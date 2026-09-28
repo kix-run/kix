@@ -263,7 +263,8 @@
       ],
       "offlineCaptures": [
         "how-to/application-custom-resource-readiness/widget"
-      ]
+      ],
+      "unverifiedNixBlocks": 1
     },
     {
       "page": "author-packages-and-clusters/keep-intentionally-empty-values",

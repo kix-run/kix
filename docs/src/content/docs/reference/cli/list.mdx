@@ -1,4 +1,69 @@
 ---
 title: "`list`"
-description: TODO
+description: "List the clusters a flake defines, or its packages, optionally with each package's install status in one cluster."
 ---
+
+`kix list` reads the flake and prints the clusters or packages it exposes. It
+does not contact a cluster. Use it to find the names other commands accept.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/list.rs` when in doubt.
+
+## Synopsis
+
+```text
+kix list clusters [-o text|json|yaml] [--flake <FLAKE>] [--no-cache]
+kix list packages [--cluster <CLUSTER>] [-o text|json|yaml]
+                  [--flake <FLAKE>] [--no-cache]
+```
+
+| Argument or flag | Default | Meaning |
+| --- | --- | --- |
+| `--cluster <CLUSTER>` | Unset | `list packages` only. List the packages as seen by this cluster, with a status column. |
+| `-o`, `--output` | `text` | `text` and `markdown` print a table. `json` and `yaml` print an array. |
+| `--flake <FLAKE>` | `.` | Flake to read. |
+| `--no-cache` | Off | Read from Nix instead of the [eval cache](/docs/reference/cli/eval-cache-behavior/). |
+
+## `list clusters`
+
+Prints a `NAME` column with every cluster registered with `kix.lib.mkFlake`,
+read from `legacyPackages.<system>.kixClusters`. JSON output is an array of
+names. A flake with no clusters prints `No clusters found in this flake.` on
+stderr.
+
+## `list packages`
+
+Without `--cluster`, lists every package the flake exposes in
+`legacyPackages.<system>.kixPackages`, with `NAME` and `VERSION` columns.
+
+With `--cluster`, lists the cluster's instances and the packages it could
+install, with a `STATUS` column:
+
+| Status | Meaning |
+| --- | --- |
+| `installed [<namespace>]` | An instance declared in the cluster |
+| `installed (auto) [<namespace>]` | An instance added by auto-instantiation |
+| `import [<namespace>]` | An instance that stands for resources Kix does not manage |
+| `available` | A package the cluster can use but has not instantiated |
+
+Rows are keyed by name and sorted. An `OWNER` column appears when any package
+declares an owner; the rest show `-`. JSON entries have `name`, `version`, and
+`owner`, plus `status` and `isImport` with `--cluster`. An empty result prints
+`No packages found.` on stderr.
+
+## Examples
+
+```text
+kix list clusters
+kix list packages --cluster demo
+kix --flake ../infra list clusters -o json
+```
+
+## Exit status
+
+`0` on success, including an empty list. `1` when the flake cannot be
+evaluated or the cluster does not exist.
+
+:::tip[Use it in a task]
+See [List clusters and packages](/docs/how-to/start-and-inspect/list-clusters-and-packages/).
+:::

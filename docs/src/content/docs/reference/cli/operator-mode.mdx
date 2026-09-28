@@ -1,4 +1,70 @@
 ---
 title: "Operator mode"
-description: TODO
+description: "How `deploy`, `rollback`, `gc` and `status` behave with `--operator`, when the Kix operator applies Activation records inside the cluster."
 ---
+
+In operator mode the CLI still builds and plans on your machine, but the
+Kix operator running in the cluster makes the changes. The CLI writes an
+Activation record that names the build's Nix store path, then watches the
+record's status until the operator finishes. The operator applies with the
+same engine as `kix deploy` and, while an activation is Active, re-applies
+resources that have drifted.
+
+This page is hand-maintained. Check `cli/kix-cli/src/commands/operator.rs`,
+`cli/kix-operator/src/main.rs` and the command files when in doubt.
+
+## Commands
+
+| Command | With `--operator` |
+| --- | --- |
+| `kix deploy <CLUSTER> --operator` | Builds, shows the plan, confirms, then creates the Activation record with the build's store path and the deploy receipt. Waits until the record is `Active` or `Degraded`. |
+| `kix rollback <CLUSTER> --operator` | Selects a Superseded activation, then points the current Activation record at the target's store path. Waits for the operator to apply it. |
+| `kix gc <CLUSTER> --operator` | Deletes the Activation records that retention retires. The operator's finalizer deletes each record's resources; the CLI waits up to 300 seconds per record. |
+| `kix status <CLUSTER> --operator` | Reads the cluster's Active record and groups live resources by package. Does not need the operator to be running. See [`status`](/docs/reference/cli/status/). |
+
+Flags that control the local engine have no effect in operator mode:
+`--timeout`, `--on-error`, `--prune`, `--prune-mode`, `--reconcile`,
+`--force-conflicts`, `--tui` and `--log-format`. `--yes`, `--dry-run`,
+`--current-activation` and `--accept-migrations` still apply to the local
+plan.
+
+## Waiting for the operator
+
+The CLI polls the Activation record every 2 seconds and prints progress as
+the operator reports it.
+
+| Record phase | CLI result |
+| --- | --- |
+| `Active` or `Degraded` | Success |
+| `Failed` | Error, with the record's `status.message` |
+| `Superseded` | Error: a newer activation took over |
+| No terminal phase after 600 seconds | Error: timed out |
+
+A timeout ends the CLI only. The operator keeps working on the record.
+
+## Requirements
+
+- The Activation CRD is installed, and the account can list Activation
+  records. Every `--operator` command checks this first.
+- The operator is running and watches the `kix.run` API group.
+- The operator can read the store path the CLI wrote. It loads manifests from
+  `spec.source.path` and needs `nix-store` and read access to `/nix/store`, so
+  the build must be present in the store the operator reads, not only on the
+  machine that ran the CLI.
+
+## Exit status
+
+Operator-mode commands exit `1` on any of the errors above, when confirmation
+is needed on a non-interactive terminal, or when a record could not be
+deleted.
+
+:::tip[Use it in a task]
+See [Roll back an activation](/docs/how-to/operate-a-cluster/roll-back-an-activation/)
+and [Garbage-collect stale resources](/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/)
+for the operator variants of those tasks.
+:::
+
+:::note[Explanation]
+See [Activation and PackageInstance lifecycle](/docs/explanation/activation-and-packageinstance-lifecycle/)
+for the record phases.
+:::

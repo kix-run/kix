@@ -1,4 +1,109 @@
 ---
 title: "`compliance` commands"
-description: TODO
+description: "Produce a CycloneDX SBOM, an unsigned SLSA provenance statement, or a full audit bundle from a cluster build."
 ---
+
+`kix compliance` turns data Kix already has about a cluster build into formats
+auditors and compliance tools read. `sbom` and `attest` print one document to
+stdout; `audit` writes a directory of files. None of them changes the cluster.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/compliance/` when in doubt.
+
+## Subcommands
+
+| Subcommand | Output |
+| --- | --- |
+| `sbom <CLUSTER>` | CycloneDX 1.6 Software Bill of Materials on stdout |
+| `attest <CLUSTER>` | Unsigned in-toto statement with a SLSA v1 provenance predicate on stdout |
+| `audit <CLUSTER>` | SARIF, SBOM, SLSA provenance, OSCAL assessment results, and a Markdown summary in a directory |
+
+`sbom`, `attest` (without `--from-cluster`), and `audit` build the cluster from
+the flake. See [Global flags](/docs/reference/cli/global-flags/) for `--flake`,
+`--no-cache`, and `--override-input`.
+
+## `kix compliance sbom <CLUSTER>`
+
+```text
+kix compliance sbom <CLUSTER> [-o json|yaml]
+```
+
+The SBOM has a `platform` component for the cluster, one `application`
+component per package (`pkg:kix/<namespace>/<name>@<version>`), one
+`container` component per unique image, and one `library` component per
+flake input in `flake.lock` (`pkg:nix/<name>@<rev>`). Dependencies follow the
+packages' cross-package references and image use. Output is JSON by default,
+YAML with `-o yaml`; `text` and `markdown` print JSON.
+
+## `kix compliance attest <CLUSTER>`
+
+```text
+kix compliance attest <CLUSTER> [--builder-id <URI>] [--invocation-id <ID>]
+                      [--from-cluster] [--context <CONTEXT>] [-o json|yaml]
+```
+
+| Argument or flag | Meaning |
+| --- | --- |
+| `<CLUSTER>` | Cluster name. |
+| `--builder-id <URI>` | SLSA builder ID. In CI, pass the workflow run URL. |
+| `--invocation-id <ID>` | Invocation ID, such as the CI run ID. |
+| `--from-cluster` | Read the deploy receipt from the cluster's active Activation instead of building. The statement then describes what was deployed, and the command works on a machine that never built the cluster. Needs cluster access. |
+| `--context <CONTEXT>` | Kubeconfig context for `--from-cluster`. |
+
+The statement's subject is the activation identity hash. It records the flake
+reference, a digest of `flake.lock`, the Git commit and whether the working
+tree was dirty, every flake input, and every container image (with a `sha256`
+digest only when the reference carries one). A build from a dirty tree prints
+a warning and marks the statement dirty. The statement is not signed. Output
+is JSON by default, YAML with `-o yaml`.
+
+## `kix compliance audit <CLUSTER>`
+
+```text
+kix compliance audit <CLUSTER> [--out <DIR>] [--force]
+                     [--framework soc2|iso27001|dora|nis2] [--builder-id <URI>]
+```
+
+| Argument or flag | Meaning |
+| --- | --- |
+| `<CLUSTER>` | Cluster name. |
+| `--out <DIR>` | Output directory, created if missing. Default `./compliance`. |
+| `--force` | Write into an existing output directory. Files with the same names are overwritten; other files are left in place. Without it, an existing directory is an error. |
+| `--framework <NAME>` | Framework whose controls the OSCAL assessment maps findings to: `soc2` (default), `iso27001`, `dora`, or `nis2`. |
+| `--builder-id <URI>` | Builder ID for the SLSA provenance, as for `attest`. |
+
+The directory contains:
+
+| File | Content |
+| --- | --- |
+| `scorecard-results.sarif` | Scorecard findings as SARIF 2.1.0 |
+| `sbom.json` | The same SBOM as `kix compliance sbom` |
+| `provenance.json` | The same statement as `kix compliance attest` |
+| `assessment-results.json` | OSCAL assessment results. A control is `not-satisfied` when an error-level scorecard finding matches one of the rules it requires. |
+| `audit-report.md` | A Markdown summary suitable for a pull request comment |
+
+## Exit status
+
+| Code | Meaning |
+| --- | --- |
+| `0` | The document or bundle was written |
+| `1` | Evaluation or build failed, the output directory exists without `--force`, or `--from-cluster` found no Activation or no receipt |
+
+## Examples
+
+```text
+kix compliance sbom demo > sbom.json
+kix compliance attest demo --from-cluster --builder-id "$RUN_URL"
+kix compliance audit demo --framework iso27001 --out audit/
+```
+
+:::tip[Use it in a task]
+See [Generate an audit bundle](/docs/how-to/policy-ci-and-compliance/generate-an-audit-bundle/),
+[Generate a CycloneDX SBOM](/docs/how-to/policy-ci-and-compliance/generate-a-cyclonedx-sbom/),
+or [Attest a deployment from its cluster receipt](/docs/how-to/policy-ci-and-compliance/attest-a-deployment-from-its-cluster-receipt/).
+:::
+
+:::note[Explanation]
+See [Compliance evidence as build output](/docs/explanation/compliance-evidence-as-build-output/)
+for why these documents come from the build.
+:::

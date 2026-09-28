@@ -1,4 +1,49 @@
 ---
 title: "`pf`"
-description: TODO
+description: "Forward local ports to a package's primary workload by running `kubectl port-forward` against it."
 ---
+
+`kix pf` builds the cluster, finds the named package's primary workload, and
+replaces itself with `kubectl port-forward` against that workload. `kubectl`
+picks the pod and picks a new one when the pod is replaced. `port-forward` is
+an alias. `kubectl` must be on `PATH`.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
+`cli/kix-cli/src/commands/pf.rs` and `cli/kix-cli/src/commands/workload.rs`
+when in doubt.
+
+## Synopsis
+
+```text
+kix pf <CLUSTER> <PACKAGE> <PORT>... [--address <ADDRESS>]
+       [--context <CONTEXT>] [--flake <FLAKE>]
+```
+
+| Argument or flag | Meaning |
+| --- | --- |
+| `<CLUSTER>` | Cluster name to build from the flake. |
+| `<PACKAGE>` | Package instance name, or `<namespace>/<name>` when the name is not unique. |
+| `<PORT>...` | One or more port specs, passed to `kubectl port-forward` unchanged. `8080:80` binds local port 8080, `5432` uses the same port on both sides, `:80` lets kubectl choose a free local port. At least one is required. |
+| `--address <ADDRESS>` | Local addresses to listen on (`kubectl port-forward --address`). kubectl's default is `localhost`. |
+| `--context <CONTEXT>` | Kubeconfig context, passed through to `kubectl`. |
+
+The primary workload is chosen as for [`kix logs`](/docs/reference/cli/logs/#workload-selection):
+the first Deployment, then StatefulSet, then DaemonSet in the package. `-q`
+suppresses the line naming the target.
+
+## Examples
+
+```text
+kix pf demo web 8080:80
+kix pf demo postgres 5432 --address 0.0.0.0
+```
+
+## Exit status
+
+On success `kix pf` is replaced by `kubectl`, so the exit status is kubectl's.
+A build or package-resolution failure, or a missing `kubectl`, exits `1`.
+
+:::tip[Use it in a task]
+See [Use `kix pf`](/docs/how-to/operate-a-cluster/use-kix-pf/)
+for the day-to-day workflow.
+:::

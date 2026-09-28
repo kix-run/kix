@@ -1,4 +1,71 @@
 ---
 title: "`status`"
-description: TODO
+description: "Show readiness for the Kix-managed resources on a cluster, as a flat table or grouped by package under the Active activation."
 ---
+
+`kix status` lists live Kix-managed resources with whether each is ready.
+The default view is one flat table. With `--operator` it reads the cluster's
+Active Activation record and groups resources by package.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/status.rs` when in doubt.
+
+## Synopsis
+
+```text
+kix status <CLUSTER> [--operator] [-o text|json|yaml]
+           [--flake <FLAKE>] [--context <CONTEXT>] [--no-cache]
+```
+
+| Argument or flag | Meaning |
+| --- | --- |
+| `<CLUSTER>` | Cluster name. The flat view evaluates it from the flake first; `--operator` uses it to find the Active record. |
+| `--operator` | Package-grouped view built from the Active Activation record. |
+| `-o`, `--output` | `text` (default), `json` or `yaml`. `markdown` prints text. |
+| `--flake`, `--context`, `--no-cache` | See [Global flags](/docs/reference/cli/global-flags/). |
+
+## Flat view
+
+A table with `NAME`, `NAMESPACE`, `KIND`, `READY`, `STATUS` and `AGE`, sorted
+by namespace, kind and name. It includes every resource carrying the Kix
+managed-by label in the Kubernetes context, not only those of `<CLUSTER>`.
+
+`STATUS` is kind-specific:
+
+| Kind | `STATUS` |
+| --- | --- |
+| Deployment, StatefulSet | Ready replicas over desired replicas |
+| DaemonSet | Ready pods over desired scheduled pods |
+| Job | `Complete`, `Running` or `Pending` |
+| PersistentVolumeClaim | `status.phase` |
+| Other | `Ready` or `Available` when that condition is `True`, otherwise `Active` |
+
+`READY` uses the same readiness rules as `kix deploy`.
+
+## `--operator` view
+
+Prints the Active record's name, phase, identity hash and age, then one line
+per package with its resource count and `healthy` or `N degraded`. Packages
+with a resource that is not ready are expanded. A resource the build declares
+but the cluster lacks shows as `NotFound`.
+
+Package grouping needs the Active record's build in the local Nix store.
+Without it every resource is listed under "Unowned resources".
+
+## Examples
+
+```text
+kix status demo
+kix status demo --operator -o json
+```
+
+## Exit status
+
+`0` when the report is printed, whatever the readiness of the resources. `1`
+on an evaluation or cluster error. Use [`kix health`](/docs/reference/cli/health/)
+when a script needs a failing status.
+
+:::tip[Use it in a task]
+See [Check resource status](/docs/how-to/operate-a-cluster/check-resource-status/)
+for reading the output.
+:::

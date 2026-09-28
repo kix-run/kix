@@ -97,8 +97,8 @@ array.
 | Key | Content |
 | --- | --- |
 | `packages.summary` | Counts of `added`, `removed`, `changed`, and `unchanged` packages |
-| `packages.added`, `packages.removed` | Arrays of `{ key, version, resources }` |
-| `packages.changed` | Array of package changes: `key`, `old_version`, `new_version`, `added_resources`, `removed_resources`, `modified_resources` (each `{ resource, diff_count }`), `dep_affected_resources` |
+| `packages.added`, `packages.removed` | Arrays of `{ key, version, resources, kept_resources }`. `resources` counts every resource in the package; `kept_resources` lists the Namespaces and CustomResourceDefinitions among them, which Kix never deletes automatically (always empty on `added`) |
+| `packages.changed` | Array of package changes: `key`, `old_version`, `new_version`, `added_resources`, `removed_resources`, `kept_resources`, `modified_resources` (each `{ resource, diff_count }`), `dep_affected_resources`. A Namespace or CustomResourceDefinition that left the build is listed in `kept_resources`, not `removed_resources` |
 | `packages.cluster_level` | The same shape as one changed package, with key `_cluster`, or `null` |
 | `packages.activation` | `{ old, new }` record names, or `null` when unchanged |
 | `packages.unchanged` | Number of unchanged packages |

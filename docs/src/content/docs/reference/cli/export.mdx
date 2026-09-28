@@ -1,4 +1,74 @@
 ---
 title: "`export`"
-description: TODO
+description: "Build a cluster and write every manifest as plain Kubernetes YAML, one file per resource, either without Kix annotations or with them kept for audit."
 ---
+
+`kix export` builds the cluster's activation and writes each resource to its
+own YAML file. It does not contact a cluster. The default `exit` mode produces
+YAML with no Kix annotations or Kix-internal resources, which `kubectl`, Flux,
+or Argo CD can apply. The `audit` mode keeps everything as evidence of what
+Kix would deploy.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/export.rs` when in doubt.
+
+## Synopsis
+
+```text
+kix export <CLUSTER> [--out <DIR>] [--for exit|audit] [--force]
+           [--flake <FLAKE>]
+```
+
+| Argument or flag | Default | Meaning |
+| --- | --- | --- |
+| `<CLUSTER>` | | Cluster name to build. |
+| `--out <DIR>` | `./kix-export` | Directory to write. |
+| `--for <MODE>` | `exit` | `exit` or `audit`. See [Modes](#modes). |
+| `--force` | Off | Replace an existing output directory. See [Overwriting](#overwriting). |
+| `--flake <FLAKE>` | `.` | Flake to build. |
+
+`-o` has no effect. Progress and the summary line go to stderr; `-q` hides
+them. See [Global flags](/docs/reference/cli/global-flags/) for
+`--override-input`.
+
+## Modes
+
+| Mode | `kix.run/*` annotations | Activation and PackageInstance resources |
+| --- | --- | --- |
+| `exit` | Removed | Skipped |
+| `audit` | Kept, including the identity hash and package stamps a deploy writes | Written |
+
+Both modes drop null fields and write keys in sorted order. Labels are
+written unchanged in both modes.
+
+## Layout
+
+Each resource is written to `<DIR>/<namespace>/<Kind>-<name>.yaml`.
+Cluster-scoped resources go under `<DIR>/_cluster/`. An `audit` export is a
+valid old side for [`kix diff --from`](/docs/reference/cli/diff/#old-side);
+an `exit` export is not, because the diff needs the Kix annotations.
+
+## Overwriting
+
+Without `--force`, an existing output directory is an error. With `--force`,
+Kix deletes the directory and writes it again, so files from an earlier export
+do not linger. It refuses when the directory holds anything other than
+subdirectories and `.yaml` files, or a symlink, and names the first such entry.
+
+## Examples
+
+```text
+kix export demo --out handoff/
+kubectl diff --server-side -R -f handoff/
+kix export demo --for audit --out evidence/ --force
+```
+
+## Exit status
+
+`0` on success, `1` when the build fails or the output directory cannot be
+written or replaced.
+
+:::tip[Use it in a task]
+See [Export plain YAML](/docs/how-to/operate-a-cluster/export-plain-yaml/)
+and [Export audit-preserving YAML](/docs/how-to/operate-a-cluster/export-audit-preserving-yaml/).
+:::

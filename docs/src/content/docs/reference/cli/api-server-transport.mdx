@@ -1,4 +1,80 @@
 ---
 title: "API server retries and request limits"
-description: TODO
+description: "How Kix retries Kubernetes API requests, the timeouts and concurrency limits it applies, and the environment variables that change them."
 ---
+
+Every Kix command that talks to a cluster, and the Kix operator, sends its
+Kubernetes API requests through one transport policy. The policy retries
+failures that a short wait can fix, such as an API server restart or a
+webhook pod being replaced, and bounds how long any request can take. The
+settings are environment variables; no command-line flag changes them.
+
+This page is hand-maintained. Check `cli/kix/src/cluster/client.rs`,
+`cli/kix/src/cluster/fetch.rs` and `cli/kix/src/cluster/watchdog.rs` when in
+doubt.
+
+## Environment variables
+
+Values are whole numbers. A value that is not a whole number is ignored with a
+warning and the default applies.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `KIX_RETRY_ATTEMPTS` | `7` | Total attempts per request, including the first. `1` (or `0`) disables retries. |
+| `KIX_REQUEST_TIMEOUT` | `120` | Deadline in seconds for each attempt of a request that is not a watch. `0` removes the deadline. |
+| `KIX_CONNECT_TIMEOUT` | `15` | TCP connect timeout in seconds. `0` keeps the default. |
+| `KIX_PREFLIGHT` | on | `0` skips the reachability check before the first request. |
+| `KIX_SWEEP_CONCURRENCY` | `16` | Maximum parallel LIST requests when Kix lists every Kix-managed resource. Minimum `1`. |
+| `KIX_STALL_TIMEOUT` | `600` | Seconds without progress after which `deploy`, `rollback`, or the operator cancels the run. `0` never cancels. |
+
+## Retries
+
+| Failure | Retried for |
+| --- | --- |
+| `429 Too Many Requests` | Every method |
+| `5xx` response or lost connection | Idempotent methods: `GET`, `HEAD`, `OPTIONS`, `PUT`, `PATCH`, `DELETE` |
+| Connection that never opened | Every method, including `POST` |
+
+The wait between attempts starts at 0.5 seconds and doubles up to 8 seconds,
+with jitter. A `Retry-After` header takes precedence, up to 30 seconds. All
+attempts of one request share a 60-second budget. When the attempts or the
+budget run out, the command receives the last response or error unchanged.
+
+## Reachability check
+
+Before its first request, a command checks that the API server answers. The
+check makes one attempt, with no retries, and waits for the connect timeout
+plus 5 seconds. Any HTTP response passes, including `401`, `403`, and `404`,
+so an account that cannot read `/version` is not refused here. A server that
+does not answer fails with an error naming the endpoint, instead of stalling
+on the first real request.
+
+## Listing managed resources
+
+`diff`, `snapshot save`, `gc`, `status`, `health`, `drift`, and `deploy` (when
+it must reconstruct the previous state from the cluster) list every resource
+type the cluster serves, filtered by the Kix managed-by label. At most
+`KIX_SWEEP_CONCURRENCY` lists run at once. A resource type the account may not
+list (`403`) is skipped; `diff` and `gc` print how many types were not
+listable with this account. Any other list failure that
+survives the retries fails the command, so a partial listing is never treated
+as the cluster's full state.
+
+## Stalled deploys
+
+During `deploy` and `rollback`, Kix tracks the last progress of any kind:
+an apply finishing, a readiness status update, or an API discovery refresh.
+After 30 seconds without progress it prints which resources it is waiting
+on, and repeats every 30 seconds. After `KIX_STALL_TIMEOUT` seconds it
+cancels the run with that list as the reason. A slow rollout that keeps
+reporting readiness status is progress and does not count as a stall.
+
+:::note[Reference]
+See [`kix deploy`](/docs/reference/cli/deploy-apply/) for the deploy readiness
+timeout, which is separate from the stall timeout.
+:::
+
+:::note[Explanation]
+See [The DAG-driven deployment scheduler](/docs/explanation/dag-driven-deployment-scheduler-readiness-pruning-drift-blast-radius/)
+for how deploys wait on readiness.
+:::

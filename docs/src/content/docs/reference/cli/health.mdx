@@ -1,4 +1,73 @@
 ---
 title: "`health`"
-description: TODO
+description: "Check that every dependency of the cluster's Active activation is present on the cluster, grouped by package."
 ---
+
+`kix health` checks that the resources of a cluster's Active activation are
+all present. It reads the `kix.run/depends-on` annotations on live resources
+and confirms each named dependency exists, identified by its identity hash.
+It checks presence only; use [`kix drift`](/docs/reference/cli/drift/) to
+compare field content. It does not build the cluster.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/health.rs` when in doubt.
+
+## Synopsis
+
+```text
+kix health <CLUSTER> [--context <CONTEXT>] [-v | -vv] [-q]
+```
+
+| Argument or flag | Meaning |
+| --- | --- |
+| `<CLUSTER>` | Cluster name, as recorded on its Activation records. |
+| `--context <CONTEXT>` | Kubeconfig context. |
+| `-v`, `-vv` | `-vv` prints each resource and dependency as it is checked. |
+| `-q`, `--quiet` | Omit the connection and count lines. |
+
+The output is text only; `-o` has no effect. See
+[Global flags](/docs/reference/cli/global-flags/).
+
+## Scope
+
+Kix finds the cluster's Active Activation record and walks its dependencies.
+Resources that the Active activation does not reach, such as leftovers from
+superseded activations, are not reported.
+
+## Statuses
+
+| Resource status | Meaning |
+| --- | --- |
+| in-sync | Present, and every dependency is present |
+| imported | An import marker for a resource Kix does not manage |
+| completed | A dependency that is absent because it deletes itself after success: a Job with `spec.ttlSecondsAfterFinished`, or a manifest whose `helm.sh/hook-delete-policy` includes `hook-succeeded` |
+| missing | A dependency named by a present resource and not found on the cluster |
+| at risk | Present, but depends on a missing or at-risk resource |
+
+Each package line reads `healthy`, `external`, `completed`, `DEGRADED` (a
+missing resource) or `AT RISK`. Packages with problems are expanded below the
+summary.
+
+Kix reads the sealed manifest for a dependency's hash from the local Nix
+store, both to name a missing resource and to recognise a self-deleting one.
+On a machine that never built this activation, missing resources are shown
+by hash, and a self-deleting Job that is gone reads as missing.
+
+## Examples
+
+```text
+kix health demo
+kix health demo -vv
+```
+
+## Exit status
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Every package is healthy, external or completed |
+| `1` | A resource is missing or at risk; no Active record exists for the cluster; or a cluster error |
+
+:::tip[Use it in a task]
+See [Check cluster health](/docs/how-to/operate-a-cluster/check-cluster-health/)
+for acting on missing or at-risk resources.
+:::

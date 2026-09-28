@@ -1,4 +1,81 @@
 ---
 title: "Eval cache behavior"
-description: TODO
+description: "Where Kix caches cluster evaluations, what the cache key covers, what invalidates an entry, and when to pass `--no-cache`."
 ---
+
+Kix keeps the results of Nix evaluations in a local SQLite database so that
+repeated commands against an unchanged flake skip evaluation. A cached result
+is reused only when the flake's source files and `flake.lock` are unchanged.
+
+This page is hand-maintained. Check `cli/kix/src/eval/cache.rs`,
+`cli/kix/src/eval/evaluator.rs` and `cli/kix/src/eval/store.rs` when in doubt.
+
+## Location
+
+| Path | Content |
+| --- | --- |
+| `<cache dir>/kix/eval-cache.db` | Evaluation results and source fingerprints |
+
+`<cache dir>` is the platform cache directory: `$XDG_CACHE_HOME` or
+`~/.cache` on Linux, `~/Library/Caches` on macOS. Deleting the file is safe;
+the next command re-creates it and evaluates from Nix.
+
+## What is cached
+
+| Entry | Used by |
+| --- | --- |
+| A cluster's evaluation: rendered manifests and the scorecard report | `build`, `check`, `graph`, `inspect`, `images`, `status`, `compliance audit` |
+| The flake's cluster names | `list clusters`, and the "did you mean" list when a cluster is not found |
+| Available packages, and a cluster's instances | `list packages` |
+
+Commands that build the cluster's activation with `nix build`, such as
+`deploy`, `diff`, `export`, `logs`, and `pf`, do not read this cache. Nix's
+own evaluation cache and store apply to them.
+
+## Cache key
+
+Each entry's key is a BLAKE3 hash of:
+
+1. the canonical path of the flake directory;
+2. the contents of `flake.lock`, when it exists;
+3. a fingerprint of the flake's source files;
+4. the name of what was evaluated, such as the cluster name.
+
+The source fingerprint hashes the path and contents of every `.nix`, `.yaml`,
+`.yml`, and `.json` file under the flake directory, skipping `.git`,
+`.direnv`, `result`, and `node_modules` directories. When no file's
+modification time has changed since the last run, the stored fingerprint is
+reused without reading the files.
+
+## What invalidates an entry
+
+- Adding, removing, or editing a `.nix`, `.yaml`, `.yml`, or `.json` file
+  under the flake directory.
+- Any change to `flake.lock`, such as `nix flake update`.
+- Running from a different flake directory.
+
+The key does not cover:
+
+- files with other extensions that the cluster reads, for example with
+  `builtins.readFile`;
+- `--override-input` values;
+- inputs whose content changes without a change to `flake.lock`, such as a
+  `path:` input pointing outside the flake directory.
+
+Pass `--no-cache` after changing any of these. It evaluates from Nix and
+neither reads nor writes the database.
+
+A cache entry that cannot be parsed is discarded and the evaluation runs
+again. A failure to write the cache is logged and does not fail the command.
+
+## Remote flake references
+
+The source fingerprint needs a local directory. A command that uses this
+cache fails with "could not access the Nix evaluation cache" when `--flake`
+names a remote reference such as `github:org/repo`, with or without
+`--no-cache`. Clone the repository and pass its local path.
+
+:::note[Reference]
+See [Global flags](/docs/reference/cli/global-flags/) for `--flake`,
+`--no-cache`, and `--override-input`.
+:::

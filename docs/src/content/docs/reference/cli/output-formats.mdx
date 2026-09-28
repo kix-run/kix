@@ -1,4 +1,63 @@
 ---
 title: "Output formats"
-description: TODO
+description: "Which `kix` commands honour `-o text`, `json`, `yaml`, and `markdown`, what each command prints by default, and what happens with a format a command does not support."
 ---
+
+The global `-o`/`--output` flag takes `text`, `json`, `yaml`, or `markdown`.
+Each command chooses its own default and decides which values it supports. A
+value a command does not support is not an error: the command falls back to
+the output shown in the table below. Add `-q` when a script parses the result, so
+that progress lines do not mix with it.
+
+This page is hand-maintained. Check the `output_format` and
+`global.output` reads in `cli/kix-cli/src/commands/` when in doubt.
+
+## Commands that honour `-o`
+
+| Command | Default | `text` | `json` | `yaml` | `markdown` |
+| --- | --- | --- | --- | --- | --- |
+| `build` | `yaml` | YAML | JSON | YAML | YAML |
+| `diff` | `text` | Text | JSON | JSON document as YAML | Markdown for pull request comments |
+| `check` | `text` | Text | JSON | YAML | Text |
+| `list clusters`, `list packages` | `text` | Text | JSON | YAML | Text |
+| `graph` | `text` (tree) | Tree | JSON | YAML | Tree |
+| `inspect` | `text` | Text | JSON | YAML | Text |
+| `status` | `text` | Table | JSON | YAML | Table |
+| `rollback --list` | `text` | Text | JSON | YAML | Text |
+| `images` | `text` | One image per line | JSON | YAML | Text |
+| `drift` | `text` | Text | JSON | Text | Text |
+| `pin set`, `pin check`, `pin list` | `text` | Text | JSON | Text | Text |
+| `compliance sbom`, `compliance attest` | `json` | JSON | JSON | YAML | JSON |
+
+Command-specific flags take priority over `-o`:
+
+- `kix check --sarif` prints SARIF 2.1.0 whatever `-o` says.
+- `kix graph --format tree|dot|json` overrides `-o`; `dot` is only available
+  through `--format`.
+
+## Commands that ignore `-o`
+
+| Command | Output |
+| --- | --- |
+| `deploy` | A deploy event stream selected by `--log-format pretty\|line\|json`. See [`kix deploy`](/docs/reference/cli/deploy-apply/). |
+| `rollback` (without `--list`), `gc`, `migrate domain` | Plan, prompt, and progress text |
+| `health` | Text |
+| `export`, `snapshot save`, `compliance audit` | Files in a directory |
+| `logs`, `pf` | kubectl's own output |
+| `completions` | A shell script |
+
+## Colour
+
+Text output is coloured when stdout is a terminal. `--no-color`, a set
+`NO_COLOR`, or `TERM=dumb` turns it off. JSON and YAML output are never
+coloured.
+
+:::note[Reference]
+See [`kix diff`](/docs/reference/cli/diff/#output-formats) for the JSON and
+Markdown diff schemas.
+:::
+
+:::tip[Use it in a task]
+See [Generate PR-review markdown from `kix diff`](/docs/how-to/policy-ci-and-compliance/generate-pr-review-markdown-from-kix-diff/)
+for the Markdown format in CI.
+:::

@@ -1,4 +1,51 @@
 ---
 title: "`completions`"
-description: TODO
+description: "Print a shell completion script for `kix` to stdout, for bash, zsh, fish, elvish, or PowerShell."
 ---
+
+`kix completions` prints a completion script for the named shell to stdout.
+The script completes subcommands, flags, and fixed flag values. It does not
+complete cluster or package names. The command reads no flake and contacts no
+cluster, and it ignores the global flags.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/completions.rs` when in doubt.
+
+## Synopsis
+
+```text
+kix completions <SHELL>
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `<SHELL>` | One of `bash`, `elvish`, `fish`, `powershell`, or `zsh`. |
+
+## Examples
+
+Load completions into the current shell:
+
+```text
+source <(kix completions bash)
+kix completions fish | source
+```
+
+Install them for every new shell:
+
+```text
+kix completions bash > ~/.local/share/bash-completion/completions/kix
+kix completions zsh > "${fpath[1]}/_kix"
+kix completions fish > ~/.config/fish/completions/kix.fish
+```
+
+The zsh file must go in a directory on `fpath` before `compinit` runs.
+Regenerate the script after upgrading Kix so new flags complete.
+
+## Exit status
+
+`0`, or `2` for a missing or unknown shell name.
+
+:::tip[Use it in a task]
+See [Install and run the Kix CLI](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/)
+for installing the CLI itself.
+:::

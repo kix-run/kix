@@ -1,4 +1,66 @@
 ---
 title: "`migrate`"
-description: TODO
+description: "One-off cluster migrations: move a cluster's Kix records from the retired `kix.dev` API group to `kix.run`."
 ---
+
+`kix migrate` holds one-off migrations of a cluster's Kix records. It has one
+subcommand, `domain`, which moves Activation records from the retired
+`kix.dev` API group to `kix.run`. Kix refuses to operate on a cluster whose
+records are still under the old group until this has run.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/migrate.rs` when in doubt.
+
+## Synopsis
+
+```text
+kix migrate domain <CLUSTER> [--dry-run] [-y] [--flake <FLAKE>] [--context <CONTEXT>]
+```
+
+| Argument or flag | Meaning |
+| --- | --- |
+| `<CLUSTER>` | Cluster name. Kix builds it to get the current CRD manifests. |
+| `--dry-run` | Print the plan and stop. |
+| `-y`, `--yes` | Skip the confirmation prompt. Required when stdin is not a terminal. |
+| `--flake`, `--context` | See [Global flags](/docs/reference/cli/global-flags/). |
+
+## What it does
+
+1. Builds the cluster and reads the Kix CRDs from the build.
+2. Prints the plan. A cluster with nothing under the old group reports
+   "Nothing to do" and exits.
+3. Copies every Activation record to the new group with its spec, status and
+   history, and checks each copy by name and phase.
+4. Clears the operator finalizer from the old records, waits, and reads them
+   back. If a finalizer returns, an operator is still running, and the command
+   stops having deleted nothing.
+5. Deletes the old CRDs.
+
+PackageInstance records are not copied; the next deploy re-creates them.
+
+Before running it on a cluster with the Kix operator, scale the operator to
+0. Afterwards, upgrade the operator image, scale it back up, and run
+`kix deploy`. That deploy applies every resource once to move its
+annotations.
+
+The command is safe to repeat. A second run skips records it already copied
+and repairs a copy whose status did not land.
+
+## Examples
+
+```text
+kix migrate domain demo --dry-run
+kix migrate domain demo --yes
+```
+
+## Exit status
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Migrated, nothing to do, or the prompt was declined |
+| `1` | Confirmation was needed on a non-interactive terminal, a running operator was detected, or a build or cluster error |
+
+:::note[Reference]
+See [Operator mode](/docs/reference/cli/operator-mode/) for what the operator
+does with Activation records.
+:::

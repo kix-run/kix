@@ -1,4 +1,61 @@
 ---
 title: "`inspect`"
-description: TODO
+description: "Summarise the resources a cluster renders: count, namespaces, kinds, and every resource grouped by namespace."
 ---
+
+`kix inspect` evaluates a cluster and prints an inventory of its rendered
+resources. It does not contact a cluster. Use it to confirm what a cluster
+contains before reading the full manifests with
+[`kix build`](/docs/reference/cli/build/).
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/inspect.rs` when in doubt.
+
+## Synopsis
+
+```text
+kix inspect <CLUSTER> [-o text|json|yaml] [--flake <FLAKE>] [--no-cache]
+```
+
+| Argument or flag | Default | Meaning |
+| --- | --- | --- |
+| `<CLUSTER>` | | Cluster name to evaluate. |
+| `-o`, `--output` | `text` | `text` and `markdown` print the summary below. `json` and `yaml` print the same data as one document. |
+| `--flake <FLAKE>` | `.` | Flake to evaluate. |
+| `--no-cache` | Off | Evaluate from Nix instead of reading the [eval cache](/docs/reference/cli/eval-cache-behavior/). |
+
+## Output
+
+Text output has four parts:
+
+1. The cluster name and total resource count.
+2. Each namespace with its resource count. Cluster-scoped resources are
+   listed as `(cluster-scoped)`.
+3. A table of resource kinds, most frequent first.
+4. Every resource as `Kind/name`, grouped by namespace and sorted by kind,
+   then name.
+
+JSON and YAML output is an object with `cluster`, `totalResources`,
+`namespaces` (each `{ name, resources: [{ kind, name }] }`), and
+`kindCounts` (kind to count). Cluster-scoped resources are under the
+namespace name `_cluster`.
+
+`kix inspect` reports rendered resources only. To see dependency edges, use
+[`kix graph`](/docs/reference/cli/graph/). To see an instance's package
+parts and `out` values, evaluate the cluster with `nix eval`, as the how-to
+guide below shows.
+
+## Examples
+
+```text
+kix inspect demo
+kix inspect demo -o json | jq '.kindCounts'
+```
+
+## Exit status
+
+`0` when the cluster evaluates, `1` when it does not.
+
+:::tip[Use it in a task]
+See [Inspect an instance's deps, parts, and `out`](/docs/how-to/debug-dependency-wiring/inspect-an-instance-s-deps-parts-and-out/).
+:::

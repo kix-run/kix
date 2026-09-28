@@ -1,4 +1,45 @@
 ---
 title: "`build`"
-description: TODO
+description: "Evaluate a cluster and print its rendered Kubernetes manifests as multi-document YAML or a JSON array."
 ---
+
+`kix build` evaluates a cluster from the flake and prints every rendered
+manifest to stdout. It does not contact a cluster. Use it to read or pipe the
+exact objects Kix would deploy.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/build.rs` when in doubt.
+
+## Synopsis
+
+```text
+kix build <CLUSTER> [-o yaml|json] [--flake <FLAKE>] [--no-cache]
+```
+
+| Argument or flag | Default | Meaning |
+| --- | --- | --- |
+| `<CLUSTER>` | | Cluster name to evaluate. An unknown name fails with the list of available clusters. |
+| `-o`, `--output` | `yaml` | `yaml` prints multi-document YAML. `json` prints one JSON array of manifests. `text` and `markdown` print YAML. |
+| `--flake <FLAKE>` | `.` | Flake to evaluate. |
+| `--no-cache` | Off | Evaluate from Nix instead of reading the [eval cache](/docs/reference/cli/eval-cache-behavior/). |
+
+On a terminal, a spinner on stderr shows progress; `-q` hides it. Stdout
+carries only the manifests. See [Global flags](/docs/reference/cli/global-flags/)
+for `--override-input`.
+
+## Examples
+
+```text
+kix build demo > demo.yaml
+kix build demo -o json | jq '[.[] | .kind] | unique'
+```
+
+## Exit status
+
+`0` when the cluster evaluates, `1` when it does not. An evaluation failure
+includes constructor validation errors and error-severity scorecard findings.
+
+:::tip[Use it in a task]
+See [Render manifests](/docs/how-to/start-and-inspect/render-manifests/)
+for reading the output.
+:::

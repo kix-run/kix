@@ -1,4 +1,64 @@
 ---
 title: "`graph`"
-description: TODO
+description: "Print a cluster's resource dependency graph as a tree, a Graphviz DOT file, or JSON nodes and edges."
 ---
+
+`kix graph` evaluates a cluster and prints the dependency graph between its
+rendered resources. It does not contact a cluster. An edge means one resource
+must be applied and ready before another. Edges come from the
+`kix.run/depends-on` annotations evaluation writes, which record values a
+resource reads from another (`out` references) and explicit `requires` or
+`extraDeps`.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
+`cli/kix-cli/src/commands/graph.rs` and `cli/kix/src/cluster/graph.rs` when
+in doubt.
+
+## Synopsis
+
+```text
+kix graph <CLUSTER> [--format tree|dot|json] [-o text|json|yaml]
+          [--flake <FLAKE>] [--no-cache]
+```
+
+| Argument or flag | Default | Meaning |
+| --- | --- | --- |
+| `<CLUSTER>` | | Cluster name to evaluate. |
+| `--format <FORMAT>` | Unset | `tree`, `dot`, or `json`. Takes priority over `-o`. `dot` is only available here. |
+| `-o`, `--output` | `text` | Used when `--format` is unset. `text` and `markdown` print the tree, `json` the JSON document, `yaml` the same document as YAML. |
+| `--flake <FLAKE>` | `.` | Flake to evaluate. |
+| `--no-cache` | Off | Evaluate from Nix instead of reading the [eval cache](/docs/reference/cli/eval-cache-behavior/). |
+
+After the graph, a line on stderr gives the resource and dependency counts;
+`-q` hides it.
+
+## Formats
+
+| Format | Content |
+| --- | --- |
+| `tree` | Each root is a resource with no dependencies. Beneath each resource are the resources that depend on it, so a resource with several dependencies appears under each of them. A repeated path is marked `(circular ref)`. A cluster with no resources prints `(no resources)`. |
+| `dot` | A `digraph` with one box per resource. Edges point from the dependent resource to its dependency. Import PackageInstances are dashed and grey. |
+| `json` | `{ "nodes": [...], "edges": [...] }`. Each node has `id`, `kind`, `name`, `namespace`, `identityHash`, and `isImport`. Each edge has `from` (the dependent) and `to` (the dependency), both node `id`s. |
+
+Resource ids have the form `Kind/name@namespace`. The PackageInstance that
+stands for an
+[import](/docs/how-to/adopt-existing-resources/import-an-existing-service-with-kix-mkimport/)
+is labelled `(import)` in the tree and DOT output and has `isImport: true` in
+JSON.
+
+## Examples
+
+```text
+kix graph demo
+kix graph demo --format dot | dot -Tsvg > graph.svg
+kix graph demo --format json | jq '.edges | length'
+```
+
+## Exit status
+
+`0` when the cluster evaluates, `1` when it does not.
+
+:::tip[Use it in a task]
+See [Visualize the dependency graph with `kix graph`](/docs/how-to/debug-dependency-wiring/visualize-the-dependency-graph-with-kix-graph/)
+for reading the tree and rendering the DOT output.
+:::

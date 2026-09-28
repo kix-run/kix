@@ -1,4 +1,128 @@
 ---
 title: "`pin`"
-description: TODO
+description: "Resolve image tags to digests, record them in a committed pin file, and verify that every recorded digest still exists."
 ---
+
+`kix pin` reads and writes a pin file: committed JSON that records which
+digest each image reference resolved to. A cluster definition reads it with
+`pins.get "<key>"`. `kix pin` does not evaluate the flake or the cluster, so it
+works while evaluation is failing.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
+`cli/kix-cli/src/commands/pin.rs` and `cli/kix-cli/src/commands/pin/locate.rs`
+when in doubt.
+
+## Subcommands
+
+| Subcommand | Purpose |
+| --- | --- |
+| `set <KEY>` | Resolve a tag in the registry and write the pin |
+| `check` | Verify every pin still resolves, by digest |
+| `list` | Show what the pin file holds |
+
+## Finding the pin file
+
+Every subcommand takes `--pins-file <PATH>`. Without it, Kix uses the first of:
+
+1. `pins.json` in the working directory;
+2. `pins.json` in the directory named by `--flake`, when that is a local path;
+3. the only pin file under the Git repository root (`pins.json`, or a single
+   `*pins.json` whose header declares `managedBy`).
+
+Several candidates at step 3 is an error; pass `--pins-file`. When Kix chose
+the file itself, it prints which one it used.
+
+## `kix pin set <KEY>`
+
+```text
+kix pin set <KEY> [--tag <TAG>] [--repository <REPO>]
+            [--digest <DIGEST> | --no-resolve] [--source-rev <REV>]
+            [--promoted-by <WHO>] [--note <TEXT>] [--init] [--force]
+            [--pins-file <PATH>]
+```
+
+| Argument or flag | Meaning |
+| --- | --- |
+| `<KEY>` | Pin name, as the cluster definition reads it with `pins.get "<KEY>"`. |
+| `--tag <TAG>` | Tag to promote to. Required for a new pin; otherwise the existing tag is kept. |
+| `--repository <REPO>` | Repository including the registry host. Required for a new pin; otherwise the existing repository is kept. |
+| `--digest <DIGEST>` | Record this digest instead of asking the registry, for example in an air-gapped promotion. Must be `sha256:` followed by 64 hexadecimal characters. Conflicts with `--no-resolve`. |
+| `--no-resolve` | Write the pin without a digest. Kix then never checks that the tag exists, and prints a warning. |
+| `--source-rev <REV>` | Source revision the image was built from. `kix pin check --source-rev` compares against it. Kept from the existing pin when omitted. |
+| `--promoted-by <WHO>` | Who promoted it. Defaults to the CI run (`ci:<workflow>#<run>` on GitHub Actions, or the job URL on GitLab, Jenkins, and Buildkite), otherwise `user@host`. |
+| `--note <TEXT>` | A note for readers of the file. Kix never reads it and a later promotion keeps it. `--note ""` clears it. |
+| `--init` | Create the pin file, or add a key that is not in it yet. Without it, an unknown key or a missing file is an error. A new file is created next to the flake. |
+| `--force` | Rewrite a pin file that `kix pin` did not write, discarding its comments and layout. |
+| `--pins-file <PATH>` | Pin file to use. See [Finding the pin file](#finding-the-pin-file). |
+
+Kix asks the registry for the tag's manifest digest and refuses a tag that
+does not exist. When the repository, tag, digest, and source revision are
+unchanged, the file is not rewritten, so re-promoting the same image produces
+no commit. Registry credentials come from `KIX_REGISTRY_USERNAME` and
+`KIX_REGISTRY_PASSWORD`, then the Docker credential helpers and `auths` in the
+Docker config; anonymous access is tried when none apply.
+
+## `kix pin check`
+
+```text
+kix pin check [--key <KEY>]... [--source-rev <REV>] [--allow-unresolved]
+              [--offline] [--pins-file <PATH>]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--key <KEY>` | Check only this pin. Repeatable. Default: all pins. |
+| `--source-rev <REV>` | Fail when a pin records a different source revision. A short and a full SHA match when one is a prefix of the other. Pins that record no revision are skipped. |
+| `--allow-unresolved` | Report a pin with no digest as a warning instead of a failure. |
+| `--offline` | Check the file's shape without contacting any registry. |
+| `--pins-file <PATH>` | Pin file to use. |
+
+Each pin gets one verdict:
+
+| Verdict | When |
+| --- | --- |
+| `ok` | The digest exists and the tag still resolves to it, or `--offline` was given |
+| `warn` | The digest exists but the tag now points elsewhere or could not be checked, or the pin has no digest and `--allow-unresolved` was given |
+| `fail` | The digest could not be verified in the registry, the reference is invalid, or the pin has no digest |
+
+## `kix pin list`
+
+```text
+kix pin list [--pins-file <PATH>]
+```
+
+Prints each pin's reference, digest, source revision, who promoted it and
+when, and its note.
+
+## Output
+
+`-o json` prints a JSON document for all three subcommands: for `set`, the
+pin file path, key, resulting pin, and whether it changed; for `check`, each
+pin's result and message, the stale pins, and `ok`; for `list`, the pins
+object. Any other `-o` value prints text.
+
+## Exit status
+
+| Code | Meaning |
+| --- | --- |
+| `0` | `set` or `list` succeeded; `check` found no failure |
+| `1` | `check` found a failed pin or a pin that is not current, or any subcommand hit an error (no pin file, unknown key, registry refused the tag) |
+
+## Examples
+
+```text
+kix pin set web --repository ghcr.io/acme/web --tag v1.4.0 --init
+kix pin set web --tag v1.5.0 --source-rev "$GITHUB_SHA"
+kix pin check --source-rev "$GITHUB_SHA"
+```
+
+:::tip[Use it in a task]
+See [Create a committed image pin file](/docs/how-to/promote-images/create-a-committed-image-pin-file/)
+to start one, and [Promote and verify an image pin](/docs/how-to/promote-images/promote-and-verify-an-image-pin/)
+for the CI workflow.
+:::
+
+:::note[Explanation]
+See [Why deploy inputs are committed](/docs/explanation/why-deploy-inputs-are-committed/)
+for why the digest lives in the repository.
+:::

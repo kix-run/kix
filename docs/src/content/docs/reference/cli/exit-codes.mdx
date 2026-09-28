@@ -1,4 +1,46 @@
 ---
 title: "Exit codes"
-description: TODO
+description: "What each `kix` command's exit status means, so CI jobs and scripts can branch on the result."
 ---
+
+Every `kix` command exits `0` on success and `1` on an error it reports, such
+as an evaluation failure, a build failure, or an unreachable cluster. Some
+commands also use a non-zero status to report a result, listed below.
+
+This page is hand-maintained. Check the `std::process::exit` calls in
+`cli/kix-cli/src/commands/` when in doubt.
+
+## Common codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success. Also printed help (`-h`, `--help`) and version (`-V`). |
+| `1` | An error, printed on stderr. |
+| `2` | The command line could not be parsed: an unknown flag, a missing argument, or an invalid value. `kix diff` also uses `2`, see below. |
+
+## Per command
+
+| Command | Non-zero status beyond errors |
+| --- | --- |
+| `kix diff` | `2` when there is at least one difference or a stateful migration was detected. `0` means no differences. |
+| `kix check` | `1` when any step reports `fail`: cluster evaluation, which includes error-level scorecard findings, or the scorecard report. Applies with `--sarif` too. |
+| `kix deploy` | `1` when a resource operation fails or the run is stopped or cancelled, when stateful migrations are detected without `--accept-migrations`, or when confirmation is needed on a non-interactive terminal without `--yes`. With `--operator`, `1` when the Activation reaches phase `Failed`. |
+| `kix rollback` | `1` when the rollback fails, or when confirmation is needed on a non-interactive terminal without `--yes`. |
+| `kix gc` | `1` when any deletion fails, or when confirmation is needed on a non-interactive terminal without `--yes`. |
+| `kix migrate domain` | `1` when confirmation is needed on a non-interactive terminal without `--yes`. |
+| `kix health` | `1` when any package is not healthy. |
+| `kix drift` | `1` when any resource has drifted. Unstamped resources do not count. |
+| `kix pin check` | `1` when a pin fails or, with `--source-rev`, records a different source revision. Warnings do not fail. |
+| `kix logs`, `kix pf` | kubectl's exit status. Kix replaces itself with `kubectl` once the workload is found. |
+
+Answering no to a confirmation prompt (`deploy`, `rollback`, `gc`,
+`migrate domain`) exits `0` without changing anything.
+
+A `kix diff` in CI cannot tell a difference from a usage error by the code
+alone. Check that the command line is valid in a step that does not branch on
+`2`, or read the JSON output.
+
+:::tip[Use it in a task]
+See [Run `kix check --sarif` in CI](/docs/how-to/policy-ci-and-compliance/run-kix-check-sarif-in-ci/)
+for a job that branches on the check result.
+:::

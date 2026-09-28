@@ -1,4 +1,100 @@
 ---
 title: "`deploy` / `apply`"
-description: TODO
+description: "Build a cluster, show the plan against what is running, and apply it in dependency order, waiting for each resource to become ready."
 ---
+
+`kix deploy` builds a cluster, compares the build with the activation the
+cluster runs now, shows a package-grouped plan, asks for confirmation, and
+applies the changed resources with server-side apply. Each resource starts as
+soon as the resources it depends on are ready. `kix apply` is an alias for the
+same command.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/deploy.rs` when in doubt.
+
+## Synopsis
+
+```text
+kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
+           [--timeout <DURATION>] [--on-error stop|continue]
+           [--reconcile] [--force-conflicts] [--accept-migrations]
+           [--current-activation] [--operator]
+           [--log-format pretty|line|json] [--tui [--group-by-ns] [--fold-height <ROWS>]]
+           [--flake <FLAKE>] [--context <CONTEXT>] [--no-cache]
+```
+
+| Argument or flag | Meaning |
+| --- | --- |
+| `<CLUSTER>` | Cluster name to build from the flake. |
+| `-y`, `--yes` | Skip the confirmation prompt. Required when stdin is not a terminal, unless `--dry-run` is set. |
+| `--dry-run` | Run the whole plan with `dryRun=All`. The apiserver reports each outcome, including admission, RBAC and field-conflict errors, and nothing changes. |
+| `--prune` | Delete orphans: resources the previous activation had and this build does not. Without it, orphans are listed and kept. |
+| `--prune-mode <MODE>` | `default` prunes according to `--prune`. `no` never prunes in this run, even with `--prune`; use `kix gc` later. |
+| `--timeout <DURATION>` | How long to wait for each resource to become ready: `5m`, `300s`, or a bare number of seconds. Default `180s`. |
+| `--on-error <MODE>` | `stop` (default) halts the run at the first failure and cancels what has not started. `continue` cancels only the dependents of a failed resource and carries on with the rest. |
+| `--reconcile` | Re-apply every resource, including those whose identity hash matches the running activation. Use it to put back fields that were changed on the cluster. |
+| `--force-conflicts` | Take ownership of fields another field manager owns. Without it, a conflict fails that resource and names the fields and their current owner. |
+| `--accept-migrations` | Proceed when the plan removes and adds stateful resources in the same slot. Without it such a deploy stops, even with `--yes`. Kix does not copy data. |
+| `--current-activation` | Take the previous activation from the local cache instead of the cluster. The plan is computed offline, so it cannot see deploys that stopped part way. With `--dry-run` nothing contacts the cluster. |
+| `--operator` | Hand the build to the Kix operator instead of applying it from this machine. See [Operator mode](/docs/reference/cli/operator-mode/). |
+| `--log-format <FORMAT>` | `pretty` (default): coloured progress, or `line` when stdin is not a terminal. `line`: one plain line per resource outcome. `json`: one JSON event per line. |
+| `--tui` | Draw a live dependency tree while deploying. Ignored when stdin is not a terminal. |
+| `--group-by-ns` | With `--tui`, group the tree by namespace instead of package. Execution order does not change. |
+| `--fold-height <ROWS>` | With `--tui`, cap the live view at this many rows. Default: half the terminal height, between 10 and 40. |
+| `--show-refs <MODE>` | Accepted (`refs` or `full`, default `refs`) but has no effect in this version. |
+| `--flake`, `--context`, `--no-cache` | See [Global flags](/docs/reference/cli/global-flags/). `-o` has no effect; use `--log-format`. |
+
+## What a deploy does
+
+1. Builds the cluster.
+2. Reads the running activation from the cluster (or the local cache with
+   `--current-activation`). If that build is no longer in the local Nix store,
+   Kix rebuilds the previous state from the live resources it manages.
+3. Refuses to start if another deploy of the same cluster is in progress.
+   Resources left by an earlier deploy that stopped part way are folded into
+   the plan: they are re-applied or reported as orphans.
+4. Prints the plan, warnings for node labels that `DoNotSchedule` spread or
+   affinity rules need but no schedulable node carries, and whether the
+   working tree has uncommitted changes.
+5. Asks for confirmation, then creates the Activation record and applies.
+   Unchanged resources are skipped. A deploy with nothing to change exits
+   without applying.
+6. Prunes orphans when asked. Namespaces and CustomResourceDefinitions are
+   reported as kept and never deleted, with or without `--prune`. In
+   `--log-format json`, the `prune_start` event lists them under `kept`,
+   apart from the `resources` that prune may delete.
+7. Marks the Activation `Active`, or `Degraded` or `Failed` when resources
+   failed.
+
+`Ctrl-C` cancels the run and marks the record `Failed`. A run that makes no
+progress for 600 seconds is cancelled; set `KIX_STALL_TIMEOUT` to a number of
+seconds to change that, or `0` to disable it. Retries and request timeouts
+are covered in [API server retries and request limits](/docs/reference/cli/api-server-transport/).
+
+Set `KIX_NO_INTERACTIVE` to any value to treat the terminal as
+non-interactive.
+
+## Examples
+
+```text
+kix deploy demo --dry-run
+kix deploy demo --yes --prune --timeout 10m
+kix apply demo --yes --log-format json > deploy.ndjson
+```
+
+## Exit status
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Deploy complete, nothing to apply, or the prompt was declined |
+| `1` | A resource failed or the run was cancelled; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; or a build, evaluation or cluster error |
+
+:::tip[Use it in a task]
+See [Deploy with dry-run, timeouts, pruning, and log or TUI output modes](/docs/how-to/operate-a-cluster/deploy-with-dry-run-timeouts-pruning-and-log-tui-output-modes/)
+for the common flag combinations.
+:::
+
+:::note[Explanation]
+See [The DAG-driven deployment scheduler](/docs/explanation/dag-driven-deployment-scheduler-readiness-pruning-drift-blast-radius/)
+for how ordering, readiness and pruning fit together.
+:::

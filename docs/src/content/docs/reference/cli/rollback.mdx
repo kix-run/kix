@@ -1,4 +1,71 @@
 ---
 title: "`rollback`"
-description: TODO
+description: "Re-apply a previous activation of a cluster from the local Nix store, or list the activations available to roll back to."
 ---
+
+`kix rollback` switches a cluster back to one of its Superseded activations.
+It does not build: it finds the target activation's build in the local Nix
+store and applies it through the same engine as `kix deploy`. With `--list`
+it prints the activation history and changes nothing.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/rollback.rs` when in doubt.
+
+## Synopsis
+
+```text
+kix rollback <CLUSTER> [--list [-o text|json|yaml]]
+kix rollback <CLUSTER> [-y] [--dry-run] [--prune] [--operator] [--context <CONTEXT>]
+```
+
+| Argument or flag | Meaning |
+| --- | --- |
+| `<CLUSTER>` | Cluster name, as recorded on its Activation records. |
+| `--list` | Print the active activation and every Superseded one (name, identity hash, deploy time, source store path, previous activation, and whether the build is in the local store), then exit. Honours `-o json` and `-o yaml`. |
+| `-y`, `--yes` | Roll back to the most recent Superseded activation without prompting. |
+| `--dry-run` | Print the plan and stop. |
+| `--prune` | Delete resources the current activation has and the target does not. Without it they are listed and kept. |
+| `--operator` | Point the Activation record at the target build and let the Kix operator apply it. See [Operator mode](/docs/reference/cli/operator-mode/). |
+| `--context <CONTEXT>` | Kubeconfig context. See [Global flags](/docs/reference/cli/global-flags/). |
+
+## Choosing the target
+
+Only records that were once the cluster's running state are offered. A deploy
+that stopped part way is never a target.
+
+On a terminal without `--yes`, Kix lists the candidates, newest first, and
+asks for a number; Enter picks the newest. Without a terminal it picks the
+newest and then stops at the confirmation unless `--yes` is set.
+
+The target's build must be in the local Nix store, found through the record's
+source path or the local activation cache. A build made on another machine or
+removed by `nix-collect-garbage` cannot be rolled back to from here. How many
+records exist depends on `kix gc` retention.
+
+The rollback waits up to 180 seconds for each resource to become ready and
+stops at the first failure.
+
+## Examples
+
+```text
+kix rollback demo --list
+kix rollback demo --dry-run
+kix rollback demo --yes
+```
+
+## Exit status
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Rolled back, nothing to change, or the prompt was declined |
+| `1` | A resource failed; confirmation was needed on a non-interactive terminal; no target is available; the target build is not in the local store; or a cluster error |
+
+:::tip[Use it in a task]
+See [Roll back an activation](/docs/how-to/operate-a-cluster/roll-back-an-activation/)
+for the workflow, including operator-managed clusters.
+:::
+
+:::note[Explanation]
+See [Activation and PackageInstance lifecycle](/docs/explanation/activation-and-packageinstance-lifecycle/)
+for how records become Superseded.
+:::

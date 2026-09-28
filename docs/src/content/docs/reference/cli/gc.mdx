@@ -1,4 +1,74 @@
 ---
 title: "`gc`"
-description: TODO
+description: "Delete Kix-managed resources a cluster no longer declares, and retire old Activation records under a retention policy."
 ---
+
+`kix gc` removes what a cluster's build no longer contains. It has three
+modes: soft (the default) compares the last deployed build with a fresh one,
+`--hard` scans every Kix-managed resource on the cluster, and `--operator`
+deletes Activation records and lets the Kix operator clean up after them.
+Every mode also retires old Superseded Activation records.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/gc.rs` when in doubt.
+
+## Synopsis
+
+```text
+kix gc <CLUSTER> [-y] [--hard [--include-unstamped]] [--operator]
+       [--keep <N>] [--keep-max <N>] [--keep-for <DURATION>]
+       [--flake <FLAKE>] [--context <CONTEXT>]
+```
+
+| Argument or flag | Meaning |
+| --- | --- |
+| `<CLUSTER>` | Cluster name to build from the flake. |
+| `-y`, `--yes` | Skip the confirmation prompt. Required when stdin is not a terminal. |
+| `--hard` | Scan every resource carrying the Kix managed-by label and delete those whose identity hash is not in the fresh build. |
+| `--include-unstamped` | With `--hard`, also delete resources that carry the label but no `kix.run/identity-hash`. Kix never applied these, so by default they are only listed. |
+| `--operator` | Delete the retired Activation records only; the operator's finalizer removes their resources. |
+| `--keep <N>` | Always keep at least the `N` newest Superseded records, whatever their age. Default `10`. `0` keeps none. |
+| `--keep-max <N>` | Never keep more than `N` Superseded records. Default `50`. A value below `--keep` is raised to it. |
+| `--keep-for <DURATION>` | Beyond `--keep`, retire records older than this: `30d`, `12h`, `45m`, `30s`, or a bare number of days. `0` or `off` disables the age rule. Default `30d`. |
+| `--flake`, `--context` | See [Global flags](/docs/reference/cli/global-flags/). `-o` has no effect. |
+
+## Modes
+
+| Mode | Old side | What is deleted |
+| --- | --- | --- |
+| Soft | The build from the last `kix deploy` or `kix rollback` on this machine | Resources whose kind, namespace and name are absent from the fresh build. Exits with a message if no previous deploy is recorded here. |
+| `--hard` | Every Kix-managed resource on the cluster | Resources whose identity hash is not in the fresh build |
+| `--operator` | Activation records | Retired records; the operator deletes their resources |
+
+`--hard` judges every Kix-managed resource the Kubernetes context can see
+against the one cluster you name. Resources deployed from another Kix cluster
+definition to the same API server count as garbage.
+
+Resources are deleted dependents first. Namespaces are skipped.
+
+Retiring a record removes it as a rollback target. Each record kept adds one
+entry to the `kix.run/activations` annotation on every managed resource, which
+is why the count is capped. A record is deleted only if it has not changed
+since it was listed.
+
+## Examples
+
+```text
+kix gc demo
+kix gc demo --hard --yes
+kix gc demo --keep 5 --keep-for 14d
+```
+
+## Exit status
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Nothing to collect, everything planned was deleted, or the prompt was declined |
+| `1` | A deletion failed; confirmation was needed on a non-interactive terminal; or a build or cluster error |
+
+:::tip[Use it in a task]
+See [Garbage-collect stale resources](/docs/how-to/operate-a-cluster/garbage-collect-stale-resources/)
+for choosing a mode, and
+[Configure activation retention](/docs/how-to/operate-a-cluster/configure-activation-retention/)
+for the retention flags.
+:::

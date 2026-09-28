@@ -1,4 +1,63 @@
 ---
 title: "Global flags"
-description: TODO
+description: "Flags and environment variables every `kix` command accepts: output format, verbosity, colour, kubeconfig context, flake selection, and the eval cache."
 ---
+
+These flags are accepted by every `kix` command and may appear before or
+after the subcommand. A command that has no use for a flag ignores it.
+
+This page is hand-maintained. Check `GlobalArgs` in
+`cli/kix-cli/src/cli.rs`, `cli/kix-cli/src/main.rs` and
+`cli/kix-cli/src/output.rs` when in doubt.
+
+## Flags
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `-o`, `--output <FORMAT>` | Varies by command | `text`, `json`, `yaml`, or `markdown`. See [Output formats](/docs/reference/cli/output-formats/) for which commands honour which values. |
+| `-v`, `--verbose` | Off | Log more to stderr. Repeat for more: `-v` logs Kix at info level, `-vv` at debug, `-vvv` everything at debug. |
+| `-q`, `--quiet` | Off | Suppress progress and informational output, and log errors only. Results still print. |
+| `--no-color` | Off | Disable coloured output. |
+| `--context <CONTEXT>` | Current kubeconfig context | Kubeconfig context for every command that talks to a cluster. `logs` and `pf` pass it to `kubectl`. |
+| `--flake <FLAKE>` | `.` | Flake to evaluate clusters from. A value without `:` is a local path, resolved against the working directory; anything else, such as `github:org/repo`, is passed to Nix as a flake reference. Commands that use the [eval cache](/docs/reference/cli/eval-cache-behavior/) currently fail on a remote reference. |
+| `--no-cache` | Off | Skip the Kix eval cache and evaluate from Nix every time. See [Eval cache behavior](/docs/reference/cli/eval-cache-behavior/). |
+| `--override-input <INPUT> <URL>` | None | Override a flake input's URL for every `nix` command Kix runs, like `nix --override-input`. Repeatable, two values each time. |
+| `-h`, `--help` | | Print help. `-h` prints a summary, `--help` the long form. |
+| `-V`, `--version` | | Print the version. |
+
+## Commands that do not evaluate a flake
+
+These commands never evaluate the flake, so `--flake`, `--no-cache`, and
+`--override-input` have no effect on them:
+
+| Command | What it reads |
+| --- | --- |
+| `kix drift` | The live cluster only |
+| `kix snapshot save` | The live cluster only |
+| `kix completions` | Nothing |
+| `kix pin` | The pin file. `--flake` is used only as a place to look for `pins.json`. |
+
+## Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `NO_COLOR` | Any value disables colour, as `--no-color` does. Colour is also off when `TERM=dumb` or stdout is not a terminal. |
+| `KIX_LOG` | A tracing filter, such as `kix=debug` or `debug`, that replaces the level chosen by `-v` and `-q`. |
+| `KIX_NO_INTERACTIVE` | Any value makes Kix treat the terminal as non-interactive, so commands that ask for confirmation refuse to prompt and need `--yes`. Stdin that is not a terminal has the same effect. |
+
+The variables that tune how Kix talks to the Kubernetes API are listed in
+[API server retries and request limits](/docs/reference/cli/api-server-transport/).
+Registry credentials for `kix pin` are listed on [`kix pin`](/docs/reference/cli/pin/).
+
+## Examples
+
+```text
+kix --flake ../infra list clusters
+kix deploy demo --context kind-demo -v
+kix build demo --override-input kixpkgs git+file:///home/me/src/kixpkgs
+```
+
+:::tip[Use it in a task]
+See [Install and run the Kix CLI](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/)
+for setting up the CLI against a flake.
+:::
