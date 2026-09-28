@@ -22,6 +22,9 @@
 
       clusterOutputs = mkFlake {
         inherit inputs;
+        # Matches clusters/flake.nix: a finding from an error-severity
+        # scorecard rule fails the build.
+        clusterModules = [ { scorecard.maxSeverity = "error"; } ];
         clusters = {
           # Test clusters
           minimal = ./clusters/test-minimal.nix;
