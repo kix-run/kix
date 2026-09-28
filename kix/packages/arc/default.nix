@@ -51,7 +51,7 @@ let
 in
 {
   meta = {
-    version = "0.13.1";
+    version = "0.14.2";
     description = "GitHub Actions Runner Controller (gha-runner-scale-set-controller), which runs self-hosted runner scale sets";
     owner = "platform";
     # The controller runs without leader election here (no lease RBAC), so
@@ -64,7 +64,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "ghcr.io/actions/gha-runner-scale-set-controller";
-        tag = "0.13.1";
+        tag = "0.14.2";
         pullPolicy = "IfNotPresent";
       };
     };
@@ -85,6 +85,17 @@ in
     logFormat = lib.mkOption {
       type = lib.types.str;
       default = "text";
+    };
+    healthProbePort = lib.mkOption {
+      type = lib.types.nullOr lib.types.port;
+      # The port of the chart's `flags.healthProbeBindAddress` example value.
+      default = 8081;
+      description = ''
+        Port the manager serves /healthz and /readyz on, passed as
+        `--health-probe-bind-address=:<port>`. The liveness and readiness
+        probes target it. `null` omits the flag, which switches the
+        endpoints off, and drops both probes.
+      '';
     };
     updateStrategy = lib.mkOption {
       type = lib.types.str;
@@ -113,6 +124,29 @@ in
     }:
     let
       controllerName = "${config.releaseName}-gha-rs-controller";
+      healthProbesEnabled = config.healthProbePort != null;
+
+      # Paths and timings from the chart's deployment template (0.14.2),
+      # which adds these probes whenever the bind address is set.
+      healthProbes = lib.optionalAttrs healthProbesEnabled {
+        ports = [ (kix.port "health" config.healthProbePort) ];
+        livenessProbe = {
+          httpGet = {
+            path = "/healthz";
+            port = "health";
+          };
+          initialDelaySeconds = 15;
+          periodSeconds = 20;
+        };
+        readinessProbe = {
+          httpGet = {
+            path = "/readyz";
+            port = "health";
+          };
+          initialDelaySeconds = 5;
+          periodSeconds = 10;
+        };
+      };
 
       selectorLabels = {
         "app.kubernetes.io/name" = "gha-rs-controller";
@@ -241,7 +275,7 @@ in
       # --- CRDs ---
       # Vendored verbatim from the gha-runner-scale-set-controller chart at the
       # tag matching config.image.tag:
-      #   https://github.com/actions/actions-runner-controller/tree/gha-runner-scale-set-0.13.1/charts/gha-runner-scale-set-controller/crds
+      #   https://github.com/actions/actions-runner-controller/tree/gha-runner-scale-set-0.14.2/charts/gha-runner-scale-set-controller/crds
       # Without them the controller crash-loops on start with
       # `no matches for kind "EphemeralRunnerSet" in version
       # "actions.github.com/v1alpha1"`.
@@ -292,52 +326,53 @@ in
               serviceAccount = self.serviceAccount;
               terminationGracePeriodSeconds = 10;
               containers = [
-                {
-                  name = "manager";
-                  image = "${config.image.repository}:${config.image.tag}";
-                  imagePullPolicy = config.image.pullPolicy;
-                  command = [ "/manager" ];
-                  args = [
-                    "--auto-scaling-runner-set-only"
-                    "--log-level=${config.logLevel}"
-                    "--log-format=${config.logFormat}"
-                    "--runner-max-concurrent-reconciles=2"
-                    "--update-strategy=${config.updateStrategy}"
-                    "--listener-metrics-addr=0"
-                    "--listener-metrics-endpoint="
-                    "--metrics-addr=0"
-                  ];
-                  # The 0.13.1 manager has no health endpoints: the
-                  # `--health-probe-bind-address` flag first ships in
-                  # gha-runner-scale-set 0.14.2, and 0.13.1 exits on it.
-                  env = [
-                    {
-                      name = "CONTROLLER_MANAGER_CONTAINER_IMAGE";
-                      value = "${config.image.repository}:${config.image.tag}";
-                    }
-                    {
-                      name = "CONTROLLER_MANAGER_POD_NAMESPACE";
-                      valueFrom.fieldRef = {
-                        apiVersion = "v1";
-                        fieldPath = "metadata.namespace";
-                      };
-                    }
-                  ];
-                  resources = config.resources;
-                  # The image runs as 65532. The chart (0.13.1) mounts the
-                  # /tmp emptyDir below and suggests a read-only root in its
-                  # `securityContext` example.
-                  securityContext = {
-                    runAsNonRoot = true;
-                    readOnlyRootFilesystem = true;
-                  };
-                  volumeMounts = [
-                    {
-                      name = "tmp";
-                      mountPath = "/tmp";
-                    }
-                  ];
-                }
+                (
+                  {
+                    name = "manager";
+                    image = "${config.image.repository}:${config.image.tag}";
+                    imagePullPolicy = config.image.pullPolicy;
+                    command = [ "/manager" ];
+                    args = [
+                      "--auto-scaling-runner-set-only"
+                      "--log-level=${config.logLevel}"
+                      "--log-format=${config.logFormat}"
+                      "--runner-max-concurrent-reconciles=2"
+                      "--update-strategy=${config.updateStrategy}"
+                      "--listener-metrics-addr=0"
+                      "--listener-metrics-endpoint="
+                      "--metrics-addr=0"
+                    ]
+                    ++ lib.optional healthProbesEnabled "--health-probe-bind-address=:${toString config.healthProbePort}";
+                    env = [
+                      {
+                        name = "CONTROLLER_MANAGER_CONTAINER_IMAGE";
+                        value = "${config.image.repository}:${config.image.tag}";
+                      }
+                      {
+                        name = "CONTROLLER_MANAGER_POD_NAMESPACE";
+                        valueFrom.fieldRef = {
+                          apiVersion = "v1";
+                          fieldPath = "metadata.namespace";
+                        };
+                      }
+                    ];
+                    resources = config.resources;
+                    # The image runs as 65532. The chart (0.14.2) mounts the
+                    # /tmp emptyDir below and suggests a read-only root in its
+                    # `securityContext` example.
+                    securityContext = {
+                      runAsNonRoot = true;
+                      readOnlyRootFilesystem = true;
+                    };
+                    volumeMounts = [
+                      {
+                        name = "tmp";
+                        mountPath = "/tmp";
+                      }
+                    ];
+                  }
+                  // healthProbes
+                )
               ];
               volumes = [
                 # An empty emptyDir is a source, not an absence: kept so the

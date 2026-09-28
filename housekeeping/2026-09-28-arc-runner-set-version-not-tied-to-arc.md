@@ -1,0 +1,3 @@
+# 2026-09-28 · `kix/packages/arc-runner-set` · Nothing checks that arc-runner-set and the arc controller share a major.minor version.
+
+When the two differ, the controller deletes the AutoscalingRunnerSet instead of reconciling it (upstream `controllers/actions.github.com/autoscalingrunnerset_controller.go`, near line 139, compares the `app.kubernetes.io/version` label with its own build version). The runners disappear with no eval error and no deploy error. The two packages are not wired together: arc-runner-set takes the controller's ServiceAccount as plain Helm values (`controllerServiceAccount`, see `kix/package-eval.nix`), so it has no dependency `out` to read arc's `meta.version` from. Both are at 0.14.2 today only because they were bumped in the same commit.

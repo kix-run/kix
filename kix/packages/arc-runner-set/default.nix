@@ -6,22 +6,22 @@
 #
 # Chart:   oci://ghcr.io/actions/actions-runner-controller-charts
 # Name:    gha-runner-scale-set
-# Version: 0.13.1
+# Version: 0.14.2
 
 { scope, lib }:
 let
   chart = scope.helm.fetchHelmChart {
     repo = "oci://ghcr.io/actions/actions-runner-controller-charts";
     name = "gha-runner-scale-set";
-    version = "0.13.1";
-    hash = "sha256-vARZeh9Qn3QCbMT7Qx8L1zApSM5nkZxZ9LY3ieWbmqs=";
+    version = "0.14.2";
+    hash = "sha256-Gi0QTlVIbK03Opwz8879CyaM1Wd0PlfqXajh3fdeDMA=";
   };
 
   defaultValues = { };
 in
 {
   meta = {
-    version = "0.13.1";
+    version = "0.14.2";
     description = "A GitHub Actions runner scale set from the upstream gha-runner-scale-set chart, reconciled by the arc controller";
     owner = "platform";
     isHelm = true;
