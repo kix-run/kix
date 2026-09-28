@@ -13,7 +13,7 @@ use kube::{
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
+use crate::manifest::types::ResourceId;
 
 use super::super::activation::{self, WaveRecord, WaveStatus};
 use super::super::apply::{self, ApplyAction, ApplyError, ApplyResult};
@@ -546,19 +546,7 @@ impl ClusterOps for KubeOps {
                 });
             }
         };
-        let ns = (rid.namespace != CLUSTER_SCOPED).then_some(rid.namespace.as_str());
-        readiness::wait_for_ready(
-            &self.client,
-            &ar,
-            &scope,
-            &rid.name,
-            ns,
-            &rid.kind,
-            timeout,
-            cancel,
-            on_status,
-        )
-        .await
+        readiness::wait_for_ready(&self.client, &ar, &scope, rid, timeout, cancel, on_status).await
     }
 
     async fn rediscover(&self) -> Result<(), FetchError> {
@@ -744,6 +732,7 @@ mod prune_tests {
     use crate::cluster::fake_api::FakeApi;
     use crate::manifest::keys;
     use crate::manifest::lifecycle::RECORD_KIND;
+    use crate::manifest::types::CLUSTER_SCOPED;
     use serde_json::json;
 
     /// Deploy's prune deletes through the prune guard: a ClusterRole another

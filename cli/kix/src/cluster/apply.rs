@@ -106,6 +106,38 @@ pub enum ApplyError {
         expected: String,
         detail: String,
     },
+
+    #[error(
+        "cannot apply {resource}: Kubernetes serves this kind as namespaced, but the manifest has no metadata.namespace. \
+         Kix does not pick a namespace for it. Create it with a namespaced scope (scope.mkResource) or set metadata.namespace"
+    )]
+    NoNamespace { resource: String },
+}
+
+/// Is `rid` of a namespaced kind but keyed [`CLUSTER_SCOPED`], because its
+/// manifest names no namespace? The apiserver would store such an object in
+/// the requester's namespace, where no later comparison with the build finds
+/// it, so [`apply_resource`] refuses it.
+pub fn is_namespaceless(scope: &Scope, rid: &ResourceId) -> bool {
+    matches!(scope, Scope::Namespaced) && rid.namespace == CLUSTER_SCOPED
+}
+
+/// The resources among `rids` that [`apply_resource`] would refuse as
+/// [`ApplyError::NoNamespace`], judged by `discovery`. A kind discovery does
+/// not know yet (a CRD the same deploy creates) is not reported.
+pub fn namespaceless<'a>(
+    discovery: &[(ApiResource, Scope)],
+    rids: impl IntoIterator<Item = &'a ResourceId>,
+) -> Vec<ResourceId> {
+    rids.into_iter()
+        .filter(|rid| {
+            discovery
+                .iter()
+                .find(|(ar, _)| ar.kind == rid.kind)
+                .is_some_and(|(_, scope)| is_namespaceless(scope, rid))
+        })
+        .cloned()
+        .collect()
 }
 
 /// Result of applying a single resource.
@@ -524,26 +556,6 @@ pub fn detect_changes_live(
     actions
 }
 
-/// Build the typed API handle for a resource, honoring cluster scope.
-fn api_for(
-    client: &Client,
-    ar: &ApiResource,
-    scope: Scope,
-    rid: &ResourceId,
-) -> Api<DynamicObject> {
-    match scope {
-        Scope::Namespaced => {
-            let ns = if rid.namespace == CLUSTER_SCOPED {
-                "default"
-            } else {
-                &rid.namespace
-            };
-            Api::namespaced_with(client.clone(), ns, ar)
-        }
-        Scope::Cluster => Api::all_with(client.clone(), ar),
-    }
-}
-
 /// Record this activation on a resource the deploy did NOT apply.
 ///
 /// An unchanged resource is still part of the current activation. Add the
@@ -560,7 +572,7 @@ pub async fn record_activation_on_skipped(
     activation_hash: &str,
     live_activations: Option<&HashSet<String>>,
 ) -> Result<(), ApplyError> {
-    let api = api_for(client, ar, scope, rid);
+    let api = super::fetch::api_for(client, ar, &scope, rid);
     update_bookkeeping_annotations_checked(
         &api,
         &rid.name,
@@ -592,7 +604,12 @@ pub async fn apply_resource(
 
     tracing::info!(resource = %rid.display_id(), "applying resource");
 
-    let api: Api<DynamicObject> = api_for(client, ar, scope, &rid);
+    if is_namespaceless(&scope, &rid) {
+        return Err(ApplyError::NoNamespace {
+            resource: rid.display_id(),
+        });
+    }
+    let api: Api<DynamicObject> = super::fetch::api_for(client, ar, &scope, &rid);
 
     // Default to non-force SSA so ownership conflicts return their field paths
     // and current manager. --force-conflicts opts into taking ownership.
@@ -2026,6 +2043,54 @@ mod tests {
             orphan_ids(&actions).is_empty(),
             "{:?}",
             orphan_ids(&actions)
+        );
+    }
+
+    /// A ConfigMap manifest without metadata.namespace is refused before any
+    /// request, so the apiserver never stores it in `default` under an id
+    /// the build does not have. `namespaceless` reports only that case: not a
+    /// ClusterRole, a ConfigMap with a namespace, or a kind discovery lacks.
+    #[tokio::test]
+    async fn a_namespaced_kind_without_a_namespace_is_refused() {
+        use crate::cluster::{fake_api::FakeApi, fetch};
+        use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
+
+        let api = FakeApi::default();
+        let client = api.client();
+        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let before = api.requests().len();
+        let cm = serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": { "name": "shared" },
+        });
+        let (ar, scope) = discovery
+            .iter()
+            .find(|(ar, _)| ar.kind == "ConfigMap")
+            .unwrap();
+        let err = super::apply_resource(&client, ar, scope.clone(), &cm, false, None, None, false)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, super::ApplyError::NoNamespace { resource } if resource == "ConfigMap/shared"),
+            "{err}"
+        );
+        assert_eq!(api.requests().len(), before, "{:?}", api.requests());
+
+        let rid = |kind: &str, ns: &str| ResourceId {
+            kind: kind.into(),
+            namespace: ns.into(),
+            name: "shared".into(),
+        };
+        let candidates = [
+            rid("ConfigMap", CLUSTER_SCOPED),
+            rid("ConfigMap", "default"),
+            rid("ClusterRole", CLUSTER_SCOPED),
+            rid("Widget", CLUSTER_SCOPED),
+        ];
+        assert_eq!(
+            super::namespaceless(&discovery, &candidates),
+            vec![rid("ConfigMap", CLUSTER_SCOPED)]
         );
     }
 }

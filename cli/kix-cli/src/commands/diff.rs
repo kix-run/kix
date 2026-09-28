@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
+use kix::cluster::apply::ApplyError;
 use kix::cluster::fetch;
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use kix::eval::build_cluster_activation_with_status;
@@ -45,6 +46,8 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     let new_graph = build_store_graph(&flake_path, &args.cluster, &overrides, &spinner)?;
     clear_spinner(&spinner);
 
+    // Resources `kix deploy` would refuse; only known against a live cluster.
+    let mut namespaceless = Vec::new();
     let old_graph = if let Some(from) = &args.from {
         let path = PathBuf::from(from);
         if !path.is_dir() {
@@ -66,10 +69,11 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     } else {
         let spinner = make_spinner(ctx, "Fetching live cluster state...");
         let global = ctx.global.clone();
-        let manifests = ctx
+        let (manifests, refused) = ctx
             .runtime
             .block_on(fetch_live_manifests(&global, &new_graph))?;
         clear_spinner(&spinner);
+        namespaceless = refused;
         StoreGraph::synthesize(&manifests, &new_graph)
     };
 
@@ -80,6 +84,15 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
         OutputFormat::Yaml => print_json_output(&result, true)?,
         OutputFormat::Markdown => print_markdown_output(&result),
         OutputFormat::Text => print_text_output(&result, &ctx.global),
+    }
+    for rid in namespaceless {
+        eprintln!(
+            "{} {}",
+            output::red("error:"),
+            ApplyError::NoNamespace {
+                resource: rid.display_id()
+            }
+        );
     }
 
     if result.has_diff() {
@@ -135,10 +148,12 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> DiffResult {
     }
 }
 
+/// The live cluster's kix-owned view, and the resources of `new_graph` that
+/// `kix deploy` would refuse as [`ApplyError::NoNamespace`].
 async fn fetch_live_manifests(
     global: &crate::cli::GlobalArgs,
     new_graph: &StoreGraph,
-) -> Result<Vec<Value>> {
+) -> Result<(Vec<Value>, Vec<ResourceId>)> {
     let client = fetch::make_client(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
@@ -203,6 +218,8 @@ async fn fetch_live_manifests(
         .values()
         .map(|r| ResourceId::from_value(&r.manifest))
         .collect();
+    let mut namespaceless = kix::cluster::apply::namespaceless(&discovery, &in_build);
+    namespaceless.sort();
     let tenancy = &sweep.tenancy;
     let (elsewhere, compared): (Vec<_>, Vec<_>) = sweep.managed.into_iter().partition(|obj| {
         !in_build.contains(&ResourceId::from_value(&fetch::to_manifest_value(obj)))
@@ -217,7 +234,7 @@ async fn fetch_live_manifests(
 
     // Only the fields kix's server-side apply owns: server defaults and
     // kix's own bookkeeping never enter the comparison.
-    Ok(fetch::kix_owned_manifests(compared))
+    Ok((fetch::kix_owned_manifests(compared), namespaceless))
 }
 
 fn make_spinner(ctx: &CommandContext, msg: &str) -> Option<indicatif::ProgressBar> {

@@ -1,0 +1,3 @@
+# 2026-09-28 · `kix/lib` · Three hand-kept lists say which built-in kinds are namespaced or cluster-scoped, and they disagree.
+
+`kix/lib/helm.nix` (`clusterScopedKinds`, 14 kinds) and `kix/lib/eval/validate.nix` (`builtInClusterScopedKinds`, 19 kinds, and `builtInNamespacedKinds` for check 18) each keep their own list, and only the last is keyed by API group. The helm list lacks `RuntimeClass`, `ValidatingAdmissionPolicy` and `CertificateSigningRequest`, so a chart shipping one renders it with a `metadata.namespace`. The CLI then keys the build object under that namespace while the live object is cluster-scoped, which looks like the same add-plus-orphan mismatch check 18 prevents for the opposite case. Not reproduced.

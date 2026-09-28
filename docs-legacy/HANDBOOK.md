@@ -487,7 +487,7 @@ scope.mkResource {
 
 **`extra.*` shadowing check.** `extra` may NOT redefine `apiVersion`, `kind`, `metadata.name`, `metadata.namespace`, `spec` (when `spec != {}`), `data` (when `data != {}`), `stringData` (when `stringData != {}`). The check fires at eval time with a remediation hint. `metadata.labels` and `metadata.annotations` are deliberately allowed because they merge additively with scope-injected values.
 
-**Namespace handling.** `mkResource` doesn't take a namespace arg directly — it comes from `scope`. `mkClusterResource` sets the cluster-scoped sentinel, which omits `metadata.namespace`.
+**Namespace handling.** `mkResource` doesn't take a namespace arg directly — it comes from `scope`. `mkClusterResource` sets the cluster-scoped sentinel, which omits `metadata.namespace`; it is for cluster-scoped kinds only, and a namespaced kind built with it fails cross-resource check 18 (§17.4).
 
 **Manifest normalization (the collapse rule).** Rendering strips nulls bottom-up. A container that had members and lost them all collapses to null and is omitted, and the collapse cascades upward through wrappers. A container written literally empty (`emptyDir = { };`, `ingress = [ ];`) renders as `{}`/`[]`: empty values are meaningful to Kubernetes (an empty volume source selects `emptyDir`; an empty label selector matches everything; `subresources.status = { };` enables the subresource). Null list elements are dropped, and an element that collapses entirely leaves its list. The one trap: a constructor that builds a presence-meaningful container from optional arguments that are all null collapses, and the field disappears without an error. Such constructors must either filter their own nulls (`lib.optionalAttrs`, as `kix.mount.emptyDir` does) or wrap the result in `kix.keep` (§9.1). The `volumeHasSource` scorecard rule (severity error) catches the volume case at build time.
 
@@ -1176,7 +1176,7 @@ scorecard.ruleOverrides.byNamespace = { kube-system = { noLatestTag = "info"; };
 
 ### 17.4 Cross-resource checks
 
-Sixteen checks over the finished manifest list run inside every cluster evaluation (`kix/lib/eval/validate.nix`, called from `buildCluster`). They ask whether the thing a name points at exists and whether labels really match a pod in the build. The scorecard rules ask a different question, whether a value came from the right place, and run before string context is stripped. Both are needed: a hand-typed selector with a typo gets the same scorecard warning as a correct one, and only these checks tell them apart.
+Eighteen checks over the finished manifest list run inside every cluster evaluation (`kix/lib/eval/validate.nix`, called from `buildCluster`). They ask whether the thing a name points at exists and whether labels really match a pod in the build. The scorecard rules ask a different question, whether a value came from the right place, and run before string context is stripped. Both are needed: a hand-typed selector with a typo gets the same scorecard warning as a correct one, and only these checks tell them apart.
 
 | # | Check | Skips |
 |---|---|---|
@@ -1196,6 +1196,8 @@ Sixteen checks over the finished manifest list run inside every cluster evaluati
 | 14 | PodDisruptionBudget `selector.matchLabels` matches at least one pod template | no `matchLabels`; a PDB that declares `kix.run/operand-of` (below) |
 | 15 | A Job's pod template labels satisfy no Service selector in its namespace (the Service would route traffic to the Job pod) | Services without a selector |
 | 16 | `kix.run/rerun` appears on Jobs only, with the value `on-change` (the deploy engine deletes and recreates what carries it; key and value live in `core/annotations.nix`) | |
+| 17 | Workload `priorityClassName` names a PriorityClass in the build | `system-cluster-critical`, `system-node-critical` |
+| 18 | A resource of a namespaced kind has `metadata.namespace` (the apiserver would put it in the requester's namespace, where Kix's comparisons with the build never find it) | kinds whose scope Kix does not know: only built-in namespaced kinds and custom kinds whose CRD with `spec.scope: Namespaced` is in the build are checked. `kix deploy` refuses the rest against the cluster's discovery before applying anything |
 
 **Scope of a lookup.** A reference is looked up in the referrer's namespace only, unless the referenced kind is a built-in cluster-scoped kind (a RoleBinding to a ClusterRole). Nothing else falls back to the cluster-scoped bucket. A `kix.untrackedRef` name resolves whatever its kind. Pod selectors follow the same rule: a Service, NetworkPolicy or PodDisruptionBudget matches pod templates in its own namespace only.
 

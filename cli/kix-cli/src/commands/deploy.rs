@@ -1192,6 +1192,29 @@ async fn run_deploy_async(
     )
     .map_err(|e| miette!("{e}"))?;
 
+    // The engine would refuse each of these on its own, part way through
+    // the run; refusing here applies nothing.
+    let namespaceless = kix::cluster::apply::namespaceless(
+        &discovery,
+        plan.nodes.iter().filter_map(|n| match &n.id {
+            NodeId::Resource(rid) => Some(rid),
+            _ => None,
+        }),
+    );
+    if !namespaceless.is_empty() {
+        return Err(miette!(
+            "{}",
+            namespaceless
+                .iter()
+                .map(|rid| kix::cluster::apply::ApplyError::NoNamespace {
+                    resource: rid.display_id()
+                }
+                .to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+
     let discovery = Arc::new(tokio::sync::RwLock::new(discovery));
 
     let prune_policy = prune_policy_for(args);

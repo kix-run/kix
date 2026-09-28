@@ -303,9 +303,8 @@ fn deploy_and_gc() {
 // =============================================================================
 
 /// A flake with Kix clusters `sweep-a` and `sweep-b`, echo servers in
-/// namespaces of their own, both deploying the `shared-role` package: a
-/// ClusterRole, and a ConfigMap whose manifest names no namespace, so it is
-/// applied to `default`.
+/// namespaces of their own, both deploying the `shared-role` package into
+/// the namespace `shared`: a ClusterRole and a ConfigMap.
 struct TwoClusters {
     dir: tempfile::TempDir,
 }
@@ -332,7 +331,7 @@ const SHARED_ROLE_NIX: &str = r#"{ scope, ... }:
           }
         ];
       };
-      note = scope.mkClusterResource {
+      note = scope.mkResource {
         apiVersion = "v1";
         kind = "ConfigMap";
         name = "sweep-test-shared";
@@ -456,7 +455,7 @@ fn assert_b_intact(kube_ctx: &str) {
         ("service", "echo-b", "echo-server"),
         ("configmap", "echo-b", "echo-server"),
         ("clusterrole", "", "sweep-test-reader"),
-        ("configmap", "default", "sweep-test-shared"),
+        ("configmap", "shared", "sweep-test-shared"),
     ] {
         let mut args = vec!["get", kind, name, "-o", "name"];
         if !ns.is_empty() {
@@ -472,7 +471,7 @@ fn assert_b_intact(kube_ctx: &str) {
 }
 
 /// Two Kix clusters deploy into one kind cluster, sharing a ClusterRole and
-/// an unnamespaced ConfigMap. Every command run for `sweep-a` leaves
+/// a ConfigMap. Every command run for `sweep-a` leaves
 /// `sweep-b`'s objects alone, and a prune by `sweep-a` keeps what `sweep-b`
 /// still deploys.
 ///
@@ -505,14 +504,10 @@ fn two_kix_clusters_share_one_kind_cluster() {
     assert!(flake.kix(&ctx, &["deploy", "sweep-b", "--yes"]).0);
     assert_b_intact(&ctx);
 
-    // 1. `kix diff sweep-a` reports no removals. (It does show the
-    //    unnamespaced ConfigMap as added: the build names it without a
-    //    namespace and the live object sits in `default`.)
-    let (_, out) = flake.kix(&ctx, &["diff", "sweep-a"]);
-    assert!(
-        !out.lines().any(|l| l.trim_start().starts_with("- ")),
-        "diff sweep-a should remove nothing:\n{out}"
-    );
+    // 1. `kix diff sweep-a` reports no change: sweep-b's objects are not
+    //    removals.
+    let (ok, out) = flake.kix(&ctx, &["diff", "sweep-a"]);
+    assert!(ok, "diff sweep-a should report no change:\n{out}");
     assert!(out.contains("belong to Kix cluster sweep-b"), "{out}");
 
     // 2. `kix status sweep-a` and `kix snapshot save sweep-a` contain none
@@ -566,7 +561,7 @@ fn two_kix_clusters_share_one_kind_cluster() {
     assert_b_intact(&ctx);
 
     // 5. sweep-a drops the shared package; its prune keeps what sweep-b
-    //    still deploys, including the ConfigMap applied to `default`.
+    //    still deploys.
     flake.write_cluster("a", "hello again from sweep-a", false);
     let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-a", "--prune", "--yes"]);
     assert!(ok, "{out}");

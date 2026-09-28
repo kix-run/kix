@@ -172,6 +172,18 @@ let
     (builtins.length fs == 1 && lib.hasInfix needle (builtins.head fs))
     || throw "expected exactly one failure containing '${needle}', got: ${builtins.toJSON fs}";
 
+  # Exactly one failure per needle, each containing its needle.
+  failuresInclude =
+    needles: ms:
+    let
+      fs = failures ms;
+    in
+    (
+      builtins.length fs == builtins.length needles
+      && builtins.all (n: builtins.any (lib.hasInfix n) fs) needles
+    )
+    || throw "expected failures containing ${builtins.toJSON needles}, got: ${builtins.toJSON fs}";
+
   clean =
     ms:
     let
@@ -179,7 +191,32 @@ let
     in
     fs == [ ] || throw "expected no failures, got: ${builtins.toJSON fs}";
 
+  crd =
+    scope:
+    res "CustomResourceDefinition" null "widgets.example.com" {
+      apiVersion = "apiextensions.k8s.io/v1";
+      spec = {
+        group = "example.com";
+        names.kind = "Widget";
+        inherit scope;
+      };
+    };
+
   # Inline packages for the cluster-level cases.
+  clusterConfigMapPackage = {
+    build =
+      { self, scope, ... }:
+      {
+        cm = scope.mkClusterResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "unns";
+          data.k = "v";
+        };
+        root = self.cm;
+      };
+  };
+
   aliasedPackage = {
     build =
       { self, scope, ... }:
@@ -324,9 +361,13 @@ in
   # A namespaced lookup must not be satisfied by a cluster-scoped object of
   # the same kind and name (kixpkgs#71 item 5). ConfigMap is namespaced in
   # Kubernetes; the cluster-scoped one here is synthetic, which is the point:
-  # the checker must not guess.
+  # the checker must not guess. Check 18 also refuses the synthetic object.
   v03b-cluster-scoped-namesake-does-not-satisfy-namespaced-lookup =
-    onlyFailure "mounts ConfigMap 'shared' which is not in the cluster build"
+    failuresInclude
+      [
+        "mounts ConfigMap 'shared' which is not in the cluster build"
+        "ConfigMap shared (v1) is a namespaced kind"
+      ]
       (
         base "a"
         ++ [
@@ -1019,7 +1060,41 @@ in
     ]
   );
 
+  v18a-namespaced-builtin-without-namespace =
+    onlyFailure "ConfigMap shared (v1) is a namespaced kind but has no metadata.namespace"
+      (base "a" ++ [ (res "ConfigMap" null "shared" { }) ]);
+
+  # The group decides: a custom kind named like a built-in is not refused
+  # unless its CRD in the build says Namespaced.
+  v18b-same-name-in-another-group-is-fine = clean (
+    base "a" ++ [ (res "Service" null "edge" { apiVersion = "example.com/v1"; }) ]
+  );
+
+  v18c-namespaced-custom-kind-without-namespace =
+    onlyFailure "Widget w (example.com/v1) is a namespaced kind"
+      (
+        base "a"
+        ++ [
+          (crd "Namespaced")
+          (res "Widget" null "w" { apiVersion = "example.com/v1"; })
+        ]
+      );
+
+  v18d-cluster-scoped-custom-kind-is-fine = clean (
+    base "a"
+    ++ [
+      (crd "Cluster")
+      (res "Widget" null "w" { apiVersion = "example.com/v1"; })
+    ]
+  );
+
   # --- wiring into buildCluster ---
+
+  # scope.mkClusterResource with a namespaced kind fails the cluster eval.
+  v18e-cluster-resource-of-namespaced-kind-fails-the-build = evalFails (mkCluster [
+    baseInstances
+    { instances.infra.unns.package = clusterConfigMapPackage; }
+  ]);
 
   # kix.untrackedRef on a ServiceAccount name builds.
   v23-untracked-ref-serviceaccount-builds =

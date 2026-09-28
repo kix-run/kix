@@ -24,6 +24,7 @@ use super::cancel::CancelToken;
 use super::errors::{FailureClass, classify};
 use super::fetch;
 use crate::manifest::keys;
+use crate::manifest::types::ResourceId;
 
 /// After a CRD reaches `Established=True`, the apiserver's discovery endpoint
 /// (and replicas behind an HA load balancer) may still lag by a few hundred
@@ -1103,24 +1104,18 @@ pub async fn wait_for_ready(
     client: &Client,
     ar: &ApiResource,
     scope: &Scope,
-    name: &str,
-    namespace: Option<&str>,
-    kind: &str,
+    rid: &ResourceId,
     timeout: Duration,
     cancel: &CancelToken,
     on_status: impl Fn(&str),
 ) -> Result<ReadinessResult, ReadinessError> {
+    let (name, kind) = (rid.name.as_str(), rid.kind.as_str());
     // Immediate kinds: existence = ready
     if is_immediate_kind(kind) {
         return Ok(ReadinessResult::Ready);
     }
 
-    let api: Api<DynamicObject> = match scope {
-        Scope::Namespaced => {
-            Api::namespaced_with(client.clone(), namespace.unwrap_or("default"), ar)
-        }
-        Scope::Cluster => Api::all_with(client.clone(), ar),
-    };
+    let api: Api<DynamicObject> = fetch::api_for(client, ar, scope, rid);
 
     let idle_budget = timeout;
     let hard_ceiling = HARD_CEILING;
@@ -1167,7 +1162,7 @@ pub async fn wait_for_ready(
 
         // Check terminal failures before readiness so partial success does not
         // hide a Failed condition.
-        let ns_for_pods = namespace.unwrap_or("default");
+        let ns_for_pods = obj.metadata.namespace.as_deref().unwrap_or_default();
         let scan = scan_terminal(client, &obj.data, kind, ns_for_pods).await;
         if let Some((reason, detail)) = scan.terminal {
             return Ok(ReadinessResult::Failed {

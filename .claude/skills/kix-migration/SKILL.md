@@ -249,7 +249,7 @@ Fix all warnings before committing.
 | API | Description |
 |-----|-------------|
 | `scope.mkResource { ... }` | Create a namespaced K8s resource that is not a workload. A Deployment, StatefulSet, DaemonSet or Job through it is an eval error: only the typed builders below seal a workload (validators, derived spread and PDB, netpol edges) |
-| `scope.mkClusterResource { ... }` | Create a cluster-scoped resource |
+| `scope.mkClusterResource { ... }` | Create a resource of a cluster-scoped kind (a namespaced kind here fails the eval) |
 | `scope.mkDeployment` | Create a Deployment — auto-sets apiVersion/kind, copies `selector.matchLabels` to template labels |
 | `scope.mkStatefulSet` | Same as mkDeployment but for StatefulSets |
 | `scope.mkDaemonSet` | Same as mkDeployment but for DaemonSets |

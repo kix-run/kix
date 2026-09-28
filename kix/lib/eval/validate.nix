@@ -750,6 +750,83 @@ rec {
           ]
       ) workloads;
 
+      # --- 18. Namespaced kinds carry a namespace ---
+      # The apiserver stores a namespaced object that names no namespace in
+      # the requester's namespace, and the CLI keys the manifest as
+      # cluster-scoped, so `kix diff` and `kix deploy --prune` would treat
+      # the live object as an orphan of the build that created it. Kix knows
+      # the scope of the built-in kinds below and of every custom kind whose
+      # CustomResourceDefinition is in this build (`spec.scope`); a custom
+      # kind defined elsewhere is left to the deploy-time check in the CLI.
+
+      builtInNamespacedKinds = {
+        "" = [
+          "ConfigMap"
+          "Endpoints"
+          "Event"
+          "LimitRange"
+          "PersistentVolumeClaim"
+          "Pod"
+          "PodTemplate"
+          "ReplicationController"
+          "ResourceQuota"
+          "Secret"
+          "Service"
+          "ServiceAccount"
+        ];
+        "apps" = [
+          "ControllerRevision"
+          "DaemonSet"
+          "Deployment"
+          "ReplicaSet"
+          "StatefulSet"
+        ];
+        "autoscaling" = [ "HorizontalPodAutoscaler" ];
+        "batch" = [
+          "CronJob"
+          "Job"
+        ];
+        "coordination.k8s.io" = [ "Lease" ];
+        "discovery.k8s.io" = [ "EndpointSlice" ];
+        "events.k8s.io" = [ "Event" ];
+        "networking.k8s.io" = [
+          "Ingress"
+          "NetworkPolicy"
+        ];
+        "policy" = [ "PodDisruptionBudget" ];
+        "rbac.authorization.k8s.io" = [
+          "Role"
+          "RoleBinding"
+        ];
+        "storage.k8s.io" = [ "CSIStorageCapacity" ];
+      };
+
+      namespacedCustomKinds = builtins.listToAttrs (
+        map
+          (crd: {
+            name = "${crd.spec.group}/${crd.spec.names.kind}";
+            value = true;
+          })
+          (
+            builtins.filter (
+              r: r.kind == "CustomResourceDefinition" && (r.spec.scope or "") == "Namespaced"
+            ) resources
+          )
+      );
+
+      isNamespacedKind =
+        r:
+        let
+          group = groupOf (r.apiVersion or "");
+        in
+        builtins.elem r.kind (builtInNamespacedKinds.${group} or [ ])
+        || namespacedCustomKinds ? "${group}/${r.kind}";
+
+      missingNamespaceFailures = map (
+        r:
+        "${r.kind} ${r.metadata.name or "unnamed"} (${r.apiVersion or ""}) is a namespaced kind but has no metadata.namespace. Create it with a namespaced scope (scope.mkResource) rather than scope.mkClusterResource, or set metadata.namespace"
+      ) (builtins.filter (r: !(r.metadata ? namespace) && isNamespacedKind r) resources);
+
       # --- Collect all failures ---
 
       allFailures =
@@ -769,7 +846,8 @@ rec {
         ++ pdbFailures
         ++ jobEndpointFailures
         ++ rerunFailures
-        ++ priorityClassFailures;
+        ++ priorityClassFailures
+        ++ missingNamespaceFailures;
     in
     allFailures;
 

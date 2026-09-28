@@ -622,17 +622,7 @@ pub async fn fetch_matching_resources(
             continue;
         };
 
-        let api: Api<DynamicObject> = match scope {
-            Scope::Namespaced => {
-                let ns = if rid.namespace == CLUSTER_SCOPED {
-                    "default"
-                } else {
-                    &rid.namespace
-                };
-                Api::namespaced_with(client.clone(), ns, &ar.clone())
-            }
-            Scope::Cluster => Api::all_with(client.clone(), &ar.clone()),
-        };
+        let api = api_for(client, ar, scope, rid);
 
         let name = rid.name.clone();
         let resource_id = rid.display_id();
@@ -783,9 +773,11 @@ pub async fn split_shared_orphans_live(
     Ok(split_by_lookup(orphans, |rid| live.get(rid), &tenancy))
 }
 
-/// The API a request about `rid` goes to. A namespaced object whose
-/// manifest names no namespace (`rid.namespace` is [`CLUSTER_SCOPED`]) was
-/// applied to `default`, so it is read and deleted there.
+/// The API a request about `rid` goes to. For a namespaced kind keyed
+/// [`CLUSTER_SCOPED`] (its manifest names no namespace) that is `default`:
+/// [`crate::cluster::apply::apply_resource`] refuses to create such an
+/// object, but Kix CLIs before that check applied it there, and a prune of
+/// an old build reads and deletes it there.
 pub fn api_for(
     client: &Client,
     ar: &ApiResource,
