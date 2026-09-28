@@ -479,15 +479,15 @@ in
 
       root = {
         resource = credentials;
-        ## bootstrapPassword is referenced by the Job (via secretKeyRef
-        ## context), so listing it explicitly would be redundant; kix's
-        ## forward closure picks it up. The Job itself is not referenced
-        ## from `credentials`, so it needs to live in either `requires`
-        ## (in-band, blocks readiness) or `postHooks` (runs after package
-        ## is otherwise deployed). We use `postHooks` so the credentials
-        ## Secret can be applied immediately and immich's wave waits on
-        ## the Job's success readiness rather than coupling the two.
-        #postHooks = [ bootstrapJob ];
+        # The Job reaches this instance by two routes, and each covers a
+        # case the other does not. `pg` above carries it to consumers, so a
+        # consumer's workload waits for the Job and gets egress to postgres.
+        # `postHooks` puts the Job, and what it references (bootstrapPassword,
+        # superuserRef, its network policies), in this instance's own forward
+        # closure, so the PackageInstance depends on the Job even when no
+        # consumer reads `out.host`. `credentials` does not reference the Job
+        # and can be applied before the Job runs.
+        postHooks = [ bootstrapJob ];
 
         out = {
           host = self.pg.fqdn;

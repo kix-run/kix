@@ -1,0 +1,3 @@
+# 2026-09-28 · `kix/lib/core/activation.nix` · The CLI never reads the `post-hooks`, `package-requires` or `inverse-deps` annotations.
+
+`mkPackageInstance` writes all three on every PackageInstance, and `cli/kix/src/manifest/keys.rs` defines the keys, but no CLI code reads them. At deploy time `root.postHooks` and `root.requires` therefore behave the same: each only adds the resource to the instance's forward closure and so to the PackageInstance's `kix.run/depends-on`. Package comments that promise a post-hook "runs after the package is otherwise deployed" describe behavior nothing implements.
