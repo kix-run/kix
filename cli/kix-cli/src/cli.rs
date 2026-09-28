@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
 #[derive(Parser)]
@@ -68,6 +68,149 @@ impl GlobalArgs {
     }
 }
 
+/// The global flags that only some commands read, each with the command
+/// paths that read it. A path covers its subcommands, and a command group
+/// counts as reading a flag when any of its subcommands does.
+///
+/// `-v`, `-q` and `--no-color` are read by every command and are not listed.
+const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
+    (
+        "output",
+        &[
+            "build",
+            "diff",
+            "check",
+            "status",
+            "list",
+            "graph",
+            "inspect",
+            "rollback",
+            "drift",
+            "images",
+            "compliance sbom",
+            "compliance attest",
+            "pin",
+        ],
+    ),
+    (
+        "context",
+        &[
+            "diff",
+            "deploy",
+            "status",
+            "gc",
+            "migrate",
+            "rollback",
+            "logs",
+            "pf",
+            "health",
+            "drift",
+            "snapshot",
+            "compliance attest",
+        ],
+    ),
+    (
+        "flake",
+        &[
+            "build",
+            "diff",
+            "check",
+            "deploy",
+            "status",
+            "list",
+            "graph",
+            "inspect",
+            "gc",
+            "migrate",
+            "export",
+            "logs",
+            "pf",
+            "images",
+            "compliance",
+            "pin",
+        ],
+    ),
+    // Only commands that evaluate through the SQLite eval cache.
+    (
+        "no_cache",
+        &[
+            "build",
+            "check",
+            "status",
+            "list",
+            "graph",
+            "inspect",
+            "images",
+            "compliance audit",
+        ],
+    ),
+    (
+        "override_input",
+        &[
+            "build",
+            "diff",
+            "check",
+            "deploy",
+            "status",
+            "list",
+            "graph",
+            "inspect",
+            "gc",
+            "migrate",
+            "export",
+            "logs",
+            "pf",
+            "images",
+            "compliance",
+        ],
+    ),
+];
+
+/// The clap command for `kix`, with each scoped global flag hidden from the
+/// `--help` of the commands that ignore it.
+///
+/// A hidden flag is still accepted there, so a wrapper that passes
+/// `--flake` or `--context` ahead of every subcommand keeps working.
+/// clap_complete's generators include hidden flags, so shell completions
+/// still offer them.
+pub fn command() -> clap::Command {
+    let cmd = Cli::command();
+    let globals: Vec<clap::Arg> = cmd
+        .get_arguments()
+        .filter(|a| a.is_global_set())
+        .cloned()
+        .collect();
+    cmd.mut_subcommands(|sc| hide_unread_globals(sc, "", &globals))
+}
+
+/// Gives `cmd` a hidden copy of each scoped global flag it does not read.
+///
+/// clap copies a global flag into a subcommand only when the subcommand has
+/// no argument with that id, so the hidden copy takes its place. This has to
+/// happen before `Command::build`: an argument changed after the build keeps
+/// a stale position in the parser's lookup table.
+fn hide_unread_globals(cmd: clap::Command, parent: &str, globals: &[clap::Arg]) -> clap::Command {
+    let path = if parent.is_empty() {
+        cmd.get_name().to_string()
+    } else {
+        format!("{parent} {}", cmd.get_name())
+    };
+    let mut cmd = cmd;
+    for (id, readers) in SCOPED_GLOBALS {
+        let reads = readers.iter().any(|r| {
+            *r == path || r.starts_with(&format!("{path} ")) || path.starts_with(&format!("{r} "))
+        });
+        if !reads {
+            let arg = globals
+                .iter()
+                .find(|a| a.get_id() == *id)
+                .unwrap_or_else(|| panic!("no global flag {id}"));
+            cmd = cmd.arg(arg.clone().hide(true));
+        }
+    }
+    cmd.mut_subcommands(|sc| hide_unread_globals(sc, &path, globals))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OutputFormat {
     Text,
@@ -82,10 +225,17 @@ pub enum Command {
     /// Render manifests to stdout
     Build(BuildArgs),
 
-    /// Colored diff against live cluster
+    /// Colored diff against the live cluster, or against a directory with --from
     Diff(DiffArgs),
 
-    /// Validate: eval + schema + policy
+    /// Evaluate a cluster and report build-time checks and scorecard findings
+    ///
+    /// Evaluation runs the constructor validators, the cross-resource checks
+    /// and every error-severity scorecard rule; a failure in any of them
+    /// reports `eval` as `fail`. The `scorecard` row counts findings at each
+    /// severity. `kix check` does not validate the rendered manifests against
+    /// Kubernetes schemas; `nix flake check` does, through the
+    /// `schema-cluster-<name>` check. Exits 1 when a row reports `fail`.
     Check(CheckArgs),
 
     /// Wave-based deployment with confirmation
@@ -101,7 +251,7 @@ pub enum Command {
     /// Dependency DAG visualization
     Graph(GraphArgs),
 
-    /// Deep-dive: DI deps, parts, out
+    /// Summarise a cluster's rendered resources by namespace and kind
     Inspect(InspectArgs),
 
     /// Garbage-collect stale kix-managed resources
@@ -452,7 +602,7 @@ pub struct DeployArgs {
     /// Acknowledge detected stateful migration pairs and proceed. Without
     /// this flag, a deploy that would remove + add stateful resources in
     /// the same logical slot is rejected (even with --yes) to prevent
-    /// silent data loss. See v2_discussions/67_stateful_migration_orchestration.md.
+    /// silent data loss. Kix does not copy data between them.
     #[arg(long)]
     pub accept_migrations: bool,
 
@@ -472,12 +622,6 @@ pub struct DeployArgs {
     #[arg(long, value_name = "ROWS")]
     pub fold_height: Option<u16>,
 
-    /// How to render cross-package edges in the graph-streaming view.
-    /// `refs` (default) draws `└┄►` references; `full` duplicates the
-    /// referenced node under each consuming package.
-    #[arg(long, value_enum, default_value_t = ShowRefs::Refs)]
-    pub show_refs: ShowRefs,
-
     /// Output format for the deploy event stream. `pretty` (default on TTY)
     /// is the colored human stream; `line` is the nix-build-L idiom (one
     /// line per terminal verdict, no ANSI); `json` emits NDJSON, one event
@@ -485,12 +629,6 @@ pub struct DeployArgs {
     /// to `line` when `pretty` is requested.
     #[arg(long, value_enum, default_value_t = LogFormat::Pretty)]
     pub log_format: LogFormat,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum ShowRefs {
-    Refs,
-    Full,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -815,4 +953,102 @@ fn validate_timeout(s: &str) -> Result<String, String> {
 pub struct CompletionsArgs {
     /// Shell to generate completions for
     pub shell: Shell,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::FromArgMatches;
+
+    fn long_help(path: &[&str]) -> String {
+        let argv = ["kix"].iter().chain(path).chain(&["--help"]);
+        let err = command()
+            .try_get_matches_from(argv)
+            .expect_err("--help exits");
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayHelp);
+        err.render().to_string()
+    }
+
+    #[test]
+    fn command_is_valid() {
+        command().debug_assert();
+    }
+
+    #[test]
+    fn every_scoped_global_names_a_real_flag_and_command() {
+        let cmd = Cli::command();
+        for (id, readers) in SCOPED_GLOBALS {
+            assert!(
+                cmd.get_arguments().any(|a| a.get_id() == *id),
+                "no global flag {id}"
+            );
+            for reader in *readers {
+                let mut sc = &cmd;
+                for name in reader.split(' ') {
+                    sc = sc
+                        .find_subcommand(name)
+                        .unwrap_or_else(|| panic!("no command `{reader}`"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn completions_help_lists_no_scoped_globals() {
+        let help = long_help(&["completions"]);
+        for flag in [
+            "--output",
+            "--context",
+            "--flake",
+            "--no-cache",
+            "--override-input",
+        ] {
+            assert!(!help.contains(flag), "{flag} in:\n{help}");
+        }
+        assert!(help.contains("--quiet"));
+    }
+
+    #[test]
+    fn help_lists_the_globals_a_command_reads() {
+        let deploy = long_help(&["deploy"]);
+        assert!(deploy.contains("--context") && deploy.contains("--flake"));
+        assert!(!deploy.contains("--output") && !deploy.contains("--no-cache"));
+
+        let drift = long_help(&["drift"]);
+        assert!(drift.contains("--context") && drift.contains("--output"));
+        assert!(!drift.contains("--flake"));
+
+        let sbom = long_help(&["compliance", "sbom"]);
+        assert!(sbom.contains("--output") && !sbom.contains("--context"));
+        assert!(long_help(&["compliance"]).contains("--context"));
+    }
+
+    /// Every command, including each one that hides a global flag, still
+    /// resolves `--help` to the help flag.
+    #[test]
+    fn every_command_prints_help() {
+        fn paths(cmd: &clap::Command, prefix: &[String], out: &mut Vec<Vec<String>>) {
+            for sc in cmd.get_subcommands() {
+                let mut path = prefix.to_vec();
+                path.push(sc.get_name().to_string());
+                paths(sc, &path, out);
+                out.push(path);
+            }
+        }
+        let mut all = Vec::new();
+        paths(&Cli::command(), &[], &mut all);
+        for path in all {
+            let path: Vec<&str> = path.iter().map(String::as_str).collect();
+            long_help(&path);
+        }
+    }
+
+    #[test]
+    fn a_hidden_global_is_still_accepted() {
+        let matches = command()
+            .try_get_matches_from(["kix", "--flake", "x", "drift"])
+            .expect("parses");
+        let cli = Cli::from_arg_matches(&matches).expect("converts");
+        assert_eq!(cli.global.flake, "x");
+    }
 }

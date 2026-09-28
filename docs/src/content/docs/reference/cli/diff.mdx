@@ -14,7 +14,7 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 
 ```text
 kix diff <CLUSTER> [--from <DIR>] [-o text|json|yaml|markdown]
-         [--flake <FLAKE>] [--context <CONTEXT>] [--no-cache]
+         [--flake <FLAKE>] [--context <CONTEXT>]
 ```
 
 | Argument or flag | Meaning |
@@ -24,7 +24,6 @@ kix diff <CLUSTER> [--from <DIR>] [-o text|json|yaml|markdown]
 | `-o`, `--output` | `text` (default), `json`, `yaml` (the JSON document as YAML), or `markdown` for pull request comments. |
 | `--flake <FLAKE>` | Flake to evaluate. Defaults to the current directory. |
 | `--context <CONTEXT>` | Kubeconfig context for the live cluster. Ignored with `--from`. |
-| `--no-cache` | Re-evaluate from Nix instead of reading the evaluation cache. |
 
 ## Old side
 

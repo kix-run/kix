@@ -316,7 +316,7 @@ Colored diff of the build against the live cluster, or against a directory. Ever
 - Warns on PVC modifications.
 
 #### `kix check <CLUSTER>`
-Three-layer validation: eval correctness → schema compliance (preflight tools like kubeconform) → scorecard policy.
+Two steps: eval correctness, then the scorecard report. No schema or deprecated-API tool runs over the rendered manifests.
 - The eval step is where every build-time check lives: constructor validators, error-level scorecard findings, and the 14 cross-resource resolution checks (`kix/lib/eval/validate.nix`: ServiceAccount, Role, ConfigMap, Service selector, HPA, StatefulSet headless Service, duplicate identity, managed-by label, selector consistency, Ingress backend, Namespace, NetworkPolicy selector, named targetPort, PodDisruptionBudget selector). Since 2026-09 those run inside `buildCluster`, so `nix build` and every `kix` command that evaluates a cluster run them; before that they ran only under `nix flake check`. Exemptions and the failure shape are in HANDBOOK §17.4.
 - `--sarif` — SARIF 2.1.0 JSON output (GitHub Code Scanning compatible).
 - Text output: TOOL | RESULT | DETAILS table.
@@ -459,8 +459,7 @@ Long-lived K8s controller watching Activation CRs.
 
 ### manifest module
 - **Structural diff engine:** path-based differences, keyed-list array diffing, rename/move detection (fuzzy similarity), configurable ignore rules, field labels.
-- **Serialization:** YAML/JSON I/O, `load_manifests_from_dir`, `write_manifests_to_dir`.
-- **Validation:** `run_preflight` for schema/validation tools.
+- **Serialization:** YAML/JSON I/O, `load_manifests_from_dir`.
 - **Stamping:** Annotation injection (identity-hash, depends-on, package metadata).
 
 ### cluster module

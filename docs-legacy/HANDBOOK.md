@@ -179,13 +179,13 @@ ls result/
 |---|---|---|
 | `kix build <cluster>` | Render manifests to stdout (yaml/json) | `-o yaml|json` |
 | `kix diff <cluster>` | Diff vs live, or vs a directory (previous build result, snapshot, export) | `--from <dir>`, `-o markdown` |
-| `kix check <cluster>` | Eval (constructor validators, cross-resource checks, scorecard errors) + schema tools + scorecard report | `--sarif` |
+| `kix check <cluster>` | Eval (constructor validators, cross-resource checks, scorecard errors) + scorecard report | `--sarif` |
 | `kix deploy <cluster>` (alias `apply`) | Wave-based apply with confirmation | `-y`, `--dry-run`, `--reconcile`, `--prune`, `--operator`, `--tui`, `--log-format=line|json|pretty` |
 | `kix status <cluster>` | Resource health table | `--operator` (group by package) |
 | `kix list clusters` | List flake clusters | |
 | `kix list packages` | List registered packages | `--cluster <name>` |
 | `kix graph <cluster>` | DAG visualization | `--format tree|dot|json` |
-| `kix inspect <cluster>` | Cluster structure summary | |
+| `kix inspect <cluster>` | Rendered resources by namespace and kind | |
 | `kix gc <cluster>` | Garbage-collect stale resources; retire old Activation records | `--hard`, `--operator`, `--keep N` (always keep the N newest, default 10), `--keep-max N` (never more than N, default 50), `--keep-for 30d` (retire older, default 30d, `0` off), `--include-unstamped`, `-y` |
 | `kix rollback <cluster>` | Roll back to a previous activation | `-y`, `--dry-run`, `--prune`, `--list`, `--operator` |
 | `kix health <cluster>` | Drift detection vs live | |
@@ -199,7 +199,7 @@ ls result/
 | `kix audit <cluster>` | Compliance bundle (SARIF + SBOM + provenance + OSCAL + report) | `--out` |
 | `kix completions <shell>` | Generate completions | bash/zsh/fish |
 
-**Global flags:** `-o text|json|yaml`, `-v|-vv|-vvv`, `-q`, `--no-color`, `--context <ctx>`, `--flake <path>`, `--no-cache` (bypass SQLite eval cache).
+**Global flags:** `-o text|json|yaml`, `-v|-vv|-vvv`, `-q`, `--no-color`, `--context <ctx>`, `--flake <path>`, `--no-cache` (bypass SQLite eval cache), `--override-input <name> <url>`. A subcommand's `--help` lists only the ones it reads (`SCOPED_GLOBALS` in `cli/kix-cli/src/cli.rs`); the rest are accepted and ignored.
 
 **Env vars:** `KIX_LOG` overrides the log-filter (RUST_LOG syntax). Apiserver transport (every command and the operator share one policy; defaults suit a cluster mid-incident, override only to debug): `KIX_RETRY_ATTEMPTS` total attempts per request (default 7, `1` disables retries), `KIX_SWEEP_CONCURRENCY` parallel LISTs in the managed-resource sweep (default 16), `KIX_REQUEST_TIMEOUT` per-attempt deadline in seconds for non-watch requests (default 120, `0` none), `KIX_CONNECT_TIMEOUT` TCP connect timeout in seconds (default 15), which also sets the deadline for the first-contact probe (`KIX_PREFLIGHT=0` skips it), `KIX_STALL_TIMEOUT` seconds of no progress before `kix deploy` gives up (default 600, `0` never; a `stalled:` line naming every resource in flight, its phase and its age prints after 30s of no progress regardless). Retries: 429 always, with `Retry-After` honoured; 5xx and connection loss only for idempotent requests (GET, DELETE, PATCH including server-side apply). A request that still fails after the retries is an error, never an empty result: `diff`, `deploy` and `gc` refuse to plan from a partial view of the cluster. Resource types the account may not list (403) are reported, not hidden. First contact: every command proves the apiserver answers before doing anything else, so an unreachable cluster fails in seconds with the endpoint named instead of hanging on whatever request happened to run first. A refused port fails in 0.1s, a blackholed address in 15s, and an endpoint that completes the handshake and then goes silent in 20s.
 

@@ -4,9 +4,10 @@ description: "Flags and environment variables every `kix` command accepts: outpu
 ---
 
 These flags are accepted by every `kix` command and may appear before or
-after the subcommand. A command that has no use for a flag ignores it.
+after the subcommand. A command that has no use for a flag ignores it, and its
+`--help` does not list it. `kix --help` lists them all.
 
-This page is hand-maintained. Check `GlobalArgs` in
+This page is hand-maintained. Check `GlobalArgs` and `SCOPED_GLOBALS` in
 `cli/kix-cli/src/cli.rs`, `cli/kix-cli/src/main.rs` and
 `cli/kix-cli/src/output.rs` when in doubt.
 
@@ -25,17 +26,30 @@ This page is hand-maintained. Check `GlobalArgs` in
 | `-h`, `--help` | | Print help. `-h` prints a summary, `--help` the long form. |
 | `-V`, `--version` | | Print the version. |
 
-## Commands that do not evaluate a flake
+## Which commands read which flag
 
-These commands never evaluate the flake, so `--flake`, `--no-cache`, and
-`--override-input` have no effect on them:
+`-v`, `-q` and `--no-color` apply to every command. The other flags apply only
+where the table shows them; elsewhere they are accepted and have no effect.
 
-| Command | What it reads |
-| --- | --- |
-| `kix drift` | The live cluster only |
-| `kix snapshot save` | The live cluster only |
-| `kix completions` | Nothing |
-| `kix pin` | The pin file. `--flake` is used only as a place to look for `pins.json`. |
+| Command | `-o` | `--context` | `--flake` | `--no-cache` | `--override-input` |
+| --- | --- | --- | --- | --- | --- |
+| `build`, `check`, `graph`, `inspect`, `images`, `list` | yes | | yes | yes | yes |
+| `status` | yes | yes | yes | yes | yes |
+| `diff` | yes | yes | yes | | yes |
+| `deploy`, `gc`, `migrate domain`, `logs`, `pf` | | yes | yes | | yes |
+| `export` | | | yes | | yes |
+| `rollback`, `drift` | yes | yes | | | |
+| `health`, `snapshot save` | | yes | | | |
+| `compliance sbom` | yes | | yes | | yes |
+| `compliance attest` | yes | yes | yes | | yes |
+| `compliance audit` | | | yes | yes | yes |
+| `pin` | yes | | yes | | |
+| `completions` | | | | | |
+
+`--no-cache` applies only to commands that read the
+[eval cache](/docs/reference/cli/eval-cache-behavior/). `kix pin` uses
+`--flake` only as a place to look for `pins.json`. `-o` on `rollback` applies
+only with `--list`.
 
 ## Environment variables
 

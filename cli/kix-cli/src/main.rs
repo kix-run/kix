@@ -4,7 +4,7 @@ mod output;
 mod plan;
 pub mod trace_sink;
 
-use clap::Parser;
+use clap::FromArgMatches;
 use cli::{Cli, Command};
 
 /// Validate cluster name format.
@@ -58,7 +58,7 @@ fn main() -> miette::Result<()> {
         Box::new(miette::MietteHandlerOpts::new().build())
     }))?;
 
-    let cli = Cli::parse();
+    let cli = Cli::from_arg_matches(&cli::command().get_matches()).unwrap_or_else(|e| e.exit());
     init_tracing(cli.global.verbose, cli.global.quiet);
     output::init_color(&cli.global);
 

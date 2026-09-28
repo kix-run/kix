@@ -19,8 +19,10 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 | `audit <CLUSTER>` | SARIF, SBOM, SLSA provenance, OSCAL assessment results, and a Markdown summary in a directory |
 
 `sbom`, `attest` (without `--from-cluster`), and `audit` build the cluster from
-the flake. See [Global flags](/docs/reference/cli/global-flags/) for `--flake`,
-`--no-cache`, and `--override-input`.
+the flake. See [Global flags](/docs/reference/cli/global-flags/) for `--flake`
+and `--override-input`. Only `audit` reads the
+[eval cache](/docs/reference/cli/eval-cache-behavior/), so `--no-cache` affects
+only `audit`.
 
 ## `kix compliance sbom <CLUSTER>`
 

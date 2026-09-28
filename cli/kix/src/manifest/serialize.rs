@@ -181,28 +181,6 @@ pub fn load_manifests_from_dir(
     Ok(results)
 }
 
-/// Write manifests as individual YAML files into a directory.
-///
-/// Each manifest is written as `{ns}--{name}-{kind}.yaml` using the ResourceId.
-/// Returns the number of files written.
-pub fn write_manifests_to_dir(
-    manifests: &[serde_json::Value],
-    dir: &Path,
-) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-    let mut count = 0;
-    for manifest in manifests {
-        let rid = ResourceId::from_value(manifest);
-        let filename = rid.to_flat_filename();
-        let mut cleaned = manifest.clone();
-        strip_nulls(&mut cleaned);
-        let yaml = to_sorted_yaml(&cleaned)
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-        std::fs::write(dir.join(&filename), yaml)?;
-        count += 1;
-    }
-    Ok(count)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

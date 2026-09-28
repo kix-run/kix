@@ -7,14 +7,14 @@ description: "Evaluate a cluster, report each validation step as pass, fail, or 
 in a table. It does not contact a cluster. Use it as the local and CI gate
 before a deploy.
 
-This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
-`cli/kix-cli/src/commands/check.rs` and `cli/kix/src/manifest/validate.rs`
-when in doubt.
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
+`cli/kix-cli/src/commands/check.rs` when in doubt.
 
 ## Synopsis
 
 ```text
-kix check <CLUSTER> [--sarif] [-o text|json|yaml] [--flake <FLAKE>] [--no-cache]
+kix check <CLUSTER> [--sarif] [-o text|json|yaml] [--flake <FLAKE>]
+          [--override-input <INPUT> <URL>]... [--no-cache]
 ```
 
 | Argument or flag | Default | Meaning |
@@ -23,6 +23,7 @@ kix check <CLUSTER> [--sarif] [-o text|json|yaml] [--flake <FLAKE>] [--no-cache]
 | `--sarif` | Off | Print SARIF 2.1.0 JSON instead of the table. Overrides `-o`. |
 | `-o`, `--output` | `text` | `text` prints a `TOOL`, `RESULT`, `DETAILS` table. `json` and `yaml` print an array of `{ tool, result, details }`. |
 | `--flake <FLAKE>` | `.` | Flake to evaluate. |
+| `--override-input <INPUT> <URL>` | None | Override a flake input for the evaluation. Repeatable. |
 | `--no-cache` | Off | Evaluate from Nix instead of reading the [eval cache](/docs/reference/cli/eval-cache-behavior/). |
 
 ## Steps
@@ -30,10 +31,15 @@ kix check <CLUSTER> [--sarif] [-o text|json|yaml] [--flake <FLAKE>] [--no-cache]
 | Tool | What it reports |
 | --- | --- |
 | `eval` | `pass` with the number of manifests, or `fail` with the evaluation error. Evaluation runs the constructor validators, the cross-resource checks, and every error-severity scorecard rule, so a failure in any of them appears here. |
-| `kubeconform`, `pluto`, `kyverno` | Placeholders. Each always reports `pass` with the detail `skipped`; Kix does not run these tools yet. |
 | `scorecard` | The counts of error, warning, and info findings. `fail` when there is at least one error, `skip` when the cluster does not enable the scorecard. |
 
-When `eval` fails, the later steps do not run.
+When `eval` fails, the `scorecard` step does not run.
+
+`kix check` does not validate the rendered manifests against Kubernetes
+schemas or check them for deprecated API versions. Schema validation runs in
+`nix flake check`: a flake built with `mkFlake` exports a
+`schema-cluster-<name>` check per cluster that runs `kubeconform -strict` over
+the rendered manifests and skips kinds with no published schema.
 
 ## SARIF output
 

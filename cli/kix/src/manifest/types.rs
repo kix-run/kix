@@ -66,11 +66,6 @@ impl ResourceId {
         })
     }
 
-    /// Produce the flat filename: `{ns}--{name}-{kind}.yaml`
-    pub fn to_flat_filename(&self) -> String {
-        format!("{}--{}-{}.yaml", self.namespace, self.name, self.kind)
-    }
-
     /// Display as "Kind/name@namespace".
     pub fn display_id(&self) -> String {
         if self.namespace == CLUSTER_SCOPED {

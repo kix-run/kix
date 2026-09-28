@@ -20,7 +20,7 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
            [--reconcile] [--force-conflicts] [--accept-migrations]
            [--current-activation] [--operator]
            [--log-format pretty|line|json] [--tui [--group-by-ns] [--fold-height <ROWS>]]
-           [--flake <FLAKE>] [--context <CONTEXT>] [--no-cache]
+           [--flake <FLAKE>] [--context <CONTEXT>]
 ```
 
 | Argument or flag | Meaning |
@@ -41,8 +41,7 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
 | `--tui` | Draw a live dependency tree while deploying. Ignored when stdin is not a terminal. |
 | `--group-by-ns` | With `--tui`, group the tree by namespace instead of package. Execution order does not change. |
 | `--fold-height <ROWS>` | With `--tui`, cap the live view at this many rows. Default: half the terminal height, between 10 and 40. |
-| `--show-refs <MODE>` | Accepted (`refs` or `full`, default `refs`) but has no effect in this version. |
-| `--flake`, `--context`, `--no-cache` | See [Global flags](/docs/reference/cli/global-flags/). `-o` has no effect; use `--log-format`. |
+| `--flake`, `--context`, `--override-input` | See [Global flags](/docs/reference/cli/global-flags/). `-o` and `--no-cache` have no effect; use `--log-format` to choose the output. |
 
 ## What a deploy does
 

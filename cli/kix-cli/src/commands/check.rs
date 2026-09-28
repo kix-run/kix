@@ -1,10 +1,9 @@
 use std::io::IsTerminal;
 
-use miette::{IntoDiagnostic, Result};
+use miette::Result;
 
 use crate::cli::{CheckArgs, OutputFormat};
 use crate::output::{self, CommandResponse};
-use kix::manifest::validate::{PreflightResult, default_tools, run_preflight};
 
 use super::CommandContext;
 use kix::manifest::keys;
@@ -14,17 +13,6 @@ struct CheckResult {
     tool: String,
     result: String,
     details: String,
-}
-
-impl From<&PreflightResult> for CheckResult {
-    fn from(pr: &PreflightResult) -> Self {
-        let result = if pr.passed { "pass" } else { "fail" };
-        CheckResult {
-            tool: pr.tool.clone(),
-            result: result.into(),
-            details: pr.details.clone(),
-        }
-    }
 }
 
 struct CheckResponse {
@@ -230,24 +218,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     };
 
-    // Step 2: Run preflight tools against rendered manifests
-    if let Some(output) = &cluster_output {
-        // Write manifests to a temp dir for preflight tools
-        let tmp_dir = tempfile::tempdir().into_diagnostic()?;
-        kix::manifest::serialize::write_manifests_to_dir(&output.raw_manifests, tmp_dir.path())
-            .map_err(|e| miette::miette!("failed to write manifests: {e}"))?;
-
-        let tools = default_tools();
-        let tool_refs: Vec<&dyn kix::manifest::validate::PreflightTool> =
-            tools.iter().map(|t| t.as_ref()).collect();
-        let preflight_results = run_preflight(tmp_dir.path(), &tool_refs);
-
-        for pr in &preflight_results {
-            results.push(CheckResult::from(pr));
-        }
-    }
-
-    // Step 3: Include scorecard findings
+    // Step 2: Include scorecard findings
     if let Some(output) = &cluster_output {
         if let Some(report) = &output.scorecard_report {
             if let Some(findings) = report.get("findings").and_then(|f| f.as_array()) {

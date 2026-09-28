@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-package-monitoring",
-      "stdout": " TOOL         RESULT  DETAILS                                                       \n eval         pass    108 manifests evaluated                                       \n kubeconform  pass    skipped (this validation tool is not yet integrated with Kix) \n pluto        pass    skipped (this validation tool is not yet integrated with Kix) \n kyverno      pass    skipped (this validation tool is not yet integrated with Kix) \n scorecard    pass    0 errors, 24 warnings, 9 info                                 \n",
+      "stdout": " TOOL       RESULT  DETAILS                       \n eval       pass    108 manifests evaluated       \n scorecard  pass    0 errors, 24 warnings, 9 info \n",
       "stderr": "",
-      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 108 manifests evaluated\nkubeconform pass skipped (this validation tool is not yet integrated with Kix)\nkyverno pass skipped (this validation tool is not yet integrated with Kix)\npluto pass skipped (this validation tool is not yet integrated with Kix)\nscorecard pass 0 errors, 24 warnings, 9 info\n",
+      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 108 manifests evaluated\nscorecard pass 0 errors, 24 warnings, 9 info\n",
       "stderrDrift": "",
       "exitCode": 0
     }

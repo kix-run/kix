@@ -6,7 +6,8 @@ description: "Print a shell completion script for `kix` to stdout, for bash, zsh
 `kix completions` prints a completion script for the named shell to stdout.
 The script completes subcommands, flags, and fixed flag values. It does not
 complete cluster or package names. The command reads no flake and contacts no
-cluster, and it ignores the global flags.
+cluster, and it ignores the global flags. Of the global flags,
+`kix completions --help` lists only `-v`, `-q` and `--no-color`.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 `cli/kix-cli/src/commands/completions.rs` when in doubt.
