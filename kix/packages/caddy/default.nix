@@ -38,13 +38,9 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = {
-        repository = "ghcr.io/northwind/shopfront/caddy";
-        tag = "2.10.0-cf";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "ghcr.io/northwind/shopfront/caddy";
+      tag = "2.10.0-cf";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -173,7 +169,7 @@ in
               containers = [
                 {
                   name = "caddy";
-                  image = "${config.image.repository}:${config.image.tag}";
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   args = [
                     "caddy"

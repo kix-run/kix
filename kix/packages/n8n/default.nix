@@ -70,13 +70,9 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "n8nio/n8n";
-        tag = "1.74.2";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "n8nio/n8n";
+      tag = "1.74.2";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -278,7 +274,7 @@ in
                   containers = [
                     {
                       name = "n8n";
-                      image = "${config.image.repository}:${config.image.tag}";
+                      image = kix.image.ref config.image;
                       imagePullPolicy = config.image.pullPolicy;
                       envFrom = mainEnvFrom;
                       ports = [
@@ -382,7 +378,7 @@ in
                     containers = [
                       {
                         name = "n8n-worker";
-                        image = "${config.image.repository}:${config.image.tag}";
+                        image = kix.image.ref config.image;
                         imagePullPolicy = config.image.pullPolicy;
                         command = [ "n8n" ];
                         args = [

@@ -31,13 +31,9 @@ in
       default = { };
       description = "Merged over the default kubernetes.io/os=linux selector.";
     };
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "registry.k8s.io/kube-state-metrics/kube-state-metrics";
-        tag = "v2.19.1";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "registry.k8s.io/kube-state-metrics/kube-state-metrics";
+      tag = "v2.19.1";
     };
     replicas = lib.mkOption {
       type = lib.types.int;
@@ -202,7 +198,7 @@ in
               containers = [
                 {
                   name = "kube-state-metrics";
-                  image = "${config.image.repository}:${config.image.tag}";
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   args = [
                     "--port=8080"

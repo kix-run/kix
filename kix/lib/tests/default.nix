@@ -5059,6 +5059,42 @@ let
     t103-mkenvvars-refuses-object-value =
       !(builtins.tryEval (builtins.deepSeq (kixlib.mkEnvVars { BAD.nested = "x"; }) true)).success
       || throw "mkEnvVars accepted an attrset with no valueFrom";
+
+    # kix.options.image keeps the package's digest while the instance leaves
+    # `tag` at the package's tag, and drops it when the tag changes.
+    t104-image-option-keeps-digest-with-its-tag =
+      let
+        digestOf = c: "sha256:${lib.concatStrings (lib.genList (_: c) 64)}";
+        eval =
+          defs:
+          (lib.evalModules {
+            modules = [
+              {
+                options.image = kixlib.options.image {
+                  repository = "reg.example/app";
+                  tag = "v1";
+                  digest = digestOf "a";
+                };
+              }
+            ]
+            ++ map (d: { config.image = d; }) defs;
+          }).config.image.digest;
+        cases = {
+          none = eval [ ] == digestOf "a";
+          pullPolicy = eval [ { pullPolicy = "Always"; } ] == digestOf "a";
+          repository = eval [ { repository = "mirror.example/app"; } ] == digestOf "a";
+          tag = eval [ { tag = "v2"; } ] == null;
+          tagAndDigest =
+            eval [
+              {
+                tag = "v2";
+                digest = digestOf "b";
+              }
+            ] == digestOf "b";
+        };
+      in
+      builtins.all lib.id (builtins.attrValues cases)
+      || throw "options.image digest default wrong: ${builtins.toJSON cases}";
   }
   // import ./validate.nix {
     inherit

@@ -62,13 +62,9 @@
     ];
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "docker.io/bitnamilegacy/valkey";
-        tag = "8.1.3-debian-12-r3";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "docker.io/bitnamilegacy/valkey";
+      tag = "8.1.3-debian-12-r3";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -103,22 +99,46 @@
         secretSource = null;
       };
     };
-    sentinel = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        # Automatic failover needs a second node to fail over to.
-        enabled = kix.availability.atLeast "node" availability;
-        image = {
-          repository = "docker.io/bitnamilegacy/valkey-sentinel";
-          tag = "8.1.3-debian-12-r3";
-          pullPolicy = "IfNotPresent";
-        };
-        quorum = 2;
-        downAfterMilliseconds = 3000;
-        failoverTimeout = 10000;
-        parallelSyncs = 1;
-        primarySet = "primary";
-        resources = {
+    sentinel = {
+      # Automatic failover needs a second node to fail over to.
+      enabled = lib.mkOption {
+        type = lib.types.bool;
+        default = kix.availability.atLeast "node" availability;
+        description = "Run a Sentinel sidecar in every pod for automatic failover. Defaults on from availability level \"node\" up.";
+      };
+      image = kix.options.image {
+        repository = "docker.io/bitnamilegacy/valkey-sentinel";
+        tag = "8.1.3-debian-12-r3";
+        description = "Image for the Sentinel sidecar.";
+      };
+      quorum = lib.mkOption {
+        type = lib.types.int;
+        default = 2;
+        description = "Number of Sentinels that must agree the primary is down before a failover starts (`sentinel monitor` quorum; Bitnami chart `sentinel.quorum`).";
+      };
+      downAfterMilliseconds = lib.mkOption {
+        type = lib.types.int;
+        default = 3000;
+        description = "Milliseconds a node must be unreachable before a Sentinel considers it down (`sentinel down-after-milliseconds`; Bitnami chart `sentinel.downAfterMilliseconds`).";
+      };
+      failoverTimeout = lib.mkOption {
+        type = lib.types.int;
+        default = 10000;
+        description = "Failover timeout in milliseconds (`sentinel failover-timeout`; Bitnami chart `sentinel.failoverTimeout`).";
+      };
+      parallelSyncs = lib.mkOption {
+        type = lib.types.int;
+        default = 1;
+        description = "Number of replicas reconfigured to use the new primary at the same time after a failover (`sentinel parallel-syncs`; Bitnami chart `sentinel.parallelSyncs`).";
+      };
+      primarySet = lib.mkOption {
+        type = lib.types.str;
+        default = "primary";
+        description = "Name Sentinel monitors the primary under, and that clients ask Sentinel for (Bitnami chart `sentinel.primarySet`).";
+      };
+      resources = lib.mkOption {
+        type = lib.types.anything;
+        default = {
           requests = {
             cpu = "100m";
             memory = "256Mi";
@@ -128,6 +148,7 @@
             memory = "512Mi";
           };
         };
+        description = "Resource requests and limits for the Sentinel container.";
       };
     };
     persistence = lib.mkOption {
@@ -151,16 +172,20 @@
         };
       };
     };
-    metrics = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        enabled = false;
-        image = {
-          repository = "docker.io/bitnamilegacy/redis-exporter";
-          tag = "1.76.0-debian-12-r0";
-          pullPolicy = "IfNotPresent";
-        };
-        resources = {
+    metrics = {
+      enabled = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Run the redis-exporter sidecar. The ServiceMonitor for it is added only when a prometheus provider is present.";
+      };
+      image = kix.options.image {
+        repository = "docker.io/bitnamilegacy/redis-exporter";
+        tag = "1.76.0-debian-12-r0";
+        description = "Image for the redis-exporter sidecar.";
+      };
+      resources = lib.mkOption {
+        type = lib.types.anything;
+        default = {
           requests = {
             cpu = "100m";
             memory = "128Mi";
@@ -170,6 +195,7 @@
             memory = "256Mi";
           };
         };
+        description = "Resource requests and limits for the redis-exporter container.";
       };
     };
     priorityClassName = lib.mkOption {
@@ -856,7 +882,7 @@
 
       valkeyContainer = {
         name = "valkey";
-        image = "${config.image.repository}:${config.image.tag}";
+        image = kix.image.ref config.image;
         imagePullPolicy = config.image.pullPolicy;
         command = [ "/bin/bash" ];
         args = [
@@ -992,7 +1018,7 @@
 
       sentinelContainer = {
         name = "sentinel";
-        image = "${config.sentinel.image.repository}:${config.sentinel.image.tag}";
+        image = kix.image.ref config.sentinel.image;
         imagePullPolicy = config.sentinel.image.pullPolicy;
         command = [ "/bin/bash" ];
         args = [
@@ -1097,7 +1123,7 @@
 
       metricsContainer = {
         name = "metrics";
-        image = "${config.metrics.image.repository}:${config.metrics.image.tag}";
+        image = kix.image.ref config.metrics.image;
         imagePullPolicy = config.metrics.image.pullPolicy;
         command = [
           "/bin/bash"

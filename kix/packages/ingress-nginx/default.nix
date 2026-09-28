@@ -96,22 +96,14 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
     };
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "registry.k8s.io/ingress-nginx/controller";
-        tag = "v1.15.1";
-        digest = null;
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "registry.k8s.io/ingress-nginx/controller";
+      tag = "v1.15.1";
     };
-    webhookCertgenImage = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "registry.k8s.io/ingress-nginx/kube-webhook-certgen";
-        tag = "v1.6.9";
-        digest = null;
-      };
+    webhookCertgenImage = kix.options.image {
+      repository = "registry.k8s.io/ingress-nginx/kube-webhook-certgen";
+      tag = "v1.6.9";
+      description = "Image for the Jobs that create and patch the admission webhook certificate.";
     };
     # Suffix appended to controller-bound resource names (Deployment,
     # ConfigMap, Service, PDB, admission Service). Helm chart 4.13+
@@ -255,18 +247,6 @@ in
         if config.controllerValue != null then config.controllerValue else "k8s.io/${name}";
 
       electionId = if config.electionId != null then config.electionId else "${name}-leader";
-
-      controllerImage =
-        "${config.image.repository}:${config.image.tag}"
-        + lib.optionalString (
-          config.image ? digest && config.image.digest != null
-        ) "@${config.image.digest}";
-
-      certgenImage =
-        "${config.webhookCertgenImage.repository}:${config.webhookCertgenImage.tag}"
-        + lib.optionalString (
-          config.webhookCertgenImage ? digest && config.webhookCertgenImage.digest != null
-        ) "@${config.webhookCertgenImage.digest}";
 
       selectorLabels = {
         "app.kubernetes.io/name" = "ingress-nginx";
@@ -514,7 +494,7 @@ in
               containers = [
                 {
                   name = "controller";
-                  image = controllerImage;
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   args = [
                     "/nginx-ingress-controller"
@@ -751,8 +731,8 @@ in
               containers = [
                 {
                   name = "create";
-                  image = certgenImage;
-                  imagePullPolicy = "IfNotPresent";
+                  image = kix.image.ref config.webhookCertgenImage;
+                  imagePullPolicy = config.webhookCertgenImage.pullPolicy;
                   args = [
                     "create"
                     "--host=${ctrlName}-admission,${ctrlName}-admission.$(POD_NAMESPACE).svc"
@@ -812,8 +792,8 @@ in
               containers = [
                 {
                   name = "patch";
-                  image = certgenImage;
-                  imagePullPolicy = "IfNotPresent";
+                  image = kix.image.ref config.webhookCertgenImage;
+                  imagePullPolicy = config.webhookCertgenImage.pullPolicy;
                   args = [
                     "patch"
                     "--webhook-name=${name}-admission"

@@ -47,20 +47,23 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "velero/velero";
-        tag = "v1.15.2";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "velero/velero";
+      tag = "v1.15.2";
     };
+    # Plugin init containers. `image` is a reference string or an image
+    # record (`repository`, `tag`, optional `digest` and `pullPolicy`), so a
+    # `pins.get` result fits. Without its own pullPolicy a plugin uses
+    # `image.pullPolicy`.
     initContainers = lib.mkOption {
       type = lib.types.listOf lib.types.anything;
       default = [
         {
           name = "velero-plugin-for-aws";
-          image = "velero/velero-plugin-for-aws:v1.11.1";
+          image = {
+            repository = "velero/velero-plugin-for-aws";
+            tag = "v1.11.1";
+          };
           # The chart leaves init container resources to the user. The
           # container copies one plugin binary into /target and exits.
           resources = {
@@ -483,8 +486,13 @@ in
               initContainers = map (
                 ic:
                 {
-                  inherit (ic) name image volumeMounts;
-                  imagePullPolicy = config.image.pullPolicy;
+                  inherit (ic) name volumeMounts;
+                  image = if builtins.isAttrs ic.image then kix.image.ref ic.image else ic.image;
+                  imagePullPolicy =
+                    if builtins.isAttrs ic.image then
+                      ic.image.pullPolicy or config.image.pullPolicy
+                    else
+                      config.image.pullPolicy;
                   securityContext.readOnlyRootFilesystem = true;
                 }
                 // lib.optionalAttrs (ic ? resources) { inherit (ic) resources; }
@@ -492,7 +500,7 @@ in
               containers = [
                 {
                   name = "velero";
-                  image = "${config.image.repository}:${config.image.tag}";
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   command = [ "/velero" ];
                   args = serverArgs;
@@ -619,7 +627,7 @@ in
                     (
                       {
                         name = "node-agent";
-                        image = "${config.image.repository}:${config.image.tag}";
+                        image = kix.image.ref config.image;
                         imagePullPolicy = config.image.pullPolicy;
                         command = [ "/velero" ];
                         args = nodeAgentArgs;

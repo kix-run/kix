@@ -34,13 +34,9 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = {
-        repository = "ghcr.io/astral-sh/uv";
-        tag = "python3.12-bookworm-slim";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "ghcr.io/astral-sh/uv";
+      tag = "python3.12-bookworm-slim";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -227,7 +223,7 @@ in
               containers = [
                 {
                   name = "event-logger";
-                  image = "${config.image.repository}:${config.image.tag}";
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   command = [ "/app/k8s_event_logger.py" ];
                   env = kix.mkEnvVars {

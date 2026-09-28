@@ -28,13 +28,9 @@
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = {
-        repository = "docker.io/bitnamilegacy/external-dns";
-        tag = "0.16.1-debian-12-r1";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "docker.io/bitnamilegacy/external-dns";
+      tag = "0.16.1-debian-12-r1";
     };
     provider = lib.mkOption {
       type = lib.types.str;
@@ -479,7 +475,7 @@
                 (
                   {
                     name = "external-dns";
-                    image = "${config.image.repository}:${config.image.tag}";
+                    image = kix.image.ref config.image;
                     imagePullPolicy = config.image.pullPolicy;
                     inherit args;
                     ports = [

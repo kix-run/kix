@@ -31,13 +31,9 @@ in
       default = { };
       description = "Merged over the default kubernetes.io/os=linux selector.";
     };
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "quay.io/prometheus/node-exporter";
-        tag = "v1.12.1";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "quay.io/prometheus/node-exporter";
+      tag = "v1.12.1";
     };
     resources = lib.mkOption {
       type = lib.types.anything;
@@ -113,7 +109,7 @@ in
             containers = [
               {
                 name = "node-exporter";
-                image = "${config.image.repository}:${config.image.tag}";
+                image = kix.image.ref config.image;
                 imagePullPolicy = config.image.pullPolicy;
                 args = [
                   "--web.listen-address=[$(HOST_IP)]:9100"

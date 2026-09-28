@@ -36,12 +36,10 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "quay.io/prometheus/prometheus";
-        tag = "v3.13.1";
-      };
+    image = kix.options.image {
+      repository = "quay.io/prometheus/prometheus";
+      tag = "v3.13.1";
+      pullPolicy = null;
     };
     replicas = lib.mkOption {
       type = lib.types.int;
@@ -700,7 +698,7 @@ in
         spec = lib.recursiveUpdate (
           {
             replicas = config.replicas;
-            image = "${config.image.repository}:${config.image.tag}";
+            image = kix.image.ref config.image;
             version = config.image.tag;
             serviceAccountName = self.serviceAccount.out.name;
 
@@ -720,6 +718,9 @@ in
 
             enableAdminAPI = false;
             enableRemoteWriteReceiver = false;
+          }
+          // lib.optionalAttrs (config.image.pullPolicy != null) {
+            imagePullPolicy = config.image.pullPolicy;
           }
           // lib.optionalAttrs (storageSpec != null) { storage = storageSpec; }
           // lib.optionalAttrs (config.externalUrl != null) {
@@ -982,7 +983,7 @@ in
           # The Prometheus CR's image is reconciled by the operator into a
           # StatefulSet — not directly in a kix-generated pod spec.
           extraImages = [
-            "${config.image.repository}:${config.image.tag}"
+            (kix.image.ref config.image)
           ];
         };
       };

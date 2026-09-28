@@ -23,13 +23,9 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = {
-        repository = "nginxinc/nginx-unprivileged";
-        tag = "1.27-alpine";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "nginxinc/nginx-unprivileged";
+      tag = "1.27-alpine";
     };
   };
 
@@ -87,7 +83,7 @@ in
               containers = [
                 {
                   name = "echo";
-                  image = "${config.image.repository}:${config.image.tag}";
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   command = [
                     "/bin/sh"

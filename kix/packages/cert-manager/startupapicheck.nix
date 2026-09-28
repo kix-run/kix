@@ -79,6 +79,8 @@ in
           containers = [
             {
               name = "cert-manager-startupapicheck";
+              # Follows the controller's release tag, so it cannot be pinned
+              # separately and never carries the controller's digest.
               image = "quay.io/jetstack/cert-manager-startupapicheck:${config.image.tag}";
               imagePullPolicy = config.image.pullPolicy;
               args = [

@@ -354,7 +354,7 @@ in
 
       container = {
         name = "operator";
-        image = "${config.image.repository}:${config.image.tag}";
+        image = kix.image.ref config.image;
         imagePullPolicy = config.image.pullPolicy;
         inherit args env;
         ports = [

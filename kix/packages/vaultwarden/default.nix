@@ -47,12 +47,10 @@ in
     lib.optional config.initChownData chownOverrideHint;
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "vaultwarden/server";
-        tag = "1.36.0-alpine";
-      };
+    image = kix.options.image {
+      repository = "vaultwarden/server";
+      tag = "1.36.0-alpine";
+      pullPolicy = null;
     };
     domain = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -203,51 +201,56 @@ in
                     }
                 );
                 containers = [
-                  {
-                    name = "vaultwarden";
-                    image = "${config.image.repository}:${config.image.tag}";
-                    ports = [ (kix.port "http" 8080) ];
-                    env =
-                      # Secret refs FIRST so k8s can substitute $(DB_USERNAME)/$(DB_PASSWORD)
-                      # in DATABASE_URL. K8s only substitutes vars defined earlier in the list.
-                      (postgres.out.superuserSecret.out.mkEnv {
-                        DB_USERNAME = "superuser-username";
-                        DB_PASSWORD = "superuser-password";
-                      })
-                      ++ kix.mkEnvVars (
-                        {
-                          DATA_FOLDER = "/data";
-                          DATABASE_URL = databaseUrl;
-                          DOMAIN =
-                            if config.domain != null then
-                              config.domain
-                            else if effectiveHost != null then
-                              "https://${effectiveHost}"
-                            else
-                              null;
-                          SIGNUPS_ALLOWED = lib.boolToString config.signupsAllowed;
-                          INVITATIONS_ALLOWED = lib.boolToString config.invitationsAllowed;
-                          SHOW_PASSWORD_HINT = lib.boolToString config.showPasswordHint;
-                          ROCKET_ADDRESS = "0.0.0.0";
-                          ROCKET_PORT = "8080";
-                          ADMIN_TOKEN = config.adminToken;
-                        }
-                        // config.env
-                      );
-                    livenessProbe = healthCheck // {
-                      initialDelaySeconds = 5;
-                      failureThreshold = 10;
-                    };
-                    readinessProbe = healthCheck // {
-                      initialDelaySeconds = 5;
-                      failureThreshold = 3;
-                    };
-                    resources = config.resources;
-                    securityContext = {
-                      allowPrivilegeEscalation = false;
-                      readOnlyRootFilesystem = true;
-                    };
-                  }
+                  (
+                    {
+                      name = "vaultwarden";
+                      image = kix.image.ref config.image;
+                      ports = [ (kix.port "http" 8080) ];
+                      env =
+                        # Secret refs FIRST so k8s can substitute $(DB_USERNAME)/$(DB_PASSWORD)
+                        # in DATABASE_URL. K8s only substitutes vars defined earlier in the list.
+                        (postgres.out.superuserSecret.out.mkEnv {
+                          DB_USERNAME = "superuser-username";
+                          DB_PASSWORD = "superuser-password";
+                        })
+                        ++ kix.mkEnvVars (
+                          {
+                            DATA_FOLDER = "/data";
+                            DATABASE_URL = databaseUrl;
+                            DOMAIN =
+                              if config.domain != null then
+                                config.domain
+                              else if effectiveHost != null then
+                                "https://${effectiveHost}"
+                              else
+                                null;
+                            SIGNUPS_ALLOWED = lib.boolToString config.signupsAllowed;
+                            INVITATIONS_ALLOWED = lib.boolToString config.invitationsAllowed;
+                            SHOW_PASSWORD_HINT = lib.boolToString config.showPasswordHint;
+                            ROCKET_ADDRESS = "0.0.0.0";
+                            ROCKET_PORT = "8080";
+                            ADMIN_TOKEN = config.adminToken;
+                          }
+                          // config.env
+                        );
+                      livenessProbe = healthCheck // {
+                        initialDelaySeconds = 5;
+                        failureThreshold = 10;
+                      };
+                      readinessProbe = healthCheck // {
+                        initialDelaySeconds = 5;
+                        failureThreshold = 3;
+                      };
+                      resources = config.resources;
+                      securityContext = {
+                        allowPrivilegeEscalation = false;
+                        readOnlyRootFilesystem = true;
+                      };
+                    }
+                    // lib.optionalAttrs (config.image.pullPolicy != null) {
+                      imagePullPolicy = config.image.pullPolicy;
+                    }
+                  )
                 ];
               };
             };

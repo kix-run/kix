@@ -32,12 +32,10 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "quay.io/prometheus/alertmanager";
-        tag = "v0.33.1";
-      };
+    image = kix.options.image {
+      repository = "quay.io/prometheus/alertmanager";
+      tag = "v0.33.1";
+      pullPolicy = null;
     };
     replicas = lib.mkOption {
       type = lib.types.int;
@@ -335,11 +333,14 @@ in
         spec = lib.recursiveUpdate (
           {
             replicas = config.replicas;
-            image = "${config.image.repository}:${config.image.tag}";
+            image = kix.image.ref config.image;
             version = config.image.tag;
             serviceAccountName = self.serviceAccount.out.name;
             resources = config.resources;
             routePrefix = config.routePrefix;
+          }
+          // lib.optionalAttrs (config.image.pullPolicy != null) {
+            imagePullPolicy = config.image.pullPolicy;
           }
           // lib.optionalAttrs (config.priorityClassName != null) {
             priorityClassName = config.priorityClassName;
@@ -549,7 +550,7 @@ in
           # The Alertmanager CR's image is reconciled by the operator into a
           # StatefulSet — not directly in a kix-generated pod spec.
           extraImages = [
-            "${config.image.repository}:${config.image.tag}"
+            (kix.image.ref config.image)
           ];
         };
       };

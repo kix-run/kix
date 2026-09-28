@@ -57,13 +57,9 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "quay.io/kubevirt/cdi-operator";
-        tag = "v1.62.0";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "quay.io/kubevirt/cdi-operator";
+      tag = "v1.62.0";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -891,7 +887,7 @@ in
               containers = [
                 {
                   name = "cdi-operator";
-                  image = "${config.image.repository}:${config.image.tag}";
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   env = [
                     {

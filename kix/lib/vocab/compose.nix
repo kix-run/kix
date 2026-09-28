@@ -600,7 +600,13 @@ rec {
 
   options = {
     # Image option with repository, tag, and optional digest and pull policy.
-    # A null digest leaves the reference unpinned.
+    # A null digest leaves the reference unpinned. A null pullPolicy leaves
+    # imagePullPolicy unset, so Kubernetes chooses: Always for `:latest`,
+    # IfNotPresent otherwise.
+    #
+    # An instance that sets only some fields keeps the package's defaults for
+    # the rest. The package's digest is kept only while `tag` equals the
+    # package's tag, since a digest belongs to the tag it was resolved from.
     #
     #   options.image = kix.options.image {
     #     repository = "docker.io/library/nginx";
@@ -615,9 +621,10 @@ rec {
         tag,
         digest ? null,
         pullPolicy ? "IfNotPresent",
+        description ? "Container image for this instance. Set it from a pin file (`kix.pins`) so the deployed reference is committed and resolved.",
       }:
       lib.mkOption {
-        description = "Container image for this instance. Set it from a pin file (`kix.pins`) so the deployed reference is committed and resolved.";
+        inherit description;
         default = {
           inherit
             repository
@@ -626,48 +633,54 @@ rec {
             pullPolicy
             ;
         };
-        type = lib.types.submodule {
-          options = {
-            repository = lib.mkOption {
-              type = lib.types.str;
-              description = "Image repository, registry host included.";
+        type = lib.types.submodule (
+          { config, ... }:
+          {
+            options = {
+              repository = lib.mkOption {
+                type = lib.types.str;
+                default = repository;
+                description = "Image repository, registry host included.";
+              };
+              tag = lib.mkOption {
+                type = lib.types.str;
+                default = tag;
+                description = "Image tag. What was asked for.";
+              };
+              digest = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = if config.tag == tag then digest else null;
+                defaultText = lib.literalMD "the package's digest while `tag` is the package's tag, otherwise null";
+                description = "Resolved manifest digest, `sha256:` followed by 64 hex characters. What will actually run. Null means not resolved.";
+              };
+              pullPolicy = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = pullPolicy;
+                description = "imagePullPolicy for containers using this image. Null leaves it to Kubernetes.";
+              };
+              sourceRev = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = "Revision of the source the image was built from, when Kix built it. Null for upstream images.";
+              };
+              promotedBy = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = "Who resolved this pin, for the record. Null when unknown.";
+              };
+              resolvedAt = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = "When this pin was resolved, RFC 3339. Null when unknown.";
+              };
+              note = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = "Whatever a person wanted to say about this pin. Kix never reads it and a promotion never discards it. Declared here for the same reason as the three fields above: a pin carries its own record-keeping, and the option accepts the whole pin rather than a subset of it.";
+              };
             };
-            tag = lib.mkOption {
-              type = lib.types.str;
-              description = "Image tag. What was asked for.";
-            };
-            digest = lib.mkOption {
-              type = lib.types.nullOr lib.types.str;
-              default = null;
-              description = "Resolved manifest digest, `sha256:` followed by 64 hex characters. What will actually run. Null means not resolved.";
-            };
-            pullPolicy = lib.mkOption {
-              type = lib.types.str;
-              default = "IfNotPresent";
-              description = "imagePullPolicy for containers using this image.";
-            };
-            sourceRev = lib.mkOption {
-              type = lib.types.nullOr lib.types.str;
-              default = null;
-              description = "Revision of the source the image was built from, when Kix built it. Null for upstream images.";
-            };
-            promotedBy = lib.mkOption {
-              type = lib.types.nullOr lib.types.str;
-              default = null;
-              description = "Who resolved this pin, for the record. Null when unknown.";
-            };
-            resolvedAt = lib.mkOption {
-              type = lib.types.nullOr lib.types.str;
-              default = null;
-              description = "When this pin was resolved, RFC 3339. Null when unknown.";
-            };
-            note = lib.mkOption {
-              type = lib.types.nullOr lib.types.str;
-              default = null;
-              description = "Whatever a person wanted to say about this pin. Kix never reads it and a promotion never discards it. Declared here for the same reason as the three fields above: a pin carries its own record-keeping, and the option accepts the whole pin rather than a subset of it.";
-            };
-          };
-        };
+          }
+        );
       };
 
     ingress = {

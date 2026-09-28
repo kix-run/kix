@@ -67,13 +67,9 @@ in
   deps.postgres.config.extensions = [ { name = "citext"; } ];
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "docker.io/metabase/metabase";
-        tag = "v0.50.34";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "docker.io/metabase/metabase";
+      tag = "v0.50.34";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -211,7 +207,7 @@ in
               template.spec.containers = [
                 {
                   name = "web";
-                  image = "${config.image.repository}:${config.image.tag}";
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   env = kix.mkEnvVars (
                     {

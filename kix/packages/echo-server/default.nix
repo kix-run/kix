@@ -21,18 +21,9 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = {
-        repository = "nginxinc/nginx-unprivileged";
-        tag = "1.27-alpine";
-        pullPolicy = "IfNotPresent";
-      };
-      description = ''
-        Container image used by the echo-server `Deployment`. Attrset with
-        `repository`, `tag`, and `pullPolicy` keys, applied directly to the
-        pod's container spec.
-      '';
+    image = kix.options.image {
+      repository = "nginxinc/nginx-unprivileged";
+      tag = "1.27-alpine";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -113,7 +104,7 @@ in
               containers = [
                 {
                   name = "nginx";
-                  image = "${config.image.repository}:${config.image.tag}";
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   # nginx-unprivileged runs as uid 101 and listens on 8080.
                   securityContext = {

@@ -280,10 +280,7 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = { repository = "myapp/server"; tag = "v1.0.0"; pullPolicy = "IfNotPresent"; };
-    };
+    image = kix.options.image { repository = "myapp/server"; tag = "v1.0.0"; };
     replicaCount = lib.mkOption { type = lib.types.int; default = 1; };
     ingress = kix.options.ingress;            # standardized { host, annotations }
     metrics = kix.options.monitor;            # standardized { enabled, interval }
@@ -309,7 +306,7 @@ in
             selector.matchLabels = scope.selectorLabels;
             template.spec.containers = [{
               name = "server";
-              image = "${config.image.repository}:${config.image.tag}";
+              image = kix.image.ref config.image;   # repository:tag@digest
               env = kix.mkEnv
                 {
                   DB_HOST = postgres.out.fqdn;
@@ -644,7 +641,12 @@ options.healthCheck = kix.options.healthCheck;  # { enable = bool (default false
 
 # A package's image. Takes the defaults, returns one mkOption whose type is a
 # submodule: { repository, tag, digest = null, pullPolicy = "IfNotPresent",
-#              sourceRev = null, promotedBy = null, resolvedAt = null }
+#              sourceRev = null, promotedBy = null, resolvedAt = null, note = null }
+# `pullPolicy = null` leaves imagePullPolicy to Kubernetes. `description`
+# replaces the generic option description. An instance that sets some
+# fields keeps the package's defaults for the rest. The package's digest is
+# kept while `image.tag` equals the package's tag and dropped when the tag
+# changes, since a digest belongs to the tag it was resolved from.
 options.image = kix.options.image {
   repository = "docker.io/library/nginx";
   tag = "1.27-alpine";

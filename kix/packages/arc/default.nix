@@ -60,13 +60,9 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "ghcr.io/actions/gha-runner-scale-set-controller";
-        tag = "0.14.2";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "ghcr.io/actions/gha-runner-scale-set-controller";
+      tag = "0.14.2";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -329,7 +325,7 @@ in
                 (
                   {
                     name = "manager";
-                    image = "${config.image.repository}:${config.image.tag}";
+                    image = kix.image.ref config.image;
                     imagePullPolicy = config.image.pullPolicy;
                     command = [ "/manager" ];
                     args = [
@@ -346,7 +342,7 @@ in
                     env = [
                       {
                         name = "CONTROLLER_MANAGER_CONTAINER_IMAGE";
-                        value = "${config.image.repository}:${config.image.tag}";
+                        value = kix.image.ref config.image;
                       }
                       {
                         name = "CONTROLLER_MANAGER_POD_NAMESPACE";

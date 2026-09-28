@@ -50,36 +50,34 @@
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "quay.io/jetstack/cert-manager-controller";
-        tag = "v1.17.1";
-        pullPolicy = "IfNotPresent";
-      };
-      description = ''
-        Image for the cert-manager controller `Deployment`. Attrset with
-        `repository`, `tag`, and `pullPolicy` keys.
-      '';
+    image = kix.options.image {
+      repository = "quay.io/jetstack/cert-manager-controller";
+      tag = "v1.17.1";
+      description = "Image for the cert-manager controller Deployment.";
     };
-    webhook = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        image = {
-          repository = "quay.io/jetstack/cert-manager-webhook";
-          tag = "v1.17.1";
-        };
-        # The webhook sits in the write path for every cert-manager object,
-        # so with one replica a rolling restart is a visible API failure.
-        replicaCount = kix.availability.pick availability {
+    # The webhook sits in the write path for every cert-manager object, so
+    # with one replica a rolling restart is a visible API failure.
+    webhook = {
+      image = kix.options.image {
+        repository = "quay.io/jetstack/cert-manager-webhook";
+        tag = "v1.17.1";
+        description = "Image for the admission webhook that validates and mutates cert-manager CRs.";
+      };
+      replicaCount = lib.mkOption {
+        type = lib.types.int;
+        default = kix.availability.pick availability {
           none = 1;
           pod = 2;
           node = 2;
           zone = 2;
         };
-        # The webhook keeps no cache, so its memory stays flat as the
-        # cluster grows.
-        resources = {
+        description = "Webhook replicas. Defaults from the cluster's availability level (v2_discussions/145).";
+      };
+      # The webhook keeps no cache, so its memory stays flat as the cluster
+      # grows.
+      resources = lib.mkOption {
+        type = lib.types.anything;
+        default = {
           requests = {
             cpu = "10m";
             memory = "32Mi";
@@ -89,33 +87,30 @@
             memory = "128Mi";
           };
         };
+        description = "Resource requests and limits for the webhook container.";
       };
-      description = ''
-        Webhook component config. Sets the `image` attrset, `replicaCount`
-        and container `resources` for the admission webhook that validates
-        and mutates cert-manager CRs. The replica count defaults from the
-        cluster's availability level (v2_discussions/145).
-      '';
     };
-    cainjector = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        image = {
-          repository = "quay.io/jetstack/cert-manager-cainjector";
-          tag = "v1.17.1";
-        };
-        # Leader election makes a restart invisible, so "pod" stays at 1.
-        # From "node" up a standby keeps injecting when a node is lost.
-        replicaCount = kix.availability.pick availability {
+    cainjector = {
+      image = kix.options.image {
+        repository = "quay.io/jetstack/cert-manager-cainjector";
+        tag = "v1.17.1";
+        description = "Image for the controller that injects CA bundles into webhooks, APIServices and CRDs.";
+      };
+      # Leader election makes a restart invisible, so "pod" stays at 1.
+      # From "node" up a standby keeps injecting when a node is lost.
+      replicaCount = lib.mkOption {
+        type = lib.types.int;
+        default = kix.availability.pick availability {
           none = 1;
           pod = 1;
           node = 2;
           zone = 2;
         };
-        # cainjector caches the Secrets, CRDs and webhook configurations it
-        # injects into, so memory grows with the cluster; raise the limit
-        # on large clusters.
-        resources = {
+        description = "CA-injector replicas. Defaults from the cluster's availability level (v2_discussions/145).";
+      };
+      resources = lib.mkOption {
+        type = lib.types.anything;
+        default = {
           requests = {
             cpu = "10m";
             memory = "64Mi";
@@ -125,30 +120,19 @@
             memory = "512Mi";
           };
         };
+        description = ''
+          Resource requests and limits for the CA-injector container. The
+          512Mi memory limit suits a small cluster; cainjector's cache grows
+          with the Secrets, CRDs and webhook configurations it watches, so
+          raise `limits.memory` on a large one (cert-manager's installation
+          best-practice guide, "Scalability").
+        '';
       };
-      description = ''
-        CA-injector component config. Sets the `image` attrset,
-        `replicaCount` and container `resources` for the controller that injects CA bundles into
-        webhooks, APIServices, and CRDs. The replica count defaults from the
-        cluster's availability level (v2_discussions/145). The 512Mi memory
-        limit suits a small cluster; cainjector's cache grows with the
-        Secrets, CRDs and webhook configurations it watches, so raise
-        `resources.limits.memory` on a large one (cert-manager's
-        installation best-practice guide, "Scalability").
-      '';
     };
-    acmesolver = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        image = {
-          repository = "quay.io/jetstack/cert-manager-acmesolver";
-          tag = "v1.17.1";
-        };
-      };
-      description = ''
-        ACME-solver image used by cert-manager to spin up HTTP-01
-        challenge-response pods. Image attrset with `repository` and `tag`.
-      '';
+    acmesolver.image = kix.options.image {
+      repository = "quay.io/jetstack/cert-manager-acmesolver";
+      tag = "v1.17.1";
+      description = "Image cert-manager runs for HTTP-01 challenge-response pods.";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;

@@ -103,10 +103,11 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = { repository = "myapp/server"; tag = "v1.0.0"; pullPolicy = "IfNotPresent"; };
-    };
+    # One kix.options.image per image the package runs (sidecars and init
+    # containers included), so `pins.get` can supply a digest for each.
+    # A `digest` given here is kept while an instance leaves `image.tag` at
+    # this tag and dropped when the tag changes; other field overrides keep it.
+    image = kix.options.image { repository = "myapp/server"; tag = "v1.0.0"; };
     replicaCount = lib.mkOption { type = lib.types.int; default = 1; };
     ingress = kix.options.ingress;  # standardized { host, annotations } options
   };
@@ -135,7 +136,7 @@ in
             selector.matchLabels = scope.selectorLabels;
             template.spec.containers = [{
               name = "server";
-              image = "${config.image.repository}:${config.image.tag}";
+              image = kix.image.ref config.image;   # repository:tag@digest
               env = kix.mkEnvVars ({
                 DB_HOST = postgres.out.fqdn;
                 DB_PORT = postgres.out.port;

@@ -40,13 +40,9 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = {
-        repository = "coredns/coredns";
-        tag = "1.13.1";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "coredns/coredns";
+      tag = "1.13.1";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -282,7 +278,7 @@ in
               containers = [
                 {
                   name = "coredns";
-                  image = "${config.image.repository}:${config.image.tag}";
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   args = [
                     "-conf"

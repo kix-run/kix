@@ -265,13 +265,10 @@ in
   };
 
   options = {
-    operator.image.repository = lib.mkOption {
-      type = lib.types.str;
-      default = "quay.io/stackgres/operator";
-    };
-    operator.image.tag = lib.mkOption {
-      type = lib.types.str;
-      default = "1.19.0";
+    operator.image = kix.options.image {
+      repository = "quay.io/stackgres/operator";
+      tag = "1.19.0";
+      description = "Image for the StackGres operator Deployment. `tag` is also passed to the operator as OPERATOR_IMAGE_VERSION.";
     };
     restapi.image.repository = lib.mkOption {
       type = lib.types.str;
@@ -670,8 +667,8 @@ in
               containers = [
                 {
                   name = name;
-                  image = "${config.operator.image.repository}:${config.operator.image.tag}";
-                  imagePullPolicy = "IfNotPresent";
+                  image = kix.image.ref config.operator.image;
+                  imagePullPolicy = config.operator.image.pullPolicy;
                   env = [
                     {
                       name = "OPERATOR_NAME";

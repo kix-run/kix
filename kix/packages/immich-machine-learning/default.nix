@@ -55,13 +55,9 @@ in
     lib.optional config.initChownData chownOverrideHint;
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "ghcr.io/immich-app/immich-machine-learning";
-        tag = release.version;
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "ghcr.io/immich-app/immich-machine-learning";
+      tag = release.version;
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -217,7 +213,7 @@ in
             template.spec.containers = [
               {
                 name = "immich-machine-learning";
-                image = "${config.image.repository}:${config.image.tag}";
+                image = kix.image.ref config.image;
                 imagePullPolicy = config.image.pullPolicy;
                 env = kix.mkEnvVars {
                   TRANSFORMERS_CACHE = "/cache";

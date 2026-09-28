@@ -77,7 +77,6 @@ kix.buildCluster {
                 downAfterMilliseconds = 60000;
                 failoverTimeout = 180000;
                 parallelSyncs = 1;
-                configuration = "";
                 image = {
                   repository = "docker.io/bitnami/valkey-sentinel";
                   tag = "8.1.1-debian-12-r0";

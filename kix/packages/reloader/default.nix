@@ -64,13 +64,9 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = {
-        repository = "ghcr.io/stakater/reloader";
-        tag = "v1.3.0";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "ghcr.io/stakater/reloader";
+      tag = "v1.3.0";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -204,7 +200,7 @@ in
               containers = [
                 {
                   name = containerName;
-                  image = "${config.image.repository}:${config.image.tag}";
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   args =
                     lib.optional (config.logFormat != "") "--log-format=${config.logFormat}"

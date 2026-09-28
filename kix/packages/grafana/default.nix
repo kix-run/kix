@@ -54,21 +54,14 @@ in
       default = { };
       description = "Merged over the default kubernetes.io/os=linux selector.";
     };
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "docker.io/grafana/grafana";
-        tag = "13.1.1";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "docker.io/grafana/grafana";
+      tag = "13.1.1";
     };
-    sidecarImage = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "quay.io/kiwigrid/k8s-sidecar";
-        tag = "2.8.1";
-        pullPolicy = "IfNotPresent";
-      };
+    sidecarImage = kix.options.image {
+      repository = "quay.io/kiwigrid/k8s-sidecar";
+      tag = "2.8.1";
+      description = "Image for the k8s-sidecar containers that load dashboards, datasources and alerting resources from labelled ConfigMaps and Secrets.";
     };
     replicas = lib.mkOption {
       type = lib.types.int;
@@ -447,7 +440,7 @@ in
       hasMetrics = config.metrics.enabled && prometheus != null;
       mkServiceMonitor = if prometheus != null then prometheus.out.mkServiceMonitor scope else null;
 
-      sidecarImg = "${config.sidecarImage.repository}:${config.sidecarImage.tag}";
+      sidecarImg = kix.image.ref config.sidecarImage;
 
       # ── Admin secret indirection ────────────────────────────────────────
       # Chart's `admin.existingSecret` lets users supply pre-existing creds.
@@ -1011,7 +1004,7 @@ in
               containers = [
                 {
                   name = "grafana";
-                  image = "${config.image.repository}:${config.image.tag}";
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   env = [
                     {

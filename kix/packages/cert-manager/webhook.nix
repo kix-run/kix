@@ -6,6 +6,7 @@
   clusterConfig,
   scope,
   lib,
+  kix,
 }:
 let
   common = import ./common.nix { instanceName = scope.instanceName; };
@@ -124,8 +125,8 @@ in
             containers = [
               {
                 name = "cert-manager-webhook";
-                image = "${config.webhook.image.repository}:${config.webhook.image.tag}";
-                imagePullPolicy = config.image.pullPolicy;
+                image = kix.image.ref config.webhook.image;
+                imagePullPolicy = config.webhook.image.pullPolicy;
                 args = [
                   "--v=2"
                   "--secure-port=10250"

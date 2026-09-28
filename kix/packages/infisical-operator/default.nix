@@ -70,13 +70,9 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "infisical/kubernetes-operator";
-        tag = "v0.9.1";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "infisical/kubernetes-operator";
+      tag = "v0.9.1";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -113,16 +109,20 @@ in
       default = scope.instanceName;
     };
     # kube-rbac-proxy sidecar for securing the metrics endpoint.
-    kubeRbacProxy = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        enabled = false;
-        image = {
-          repository = "gcr.io/kubebuilder/kube-rbac-proxy";
-          tag = "v0.15.0";
-          pullPolicy = "IfNotPresent";
-        };
-        resources = {
+    kubeRbacProxy = {
+      enabled = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Serve the metrics endpoint through a kube-rbac-proxy sidecar over HTTPS.";
+      };
+      image = kix.options.image {
+        repository = "gcr.io/kubebuilder/kube-rbac-proxy";
+        tag = "v0.15.0";
+        description = "Image for the kube-rbac-proxy sidecar.";
+      };
+      resources = lib.mkOption {
+        type = lib.types.anything;
+        default = {
           requests = {
             cpu = "5m";
             memory = "64Mi";
@@ -176,7 +176,7 @@ in
       # Manager container definition (shared between proxy and non-proxy modes).
       managerContainer = {
         name = "manager";
-        image = "${config.image.repository}:${config.image.tag}";
+        image = kix.image.ref config.image;
         imagePullPolicy = config.image.pullPolicy;
         command = [ "/manager" ];
         args = managerArgs;
@@ -230,7 +230,7 @@ in
       # kube-rbac-proxy sidecar container.
       proxyContainer = {
         name = "kube-rbac-proxy";
-        image = "${config.kubeRbacProxy.image.repository}:${config.kubeRbacProxy.image.tag}";
+        image = kix.image.ref config.kubeRbacProxy.image;
         imagePullPolicy = config.kubeRbacProxy.image.pullPolicy;
         args = [
           "--secure-listen-address=0.0.0.0:8443"

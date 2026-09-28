@@ -57,13 +57,9 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "quay.io/kubevirt/virt-operator";
-        tag = "v1.5.0";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "quay.io/kubevirt/virt-operator";
+      tag = "v1.5.0";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -1729,7 +1725,7 @@ in
               containers = [
                 {
                   name = "virt-operator";
-                  image = "${config.image.repository}:${config.image.tag}";
+                  image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
                   command = [ "virt-operator" ];
                   args = [
@@ -1744,6 +1740,10 @@ in
                       value = config.image.tag;
                     }
                     {
+                      # virt-operator takes everything after `virt-operator:`
+                      # as the tag for every operand image and as the target
+                      # version, so this carries no digest. The container's
+                      # own `image` above keeps the pin.
                       name = "VIRT_OPERATOR_IMAGE";
                       value = "${config.image.repository}:${config.image.tag}";
                     }

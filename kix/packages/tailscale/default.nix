@@ -35,14 +35,18 @@ in
 
   options = {
     # --- Images ---
-    operatorImage = lib.mkOption {
-      type = lib.types.str;
-      default = "tailscale/k8s-operator:v1.82.0";
+    operatorImage = kix.options.image {
+      repository = "tailscale/k8s-operator";
+      tag = "v1.82.0";
+      pullPolicy = "Always";
+      description = "Image for the operator Deployment.";
     };
 
-    proxyImage = lib.mkOption {
-      type = lib.types.str;
-      default = "tailscale/tailscale:v1.82.0";
+    proxyImage = kix.options.image {
+      repository = "tailscale/tailscale";
+      tag = "v1.82.0";
+      pullPolicy = null;
+      description = "Image the operator runs in the proxy pods it creates, passed as PROXY_IMAGE. `pullPolicy` is not passed to the operator.";
     };
 
     # --- Deployment ---
@@ -539,8 +543,8 @@ in
               containers = [
                 {
                   name = "operator";
-                  image = config.operatorImage;
-                  imagePullPolicy = "Always";
+                  image = kix.image.ref config.operatorImage;
+                  imagePullPolicy = config.operatorImage.pullPolicy;
                   env = [
                     {
                       name = "APISERVER_PROXY";
@@ -601,7 +605,7 @@ in
                     }
                     {
                       name = "PROXY_IMAGE";
-                      value = config.proxyImage;
+                      value = kix.image.ref config.proxyImage;
                     }
                     {
                       name = "PROXY_TAGS";

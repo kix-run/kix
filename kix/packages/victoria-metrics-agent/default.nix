@@ -30,6 +30,8 @@
 }:
 let
   name = scope.instanceName;
+
+  inherit (import ../victoria-metrics-operator/cr-image.nix { inherit lib kix; }) crImage;
 in
 {
   meta = {
@@ -59,12 +61,10 @@ in
       "scrapeInterval ${config.scrapeInterval} differs from the cluster's ${deps.vmCluster.out.scrapeInterval}; -dedup.minScrapeInterval on vmselect/vmstorage is calibrated to the cluster value, so samples may double-count. Change both together.";
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "victoriametrics/vmagent";
-        tag = "v1.150.0";
-      };
+    image = kix.options.image {
+      repository = "victoriametrics/vmagent";
+      tag = "v1.150.0";
+      pullPolicy = null;
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -155,9 +155,7 @@ in
       let
         baseSpec = {
           replicaCount = config.replicaCount;
-          image = {
-            inherit (config.image) repository tag;
-          };
+          image = crImage config.image;
           remoteWrite = [ { url = vmCluster.out.insertUrl; } ];
           # The cluster's dedup is calibrated to ITS scrapeInterval — an
           # agent override that differs double-counts samples (doc 133 §5).
@@ -204,7 +202,7 @@ in
           resource = self.vmAgent;
           out = {
             # Operand pods are operator-created; image not in any kix manifest.
-            extraImages = [ "${config.image.repository}:${config.image.tag}" ];
+            extraImages = [ (kix.image.ref config.image) ];
           };
         };
       }

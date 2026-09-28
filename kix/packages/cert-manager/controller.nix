@@ -6,6 +6,7 @@
   clusterConfig,
   scope,
   lib,
+  kix,
 }:
 let
   common = import ./common.nix { instanceName = scope.instanceName; };
@@ -407,12 +408,12 @@ in
             containers = [
               ({
                 name = "cert-manager-controller";
-                image = "${config.image.repository}:${config.image.tag}";
+                image = kix.image.ref config.image;
                 imagePullPolicy = config.image.pullPolicy;
                 args = [
                   "--v=2"
                   "--cluster-resource-namespace=$(POD_NAMESPACE)"
-                  "--acme-http01-solver-image=${config.acmesolver.image.repository}:${config.acmesolver.image.tag}"
+                  "--acme-http01-solver-image=${kix.image.ref config.acmesolver.image}"
                   "--leader-election-namespace=${ns}"
                 ]
                 ++ lib.optional config.dns01RecursiveNameserversOnly "--dns01-recursive-nameservers-only"

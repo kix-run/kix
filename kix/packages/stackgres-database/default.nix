@@ -140,9 +140,10 @@ in
       '';
     };
 
-    psqlImage = lib.mkOption {
-      type = lib.types.str;
-      default = "postgres:16-alpine";
+    psqlImage = kix.options.image {
+      repository = "postgres";
+      tag = "16-alpine";
+      pullPolicy = null;
       description = "Image used by the bootstrap Job. Must contain `psql` and `pg_isready`.";
     };
   };
@@ -366,44 +367,49 @@ in
                 runAsGroup = 999;
               };
               containers = [
-                {
-                  name = "bootstrap";
-                  image = config.psqlImage;
-                  command = [
-                    "/bin/sh"
-                    "-c"
-                  ];
-                  args = [ bootstrapScript ];
-                  # psql writes no files; /tmp covers the shell's here-documents.
-                  securityContext.readOnlyRootFilesystem = true;
-                  volumeMounts = [
-                    {
-                      name = "tmp";
-                      mountPath = "/tmp";
-                    }
-                  ];
-                  env = [
-                    {
-                      name = "PGHOST";
-                      value = clusterFqdn;
-                    }
-                    {
-                      name = "PGPORT";
-                      value = clusterPort;
-                    }
-                    {
-                      name = "PGDATABASE";
-                      value = "postgres";
-                    }
-                  ]
-                  ++ (superuserRef.out.mkEnv {
-                    PGUSER = "superuser-username";
-                    PGPASSWORD = "superuser-password";
-                  })
-                  ++ (bootstrapPassword.out.mkEnv {
-                    NEW_PASSWORD = "password";
-                  });
-                }
+                (
+                  {
+                    name = "bootstrap";
+                    image = kix.image.ref config.psqlImage;
+                    command = [
+                      "/bin/sh"
+                      "-c"
+                    ];
+                    args = [ bootstrapScript ];
+                    # psql writes no files; /tmp covers the shell's here-documents.
+                    securityContext.readOnlyRootFilesystem = true;
+                    volumeMounts = [
+                      {
+                        name = "tmp";
+                        mountPath = "/tmp";
+                      }
+                    ];
+                    env = [
+                      {
+                        name = "PGHOST";
+                        value = clusterFqdn;
+                      }
+                      {
+                        name = "PGPORT";
+                        value = clusterPort;
+                      }
+                      {
+                        name = "PGDATABASE";
+                        value = "postgres";
+                      }
+                    ]
+                    ++ (superuserRef.out.mkEnv {
+                      PGUSER = "superuser-username";
+                      PGPASSWORD = "superuser-password";
+                    })
+                    ++ (bootstrapPassword.out.mkEnv {
+                      NEW_PASSWORD = "password";
+                    });
+                  }
+                  // lib.optionalAttrs (config.psqlImage.pullPolicy != null) {
+                    imagePullPolicy = config.psqlImage.pullPolicy;
+                  }
+                )
               ];
               volumes = [
                 {

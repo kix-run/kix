@@ -48,13 +48,9 @@ in
   ];
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "firezone/firezone";
-        tag = "0.7.26";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "firezone/firezone";
+      tag = "0.7.26";
     };
 
     replicaCount = lib.mkOption {
@@ -354,7 +350,7 @@ in
                 containers = [
                   {
                     name = "firezone";
-                    image = "${config.image.repository}:${config.image.tag}";
+                    image = kix.image.ref config.image;
                     imagePullPolicy = config.image.pullPolicy;
                     ports = [
                       (kix.port "wireguard" wg.port // { protocol = "UDP"; })

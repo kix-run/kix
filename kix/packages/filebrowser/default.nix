@@ -26,12 +26,10 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "filebrowser/filebrowser";
-        tag = "v2.63.18";
-      };
+    image = kix.options.image {
+      repository = "filebrowser/filebrowser";
+      tag = "v2.63.18";
+      pullPolicy = null;
     };
     # Upstream publishes no chart or resource guidance. An idle instance
     # holds about 15 MiB; the limits leave room for archive downloads.
@@ -72,39 +70,44 @@ in
               # Kubernetes default: filebrowser documents no shutdown drain.
               template.spec.terminationGracePeriodSeconds = 30;
               template.spec.containers = [
-                {
-                  name = "filebrowser";
-                  image = "${config.image.repository}:${config.image.tag}";
-                  # The image's own user is uid 1000; stated so the kubelet
-                  # can verify it rather than trust the image.
-                  securityContext = {
-                    runAsNonRoot = true;
-                    runAsUser = 1000;
-                    runAsGroup = 1000;
-                    readOnlyRootFilesystem = true;
-                  };
-                  resources = config.resources;
-                  ports = [
-                    {
-                      name = "http";
-                      containerPort = 80;
-                      protocol = "TCP";
-                    }
-                  ];
-                  livenessProbe = {
-                    httpGet = {
-                      path = "/health";
-                      port = "http";
+                (
+                  {
+                    name = "filebrowser";
+                    image = kix.image.ref config.image;
+                    # The image's own user is uid 1000; stated so the kubelet
+                    # can verify it rather than trust the image.
+                    securityContext = {
+                      runAsNonRoot = true;
+                      runAsUser = 1000;
+                      runAsGroup = 1000;
+                      readOnlyRootFilesystem = true;
                     };
-                    periodSeconds = 30;
-                  };
-                  readinessProbe = {
-                    httpGet = {
-                      path = "/health";
-                      port = "http";
+                    resources = config.resources;
+                    ports = [
+                      {
+                        name = "http";
+                        containerPort = 80;
+                        protocol = "TCP";
+                      }
+                    ];
+                    livenessProbe = {
+                      httpGet = {
+                        path = "/health";
+                        port = "http";
+                      };
+                      periodSeconds = 30;
                     };
-                  };
-                }
+                    readinessProbe = {
+                      httpGet = {
+                        path = "/health";
+                        port = "http";
+                      };
+                    };
+                  }
+                  // lib.optionalAttrs (config.image.pullPolicy != null) {
+                    imagePullPolicy = config.image.pullPolicy;
+                  }
+                )
               ];
             };
           }

@@ -13,6 +13,7 @@
 {
   scope,
   lib,
+  kix,
 }:
 
 let
@@ -35,9 +36,10 @@ in
       default = "*/5 * * * *";
       description = "Cron schedule for the perms-fix Job.";
     };
-    image = lib.mkOption {
-      type = lib.types.str;
-      default = "alpine/k8s:1.33.1";
+    image = kix.options.image {
+      repository = "alpine/k8s";
+      tag = "1.33.1";
+      pullPolicy = "Always";
     };
   };
 
@@ -115,8 +117,8 @@ in
               containers = [
                 {
                   name = "chmod-pgpass";
-                  image = config.image;
-                  imagePullPolicy = "Always";
+                  image = kix.image.ref config.image;
+                  imagePullPolicy = config.image.pullPolicy;
                   securityContext = {
                     allowPrivilegeEscalation = false;
                     capabilities.drop = [ "ALL" ];

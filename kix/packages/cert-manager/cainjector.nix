@@ -6,6 +6,7 @@
   clusterConfig,
   scope,
   lib,
+  kix,
 }:
 let
   common = import ./common.nix { instanceName = scope.instanceName; };
@@ -180,8 +181,8 @@ in
             containers = [
               {
                 name = "cert-manager-cainjector";
-                image = "${config.cainjector.image.repository}:${config.cainjector.image.tag}";
-                imagePullPolicy = config.image.pullPolicy;
+                image = kix.image.ref config.cainjector.image;
+                imagePullPolicy = config.cainjector.image.pullPolicy;
                 args = [
                   "--v=2"
                   "--leader-election-namespace=${ns}"

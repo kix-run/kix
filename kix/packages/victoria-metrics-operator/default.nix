@@ -50,13 +50,9 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "victoriametrics/operator";
-        tag = "v0.74.1";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "victoriametrics/operator";
+      tag = "v0.74.1";
     };
     replicas = lib.mkOption {
       type = lib.types.int;

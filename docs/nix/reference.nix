@@ -37,9 +37,11 @@ let
         # to size replica counts, and nixosOptionsDoc renders every default
         # that has no `defaultText`. The package sees the level a cluster
         # without an availability setting resolves to, so the rendered
-        # default is the single-replica one. Any other `kix` attribute is
-        # missing here, and the error names it.
+        # default is the single-replica one. Image options come from
+        # `kix.options.image`. Any other `kix` attribute is missing here,
+        # and the error names it.
         kix.availability = import ../../kix/lib/core/availability.nix { inherit lib; };
+        kix.options = (import ../../kix/lib/vocab/compose.nix { inherit lib; }).options;
         availability = "none";
       };
       pkg = package (lib.intersectAttrs fnArgs stubs);

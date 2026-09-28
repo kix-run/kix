@@ -1317,7 +1317,7 @@ in
                   containers = [
                     {
                       name = "redis";
-                      image = "${config.redis.image.repository}:${config.redis.image.tag}";
+                      image = kix.image.ref config.redis.image;
                       ports = [
                         (kix.port "redis" 6379)
                       ];

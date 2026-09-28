@@ -33,6 +33,11 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
+
+  inherit (import ../victoria-metrics-operator/cr-image.nix { inherit lib kix; })
+    crImage
+    crImageVersionTag
+    ;
 in
 {
   meta = {
@@ -44,12 +49,10 @@ in
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "victoriametrics/vmalert";
-        tag = "v1.150.0";
-      };
+    image = kix.options.image {
+      repository = "victoriametrics/vmalert";
+      tag = "v1.150.0";
+      pullPolicy = null;
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -98,12 +101,11 @@ in
     };
 
     alertmanager = {
-      image = lib.mkOption {
-        type = lib.types.anything;
-        default = {
-          repository = "quay.io/prometheus/alertmanager";
-          tag = "v0.33.1";
-        };
+      image = kix.options.image {
+        repository = "quay.io/prometheus/alertmanager";
+        tag = "v0.33.1";
+        pullPolicy = null;
+        description = "Alertmanager container image for the VMAlertmanager CR. It cannot take a digest: the operator reads the tag as a semantic version to choose feature flags.";
       };
       replicaCount = lib.mkOption {
         type = lib.types.int;
@@ -221,9 +223,7 @@ in
 
         alertmanagerBaseSpec = {
           replicaCount = config.alertmanager.replicaCount;
-          image = {
-            inherit (config.alertmanager.image) repository tag;
-          };
+          image = crImageVersionTag "alertmanager.image" config.alertmanager.image;
           # out.name carries the store-path edge to the config Secret.
           configSecret = self.alertmanagerConfig.out.name;
           retention = config.alertmanager.retention;
@@ -245,9 +245,7 @@ in
 
         vmAlertBaseSpec = {
           replicaCount = config.replicaCount;
-          image = {
-            inherit (config.image) repository tag;
-          };
+          image = crImage config.image;
           datasource.url = vmCluster.out.serviceUrl;
           remoteWrite.url = vmCluster.out.insertBaseUrl;
           remoteRead.url = vmCluster.out.serviceUrl;
@@ -296,8 +294,8 @@ in
           resource = self.vmAlert;
           out = {
             extraImages = [
-              "${config.image.repository}:${config.image.tag}"
-              "${config.alertmanager.image.repository}:${config.alertmanager.image.tag}"
+              (kix.image.ref config.image)
+              (kix.image.ref config.alertmanager.image)
             ];
           };
         };

@@ -8,6 +8,7 @@
   config,
   scope,
   lib,
+  kix,
   ...
 }:
 let
@@ -245,7 +246,7 @@ in
         "--kubelet-service=${config.kubeletService.namespace}/${config.kubeletService.name}"
       );
       baseArgs = kubeletArg ++ [
-        "--prometheus-config-reloader=${config.prometheusConfigReloader.image.repository}:${config.prometheusConfigReloader.image.tag}"
+        "--prometheus-config-reloader=${kix.image.ref config.prometheusConfigReloader.image}"
       ];
       finalArgs =
         baseArgs
@@ -281,7 +282,7 @@ in
 
       container = {
         name = "prometheus-operator";
-        image = "${config.image.repository}:${config.image.tag}";
+        image = kix.image.ref config.image;
         imagePullPolicy = config.image.pullPolicy;
         args = finalArgs;
         ports = [

@@ -40,22 +40,15 @@
   };
 
   options = {
-    image = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        repository = "quay.io/prometheus-operator/prometheus-operator";
-        tag = "v0.92.1";
-        pullPolicy = "IfNotPresent";
-      };
+    image = kix.options.image {
+      repository = "quay.io/prometheus-operator/prometheus-operator";
+      tag = "v0.92.1";
     };
-    prometheusConfigReloader = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        image = {
-          repository = "quay.io/prometheus-operator/prometheus-config-reloader";
-          tag = "v0.92.1";
-        };
-      };
+    prometheusConfigReloader.image = kix.options.image {
+      repository = "quay.io/prometheus-operator/prometheus-config-reloader";
+      tag = "v0.92.1";
+      pullPolicy = null;
+      description = "Image the operator injects as the config-reloader sidecar into Prometheus and Alertmanager pods. Its pull policy follows the imagePullPolicy of the Prometheus or Alertmanager resource, so `pullPolicy` here has no effect.";
     };
     replicas = lib.mkOption {
       type = lib.types.int;
@@ -319,7 +312,7 @@
             # The operator injects a config-reloader sidecar into Prometheus
             # and Alertmanager pods — not in any kix-generated manifest.
             extraImages = [
-              "${config.prometheusConfigReloader.image.repository}:${config.prometheusConfigReloader.image.tag}"
+              (kix.image.ref config.prometheusConfigReloader.image)
             ];
           };
         };
