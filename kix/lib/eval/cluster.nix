@@ -611,15 +611,30 @@
 
       # Collect names marked with kix.untrackedRef before rawManifestList
       # removes string context. Key entries by the referring resource's
-      # namespace so an exemption does not apply across namespaces.
+      # namespace so an exemption does not apply across namespaces. Each
+      # value is { creatorNamed; }, true only when every reference to that
+      # key named its kind and creator.
       externalRefNames =
         let
-          isMarked =
-            s: builtins.any k8s.markers.isUntrackedRefPath (builtins.attrNames (builtins.getContext s));
+          markersOf =
+            s: builtins.filter k8s.markers.isUntrackedRefPath (builtins.attrNames (builtins.getContext s));
           walk =
             v:
             if builtins.isString v then
-              (if isMarked v then [ (builtins.unsafeDiscardStringContext v) ] else [ ])
+              (
+                let
+                  ms = markersOf v;
+                in
+                if ms != [ ] then
+                  [
+                    {
+                      name = builtins.unsafeDiscardStringContext v;
+                      creatorNamed = builtins.all k8s.markers.namesCreator ms;
+                    }
+                  ]
+                else
+                  [ ]
+              )
             # rawManifest is JSON-shaped: sealing goes through builtins.toFile,
             # which refuses derivation references, so no self-referential
             # derivation attrset can be here.
@@ -636,15 +651,24 @@
               toString (r.rawManifest.metadata.namespace or "cluster-scoped")
             );
         in
-        builtins.listToAttrs (
-          builtins.concatMap (
-            r:
-            map (n: {
-              name = "${nsOf r}/${n}";
-              value = true;
-            }) (walk r.rawManifest)
-          ) allResources
-        );
+        builtins.foldl'
+          (
+            acc: e:
+            acc
+            // {
+              ${e.key}.creatorNamed = e.creatorNamed && (acc.${e.key}.creatorNamed or true);
+            }
+          )
+          { }
+          (
+            builtins.concatMap (
+              r:
+              map (n: {
+                key = "${nsOf r}/${n.name}";
+                inherit (n) creatorNamed;
+              }) (walk r.rawManifest)
+            ) allResources
+          );
 
       clusterDiagnostics = meta.collectClusterDiagnostics {
         clusterName = name;

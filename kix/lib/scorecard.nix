@@ -382,9 +382,9 @@ rec {
       ruleDefaults ? { },
       ruleOverrides ? { },
       maxSeverity ? "error",
-      # "<namespace>/<name>" → true for every name a package declared
-      # external with kix.untrackedRef. Collected before string context is
-      # stripped, which is the only point it can be read at.
+      # "<namespace>/<name>" → { creatorNamed; } for every name a package
+      # declared external with kix.untrackedRef. Collected before string
+      # context is stripped, which is the only point it can be read at.
       externalNames ? { },
     }:
     let

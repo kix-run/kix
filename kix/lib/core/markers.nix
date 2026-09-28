@@ -50,9 +50,12 @@ rec {
         if kind == null then
           name
         else
-          builtins.toJSON {
-            inherit name kind apiVersion;
-          };
+          builtins.toJSON (
+            {
+              inherit name kind apiVersion;
+            }
+            // lib.optionalAttrs (by != null) { hasCreator = true; }
+          );
       marker = builtins.toFile untrackedRefName content;
       byCtx = if by == null then { } else builtins.getContext "${by}";
     in
@@ -61,11 +64,21 @@ rec {
   isUntrackedRefPath = p: lib.hasPrefix untrackedRefName (pathName p);
 
   # What a marker expects to exist, when its reference named a kind:
-  # { name; kind; apiVersion; }, else null.
+  # { name; kind; apiVersion; hasCreator?; }, else null. hasCreator is true
+  # when the reference also named `by`.
   readExpectation =
     p:
     let
       content = builtins.readFile p;
     in
     if lib.hasPrefix "{" content then builtins.fromJSON content else null;
+
+  # Whether a marker's reference named both a kind and its creator (`by`),
+  # so deploy orders the referrer after the creator and waits for the object.
+  namesCreator =
+    p:
+    let
+      e = readExpectation p;
+    in
+    e != null && (e.hasCreator or false);
 }

@@ -3043,7 +3043,8 @@ let
 
     # An untracked reference that names its creator and kind orders the
     # referring resource after the creator and stamps what it expects;
-    # the bare string form stamps nothing, as before.
+    # the bare string form stamps nothing, as before. Only the bare form
+    # is listed by the untrackedReferences audit.
     t97-untracked-ref-with-creator =
       let
         pkg = {
@@ -3119,9 +3120,13 @@ let
         };
         cluster = mkCluster [
           baseInstances
+          scorecardOn
           { instances.appns.a.package = pkg; }
         ];
         web = byName "web" (ofKind "Deployment" (manifests cluster));
+        untrackedFindings = builtins.filter (f: lib.hasSuffix "untrackedReferences" (f.rule or "")) (
+          (cluster.scorecardReport or { findings = [ ]; }).findings
+        );
         minterHash = k8s.extractStoreHash cluster.instances.appns.a.raw.minter.outPath;
         badBy = evalFails (mkCluster [
           baseInstances
@@ -3156,8 +3161,11 @@ let
         web.metadata.annotations.${kixKeys.expects} == "v1|Secret|minted-cert"
         && lib.hasInfix minterHash (dependsOn web)
         && badBy
+        && map (f: f.resource) untrackedFindings == [ "cluster-provided" ]
       )
-      || throw "untracked ref with creator: ${builtins.toJSON (web.metadata.annotations or { })}";
+      || throw "untracked ref with creator: ${
+        builtins.toJSON (web.metadata.annotations or { })
+      }, audit: ${builtins.toJSON untrackedFindings}";
 
     t57-service-ref-fqdn-carries-cluster-domain =
       let

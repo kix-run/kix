@@ -152,7 +152,7 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - `consistentPortNames` — one port name must mean one number across an instance's workloads (warning). A vendored chart can carry the clash, so it reports rather than fails.
 - **Cluster DNS under `always` enforcement** — the cilium package emits one CiliumClusterwideNetworkPolicy allowing every pod in the cluster egress to kube-dns, because `policyEnforcementMode = "always"` puts pods Kix never renders into default deny too. `config.clusterDnsEgress = false` to write it yourself.
 - `unsafeGrants` — audit listing every `meta.unsafe` grant (info).
-- `untrackedReferences` — audit listing every name declared external with `kix.untrackedRef` (info). An untracked reference claims something else creates the object; nothing checks that anything does, so the claims are collected where a reviewer sees them together.
+- `untrackedReferences` — audit listing every name declared external with `kix.untrackedRef` that does not name both `kind` and `by` (info). A bare untracked reference claims something else creates the object; nothing checks that anything does, so the claims are collected where a reviewer sees them together. A name is left out only when every reference to it in that namespace names its kind and creator, since those references are ordered after the creator and awaited at deploy.
 - `selectorCoherence` — Service selectors must carry store-path context (warning).
 - `fqdnWithoutContext` — `*.svc` FQDNs in workloads must carry store-path context (warning).
 - `monitorSelectorMatchesService` — ServiceMonitor/VMServiceScrape selectors must match some Service's metadata labels (cluster-level, error). Opt-out for operator-created targets: `kix.run/monitors-external-service` annotation.
