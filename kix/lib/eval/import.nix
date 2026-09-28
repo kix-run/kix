@@ -248,6 +248,8 @@ rec {
 
             evaluatedConfig = evaluateInstanceConfig {
               packageOptions = raw.options or { };
+              packageConfig = raw.config or { };
+              packageConfigFile = "package config of ${namespaceName}/${instanceName}";
               inherit instCfg clusterConfig;
             };
 

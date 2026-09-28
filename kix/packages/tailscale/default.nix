@@ -17,6 +17,11 @@
 let
   name = scope.instanceName;
 
+  # Each Tailscale release tags the operator and proxy images alike. Both
+  # declared tags come from this binding, so the proxy keeps its declared
+  # tag until the instance moves `operatorImage.tag`.
+  release = "v1.82.0";
+
   selectorLabels = {
     "app.kubernetes.io/name" = "tailscale";
     "app.kubernetes.io/instance" = name;
@@ -37,14 +42,15 @@ in
     # --- Images ---
     operatorImage = kix.options.image {
       repository = "tailscale/k8s-operator";
-      tag = "v1.82.0";
+      tag = release;
       pullPolicy = "Always";
       description = "Image for the operator Deployment.";
     };
 
     proxyImage = kix.options.image {
       repository = "tailscale/tailscale";
-      tag = "v1.82.0";
+      tag = release;
+      tagText = "config.operatorImage.tag";
       pullPolicy = null;
       description = "Image the operator runs in the proxy pods it creates, passed as PROXY_IMAGE. `pullPolicy` is not passed to the operator.";
     };
@@ -369,6 +375,13 @@ in
       description = "Connector resources to create. Keys are resource names, values are specs.";
     };
   };
+
+  # The proxy's tag follows `operatorImage.tag` unless the instance sets it.
+  config =
+    { config, ... }:
+    {
+      proxyImage.tag = lib.mkDefault config.operatorImage.tag;
+    };
 
   build =
     {

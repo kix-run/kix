@@ -316,6 +316,7 @@
               depsEnrichment = { };
               resolvedTargets = { };
               packageOptions = { };
+              packageConfig = { };
             }
           else
             let
@@ -340,6 +341,7 @@
             {
               inherit discoveredDeps depsEnrichment resolvedTargets;
               packageOptions = raw.options or { };
+              packageConfig = raw.config or { };
             }
         ) nsInsts
       ) mergedInstances;
@@ -371,7 +373,8 @@
               { }
             else
               evaluateInstanceConfig {
-                packageOptions = phase1Instances.${nsName}.${instName}.packageOptions;
+                inherit (phase1Instances.${nsName}.${instName}) packageOptions packageConfig;
+                packageConfigFile = "package config of ${nsName}/${instName}";
                 inherit instCfg;
                 clusterConfig = cfg;
                 configInjections = resolveInjectionsAgainst selfCfg nsName instName;

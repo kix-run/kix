@@ -16,9 +16,16 @@
   availability,
 }:
 
+let
+  # One cert-manager release tags every component image alike. The
+  # component tags follow `image.tag` through `config` below; declaring them
+  # from this binding keeps each declared tag equal to the controller's, so
+  # a component keeps its default digest until the instance moves the tag.
+  release = "v1.17.1";
+in
 {
   meta = {
-    version = "v1.17.1";
+    version = release;
     description = "cert-manager: X.509 certificate management for Kubernetes";
     owner = "platform";
     defaultAliases = [ "certManager" ];
@@ -52,7 +59,7 @@
   options = {
     image = kix.options.image {
       repository = "quay.io/jetstack/cert-manager-controller";
-      tag = "v1.17.1";
+      tag = release;
       description = "Image for the cert-manager controller Deployment.";
     };
     # The webhook sits in the write path for every cert-manager object, so
@@ -60,7 +67,8 @@
     webhook = {
       image = kix.options.image {
         repository = "quay.io/jetstack/cert-manager-webhook";
-        tag = "v1.17.1";
+        tag = release;
+        tagText = "config.image.tag";
         description = "Image for the admission webhook that validates and mutates cert-manager CRs.";
       };
       replicaCount = lib.mkOption {
@@ -93,7 +101,8 @@
     cainjector = {
       image = kix.options.image {
         repository = "quay.io/jetstack/cert-manager-cainjector";
-        tag = "v1.17.1";
+        tag = release;
+        tagText = "config.image.tag";
         description = "Image for the controller that injects CA bundles into webhooks, APIServices and CRDs.";
       };
       # Leader election makes a restart invisible, so "pod" stays at 1.
@@ -131,8 +140,15 @@
     };
     acmesolver.image = kix.options.image {
       repository = "quay.io/jetstack/cert-manager-acmesolver";
-      tag = "v1.17.1";
+      tag = release;
+      tagText = "config.image.tag";
       description = "Image cert-manager runs for HTTP-01 challenge-response pods.";
+    };
+    startupapicheck.image = kix.options.image {
+      repository = "quay.io/jetstack/cert-manager-startupapicheck";
+      tag = release;
+      tagText = "config.image.tag";
+      description = "Image for the Job that waits until the cert-manager API accepts requests.";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -215,6 +231,19 @@
       '';
     };
   };
+
+  # A component's tag follows the controller's `image.tag` unless the
+  # instance sets that component's tag itself. The startupapicheck Job also
+  # follows the controller's pull policy.
+  config =
+    { config, ... }:
+    lib.recursiveUpdate
+      (lib.genAttrs [ "webhook" "cainjector" "acmesolver" "startupapicheck" ] (_: {
+        image.tag = lib.mkDefault config.image.tag;
+      }))
+      {
+        startupapicheck.image.pullPolicy = lib.mkDefault config.image.pullPolicy;
+      };
 
   build = [
     ./crds.nix

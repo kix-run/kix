@@ -106,6 +106,7 @@ in
     resolveArg
     extractDeferredValues
     evaluateInstanceConfig
+    packageDefaultPriority
     callPackagePhase1
     discoverBuildDeps
     resolveDeclaredDeps

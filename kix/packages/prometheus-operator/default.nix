@@ -20,9 +20,15 @@
   availability,
 }:
 
+let
+  # The operator and its config-reloader are released together under one
+  # tag. Both declared tags come from this binding, so the reloader keeps
+  # its declared tag until the instance moves `image.tag`.
+  release = "v0.92.1";
+in
 {
   meta = {
-    version = "v0.92.1";
+    version = release;
     # Leader election is not enabled in the operator args, so one replica
     # is the ceiling this package can honour.
     availability.max = "pod";
@@ -42,11 +48,12 @@
   options = {
     image = kix.options.image {
       repository = "quay.io/prometheus-operator/prometheus-operator";
-      tag = "v0.92.1";
+      tag = release;
     };
     prometheusConfigReloader.image = kix.options.image {
       repository = "quay.io/prometheus-operator/prometheus-config-reloader";
-      tag = "v0.92.1";
+      tag = release;
+      tagText = "config.image.tag";
       pullPolicy = null;
       description = "Image the operator injects as the config-reloader sidecar into Prometheus and Alertmanager pods. Its pull policy follows the imagePullPolicy of the Prometheus or Alertmanager resource, so `pullPolicy` here has no effect.";
     };
@@ -265,6 +272,13 @@
       description = "Seconds the pod gets to stop, including any `lifecycle.preStop` hook.";
     };
   };
+
+  # The reloader's tag follows `image.tag` unless the instance sets it.
+  config =
+    { config, ... }:
+    {
+      prometheusConfigReloader.image.tag = lib.mkDefault config.image.tag;
+    };
 
   build = [
     ./crds.nix

@@ -615,16 +615,20 @@ rec {
     #
     # Supply a resolved reference from the cluster's pin file:
     #   config.image = pins.get "web";
+    #
+    # `tagText` is the Nix expression the option reference shows as the
+    # tag's default, for a package whose `config` sets the tag from another
+    # option. `tag` stays the declared default the digest rule compares with.
     image =
       {
         repository,
         tag,
         digest ? null,
         pullPolicy ? "IfNotPresent",
+        tagText ? null,
         description ? "Container image for this instance. Set it from a pin file (`kix.pins`) so the deployed reference is committed and resolved.",
       }:
-      lib.mkOption {
-        inherit description;
+      let
         default = {
           inherit
             repository
@@ -633,6 +637,17 @@ rec {
             pullPolicy
             ;
         };
+        # toPretty prints a `__pretty` value through its function, so the tag
+        # renders as the expression rather than as a quoted string.
+        shownDefault = default // {
+          tag = {
+            __pretty = lib.id;
+            val = tagText;
+          };
+        };
+      in
+      lib.mkOption {
+        inherit description default;
         type = lib.types.submodule (
           { config, ... }:
           {
@@ -642,11 +657,13 @@ rec {
                 default = repository;
                 description = "Image repository, registry host included.";
               };
-              tag = lib.mkOption {
-                type = lib.types.str;
-                default = tag;
-                description = "Image tag. What was asked for.";
-              };
+              tag =
+                lib.mkOption {
+                  type = lib.types.str;
+                  default = tag;
+                  description = "Image tag. What was asked for.";
+                }
+                // lib.optionalAttrs (tagText != null) { defaultText = lib.literalExpression tagText; };
               digest = lib.mkOption {
                 type = lib.types.nullOr lib.types.str;
                 default = if config.tag == tag then digest else null;
@@ -680,6 +697,14 @@ rec {
               };
             };
           }
+        );
+      }
+      // lib.optionalAttrs (tagText != null) {
+        defaultText = lib.literalExpression (
+          lib.generators.toPretty {
+            multiline = true;
+            allowPrettyValues = true;
+          } shownDefault
         );
       };
 

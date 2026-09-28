@@ -5780,6 +5780,335 @@ let
         }
       )
     ]);
+
+    # A package's `config` module defaults `keep` from `message`; an
+    # instance that sets `keep` itself overrides that default.
+    t116-package-config-defaults-one-option-from-another =
+      let
+        package = envProbePackage // {
+          config =
+            { config, ... }:
+            {
+              keep = lib.mkDefault config.message;
+            };
+        };
+        keepFor =
+          config:
+          let
+            ms = manifests (mkCluster [
+              {
+                instances.probens.probe = { inherit package config; };
+              }
+            ]);
+          in
+          (byName "probe" (ofKind "ConfigMap" ms)).data.keep;
+        cases = {
+          follows = keepFor { message = "hi"; } == "hi";
+          instanceWins =
+            keepFor {
+              message = "hi";
+              keep = "own";
+            } == "own";
+          packageDefault = keepFor { } == "unset";
+        };
+      in
+      builtins.all lib.id (builtins.attrValues cases)
+      || throw "package config defaulting wrong: ${builtins.toJSON cases}";
+
+    # An attrset package `config` sets options by name, including an option
+    # that is itself called `config`.
+    t117-package-config-attrset-sets-option-named-config =
+      let
+        config = eval.evaluateInstanceConfig {
+          packageOptions.config = lib.mkOption {
+            type = lib.types.str;
+            default = "declared";
+          };
+          packageConfig.config = lib.mkDefault "from package";
+          instCfg.config.imports = [ ];
+        };
+      in
+      config.config == "from package"
+      || throw "package config attrset did not set option 'config': ${builtins.toJSON config}";
+
+    # A component image whose tag follows the main image's tag through the
+    # package `config` keeps its own default digest while the main tag is
+    # unchanged, and drops it once the main tag moves.
+    t118-package-config-tag-follow-drops-digest =
+      let
+        digestOf = c: "sha256:${lib.concatStrings (lib.genList (_: c) 64)}";
+        evalWith =
+          defs:
+          (eval.evaluateInstanceConfig {
+            packageOptions = {
+              image = kixlib.options.image {
+                repository = "reg.example/app";
+                tag = "v1";
+                digest = digestOf "a";
+              };
+              sidecar.image = kixlib.options.image {
+                repository = "reg.example/sidecar";
+                tag = "v1";
+                digest = digestOf "b";
+                tagText = "config.image.tag";
+              };
+            };
+            packageConfig =
+              { config, ... }:
+              {
+                sidecar.image.tag = lib.mkDefault config.image.tag;
+              };
+            instCfg.config.imports = defs;
+          }).sidecar.image;
+        cases = {
+          unchanged =
+            let
+              img = evalWith [ ];
+            in
+            img.tag == "v1" && img.digest == digestOf "b";
+          moved =
+            let
+              img = evalWith [ { image.tag = "v2"; } ];
+            in
+            img.tag == "v2" && img.digest == null;
+          pinnedBack =
+            let
+              img = evalWith [
+                {
+                  image.tag = "v2";
+                  sidecar.image.tag = "v1";
+                }
+              ];
+            in
+            img.tag == "v1" && img.digest == digestOf "b";
+        };
+      in
+      builtins.all lib.id (builtins.attrValues cases)
+      || throw "package config tag follow and digest wrong: ${builtins.toJSON cases}";
+
+    # A `lib.mkDefault` in the package's `config` sits between an instance
+    # or injection `lib.mkDefault` and the option's declared default: the
+    # instance and the injection win, plain instance values win, and with
+    # neither the package default replaces the declared one.
+    t126-package-config-mkdefault-yields-to-instance-and-injection =
+      let
+        tagWith =
+          {
+            defs ? [ ],
+            injections ? [ ],
+          }:
+          (eval.evaluateInstanceConfig {
+            packageOptions = {
+              image = kixlib.options.image {
+                repository = "reg.example/app";
+                tag = "v1";
+              };
+              side.image = kixlib.options.image {
+                repository = "reg.example/side";
+                tag = "v1";
+                tagText = "config.image.tag";
+              };
+            };
+            packageConfig =
+              { config, ... }:
+              {
+                side.image.tag = lib.mkDefault config.image.tag;
+              };
+            instCfg.config.imports = defs;
+            configInjections = injections;
+          }).side.image.tag;
+        cases = {
+          packageBeatsDeclared = tagWith { defs = [ { image.tag = "v2"; } ]; } == "v2";
+          instanceMkDefault =
+            tagWith {
+              defs = [
+                {
+                  image.tag = "v2";
+                  side.image.tag = lib.mkDefault "v9";
+                }
+              ];
+            } == "v9";
+          injectionMkDefault =
+            tagWith {
+              defs = [ { image.tag = "v2"; } ];
+              injections = [
+                {
+                  source = "consumer";
+                  config.side.image.tag = lib.mkDefault "v8";
+                }
+              ];
+            } == "v8";
+          instancePlain =
+            tagWith {
+              defs = [
+                {
+                  image.tag = "v2";
+                  side.image.tag = "v7";
+                }
+              ];
+            } == "v7";
+        };
+      in
+      builtins.all lib.id (builtins.attrValues cases)
+      || throw "package config mkDefault priority wrong: ${builtins.toJSON cases}";
+
+    # The priority rewrite reaches a `lib.mkDefault` under `lib.mkIf` and
+    # `lib.mkMerge`, and leaves a `lib.mkForce` in the package's `config`
+    # above the instance.
+    t127-package-config-priority-through-mkif-mkmerge =
+      let
+        valueWith =
+          packageConfig: defs:
+          (eval.evaluateInstanceConfig {
+            packageOptions.v = lib.mkOption {
+              type = lib.types.str;
+              default = "declared";
+            };
+            inherit packageConfig;
+            instCfg.config.imports = defs;
+          }).v;
+        cases = {
+          mkIf =
+            valueWith (lib.mkIf true { v = lib.mkDefault "package"; }) [ { v = lib.mkDefault "instance"; } ]
+            == "instance";
+          mkMerge =
+            valueWith (lib.mkMerge [ { v = lib.mkDefault "package"; } ]) [ { v = lib.mkDefault "instance"; } ]
+            == "instance";
+          aloneBeatsDeclared = valueWith { v = lib.mkDefault "package"; } [ ] == "package";
+          mkForceKept = valueWith { v = lib.mkForce "package"; } [ { v = "instance"; } ] == "package";
+        };
+      in
+      builtins.all lib.id (builtins.attrValues cases)
+      || throw "package config priority rewrite wrong: ${builtins.toJSON cases}";
+
+    # Every shipped package with a `config` module declares its image
+    # options so that the module changes none of them at the defaults. A
+    # follower whose declared tag differs from its main tag would render the
+    # main tag with no digest; this catches a release bump that updates one
+    # declaration and not the other.
+    t128-shipped-package-config-keeps-declared-images =
+      let
+        packagesDir = ../../packages;
+        names = builtins.attrNames (
+          lib.filterAttrs (
+            n: t: t == "directory" && builtins.pathExists (packagesDir + "/${n}/default.nix")
+          ) (builtins.readDir packagesDir)
+        );
+        rawOf =
+          n:
+          eval.callPackagePhase1 {
+            package = import (packagesDir + "/${n}");
+            scope = {
+              instanceName = n;
+              namespaceName = "pkgcfg";
+            };
+          };
+        withConfig = builtins.filter (n: (rawOf n) ? config) names;
+        # Paths of the options whose declared default is an image
+        # (`kix.options.image`); submodule-typed options are not entered.
+        imagePaths =
+          prefix: opts:
+          builtins.concatLists (
+            lib.mapAttrsToList (
+              k: o:
+              if lib.isOption o then
+                lib.optional ((builtins.tryEval (
+                  o ? default && builtins.isAttrs o.default && o.default ? repository && o.default ? tag
+                )).value or false
+                ) (prefix ++ [ k ])
+              else if builtins.isAttrs o then
+                imagePaths (prefix ++ [ k ]) o
+              else
+                [ ]
+            ) opts
+          );
+        mismatches = builtins.concatMap (
+          n:
+          let
+            raw = rawOf n;
+            evalWith =
+              packageConfig:
+              eval.evaluateInstanceConfig {
+                packageOptions = raw.options;
+                inherit packageConfig;
+                instCfg.config.imports = [ ];
+              };
+            followed = evalWith raw.config;
+            declared = evalWith { };
+            fields = img: {
+              inherit (img)
+                repository
+                tag
+                digest
+                pullPolicy
+                ;
+            };
+          in
+          builtins.concatMap (
+            path:
+            let
+              a = fields (lib.getAttrFromPath path followed);
+              b = fields (lib.getAttrFromPath path declared);
+            in
+            lib.optional (
+              a != b
+            ) "${n}: ${lib.concatStringsSep "." path} is ${builtins.toJSON a}, declared ${builtins.toJSON b}"
+          ) (imagePaths [ ] raw.options)
+        ) withConfig;
+        expected = [
+          "cert-manager"
+          "clickhouse-operator"
+          "prometheus-operator"
+          "tailscale"
+        ];
+        missing = lib.subtractLists withConfig expected;
+      in
+      (mismatches == [ ] && missing == [ ])
+      || throw "package config changes a declared image: ${builtins.toJSON mismatches}; packages not checked: ${builtins.toJSON missing}";
+
+    # cert-manager's startupapicheck Job follows the controller's tag and
+    # pull policy until the instance sets its own.
+    t129-cert-manager-startupapicheck-follows-controller-image =
+      let
+        jobImage =
+          config:
+          let
+            ms = manifests (mkCluster [
+              {
+                instances.cert-manager.cert-manager = {
+                  package = import ../../packages/cert-manager;
+                  inherit config;
+                };
+              }
+            ]);
+            job = lib.findFirst (
+              m: m.kind == "Job" && lib.hasInfix "startupapicheck" m.metadata.name
+            ) (throw "no startupapicheck Job") ms;
+            c = builtins.head job.spec.template.spec.containers;
+          in
+          {
+            inherit (c) image imagePullPolicy;
+          };
+        cases = {
+          follows =
+            jobImage {
+              image = {
+                tag = "v1.18.0";
+                pullPolicy = "Always";
+              };
+            } == {
+              image = "quay.io/jetstack/cert-manager-startupapicheck:v1.18.0";
+              imagePullPolicy = "Always";
+            };
+          own =
+            (jobImage {
+              image.pullPolicy = "Always";
+              startupapicheck.image.pullPolicy = "Never";
+            }).imagePullPolicy == "Never";
+        };
+      in
+      builtins.all lib.id (builtins.attrValues cases)
+      || throw "startupapicheck image does not follow the controller: ${builtins.toJSON cases}";
   }
   // import ./validate.nix {
     inherit

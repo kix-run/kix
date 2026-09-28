@@ -246,7 +246,7 @@ capability ownership, etc.).
 
 ## 5. Package authoring contract
 
-A package is a function `{ scope, lib, kix, ... }: { meta?, options?, deps?, build }`.
+A package is a function `{ scope, lib, kix, ... }: { meta?, options?, config?, deps?, build }`.
 
 ```nix
 # kix/packages/<pkg>/default.nix
@@ -284,6 +284,17 @@ in
     replicaCount = lib.mkOption { type = lib.types.int; default = 1; };
     ingress = kix.options.ingress;            # standardized { host, annotations }
     metrics = kix.options.monitor;            # standardized { enabled, interval }
+    # Same release as `image`; its tag follows `image.tag` through `config`.
+    # Declare both tags from one `let` binding so they cannot drift apart.
+    worker.image = kix.options.image { repository = "myapp/worker"; tag = "v1.0.0"; tagText = "config.image.tag"; };
+  };
+
+  # The package's own config module: an attrset or `{ config, lib, ... }:`,
+  # evaluated with `options`, dependency injections and the instance config.
+  # Its lib.mkDefault runs at priority 1250, so an instance or injection that
+  # sets the option wins, even with lib.mkDefault (see below).
+  config = { config, ... }: {
+    worker.image.tag = lib.mkDefault config.image.tag;
   };
 
   build = [
@@ -338,6 +349,17 @@ in
   ];
 }
 ```
+
+A package's `config` holds defaults, not settings. Every `lib.mkDefault` in
+it is evaluated at priority 1250 (`packageDefaultPriority` in
+`kix/lib/eval/resolve.nix`), between `lib.mkDefault` (1000) and an option's
+declared default (1500). The package default replaces the declared default,
+and anything an instance or a dependency injection sets replaces the package
+default, `lib.mkDefault` included. The rewrite reaches through `lib.mkIf`,
+`lib.mkMerge` and `lib.mkOrder`. Other priorities are left as written: a
+plain value in the package's `config` is a fixed setting that conflicts with a
+plain instance value, and `lib.mkForce` there beats the instance. Module
+errors name the module `package config of <namespace>/<instance>`.
 
 ### 5.1 Build args
 
@@ -650,6 +672,23 @@ options.healthCheck = kix.options.healthCheck;  # { enable = bool (default false
 options.image = kix.options.image {
   repository = "docker.io/library/nginx";
   tag = "1.27-alpine";
+};
+
+# An image released with another one: the package's `config` sets its tag
+# from the other option, and `tagText` is the Nix expression the option
+# reference shows as the tag's default. `tag` stays the declared default the
+# digest rule compares with, so the component's own digest is dropped once
+# the followed tag moves. Declare both tags from one binding
+# (`release = "0.27.3";` in the package's `let`): a follower declared with an
+# older tag would render the main tag with no digest. The kix/lib test
+# t128 fails when a shipped package's `config` changes any declared image.
+options.exporter.image = kix.options.image {
+  repository = "docker.io/altinity/metrics-exporter";
+  tag = release;
+  tagText = "config.image.tag";
+};
+config = { config, ... }: {
+  exporter.image.tag = lib.mkDefault config.image.tag;
 };
 ```
 

@@ -50,6 +50,10 @@
 }:
 let
   inherit (import ./kinds.nix) crdDefs;
+  # The operator and its metrics exporter are released in lockstep under
+  # one version. Both declared tags come from this binding, so the exporter
+  # keeps its default digest until the instance moves `image.tag`.
+  release = "0.27.3";
   credentialKeys = [
     "username"
     "password"
@@ -57,7 +61,7 @@ let
 in
 {
   meta = {
-    version = "0.27.3";
+    version = release;
     description = "Altinity ClickHouse operator: ClickHouseInstallation and ClickHouseKeeperInstallation controller";
     defaultAliases = [ "clickhouseOperator" ];
     k8s.minVersion = "1.25";
@@ -81,16 +85,18 @@ in
   options = {
     image = kix.options.image {
       repository = "docker.io/altinity/clickhouse-operator";
-      tag = "0.27.3";
+      tag = release;
       digest = "sha256:251c4fda281854c3adba6710098c637d076361282bf6ea4fc6a402dd93ef0e08";
     };
 
     # Second container of the operator pod. It serves the ClickHouse metrics
     # of every installation on one endpoint (8888) by querying each server on
-    # every scrape. Released in lockstep with the operator: keep the tags equal.
+    # every scrape. Released in lockstep with the operator, so its tag
+    # follows `image.tag` (see `config` below).
     metricsExporterImage = kix.options.image {
       repository = "docker.io/altinity/metrics-exporter";
-      tag = "0.27.3";
+      tag = release;
+      tagText = "config.image.tag";
       digest = "sha256:6831ce244b81b9639740941a0fe8f0cfc534c4860b22ff0eb668307b6c1a3116";
     };
 
@@ -165,6 +171,12 @@ in
 
     metrics = kix.options.monitor;
   };
+
+  config =
+    { config, ... }:
+    {
+      metricsExporterImage.tag = lib.mkDefault config.image.tag;
+    };
 
   build = [
     ./crds.nix

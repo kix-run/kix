@@ -45,6 +45,10 @@ let
         availability = "none";
       };
       pkg = package (lib.intersectAttrs fnArgs stubs);
+      # nixosOptionsDoc renders each option's declared default. A package
+      # whose `config` defaults an option from another option gives that
+      # option a `defaultText` (for an image, `kix.options.image`'s
+      # `tagText`), so the package's `config` is not evaluated here.
       evaluated = lib.evalModules {
         modules = [ { options = pkg.options or { }; } ];
       };

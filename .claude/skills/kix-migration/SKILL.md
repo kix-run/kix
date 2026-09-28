@@ -77,7 +77,7 @@ Focus on the **Modified** section. Each entry shows exactly which fields differ 
 
 ## Package Anatomy
 
-A function `{ scope, lib, kix }: ...` that returns `{ meta?, options?, deps?, build }`. **Dependencies are declared as build function args**, not package function args.
+A function `{ scope, lib, kix }: ...` that returns `{ meta?, options?, config?, deps?, build }`. **Dependencies are declared as build function args**, not package function args.
 
 ```nix
 { scope, lib, kix }:
@@ -108,8 +108,27 @@ in
     # A `digest` given here is kept while an instance leaves `image.tag` at
     # this tag and dropped when the tag changes; other field overrides keep it.
     image = kix.options.image { repository = "myapp/server"; tag = "v1.0.0"; };
+    # An image from the same release: its tag follows `image.tag` through
+    # `config` below. `tagText` is what the option reference shows as the default.
+    # Declare both tags from one `let` binding (e.g. `release = "v1.0.0";`) so a
+    # bump cannot leave the follower's declared tag, and its digest, behind.
+    worker.image = kix.options.image {
+      repository = "myapp/worker";
+      tag = "v1.0.0";
+      tagText = "config.image.tag";
+    };
     replicaCount = lib.mkOption { type = lib.types.int; default = 1; };
     ingress = kix.options.ingress;  # standardized { host, annotations } options
+  };
+
+  # Optional: the package's own config module, evaluated with `options` and the
+  # instance config like a NixOS module (an attrset, or `{ config, lib, ... }:`).
+  # Write lib.mkDefault: the evaluator runs it at priority 1250, below anything
+  # an instance or injection sets (lib.mkDefault included) and above the
+  # option's declared default. A plain value here conflicts with a plain
+  # instance value.
+  config = { config, ... }: {
+    worker.image.tag = lib.mkDefault config.image.tag;
   };
 
   # build can be a function or a list of functions.
@@ -167,7 +186,7 @@ in
 }
 ```
 
-**Inline attrset package** (for test fixtures and simple inline definitions in cluster files): a plain attrset `{ build, meta?, options?, deps? }` — no function wrapper needed. Use function packages for `packages/` directory files.
+**Inline attrset package** (for test fixtures and simple inline definitions in cluster files): a plain attrset `{ build, meta?, options?, config?, deps? }` — no function wrapper needed. Use function packages for `packages/` directory files.
 
 ### `root` must alias a named part
 

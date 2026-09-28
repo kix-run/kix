@@ -141,9 +141,53 @@ rec {
     in
     builtins.concatMap extractOne modules;
 
+  # Priority of a `lib.mkDefault` in a package's own `config`. It sits
+  # between `lib.mkDefault` (1000) and an option's declared default (1500),
+  # so the package default replaces the declared default, and an instance or
+  # config injection replaces the package default even when it also uses
+  # `lib.mkDefault`.
+  packageDefaultPriority = 1250;
+
+  # Moves every `lib.mkDefault` in a package's `config` to
+  # `packageDefaultPriority`, through `mkIf`, `mkMerge`, `mkOrder` and
+  # nested attrsets. Other priorities and plain values keep their meaning,
+  # so a plain value in a package's `config` conflicts with a plain instance
+  # value. `mapAttrs` keeps the rewrite lazy: a value is forced only when
+  # the module system reads it.
+  lowerPackageDefaults =
+    value:
+    if !builtins.isAttrs value then
+      value
+    else
+      let
+        type = value._type or null;
+      in
+      if type == null then
+        lib.mapAttrs (_: lowerPackageDefaults) value
+      else if type == "override" then
+        value
+        // {
+          priority =
+            if value.priority == (lib.mkDefault null).priority then packageDefaultPriority else value.priority;
+          content = lowerPackageDefaults value.content;
+        }
+      else if type == "if" || type == "order" then
+        value // { content = lowerPackageDefaults value.content; }
+      else if type == "merge" then
+        value // { contents = map lowerPackageDefaults value.contents; }
+      else
+        value;
+
+  # `packageConfig` is the package's own `config`, a plain attrset or a
+  # module function such as `{ config, lib, ... }: { ... }`. It is one more
+  # module beside `packageOptions`, so a package can default one option
+  # from another with `lib.mkDefault` (see `packageDefaultPriority`).
+  # `packageConfigFile` names that module in module-system errors.
   evaluateInstanceConfig =
     {
       packageOptions,
+      packageConfig ? { },
+      packageConfigFile ? "package config",
       instCfg,
       clusterConfig ? { },
       configInjections ? [ ],
@@ -195,11 +239,27 @@ rec {
 
       injectionModules = map (injection: { config = injection.config; }) configInjections;
 
+      # The package's `config` is always wrapped as a module's `config`, so
+      # a package option named `config`, `options` or `imports` is set
+      # rather than read as module structure.
+      packageConfigModule =
+        if builtins.isFunction packageConfig then
+          lib.setFunctionArgs (args: {
+            _file = packageConfigFile;
+            config = lowerPackageDefaults (packageConfig args);
+          }) (lib.functionArgs packageConfig)
+        else
+          {
+            _file = packageConfigFile;
+            config = lowerPackageDefaults packageConfig;
+          };
+
       evaluated =
         removeAttrs
           (lib.evalModules {
             modules = [
               { options = packageOptions; }
+              packageConfigModule
             ]
             ++ injectionModules
             ++ wrappedModules;
