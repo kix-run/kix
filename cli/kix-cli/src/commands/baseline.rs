@@ -10,6 +10,12 @@
 //! now created before the first wave and marked `Failed` when the run stops,
 //! those closures can be recovered by hash and folded in.
 //!
+//! A deploy that keeps its orphans (warn-only, the default) leaves the same
+//! kind of hole: the next plan compares against the new record only, and the
+//! build that still knew about those objects is gone from the comparison. The
+//! record therefore names those builds under `status.orphansKeptFrom`, and
+//! [`load_kept`] resolves them the same way.
+//!
 //! Everything here resolves a record to a closure in the local store. Nothing
 //! reads the cluster's objects: the kix invariant is that live state is
 //! consulted to execute and to observe, never to decide
@@ -17,7 +23,9 @@
 //! B"). Listing the records is a read of our own bookkeeping, not of the
 //! objects being reasoned about.
 
-use kix::cluster::activation::{self, DeployingActivation, FailedActivation};
+use kix::cluster::activation::{
+    self, ActiveActivation, DeployingActivation, FailedActivation, KeptOrphanSource,
+};
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::stamp::stamp_annotations;
 use kube::{client::Client, discovery::ApiResource};
@@ -34,6 +42,9 @@ pub struct FailedBaseline {
     /// closure was actually folded in: a record we could not resolve has not
     /// been reconciled and must keep asking.
     pub consumed: Vec<String>,
+    /// The build behind each entry of `closures`, in the same order, for
+    /// `status.orphansKeptFrom` when this plan keeps the orphans it found.
+    pub sources: Vec<KeptOrphanSource>,
     /// Records whose closure is not in this machine's store.
     pub unresolved: Vec<FailedActivation>,
 }
@@ -70,49 +81,187 @@ pub async fn load_failed(
             out.unresolved.push(record);
             continue;
         };
-        let result_dir = record
-            .built_via
-            .as_ref()
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.join("kix-packages.json").exists())
-            .or_else(|| kix::eval::store::resolve_activation_by_hash(cluster, &hash));
-
-        let Some(result_dir) = result_dir else {
+        let Some(closure) = resolve_closure(cluster, &hash, record.built_via.as_deref()) else {
             out.unresolved.push(record);
             continue;
         };
-        let noop = |_: &str| {};
-        match StoreGraph::from_result_dir_with_status(&result_dir, &noop) {
-            Ok(mut graph) => {
-                stamp_annotations(&mut graph);
-                if !quiet {
-                    println!(
-                        "  {} including resources from failed deployment {} ({}...)",
-                        output::yellow("!"),
-                        output::bold(&record.name),
-                        &hash[..8.min(hash.len())],
-                    );
-                    if let Some(reason) = &record.reason {
-                        println!("    it stopped because: {reason}");
-                    }
-                }
-                out.closures.push(
-                    graph
-                        .resources
-                        .values()
-                        .map(|r| r.manifest.clone())
-                        .collect(),
-                );
-                out.consumed.push(record.name.clone());
+        if !quiet {
+            println!(
+                "  {} including resources from failed deployment {} ({}...)",
+                output::yellow("!"),
+                output::bold(&record.name),
+                &hash[..8.min(hash.len())],
+            );
+            if let Some(reason) = &record.reason {
+                println!("    it stopped because: {reason}");
             }
-            Err(_) => out.unresolved.push(record),
         }
+        out.closures.push(closure);
+        out.consumed.push(record.name.clone());
+        out.sources.push(KeptOrphanSource {
+            activation: record.name.clone(),
+            identity_hash: hash,
+            built_via: record.built_via.clone(),
+        });
     }
 
     if !quiet {
         report_unresolved(&out.unresolved, cluster);
     }
     out
+}
+
+/// A build's result dir: `built_via` when that store path is on this
+/// machine, else the local activation cache by identity hash.
+fn result_dir(
+    cluster: &str,
+    identity_hash: &str,
+    built_via: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    built_via
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.join("kix-packages.json").exists())
+        .or_else(|| kix::eval::store::resolve_activation_by_hash(cluster, identity_hash))
+}
+
+/// The stamped manifests of a build, from `built_via` when that store path
+/// is on this machine, else through the local activation cache by identity
+/// hash. `None` when neither is available or the build will not load.
+fn resolve_closure(
+    cluster: &str,
+    identity_hash: &str,
+    built_via: Option<&str>,
+) -> Option<Vec<Value>> {
+    let result_dir = result_dir(cluster, identity_hash, built_via)?;
+    let noop = |_: &str| {};
+    let mut graph = StoreGraph::from_result_dir_with_status(&result_dir, &noop).ok()?;
+    stamp_annotations(&mut graph);
+    Some(
+        graph
+            .resources
+            .values()
+            .map(|r| r.manifest.clone())
+            .collect(),
+    )
+}
+
+/// The builds an earlier deploy kept orphans from, resolved to closures.
+#[derive(Debug, Default)]
+pub struct KeptBaseline {
+    /// One stamped manifest set per source this machine could resolve.
+    pub closures: Vec<Vec<Value>>,
+    /// The source behind each entry of `closures`, in the same order.
+    pub sources: Vec<KeptOrphanSource>,
+    /// Sources whose build is not in this machine's store. Their orphans are
+    /// not in this plan, and the next record carries them forward unchanged
+    /// so a machine that has the build can still prune them.
+    pub unresolved: Vec<KeptOrphanSource>,
+}
+
+/// Resolve the Active record's `status.orphansKeptFrom` to closures, and say
+/// how many there are so the plan's extra orphans have an explanation.
+pub fn load_kept(active: &ActiveActivation, cluster: &str, quiet: bool) -> KeptBaseline {
+    let mut out = KeptBaseline::default();
+    for source in &active.orphans_kept_from {
+        match resolve_closure(cluster, &source.identity_hash, source.built_via.as_deref()) {
+            Some(closure) => {
+                out.closures.push(closure);
+                out.sources.push(source.clone());
+            }
+            None => out.unresolved.push(source.clone()),
+        }
+    }
+    if quiet {
+        return out;
+    }
+    if !out.sources.is_empty() {
+        let names: Vec<&str> = out.sources.iter().map(|s| s.activation.as_str()).collect();
+        println!(
+            "  {} including orphans kept by earlier deploys, from {}",
+            output::yellow("!"),
+            names.join(", "),
+        );
+    }
+    for source in &out.unresolved {
+        eprintln!(
+            "{} cannot read the build of activation {} on this machine. An earlier deploy kept orphans from it.",
+            output::yellow("warning:"),
+            output::bold(&source.activation),
+        );
+        eprintln!(
+            "  This plan cannot list or delete them. Deploy from the machine that built it, or \
+             remove them with `kix gc --hard {cluster}`."
+        );
+    }
+    out
+}
+
+/// What the record this plan finalizes lists under `status.orphansKeptFrom`:
+/// every build the plan compared against (the Active one, folded-in failed
+/// ones, kept ones) that still has something prune would delete, and every
+/// kept source this machine could not resolve. See
+/// [`activation::KeptOrphans`] for which of them finalize writes.
+pub fn orphans_kept_from(
+    new_manifests: &[Value],
+    active: Option<&ActiveActivation>,
+    active_manifests: &[Value],
+    failed: &FailedBaseline,
+    kept: &KeptBaseline,
+) -> activation::KeptOrphans {
+    let active_source = active.and_then(|a| {
+        Some(KeptOrphanSource {
+            activation: a.name.clone(),
+            identity_hash: a.identity_hash.clone()?,
+            built_via: a.built_via.clone(),
+        })
+    });
+    let compared = active_source
+        .map(|source| (source, active_manifests))
+        .into_iter()
+        .chain(
+            failed
+                .sources
+                .iter()
+                .cloned()
+                .zip(failed.closures.iter().map(Vec::as_slice)),
+        )
+        .chain(
+            kept.sources
+                .iter()
+                .cloned()
+                .zip(kept.closures.iter().map(Vec::as_slice)),
+        );
+
+    let mut found: Vec<KeptOrphanSource> = Vec::new();
+    for (source, closure) in compared {
+        if kix::cluster::apply::leaves_orphans(closure, new_manifests)
+            && !found
+                .iter()
+                .any(|s| s.identity_hash == source.identity_hash)
+        {
+            found.push(source);
+        }
+    }
+    activation::KeptOrphans {
+        found,
+        unexamined: kept.unresolved.clone(),
+        carry_current: false,
+    }
+}
+
+/// Keep a Nix GC root for every build `recorded` lists that this machine
+/// can resolve, and drop the roots of builds it no longer lists. A listed
+/// build that loses its store path cannot be read by the next plan, so its
+/// orphans would be carried unexamined until `kix gc --hard`.
+pub fn sync_kept_roots(cluster: &str, recorded: &[KeptOrphanSource]) {
+    let listed: Vec<(String, Option<std::path::PathBuf>)> = recorded
+        .iter()
+        .map(|source| {
+            let dir = result_dir(cluster, &source.identity_hash, source.built_via.as_deref());
+            (source.identity_hash.clone(), dir)
+        })
+        .collect();
+    kix::eval::store::sync_kept_roots(cluster, &listed);
 }
 
 fn report_unresolved(unresolved: &[FailedActivation], cluster: &str) {
@@ -198,4 +347,124 @@ pub fn report_in_flight(record: &DeployingActivation, quiet: bool) {
     eprintln!(
         "      -p '{{\"status\":{{\"phase\":\"Failed\",\"failure\":{{\"reason\":\"abandoned\"}}}}}}'"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kix::manifest::keys;
+    use serde_json::json;
+
+    fn m(kind: &str, name: &str, hash: &str) -> Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": kind,
+            "metadata": {
+                "name": name,
+                "namespace": "app",
+                "annotations": { keys::IDENTITY_HASH: hash },
+            },
+        })
+    }
+
+    fn source(activation: &str) -> KeptOrphanSource {
+        KeptOrphanSource {
+            activation: activation.into(),
+            identity_hash: format!("{activation}-hash"),
+            built_via: None,
+        }
+    }
+
+    fn active(name: &str, kept: Vec<KeptOrphanSource>) -> ActiveActivation {
+        ActiveActivation {
+            name: name.into(),
+            identity_hash: Some(format!("{name}-hash")),
+            built_via: None,
+            orphans_kept_from: kept,
+        }
+    }
+
+    fn names(sources: &[KeptOrphanSource]) -> Vec<&str> {
+        sources.iter().map(|s| s.activation.as_str()).collect()
+    }
+
+    /// A warn-only deploy of v2 over v1 records v1, whose ConfigMap v2 dropped.
+    #[test]
+    fn the_replaced_build_is_recorded_when_it_leaves_orphans() {
+        let v1 = vec![m("Deployment", "web", "h1"), m("ConfigMap", "old", "h2")];
+        let v2 = vec![m("Deployment", "web", "h3")];
+        let got = orphans_kept_from(
+            &v2,
+            Some(&active("v1", vec![])),
+            &v1,
+            &FailedBaseline::default(),
+            &KeptBaseline::default(),
+        );
+        assert_eq!(names(&got.found), vec!["v1"]);
+    }
+
+    /// v3 over v2 (which kept v1's orphans) carries v1 forward while v1 still
+    /// has something v3 lacks, and records v2 only if v2 does too.
+    #[test]
+    fn kept_sources_carry_forward_until_the_new_build_declares_their_objects() {
+        let v1 = vec![m("Deployment", "web", "h1"), m("ConfigMap", "old", "h2")];
+        let v2 = vec![m("Deployment", "web", "h3")];
+        let kept = KeptBaseline {
+            closures: vec![v1.clone()],
+            sources: vec![source("v1")],
+            unresolved: vec![source("elsewhere")],
+        };
+        let v3 = vec![m("Deployment", "web", "h4")];
+        let got = orphans_kept_from(
+            &v3,
+            Some(&active("v2", vec![source("v1")])),
+            &v2,
+            &FailedBaseline::default(),
+            &kept,
+        );
+        // v2 has nothing v3 lacks. The unresolved source is carried unread.
+        assert_eq!(names(&got.found), vec!["v1"]);
+        assert_eq!(names(&got.unexamined), vec!["elsewhere"]);
+
+        // A build that declares the ConfigMap again ends v1's entry.
+        let v4 = vec![m("Deployment", "web", "h4"), m("ConfigMap", "old", "h5")];
+        let kept = KeptBaseline {
+            closures: vec![v1],
+            sources: vec![source("v1")],
+            unresolved: vec![],
+        };
+        let got = orphans_kept_from(
+            &v4,
+            Some(&active("v2", vec![source("v1")])),
+            &v2,
+            &FailedBaseline::default(),
+            &kept,
+        );
+        assert!(got.found.is_empty(), "{got:?}");
+    }
+
+    /// A failed deploy's leftovers that this plan keeps are recorded too:
+    /// the failed record is superseded on finalize and would otherwise be
+    /// the only thing that knew about them.
+    #[test]
+    fn a_folded_failed_build_with_orphans_is_recorded() {
+        let v1 = vec![m("Deployment", "web", "h1")];
+        let failed = FailedBaseline {
+            closures: vec![vec![
+                m("Deployment", "web", "h1"),
+                m("Secret", "half", "h9"),
+            ]],
+            consumed: vec!["f1".into()],
+            sources: vec![source("f1")],
+            unresolved: vec![],
+        };
+        let got = orphans_kept_from(
+            &v1,
+            Some(&active("v1", vec![])),
+            &v1,
+            &failed,
+            &KeptBaseline::default(),
+        );
+        assert_eq!(names(&got.found), vec!["f1"]);
+    }
 }

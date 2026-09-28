@@ -36,7 +36,7 @@ kix gc <CLUSTER> [-y] [--hard [--include-unstamped]] [--operator]
 
 | Mode | Old side | What is deleted |
 | --- | --- | --- |
-| Soft | The build from the last `kix deploy` or `kix rollback` on this machine | Resources whose kind, namespace and name are absent from the fresh build. Exits with a message if no previous deploy is recorded here. |
+| Soft | The build from the last `kix deploy` or `kix rollback` on this machine, and the builds the Active record lists under `status.orphansKeptFrom` | Resources whose kind, namespace and name are absent from the fresh build. Exits with a message if no previous deploy is recorded here. |
 | `--hard` | Every Kix-managed resource on the cluster | Resources whose identity hash is not in the fresh build |
 | `--operator` | Activation records | Retired records; the operator deletes their resources |
 
@@ -44,7 +44,17 @@ kix gc <CLUSTER> [-y] [--hard [--include-unstamped]] [--operator]
 against the one cluster you name. Resources deployed from another Kix cluster
 definition to the same API server count as garbage.
 
-Resources are deleted dependents first. Namespaces are skipped.
+Resources are deleted dependents first. Namespaces and
+CustomResourceDefinitions are skipped. A resource that is already gone when
+gc deletes it is reported, not counted as a failure.
+
+A deploy without `--prune` keeps its orphans and lists the builds they came
+from on the new Activation, under `status.orphansKeptFrom`. Soft gc deletes
+those orphans too, listed under "Orphans kept by earlier deploys". When soft
+or hard gc deletes without failures and the fresh build is the one the
+Active record describes, it removes the list. Soft gc leaves the list if this
+machine could not read one of the builds, and hard gc leaves it if it was
+forbidden to list some kinds.
 
 Retiring a record removes it as a rollback target. Each record kept adds one
 entry to the `kix.run/activations` annotation on every managed resource, which

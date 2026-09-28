@@ -935,6 +935,10 @@ pub async fn run_deploy(
         .filter(|rid| !consumed_orphans.contains(rid))
         .cloned()
         .collect();
+    // Whether any prunable orphan is still on the cluster after this phase.
+    // Finalize records the builds they came from when it is.
+    let mut orphans_left = config.prune != PrunePolicy::Delete
+        && effective_orphans.iter().any(|rid| !never_pruned(&rid.kind));
     if !effective_orphans.is_empty() && config.prune != PrunePolicy::Skip {
         let ordered = prune_order(&effective_orphans, old_manifests);
         let delete = config.prune == PrunePolicy::Delete;
@@ -977,6 +981,7 @@ pub async fn run_deploy(
                 }
                 Err(message) => {
                     result.failed += 1;
+                    orphans_left = true;
                     emit(DeployEvent::NodeStateChanged {
                         node: NodeId::Resource(rid.clone()),
                         kind: TransitionKind::Delete,
@@ -993,8 +998,11 @@ pub async fn run_deploy(
         result.created > 0 || result.configured > 0 || result.pruned > 0 || result.failed > 0;
 
     if !config.dry_run && actually_changed {
-        match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, ops.finalize(result.failed > 0))
-            .await
+        match tokio::time::timeout(
+            INLINE_BEST_EFFORT_TIMEOUT,
+            ops.finalize(result.failed > 0, orphans_left),
+        )
+        .await
         {
             Ok(Ok(Some(f))) => emit(DeployEvent::Finalized {
                 activation: f.activation,
@@ -2512,9 +2520,13 @@ mod engine_tests {
 
         let calls = ops.calls();
         assert!(
-            calls
-                .iter()
-                .any(|c| matches!(c, Call::Finalize { had_failures: true })),
+            calls.iter().any(|c| matches!(
+                c,
+                Call::Finalize {
+                    had_failures: true,
+                    ..
+                }
+            )),
             "expected a Degraded finalize: {calls:?}",
         );
         assert!(!calls.iter().any(|c| matches!(c, Call::Abort { .. })));
@@ -3199,6 +3211,60 @@ mod engine_tests {
                 false
             )]
         );
+    }
+
+    /// Finalize is told whether a prunable orphan is still on the cluster:
+    /// true when the policy keeps one or a delete fails, false when every
+    /// delete succeeds or the only orphans are kinds prune never deletes.
+    #[tokio::test(start_paused = true)]
+    async fn finalize_learns_whether_orphans_were_left() {
+        async fn orphans_left(
+            policy: PrunePolicy,
+            orphans: &[ResourceId],
+            delete: Behaviour<Result<(), String>>,
+        ) -> bool {
+            let manifests = vec![m("ConfigMap", "keep", &[])];
+            let old = [m("ConfigMap", "old", &[]), m("Namespace", "ns", &[])];
+            let ops = Arc::new(ScriptedOps::new());
+            ops.delete_behaviour(delete);
+            let mut cfg = config(quiet_watchdog());
+            cfg.prune = policy;
+            let _ = run_with_orphans(
+                &ops,
+                plan_of(&manifests),
+                orphans,
+                &old,
+                &cfg,
+                Arc::new(Recorder::default()),
+            )
+            .await;
+            let finalized: Vec<bool> = ops
+                .calls()
+                .into_iter()
+                .filter_map(|c| match c {
+                    Call::Finalize { orphans_left, .. } => Some(orphans_left),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(finalized.len(), 1, "finalize runs once");
+            finalized[0]
+        }
+        let cm = [rid("ConfigMap", "old")];
+        let ns = [rid("Namespace", "ns")];
+        let ok = || Behaviour::Now(Ok(()));
+
+        assert!(orphans_left(PrunePolicy::WarnOnly, &cm, ok()).await);
+        assert!(orphans_left(PrunePolicy::Skip, &cm, ok()).await);
+        assert!(!orphans_left(PrunePolicy::Delete, &cm, ok()).await);
+        assert!(
+            orphans_left(
+                PrunePolicy::Delete,
+                &cm,
+                Behaviour::Now(Err("denied".into()))
+            )
+            .await
+        );
+        assert!(!orphans_left(PrunePolicy::WarnOnly, &ns, ok()).await);
     }
 
     /// Under `OnErrorPolicy::Stop`, nodes still in flight finish and are

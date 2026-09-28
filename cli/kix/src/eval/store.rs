@@ -50,24 +50,84 @@ pub fn save_activation_path(cluster: &str, result_dir: &Path) -> std::io::Result
     // bookkeeping.
     let root_link = dir.join(format!("{cluster}.root"));
     let _ = std::fs::remove_file(&root_link);
+    if let Err(e) = add_gc_root(&root_link, result_dir) {
+        tracing::warn!(cluster, ?result_dir, error = %e, "could not protect this deployment build from Nix garbage collection; it may become unavailable for rollback");
+    }
+    Ok(())
+}
+
+/// Register `link` as a Nix GC root for `target` with `nix-store --add-root`.
+fn add_gc_root(link: &Path, target: &Path) -> Result<(), String> {
     match std::process::Command::new("nix-store")
         .arg("--add-root")
-        .arg(&root_link)
+        .arg(link)
         .arg("--realise")
-        .arg(result_dir)
+        .arg(target)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
     {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
-            tracing::warn!(cluster, ?result_dir, %status, "could not protect this deployment build from Nix garbage collection; it may become unavailable for rollback");
-        }
-        Err(e) => {
-            tracing::warn!(cluster, ?result_dir, error = %e, "could not run nix-store --add-root; this deployment build may be garbage-collected and become unavailable for rollback");
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("nix-store --add-root exited with {status}")),
+        Err(e) => Err(format!("could not run nix-store --add-root: {e}")),
+    }
+}
+
+/// Keep one Nix GC root, `{cluster}.kept-{identity_hash}`, for every build an
+/// Activation lists under `status.orphansKeptFrom`, and remove the roots of
+/// builds it no longer lists.
+///
+/// `listed` pairs each identity hash with the build's result dir on this
+/// machine, `None` when it is not here. The `{cluster}.root` of the deployed
+/// build moves on the next deploy, so without these a listed build is
+/// collectable and every later plan reports it as unreadable. Best-effort:
+/// failures are logged, never returned.
+pub fn sync_kept_roots(cluster: &str, listed: &[(String, Option<PathBuf>)]) {
+    sync_kept_roots_in(&activations_dir(), cluster, listed, add_gc_root);
+}
+
+fn sync_kept_roots_in(
+    dir: &Path,
+    cluster: &str,
+    listed: &[(String, Option<PathBuf>)],
+    add_root: impl Fn(&Path, &Path) -> Result<(), String>,
+) {
+    let prefix = format!("{cluster}.kept-");
+    // The hash comes from the cluster and becomes a file name, so anything
+    // other than a store hash is ignored.
+    let is_hash = |h: &str| !h.is_empty() && h.bytes().all(|b| b.is_ascii_alphanumeric());
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(hash) = name.to_str().and_then(|n| n.strip_prefix(&prefix)) else {
+                continue;
+            };
+            if is_hash(hash) && !listed.iter().any(|(h, _)| h == hash) {
+                let _ = std::fs::remove_file(entry.path());
+            }
         }
     }
-    Ok(())
+
+    for (hash, result_dir) in listed {
+        let Some(result_dir) = result_dir else {
+            continue;
+        };
+        if !is_hash(hash) {
+            continue;
+        }
+        let link = dir.join(format!("{prefix}{hash}"));
+        if link.symlink_metadata().is_ok() {
+            continue;
+        }
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            tracing::warn!(error = %e, "could not create the activation cache directory");
+            return;
+        }
+        if let Err(e) = add_root(&link, result_dir) {
+            tracing::warn!(cluster, ?result_dir, error = %e, "could not protect a build with kept orphans from Nix garbage collection");
+        }
+    }
 }
 
 /// Load the previously saved activation result directory path.
@@ -134,6 +194,51 @@ fn dirs_fallback_home() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A listed build gains a root, a root whose build is no longer listed
+    /// is removed, and other clusters' roots and non-hash names are left
+    /// alone.
+    #[test]
+    fn kept_roots_follow_the_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake_root = |link: &Path, target: &Path| {
+            std::os::unix::fs::symlink(target, link).map_err(|e| e.to_string())
+        };
+        let build = |h: &str| Some(PathBuf::from(format!("/nix/store/{h}-activation")));
+        let roots = || {
+            let mut names: Vec<String> = std::fs::read_dir(dir.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().into_string().unwrap())
+                .collect();
+            names.sort();
+            names
+        };
+        std::fs::write(dir.path().join("other.kept-aaa"), "").unwrap();
+
+        sync_kept_roots_in(
+            dir.path(),
+            "c",
+            &[
+                ("aaa".into(), build("aaa")),
+                ("bbb".into(), build("bbb")),
+                ("ccc".into(), None),
+                ("not/a.hash".into(), build("x")),
+                ("not.a.hash".into(), build("x")),
+            ],
+            fake_root,
+        );
+        assert_eq!(roots(), vec!["c.kept-aaa", "c.kept-bbb", "other.kept-aaa"]);
+        assert_eq!(
+            std::fs::read_link(dir.path().join("c.kept-bbb")).unwrap(),
+            PathBuf::from("/nix/store/bbb-activation")
+        );
+
+        sync_kept_roots_in(dir.path(), "c", &[("bbb".into(), None)], fake_root);
+        assert_eq!(roots(), vec!["c.kept-bbb", "other.kept-aaa"]);
+
+        sync_kept_roots_in(dir.path(), "c", &[], fake_root);
+        assert_eq!(roots(), vec!["other.kept-aaa"]);
+    }
 
     #[test]
     fn default_cache_dir_is_absolute() {

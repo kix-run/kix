@@ -72,6 +72,113 @@ pub struct ActiveActivation {
     pub identity_hash: Option<String>,
     /// Store path of the activation result dir (contains kix-packages.json).
     pub built_via: Option<String>,
+    /// `status.orphansKeptFrom`: builds whose orphans are still on the cluster.
+    pub orphans_kept_from: Vec<KeptOrphanSource>,
+}
+
+/// A build whose orphans a deploy reported and did not delete.
+///
+/// A deploy finds orphans by comparing its build with the builds it replaces.
+/// When it keeps them (warn-only, `--prune-mode=no`, or a failed delete), the
+/// record it finalizes lists those builds under `status.orphansKeptFrom`, so
+/// the next `kix deploy --prune`, `kix rollback --prune` or soft `kix gc` can
+/// compare against them again. Without the list, the new record becomes the
+/// only baseline and the orphans are invisible to everything but
+/// `kix gc --hard`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptOrphanSource {
+    /// The Activation record the build belonged to, for people reading the
+    /// status. The record may since have been retired.
+    pub activation: String,
+    /// The build's `kix.run/identity-hash`, resolved through the local
+    /// activation cache when `built_via` is not in this machine's store.
+    pub identity_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_via: Option<String>,
+}
+
+/// What a finalizing run writes to `status.orphansKeptFrom`.
+#[derive(Debug, Clone, Default)]
+pub struct KeptOrphans {
+    /// Builds this run's plan found orphans in. Recorded only when the run
+    /// leaves an orphan on the cluster: a run that deleted them all has
+    /// nothing left to describe.
+    pub found: Vec<KeptOrphanSource>,
+    /// Listed sources the plan could not examine because their build is not
+    /// in this machine's store. Recorded whatever the run did, since it could
+    /// not have deleted their orphans.
+    pub unexamined: Vec<KeptOrphanSource>,
+    /// Also carry forward the list on the record current at finalize, as
+    /// unexamined sources. For a plan that never read that record
+    /// (`kix deploy --current-activation`).
+    pub carry_current: bool,
+}
+
+impl KeptOrphans {
+    /// The list to write, given the current record's list (read at finalize)
+    /// and whether the run left a prunable orphan in place. Deduplicated by
+    /// identity hash, first entry wins.
+    pub fn recorded(
+        &self,
+        current: Option<&[KeptOrphanSource]>,
+        orphans_left: bool,
+    ) -> Vec<KeptOrphanSource> {
+        let found = if orphans_left { &self.found[..] } else { &[] };
+        let carried = if self.carry_current {
+            current.unwrap_or_default()
+        } else {
+            &[]
+        };
+        let mut out: Vec<KeptOrphanSource> = Vec::new();
+        for source in found.iter().chain(&self.unexamined).chain(carried) {
+            if !out.iter().any(|s| s.identity_hash == source.identity_hash) {
+                out.push(source.clone());
+            }
+        }
+        out
+    }
+}
+
+/// Read `status.orphansKeptFrom`. A malformed entry is skipped with a debug
+/// log: the list only widens a prune, so losing an entry keeps an orphan, it
+/// never deletes anything extra.
+pub fn read_orphans_kept_from(activation: &DynamicObject) -> Vec<KeptOrphanSource> {
+    let Some(entries) = activation
+        .data
+        .pointer(&format!("/status/{}", keys::ORPHANS_KEPT_FROM_FIELD))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| match serde_json::from_value(entry.clone()) {
+            Ok(source) => Some(source),
+            Err(e) => {
+                tracing::debug!(error = %e, "ignoring a malformed orphansKeptFrom entry");
+                None
+            }
+        })
+        .collect()
+}
+
+/// Remove `status.orphansKeptFrom` from a record, once something has deleted
+/// the orphans it describes.
+pub async fn clear_orphans_kept_from(
+    client: &Client,
+    ar: &ApiResource,
+    name: &str,
+) -> Result<(), ActivationError> {
+    let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
+    let patch = json!({ "status": { keys::ORPHANS_KEPT_FROM_FIELD: Value::Null } });
+    api.patch_status(name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await
+        .map_err(|e| ActivationError::PatchFailed {
+            name: name.to_string(),
+            source: e,
+        })?;
+    Ok(())
 }
 
 /// Find the Activation ApiResource from discovery results.
@@ -184,6 +291,7 @@ pub async fn find_active(
                 name: name.clone(),
                 identity_hash,
                 built_via,
+                orphans_kept_from: read_orphans_kept_from(item),
             },
             parsed_deployed_at(item),
             name,
@@ -320,6 +428,9 @@ pub async fn find_deploying(
 /// Degraded. The new record stores its predecessor, deployment timestamp,
 /// cluster label, and receipt. Consumed Failed records are also superseded.
 /// Degraded remains current so the next deploy can compute its diff.
+///
+/// `orphans_kept_from` replaces the record's `status.orphansKeptFrom`; an
+/// empty slice removes the field.
 // The parameters have distinct types and this function has one call site.
 #[allow(clippy::too_many_arguments)]
 pub async fn finalize_deploy(
@@ -331,6 +442,7 @@ pub async fn finalize_deploy(
     had_failures: bool,
     receipt: Option<&Value>,
     consumed_failed: &[String],
+    orphans_kept_from: &[KeptOrphanSource],
 ) -> Result<(), ActivationError> {
     let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
     let now = chrono::Utc::now().to_rfc3339();
@@ -410,6 +522,16 @@ pub async fn finalize_deploy(
     if let Some(receipt) = receipt {
         status.insert(keys::RECEIPT_FIELD.to_string(), receipt.clone());
     }
+    // A same-name redeploy finalizes a record that may already carry a list,
+    // so an empty one is written as null to remove it.
+    status.insert(
+        keys::ORPHANS_KEPT_FROM_FIELD.to_string(),
+        if orphans_kept_from.is_empty() {
+            Value::Null
+        } else {
+            json!(orphans_kept_from)
+        },
+    );
 
     let status_patch = json!({ "status": status });
     api.patch_status(
@@ -1452,6 +1574,87 @@ mod phase_tests {
         );
 
         assert_eq!(pick_current(Vec::<(&str, _, String)>::new()), None);
+    }
+}
+
+#[cfg(test)]
+mod orphans_kept_from_tests {
+    use super::*;
+
+    /// The status list round-trips through JSON and a malformed entry is
+    /// dropped without losing the others.
+    #[test]
+    fn reads_the_list_and_skips_malformed_entries() {
+        let written = vec![KeptOrphanSource {
+            activation: "c-v1".into(),
+            identity_hash: "abc".into(),
+            built_via: Some("/nix/store/abc-activation".into()),
+        }];
+        let obj: DynamicObject = serde_json::from_value(json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": { "name": "c-v2" },
+            "status": {
+                "phase": PHASE_ACTIVE,
+                (keys::ORPHANS_KEPT_FROM_FIELD): [written[0], { "activation": "no-hash" }],
+            },
+        }))
+        .unwrap();
+        assert_eq!(read_orphans_kept_from(&obj), written);
+        assert_eq!(
+            json!(written[0]),
+            json!({"activation": "c-v1", "identityHash": "abc", "builtVia": "/nix/store/abc-activation"})
+        );
+    }
+
+    fn source(name: &str) -> KeptOrphanSource {
+        KeptOrphanSource {
+            activation: name.into(),
+            identity_hash: format!("{name}-hash"),
+            built_via: None,
+        }
+    }
+
+    fn names(sources: &[KeptOrphanSource]) -> Vec<&str> {
+        sources.iter().map(|s| s.activation.as_str()).collect()
+    }
+
+    /// Found sources are written only while an orphan is left; unexamined
+    /// ones are written either way, so a `--prune` run on a machine that
+    /// cannot read a listed build does not forget it.
+    #[test]
+    fn unexamined_sources_survive_a_run_that_left_no_orphans() {
+        let kept = KeptOrphans {
+            found: vec![source("v1")],
+            unexamined: vec![source("elsewhere")],
+            carry_current: false,
+        };
+        assert_eq!(names(&kept.recorded(None, true)), vec!["v1", "elsewhere"]);
+        assert_eq!(names(&kept.recorded(None, false)), vec!["elsewhere"]);
+        assert!(KeptOrphans::default().recorded(None, true).is_empty());
+    }
+
+    /// The current record's list is carried only when asked for, deduplicated
+    /// against what the plan found.
+    #[test]
+    fn the_current_list_is_carried_when_the_plan_did_not_read_it() {
+        let current = [source("v1"), source("v0")];
+        let mut kept = KeptOrphans {
+            found: vec![source("v1")],
+            unexamined: vec![],
+            carry_current: false,
+        };
+        assert_eq!(names(&kept.recorded(Some(&current), true)), vec!["v1"]);
+        kept.carry_current = true;
+        assert_eq!(
+            names(&kept.recorded(Some(&current), true)),
+            vec!["v1", "v0"]
+        );
+        assert_eq!(
+            names(&kept.recorded(Some(&current), false)),
+            vec!["v1", "v0"]
+        );
+        assert!(kept.recorded(None, false).is_empty());
     }
 }
 

@@ -564,8 +564,10 @@ pub struct DeployArgs {
     /// Use local activation cache instead of fetching from cluster.
     ///
     /// Plans entirely offline, so it cannot see the records of deploys that
-    /// stopped part way and will not reconcile what they left behind. Run a
-    /// plain `kix deploy` for that.
+    /// stopped part way and will not reconcile what they left behind, and it
+    /// cannot see orphans that earlier deploys kept. It records those builds
+    /// on the new activation again, so a later plain `kix deploy --prune` or
+    /// `kix gc` still deletes their orphans.
     #[arg(long)]
     pub current_activation: bool,
 
@@ -581,7 +583,9 @@ pub struct DeployArgs {
     #[arg(long)]
     pub reconcile: bool,
 
-    /// Delete orphaned resources (from old activation but not new)
+    /// Delete orphaned resources (in the old activation, or kept by an earlier
+    /// deploy, and not in the new one). Without it they are listed, kept, and
+    /// recorded on the new activation for a later `--prune` or `kix gc`
     #[arg(long)]
     pub prune: bool,
 
@@ -754,7 +758,8 @@ pub struct RollbackArgs {
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Delete orphaned resources (resources in current activation but not in target)
+    /// Delete orphaned resources (in the current activation, or kept by an
+    /// earlier deploy, and not in the target)
     #[arg(long)]
     pub prune: bool,
 

@@ -135,5 +135,13 @@ pub trait ClusterOps: Send + Sync + 'static {
     /// Finalize the Activation lifecycle: new one Active (or Degraded), old
     /// one Superseded. `Ok(None)` when there is no Activation to finalize
     /// (no name configured, CRD absent, dry run).
-    async fn finalize(&self, had_failures: bool) -> Result<Option<Finalized>, String>;
+    ///
+    /// `orphans_left` is true when the run reported orphans it did not delete
+    /// (warn-only, skip, or a failed delete), so the record must keep naming
+    /// the builds they came from.
+    async fn finalize(
+        &self,
+        had_failures: bool,
+        orphans_left: bool,
+    ) -> Result<Option<Finalized>, String>;
 }

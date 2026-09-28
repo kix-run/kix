@@ -326,7 +326,7 @@ Wave-based deployment with confirmation.
 - `-y, --yes` — Skip confirmation.
 - `--dry-run` — Preview without applying.
 - `--reconcile` — Re-apply all resources (heal drift).
-- `--prune` — Delete orphaned resources. Without it the plan still lists every orphan by name and says they are kept. The previous deploy record (Activation) is never an orphan.
+- `--prune` — Delete orphaned resources. Without it the plan still lists every orphan by name and says they are kept, and the new Activation lists the builds they came from under `status.orphansKeptFrom`, so a later `kix deploy --prune` or soft `kix gc` still deletes them. The previous deploy record (Activation) is never an orphan.
 - `--prune-mode <MODE>` — default (after apply), no (skip).
 - `--on-error <MODE>` — stop (default) or continue.
 - `--timeout <DURATION>` — Readiness timeout (default: 5m).

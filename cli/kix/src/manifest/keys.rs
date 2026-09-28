@@ -76,6 +76,11 @@ pub const RECEIPT_SCHEMA: &str = concat!(domain!(), "/receipt/v1");
 /// Field under an Activation's `status` that carries the deploy receipt.
 pub const RECEIPT_FIELD: &str = "receipt";
 
+/// Field under an Activation's `status` that lists the builds whose orphans
+/// the deploy that finalized it reported and did not delete. See
+/// `cluster::activation::KeptOrphanSource`.
+pub const ORPHANS_KEPT_FROM_FIELD: &str = "orphansKeptFrom";
+
 /// `activations.<domain>`, the CRD name.
 pub const ACTIVATIONS_CRD: &str = concat!("activations.", domain!());
 

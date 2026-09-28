@@ -405,15 +405,34 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     // deploy declared but never created read as already present, and if the
     // target declares it at the same hash the plan would skip it and the
     // rollback would finalize claiming an object that is not there.
-    let baseline_manifests =
-        kix::cluster::apply::baseline_manifests(&current_manifests, &failed_baseline.closures);
+    // Builds whose orphans an earlier warn-only deploy kept, as in deploy.
+    let kept_baseline = baseline::load_kept(&current, &args.cluster, ctx.global.quiet);
+    let baseline_manifests = kix::cluster::apply::baseline_manifests(
+        &current_manifests,
+        &[
+            failed_baseline.closures.as_slice(),
+            kept_baseline.closures.as_slice(),
+        ]
+        .concat(),
+    );
 
     // Compute changes from current to target, then fold in what failed
     //    deploys may have left behind.
-    let all_actions = kix::cluster::apply::fold_failed_closures(
-        kix::cluster::apply::detect_changes(&target_manifests, &current_manifests),
+    let all_actions = kix::cluster::apply::fold_kept_closures(
+        kix::cluster::apply::fold_failed_closures(
+            kix::cluster::apply::detect_changes(&target_manifests, &current_manifests),
+            &target_manifests,
+            &failed_baseline.closures,
+        ),
         &target_manifests,
-        &failed_baseline.closures,
+        &kept_baseline.closures,
+    );
+    let kept_orphans = baseline::orphans_kept_from(
+        &target_manifests,
+        Some(&current),
+        &current_manifests,
+        &failed_baseline,
+        &kept_baseline,
     );
 
     let mut orphan_rids: Vec<ResourceId> = Vec::new();
@@ -552,7 +571,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     // the start of the run, so a process that just dies leaves it Deploying.
     config.cancel.cancel_on_interrupt();
 
-    let ops: Arc<dyn ClusterOps> = Arc::new(KubeOps::new(
+    let kube_ops = Arc::new(KubeOps::new(
         client.clone(),
         discovery,
         KubeOpsConfig {
@@ -569,6 +588,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
             // for the duration, the same as a deploy.
             activation_manifest: record.cloned(),
             consumed_failed: failed_baseline.consumed.clone(),
+            kept_orphans,
             mark_failed_on_abort: true,
             // Rollback re-applies a known-good prior activation; conflicts
             // fail loudly rather than silently overwriting whatever the
@@ -577,6 +597,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
             dry_run: false,
         },
     ));
+    let ops: Arc<dyn ClusterOps> = kube_ops.clone();
 
     let result = scheduler::run_deploy(
         ops,
@@ -589,6 +610,10 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         observer,
     )
     .await;
+
+    if let Some(recorded) = kube_ops.recorded_orphans_kept_from() {
+        baseline::sync_kept_roots(&args.cluster, &recorded);
+    }
 
     // Save activation path for next deploy's diff
     if result.is_ok()

@@ -473,6 +473,9 @@ async fn run_reconcile(
             // deploy's leftovers are already visible to its next reconcile.
             // Nothing to fold, nothing to supersede.
             consumed_failed: Vec::new(),
+            // Its orphans are live objects the next reconcile finds again,
+            // so there are no builds to record.
+            kept_orphans: Default::default(),
             // Its model is resume-on-requeue: a reconcile that returns early
             // is retried, so marking the record Failed would fight it.
             mark_failed_on_abort: false,

@@ -20,6 +20,10 @@ The normal mode compares the previously deployed Activation with a fresh build
 of the cluster. It prints every resource and Activation record it plans to
 delete, then asks for confirmation.
 
+It also deletes orphans that a `kix deploy` without `--prune` listed and kept.
+That deploy records the builds they came from on its Activation, and the plan
+lists them under **Orphans kept by earlier deploys**.
+
 Check the package, kind, namespace, and name of each resource before approving
 the plan. Kix deletes dependants before their dependencies.
 

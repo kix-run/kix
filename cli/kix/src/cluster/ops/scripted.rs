@@ -176,6 +176,7 @@ pub enum Call {
     Delete(ResourceId),
     Finalize {
         had_failures: bool,
+        orphans_left: bool,
     },
     Abort {
         reason: String,
@@ -507,8 +508,15 @@ impl ClusterOps for ScriptedOps {
         b.run().await
     }
 
-    async fn finalize(&self, had_failures: bool) -> Result<Option<Finalized>, String> {
-        self.record(Call::Finalize { had_failures });
+    async fn finalize(
+        &self,
+        had_failures: bool,
+        orphans_left: bool,
+    ) -> Result<Option<Finalized>, String> {
+        self.record(Call::Finalize {
+            had_failures,
+            orphans_left,
+        });
         let b = self.finalize.lock().unwrap().clone();
         b.run().await
     }

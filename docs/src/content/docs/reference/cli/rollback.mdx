@@ -24,7 +24,7 @@ kix rollback <CLUSTER> [-y] [--dry-run] [--prune] [--operator] [--context <CONTE
 | `--list` | Print the active activation and every Superseded one (name, identity hash, deploy time, source store path, previous activation, and whether the build is in the local store), then exit. Honours `-o json` and `-o yaml`. |
 | `-y`, `--yes` | Roll back to the most recent Superseded activation without prompting. |
 | `--dry-run` | Print the plan and stop. |
-| `--prune` | Delete resources the current activation has and the target does not. Without it they are listed and kept. |
+| `--prune` | Delete resources the current activation has and the target does not, and orphans earlier deploys kept. Without it they are listed and kept, and the target Activation records where they came from, as a deploy does. |
 | `--operator` | Point the Activation record at the target build and let the Kix operator apply it. See [Operator mode](/docs/reference/cli/operator-mode/). |
 | `--context <CONTEXT>` | Kubeconfig context. See [Global flags](/docs/reference/cli/global-flags/). |
 

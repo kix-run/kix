@@ -336,6 +336,70 @@ pub fn fold_failed_closures(
     out
 }
 
+/// Add the orphans of builds an earlier deploy kept orphans from
+/// (`status.orphansKeptFrom`).
+///
+/// Every one of those builds was applied in full and then replaced, so unlike
+/// [`fold_failed_closures`] nothing here can turn a `Skip` into an `Apply`:
+/// the Active closure already describes every object the new build shares
+/// with them. What they add is the objects the new build no longer declares,
+/// under the same rules [`detect_changes`] uses: stamped, prunable, and not
+/// a record.
+pub fn fold_kept_closures(
+    mut actions: Vec<ChangeAction>,
+    new_manifests: &[Value],
+    kept_closures: &[Vec<Value>],
+) -> Vec<ChangeAction> {
+    let id_of = |rid: &ResourceId| format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
+    let new_ids: HashSet<String> = new_manifests
+        .iter()
+        .map(|m| id_of(&ResourceId::from_value(m)))
+        .collect();
+    let mut seen: HashSet<String> = actions
+        .iter()
+        .filter_map(|a| match a {
+            ChangeAction::Orphan(rid) => Some(id_of(rid)),
+            _ => None,
+        })
+        .collect();
+    // Sorted so a plan is byte-identical across runs.
+    let mut added: Vec<ResourceId> = Vec::new();
+    for manifest in kept_closures.iter().flatten() {
+        if manifest_identity_hash(manifest).is_none() || !lifecycle_of(manifest).prunable() {
+            continue;
+        }
+        let rid = ResourceId::from_value(manifest);
+        let id = id_of(&rid);
+        if !new_ids.contains(&id) && seen.insert(id) {
+            added.push(rid);
+        }
+    }
+    added.sort();
+    actions.extend(added.into_iter().map(ChangeAction::Orphan));
+    actions
+}
+
+/// Whether `closure` has an object that prune would delete if `new_manifests`
+/// replaced it: stamped, prunable, of a kind `never_pruned` does not protect,
+/// and absent from `new_manifests` by Kubernetes identity.
+///
+/// A deploy that keeps its orphans records each build this is true for, so
+/// the list on the record names only builds that still have something to
+/// delete.
+pub fn leaves_orphans(closure: &[Value], new_manifests: &[Value]) -> bool {
+    let id_of = |m: &Value| {
+        let rid = ResourceId::from_value(m);
+        format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
+    };
+    let new_ids: HashSet<String> = new_manifests.iter().map(id_of).collect();
+    closure.iter().any(|m| {
+        manifest_identity_hash(m).is_some()
+            && lifecycle_of(m).prunable()
+            && !crate::manifest::lifecycle::never_pruned(&ResourceId::from_value(m).kind)
+            && !new_ids.contains(&id_of(m))
+    })
+}
+
 /// The manifest set a plan should show and prune against: the Active closure,
 /// plus anything only a failed closure has.
 ///
@@ -1555,6 +1619,81 @@ mod tests {
             .collect();
         v.sort();
         v
+    }
+
+    // -- fold_kept_closures / leaves_orphans ------------------------------
+    //
+    // The situation: a warn-only deploy of A replaced K and kept K's orphans.
+    // A is Active and lists K under `status.orphansKeptFrom`; we are about to
+    // deploy N.
+
+    #[test]
+    fn an_object_only_a_kept_closure_has_is_an_orphan_again() {
+        let active = vec![manifest("Deployment", "web", "app", "h1")];
+        let new = active.clone();
+        let kept = vec![
+            manifest("Deployment", "web", "app", "h0"),
+            manifest("ConfigMap", "removed", "app", "h9"),
+            record("demo-old", "h8"),
+        ];
+
+        let folded = fold_kept_closures(detect_changes(&new, &active), &new, &[kept]);
+        assert_eq!(orphan_ids(&folded), vec!["ConfigMap/removed@app"]);
+        // A kept closure never turns a Skip into an Apply: A replaced it in full.
+        assert_eq!(skip_ids(&folded), vec!["Deployment/web@app"]);
+        assert!(apply_ids(&folded).is_empty());
+    }
+
+    #[test]
+    fn an_object_the_new_build_declares_again_is_not_an_orphan() {
+        let active = vec![manifest("Deployment", "web", "app", "h1")];
+        let new = vec![
+            manifest("Deployment", "web", "app", "h1"),
+            manifest("ConfigMap", "removed", "app", "h10"),
+        ];
+        let kept = vec![manifest("ConfigMap", "removed", "app", "h9")];
+
+        let folded = fold_kept_closures(detect_changes(&new, &active), &new, &[kept]);
+        assert!(orphan_ids(&folded).is_empty());
+    }
+
+    #[test]
+    fn kept_closures_and_the_active_diff_do_not_duplicate_orphans() {
+        let active = vec![
+            manifest("Deployment", "web", "app", "h1"),
+            manifest("ConfigMap", "gone", "app", "h5"),
+        ];
+        let new = vec![manifest("Deployment", "web", "app", "h1")];
+        let first = vec![
+            manifest("ConfigMap", "gone", "app", "h4"),
+            manifest("Secret", "older", "app", "h3"),
+        ];
+        let second = vec![manifest("Secret", "older", "app", "h3")];
+
+        let folded = fold_kept_closures(detect_changes(&new, &active), &new, &[first, second]);
+        assert_eq!(
+            orphan_ids(&folded),
+            vec!["ConfigMap/gone@app", "Secret/older@app"]
+        );
+    }
+
+    #[test]
+    fn a_closure_leaves_orphans_only_for_deletable_objects_the_new_build_lacks() {
+        let new = vec![manifest("Deployment", "web", "app", "h1")];
+        assert!(leaves_orphans(
+            &[manifest("ConfigMap", "removed", "app", "h9")],
+            &new
+        ));
+        // Same identity under a different hash is an update, not an orphan.
+        assert!(!leaves_orphans(
+            &[manifest("Deployment", "web", "app", "h0")],
+            &new
+        ));
+        // Records are superseded and Namespaces are never pruned.
+        assert!(!leaves_orphans(&[record("demo-old", "h8")], &new));
+        let mut ns = manifest("Namespace", "app", "app", "h7");
+        ns["metadata"].as_object_mut().unwrap().remove("namespace");
+        assert!(!leaves_orphans(&[ns], &new));
     }
 
     // -- fold_failed_closures --------------------------------------------

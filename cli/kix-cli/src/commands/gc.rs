@@ -2,10 +2,12 @@
 //!
 //! Three modes:
 //!   - **Soft (default):** Diff old vs new activation store graphs locally.
-//!     Resources only in the old graph are garbage. Deletes in reverse
-//!     dependency order (dependents first). Fast: no cluster-wide resource scan.
-//!     This is the same diff that deploy computes; soft GC is
-//!     "deploy's prune phase, run separately."
+//!     Resources only in the old graph are garbage, and so are resources only
+//!     in a build the Active record lists under `status.orphansKeptFrom`
+//!     (orphans a warn-only deploy kept). Deletes in reverse dependency order
+//!     (dependents first). Fast: no cluster-wide resource scan. This is the
+//!     same diff that deploy computes; soft GC is "deploy's prune phase, run
+//!     separately."
 //!   - **Hard (`--hard`):** Builds the cluster now and lists every live
 //!     resource carrying the kix label. A resource whose identity hash is not
 //!     in that build is garbage; one stamped before the domain move is judged
@@ -45,6 +47,7 @@ use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use crate::cli::GcArgs;
+use crate::commands::baseline;
 use crate::output;
 use crate::plan::{self, print_never_pruned, split_never_pruned};
 
@@ -134,7 +137,35 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         &new_ids,
     );
 
-    if garbage_manifests.is_empty() && records.plan.retire.is_empty() {
+    // Orphans a warn-only deploy kept. The cached build is usually the one
+    // that deploy made, so the diff above cannot see them.
+    let kept_baseline = match &records.active {
+        Some(active) => baseline::load_kept(active, &args.cluster, ctx.global.quiet),
+        None => baseline::KeptBaseline::default(),
+    };
+    let kept_garbage = kept_garbage(
+        &kept_baseline.closures,
+        &garbage_manifests,
+        &new_hashes,
+        &new_ids,
+    );
+    let new_activation_hash = lifecycle::record_of(
+        &new_graph
+            .resources
+            .values()
+            .map(|r| r.manifest.clone())
+            .collect::<Vec<_>>(),
+    )
+    .and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string));
+
+    if garbage_manifests.is_empty() && kept_garbage.is_empty() && records.plan.retire.is_empty() {
+        ctx.runtime.block_on(clear_kept(
+            &args.cluster,
+            &records,
+            kept_baseline.unresolved.is_empty(),
+            new_activation_hash.as_deref(),
+            ctx.global.quiet,
+        ));
         if !ctx.global.quiet {
             println!(
                 "{} ({} resources unchanged, {})",
@@ -158,13 +189,29 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
             plan::print_plan_summary(&pkg_diff);
         }
     }
+    if !kept_garbage.is_empty() && !ctx.global.quiet {
+        println!();
+        println!(
+            "{}",
+            output::bold("Orphans kept by earlier deploys (warn-only)")
+        );
+        let mut rids: Vec<ResourceId> = kept_garbage.iter().map(ResourceId::from_value).collect();
+        rids.sort();
+        for rid in rids.iter().filter(|r| !lifecycle::never_pruned(&r.kind)) {
+            println!("  {} {rid}", output::red("-"));
+        }
+    }
     if !ctx.global.quiet {
         print_record_plan(&records, &policy);
     }
 
     // 6. Reverse-topological ordering for deletion (dependents first so a
     //    provider still exists when its consumer is torn down).
-    let garbage_values: Vec<Value> = garbage_manifests.values().cloned().collect();
+    let garbage_values: Vec<Value> = garbage_manifests
+        .values()
+        .cloned()
+        .chain(kept_garbage)
+        .collect();
     let ordered_rids = match ResourceGraph::from_manifests(&garbage_values) {
         Ok(graph) => graph.reverse_topo_ids(),
         Err(_) => garbage_values.iter().map(ResourceId::from_value).collect(),
@@ -193,12 +240,102 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
             .block_on(delete_resources(&global, &ordered_rids))?
     };
     let (retired, records_failed) = ctx.runtime.block_on(delete_records(&global, &records))?;
+    if failed == 0 {
+        ctx.runtime.block_on(clear_kept(
+            &args.cluster,
+            &records,
+            kept_baseline.unresolved.is_empty(),
+            new_activation_hash.as_deref(),
+            ctx.global.quiet,
+        ));
+    }
     finish(
         &global,
         deleted,
         failed + records_failed,
         Some((retired, records.plan.kept.len())),
     )
+}
+
+/// Manifests from kept closures (`status.orphansKeptFrom`) that the new build
+/// no longer has, by the rule [`soft_garbage`] uses, and that `garbage` does
+/// not already name by Kubernetes identity.
+fn kept_garbage(
+    closures: &[Vec<Value>],
+    garbage: &HashMap<String, Value>,
+    new_hashes: &HashSet<String>,
+    new_ids: &HashSet<String>,
+) -> Vec<Value> {
+    let mut seen: HashSet<String> = garbage.values().map(k8s_identity).collect();
+    let mut out = Vec::new();
+    for manifest in closures.iter().flatten() {
+        let Some(hash) = keys::get(manifest, keys::IDENTITY_HASH) else {
+            continue;
+        };
+        if !lifecycle::lifecycle_of(manifest).prunable()
+            || new_hashes.contains(hash)
+            || new_ids.contains(&k8s_identity(manifest))
+        {
+            continue;
+        }
+        if seen.insert(k8s_identity(manifest)) {
+            out.push(manifest.clone());
+        }
+    }
+    out
+}
+
+/// Remove `status.orphansKeptFrom` from the Active record once this gc has
+/// deleted what it describes, and drop the GC roots this machine keeps for
+/// those builds under `cluster`. See [`may_clear_kept`] for when. Best-effort: a list left behind
+/// makes the next deploy's plan name objects that are already gone, and
+/// deleting those is a no-op.
+async fn clear_kept(
+    cluster: &str,
+    records: &RecordRetirement,
+    examined_all: bool,
+    build_hash: Option<&str>,
+    quiet: bool,
+) {
+    let (Some((client, ar)), Some(active)) = (&records.conn, &records.active) else {
+        return;
+    };
+    if !may_clear_kept(active, examined_all, build_hash) {
+        return;
+    }
+    match kix::cluster::activation::clear_orphans_kept_from(client, ar, &active.name).await {
+        Ok(()) => {
+            baseline::sync_kept_roots(cluster, &[]);
+            if !quiet {
+                println!(
+                    "  {} Activation/{}: no kept orphans left to record",
+                    output::dim("="),
+                    active.name
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(activation = %active.name, error = %e, "could not clear orphansKeptFrom")
+        }
+    }
+}
+
+/// Whether a gc that deleted its garbage without failures may clear the
+/// Active record's `orphansKeptFrom`.
+///
+/// Only when the build gc compared against is the Active one: against a
+/// different build, an object the Active build lacks but this build declares
+/// was not deleted and is still an orphan. And only when `examined_all`: soft
+/// gc resolved every listed build, or hard gc was allowed to list every kind.
+fn may_clear_kept(
+    active: &kix::cluster::activation::ActiveActivation,
+    examined_all: bool,
+    build_hash: Option<&str>,
+) -> bool {
+    !active.orphans_kept_from.is_empty()
+        && examined_all
+        && build_hash.is_some()
+        && active.identity_hash.as_deref() == build_hash
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +379,15 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         );
     }
 
+    let build_hash = lifecycle::record_of(
+        &graph
+            .resources
+            .values()
+            .map(|r| r.manifest.clone())
+            .collect::<Vec<_>>(),
+    )
+    .and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string));
+
     // 3. Fetch ALL live kix-managed resources
     let global = ctx.global.clone();
     let cluster_name = graph.cluster_name.clone();
@@ -251,6 +397,7 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         &expected_hashes,
         &expected_ids,
         &cluster_name,
+        build_hash.as_deref(),
     ))
 }
 
@@ -260,6 +407,7 @@ async fn run_hard_async(
     expected_hashes: &HashSet<String>,
     expected_ids: &HashSet<String>,
     cluster_name: &str,
+    build_hash: Option<&str>,
 ) -> Result<()> {
     if !global.quiet {
         println!("Fetching live cluster state...");
@@ -283,6 +431,7 @@ async fn run_hard_async(
             crate::output::forbidden_note(&sweep.forbidden),
         );
     }
+    let forbidden_none = sweep.forbidden.is_empty();
     let live: Vec<_> = sweep.managed.into_iter().chain(sweep.unstamped).collect();
 
     // Refuse on a cluster that has been migrated but not deployed since.
@@ -428,7 +577,21 @@ async fn run_hard_async(
         print_unstamped(&unstamped);
     }
 
+    // Hard gc judges every live object against the build, so once it has
+    // deleted without failures no kept orphan is left, whether or not this
+    // machine can resolve the builds the Active record names. Kinds the
+    // sweep was forbidden to list were not judged.
+    let examined_all = forbidden_none;
+
     if garbage.is_empty() {
+        clear_kept(
+            &args.cluster,
+            &records,
+            examined_all,
+            build_hash,
+            global.quiet,
+        )
+        .await;
         if !global.quiet {
             println!(
                 "{} ({})",
@@ -471,6 +634,16 @@ async fn run_hard_async(
         delete_resources(global, &rids).await?
     };
     let (retired, records_failed) = delete_records(global, &records).await?;
+    if failed == 0 {
+        clear_kept(
+            &args.cluster,
+            &records,
+            examined_all,
+            build_hash,
+            global.quiet,
+        )
+        .await;
+    }
     finish(
         global,
         deleted,
@@ -778,6 +951,8 @@ fn parse_retention_duration(s: &str) -> Result<Option<chrono::Duration>> {
 struct RecordRetirement {
     conn: Option<(kube::Client, kube::discovery::ApiResource)>,
     plan: Retirement,
+    /// The cluster's Active or Degraded record, for its `orphansKeptFrom`.
+    active: Option<kix::cluster::activation::ActiveActivation>,
 }
 
 impl RecordRetirement {
@@ -823,15 +998,20 @@ async fn plan_records_with(
         return Ok(RecordRetirement {
             conn: None,
             plan: Default::default(),
+            active: None,
         });
     };
     let superseded = kix::cluster::activation::list_superseded_activations(client, ar, cluster)
         .await
         .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
     let plan = kix::cluster::activation::retire_plan(superseded, policy);
+    let active = kix::cluster::activation::find_active(client, ar, cluster)
+        .await
+        .map_err(|e| miette!("failed to find the active activation: {e}"))?;
     Ok(RecordRetirement {
         conn: Some((client.clone(), ar.clone())),
         plan,
+        active,
     })
 }
 
@@ -1087,6 +1267,11 @@ async fn delete_resources(
                 println!("  {} deleted {}", output::red("-"), rid);
                 deleted += 1;
             }
+            // A kept orphan someone already removed by hand. Nothing is left
+            // to delete, so it is not a failure.
+            Err(kube::Error::Api(ae)) if ae.code == 404 => {
+                println!("  {} {} already gone", output::dim("="), rid);
+            }
             Err(e) => {
                 eprintln!("  {} {}: {}", output::red("!"), rid, e);
                 failed += 1;
@@ -1202,6 +1387,78 @@ mod soft_garbage_tests {
             vec!["cccccccccccccccccccccccccccccccc"],
             "the changed Deployment and the rebuilt record are not garbage: {garbage:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod kept_garbage_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn m(kind: &str, name: &str, hash: &str) -> Value {
+        json!({
+            "kind": kind,
+            "metadata": {
+                "name": name,
+                "namespace": "d",
+                "annotations": { keys::IDENTITY_HASH: hash },
+            },
+        })
+    }
+
+    /// Soft gc after a warn-only deploy: the cached build equals the new one,
+    /// so only the kept closure names the dropped ConfigMap.
+    #[test]
+    fn objects_only_a_kept_closure_has_are_garbage_once() {
+        let kept = vec![
+            vec![
+                m("Deployment", "web", "h0"),
+                m("ConfigMap", "old", "h1"),
+                json!({"kind": lifecycle::RECORD_KIND, "metadata": {"name": "c-v1", "annotations": { keys::IDENTITY_HASH: "h2" }}}),
+            ],
+            vec![m("ConfigMap", "old", "h1"), m("Secret", "listed", "h3")],
+        ];
+        let new_hashes: HashSet<String> = ["h9".to_string()].into();
+        let new_ids: HashSet<String> = ["Deployment/d/web".to_string()].into();
+        let mut already = HashMap::new();
+        already.insert("h3".to_string(), m("Secret", "listed", "h3"));
+
+        let got: Vec<String> = kept_garbage(&kept, &already, &new_hashes, &new_ids)
+            .iter()
+            .map(k8s_identity)
+            .collect();
+        assert_eq!(got, vec!["ConfigMap/d/old"]);
+    }
+
+    /// gc clears the list only against the Active build, only when it
+    /// examined everything, and only when there is a list.
+    #[test]
+    fn kept_list_is_cleared_only_after_a_complete_gc_of_the_active_build() {
+        use kix::cluster::activation::{ActiveActivation, KeptOrphanSource};
+        let active = |kept: bool| ActiveActivation {
+            name: "c-v2".into(),
+            identity_hash: Some("h-v2".into()),
+            built_via: None,
+            orphans_kept_from: if kept {
+                vec![KeptOrphanSource {
+                    activation: "c-v1".into(),
+                    identity_hash: "h-v1".into(),
+                    built_via: None,
+                }]
+            } else {
+                vec![]
+            },
+        };
+        assert!(may_clear_kept(&active(true), true, Some("h-v2")));
+        assert!(!may_clear_kept(&active(false), true, Some("h-v2")));
+        assert!(!may_clear_kept(&active(true), false, Some("h-v2")));
+        assert!(!may_clear_kept(&active(true), true, Some("h-v3")));
+        assert!(!may_clear_kept(&active(true), true, None));
+        let unhashed = ActiveActivation {
+            identity_hash: None,
+            ..active(true)
+        };
+        assert!(!may_clear_kept(&unhashed, true, None));
     }
 }
 

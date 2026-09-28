@@ -90,6 +90,8 @@ pub struct KubeOpsConfig {
     /// Failed records whose leftovers this run's plan folded in. Superseded
     /// on finalize, because by then they describe nothing outstanding.
     pub consumed_failed: Vec<String>,
+    /// What finalize writes to the record's `status.orphansKeptFrom`.
+    pub kept_orphans: activation::KeptOrphans,
     /// Whether [`ClusterOps::abort`] should mark the record Failed.
     ///
     /// True for the CLI, which owns the run end to end. False for the
@@ -110,6 +112,9 @@ pub struct KubeOps {
     /// [`ClusterOps::rediscover`] does it at the CRD barrier, the earliest
     /// point at which it can succeed.
     record_pending: std::sync::atomic::AtomicBool,
+    /// The `status.orphansKeptFrom` that [`ClusterOps::finalize`] wrote, for
+    /// the caller's GC roots. `None` until a finalize succeeds.
+    recorded_kept: std::sync::Mutex<Option<Vec<activation::KeptOrphanSource>>>,
 }
 
 impl KubeOps {
@@ -120,7 +125,14 @@ impl KubeOps {
             cfg,
             live_activations: std::sync::RwLock::new(None),
             record_pending: std::sync::atomic::AtomicBool::new(false),
+            recorded_kept: std::sync::Mutex::new(None),
         }
+    }
+
+    /// The `status.orphansKeptFrom` the run's finalize wrote, or `None` when
+    /// it did not finalize (no-op run, dry run, failure).
+    pub fn recorded_orphans_kept_from(&self) -> Option<Vec<activation::KeptOrphanSource>> {
+        self.recorded_kept.lock().ok().and_then(|g| g.clone())
     }
 
     fn live_activations(&self) -> Option<HashSet<String>> {
@@ -674,7 +686,11 @@ impl ClusterOps for KubeOps {
         }
     }
 
-    async fn finalize(&self, had_failures: bool) -> Result<Option<Finalized>, String> {
+    async fn finalize(
+        &self,
+        had_failures: bool,
+        orphans_left: bool,
+    ) -> Result<Option<Finalized>, String> {
         if self.cfg.dry_run {
             return Ok(None);
         }
@@ -682,11 +698,15 @@ impl ClusterOps for KubeOps {
             return Ok(None);
         };
         let work = async {
-            let old = activation::find_active(&self.client, &ar, &self.cfg.cluster_name)
+            let current = activation::find_active(&self.client, &ar, &self.cfg.cluster_name)
                 .await
                 .ok()
-                .flatten()
-                .filter(|old| &old.name != name);
+                .flatten();
+            let kept = self.cfg.kept_orphans.recorded(
+                current.as_ref().map(|c| c.orphans_kept_from.as_slice()),
+                orphans_left,
+            );
+            let old = current.filter(|old| &old.name != name);
             activation::finalize_deploy(
                 &self.client,
                 &ar,
@@ -696,9 +716,13 @@ impl ClusterOps for KubeOps {
                 had_failures,
                 self.cfg.receipt.as_ref(),
                 &self.cfg.consumed_failed,
+                &kept,
             )
-            .await
-            .map(|()| Finalized {
+            .await?;
+            if let Ok(mut recorded) = self.recorded_kept.lock() {
+                *recorded = Some(kept);
+            }
+            Ok::<_, activation::ActivationError>(Finalized {
                 activation: name.clone(),
                 previous: old.map(|a| a.name),
             })

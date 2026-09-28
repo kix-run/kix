@@ -108,17 +108,24 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     // Resolve the old activation from the cluster or local cache.
-    let (old_graph, active_manifests, pre_client, active_hash) = if args.current_activation {
+    let (old_graph, active_manifests, pre_client, active) = if args.current_activation {
         // Local cache mode does not connect before confirmation.
         let (og, om) = load_old_from_cache(&args.cluster, &ctx.global);
-        let hash = find_activation_identity_hash(&om);
-        (og, om, None, hash)
+        let active = cached_as_active(&args.cluster, &om);
+        (og, om, None, active)
     } else {
         // Fetch the active Activation from the cluster.
-        let (og, om, client, hash) = ctx
-            .runtime
-            .block_on(load_old_from_cluster(&args.cluster, &ctx.global))?;
-        (og, om, client, hash)
+        ctx.runtime
+            .block_on(load_old_from_cluster(&args.cluster, &ctx.global))?
+    };
+    let active_hash = active.as_ref().and_then(|a| a.identity_hash.clone());
+
+    // Builds whose orphans an earlier warn-only deploy kept. The Active
+    // closure no longer declares those objects, so without these the plan
+    // cannot see them.
+    let kept_baseline = match &active {
+        Some(active) => baseline::load_kept(active, &args.cluster, ctx.global.quiet),
+        None => baseline::KeptBaseline::default(),
     };
 
     // Include closures from deploys that stopped part way. They applied objects and
@@ -153,19 +160,42 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     };
 
     // The plan display and the prune ordering both need a manifest for an
-    // object that exists only in a failed closure.
-    let old_manifests =
-        kix::cluster::apply::baseline_manifests(&active_manifests, &failed_baseline.closures);
+    // object that exists only in a failed or kept closure.
+    let old_manifests = kix::cluster::apply::baseline_manifests(
+        &active_manifests,
+        &[
+            failed_baseline.closures.as_slice(),
+            kept_baseline.closures.as_slice(),
+        ]
+        .concat(),
+    );
 
     // 4. Local DAG diff: old vs new, then fold in what the failed deploys may
     //    have left. The fold can turn a Skip into an Apply (repair) and can
     //    add orphans (prune); it never invents a change the closures do not
     //    justify.
-    let all_actions = kix::cluster::apply::fold_failed_closures(
-        kix::cluster::apply::detect_changes(&new_manifests, &active_manifests),
+    let all_actions = kix::cluster::apply::fold_kept_closures(
+        kix::cluster::apply::fold_failed_closures(
+            kix::cluster::apply::detect_changes(&new_manifests, &active_manifests),
+            &new_manifests,
+            &failed_baseline.closures,
+        ),
         &new_manifests,
-        &failed_baseline.closures,
+        &kept_baseline.closures,
     );
+
+    // What the new record lists under `status.orphansKeptFrom` if this run
+    // leaves orphans on the cluster.
+    let mut kept_orphans = baseline::orphans_kept_from(
+        &new_manifests,
+        active.as_ref(),
+        &active_manifests,
+        &failed_baseline,
+        &kept_baseline,
+    );
+    // The plan did not read the Active record, so its list is carried
+    // forward unexamined.
+    kept_orphans.carry_current = args.current_activation;
 
     // Detect stateful migration pairs and require --accept-migrations.
     // Against the Active closure only. A half-applied closure is not a
@@ -297,13 +327,13 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
 
         let fate = if args.prune_mode == Some(PruneMode::No) {
-            "kept (--prune-mode=no)"
+            "kept (--prune-mode=no)".to_string()
         } else if prune_flag_requested(args) {
-            "will be deleted"
+            "will be deleted".to_string()
         } else {
-            "kept; pass --prune to delete"
+            format!("kept; {KEPT_ORPHANS_HINT}")
         };
-        print!("{}", render_plan_orphans(&orphan_rids, fate));
+        print!("{}", render_plan_orphans(&orphan_rids, &fate));
 
         // Where the extra work in this plan came from. Without this the
         // reader sees a deploy of an unchanged config proposing changes, and
@@ -489,6 +519,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         pre_client,
         activation_manifest,
         &failed_baseline.consumed,
+        kept_orphans,
     ));
 
     // Save activation path for next deploy's diff and for soft `kix gc`.
@@ -544,20 +575,25 @@ fn load_old_from_cache(
     }
 }
 
-/// Extract the `kix.run/identity-hash` annotation from the Activation
-/// manifest in a manifest set, if present.
-fn find_activation_identity_hash(manifests: &[Value]) -> Option<String> {
-    lifecycle::record_of(manifests).and_then(|m| {
-        m.pointer("/metadata/annotations")
-            .and_then(|a| a.get(keys::IDENTITY_HASH))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+/// The cached build as the current record, for `--current-activation`, which
+/// does not read the cluster's records before confirmation. It has no
+/// `orphansKeptFrom`, so orphans kept by earlier deploys are not in its plan;
+/// finalize carries the real record's list forward instead.
+fn cached_as_active(cluster: &str, manifests: &[Value]) -> Option<activation::ActiveActivation> {
+    let record = lifecycle::record_of(manifests)?;
+    Some(activation::ActiveActivation {
+        name: record.pointer("/metadata/name")?.as_str()?.to_string(),
+        identity_hash: keys::get(record, keys::IDENTITY_HASH).map(str::to_string),
+        built_via: kix::eval::store::load_activation_path(cluster)
+            .map(|p| p.to_string_lossy().into_owned()),
+        orphans_kept_from: Vec::new(),
     })
 }
 
 /// Connect to cluster, fetch Active Activation, resolve to local store graph.
-/// The final tuple element is the active activation's identity hash, used to
-/// report a no-op deploy as "activation identical".
+/// The final tuple element is the Active record, whose identity hash reports
+/// a no-op deploy as "activation identical" and whose `orphansKeptFrom` names
+/// earlier builds to prune against.
 async fn load_old_from_cluster(
     cluster: &str,
     global: &crate::cli::GlobalArgs,
@@ -565,7 +601,7 @@ async fn load_old_from_cluster(
     Option<StoreGraph>,
     Vec<Value>,
     Option<kube::Client>,
-    Option<String>,
+    Option<activation::ActiveActivation>,
 )> {
     if !global.quiet {
         println!("Connecting to cluster...");
@@ -621,7 +657,7 @@ async fn load_old_from_cluster(
                                 .values()
                                 .map(|r| r.manifest.clone())
                                 .collect();
-                            Ok((Some(old_graph), manifests, Some(client), Some(hash.clone())))
+                            Ok((Some(old_graph), manifests, Some(client), Some(act)))
                         }
                         Err(e) => {
                             // A store path that exists but will not load is
@@ -636,7 +672,7 @@ async fn load_old_from_cluster(
                             }
                             let old_manifests =
                                 reconstruct_old_from_live(&client, &discovery).await?;
-                            Ok((None, old_manifests, Some(client), Some(hash.clone())))
+                            Ok((None, old_manifests, Some(client), Some(act)))
                         }
                     }
                 }
@@ -648,7 +684,7 @@ async fn load_old_from_cluster(
                         );
                     }
                     let old_manifests = reconstruct_old_from_live(&client, &discovery).await?;
-                    Ok((None, old_manifests, Some(client), Some(hash.clone())))
+                    Ok((None, old_manifests, Some(client), Some(act)))
                 }
             }
         }
@@ -701,9 +737,11 @@ fn supersede_consumed(
     }
 }
 
-/// The prune policy the flags ask for. `--prune-mode=no` skips, plain
-/// `deploy` reports orphans without deleting (warn-only), `--prune` deletes.
-///
+/// What deletes the orphans a warn-only run keeps. Both work because the
+/// record the run finalizes lists the builds they came from under
+/// `status.orphansKeptFrom`.
+pub(crate) const KEPT_ORPHANS_HINT: &str = "`kix deploy --prune` or `kix gc` deletes them";
+
 /// The topology label preflight, printed above the confirmation. The
 /// compiler derives spread on cluster.topology.zoneKey and cannot see a
 /// node; under DoNotSchedule a node without the label cannot take the pod,
@@ -743,6 +781,8 @@ fn report_topology_labels(ctx: &CommandContext, client: &kube::Client, manifests
     }
 }
 
+/// The prune policy the flags ask for. `--prune-mode=no` skips, plain
+/// `deploy` reports orphans without deleting (warn-only), `--prune` deletes.
 fn prune_policy_for(args: &DeployArgs) -> PrunePolicy {
     match args.prune_mode.unwrap_or(PruneMode::Default) {
         PruneMode::No => PrunePolicy::Skip,
@@ -1042,6 +1082,7 @@ async fn run_deploy_async(
     pre_client: Option<kube::Client>,
     activation_manifest: Option<&Value>,
     consumed_failed: &[String],
+    kept_orphans: activation::KeptOrphans,
 ) -> Result<()> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
 
@@ -1094,7 +1135,7 @@ async fn run_deploy_async(
     // the start of the run, so a process that just dies leaves it Deploying.
     config.cancel.cancel_on_interrupt();
 
-    let ops: Arc<dyn ClusterOps> = Arc::new(KubeOps::new(
+    let kube_ops = Arc::new(KubeOps::new(
         client.clone(),
         discovery,
         KubeOpsConfig {
@@ -1110,9 +1151,11 @@ async fn run_deploy_async(
             // last node, which is then an unchanged no-op.
             activation_manifest: activation_manifest.cloned(),
             consumed_failed: consumed_failed.to_vec(),
+            kept_orphans,
             mark_failed_on_abort: true,
         },
     ));
+    let ops: Arc<dyn ClusterOps> = kube_ops.clone();
 
     // Select the TUI, NDJSON, plain line, or colored observer from CLI flags
     // and terminal capabilities.
@@ -1172,6 +1215,10 @@ async fn run_deploy_async(
     // Tear down the TUI before the summary prints so it lands in normal
     // scrollback below the history lines.
     drop(tui_driver);
+
+    if let Some(recorded) = kube_ops.recorded_orphans_kept_from() {
+        baseline::sync_kept_roots(&args.cluster, &recorded);
+    }
 
     match result {
         Ok(r) => {
@@ -1337,7 +1384,7 @@ fn render_prune_start(resources: &[ResourceId], kept: &[ResourceId], delete: boo
         } else {
             let _ = writeln!(
                 out,
-                "{} {} orphaned resources kept (warn-only; pass --prune to delete)",
+                "{} {} orphaned resources kept (warn-only; {KEPT_ORPHANS_HINT})",
                 output::bold("prune:"),
                 resources.len(),
             );

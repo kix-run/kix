@@ -286,7 +286,10 @@ fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> V
         lines.push(if delete {
             format!("prune> deleting {count} orphaned resources")
         } else {
-            format!("prune> {count} orphaned resources kept (warn-only; pass --prune to delete)")
+            format!(
+                "prune> {count} orphaned resources kept (warn-only; {})",
+                super::deploy::KEPT_ORPHANS_HINT
+            )
         });
         lines.extend(
             resources
@@ -431,7 +434,7 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                "prune> 1 orphaned resources kept (warn-only; pass --prune to delete)",
+                "prune> 1 orphaned resources kept (warn-only; `kix deploy --prune` or `kix gc` deletes them)",
                 "ConfigMap/old@app> orphan",
                 "prune> 1 orphaned resources are never deleted automatically",
                 "Namespace/gone@app> orphan, kept",

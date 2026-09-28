@@ -28,14 +28,14 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
 | `<CLUSTER>` | Cluster name to build from the flake. |
 | `-y`, `--yes` | Skip the confirmation prompt. Required when stdin is not a terminal, unless `--dry-run` is set. |
 | `--dry-run` | Run the whole plan with `dryRun=All`. The apiserver reports each outcome, including admission, RBAC and field-conflict errors, and nothing changes. |
-| `--prune` | Delete orphans: resources the previous activation had and this build does not. Without it, orphans are listed and kept. |
+| `--prune` | Delete orphans: resources the previous activation had and this build does not, including orphans earlier deploys kept. Without it, orphans are listed and kept, and the new Activation records where they came from so a later `kix deploy --prune` or `kix gc` deletes them. |
 | `--prune-mode <MODE>` | `default` prunes according to `--prune`. `no` never prunes in this run, even with `--prune`; use `kix gc` later. |
 | `--timeout <DURATION>` | How long to wait for each resource to become ready: `5m`, `300s`, or a bare number of seconds. Default `180s`. |
 | `--on-error <MODE>` | `stop` (default) halts the run at the first failure and cancels what has not started. `continue` cancels only the dependents of a failed resource and carries on with the rest. |
 | `--reconcile` | Re-apply every resource, including those whose identity hash matches the running activation. Use it to put back fields that were changed on the cluster. |
 | `--force-conflicts` | Take ownership of fields another field manager owns. Without it, a conflict fails that resource and names the fields and their current owner. |
 | `--accept-migrations` | Proceed when the plan removes and adds stateful resources in the same slot. Without it such a deploy stops, even with `--yes`. Kix does not copy data. |
-| `--current-activation` | Take the previous activation from the local cache instead of the cluster. The plan is computed offline, so it cannot see deploys that stopped part way. With `--dry-run` nothing contacts the cluster. |
+| `--current-activation` | Take the previous activation from the local cache instead of the cluster. The plan is computed offline, so it cannot see deploys that stopped part way or orphans that earlier deploys kept; the new Activation lists the builds those orphans came from again, so a later plain deploy can prune them. With `--dry-run` nothing contacts the cluster. |
 | `--operator` | Hand the build to the Kix operator instead of applying it from this machine. See [Operator mode](/docs/reference/cli/operator-mode/). |
 | `--log-format <FORMAT>` | `pretty` (default): coloured progress, or `line` when stdin is not a terminal. `line`: one plain line per resource outcome. `json`: one JSON event per line. |
 | `--tui` | Draw a live dependency tree while deploying. Ignored when stdin is not a terminal. |
@@ -62,6 +62,16 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
    reported as kept and never deleted, with or without `--prune`. In
    `--log-format json`, the `prune_start` event lists them under `kept`,
    apart from the `resources` that prune may delete.
+
+   Orphans a deploy keeps stay pruneable. The Activation it finalizes lists
+   the builds they came from under `status.orphansKeptFrom`, and the next
+   deploy's plan includes their orphans again, so `kix deploy --prune` or
+   soft `kix gc` deletes them. A deploy that deletes them all removes those
+   builds from the list. If this machine does not have one of those builds,
+   the plan says so and keeps it on the list for a machine that does; `kix gc
+   --hard` also removes its orphans. While a build is listed, the machine
+   that recorded it keeps a Nix GC root for it in
+   `~/.cache/kix/activations/`, so `nix-collect-garbage` does not remove it.
 7. Marks the Activation `Active`, or `Degraded` or `Failed` when resources
    failed.
 
