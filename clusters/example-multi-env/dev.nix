@@ -33,7 +33,9 @@ kix.buildCluster {
         };
 
         instances.cache.valkey.config = {
-          sentinel.enabled = lib.mkDefault false; # no HA needed in dev
+          # No HA needed in dev. Without Sentinel valkey runs one pod.
+          sentinel.enabled = lib.mkDefault false;
+          replicaCount = lib.mkDefault 1;
         };
       }
     )

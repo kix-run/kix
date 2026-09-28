@@ -2,7 +2,8 @@
 #
 # Supports two topologies (controlled by sentinel.enabled):
 #   sentinel=true  — Node StatefulSet with sentinel sidecar for HA failover.
-#   sentinel=false — Primary/replica StatefulSet (Bitnami primary/replica mode).
+#   sentinel=false — One standalone primary (Bitnami's `<name>-primary`
+#                    StatefulSet, without its replica StatefulSet).
 # Both default from the cluster's availability level (v2_discussions/145):
 # standalone below "node", Sentinel with three pods from "node" up.
 #
@@ -35,6 +36,30 @@
     ];
     k8s.minVersion = "1.25";
   };
+
+  assertions =
+    { config, ... }:
+    [
+      # Without Sentinel every pod runs start-primary.sh, so extra pods would
+      # be unrelated primaries behind one Service, each with its own dataset.
+      {
+        assertion = config.sentinel.enabled || config.replicaCount == 1;
+        message = "valkey '${scope.instanceName}': replicaCount is ${toString config.replicaCount} with sentinel.enabled = false. Without Sentinel valkey runs one standalone primary. Set replicaCount = 1, or set sentinel.enabled = true for a primary with replicas and automatic failover.";
+      }
+      # Each pod runs one Sentinel, so with fewer pods than the quorum no
+      # failover can ever be agreed.
+      {
+        assertion = !config.sentinel.enabled || config.replicaCount >= config.sentinel.quorum;
+        message = "valkey '${scope.instanceName}': replicaCount is ${toString config.replicaCount} but sentinel.quorum is ${toString config.sentinel.quorum}. Each pod runs one Sentinel, so fewer pods than the quorum can never agree on a failover. Raise replicaCount to at least the quorum, or lower sentinel.quorum.";
+      }
+      # A starting pod asks the Sentinels of the pods already running for the
+      # primary and becomes the primary when none answers. Parallel starts
+      # every pod at once on a fresh deploy, so each becomes a primary.
+      {
+        assertion = !config.sentinel.enabled || config.podManagementPolicy == "OrderedReady";
+        message = "valkey '${scope.instanceName}': podManagementPolicy = \"${config.podManagementPolicy}\" with Sentinel on. With Parallel every pod starts before any Sentinel runs, so each makes itself a primary. Use podManagementPolicy = \"OrderedReady\".";
+      }
+    ];
 
   options = {
     image = lib.mkOption {
@@ -205,13 +230,67 @@
         else
           { "app.kubernetes.io/component" = "headless"; };
 
+      servicePorts = [
+        {
+          name = "tcp-redis";
+          port = 6379;
+          targetPort = 6379;
+          protocol = "TCP";
+        }
+      ]
+      ++ lib.optional config.sentinel.enabled {
+        name = "tcp-sentinel";
+        port = 26379;
+        targetPort = 26379;
+        protocol = "TCP";
+      };
+
       # Auth-related helpers.
       authPasswordKey = config.auth.existingSecretPasswordKey;
 
       # ── ConfigMap data (scripts) ──────────────────────────────────
 
-      headlessServiceFqdn = "${name}-headless.${scope.namespaceName}.svc.cluster.local";
+      # With Sentinel on, the start scripts read the headless Service's
+      # `out.fqdn`, so the StatefulSet waits for it (see `headlessService`).
+      # The standalone start-primary.sh resolves neither Service. The main
+      # Service depends on the StatefulSet, so the scripts name it as a
+      # literal, and only the preStop scripts, which run long after it
+      # exists, dial it.
+      headlessServiceFqdn =
+        if config.sentinel.enabled then
+          self.headlessService.out.fqdn
+        else
+          "${name}-headless.${scope.namespaceName}.svc.cluster.local";
       mainServiceFqdn = "${name}.${scope.namespaceName}.svc.cluster.local";
+
+      # A starting pod asks for the current primary and becomes the primary
+      # itself when no Sentinel answers. The Bitnami chart asks the main
+      # Service, but kix applies that Service only once the StatefulSet is
+      # Ready, so the second pod would find no Sentinel. These functions ask
+      # each other pod's Sentinel by its headless Service name instead, which
+      # resolves before the pod is Ready (publishNotReadyAddresses). The pod's
+      # own Sentinel is skipped, as the main Service would skip a pod that is
+      # not Ready. `tlsEnabled` is the shell reference to the TLS switch and
+      # `tlsFlags` valkey-cli's TLS arguments for Sentinel.
+      querySentinelsFunctions = tlsEnabled: tlsFlags: ''
+        query_sentinels() {
+            local node host
+            for node in $(seq 0 $((${toString config.replicaCount}-1))); do
+                [[ "${name}-node-$node" == "$HOSTNAME" ]] && continue
+                host="$(get_full_hostname "${name}-node-$node")"
+                if is_boolean_yes "${tlsEnabled}"; then
+                    timeout 90 valkey-cli -h "$host" -p "$SENTINEL_SERVICE_PORT" ${tlsFlags} sentinel get-primary-addr-by-name ${config.sentinel.primarySet} && return 0
+                else
+                    timeout 90 valkey-cli -h "$host" -p "$SENTINEL_SERVICE_PORT" sentinel get-primary-addr-by-name ${config.sentinel.primarySet} && return 0
+                fi
+            done
+            return 1
+        }
+        get_sentinel_primary_info() {
+            info "asking the Sentinels of the other pods through $HEADLESS_SERVICE for the primary"
+            retry_while "query_sentinels" 2 5
+        }
+      '';
 
       startNodeScript = ''
         #!/bin/bash
@@ -267,15 +346,7 @@
             info "about to run the command: $failover_command"
             eval $failover_command
         }
-        get_sentinel_primary_info() {
-            if is_boolean_yes "$VALKEY_TLS_ENABLED"; then
-                sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ''${VALKEY_TLS_CERT_FILE} --key ''${VALKEY_TLS_KEY_FILE} --cacert ''${VALKEY_TLS_CA_FILE} sentinel get-primary-addr-by-name ${config.sentinel.primarySet}"
-            else
-                sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel get-primary-addr-by-name ${config.sentinel.primarySet}"
-            fi
-            info "about to run the command: $sentinel_info_command"
-            retry_while "eval $sentinel_info_command" 2 5
-        }
+        ${querySentinelsFunctions "$VALKEY_TLS_ENABLED" ''--tls --cert "$VALKEY_TLS_CERT_FILE" --key "$VALKEY_TLS_KEY_FILE" --cacert "$VALKEY_TLS_CA_FILE"''}
         [[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD="$(< "''${VALKEY_PASSWORD_FILE}")"
         [[ -f $VALKEY_PRIMARY_PASSWORD_FILE ]] && export VALKEY_PRIMARY_PASSWORD="$(< "''${VALKEY_PRIMARY_PASSWORD_FILE}")"
         # check if there is a primary
@@ -390,15 +461,7 @@
         host_id() {
             echo "$1" | openssl sha1 | awk '{print $2}'
         }
-        get_sentinel_primary_info() {
-            if is_boolean_yes "$VALKEY_SENTINEL_TLS_ENABLED"; then
-                sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ''${VALKEY_SENTINEL_TLS_CERT_FILE} --key ''${VALKEY_SENTINEL_TLS_KEY_FILE} --cacert ''${VALKEY_SENTINEL_TLS_CA_FILE} sentinel get-primary-addr-by-name ${config.sentinel.primarySet}"
-            else
-                sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel get-primary-addr-by-name ${config.sentinel.primarySet}"
-            fi
-            info "about to run the command: $sentinel_info_command"
-            retry_while "eval $sentinel_info_command" 2 5
-        }
+        ${querySentinelsFunctions "$VALKEY_SENTINEL_TLS_ENABLED" ''--tls --cert "$VALKEY_SENTINEL_TLS_CERT_FILE" --key "$VALKEY_SENTINEL_TLS_KEY_FILE" --cacert "$VALKEY_SENTINEL_TLS_CA_FILE"''}
         [[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD="$(< "''${VALKEY_PASSWORD_FILE}")"
         primary_in_persisted_conf="$(get_full_hostname "$HOSTNAME")"
         if [[ -f /opt/bitnami/valkey-sentinel/etc/sentinel.conf ]]; then
@@ -1331,53 +1394,46 @@
         |> scope.mkStatefulSet;
 
       # --- Service (headless, for StatefulSet DNS) ---
-      # The selector comes from the workload, so the dependency on the
-      # StatefulSet is tracked and `selectorCoherence` has a workload to
-      # trace it to. `clusterIP = "None"` merges into the built spec rather
-      # than replacing it.
+      # With Sentinel on, the pods find each other's Sentinel through this
+      # Service before they are Ready, so it publishes unready addresses, as
+      # the Bitnami chart's headless Service does, and the start scripts read
+      # its `out.fqdn`, so it is applied before the StatefulSet. It then
+      # selects with the StatefulSet's `rawSelector`; `out.selector` would
+      # recurse. Without Sentinel it comes from `kix.service.fromWorkload`.
       headlessService =
-        self.statefulSet
-        |> kix.service.fromWorkload {
-          name = "${name}-headless";
-          labels = selectorLabels // headlessComponentLabel;
-          spec.clusterIP = "None";
-          ports = [
-            {
-              name = "tcp-redis";
-              port = 6379;
-              targetPort = 6379;
-              protocol = "TCP";
-            }
-          ]
-          ++ lib.optional config.sentinel.enabled {
-            name = "tcp-sentinel";
-            port = 26379;
-            targetPort = 26379;
-            protocol = "TCP";
-          };
-        }
-        |> scope.mkResource;
+        if config.sentinel.enabled then
+          scope.mkResource {
+            apiVersion = "v1";
+            kind = "Service";
+            name = "${name}-headless";
+            labels = selectorLabels // headlessComponentLabel;
+            spec = {
+              type = "ClusterIP";
+              clusterIP = "None";
+              publishNotReadyAddresses = true;
+              selector = self.statefulSet.rawSelector;
+              ports = servicePorts;
+            };
+          }
+        else
+          self.statefulSet
+          |> kix.service.fromWorkload {
+            name = "${name}-headless";
+            labels = selectorLabels // headlessComponentLabel;
+            spec.clusterIP = "None";
+            ports = servicePorts;
+          }
+          |> scope.mkResource;
 
       # --- Service (main entry point — exposes both redis and sentinel) ---
+      # Built from the StatefulSet, so a consumer that reads `out.fqdn` waits
+      # for the Valkey pods to be Ready.
       mainService =
         self.statefulSet
         |> kix.service.fromWorkload {
-          name = "${name}";
+          inherit name;
           labels = commonLabels;
-          ports = [
-            {
-              name = "tcp-redis";
-              port = 6379;
-              targetPort = 6379;
-              protocol = "TCP";
-            }
-          ]
-          ++ lib.optional config.sentinel.enabled {
-            name = "tcp-sentinel";
-            port = 26379;
-            targetPort = 26379;
-            protocol = "TCP";
-          };
+          ports = servicePorts;
           # With Sentinel on, this Service selects every pod, replicas
           # included, and no Service selects the primary alone. A client
           # that writes must ask Sentinel for the primary (sentinelPort,

@@ -5,7 +5,8 @@
 # instance for smart features (facial recognition, search, etc.).
 #
 # Dependencies:
-#   valkey              — required, job queue backend
+#   valkey              — required, job queue backend; reached through
+#                          Sentinel when the valkey instance runs it
 #   database            — required, logical database (provided by stackgres-database
 #                          or any package exposing the same out.{host,port,database,
 #                          credentials,connectionEnv} interface). The underlying
@@ -28,6 +29,7 @@
 
 let
   name = scope.instanceName;
+  release = import ./release.nix;
 
   # init-chown-data runs as root. When security.nonRoot would fail the
   # build, fail it here instead with the override that lets the migration
@@ -44,7 +46,7 @@ let
 in
 {
   meta = {
-    version = "v3.0.3";
+    version = release.version;
     description = "Immich: self-hosted photo management";
     owner = "app-team";
     # The server mounts the photo library from a single ReadWriteOnce
@@ -143,7 +145,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "ghcr.io/immich-app/immich-server";
-        tag = "v3.0.3";
+        tag = release.version;
         pullPolicy = "IfNotPresent";
       };
     };
@@ -165,7 +167,13 @@ in
     env = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
-      description = "Extra environment variables for the server container";
+      description = ''
+        Extra environment variables for the server container. When the
+        valkey instance runs Sentinel, the container builds `REDIS_URL` at
+        start from `REDIS_SENTINEL_OPTIONS` and `REDIS_PASSWORD`, which
+        replaces a `REDIS_URL` set here, and a `REDIS_PASSWORD_FILE` set
+        here does not reach it.
+      '';
     };
     configuration = lib.mkOption {
       type = lib.types.nullOr lib.types.anything;
@@ -242,9 +250,39 @@ in
           failureThreshold = 3;
         };
         hasMl = machineLearning != null;
-        mlUrl = if hasMl then "http://${machineLearning.out.fqdn}:${machineLearning.out.port}" else null;
+        # A worker from another release answers the server's newer jobs with
+        # 500s. `out.version` is the worker's release (see release.nix `of`),
+        # so hardware variants and digest pins compare by release. It is
+        # absent for a tag that names no release and on a machine-learning
+        # dep that is not the immich-machine-learning package, such as a
+        # Service import; either skips the check.
+        mlVersion = machineLearning.out.version or null;
+        serverVersion = release.of config.image.tag;
+        mlUrl =
+          if !hasMl then
+            null
+          else if mlVersion != null && serverVersion != null && mlVersion != serverVersion then
+            throw "immich '${name}': immich-server is ${serverVersion} (image.tag ${config.image.tag}) but its machine-learning instance runs ${mlVersion}. Immich releases both images under one tag; set image.tag to the same release on both instances."
+          else
+            "http://${machineLearning.out.fqdn}:${machineLearning.out.port}";
 
         hasMetrics = config.metrics.enabled && prometheus != null;
+
+        # With Sentinel on, the valkey Service also routes to read-only
+        # replicas, so the server finds the primary through Sentinel.
+        # Immich takes ioredis options as REDIS_URL=ioredis://<base64 JSON>
+        # and then ignores the other REDIS_* variables, so the password has
+        # to go into that JSON. The container builds REDIS_URL from
+        # REDIS_SENTINEL_OPTIONS and REDIS_PASSWORD at start, which keeps
+        # the password in its Secret. See
+        # https://docs.immich.app/install/environment-variables#redis
+        useSentinel = valkey.out ? sentinelPort;
+        sentinelStart = ''
+          set -e
+          REDIS_URL="ioredis://$(node -e 'const o = JSON.parse(process.env.REDIS_SENTINEL_OPTIONS); if (process.env.REDIS_PASSWORD) o.password = process.env.REDIS_PASSWORD; process.stdout.write(Buffer.from(JSON.stringify(o)).toString("base64"))')"
+          export REDIS_URL
+          exec start.sh
+        '';
       in
       {
 
@@ -326,6 +364,9 @@ in
                   name = "immich-server";
                   image = "${config.image.repository}:${config.image.tag}";
                   imagePullPolicy = config.image.pullPolicy;
+                  # The image's entrypoint is `tini -- /bin/bash -c` with
+                  # CMD `start.sh`, so args replaces only the command string.
+                  ${if useSentinel then "args" else null} = [ sentinelStart ];
                   # kix.mkEnv combines { KEY = "val"; } entries with raw K8s env
                   # entries (e.g. valueFrom.secretKeyRef). Null values in the
                   # attrset are filtered, so disabled features just set null.
@@ -336,7 +377,20 @@ in
                           DB_HOSTNAME = database.out.host;
                           DB_PORT = database.out.port;
                           DB_DATABASENAME = database.out.database;
-                          REDIS_HOSTNAME = valkey.out.fqdn;
+                          REDIS_HOSTNAME = if useSentinel then null else valkey.out.fqdn;
+                          REDIS_SENTINEL_OPTIONS =
+                            if useSentinel then
+                              builtins.toJSON {
+                                sentinels = [
+                                  {
+                                    host = valkey.out.fqdn;
+                                    port = valkey.out.sentinelPort;
+                                  }
+                                ];
+                                name = valkey.out.primarySet;
+                              }
+                            else
+                              null;
                           IMMICH_MACHINE_LEARNING_URL = mlUrl;
                           IMMICH_CONFIG_FILE =
                             if self.configMount != null then "${self.configMount.mountPath}/immich-config.yaml" else null;

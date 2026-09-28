@@ -17,6 +17,7 @@
 
 let
   name = scope.instanceName;
+  release = import ../immich/release.nix;
 
   # init-chown-data runs as root. When security.nonRoot would fail the
   # build, fail it here instead with the override that lets the migration
@@ -33,7 +34,7 @@ let
 in
 {
   meta = {
-    version = "v2.0.0";
+    version = release.version;
     description = "Immich machine-learning worker for face recognition, smart search and duplicate detection, called by immich-server over HTTP";
     owner = "app-team";
     # Keep the `machineLearning` build argument while using a lowercase
@@ -58,7 +59,7 @@ in
       type = lib.types.anything;
       default = {
         repository = "ghcr.io/immich-app/immich-machine-learning";
-        tag = "v2.0.0";
+        tag = release.version;
         pullPolicy = "IfNotPresent";
       };
     };
@@ -253,6 +254,13 @@ in
       service = self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource;
 
       # --- Entry point ---
-      root = self.service;
+      # `version` is the release the image tag names, which immich-server
+      # compares with its own. A tag that names no release leaves it out.
+      root = {
+        resource = self.service;
+        out = lib.optionalAttrs (release.of config.image.tag != null) {
+          version = release.of config.image.tag;
+        };
+      };
     };
 }

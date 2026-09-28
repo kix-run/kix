@@ -7,7 +7,15 @@
 #
 # Dependencies:
 #   postgres            — optional, database
-#   valkey              — optional, cache/queue backend
+#   valkey              — optional, cache/queue backend. A standalone valkey
+#                          arrives as VALKEY_HOST. With Sentinel on, the valkey
+#                          Service also routes to read-only replicas, so the
+#                          app gets VALKEY_SENTINEL_HOST, VALKEY_SENTINEL_PORT
+#                          and VALKEY_SENTINEL_PRIMARY_SET instead and must use
+#                          a Sentinel-aware client (redis-py `Sentinel`,
+#                          django-redis `SentinelClient`, Celery `sentinel://`).
+#                          An app that cannot needs a standalone valkey
+#                          (sentinel.enabled = false, replicaCount = 1).
 #   ingressNginx        — optional, auto-creates ingress when present (+ hosts non-empty)
 #   clusterIssuer       — optional, auto-enables TLS when present
 #
@@ -422,8 +430,16 @@ in
         // lib.optionalAttrs (postgres != null) {
           DATABASE_HOST = postgres.out.fqdn;
         }
-        // lib.optionalAttrs (valkey != null) {
+        # Without VALKEY_HOST under Sentinel, a client that is not
+        # Sentinel-aware fails to connect instead of sending some of its
+        # writes to replicas. See the valkey dependency in the header.
+        // lib.optionalAttrs (valkey != null && !(valkey.out ? sentinelPort)) {
           VALKEY_HOST = valkey.out.fqdn;
+        }
+        // lib.optionalAttrs (valkey != null && valkey.out ? sentinelPort) {
+          VALKEY_SENTINEL_HOST = valkey.out.fqdn;
+          VALKEY_SENTINEL_PORT = valkey.out.sentinelPort;
+          VALKEY_SENTINEL_PRIMARY_SET = valkey.out.primarySet;
         };
 
       # ── Secret file volumes + mounts ────────────────────────────────

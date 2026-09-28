@@ -10,7 +10,8 @@
 #                    or anything exposing out.{host,port,database,username,
 #                    credentials} with a `password` key on the credentials.
 #   valkey         — required, Redis-compatible cache and job queue
-#                    (packages/valkey answers both `valkey` and `redis`).
+#                    (packages/valkey answers both `valkey` and `redis`),
+#                    reached through Sentinel when the valkey instance runs it.
 #   storage        — required, persistent volume for registry blobs.
 #   clusterIssuer  — optional. TLS on the Ingress (via kix.expose) and the
 #                    scheme of the derived external URL.
@@ -425,9 +426,23 @@ in
         # Secret and is spliced into the URL by Kubernetes' $(VAR) expansion,
         # so no ConfigMap ever carries it.
         redisAuth = valkey.out ? authSecret;
-        redisAddr = "${valkey.out.fqdn}:${valkey.out.port}";
+        # With Sentinel on, the valkey Service also routes to read-only
+        # replicas, so Harbor asks Sentinel for the primary: the
+        # `redis+sentinel://<sentinels>/<primary set>/<db>` URL and the
+        # registry's `sentinelMasterSet`, as the harbor-helm chart writes
+        # them for an external Sentinel (templates/_helpers.tpl,
+        # templates/registry/registry-cm.yaml).
+        redisSentinel = valkey.out ? sentinelPort;
+        redisAddr =
+          if redisSentinel then
+            "${valkey.out.fqdn}:${valkey.out.sentinelPort}"
+          else
+            "${valkey.out.fqdn}:${valkey.out.port}";
         redisUrl =
-          db: "redis://${lib.optionalString redisAuth ":$(REDIS_PASSWORD)@"}${redisAddr}/${toString db}";
+          db:
+          "${
+            if redisSentinel then "redis+sentinel" else "redis"
+          }://${lib.optionalString redisAuth ":$(REDIS_PASSWORD)@"}${redisAddr}${lib.optionalString redisSentinel "/${valkey.out.primarySet}"}/${toString db}";
         redisPasswordEnv = lib.optionals redisAuth [
           (valkey.out.authSecret.out.keyRef valkey.out.authPasswordKey // { name = "REDIS_PASSWORD"; })
         ];
@@ -879,7 +894,7 @@ in
                 redirect:
                   disable: false
               redis:
-                addr: ${redisAddr}
+                addr: ${redisAddr}${lib.optionalString redisSentinel "\n  sentinelMasterSet: ${valkey.out.primarySet}"}
                 db: 2
                 readtimeout: 10s
                 writetimeout: 10s

@@ -2104,8 +2104,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
-    kix.run/depends-on: '645lhljl77wraalwmn21nb7g6p3b2d3p,68ma8mgsdkfr3wyx4jf2zn48srgvshc1,amcy3an3i9m37k3xvvkjsbrw1w5nhwrl,awzwpm53w1kb4ysngrwmj47whaddgkih,fkzl1qkjmrcp03ny7hr2sssjby480y5w,mq9c5fv0s5rqllykn6ks80mhlq6fh5i8,rfm5bmkkkyhsszcwyinwndmglzsywf5m'
-    kix.run/identity-hash: inxakxnfia02321863a4i2zc3a404ain
+    kix.run/depends-on: '645lhljl77wraalwmn21nb7g6p3b2d3p,7kjfiij74j9nqb7iahry2gsqlvwpagl3,amcy3an3i9m37k3xvvkjsbrw1w5nhwrl,awzwpm53w1kb4ysngrwmj47whaddgkih,fkzl1qkjmrcp03ny7hr2sssjby480y5w,h7hhpsnd26w80pc42ymjimzjj5kf2mfg,rfm5bmkkkyhsszcwyinwndmglzsywf5m'
+    kix.run/identity-hash: cvg3x4nnlskxr2zdk8axvgx8pqr51hay
     kix.run/package: immich
     kix.run/package-namespace: immich
   labels:
@@ -2131,7 +2131,13 @@ spec:
         app.kubernetes.io/name: immich
     spec:
       containers:
-      - env:
+      - args:
+        - |
+          set -e
+          REDIS_URL="ioredis://$(node -e 'const o = JSON.parse(process.env.REDIS_SENTINEL_OPTIONS); if (process.env.REDIS_PASSWORD) o.password = process.env.REDIS_PASSWORD; process.stdout.write(Buffer.from(JSON.stringify(o)).toString("base64"))')"
+          export REDIS_URL
+          exec start.sh
+        env:
         - name: DB_DATABASENAME
           value: immich
         - name: DB_HOSTNAME
@@ -2140,8 +2146,8 @@ spec:
           value: '5432'
         - name: IMMICH_MACHINE_LEARNING_URL
           value: http://machine-learning.immich.svc.cluster.local:3003
-        - name: REDIS_HOSTNAME
-          value: valkey.cache.svc.cluster.local
+        - name: REDIS_SENTINEL_OPTIONS
+          value: '{"name":"myprimary","sentinels":[{"host":"valkey.cache.svc.cluster.local","port":"26379"}]}'
         - name: DB_PASSWORD
           valueFrom:
             secretKeyRef:
@@ -2214,7 +2220,7 @@ kind: Deployment
 metadata:
   annotations:
     kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih
-    kix.run/identity-hash: '7c5jjr3kz8j453h33z5hjn9fhcgsx284'
+    kix.run/identity-hash: '9a1i7ar4scgcw43nvfzfsnrld8pgvhcj'
     kix.run/package: machine-learning
     kix.run/package-namespace: immich
   labels:
@@ -2247,7 +2253,7 @@ spec:
           value: /cache/matplotlib-config
         - name: TRANSFORMERS_CACHE
           value: /cache
-        image: ghcr.io/immich-app/immich-machine-learning:v2.0.0
+        image: ghcr.io/immich-app/immich-machine-learning:v3.0.3
         imagePullPolicy: IfNotPresent
         livenessProbe:
           failureThreshold: 3
@@ -2588,8 +2594,8 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   annotations:
-    kix.run/depends-on: '5qnhwbbp86vqas3vp4iwirdfd1gi2469,6d0a44nqqwwv27qciwy6bfiayy951k76,8588icvyzk564kvg8bcwrssl2785qx3l,gc71hyi1iymywm9dg1vvilkr96l4sszg,pr6na2idmnni6w5mrsc4vva34ghd68q8'
-    kix.run/identity-hash: x6qdsc847pdi2dhjakn6vk5qbivl42hv
+    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,8588icvyzk564kvg8bcwrssl2785qx3l,gc71hyi1iymywm9dg1vvilkr96l4sszg,ghcd9cgy32r4hgf8p807kyipwgl7x96p,vnrsbpv8hah8kmzlzw293gapigz7nbsg'
+    kix.run/identity-hash: lkd8zzdx6v3jqcng16sha9rrw4nmcr9z
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: cache
@@ -2614,9 +2620,9 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/configmap: pr6na2idmnni6w5mrsc4vva34ghd68q8
+        checksum/configmap: vnrsbpv8hah8kmzlzw293gapigz7nbsg
         checksum/health: gc71hyi1iymywm9dg1vvilkr96l4sszg
-        checksum/scripts: pr6na2idmnni6w5mrsc4vva34ghd68q8
+        checksum/scripts: vnrsbpv8hah8kmzlzw293gapigz7nbsg
         checksum/secret: '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a'
         prometheus.io/port: '9121'
         prometheus.io/scrape: 'true'
@@ -3122,15 +3128,15 @@ apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
   annotations:
-    kix.run/built-via: /nix/store/kb0mw5s0g90d71nkklz3sbp2dyfvhx1l-k8s-activation-example
-    kix.run/depends-on: '0iq67p4var2drxj3fnik545qgdf2hlgy,2997x7d8ppdwm2llsbpwhj5hmyg1yzsz,2l8qrqqc8c4m7jcjnh22vplxpii47mxr,4qagsm9yhxs07nf7d31g8nkmyj41hj5m,azsh2xz3xqmx9nm8rdyx85cir5skgzm7,dmfxw9rc48vmrsymj3yspwyq1p3ipvn7,jbxbg4y1yi3g7r9glqahavayqmq4ivyy,s2gmy13qscvpmfliy02hzr5n81w8qxg3,vdfbbxv7p28973qh765rp1vkpmm1723z,yd165yf11lfpldh835wvq7l3kl1bjc7s,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
-    kix.run/identity-hash: g16y99zhkgxfll3v6wcpi88zc79zck87
+    kix.run/built-via: /nix/store/a7irw7bmg1b2shjkbxrld8mw9pyjqx50-k8s-activation-example
+    kix.run/depends-on: '0iq67p4var2drxj3fnik545qgdf2hlgy,2997x7d8ppdwm2llsbpwhj5hmyg1yzsz,4qagsm9yhxs07nf7d31g8nkmyj41hj5m,6r1261aznhaf01mdgb5ivd79bjsdbbx7,71z7qiq4l12hwnyzsyjf3wbyx7hg00c2,azimi8x1r63a27z16y62phrg7qv05p4w,dmfxw9rc48vmrsymj3yspwyq1p3ipvn7,jbxbg4y1yi3g7r9glqahavayqmq4ivyy,s2gmy13qscvpmfliy02hzr5n81w8qxg3,yd165yf11lfpldh835wvq7l3kl1bjc7s,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
+    kix.run/identity-hash: rdxcifhx48cd5ry9bfbns9rljipvspn5
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
   labels:
     app.kubernetes.io/managed-by: kix
     kix.run/cluster: example
-  name: example-g16y99zhkgxf
+  name: example-rdxcifhx48cd
 spec:
   instances:
     cache:
@@ -3153,8 +3159,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '5qnhwbbp86vqas3vp4iwirdfd1gi2469,68ma8mgsdkfr3wyx4jf2zn48srgvshc1,6d0a44nqqwwv27qciwy6bfiayy951k76,8588icvyzk564kvg8bcwrssl2785qx3l,d67fn2090v2ad613pka8lgkdxf7clw6j,gc71hyi1iymywm9dg1vvilkr96l4sszg,l3f30md9qsicbwxh8sfr4a68c6nnldyi,m1r0aqpbgvg8j5ylkymm4gwg6z8c9106,pr6na2idmnni6w5mrsc4vva34ghd68q8,x6qdsc847pdi2dhjakn6vk5qbivl42hv,ykazlrjm10vjz9cy3h8yx14kn55lxaxs,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: azsh2xz3xqmx9nm8rdyx85cir5skgzm7
+    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,7kjfiij74j9nqb7iahry2gsqlvwpagl3,8588icvyzk564kvg8bcwrssl2785qx3l,fkga6ml47l0grs70mli0n0aq4brwwk5b,gc71hyi1iymywm9dg1vvilkr96l4sszg,ghcd9cgy32r4hgf8p807kyipwgl7x96p,l2dvi8fings81mgrqygxczg0dl703f0a,lkd8zzdx6v3jqcng16sha9rrw4nmcr9z,m1r0aqpbgvg8j5ylkymm4gwg6z8c9106,vnrsbpv8hah8kmzlzw293gapigz7nbsg,ykazlrjm10vjz9cy3h8yx14kn55lxaxs,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
+    kix.run/identity-hash: '6r1261aznhaf01mdgb5ivd79bjsdbbx7'
     kix.run/inverse-deps: PodDisruptionBudget/valkey-node
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
@@ -3200,8 +3206,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '48kc31szy0y7lak26ysj94jvj6jzr1ll,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: '2l8qrqqc8c4m7jcjnh22vplxpii47mxr'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,m5kwznvzgc3i50m1ly0127vbwnwypwa5,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: azimi8x1r63a27z16y62phrg7qv05p4w
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/root: immich-server
@@ -3244,8 +3250,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,mq9c5fv0s5rqllykn6ks80mhlq6fh5i8,vc4lw2i2hl8317anzdd6wxvz67kvbijh,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: vdfbbxv7p28973qh765rp1vkpmm1723z
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,h7hhpsnd26w80pc42ymjimzjj5kf2mfg,vc4lw2i2hl8317anzdd6wxvz67kvbijh,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: '71z7qiq4l12hwnyzsyjf3wbyx7hg00c2'
     kix.run/inverse-deps: PodDisruptionBudget/machine-learning
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
@@ -3260,7 +3266,7 @@ metadata:
 spec:
   instanceName: machine-learning
   namespaceName: immich
-  version: v2.0.0
+  version: v3.0.3
 ---
 apiVersion: kix.run/v1alpha1
 kind: PackageInstance
@@ -5837,8 +5843,8 @@ data:
 kind: ConfigMap
 metadata:
   annotations:
-    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76'
-    kix.run/identity-hash: '5qnhwbbp86vqas3vp4iwirdfd1gi2469'
+    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,l2dvi8fings81mgrqygxczg0dl703f0a'
+    kix.run/identity-hash: ghcd9cgy32r4hgf8p807kyipwgl7x96p
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: cache
@@ -6132,15 +6138,24 @@ data:
         info "about to run the command: $failover_command"
         eval $failover_command
     }
-    get_sentinel_primary_info() {
-        if is_boolean_yes "$VALKEY_TLS_ENABLED"; then
-            sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel get-primary-addr-by-name myprimary"
-        else
-            sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel get-primary-addr-by-name myprimary"
-        fi
-        info "about to run the command: $sentinel_info_command"
-        retry_while "eval $sentinel_info_command" 2 5
+    query_sentinels() {
+        local node host
+        for node in $(seq 0 $((3-1))); do
+            [[ "valkey-node-$node" == "$HOSTNAME" ]] && continue
+            host="$(get_full_hostname "valkey-node-$node")"
+            if is_boolean_yes "$VALKEY_TLS_ENABLED"; then
+                timeout 90 valkey-cli -h "$host" -p "$SENTINEL_SERVICE_PORT" --tls --cert "$VALKEY_TLS_CERT_FILE" --key "$VALKEY_TLS_KEY_FILE" --cacert "$VALKEY_TLS_CA_FILE" sentinel get-primary-addr-by-name myprimary && return 0
+            else
+                timeout 90 valkey-cli -h "$host" -p "$SENTINEL_SERVICE_PORT" sentinel get-primary-addr-by-name myprimary && return 0
+            fi
+        done
+        return 1
     }
+    get_sentinel_primary_info() {
+        info "asking the Sentinels of the other pods through $HEADLESS_SERVICE for the primary"
+        retry_while "query_sentinels" 2 5
+    }
+
     [[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD="$(< "${VALKEY_PASSWORD_FILE}")"
     [[ -f $VALKEY_PRIMARY_PASSWORD_FILE ]] && export VALKEY_PRIMARY_PASSWORD="$(< "${VALKEY_PRIMARY_PASSWORD_FILE}")"
     # check if there is a primary
@@ -6253,15 +6268,24 @@ data:
     host_id() {
         echo "$1" | openssl sha1 | awk '{print $2}'
     }
-    get_sentinel_primary_info() {
-        if is_boolean_yes "$VALKEY_SENTINEL_TLS_ENABLED"; then
-            sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_SENTINEL_TLS_CERT_FILE} --key ${VALKEY_SENTINEL_TLS_KEY_FILE} --cacert ${VALKEY_SENTINEL_TLS_CA_FILE} sentinel get-primary-addr-by-name myprimary"
-        else
-            sentinel_info_command="timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel get-primary-addr-by-name myprimary"
-        fi
-        info "about to run the command: $sentinel_info_command"
-        retry_while "eval $sentinel_info_command" 2 5
+    query_sentinels() {
+        local node host
+        for node in $(seq 0 $((3-1))); do
+            [[ "valkey-node-$node" == "$HOSTNAME" ]] && continue
+            host="$(get_full_hostname "valkey-node-$node")"
+            if is_boolean_yes "$VALKEY_SENTINEL_TLS_ENABLED"; then
+                timeout 90 valkey-cli -h "$host" -p "$SENTINEL_SERVICE_PORT" --tls --cert "$VALKEY_SENTINEL_TLS_CERT_FILE" --key "$VALKEY_SENTINEL_TLS_KEY_FILE" --cacert "$VALKEY_SENTINEL_TLS_CA_FILE" sentinel get-primary-addr-by-name myprimary && return 0
+            else
+                timeout 90 valkey-cli -h "$host" -p "$SENTINEL_SERVICE_PORT" sentinel get-primary-addr-by-name myprimary && return 0
+            fi
+        done
+        return 1
     }
+    get_sentinel_primary_info() {
+        info "asking the Sentinels of the other pods through $HEADLESS_SERVICE for the primary"
+        retry_while "query_sentinels" 2 5
+    }
+
     [[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD="$(< "${VALKEY_PASSWORD_FILE}")"
     primary_in_persisted_conf="$(get_full_hostname "$HOSTNAME")"
     if [[ -f /opt/bitnami/valkey-sentinel/etc/sentinel.conf ]]; then
@@ -6331,8 +6355,8 @@ data:
 kind: ConfigMap
 metadata:
   annotations:
-    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76'
-    kix.run/identity-hash: pr6na2idmnni6w5mrsc4vva34ghd68q8
+    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,l2dvi8fings81mgrqygxczg0dl703f0a'
+    kix.run/identity-hash: vnrsbpv8hah8kmzlzw293gapigz7nbsg
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: cache
@@ -6524,8 +6548,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,x6qdsc847pdi2dhjakn6vk5qbivl42hv'
-    kix.run/identity-hash: '68ma8mgsdkfr3wyx4jf2zn48srgvshc1'
+    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,lkd8zzdx6v3jqcng16sha9rrw4nmcr9z'
+    kix.run/identity-hash: '7kjfiij74j9nqb7iahry2gsqlvwpagl3'
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: cache
@@ -6558,8 +6582,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,x6qdsc847pdi2dhjakn6vk5qbivl42hv'
-    kix.run/identity-hash: l3f30md9qsicbwxh8sfr4a68c6nnldyi
+    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76'
+    kix.run/identity-hash: l2dvi8fings81mgrqygxczg0dl703f0a
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: cache
@@ -6583,6 +6607,7 @@ spec:
     port: 26379
     protocol: TCP
     targetPort: 26379
+  publishNotReadyAddresses: true
   selector:
     app.kubernetes.io/component: node
     app.kubernetes.io/instance: valkey
@@ -6593,8 +6618,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,requires:x6qdsc847pdi2dhjakn6vk5qbivl42hv'
-    kix.run/identity-hash: d67fn2090v2ad613pka8lgkdxf7clw6j
+    kix.run/depends-on: '6d0a44nqqwwv27qciwy6bfiayy951k76,requires:lkd8zzdx6v3jqcng16sha9rrw4nmcr9z'
+    kix.run/identity-hash: fkga6ml47l0grs70mli0n0aq4brwwk5b
     kix.run/lifecycle: stateful
     kix.run/package: valkey
     kix.run/package-namespace: cache
@@ -6714,8 +6739,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,inxakxnfia02321863a4i2zc3a404ain
-    kix.run/identity-hash: '48kc31szy0y7lak26ysj94jvj6jzr1ll'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,cvg3x4nnlskxr2zdk8axvgx8pqr51hay
+    kix.run/identity-hash: m5kwznvzgc3i50m1ly0127vbwnwypwa5
     kix.run/package: immich
     kix.run/package-namespace: immich
   labels:
@@ -6739,8 +6764,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: '7c5jjr3kz8j453h33z5hjn9fhcgsx284,awzwpm53w1kb4ysngrwmj47whaddgkih'
-    kix.run/identity-hash: mq9c5fv0s5rqllykn6ks80mhlq6fh5i8
+    kix.run/depends-on: '9a1i7ar4scgcw43nvfzfsnrld8pgvhcj,awzwpm53w1kb4ysngrwmj47whaddgkih'
+    kix.run/identity-hash: h7hhpsnd26w80pc42ymjimzjj5kf2mfg
     kix.run/package: machine-learning
     kix.run/package-namespace: immich
   labels:

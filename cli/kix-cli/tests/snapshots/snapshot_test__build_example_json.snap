@@ -2672,8 +2672,8 @@ expression: stable
     "kind": "Deployment",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "645lhljl77wraalwmn21nb7g6p3b2d3p,68ma8mgsdkfr3wyx4jf2zn48srgvshc1,amcy3an3i9m37k3xvvkjsbrw1w5nhwrl,awzwpm53w1kb4ysngrwmj47whaddgkih,fkzl1qkjmrcp03ny7hr2sssjby480y5w,mq9c5fv0s5rqllykn6ks80mhlq6fh5i8,rfm5bmkkkyhsszcwyinwndmglzsywf5m",
-        "kix.run/identity-hash": "inxakxnfia02321863a4i2zc3a404ain",
+        "kix.run/depends-on": "645lhljl77wraalwmn21nb7g6p3b2d3p,7kjfiij74j9nqb7iahry2gsqlvwpagl3,amcy3an3i9m37k3xvvkjsbrw1w5nhwrl,awzwpm53w1kb4ysngrwmj47whaddgkih,fkzl1qkjmrcp03ny7hr2sssjby480y5w,h7hhpsnd26w80pc42ymjimzjj5kf2mfg,rfm5bmkkkyhsszcwyinwndmglzsywf5m",
+        "kix.run/identity-hash": "cvg3x4nnlskxr2zdk8axvgx8pqr51hay",
         "kix.run/package": "immich",
         "kix.run/package-namespace": "immich"
       },
@@ -2708,6 +2708,9 @@ expression: stable
         "spec": {
           "containers": [
             {
+              "args": [
+                "set -e\nREDIS_URL=\"ioredis://$(node -e 'const o = JSON.parse(process.env.REDIS_SENTINEL_OPTIONS); if (process.env.REDIS_PASSWORD) o.password = process.env.REDIS_PASSWORD; process.stdout.write(Buffer.from(JSON.stringify(o)).toString(\"base64\"))')\"\nexport REDIS_URL\nexec start.sh\n"
+              ],
               "env": [
                 {
                   "name": "DB_DATABASENAME",
@@ -2726,8 +2729,8 @@ expression: stable
                   "value": "http://machine-learning.immich.svc.cluster.local:3003"
                 },
                 {
-                  "name": "REDIS_HOSTNAME",
-                  "value": "valkey.cache.svc.cluster.local"
+                  "name": "REDIS_SENTINEL_OPTIONS",
+                  "value": "{\"name\":\"myprimary\",\"sentinels\":[{\"host\":\"valkey.cache.svc.cluster.local\",\"port\":\"26379\"}]}"
                 },
                 {
                   "name": "DB_PASSWORD",
@@ -2841,7 +2844,7 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih",
-        "kix.run/identity-hash": "7c5jjr3kz8j453h33z5hjn9fhcgsx284",
+        "kix.run/identity-hash": "9a1i7ar4scgcw43nvfzfsnrld8pgvhcj",
         "kix.run/package": "machine-learning",
         "kix.run/package-namespace": "immich"
       },
@@ -2890,7 +2893,7 @@ expression: stable
                   "value": "/cache"
                 }
               ],
-              "image": "ghcr.io/immich-app/immich-machine-learning:v2.0.0",
+              "image": "ghcr.io/immich-app/immich-machine-learning:v3.0.3",
               "imagePullPolicy": "IfNotPresent",
               "livenessProbe": {
                 "failureThreshold": 3,
@@ -3413,8 +3416,8 @@ expression: stable
     "kind": "StatefulSet",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "5qnhwbbp86vqas3vp4iwirdfd1gi2469,6d0a44nqqwwv27qciwy6bfiayy951k76,8588icvyzk564kvg8bcwrssl2785qx3l,gc71hyi1iymywm9dg1vvilkr96l4sszg,pr6na2idmnni6w5mrsc4vva34ghd68q8",
-        "kix.run/identity-hash": "x6qdsc847pdi2dhjakn6vk5qbivl42hv",
+        "kix.run/depends-on": "6d0a44nqqwwv27qciwy6bfiayy951k76,8588icvyzk564kvg8bcwrssl2785qx3l,gc71hyi1iymywm9dg1vvilkr96l4sszg,ghcd9cgy32r4hgf8p807kyipwgl7x96p,vnrsbpv8hah8kmzlzw293gapigz7nbsg",
+        "kix.run/identity-hash": "lkd8zzdx6v3jqcng16sha9rrw4nmcr9z",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "valkey",
         "kix.run/package-namespace": "cache"
@@ -3444,9 +3447,9 @@ expression: stable
       "template": {
         "metadata": {
           "annotations": {
-            "checksum/configmap": "pr6na2idmnni6w5mrsc4vva34ghd68q8",
+            "checksum/configmap": "vnrsbpv8hah8kmzlzw293gapigz7nbsg",
             "checksum/health": "gc71hyi1iymywm9dg1vvilkr96l4sszg",
-            "checksum/scripts": "pr6na2idmnni6w5mrsc4vva34ghd68q8",
+            "checksum/scripts": "vnrsbpv8hah8kmzlzw293gapigz7nbsg",
             "checksum/secret": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
             "prometheus.io/port": "9121",
             "prometheus.io/scrape": "true"
@@ -4139,9 +4142,9 @@ expression: stable
     "kind": "Activation",
     "metadata": {
       "annotations": {
-        "kix.run/built-via": "/nix/store/kb0mw5s0g90d71nkklz3sbp2dyfvhx1l-k8s-activation-example",
-        "kix.run/depends-on": "0iq67p4var2drxj3fnik545qgdf2hlgy,2997x7d8ppdwm2llsbpwhj5hmyg1yzsz,2l8qrqqc8c4m7jcjnh22vplxpii47mxr,4qagsm9yhxs07nf7d31g8nkmyj41hj5m,azsh2xz3xqmx9nm8rdyx85cir5skgzm7,dmfxw9rc48vmrsymj3yspwyq1p3ipvn7,jbxbg4y1yi3g7r9glqahavayqmq4ivyy,s2gmy13qscvpmfliy02hzr5n81w8qxg3,vdfbbxv7p28973qh765rp1vkpmm1723z,yd165yf11lfpldh835wvq7l3kl1bjc7s,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
-        "kix.run/identity-hash": "g16y99zhkgxfll3v6wcpi88zc79zck87",
+        "kix.run/built-via": "/nix/store/a7irw7bmg1b2shjkbxrld8mw9pyjqx50-k8s-activation-example",
+        "kix.run/depends-on": "0iq67p4var2drxj3fnik545qgdf2hlgy,2997x7d8ppdwm2llsbpwhj5hmyg1yzsz,4qagsm9yhxs07nf7d31g8nkmyj41hj5m,6r1261aznhaf01mdgb5ivd79bjsdbbx7,71z7qiq4l12hwnyzsyjf3wbyx7hg00c2,azimi8x1r63a27z16y62phrg7qv05p4w,dmfxw9rc48vmrsymj3yspwyq1p3ipvn7,jbxbg4y1yi3g7r9glqahavayqmq4ivyy,s2gmy13qscvpmfliy02hzr5n81w8qxg3,yd165yf11lfpldh835wvq7l3kl1bjc7s,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
+        "kix.run/identity-hash": "rdxcifhx48cd5ry9bfbns9rljipvspn5",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster"
       },
@@ -4149,7 +4152,7 @@ expression: stable
         "app.kubernetes.io/managed-by": "kix",
         "kix.run/cluster": "example"
       },
-      "name": "example-g16y99zhkgxf"
+      "name": "example-rdxcifhx48cd"
     },
     "spec": {
       "instances": {
@@ -4181,8 +4184,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "5qnhwbbp86vqas3vp4iwirdfd1gi2469,68ma8mgsdkfr3wyx4jf2zn48srgvshc1,6d0a44nqqwwv27qciwy6bfiayy951k76,8588icvyzk564kvg8bcwrssl2785qx3l,d67fn2090v2ad613pka8lgkdxf7clw6j,gc71hyi1iymywm9dg1vvilkr96l4sszg,l3f30md9qsicbwxh8sfr4a68c6nnldyi,m1r0aqpbgvg8j5ylkymm4gwg6z8c9106,pr6na2idmnni6w5mrsc4vva34ghd68q8,x6qdsc847pdi2dhjakn6vk5qbivl42hv,ykazlrjm10vjz9cy3h8yx14kn55lxaxs,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "azsh2xz3xqmx9nm8rdyx85cir5skgzm7",
+        "kix.run/depends-on": "6d0a44nqqwwv27qciwy6bfiayy951k76,7kjfiij74j9nqb7iahry2gsqlvwpagl3,8588icvyzk564kvg8bcwrssl2785qx3l,fkga6ml47l0grs70mli0n0aq4brwwk5b,gc71hyi1iymywm9dg1vvilkr96l4sszg,ghcd9cgy32r4hgf8p807kyipwgl7x96p,l2dvi8fings81mgrqygxczg0dl703f0a,lkd8zzdx6v3jqcng16sha9rrw4nmcr9z,m1r0aqpbgvg8j5ylkymm4gwg6z8c9106,vnrsbpv8hah8kmzlzw293gapigz7nbsg,ykazlrjm10vjz9cy3h8yx14kn55lxaxs,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "6r1261aznhaf01mdgb5ivd79bjsdbbx7",
         "kix.run/inverse-deps": "PodDisruptionBudget/valkey-node",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
@@ -4238,8 +4241,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "48kc31szy0y7lak26ysj94jvj6jzr1ll,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "2l8qrqqc8c4m7jcjnh22vplxpii47mxr",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,m5kwznvzgc3i50m1ly0127vbwnwypwa5,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "azimi8x1r63a27z16y62phrg7qv05p4w",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
         "kix.run/root": "immich-server"
@@ -4292,8 +4295,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,mq9c5fv0s5rqllykn6ks80mhlq6fh5i8,vc4lw2i2hl8317anzdd6wxvz67kvbijh,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "vdfbbxv7p28973qh765rp1vkpmm1723z",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,h7hhpsnd26w80pc42ymjimzjj5kf2mfg,vc4lw2i2hl8317anzdd6wxvz67kvbijh,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "71z7qiq4l12hwnyzsyjf3wbyx7hg00c2",
         "kix.run/inverse-deps": "PodDisruptionBudget/machine-learning",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
@@ -4311,7 +4314,7 @@ expression: stable
     "spec": {
       "instanceName": "machine-learning",
       "namespaceName": "immich",
-      "version": "v2.0.0"
+      "version": "v3.0.3"
     }
   },
   {
@@ -7778,8 +7781,8 @@ expression: stable
     "kind": "ConfigMap",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "6d0a44nqqwwv27qciwy6bfiayy951k76",
-        "kix.run/identity-hash": "5qnhwbbp86vqas3vp4iwirdfd1gi2469",
+        "kix.run/depends-on": "6d0a44nqqwwv27qciwy6bfiayy951k76,l2dvi8fings81mgrqygxczg0dl703f0a",
+        "kix.run/identity-hash": "ghcd9cgy32r4hgf8p807kyipwgl7x96p",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "valkey",
         "kix.run/package-namespace": "cache"
@@ -7832,14 +7835,14 @@ expression: stable
     "data": {
       "prestop-sentinel.sh": "#!/bin/bash\n. /opt/bitnami/scripts/libvalidations.sh\n. /opt/bitnami/scripts/libos.sh\nHEADLESS_SERVICE=\"valkey-headless.cache.svc.cluster.local\"\nget_full_hostname() {\n    hostname=\"$1\"\n    full_hostname=\"${hostname}.${HEADLESS_SERVICE}\"\n    echo \"${full_hostname}\"\n}\nrun_sentinel_command() {\n    if is_boolean_yes \"$VALKEY_SENTINEL_TLS_ENABLED\"; then\n        valkey-cli -h \"$VALKEY_SERVICE\" -p \"$VALKEY_SENTINEL_TLS_PORT_NUMBER\" --tls --cert \"$VALKEY_SENTINEL_TLS_CERT_FILE\" --key \"$VALKEY_SENTINEL_TLS_KEY_FILE\" --cacert \"$VALKEY_SENTINEL_TLS_CA_FILE\" sentinel \"$@\"\n    else\n        valkey-cli -h \"$VALKEY_SERVICE\" -p \"$VALKEY_SENTINEL_PORT\" sentinel \"$@\"\n    fi\n}\nsentinel_failover_finished() {\n  VALKEY_SENTINEL_INFO=($(run_sentinel_command get-primary-addr-by-name \"myprimary\"))\n  VALKEY_PRIMARY_HOST=\"${VALKEY_SENTINEL_INFO[0]}\"\n  [[ \"$VALKEY_PRIMARY_HOST\" != \"$(get_full_hostname $HOSTNAME)\" ]]\n}\nVALKEY_SERVICE=\"valkey.cache.svc.cluster.local\"\nif ! sentinel_failover_finished; then\n    echo \"I am the primary pod and you are stopping me. Starting sentinel failover\"\n    if retry_while \"sentinel_failover_finished\" \"20\" 1; then\n        echo \"Primary has been successfuly failed over to a different pod.\"\n        exit 0\n    else\n        echo \"Primary failover failed\"\n        exit 1\n    fi\nelse\n    exit 0\nfi\n",
       "prestop-valkey.sh": "#!/bin/bash\n. /opt/bitnami/scripts/libvalidations.sh\n. /opt/bitnami/scripts/libos.sh\nrun_valkey_command() {\n    if is_boolean_yes \"$VALKEY_TLS_ENABLED\"; then\n        valkey-cli -h 127.0.0.1 -p \"$VALKEY_TLS_PORT\" --tls --cert \"$VALKEY_TLS_CERT_FILE\" --key \"$VALKEY_TLS_KEY_FILE\" --cacert \"$VALKEY_TLS_CA_FILE\" \"$@\"\n    else\n        valkey-cli -h 127.0.0.1 -p \"$VALKEY_PORT\" \"$@\"\n    fi\n}\nis_primary() {\n    VALKEY_ROLE=$(run_valkey_command role | head -1)\n    [[ \"$VALKEY_ROLE\" == \"master\" ]]\n}\nHEADLESS_SERVICE=\"valkey-headless.cache.svc.cluster.local\"\nget_full_hostname() {\n    hostname=\"$1\"\n    full_hostname=\"${hostname}.${HEADLESS_SERVICE}\"\n    echo \"${full_hostname}\"\n}\nrun_sentinel_command() {\n    if is_boolean_yes \"$VALKEY_SENTINEL_TLS_ENABLED\"; then\n        env -u REDISCLI_AUTH valkey-cli -h \"$VALKEY_SERVICE\" -p \"$VALKEY_SENTINEL_TLS_PORT_NUMBER\" --tls --cert \"$VALKEY_SENTINEL_TLS_CERT_FILE\" --key \"$VALKEY_SENTINEL_TLS_KEY_FILE\" --cacert \"$VALKEY_SENTINEL_TLS_CA_FILE\" sentinel \"$@\"\n    else\n        env -u REDISCLI_AUTH valkey-cli -h \"$VALKEY_SERVICE\" -p \"$VALKEY_SENTINEL_PORT\" sentinel \"$@\"\n    fi\n}\nsentinel_failover_finished() {\n    VALKEY_SENTINEL_INFO=($(run_sentinel_command get-primary-addr-by-name \"myprimary\"))\n    VALKEY_PRIMARY_HOST=\"${VALKEY_SENTINEL_INFO[0]}\"\n    [[ \"$VALKEY_PRIMARY_HOST\" != \"$(get_full_hostname $HOSTNAME)\" ]]\n}\nVALKEY_SERVICE=\"valkey.cache.svc.cluster.local\"\n# valkey-cli automatically consumes credentials from the REDISCLI_AUTH variable\n[[ -n \"$VALKEY_PASSWORD\" ]] && export REDISCLI_AUTH=\"$VALKEY_PASSWORD\"\n[[ -f \"$VALKEY_PASSWORD_FILE\" ]] && export REDISCLI_AUTH=\"$(< \"${VALKEY_PASSWORD_FILE}\")\"\nif is_primary && ! sentinel_failover_finished; then\n    echo \"I am the primary pod and you are stopping me. Pausing client connections.\"\n    # Pausing client write connections to avoid data loss\n    run_valkey_command CLIENT PAUSE \"22000\" WRITE\n    echo \"Issuing failover\"\n    # if I am the primary, issue a command to failover once\n    run_sentinel_command failover \"myprimary\"\n    echo \"Waiting for sentinel to complete failover for up to 20s\"\n    retry_while \"sentinel_failover_finished\" \"20\" 1\nelse\n    exit 0\nfi\n",
-      "start-node.sh": "#!/bin/bash\n. /opt/bitnami/scripts/libos.sh\n. /opt/bitnami/scripts/liblog.sh\n. /opt/bitnami/scripts/libvalidations.sh\nget_port() {\n    hostname=\"$1\"\n    type=\"$2\"\n    port_var=$(echo \"${hostname^^}_SERVICE_PORT_$type\" | sed \"s/-/_/g\")\n    port=${!port_var}\n    if [ -z \"$port\" ]; then\n        case $type in\n            \"SENTINEL\")\n                echo 26379\n                ;;\n            \"VALKEY\")\n                echo 6379\n                ;;\n        esac\n    else\n        echo $port\n    fi\n}\nget_full_hostname() {\n    hostname=\"$1\"\n    full_hostname=\"${hostname}.${HEADLESS_SERVICE}\"\n    echo \"${full_hostname}\"\n}\nVALKEYPORT=$(get_port \"$HOSTNAME\" \"VALKEY\")\nHEADLESS_SERVICE=\"valkey-headless.cache.svc.cluster.local\"\nif [ -n \"$VALKEY_EXTERNAL_PRIMARY_HOST\" ]; then\n    VALKEY_SERVICE=\"$VALKEY_EXTERNAL_PRIMARY_HOST\"\nelse\n    VALKEY_SERVICE=\"valkey.cache.svc.cluster.local\"\nfi\nSENTINEL_SERVICE_PORT=$(get_port \"valkey\" \"SENTINEL\")\nvalidate_quorum() {\n    if is_boolean_yes \"$VALKEY_TLS_ENABLED\"; then\n        quorum_info_command=\"valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel primary myprimary\"\n    else\n        quorum_info_command=\"valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel primary myprimary\"\n    fi\n    info \"about to run the command: $quorum_info_command\"\n    eval $quorum_info_command | grep -Fq \"s_down\"\n}\ntrigger_manual_failover() {\n    if is_boolean_yes \"$VALKEY_TLS_ENABLED\"; then\n        failover_command=\"valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel failover myprimary\"\n    else\n        failover_command=\"valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel failover myprimary\"\n    fi\n    info \"about to run the command: $failover_command\"\n    eval $failover_command\n}\nget_sentinel_primary_info() {\n    if is_boolean_yes \"$VALKEY_TLS_ENABLED\"; then\n        sentinel_info_command=\"timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel get-primary-addr-by-name myprimary\"\n    else\n        sentinel_info_command=\"timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel get-primary-addr-by-name myprimary\"\n    fi\n    info \"about to run the command: $sentinel_info_command\"\n    retry_while \"eval $sentinel_info_command\" 2 5\n}\n[[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD=\"$(< \"${VALKEY_PASSWORD_FILE}\")\"\n[[ -f $VALKEY_PRIMARY_PASSWORD_FILE ]] && export VALKEY_PRIMARY_PASSWORD=\"$(< \"${VALKEY_PRIMARY_PASSWORD_FILE}\")\"\n# check if there is a primary\nprimary_in_persisted_conf=\"$(get_full_hostname \"$HOSTNAME\")\"\nprimary_port_in_persisted_conf=\"$VALKEY_PRIMARY_PORT_NUMBER\"\nprimary_in_sentinel=\"$(get_sentinel_primary_info)\"\nvalkeyRetVal=$?\nif [[ -f /opt/bitnami/valkey-sentinel/etc/sentinel.conf ]]; then\n    primary_in_persisted_conf=\"$(awk '/monitor/ {print $4}' /opt/bitnami/valkey-sentinel/etc/sentinel.conf)\"\n    primary_port_in_persisted_conf=\"$(awk '/monitor/ {print $5}' /opt/bitnami/valkey-sentinel/etc/sentinel.conf)\"\n    info \"Found previous primary ${primary_in_persisted_conf}:${primary_port_in_persisted_conf} in /opt/bitnami/valkey-sentinel/etc/sentinel.conf\"\n    debug \"$(cat /opt/bitnami/valkey-sentinel/etc/sentinel.conf | grep monitor)\"\nfi\nif [[ $valkeyRetVal -ne 0 ]]; then\n    if [[ \"$primary_in_persisted_conf\" == \"$(get_full_hostname \"$HOSTNAME\")\" ]]; then\n        # Case 1: No active sentinel and in previous sentinel.conf we were the primary --> PRIMARY\n        info \"Configuring the node as primary\"\n        export VALKEY_REPLICATION_MODE=\"primary\"\n    else\n        # Case 2: No active sentinel and in previous sentinel.conf we were not primary --> REPLICA\n        info \"Configuring the node as replica\"\n        export VALKEY_REPLICATION_MODE=\"replica\"\n        VALKEY_PRIMARY_HOST=${primary_in_persisted_conf}\n        VALKEY_PRIMARY_PORT_NUMBER=${primary_port_in_persisted_conf}\n    fi\nelse\n    # Fetches current primary's host and port\n    VALKEY_SENTINEL_INFO=($(get_sentinel_primary_info))\n    info \"Current primary: VALKEY_SENTINEL_INFO=(${VALKEY_SENTINEL_INFO[0]},${VALKEY_SENTINEL_INFO[1]})\"\n    VALKEY_PRIMARY_HOST=${VALKEY_SENTINEL_INFO[0]}\n    VALKEY_PRIMARY_PORT_NUMBER=${VALKEY_SENTINEL_INFO[1]}\n    if [[ \"$VALKEY_PRIMARY_HOST\" == \"$(get_full_hostname \"$HOSTNAME\")\" ]]; then\n        # Case 3: Active sentinel and primary it is this node --> PRIMARY\n        info \"Configuring the node as primary\"\n        export VALKEY_REPLICATION_MODE=\"primary\"\n    else\n        # Case 4: Active sentinel and primary is not this node --> REPLICA\n        info \"Configuring the node as replica\"\n        export VALKEY_REPLICATION_MODE=\"replica\"\n    fi\nfi\nif [[ -n \"$VALKEY_EXTERNAL_PRIMARY_HOST\" ]]; then\n  VALKEY_PRIMARY_HOST=\"$VALKEY_EXTERNAL_PRIMARY_HOST\"\n  VALKEY_PRIMARY_PORT_NUMBER=\"${VALKEY_EXTERNAL_PRIMARY_PORT}\"\nfi\nif [[ -f /opt/bitnami/valkey/mounted-etc/replica.conf ]];then\n    cp /opt/bitnami/valkey/mounted-etc/replica.conf /opt/bitnami/valkey/etc/replica.conf\nfi\nif [[ -f /opt/bitnami/valkey/mounted-etc/valkey.conf ]];then\n    cp /opt/bitnami/valkey/mounted-etc/valkey.conf /opt/bitnami/valkey/etc/valkey.conf\nfi\necho \"\" >> /opt/bitnami/valkey/etc/replica.conf\necho \"replica-announce-port $VALKEYPORT\" >> /opt/bitnami/valkey/etc/replica.conf\necho \"replica-announce-ip $(get_full_hostname \"$HOSTNAME\")\" >> /opt/bitnami/valkey/etc/replica.conf\nARGS=(\"--port\" \"${VALKEY_PORT}\")\nif [[ \"$VALKEY_REPLICATION_MODE\" = \"replica\" ]]; then\n    ARGS+=(\"--replicaof\" \"${VALKEY_PRIMARY_HOST}\" \"${VALKEY_PRIMARY_PORT_NUMBER}\")\nfi\nARGS+=(\"--requirepass\" \"${VALKEY_PASSWORD}\")\nARGS+=(\"--primaryauth\" \"${VALKEY_PRIMARY_PASSWORD}\")\nARGS+=(\"--include\" \"/opt/bitnami/valkey/etc/replica.conf\")\nARGS+=(\"--include\" \"/opt/bitnami/valkey/etc/valkey.conf\")\nexec valkey-server \"${ARGS[@]}\"\n",
-      "start-sentinel.sh": "#!/bin/bash\n. /opt/bitnami/scripts/libos.sh\n. /opt/bitnami/scripts/libvalidations.sh\n. /opt/bitnami/scripts/libfile.sh\nHEADLESS_SERVICE=\"valkey-headless.cache.svc.cluster.local\"\nVALKEY_SERVICE=\"valkey.cache.svc.cluster.local\"\nget_port() {\n    hostname=\"$1\"\n    type=\"$2\"\n    port_var=$(echo \"${hostname^^}_SERVICE_PORT_$type\" | sed \"s/-/_/g\")\n    port=${!port_var}\n    if [ -z \"$port\" ]; then\n        case $type in\n            \"SENTINEL\")\n                echo 26379\n                ;;\n            \"VALKEY\")\n                echo 6379\n                ;;\n        esac\n    else\n        echo $port\n    fi\n}\nget_full_hostname() {\n    hostname=\"$1\"\n    full_hostname=\"${hostname}.${HEADLESS_SERVICE}\"\n    echo \"${full_hostname}\"\n}\nSERVPORT=$(get_port \"$HOSTNAME\" \"SENTINEL\")\nVALKEYPORT=$(get_port \"$HOSTNAME\" \"VALKEY\")\nSENTINEL_SERVICE_PORT=$(get_port \"valkey\" \"SENTINEL\")\nsentinel_conf_set() {\n    local -r key=\"${1:?missing key}\"\n    local value=\"${2:-}\"\n    # Sanitize inputs\n    value=\"${value//\\\\/\\\\\\\\}\"\n    value=\"${value//&/\\\\&}\"\n    value=\"${value//\\?/\\\\?}\"\n    [[ \"$value\" = \"\" ]] && value=\"\\\"$value\\\"\"\n    replace_in_file \"/opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\" \"^#*\\s*${key} .*\" \"${key} ${value}\" false\n}\nsentinel_conf_add() {\n    echo $'\\n'\"$@\" >> \"/opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\"\n}\nhost_id() {\n    echo \"$1\" | openssl sha1 | awk '{print $2}'\n}\nget_sentinel_primary_info() {\n    if is_boolean_yes \"$VALKEY_SENTINEL_TLS_ENABLED\"; then\n        sentinel_info_command=\"timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_SENTINEL_TLS_CERT_FILE} --key ${VALKEY_SENTINEL_TLS_KEY_FILE} --cacert ${VALKEY_SENTINEL_TLS_CA_FILE} sentinel get-primary-addr-by-name myprimary\"\n    else\n        sentinel_info_command=\"timeout 90 valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel get-primary-addr-by-name myprimary\"\n    fi\n    info \"about to run the command: $sentinel_info_command\"\n    retry_while \"eval $sentinel_info_command\" 2 5\n}\n[[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD=\"$(< \"${VALKEY_PASSWORD_FILE}\")\"\nprimary_in_persisted_conf=\"$(get_full_hostname \"$HOSTNAME\")\"\nif [[ -f /opt/bitnami/valkey-sentinel/etc/sentinel.conf ]]; then\n    primary_in_persisted_conf=\"$(awk '/monitor/ {print $4}' /opt/bitnami/valkey-sentinel/etc/sentinel.conf)\"\n    info \"Found previous primary $primary_in_persisted_conf in /opt/bitnami/valkey-sentinel/etc/sentinel.conf\"\n    debug \"$(cat /opt/bitnami/valkey-sentinel/etc/sentinel.conf | grep monitor)\"\nfi\nVALKEY_SENTINEL_INFO=($(get_sentinel_primary_info))\nif [ \"$?\" -eq \"0\" ]; then\n    # current primary's host and port obtained from other Sentinel\n    info \"printing VALKEY_SENTINEL_INFO=(${VALKEY_SENTINEL_INFO[0]},${VALKEY_SENTINEL_INFO[1]})\"\n    VALKEY_PRIMARY_HOST=${VALKEY_SENTINEL_INFO[0]}\n    VALKEY_PRIMARY_PORT_NUMBER=${VALKEY_SENTINEL_INFO[1]}\nelse\n    VALKEY_PRIMARY_HOST=\"$primary_in_persisted_conf\"\n    VALKEY_PRIMARY_PORT_NUMBER=\"$VALKEYPORT\"\nfi\nif [[ \"$VALKEY_PRIMARY_HOST\" == \"$(get_full_hostname \"$HOSTNAME\")\" ]]; then\n    export VALKEY_REPLICATION_MODE=\"primary\"\nelse\n    export VALKEY_REPLICATION_MODE=\"replica\"\nfi\nif [[ -n \"$VALKEY_EXTERNAL_PRIMARY_HOST\" ]]; then\n  VALKEY_PRIMARY_HOST=\"$VALKEY_EXTERNAL_PRIMARY_HOST\"\n  VALKEY_PRIMARY_PORT_NUMBER=\"${VALKEY_EXTERNAL_PRIMARY_PORT}\"\nfi\n# To prevent incomplete configuration and as the valkey container accesses /opt/bitnami/valkey-sentinel/etc/sentinel.conf\n# as well, prepare the new config in `prepare-sentinel.conf` and move it atomically to the ultimate destination when it is complete.\ncp /opt/bitnami/valkey-sentinel/mounted-etc/sentinel.conf /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\nprintf \"\\nsentinel auth-pass %s %s\" \"myprimary\" \"$VALKEY_PASSWORD\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\nprintf \"\\nsentinel myid %s\" \"$(host_id \"$HOSTNAME\")\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\nif [[ -z \"$VALKEY_PRIMARY_HOST\" ]] || [[ -z \"$VALKEY_PRIMARY_PORT_NUMBER\" ]]\nthen\n    # Prevent incorrect configuration to be written to sentinel.conf\n    error \"Valkey primary host is configured incorrectly (host: $VALKEY_PRIMARY_HOST, port: $VALKEY_PRIMARY_PORT_NUMBER)\"\n    exit 1\nfi\nsentinel_conf_set \"sentinel monitor\" \"myprimary \"$VALKEY_PRIMARY_HOST\" \"$VALKEY_PRIMARY_PORT_NUMBER\" 2\"\nadd_known_sentinel() {\n    hostname=\"$1\"\n    ip=\"$2\"\n    if [[ -n \"$hostname\" && -n \"$ip\" && \"$hostname\" != \"$HOSTNAME\" ]]; then\n        sentinel_conf_add \"sentinel known-sentinel myprimary $(get_full_hostname \"$hostname\") $(get_port \"$hostname\" \"SENTINEL\") $(host_id \"$hostname\")\"\n    fi\n}\nadd_known_replica() {\n    hostname=\"$1\"\n    ip=\"$2\"\n    if [[ -n \"$ip\" && \"$(get_full_hostname \"$hostname\")\" != \"$VALKEY_PRIMARY_HOST\" ]]; then\n        sentinel_conf_add \"sentinel known-replica myprimary $(get_full_hostname \"$hostname\") $(get_port \"$hostname\" \"VALKEY\")\"\n    fi\n}\n# Add available hosts on the network as known replicas & sentinels\nfor node in $(seq 0 $((3-1))); do\n    hostname=\"valkey-node-$node\"\n    ip=\"$(getent hosts \"$hostname.$HEADLESS_SERVICE\" | awk '{ print $1 }')\"\n    add_known_sentinel \"$hostname\" \"$ip\"\n    add_known_replica \"$hostname\" \"$ip\"\ndone\necho \"\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\necho \"sentinel announce-hostnames yes\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\necho \"sentinel resolve-hostnames yes\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\necho \"sentinel announce-port $SERVPORT\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\necho \"sentinel announce-ip $(get_full_hostname \"$HOSTNAME\")\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\nmv /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf /opt/bitnami/valkey-sentinel/etc/sentinel.conf\nexec valkey-server /opt/bitnami/valkey-sentinel/etc/sentinel.conf --sentinel\n"
+      "start-node.sh": "#!/bin/bash\n. /opt/bitnami/scripts/libos.sh\n. /opt/bitnami/scripts/liblog.sh\n. /opt/bitnami/scripts/libvalidations.sh\nget_port() {\n    hostname=\"$1\"\n    type=\"$2\"\n    port_var=$(echo \"${hostname^^}_SERVICE_PORT_$type\" | sed \"s/-/_/g\")\n    port=${!port_var}\n    if [ -z \"$port\" ]; then\n        case $type in\n            \"SENTINEL\")\n                echo 26379\n                ;;\n            \"VALKEY\")\n                echo 6379\n                ;;\n        esac\n    else\n        echo $port\n    fi\n}\nget_full_hostname() {\n    hostname=\"$1\"\n    full_hostname=\"${hostname}.${HEADLESS_SERVICE}\"\n    echo \"${full_hostname}\"\n}\nVALKEYPORT=$(get_port \"$HOSTNAME\" \"VALKEY\")\nHEADLESS_SERVICE=\"valkey-headless.cache.svc.cluster.local\"\nif [ -n \"$VALKEY_EXTERNAL_PRIMARY_HOST\" ]; then\n    VALKEY_SERVICE=\"$VALKEY_EXTERNAL_PRIMARY_HOST\"\nelse\n    VALKEY_SERVICE=\"valkey.cache.svc.cluster.local\"\nfi\nSENTINEL_SERVICE_PORT=$(get_port \"valkey\" \"SENTINEL\")\nvalidate_quorum() {\n    if is_boolean_yes \"$VALKEY_TLS_ENABLED\"; then\n        quorum_info_command=\"valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel primary myprimary\"\n    else\n        quorum_info_command=\"valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel primary myprimary\"\n    fi\n    info \"about to run the command: $quorum_info_command\"\n    eval $quorum_info_command | grep -Fq \"s_down\"\n}\ntrigger_manual_failover() {\n    if is_boolean_yes \"$VALKEY_TLS_ENABLED\"; then\n        failover_command=\"valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT --tls --cert ${VALKEY_TLS_CERT_FILE} --key ${VALKEY_TLS_KEY_FILE} --cacert ${VALKEY_TLS_CA_FILE} sentinel failover myprimary\"\n    else\n        failover_command=\"valkey-cli -h $VALKEY_SERVICE -p $SENTINEL_SERVICE_PORT sentinel failover myprimary\"\n    fi\n    info \"about to run the command: $failover_command\"\n    eval $failover_command\n}\nquery_sentinels() {\n    local node host\n    for node in $(seq 0 $((3-1))); do\n        [[ \"valkey-node-$node\" == \"$HOSTNAME\" ]] && continue\n        host=\"$(get_full_hostname \"valkey-node-$node\")\"\n        if is_boolean_yes \"$VALKEY_TLS_ENABLED\"; then\n            timeout 90 valkey-cli -h \"$host\" -p \"$SENTINEL_SERVICE_PORT\" --tls --cert \"$VALKEY_TLS_CERT_FILE\" --key \"$VALKEY_TLS_KEY_FILE\" --cacert \"$VALKEY_TLS_CA_FILE\" sentinel get-primary-addr-by-name myprimary && return 0\n        else\n            timeout 90 valkey-cli -h \"$host\" -p \"$SENTINEL_SERVICE_PORT\" sentinel get-primary-addr-by-name myprimary && return 0\n        fi\n    done\n    return 1\n}\nget_sentinel_primary_info() {\n    info \"asking the Sentinels of the other pods through $HEADLESS_SERVICE for the primary\"\n    retry_while \"query_sentinels\" 2 5\n}\n\n[[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD=\"$(< \"${VALKEY_PASSWORD_FILE}\")\"\n[[ -f $VALKEY_PRIMARY_PASSWORD_FILE ]] && export VALKEY_PRIMARY_PASSWORD=\"$(< \"${VALKEY_PRIMARY_PASSWORD_FILE}\")\"\n# check if there is a primary\nprimary_in_persisted_conf=\"$(get_full_hostname \"$HOSTNAME\")\"\nprimary_port_in_persisted_conf=\"$VALKEY_PRIMARY_PORT_NUMBER\"\nprimary_in_sentinel=\"$(get_sentinel_primary_info)\"\nvalkeyRetVal=$?\nif [[ -f /opt/bitnami/valkey-sentinel/etc/sentinel.conf ]]; then\n    primary_in_persisted_conf=\"$(awk '/monitor/ {print $4}' /opt/bitnami/valkey-sentinel/etc/sentinel.conf)\"\n    primary_port_in_persisted_conf=\"$(awk '/monitor/ {print $5}' /opt/bitnami/valkey-sentinel/etc/sentinel.conf)\"\n    info \"Found previous primary ${primary_in_persisted_conf}:${primary_port_in_persisted_conf} in /opt/bitnami/valkey-sentinel/etc/sentinel.conf\"\n    debug \"$(cat /opt/bitnami/valkey-sentinel/etc/sentinel.conf | grep monitor)\"\nfi\nif [[ $valkeyRetVal -ne 0 ]]; then\n    if [[ \"$primary_in_persisted_conf\" == \"$(get_full_hostname \"$HOSTNAME\")\" ]]; then\n        # Case 1: No active sentinel and in previous sentinel.conf we were the primary --> PRIMARY\n        info \"Configuring the node as primary\"\n        export VALKEY_REPLICATION_MODE=\"primary\"\n    else\n        # Case 2: No active sentinel and in previous sentinel.conf we were not primary --> REPLICA\n        info \"Configuring the node as replica\"\n        export VALKEY_REPLICATION_MODE=\"replica\"\n        VALKEY_PRIMARY_HOST=${primary_in_persisted_conf}\n        VALKEY_PRIMARY_PORT_NUMBER=${primary_port_in_persisted_conf}\n    fi\nelse\n    # Fetches current primary's host and port\n    VALKEY_SENTINEL_INFO=($(get_sentinel_primary_info))\n    info \"Current primary: VALKEY_SENTINEL_INFO=(${VALKEY_SENTINEL_INFO[0]},${VALKEY_SENTINEL_INFO[1]})\"\n    VALKEY_PRIMARY_HOST=${VALKEY_SENTINEL_INFO[0]}\n    VALKEY_PRIMARY_PORT_NUMBER=${VALKEY_SENTINEL_INFO[1]}\n    if [[ \"$VALKEY_PRIMARY_HOST\" == \"$(get_full_hostname \"$HOSTNAME\")\" ]]; then\n        # Case 3: Active sentinel and primary it is this node --> PRIMARY\n        info \"Configuring the node as primary\"\n        export VALKEY_REPLICATION_MODE=\"primary\"\n    else\n        # Case 4: Active sentinel and primary is not this node --> REPLICA\n        info \"Configuring the node as replica\"\n        export VALKEY_REPLICATION_MODE=\"replica\"\n    fi\nfi\nif [[ -n \"$VALKEY_EXTERNAL_PRIMARY_HOST\" ]]; then\n  VALKEY_PRIMARY_HOST=\"$VALKEY_EXTERNAL_PRIMARY_HOST\"\n  VALKEY_PRIMARY_PORT_NUMBER=\"${VALKEY_EXTERNAL_PRIMARY_PORT}\"\nfi\nif [[ -f /opt/bitnami/valkey/mounted-etc/replica.conf ]];then\n    cp /opt/bitnami/valkey/mounted-etc/replica.conf /opt/bitnami/valkey/etc/replica.conf\nfi\nif [[ -f /opt/bitnami/valkey/mounted-etc/valkey.conf ]];then\n    cp /opt/bitnami/valkey/mounted-etc/valkey.conf /opt/bitnami/valkey/etc/valkey.conf\nfi\necho \"\" >> /opt/bitnami/valkey/etc/replica.conf\necho \"replica-announce-port $VALKEYPORT\" >> /opt/bitnami/valkey/etc/replica.conf\necho \"replica-announce-ip $(get_full_hostname \"$HOSTNAME\")\" >> /opt/bitnami/valkey/etc/replica.conf\nARGS=(\"--port\" \"${VALKEY_PORT}\")\nif [[ \"$VALKEY_REPLICATION_MODE\" = \"replica\" ]]; then\n    ARGS+=(\"--replicaof\" \"${VALKEY_PRIMARY_HOST}\" \"${VALKEY_PRIMARY_PORT_NUMBER}\")\nfi\nARGS+=(\"--requirepass\" \"${VALKEY_PASSWORD}\")\nARGS+=(\"--primaryauth\" \"${VALKEY_PRIMARY_PASSWORD}\")\nARGS+=(\"--include\" \"/opt/bitnami/valkey/etc/replica.conf\")\nARGS+=(\"--include\" \"/opt/bitnami/valkey/etc/valkey.conf\")\nexec valkey-server \"${ARGS[@]}\"\n",
+      "start-sentinel.sh": "#!/bin/bash\n. /opt/bitnami/scripts/libos.sh\n. /opt/bitnami/scripts/libvalidations.sh\n. /opt/bitnami/scripts/libfile.sh\nHEADLESS_SERVICE=\"valkey-headless.cache.svc.cluster.local\"\nVALKEY_SERVICE=\"valkey.cache.svc.cluster.local\"\nget_port() {\n    hostname=\"$1\"\n    type=\"$2\"\n    port_var=$(echo \"${hostname^^}_SERVICE_PORT_$type\" | sed \"s/-/_/g\")\n    port=${!port_var}\n    if [ -z \"$port\" ]; then\n        case $type in\n            \"SENTINEL\")\n                echo 26379\n                ;;\n            \"VALKEY\")\n                echo 6379\n                ;;\n        esac\n    else\n        echo $port\n    fi\n}\nget_full_hostname() {\n    hostname=\"$1\"\n    full_hostname=\"${hostname}.${HEADLESS_SERVICE}\"\n    echo \"${full_hostname}\"\n}\nSERVPORT=$(get_port \"$HOSTNAME\" \"SENTINEL\")\nVALKEYPORT=$(get_port \"$HOSTNAME\" \"VALKEY\")\nSENTINEL_SERVICE_PORT=$(get_port \"valkey\" \"SENTINEL\")\nsentinel_conf_set() {\n    local -r key=\"${1:?missing key}\"\n    local value=\"${2:-}\"\n    # Sanitize inputs\n    value=\"${value//\\\\/\\\\\\\\}\"\n    value=\"${value//&/\\\\&}\"\n    value=\"${value//\\?/\\\\?}\"\n    [[ \"$value\" = \"\" ]] && value=\"\\\"$value\\\"\"\n    replace_in_file \"/opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\" \"^#*\\s*${key} .*\" \"${key} ${value}\" false\n}\nsentinel_conf_add() {\n    echo $'\\n'\"$@\" >> \"/opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\"\n}\nhost_id() {\n    echo \"$1\" | openssl sha1 | awk '{print $2}'\n}\nquery_sentinels() {\n    local node host\n    for node in $(seq 0 $((3-1))); do\n        [[ \"valkey-node-$node\" == \"$HOSTNAME\" ]] && continue\n        host=\"$(get_full_hostname \"valkey-node-$node\")\"\n        if is_boolean_yes \"$VALKEY_SENTINEL_TLS_ENABLED\"; then\n            timeout 90 valkey-cli -h \"$host\" -p \"$SENTINEL_SERVICE_PORT\" --tls --cert \"$VALKEY_SENTINEL_TLS_CERT_FILE\" --key \"$VALKEY_SENTINEL_TLS_KEY_FILE\" --cacert \"$VALKEY_SENTINEL_TLS_CA_FILE\" sentinel get-primary-addr-by-name myprimary && return 0\n        else\n            timeout 90 valkey-cli -h \"$host\" -p \"$SENTINEL_SERVICE_PORT\" sentinel get-primary-addr-by-name myprimary && return 0\n        fi\n    done\n    return 1\n}\nget_sentinel_primary_info() {\n    info \"asking the Sentinels of the other pods through $HEADLESS_SERVICE for the primary\"\n    retry_while \"query_sentinels\" 2 5\n}\n\n[[ -f $VALKEY_PASSWORD_FILE ]] && export VALKEY_PASSWORD=\"$(< \"${VALKEY_PASSWORD_FILE}\")\"\nprimary_in_persisted_conf=\"$(get_full_hostname \"$HOSTNAME\")\"\nif [[ -f /opt/bitnami/valkey-sentinel/etc/sentinel.conf ]]; then\n    primary_in_persisted_conf=\"$(awk '/monitor/ {print $4}' /opt/bitnami/valkey-sentinel/etc/sentinel.conf)\"\n    info \"Found previous primary $primary_in_persisted_conf in /opt/bitnami/valkey-sentinel/etc/sentinel.conf\"\n    debug \"$(cat /opt/bitnami/valkey-sentinel/etc/sentinel.conf | grep monitor)\"\nfi\nVALKEY_SENTINEL_INFO=($(get_sentinel_primary_info))\nif [ \"$?\" -eq \"0\" ]; then\n    # current primary's host and port obtained from other Sentinel\n    info \"printing VALKEY_SENTINEL_INFO=(${VALKEY_SENTINEL_INFO[0]},${VALKEY_SENTINEL_INFO[1]})\"\n    VALKEY_PRIMARY_HOST=${VALKEY_SENTINEL_INFO[0]}\n    VALKEY_PRIMARY_PORT_NUMBER=${VALKEY_SENTINEL_INFO[1]}\nelse\n    VALKEY_PRIMARY_HOST=\"$primary_in_persisted_conf\"\n    VALKEY_PRIMARY_PORT_NUMBER=\"$VALKEYPORT\"\nfi\nif [[ \"$VALKEY_PRIMARY_HOST\" == \"$(get_full_hostname \"$HOSTNAME\")\" ]]; then\n    export VALKEY_REPLICATION_MODE=\"primary\"\nelse\n    export VALKEY_REPLICATION_MODE=\"replica\"\nfi\nif [[ -n \"$VALKEY_EXTERNAL_PRIMARY_HOST\" ]]; then\n  VALKEY_PRIMARY_HOST=\"$VALKEY_EXTERNAL_PRIMARY_HOST\"\n  VALKEY_PRIMARY_PORT_NUMBER=\"${VALKEY_EXTERNAL_PRIMARY_PORT}\"\nfi\n# To prevent incomplete configuration and as the valkey container accesses /opt/bitnami/valkey-sentinel/etc/sentinel.conf\n# as well, prepare the new config in `prepare-sentinel.conf` and move it atomically to the ultimate destination when it is complete.\ncp /opt/bitnami/valkey-sentinel/mounted-etc/sentinel.conf /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\nprintf \"\\nsentinel auth-pass %s %s\" \"myprimary\" \"$VALKEY_PASSWORD\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\nprintf \"\\nsentinel myid %s\" \"$(host_id \"$HOSTNAME\")\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\nif [[ -z \"$VALKEY_PRIMARY_HOST\" ]] || [[ -z \"$VALKEY_PRIMARY_PORT_NUMBER\" ]]\nthen\n    # Prevent incorrect configuration to be written to sentinel.conf\n    error \"Valkey primary host is configured incorrectly (host: $VALKEY_PRIMARY_HOST, port: $VALKEY_PRIMARY_PORT_NUMBER)\"\n    exit 1\nfi\nsentinel_conf_set \"sentinel monitor\" \"myprimary \"$VALKEY_PRIMARY_HOST\" \"$VALKEY_PRIMARY_PORT_NUMBER\" 2\"\nadd_known_sentinel() {\n    hostname=\"$1\"\n    ip=\"$2\"\n    if [[ -n \"$hostname\" && -n \"$ip\" && \"$hostname\" != \"$HOSTNAME\" ]]; then\n        sentinel_conf_add \"sentinel known-sentinel myprimary $(get_full_hostname \"$hostname\") $(get_port \"$hostname\" \"SENTINEL\") $(host_id \"$hostname\")\"\n    fi\n}\nadd_known_replica() {\n    hostname=\"$1\"\n    ip=\"$2\"\n    if [[ -n \"$ip\" && \"$(get_full_hostname \"$hostname\")\" != \"$VALKEY_PRIMARY_HOST\" ]]; then\n        sentinel_conf_add \"sentinel known-replica myprimary $(get_full_hostname \"$hostname\") $(get_port \"$hostname\" \"VALKEY\")\"\n    fi\n}\n# Add available hosts on the network as known replicas & sentinels\nfor node in $(seq 0 $((3-1))); do\n    hostname=\"valkey-node-$node\"\n    ip=\"$(getent hosts \"$hostname.$HEADLESS_SERVICE\" | awk '{ print $1 }')\"\n    add_known_sentinel \"$hostname\" \"$ip\"\n    add_known_replica \"$hostname\" \"$ip\"\ndone\necho \"\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\necho \"sentinel announce-hostnames yes\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\necho \"sentinel resolve-hostnames yes\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\necho \"sentinel announce-port $SERVPORT\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\necho \"sentinel announce-ip $(get_full_hostname \"$HOSTNAME\")\" >> /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf\nmv /opt/bitnami/valkey-sentinel/etc/prepare-sentinel.conf /opt/bitnami/valkey-sentinel/etc/sentinel.conf\nexec valkey-server /opt/bitnami/valkey-sentinel/etc/sentinel.conf --sentinel\n"
     },
     "kind": "ConfigMap",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "6d0a44nqqwwv27qciwy6bfiayy951k76",
-        "kix.run/identity-hash": "pr6na2idmnni6w5mrsc4vva34ghd68q8",
+        "kix.run/depends-on": "6d0a44nqqwwv27qciwy6bfiayy951k76,l2dvi8fings81mgrqygxczg0dl703f0a",
+        "kix.run/identity-hash": "vnrsbpv8hah8kmzlzw293gapigz7nbsg",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "valkey",
         "kix.run/package-namespace": "cache"
@@ -8060,8 +8063,8 @@ expression: stable
     "kind": "Service",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "6d0a44nqqwwv27qciwy6bfiayy951k76,x6qdsc847pdi2dhjakn6vk5qbivl42hv",
-        "kix.run/identity-hash": "68ma8mgsdkfr3wyx4jf2zn48srgvshc1",
+        "kix.run/depends-on": "6d0a44nqqwwv27qciwy6bfiayy951k76,lkd8zzdx6v3jqcng16sha9rrw4nmcr9z",
+        "kix.run/identity-hash": "7kjfiij74j9nqb7iahry2gsqlvwpagl3",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "valkey",
         "kix.run/package-namespace": "cache"
@@ -8105,8 +8108,8 @@ expression: stable
     "kind": "Service",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "6d0a44nqqwwv27qciwy6bfiayy951k76,x6qdsc847pdi2dhjakn6vk5qbivl42hv",
-        "kix.run/identity-hash": "l3f30md9qsicbwxh8sfr4a68c6nnldyi",
+        "kix.run/depends-on": "6d0a44nqqwwv27qciwy6bfiayy951k76",
+        "kix.run/identity-hash": "l2dvi8fings81mgrqygxczg0dl703f0a",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "valkey",
         "kix.run/package-namespace": "cache"
@@ -8138,6 +8141,7 @@ expression: stable
           "targetPort": 26379
         }
       ],
+      "publishNotReadyAddresses": true,
       "selector": {
         "app.kubernetes.io/component": "node",
         "app.kubernetes.io/instance": "valkey",
@@ -8151,8 +8155,8 @@ expression: stable
     "kind": "Service",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "6d0a44nqqwwv27qciwy6bfiayy951k76,requires:x6qdsc847pdi2dhjakn6vk5qbivl42hv",
-        "kix.run/identity-hash": "d67fn2090v2ad613pka8lgkdxf7clw6j",
+        "kix.run/depends-on": "6d0a44nqqwwv27qciwy6bfiayy951k76,requires:lkd8zzdx6v3jqcng16sha9rrw4nmcr9z",
+        "kix.run/identity-hash": "fkga6ml47l0grs70mli0n0aq4brwwk5b",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "valkey",
         "kix.run/package-namespace": "cache",
@@ -8310,8 +8314,8 @@ expression: stable
     "kind": "Service",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,inxakxnfia02321863a4i2zc3a404ain",
-        "kix.run/identity-hash": "48kc31szy0y7lak26ysj94jvj6jzr1ll",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,cvg3x4nnlskxr2zdk8axvgx8pqr51hay",
+        "kix.run/identity-hash": "m5kwznvzgc3i50m1ly0127vbwnwypwa5",
         "kix.run/package": "immich",
         "kix.run/package-namespace": "immich"
       },
@@ -8344,8 +8348,8 @@ expression: stable
     "kind": "Service",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "7c5jjr3kz8j453h33z5hjn9fhcgsx284,awzwpm53w1kb4ysngrwmj47whaddgkih",
-        "kix.run/identity-hash": "mq9c5fv0s5rqllykn6ks80mhlq6fh5i8",
+        "kix.run/depends-on": "9a1i7ar4scgcw43nvfzfsnrld8pgvhcj,awzwpm53w1kb4ysngrwmj47whaddgkih",
+        "kix.run/identity-hash": "h7hhpsnd26w80pc42ymjimzjj5kf2mfg",
         "kix.run/package": "machine-learning",
         "kix.run/package-namespace": "immich"
       },
