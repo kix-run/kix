@@ -316,7 +316,21 @@ in
           templateSpec = _expandServiceAccount rawTemplateSpec;
 
           userSuppliedLabels = templateMeta ? labels;
-          effectiveTemplateLabels = if userSuppliedLabels then templateMeta.labels else selector;
+          # Workload metadata gets the selector labels, overridden by explicit
+          # workload labels. A selector that follows upstream (`app`, `name`)
+          # lacks `app.kubernetes.io/name`, so it defaults to the instance name.
+          # Pod template labels get the same value unless the author sets it
+          # there. `spec.selector` is left alone because it is immutable once
+          # applied.
+          workloadLabels = {
+            "app.kubernetes.io/name" = instanceName;
+          }
+          // selector
+          // (attrs.labels or { });
+          effectiveTemplateLabels = {
+            "app.kubernetes.io/name" = workloadLabels."app.kubernetes.io/name";
+          }
+          // (if userSuppliedLabels then templateMeta.labels else selector);
 
           hostNetwork = templateSpec.hostNetwork or false;
 
@@ -335,8 +349,6 @@ in
               };
             };
 
-          # Copy selector labels to workload metadata. Explicit workload labels
-          # override them.
           baseArgs =
             removeAttrs attrs [
               "spec"
@@ -345,7 +357,7 @@ in
             // {
               inherit apiVersion kind;
               spec = finalSpec;
-              labels = selector // (attrs.labels or { });
+              labels = workloadLabels;
             };
         in
         withChecks

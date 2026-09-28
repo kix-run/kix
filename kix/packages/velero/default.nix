@@ -395,9 +395,7 @@ in
               targetPort = 8085;
             }
           ];
-          selector = selectorLabels // {
-            name = "velero";
-          };
+          selector = self.deployment.out.selector;
         };
       };
 

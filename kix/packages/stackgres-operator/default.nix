@@ -839,9 +839,9 @@ in
         name = name;
         spec = {
           type = "ClusterIP";
-          # Match upstream chart: Service selects only on `app`, not the
-          # full Deployment selector (which also includes `group`).
-          selector.app = name;
+          # The upstream chart selects on `app` alone. The full Deployment
+          # selector adds `group` and matches the same operator pods.
+          selector = self.operatorDeployment.out.selector;
           ports = [
             {
               name = "https";

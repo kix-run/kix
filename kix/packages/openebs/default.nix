@@ -1110,10 +1110,9 @@ in
               type = "ClusterIP";
               clusterIP = "None";
               publishNotReadyAddresses = true;
-              selector = {
-                "app.kubernetes.io/name" = "etcd";
-                "app.kubernetes.io/instance" = name;
-              };
+              # The etcd pods interpolate this Service's `out.fqdn`, so reading
+              # the StatefulSet's `out.selector` here would recurse.
+              selector = self.etcdStatefulSet.rawSelector;
               ports = [
                 {
                   name = "client";
@@ -3857,10 +3856,9 @@ in
             labels = lvmNodeLabels;
             spec = {
               clusterIP = "None";
-              # Chart 4.2.0 uses an `app:` selector here, not the DaemonSet's
-              # full label set. The lvmNode pod template carries `app:
-              # openebs-lvm-node`, so this still selects correctly.
-              selector.app = "openebs-lvm-node";
+              # Chart 4.2.0 selects on `app: openebs-lvm-node`. The DaemonSet
+              # selector matches the same pods.
+              selector = self.lvmNode.out.selector;
               ports = [
                 {
                   name = "metrics";
@@ -4062,10 +4060,9 @@ in
               "openebs.io/version" = "2.8.0";
             };
             spec = {
-              selector = {
-                app = "obs-callhome";
-                "openebs.io/release" = name;
-              };
+              # The Deployment interpolates this Service's `out.name`, so
+              # reading its `out.selector` here would recurse.
+              selector = self.obsCallhomeDeployment.rawSelector;
               ports = [
                 {
                   name = "https";
@@ -4123,7 +4120,7 @@ in
                       args = [
                         "-e http://${self.apiRestService.out.name}:8081"
                         "-n ${ns}"
-                        "--aggregator-url=http://${name}-obs-callhome-stats:9090/stats"
+                        "--aggregator-url=http://${self.obsCallhomeService.out.name}:9090/stats"
                         "--send-report"
                       ];
                       env = [
@@ -4183,9 +4180,6 @@ in
                 };
               };
             };
-            requires = [
-              self.obsCallhomeService
-            ];
           })
         else
           null;

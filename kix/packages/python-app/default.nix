@@ -848,7 +848,7 @@ in
                 labels = componentLabels wn;
                 spec = {
                   type = "ClusterIP";
-                  selector = selectorLabels wn;
+                  selector = deploy.out.selector;
                   ports = [
                     {
                       name = "http";
@@ -861,7 +861,6 @@ in
                 outputs = {
                   port = toString svcPort;
                 };
-                requires = [ deploy ];
               }
             else
               null;
@@ -1011,7 +1010,7 @@ in
             labels = componentLabels compName // config.extraServiceLabels;
             spec = {
               type = "ClusterIP";
-              selector = selectorLabels compName;
+              selector = self.backendDeployment.out.selector;
               ports = [
                 {
                   name = "http";
@@ -1024,10 +1023,7 @@ in
             outputs = {
               port = toString servicePort;
             };
-            requires = [
-              self.backendDeployment
-            ]
-            ++ lib.optional (self.serviceAccount != null) self.serviceAccount;
+            requires = lib.optional (self.serviceAccount != null) self.serviceAccount;
           }
         else
           null;
@@ -1120,7 +1116,7 @@ in
             labels = componentLabels "frontend";
             spec = {
               type = "ClusterIP";
-              selector = selectorLabels "frontend";
+              selector = self.frontendDeployment.out.selector;
               ports = [
                 {
                   name = "http";
@@ -1142,7 +1138,6 @@ in
                   config.frontend.port
               );
             };
-            requires = [ self.frontendDeployment ];
           }
         else
           null;
@@ -1196,7 +1191,7 @@ in
             labels = componentLabels "caddy";
             spec = {
               type = "ClusterIP";
-              selector = selectorLabels "caddy";
+              selector = self.caddyDeployment.out.selector;
               ports = [
                 {
                   name = "http";
@@ -1209,7 +1204,6 @@ in
             outputs = {
               port = toString config.caddy.port;
             };
-            requires = [ self.caddyDeployment ];
           }
         else
           null;
@@ -1303,7 +1297,7 @@ in
             labels = componentLabels "redis";
             spec = {
               type = "ClusterIP";
-              selector = selectorLabels "redis";
+              selector = self.redisDeployment.out.selector;
               ports = [
                 {
                   name = "redis";
@@ -1316,7 +1310,6 @@ in
             outputs = {
               port = "6379";
             };
-            requires = [ self.redisDeployment ];
           }
         else
           null;

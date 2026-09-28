@@ -392,7 +392,7 @@
         };
         spec = {
           type = "ClusterIP";
-          selector = edSelectorLabels;
+          selector = self.deployment.out.selector;
           ports = [
             {
               name = "http";
@@ -446,7 +446,6 @@
           labels = allLabels;
           requires =
             builtins.attrValues clusterRoles
-            ++ [ self.service ]
             ++ lib.optional (self.secret != null) self.secret
             ++ lib.optional (self.networkPolicy != null) self.networkPolicy;
           spec = {

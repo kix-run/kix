@@ -66,8 +66,8 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/cede-fields": "webhooks[*].rules",
-        "kix.run/depends-on": "x76ic7qk6ym4zlgp96yx61r8k039nifw",
-        "kix.run/identity-hash": "ndr5rhbzza8w3ar3dzifki1b0bbimd6m",
+        "kix.run/depends-on": "q2hg2rxym98jf54vfzpp7pr35xbr2l2i",
+        "kix.run/identity-hash": "6m47sfhvhy0adayjn2wyzjilnyv0ryrk",
         "kix.run/package": "stackgres-operator",
         "kix.run/package-namespace": "stackgres-system"
       },
@@ -626,8 +626,8 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/cede-fields": "webhooks[*].rules",
-        "kix.run/depends-on": "x76ic7qk6ym4zlgp96yx61r8k039nifw",
-        "kix.run/identity-hash": "bqi0s6v3zafh2s6azxkqgpirxv85r0lj",
+        "kix.run/depends-on": "q2hg2rxym98jf54vfzpp7pr35xbr2l2i",
+        "kix.run/identity-hash": "x9hl1bb29cifd876y5pvyvk6xlybzd9k",
         "kix.run/package": "stackgres-operator",
         "kix.run/package-namespace": "stackgres-system"
       },
@@ -2639,8 +2639,8 @@ expression: stable
     "kind": "Deployment",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "3qwjwg3a6kq414hlqfbllk2ilzh3ypdr,68ma8mgsdkfr3wyx4jf2zn48srgvshc1,7r7kk5nhba1672kr810bmflsnla341ln,89kgbs2ykpr01bzci9j1hfpy1dwndbl2,amcy3an3i9m37k3xvvkjsbrw1w5nhwrl,awzwpm53w1kb4ysngrwmj47whaddgkih,jfv5x3q25ifqwp7nnh1x1696g5vz8dsn",
-        "kix.run/identity-hash": "26zhn6mk8a2hg90q9pa67a66ldkgsh4j",
+        "kix.run/depends-on": "68ma8mgsdkfr3wyx4jf2zn48srgvshc1,amcy3an3i9m37k3xvvkjsbrw1w5nhwrl,awzwpm53w1kb4ysngrwmj47whaddgkih,g88kajifw5dyqxmfsir9cfz7l1zl1lvs,hay8ixm1jpr4s01la7296sj2wxd960hr,jfv5x3q25ifqwp7nnh1x1696g5vz8dsn,mqbsfh83bl97z64yk9sg5mlc1flfci9p",
+        "kix.run/identity-hash": "sc2annc8q3k11l9dvxdw1n67pd0rf18g",
         "kix.run/package": "immich",
         "kix.run/package-namespace": "immich"
       },
@@ -3081,7 +3081,7 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/depends-on": "9hgbvipfbm102bzfz8f8xvzfrl236a1g,mm65yrp340h4r5hkffcskpnagv1fngrx",
-        "kix.run/identity-hash": "1hf2fh97pymk5wzkdjg05nq3z6l3np6n",
+        "kix.run/identity-hash": "8w371mpvs8m24nnyvhb677h9vyaqiyvk",
         "kix.run/package": "stackgres-operator",
         "kix.run/package-namespace": "stackgres-system"
       },
@@ -3089,6 +3089,7 @@ expression: stable
         "app": "stackgres-operator",
         "app.kubernetes.io/instance": "stackgres-operator",
         "app.kubernetes.io/managed-by": "kix",
+        "app.kubernetes.io/name": "stackgres-operator",
         "app.kubernetes.io/part-of": "kix-example",
         "group": "stackgres.io",
         "team": "platform",
@@ -3109,6 +3110,7 @@ expression: stable
         "metadata": {
           "labels": {
             "app": "stackgres-operator",
+            "app.kubernetes.io/name": "stackgres-operator",
             "group": "stackgres.io"
           }
         },
@@ -3919,8 +3921,8 @@ expression: stable
     "kind": "Job",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "7r7kk5nhba1672kr810bmflsnla341ln,awzwpm53w1kb4ysngrwmj47whaddgkih,fx4r9kp4y9rhhx4dyr5j3r0k4mnnd0mz,lmgh7krl728mm0ib90k8yjhbm35dry9p",
-        "kix.run/identity-hash": "3qwjwg3a6kq414hlqfbllk2ilzh3ypdr",
+        "kix.run/depends-on": "avlp9bsk69gibv1mnaqdw5va40aw6vyi,awzwpm53w1kb4ysngrwmj47whaddgkih,g88kajifw5dyqxmfsir9cfz7l1zl1lvs,nbkr75bj0vhmvls435mg78z8sal2ac56",
+        "kix.run/identity-hash": "mqbsfh83bl97z64yk9sg5mlc1flfci9p",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "immich-db",
         "kix.run/package-namespace": "immich"
@@ -4017,9 +4019,9 @@ expression: stable
     "kind": "Activation",
     "metadata": {
       "annotations": {
-        "kix.run/built-via": "/nix/store/2blc40mdq8w49wzyymvljip0a0zjy7ga-k8s-activation-example",
-        "kix.run/depends-on": "0iq67p4var2drxj3fnik545qgdf2hlgy,4xsazaw2yhnqad8w02j9q29gjysbykas,azsh2xz3xqmx9nm8rdyx85cir5skgzm7,g7460cvrkvf78xng9w741vw95fg0618j,jbxbg4y1yi3g7r9glqahavayqmq4ivyy,jdw9m52qvpc4qa6pq1zda9gkv7216pk9,kymq061l5jy4y33n72zm9snghi1cdqmn,wgr11rv93ss5ppb4ym2l9k1kzwm2h1zp,yd165yf11lfpldh835wvq7l3kl1bjc7s,yiygmvmpkgdzyzzr4l5g6yas7jbsm1w1,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
-        "kix.run/identity-hash": "jidx24il2baphbni45b44zk30pl7xgnq",
+        "kix.run/built-via": "/nix/store/by13rkv3nahxs7m1pbmmlsib46fjb28c-k8s-activation-example",
+        "kix.run/depends-on": "0iq67p4var2drxj3fnik545qgdf2hlgy,87ynfd4131bzczch3fwzwnkgv5xgvlx3,azsh2xz3xqmx9nm8rdyx85cir5skgzm7,g7460cvrkvf78xng9w741vw95fg0618j,jbxbg4y1yi3g7r9glqahavayqmq4ivyy,jq5w4w734v394dkabnsl2913g6ccdvsm,q6wsjv11wyzvny3qv67m1ikmifldwlsg,qm3q27fq9bpg01ya29alsf8kq6g5z07g,wgr11rv93ss5ppb4ym2l9k1kzwm2h1zp,yd165yf11lfpldh835wvq7l3kl1bjc7s,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
+        "kix.run/identity-hash": "l80h1xcnxr6k01km0wsqdspznh918x4w",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster"
       },
@@ -4027,7 +4029,7 @@ expression: stable
         "app.kubernetes.io/managed-by": "kix",
         "kix.run/cluster": "example"
       },
-      "name": "example-jidx24il2bap"
+      "name": "example-l80h1xcnxr6k"
     },
     "spec": {
       "instances": {
@@ -4116,8 +4118,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,nnn28cb0qa0b7ynnvb91x2cvbghp9a34,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "jdw9m52qvpc4qa6pq1zda9gkv7216pk9",
+        "kix.run/depends-on": "a11g3yw3743nc98p4bil3cfvxykl77cj,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "q6wsjv11wyzvny3qv67m1ikmifldwlsg",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
         "kix.run/root": "immich-server"
@@ -4142,8 +4144,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "3qwjwg3a6kq414hlqfbllk2ilzh3ypdr,7r7kk5nhba1672kr810bmflsnla341ln,89kgbs2ykpr01bzci9j1hfpy1dwndbl2,awzwpm53w1kb4ysngrwmj47whaddgkih,fx4r9kp4y9rhhx4dyr5j3r0k4mnnd0mz,lmgh7krl728mm0ib90k8yjhbm35dry9p,nd4rx876r9wqz7md3gsjqv7vnw6sb110,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "4xsazaw2yhnqad8w02j9q29gjysbykas",
+        "kix.run/depends-on": "4368mx10rw8fiq8xvd7ls83xfk2brv47,avlp9bsk69gibv1mnaqdw5va40aw6vyi,awzwpm53w1kb4ysngrwmj47whaddgkih,g88kajifw5dyqxmfsir9cfz7l1zl1lvs,hay8ixm1jpr4s01la7296sj2wxd960hr,mqbsfh83bl97z64yk9sg5mlc1flfci9p,nbkr75bj0vhmvls435mg78z8sal2ac56,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "87ynfd4131bzczch3fwzwnkgv5xgvlx3",
         "kix.run/inverse-deps": "Job/immich-db-bootstrap-55078afb92,Secret/immich-db-bootstrap-password,PackageInstance/postgres,PackageInstance/postgres",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
@@ -4197,8 +4199,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "0jszdyr9p5ygryhvibaql6ihxi5w79ca,7r7kk5nhba1672kr810bmflsnla341ln,awzwpm53w1kb4ysngrwmj47whaddgkih,nd4rx876r9wqz7md3gsjqv7vnw6sb110,p0cqca41q729xxcz9721a1p5d9vad5ks,za320jsdq0svqjkyyiwdhhlvnfz3mrww,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "yiygmvmpkgdzyzzr4l5g6yas7jbsm1w1",
+        "kix.run/depends-on": "4368mx10rw8fiq8xvd7ls83xfk2brv47,5q1q304lmc03yccxspd7y224ziwiwvya,awzwpm53w1kb4ysngrwmj47whaddgkih,bn9iv6ch0xvz9z5mk63nyjbx3c4f3dmn,g88kajifw5dyqxmfsir9cfz7l1zl1lvs,va3zj79isiqmz9wysnyxfhpbhxyw7aar,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "jq5w4w734v394dkabnsl2913g6ccdvsm",
         "kix.run/inverse-deps": "PackageInstance/postgres",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
@@ -4226,8 +4228,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "7r7kk5nhba1672kr810bmflsnla341ln,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "fx4r9kp4y9rhhx4dyr5j3r0k4mnnd0mz",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,g88kajifw5dyqxmfsir9cfz7l1zl1lvs,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "nbkr75bj0vhmvls435mg78z8sal2ac56",
         "kix.run/import-apiversion": "v1",
         "kix.run/import-kind": "Secret",
         "kix.run/import-name": "postgres",
@@ -4258,8 +4260,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:za320jsdq0svqjkyyiwdhhlvnfz3mrww",
-        "kix.run/identity-hash": "nd4rx876r9wqz7md3gsjqv7vnw6sb110",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:bn9iv6ch0xvz9z5mk63nyjbx3c4f3dmn",
+        "kix.run/identity-hash": "4368mx10rw8fiq8xvd7ls83xfk2brv47",
         "kix.run/import-apiversion": "v1",
         "kix.run/import-kind": "Secret",
         "kix.run/import-name": "postgres",
@@ -4290,8 +4292,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:za320jsdq0svqjkyyiwdhhlvnfz3mrww",
-        "kix.run/identity-hash": "7r7kk5nhba1672kr810bmflsnla341ln",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:bn9iv6ch0xvz9z5mk63nyjbx3c4f3dmn",
+        "kix.run/identity-hash": "g88kajifw5dyqxmfsir9cfz7l1zl1lvs",
         "kix.run/import-apiversion": "v1",
         "kix.run/import-kind": "Service",
         "kix.run/import-name": "postgres",
@@ -4403,8 +4405,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1hf2fh97pymk5wzkdjg05nq3z6l3np6n",
-        "kix.run/identity-hash": "a5vcrmxm1ld0nnxp2rdhllkain95ipm2",
+        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:8w371mpvs8m24nnyvhb677h9vyaqiyvk",
+        "kix.run/identity-hash": "vv7hxd45lwrkwlnafnkn4s5kqghpnmac",
         "kix.run/import-apiversion": "apiextensions.k8s.io/v1",
         "kix.run/import-kind": "CustomResourceDefinition",
         "kix.run/import-name": "sgbackups.stackgres.io",
@@ -4432,8 +4434,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1hf2fh97pymk5wzkdjg05nq3z6l3np6n",
-        "kix.run/identity-hash": "xaaplv5cjn51hpffkfsmxwfiv7l71abx",
+        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:8w371mpvs8m24nnyvhb677h9vyaqiyvk",
+        "kix.run/identity-hash": "d6kjmbm5wfv3f9gryzij06784s17b9kj",
         "kix.run/import-apiversion": "apiextensions.k8s.io/v1",
         "kix.run/import-kind": "CustomResourceDefinition",
         "kix.run/import-name": "sgclusters.stackgres.io",
@@ -4461,8 +4463,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1hf2fh97pymk5wzkdjg05nq3z6l3np6n",
-        "kix.run/identity-hash": "2nzps007bz23d2sqw2snj7xxssmp6hp1",
+        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:8w371mpvs8m24nnyvhb677h9vyaqiyvk",
+        "kix.run/identity-hash": "sv2fz9y4zlm0rl5gnaqnnr05hw9zdici",
         "kix.run/import-apiversion": "apiextensions.k8s.io/v1",
         "kix.run/import-kind": "CustomResourceDefinition",
         "kix.run/import-name": "sgdbops.stackgres.io",
@@ -4490,8 +4492,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1hf2fh97pymk5wzkdjg05nq3z6l3np6n",
-        "kix.run/identity-hash": "3pm3k0p7f6hjzrcanzh5hgdkj7kcw7s8",
+        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:8w371mpvs8m24nnyvhb677h9vyaqiyvk",
+        "kix.run/identity-hash": "6yfbj8pccc288hl0n6b5iygm1kw0pk2c",
         "kix.run/import-apiversion": "apiextensions.k8s.io/v1",
         "kix.run/import-kind": "CustomResourceDefinition",
         "kix.run/import-name": "sgdistributedlogs.stackgres.io",
@@ -4519,8 +4521,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1hf2fh97pymk5wzkdjg05nq3z6l3np6n",
-        "kix.run/identity-hash": "z6px32x86czzn9vwdaa4pqrf8y0f0jqp",
+        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:8w371mpvs8m24nnyvhb677h9vyaqiyvk",
+        "kix.run/identity-hash": "khfqrvn1vhhza9pmckv0jmlqz1nf6jgk",
         "kix.run/import-apiversion": "apiextensions.k8s.io/v1",
         "kix.run/import-kind": "CustomResourceDefinition",
         "kix.run/import-name": "sginstanceprofiles.stackgres.io",
@@ -4548,8 +4550,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1hf2fh97pymk5wzkdjg05nq3z6l3np6n",
-        "kix.run/identity-hash": "9x7xp1ljkilz9dyr03yhpx2irn0adln8",
+        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:8w371mpvs8m24nnyvhb677h9vyaqiyvk",
+        "kix.run/identity-hash": "p8d068s3fhxw8bnl64094kjns9ywpypc",
         "kix.run/import-apiversion": "apiextensions.k8s.io/v1",
         "kix.run/import-kind": "CustomResourceDefinition",
         "kix.run/import-name": "sgobjectstorages.stackgres.io",
@@ -4577,8 +4579,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1hf2fh97pymk5wzkdjg05nq3z6l3np6n",
-        "kix.run/identity-hash": "vd8nqajj2dbrwyhz78kx5dpx73s8q4q2",
+        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:8w371mpvs8m24nnyvhb677h9vyaqiyvk",
+        "kix.run/identity-hash": "9zgdz58fnsswsyddfji9bxlhgq246v6l",
         "kix.run/import-apiversion": "apiextensions.k8s.io/v1",
         "kix.run/import-kind": "CustomResourceDefinition",
         "kix.run/import-name": "sgpgconfigs.stackgres.io",
@@ -4606,8 +4608,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1hf2fh97pymk5wzkdjg05nq3z6l3np6n",
-        "kix.run/identity-hash": "ahbfjwgm2imdgpwn95pxd1da55swbgjp",
+        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:8w371mpvs8m24nnyvhb677h9vyaqiyvk",
+        "kix.run/identity-hash": "jj94r9bfgyjwa9bp9y83clmfqxz65fdd",
         "kix.run/import-apiversion": "apiextensions.k8s.io/v1",
         "kix.run/import-kind": "CustomResourceDefinition",
         "kix.run/import-name": "sgpoolconfigs.stackgres.io",
@@ -4635,8 +4637,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1hf2fh97pymk5wzkdjg05nq3z6l3np6n",
-        "kix.run/identity-hash": "5fqsk9vrqkjj4lmlmvg98rsqafbsswhs",
+        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:8w371mpvs8m24nnyvhb677h9vyaqiyvk",
+        "kix.run/identity-hash": "b7zag7h83863nhh4342sr7dklkfql01v",
         "kix.run/import-apiversion": "apiextensions.k8s.io/v1",
         "kix.run/import-kind": "CustomResourceDefinition",
         "kix.run/import-name": "sgscripts.stackgres.io",
@@ -4664,8 +4666,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1hf2fh97pymk5wzkdjg05nq3z6l3np6n",
-        "kix.run/identity-hash": "2pv0ikx4vpa7hwljxjfbvc8wzwmkkapc",
+        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:8w371mpvs8m24nnyvhb677h9vyaqiyvk",
+        "kix.run/identity-hash": "ig5drhbvlzlgaqpgdqdgnyd3zq2igg8y",
         "kix.run/import-apiversion": "apiextensions.k8s.io/v1",
         "kix.run/import-kind": "CustomResourceDefinition",
         "kix.run/import-name": "sgshardedbackups.stackgres.io",
@@ -4693,8 +4695,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1hf2fh97pymk5wzkdjg05nq3z6l3np6n",
-        "kix.run/identity-hash": "aam95f46rg9s76vk4ylj2n38vanzw782",
+        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:8w371mpvs8m24nnyvhb677h9vyaqiyvk",
+        "kix.run/identity-hash": "4l479kcvjid60yakpqzsph4a5qsqcc9a",
         "kix.run/import-apiversion": "apiextensions.k8s.io/v1",
         "kix.run/import-kind": "CustomResourceDefinition",
         "kix.run/import-name": "sgshardedclusters.stackgres.io",
@@ -4722,8 +4724,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1hf2fh97pymk5wzkdjg05nq3z6l3np6n",
-        "kix.run/identity-hash": "m801m5gx0lh6y55zkqn4rwbwwssnffxf",
+        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:8w371mpvs8m24nnyvhb677h9vyaqiyvk",
+        "kix.run/identity-hash": "pb80r6g17s1z36415sgqla69267fgb0g",
         "kix.run/import-apiversion": "apiextensions.k8s.io/v1",
         "kix.run/import-kind": "CustomResourceDefinition",
         "kix.run/import-name": "sgshardeddbops.stackgres.io",
@@ -4751,8 +4753,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1hf2fh97pymk5wzkdjg05nq3z6l3np6n",
-        "kix.run/identity-hash": "y59zvirxjaw6rpnk29bgrv3lg3fczgyq",
+        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:8w371mpvs8m24nnyvhb677h9vyaqiyvk",
+        "kix.run/identity-hash": "psqv8q83jqm08xj6i9ijxf4nxr9qkmp8",
         "kix.run/import-apiversion": "apiextensions.k8s.io/v1",
         "kix.run/import-kind": "CustomResourceDefinition",
         "kix.run/import-name": "sgstreams.stackgres.io",
@@ -4780,8 +4782,8 @@ expression: stable
     "kind": "PackageInstance",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "1hf2fh97pymk5wzkdjg05nq3z6l3np6n,2nzps007bz23d2sqw2snj7xxssmp6hp1,2pv0ikx4vpa7hwljxjfbvc8wzwmkkapc,3pm3k0p7f6hjzrcanzh5hgdkj7kcw7s8,5fqsk9vrqkjj4lmlmvg98rsqafbsswhs,9hgbvipfbm102bzfz8f8xvzfrl236a1g,9x7xp1ljkilz9dyr03yhpx2irn0adln8,a5vcrmxm1ld0nnxp2rdhllkain95ipm2,aam95f46rg9s76vk4ylj2n38vanzw782,ahbfjwgm2imdgpwn95pxd1da55swbgjp,bqi0s6v3zafh2s6azxkqgpirxv85r0lj,m801m5gx0lh6y55zkqn4rwbwwssnffxf,mm65yrp340h4r5hkffcskpnagv1fngrx,ndr5rhbzza8w3ar3dzifki1b0bbimd6m,ns7h8ksg0x04ms4mddxkdr676xkjmnlf,s7kqzmffnsllk2csn881bfyy815dc6sq,vd8nqajj2dbrwyhz78kx5dpx73s8q4q2,x76ic7qk6ym4zlgp96yx61r8k039nifw,xaaplv5cjn51hpffkfsmxwfiv7l71abx,y59zvirxjaw6rpnk29bgrv3lg3fczgyq,z6px32x86czzn9vwdaa4pqrf8y0f0jqp,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
-        "kix.run/identity-hash": "kymq061l5jy4y33n72zm9snghi1cdqmn",
+        "kix.run/depends-on": "4l479kcvjid60yakpqzsph4a5qsqcc9a,6m47sfhvhy0adayjn2wyzjilnyv0ryrk,6yfbj8pccc288hl0n6b5iygm1kw0pk2c,8w371mpvs8m24nnyvhb677h9vyaqiyvk,9hgbvipfbm102bzfz8f8xvzfrl236a1g,9zgdz58fnsswsyddfji9bxlhgq246v6l,b7zag7h83863nhh4342sr7dklkfql01v,d6kjmbm5wfv3f9gryzij06784s17b9kj,ig5drhbvlzlgaqpgdqdgnyd3zq2igg8y,jj94r9bfgyjwa9bp9y83clmfqxz65fdd,khfqrvn1vhhza9pmckv0jmlqz1nf6jgk,mm65yrp340h4r5hkffcskpnagv1fngrx,ns7h8ksg0x04ms4mddxkdr676xkjmnlf,p8d068s3fhxw8bnl64094kjns9ywpypc,pb80r6g17s1z36415sgqla69267fgb0g,psqv8q83jqm08xj6i9ijxf4nxr9qkmp8,q2hg2rxym98jf54vfzpp7pr35xbr2l2i,s7kqzmffnsllk2csn881bfyy815dc6sq,sv2fz9y4zlm0rl5gnaqnnr05hw9zdici,vv7hxd45lwrkwlnafnkn4s5kqghpnmac,x9hl1bb29cifd876y5pvyvk6xlybzd9k,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs",
+        "kix.run/identity-hash": "qm3q27fq9bpg01ya29alsf8kq6g5z07g",
         "kix.run/inverse-deps": "PackageInstance/crd-ref-sgbackups-stackgres-io,PackageInstance/crd-ref-sgclusters-stackgres-io,PackageInstance/crd-ref-sgdbops-stackgres-io,PackageInstance/crd-ref-sgdistributedlogs-stackgres-io,PackageInstance/crd-ref-sginstanceprofiles-stackgres-io,PackageInstance/crd-ref-sgobjectstorages-stackgres-io,PackageInstance/crd-ref-sgpoolconfigs-stackgres-io,PackageInstance/crd-ref-sgpgconfigs-stackgres-io,PackageInstance/crd-ref-sgscripts-stackgres-io,PackageInstance/crd-ref-sgshardedbackups-stackgres-io,PackageInstance/crd-ref-sgshardedclusters-stackgres-io,PackageInstance/crd-ref-sgshardeddbops-stackgres-io,PackageInstance/crd-ref-sgstreams-stackgres-io",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster",
@@ -7364,8 +7366,8 @@ expression: stable
     "kind": "SGCluster",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "0jszdyr9p5ygryhvibaql6ihxi5w79ca,5k97q770if76zqsmhd8ylmfdlhdgljlm,awzwpm53w1kb4ysngrwmj47whaddgkih,p0cqca41q729xxcz9721a1p5d9vad5ks,requires:xaaplv5cjn51hpffkfsmxwfiv7l71abx",
-        "kix.run/identity-hash": "za320jsdq0svqjkyyiwdhhlvnfz3mrww",
+        "kix.run/depends-on": "5k97q770if76zqsmhd8ylmfdlhdgljlm,5q1q304lmc03yccxspd7y224ziwiwvya,awzwpm53w1kb4ysngrwmj47whaddgkih,va3zj79isiqmz9wysnyxfhpbhxyw7aar,requires:d6kjmbm5wfv3f9gryzij06784s17b9kj",
+        "kix.run/identity-hash": "bn9iv6ch0xvz9z5mk63nyjbx3c4f3dmn",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "postgres",
         "kix.run/package-namespace": "immich",
@@ -7455,8 +7457,8 @@ expression: stable
     "kind": "SGInstanceProfile",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,requires:z6px32x86czzn9vwdaa4pqrf8y0f0jqp",
-        "kix.run/identity-hash": "p0cqca41q729xxcz9721a1p5d9vad5ks",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,requires:khfqrvn1vhhza9pmckv0jmlqz1nf6jgk",
+        "kix.run/identity-hash": "va3zj79isiqmz9wysnyxfhpbhxyw7aar",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "postgres",
         "kix.run/package-namespace": "immich"
@@ -7481,8 +7483,8 @@ expression: stable
     "kind": "SGPostgresConfig",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,requires:vd8nqajj2dbrwyhz78kx5dpx73s8q4q2",
-        "kix.run/identity-hash": "0jszdyr9p5ygryhvibaql6ihxi5w79ca",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,requires:9zgdz58fnsswsyddfji9bxlhgq246v6l",
+        "kix.run/identity-hash": "5q1q304lmc03yccxspd7y224ziwiwvya",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "postgres",
         "kix.run/package-namespace": "immich"
@@ -7875,8 +7877,8 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/classification": "credential",
-        "kix.run/depends-on": "7r7kk5nhba1672kr810bmflsnla341ln,awzwpm53w1kb4ysngrwmj47whaddgkih",
-        "kix.run/identity-hash": "lmgh7krl728mm0ib90k8yjhbm35dry9p",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,g88kajifw5dyqxmfsir9cfz7l1zl1lvs",
+        "kix.run/identity-hash": "avlp9bsk69gibv1mnaqdw5va40aw6vyi",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "immich-db",
         "kix.run/package-namespace": "immich",
@@ -7905,8 +7907,8 @@ expression: stable
     "metadata": {
       "annotations": {
         "kix.run/classification": "credential",
-        "kix.run/depends-on": "7r7kk5nhba1672kr810bmflsnla341ln,awzwpm53w1kb4ysngrwmj47whaddgkih",
-        "kix.run/identity-hash": "89kgbs2ykpr01bzci9j1hfpy1dwndbl2",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,g88kajifw5dyqxmfsir9cfz7l1zl1lvs",
+        "kix.run/identity-hash": "hay8ixm1jpr4s01la7296sj2wxd960hr",
         "kix.run/lifecycle": "stateful",
         "kix.run/package": "immich-db",
         "kix.run/package-namespace": "immich",
@@ -8188,8 +8190,8 @@ expression: stable
     "kind": "Service",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "26zhn6mk8a2hg90q9pa67a66ldkgsh4j,awzwpm53w1kb4ysngrwmj47whaddgkih",
-        "kix.run/identity-hash": "nnn28cb0qa0b7ynnvb91x2cvbghp9a34",
+        "kix.run/depends-on": "awzwpm53w1kb4ysngrwmj47whaddgkih,sc2annc8q3k11l9dvxdw1n67pd0rf18g",
+        "kix.run/identity-hash": "a11g3yw3743nc98p4bil3cfvxykl77cj",
         "kix.run/package": "immich",
         "kix.run/package-namespace": "immich"
       },
@@ -8346,8 +8348,8 @@ expression: stable
     "kind": "Service",
     "metadata": {
       "annotations": {
-        "kix.run/depends-on": "mm65yrp340h4r5hkffcskpnagv1fngrx",
-        "kix.run/identity-hash": "x76ic7qk6ym4zlgp96yx61r8k039nifw",
+        "kix.run/depends-on": "8w371mpvs8m24nnyvhb677h9vyaqiyvk,mm65yrp340h4r5hkffcskpnagv1fngrx",
+        "kix.run/identity-hash": "q2hg2rxym98jf54vfzpp7pr35xbr2l2i",
         "kix.run/package": "stackgres-operator",
         "kix.run/package-namespace": "stackgres-system"
       },
@@ -8370,7 +8372,8 @@ expression: stable
         }
       ],
       "selector": {
-        "app": "stackgres-operator"
+        "app": "stackgres-operator",
+        "group": "stackgres.io"
       },
       "type": "ClusterIP"
     }
