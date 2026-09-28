@@ -130,6 +130,34 @@ pub fn is_kix_internal(manifest: &Value) -> bool {
     is_kix_internal_kind(manifest.get("kind").and_then(Value::as_str).unwrap_or(""))
 }
 
+/// Kinds that Kix reports when they leave the build but never deletes,
+/// because deleting one also deletes resources outside the deployment.
+///
+/// A Namespace takes every object inside it, whether Kix manages it or not.
+/// A CustomResourceDefinition takes every custom resource of that kind in
+/// the cluster, including resources Kix does not manage. Deploy's prune,
+/// every `kix gc` mode and the operator's teardown all consult this
+/// predicate; removing such an object is left to an explicit `kubectl delete`.
+pub fn never_pruned(kind: &str) -> bool {
+    matches!(kind, "Namespace" | "CustomResourceDefinition")
+}
+
+#[cfg(test)]
+mod never_pruned_tests {
+    #[test]
+    fn namespaces_and_crds_are_kept() {
+        assert!(super::never_pruned("Namespace"));
+        assert!(super::never_pruned("CustomResourceDefinition"));
+    }
+
+    #[test]
+    fn ordinary_kinds_are_pruned() {
+        for kind in ["Deployment", "Service", "ConfigMap", "Secret", "SGCluster"] {
+            assert!(!super::never_pruned(kind), "{kind} should be prunable");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

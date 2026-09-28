@@ -360,9 +360,10 @@ Garbage-collect stale kix-managed resources.
 - `-y, --yes` — Skip confirmation.
 - **Soft GC** (default) — Diffs old vs new activation store graphs. Fast, no cluster scan.
 - **Hard GC** (`--hard`) — Full cluster-wide scan, matches identity-hashes against expected set.
-- `--operator` — Deletes retired Activation CRs; operator's finalizer cleans up resources.
+- `--operator` — Deletes retired Activation CRs under the retention policy. They are all Superseded, so the operator only removes its finalizer and deletes no resources.
 - Record retention, in every mode — Superseded Activation records are rollback history, but each one still on the cluster keeps one entry in `kix.run/activations` on every managed resource, and that annotation is capped at 256 KiB, so they cannot be kept forever. `--keep N` (default 10) always keeps the N newest whatever their age; `--keep-max N` (default 50) never keeps more; `--keep-for 30d` (default) retires anything older beyond the floor (`0` or `off` disables the age rule). Deletes are conditional on the record being unchanged since it was listed. The next deploy drops the retired entries.
 - Deletes in reverse dependency order (dependents first).
+- Never deletes a Namespace or CustomResourceDefinition, the same kinds `deploy --prune` keeps: they are listed under "Kept" for removal with kubectl.
 
 #### `kix migrate domain <CLUSTER>`
 
@@ -442,7 +443,7 @@ Long-lived K8s controller watching Activation CRs.
 - **Activation lifecycle:** Queued → Deploying → Active → Superseded.
 - **Reconcile loop prevention:** Stream-level generation filter (ignores status-only updates).
 - **Requirements:** `nix-store` binary on host, read access to `/nix/store/`.
-- **Finalizer-based cleanup:** Resources cleaned when superseded Activation CRs are deleted.
+- **Finalizer-based cleanup:** Deleting an Active, Deploying or Degraded Activation CR makes the operator delete that activation's resources, dependants first. It keeps every Namespace and CustomResourceDefinition (`lifecycle::never_pruned`), which also keeps the CRD its own Activation records live in. Deleting a Superseded CR only removes the finalizer.
 
 ---
 

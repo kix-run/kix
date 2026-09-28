@@ -23,6 +23,13 @@ delete, then asks for confirmation.
 Check the package, kind, namespace, and name of each resource before approving
 the plan. Kix deletes dependants before their dependencies.
 
+A Namespace or CustomResourceDefinition that has left the build is listed
+under **Kept** and is not deleted, in soft and hard mode. Deleting a Namespace deletes
+everything in it, and deleting a CustomResourceDefinition deletes every custom
+resource of that kind on the cluster, including ones Kix does not manage.
+`kix deploy --prune` keeps the same kinds. When you do want one removed, delete
+it with `kubectl delete` after checking what it contains.
+
 ## Run without a prompt
 
 After reviewing the plan, pass `--yes` in automation:
@@ -67,8 +74,11 @@ For an operator-managed cluster, use operator mode:
 
 <Command commands={["kix gc how-to-application --operator"]} cwd="kix-examples/" />
 
-Kix deletes the Activation records selected by the retention policy. The
-operator's finalizers perform the associated resource cleanup.
+Kix deletes the Activation records selected by the retention policy. These are
+all Superseded records, so the operator only removes its finalizer from each
+one. It deletes no resources: the Active record owns them. The operator deletes
+resources only when an Active, Deploying or Degraded record is deleted, and even
+then it keeps every Namespace and CustomResourceDefinition.
 
 Use the same `--keep`, `--keep-max`, and `--keep-for` flags in any mode. For
 example:

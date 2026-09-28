@@ -6,11 +6,16 @@
 //!     dependency order (dependents first). Fast: no cluster-wide resource scan.
 //!     This is the same diff that deploy computes; soft GC is
 //!     "deploy's prune phase, run separately."
-//!   - **Hard (`--hard`):** Fetch all kix-managed resources,
-//!     compares identity hashes against the expected set from all active
-//!     activations, deletes orphans.
-//!   - **Operator (`--operator`):** Deletes retired Activation records and lets
-//!     the operator's finalizer do the rest.
+//!   - **Hard (`--hard`):** Builds the cluster now and lists every live
+//!     resource carrying the kix label. A resource whose identity hash is not
+//!     in that build is garbage; one stamped before the domain move is judged
+//!     by Kubernetes identity instead. Unstamped label carriers are reported
+//!     and deleted only with `--include-unstamped`.
+//!   - **Operator (`--operator`):** Deletes retired Activation records. They
+//!     are Superseded, so the operator's finalizer deletes no resources.
+//!
+//! Soft and hard mode never delete a kind that `lifecycle::never_pruned`
+//! protects (Namespace, CustomResourceDefinition); they list it as kept.
 //!
 //! In every mode, Superseded Activation records are retired under one
 //! retention policy: always keep the `--keep` newest (default 10), never more
@@ -164,6 +169,13 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         Ok(graph) => graph.reverse_topo_ids(),
         Err(_) => garbage_values.iter().map(ResourceId::from_value).collect(),
     };
+    let (ordered_rids, kept) = split_never_pruned(ordered_rids);
+    if !ctx.global.quiet {
+        print_never_pruned(&kept);
+    }
+    if ordered_rids.is_empty() && records.plan.retire.is_empty() {
+        return Ok(());
+    }
 
     // 7. Confirm once for both, delete resources first, then records, then
     //    one summary.
@@ -404,9 +416,14 @@ async fn run_hard_async(
     // Unstamped resources carry the kix label but no identity hash: kix never
     // applied them (a controller child that inherited the label, a render
     // someone kubectl-applied). Report them, but delete only on request.
-    let (unstamped, garbage): (Vec<GarbageEntry>, Vec<GarbageEntry>) = garbage
-        .into_iter()
-        .partition(|g| g.reason == GarbageReason::NoIdentityHash && !args.include_unstamped);
+    // Protected kinds stay in `garbage` and are listed as kept below, since
+    // --include-unstamped does not delete them either.
+    let (unstamped, garbage): (Vec<GarbageEntry>, Vec<GarbageEntry>) =
+        garbage.into_iter().partition(|g| {
+            g.reason == GarbageReason::NoIdentityHash
+                && !args.include_unstamped
+                && !lifecycle::never_pruned(&g.id.kind)
+        });
     if !unstamped.is_empty() && !global.quiet {
         print_unstamped(&unstamped);
     }
@@ -425,11 +442,19 @@ async fn run_hard_async(
     let (record_entries, resource_entries): (Vec<GarbageEntry>, Vec<GarbageEntry>) = garbage
         .into_iter()
         .partition(|g| g.reason == GarbageReason::RetiredActivation);
+    let (kept, resource_entries): (Vec<GarbageEntry>, Vec<GarbageEntry>) = resource_entries
+        .into_iter()
+        .partition(|g| lifecycle::never_pruned(&g.id.kind));
     if !resource_entries.is_empty() {
         print_garbage_plan(&resource_entries);
     }
     if !global.quiet {
+        let kept: Vec<ResourceId> = kept.into_iter().map(|g| g.id).collect();
+        print_never_pruned(&kept);
         print_record_plan(&records, &policy);
+    }
+    if resource_entries.is_empty() && record_entries.is_empty() {
+        return Ok(());
     }
 
     if !confirm(
@@ -623,7 +648,10 @@ async fn run_operator(args: &GcArgs, ctx: &CommandContext) -> Result<()> {
     if !ctx.global.quiet {
         println!(
             "  {}",
-            output::dim("The operator runs its cleanup step for each deleted record.")
+            output::dim(
+                "The operator removes its finalizer from each deleted record; \
+                 it deletes no resources for a Superseded record."
+            )
         );
     }
 
@@ -990,15 +1018,124 @@ fn confirm(args: &GcArgs, prompt: &str) -> Result<bool> {
 }
 
 // ---------------------------------------------------------------------------
+// Shared: kinds gc reports but never deletes
+// ---------------------------------------------------------------------------
+
+/// Split garbage into `(delete, kept)`, keeping each list's order. `kept`
+/// holds the kinds `lifecycle::never_pruned` protects.
+fn split_never_pruned(rids: Vec<ResourceId>) -> (Vec<ResourceId>, Vec<ResourceId>) {
+    let (kept, delete) = rids
+        .into_iter()
+        .partition(|rid| lifecycle::never_pruned(&rid.kind));
+    (delete, kept)
+}
+
+/// List garbage gc leaves in place because deleting it would also delete
+/// objects outside the build.
+fn print_never_pruned(kept: &[ResourceId]) {
+    if kept.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "{} {} resources are not in the build but are never deleted automatically:",
+        output::bold("Kept:"),
+        kept.len(),
+    );
+    for rid in kept {
+        println!("    {} {}", output::yellow("!"), rid);
+    }
+    println!(
+        "  {}",
+        output::dim(
+            "Deleting a Namespace deletes everything in it, and deleting a \
+             CustomResourceDefinition deletes every resource of that kind. \
+             Delete them with kubectl if that is intended."
+        ),
+    );
+}
+
+#[cfg(test)]
+mod never_pruned_tests {
+    use super::*;
+
+    fn rid(kind: &str, name: &str) -> ResourceId {
+        ResourceId {
+            kind: kind.into(),
+            name: name.into(),
+            namespace: CLUSTER_SCOPED.into(),
+        }
+    }
+
+    /// A CRD or Namespace dropped from the build is kept; everything else,
+    /// including custom resources of a kept CRD, is deleted in the given order.
+    #[test]
+    fn crds_and_namespaces_are_kept() {
+        let garbage = vec![
+            rid("Widget", "w1"),
+            rid("CustomResourceDefinition", "widgets.example.com"),
+            rid("ConfigMap", "old"),
+            rid("Namespace", "gone"),
+        ];
+        let (delete, kept) = split_never_pruned(garbage);
+        assert_eq!(delete, vec![rid("Widget", "w1"), rid("ConfigMap", "old")]);
+        assert_eq!(
+            kept,
+            vec![
+                rid("CustomResourceDefinition", "widgets.example.com"),
+                rid("Namespace", "gone"),
+            ]
+        );
+    }
+
+    /// `delete_resources` drops protected kinds before it connects, so a list
+    /// of only a CRD and a Namespace deletes nothing and never reaches the
+    /// (nonexistent) kube context.
+    #[tokio::test]
+    async fn delete_resources_skips_protected_kinds() {
+        #[derive(clap::Parser)]
+        struct Wrapper {
+            #[command(flatten)]
+            global: crate::cli::GlobalArgs,
+        }
+        let global = <Wrapper as clap::Parser>::parse_from([
+            "kix",
+            "--context",
+            "kix-gc-test-no-such-context",
+        ])
+        .global;
+        let resources = vec![
+            rid("CustomResourceDefinition", "widgets.example.com"),
+            rid("Namespace", "gone"),
+        ];
+        let (deleted, failed) = delete_resources(&global, &resources).await.unwrap();
+        assert_eq!((deleted, failed), (0, 0));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Shared: delete a list of resources from the cluster
 // ---------------------------------------------------------------------------
 
 /// Delete resources in the given order. Returns `(deleted, failed)`; the
-/// caller prints the summary and sets the exit code.
+/// caller prints the summary and sets the exit code. Kinds that
+/// `lifecycle::never_pruned` protects are skipped with a message and count
+/// as neither; callers list them with `print_never_pruned` beforehand.
 async fn delete_resources(
     global: &crate::cli::GlobalArgs,
     resources: &[ResourceId],
 ) -> Result<(usize, usize)> {
+    let (resources, kept) = split_never_pruned(resources.to_vec());
+    for rid in &kept {
+        eprintln!(
+            "  {} {}: never deleted automatically; skipping it",
+            output::yellow("!"),
+            rid
+        );
+    }
+    if resources.is_empty() {
+        return Ok((0, 0));
+    }
     let client = fetch::make_client(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
@@ -1015,16 +1152,7 @@ async fn delete_resources(
     let mut deleted = 0usize;
     let mut failed = 0usize;
 
-    for rid in resources {
-        if rid.kind == "Namespace" {
-            println!(
-                "  {} {}: Namespace deletion is skipped; delete it manually if needed",
-                output::yellow("!"),
-                rid,
-            );
-            continue;
-        }
-
+    for rid in &resources {
         let Some(&(ar, ref scope)) = ar_by_kind.get(&rid.kind) else {
             eprintln!(
                 "  {} {}: Kubernetes does not recognize this kind; skipping it",

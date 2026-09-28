@@ -28,7 +28,7 @@ use tokio::task::JoinSet;
 
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
-use super::apply::{ApplyAction, ApplyError, ChangeAction, wants_rerun};
+use super::apply::{ApplyAction, ApplyError, ApplyResult, ChangeAction, wants_rerun};
 use super::cancel::CancelToken;
 use super::graph::ResourceGraph;
 use super::ops::ClusterOps;
@@ -40,6 +40,7 @@ use super::stream::{
 };
 use super::watchdog::{self, Progress, StallPolicy};
 use crate::manifest::keys;
+use crate::manifest::lifecycle::never_pruned;
 
 pub use super::ops::kube::delete_propagation_for;
 
@@ -1331,6 +1332,42 @@ enum NodeOutcome {
 ///
 /// A skipped resource carrying `kix.run/rerun` is recreated when its live
 /// object failed. Other skipped resources do not reach this function.
+/// Delete and re-create one resource through `ClusterOps::recreate_in_place`,
+/// unless `recreate_refusal` refuses its kind. Every scheduler path that
+/// deletes a resource to replace it goes through here.
+async fn recreate(
+    ctx: &NodeCtx,
+    manifest: &Value,
+    rid: &ResourceId,
+) -> Result<ApplyResult, String> {
+    if let Some(refusal) = recreate_refusal(rid) {
+        return Err(refusal);
+    }
+    ctx.ops.recreate_in_place(manifest).await
+}
+
+/// The error for a resource Kix will not delete and re-create, `None` when
+/// it may. The kinds `never_pruned` protects are refused, because deleting
+/// one also deletes objects outside the build.
+fn recreate_refusal(rid: &ResourceId) -> Option<String> {
+    if !never_pruned(&rid.kind) {
+        return None;
+    }
+    let consequence = match rid.kind.as_str() {
+        "Namespace" => "deleting a Namespace deletes everything in it",
+        "CustomResourceDefinition" => {
+            "deleting a CustomResourceDefinition deletes every custom resource of that kind"
+        }
+        _ => "deleting it also deletes objects outside the build",
+    };
+    Some(format!(
+        "{rid} can only be changed by deleting and re-creating it, and Kix never \
+         deletes a {kind} automatically: {consequence}. Delete it with kubectl \
+         if that is intended, then deploy again.",
+        kind = rid.kind,
+    ))
+}
+
 async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
     // Reason a rerun node is deleted before apply. None means a plain apply.
     let mut rerun_reason: Option<&'static str> = None;
@@ -1442,7 +1479,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
     let applied_action: ApplyAction;
     let mut recreated_reason: Option<String> = None;
     if let Some(reason) = rerun_reason {
-        match ctx.ops.recreate_in_place(&manifest).await {
+        match recreate(ctx, &manifest, &rid).await {
             Ok(apply_result) => {
                 applied_action = apply_result.action;
             }
@@ -1461,7 +1498,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
             }
             Err(ApplyError::ImmutableConflict { source, .. }) if ctx.orphan_set.contains(&rid) => {
                 let reason = source.to_string();
-                match ctx.ops.recreate_in_place(&manifest).await {
+                match recreate(ctx, &manifest, &rid).await {
                     Ok(apply_result) => {
                         applied_action = apply_result.action;
                         recreated_reason = Some(reason);
@@ -1633,33 +1670,6 @@ pub async fn failed_rerun_nodes(
         }
     }
     failed
-}
-
-/// Kinds reported as orphans but never deleted because deletion cascades to
-/// resources outside the deployment.
-///
-/// A Namespace takes every object inside it, whether Kix manages it or not.
-/// A CustomResourceDefinition takes every custom resource of that kind in
-/// the cluster, including resources Kix does not manage. The prune report
-/// names these orphans and leaves them in place.
-fn never_pruned(kind: &str) -> bool {
-    matches!(kind, "Namespace" | "CustomResourceDefinition")
-}
-
-#[cfg(test)]
-mod never_pruned_tests {
-    #[test]
-    fn namespaces_and_crds_are_kept() {
-        assert!(super::never_pruned("Namespace"));
-        assert!(super::never_pruned("CustomResourceDefinition"));
-    }
-
-    #[test]
-    fn ordinary_kinds_are_pruned() {
-        for kind in ["Deployment", "Service", "ConfigMap", "Secret", "SGCluster"] {
-            assert!(!super::never_pruned(kind), "{kind} should be prunable");
-        }
-    }
 }
 
 /// Reverse-topological ordering of orphaned resources in `old_manifests`.
@@ -2753,6 +2763,57 @@ mod engine_tests {
         );
         assert_eq!(result.pruned, 0, "the consumed orphan is not pruned again");
         assert!(!ops.calls().iter().any(|c| matches!(c, Call::Delete(_))));
+    }
+
+    /// An immutable conflict on a CRD fails the node even when the CRD is a
+    /// pre-authorized orphan: re-creating it would delete every custom
+    /// resource of its kind.
+    #[tokio::test(start_paused = true)]
+    async fn immutable_conflict_on_crd_is_not_recreated() {
+        let manifests = vec![m("CustomResourceDefinition", "widgets.example.com", &[])];
+        let crd = rid("CustomResourceDefinition", "widgets.example.com");
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            crd.clone(),
+            NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::ImmutableConflict))),
+        );
+        let mut cfg = config(quiet_watchdog());
+        cfg.prune = PrunePolicy::Delete;
+        let orphans = [crd.clone()];
+        let result = run_with_orphans(
+            &ops,
+            plan_of(&manifests),
+            &orphans,
+            &manifests,
+            &cfg,
+            Arc::new(NullObserver),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.failed, 1);
+        assert!(
+            !ops.calls()
+                .iter()
+                .any(|c| matches!(c, Call::RecreateStart(_) | Call::Delete(_)))
+        );
+    }
+
+    /// The refusal names the kind and what deleting it would take with it;
+    /// ordinary kinds are not refused.
+    #[test]
+    fn recreate_refusal_names_the_consequence() {
+        let crd = recreate_refusal(&rid("CustomResourceDefinition", "widgets.example.com"))
+            .expect("a CRD is refused");
+        assert!(crd.contains("every custom resource of that kind"), "{crd}");
+        assert!(crd.contains("kubectl"), "{crd}");
+        let ns = recreate_refusal(&ResourceId {
+            kind: "Namespace".into(),
+            namespace: CLUSTER_SCOPED.into(),
+            name: "apps".into(),
+        })
+        .expect("a Namespace is refused");
+        assert!(ns.contains("deletes everything in it"), "{ns}");
+        assert!(recreate_refusal(&rid("Job", "probe")).is_none());
     }
 
     fn rerun_details(rec: &Recorder) -> Vec<String> {

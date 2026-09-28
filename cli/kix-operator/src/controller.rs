@@ -512,7 +512,8 @@ async fn run_reconcile(
 
 /// Handle deletion of an Activation CR (finalizer cleanup).
 ///
-/// Only Active or Deploying activations trigger resource cleanup.
+/// Only Active, Deploying or Degraded activations trigger resource cleanup,
+/// and it keeps the kinds `never_pruned` protects.
 /// Superseded activations just get the finalizer removed (the Active
 /// activation owns those resources now).
 async fn handle_delete(
@@ -546,17 +547,6 @@ async fn handle_delete(
                 .filter(|rid| !kix::manifest::lifecycle::is_record_kind(&rid.kind))
                 .collect();
 
-            // Kix's own CRDs, under the current domain and any retired one:
-            // the activation being deleted may name the retired pair, and the
-            // operator must never delete the CRD its own records live in.
-            let mut kix_crds: Vec<String> = vec![
-                keys::ACTIVATIONS_CRD.to_string(),
-                keys::PACKAGE_INSTANCES_CRD.to_string(),
-            ];
-            for domain in kix::legacy_domain::DOMAINS {
-                kix_crds.push(format!("activations.{domain}"));
-                kix_crds.push(format!("packageinstances.{domain}"));
-            }
             let orphan_set: std::collections::HashSet<String> = all_rids
                 .iter()
                 .map(|rid| format!("{}/{}/{}", rid.kind, rid.namespace, rid.name))
@@ -574,7 +564,9 @@ async fn handle_delete(
                 Err(_) => all_rids.clone(),
             }
             .into_iter()
-            .filter(|rid| !(rid.kind == "CustomResourceDefinition" && kix_crds.contains(&rid.name)))
+            // Namespaces and CRDs stay, which also keeps the CRD this
+            // operator's own Activation records live in. See `never_pruned`.
+            .filter(|rid| !kix::manifest::lifecycle::never_pruned(&rid.kind))
             .collect();
 
             let discovery = fetch::discover_resources(&ctx.client)
@@ -587,9 +579,6 @@ async fn handle_delete(
                 .collect();
 
             for rid in &ordered {
-                if rid.kind == "Namespace" {
-                    continue;
-                }
                 if let Some(&(ar, ref scope)) = ar_by_kind.get(&rid.kind) {
                     let api: Api<DynamicObject> = match scope {
                         Scope::Namespaced => {

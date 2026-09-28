@@ -1455,7 +1455,7 @@ changed and prune what it left behind, then supersedes it.
 | Path | Behavior |
 |---|---|
 | Default (no `--operator`) | CLI runs the scheduler directly. Reads/writes `Activation` CR for state. Wave-based apply with SSA, readiness, prune. |
-| `--operator` | CLI patches the Activation CR's source path; the kix-operator reconciles. Operator handles GC via finalizers when superseded Activation CRs are deleted. |
+| `--operator` | CLI patches the Activation CR's source path; the kix-operator reconciles. When an Active, Deploying or Degraded Activation CR is deleted, the operator's finalizer deletes that activation's resources except Namespaces and CustomResourceDefinitions, which it always keeps. Deleting a Superseded CR (what `kix gc --operator` does) only removes the finalizer. |
 
 Operator requires `nix-store` binary on the host and read access to `/nix/store/`.
 
