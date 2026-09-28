@@ -467,6 +467,9 @@
             template.spec = {
               serviceAccountName = self.serviceAccount.out.name;
               automountServiceAccountToken = true;
+              # Kubernetes' default, set explicitly; the external-dns chart
+              # (1.16.1) leaves `terminationGracePeriodSeconds` unset.
+              terminationGracePeriodSeconds = 30;
               affinity = resolvedAffinity;
               securityContext = {
                 fsGroup = 1001;

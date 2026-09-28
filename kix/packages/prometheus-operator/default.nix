@@ -264,6 +264,13 @@
       default = null;
       description = "Pod-level DNS config (nameservers, searches, options). null = omitted.";
     };
+    # Mirrors chart's `prometheusOperator.terminationGracePeriodSeconds`
+    # (kube-prometheus-stack 87.21.0 defaults it to 30).
+    terminationGracePeriodSeconds = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = 30;
+      description = "Seconds the pod gets to stop, including any `lifecycle.preStop` hook.";
+    };
   };
 
   build = [

@@ -194,6 +194,8 @@ in
             template.metadata.labels = reloaderSelectorLabels // reloaderExtraLabels;
             template.spec = {
               serviceAccountName = self.serviceAccount.out.name;
+              # Kubernetes' default, set explicitly; the chart sets none.
+              terminationGracePeriodSeconds = 30;
               securityContext = {
                 runAsNonRoot = true;
                 runAsUser = 65534;
@@ -249,7 +251,9 @@ in
                     successThreshold = 1;
                   };
                   resources = config.resources;
-                  securityContext = { };
+                  # The chart's `reloader.readOnlyRootFileSystem` (reloader
+                  # chart 2.0.0) sets this and mounts an emptyDir at /tmp.
+                  securityContext.readOnlyRootFilesystem = true;
                 }
               ];
             }
@@ -258,6 +262,12 @@ in
             };
           };
         }
+        |> kix.withMounts [
+          (kix.mount.emptyDir {
+            name = "tmp-volume";
+            mountPath = "/tmp/";
+          })
+        ]
         |> scope.mkDeployment;
 
       # --- Service (optional, metrics) ---

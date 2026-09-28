@@ -102,6 +102,9 @@ in
             automountServiceAccountToken = false;
             hostNetwork = true;
             hostPID = true;
+            # Kubernetes' default, set explicitly; the
+            # prometheus-node-exporter chart (4.59.0) sets none.
+            terminationGracePeriodSeconds = 30;
             securityContext = {
               runAsNonRoot = true;
               runAsUser = 65534;
@@ -135,7 +138,17 @@ in
                   capabilities.drop = [ "ALL" ];
                   capabilities.add = [ "SYS_TIME" ];
                 };
+                # The prometheus-node-exporter chart (4.59.0) gives both
+                # probes the same GET /.
                 livenessProbe = {
+                  httpGet = {
+                    path = "/";
+                    port = 9100;
+                  };
+                  periodSeconds = 10;
+                  failureThreshold = 3;
+                };
+                readinessProbe = {
                   httpGet = {
                     path = "/";
                     port = 9100;

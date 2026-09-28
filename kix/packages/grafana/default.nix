@@ -98,6 +98,22 @@ in
         };
       };
     };
+    # The grafana chart (10.5.15) leaves `sidecar.resources` empty and
+    # suggests these values in a comment.
+    sidecarResources = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        requests = {
+          cpu = "50m";
+          memory = "50Mi";
+        };
+        limits = {
+          cpu = "100m";
+          memory = "100Mi";
+        };
+      };
+      description = "Resources for each k8s-sidecar container.";
+    };
     # Note: persistence (PVC size / storageClass) is now controlled by a
     # sibling `storage` instance of `persistent-volume-claim`. Leaving this
     # option out of grafana keeps package config focused on grafana itself.
@@ -671,72 +687,127 @@ in
       };
 
       # ── Sidecar security context ────────────────────────────────────────
+      # The sidecars write only to their mounted folders. The
+      # grafana-community chart (13.2.6) sets a read-only root for them.
       sidecarSecCtx = {
         allowPrivilegeEscalation = false;
         capabilities.drop = [ "ALL" ];
+        readOnlyRootFilesystem = true;
         seccompProfile.type = "RuntimeDefault";
       };
 
-      # ── Sidecar containers ──────────────────────────────────────────────
-      dashboardSidecar = lib.optional config.sidecar.dashboards.enabled {
-        name = "grafana-sc-dashboard";
-        image = sidecarImg;
-        imagePullPolicy = config.sidecarImage.pullPolicy;
-        env =
-          kix.mkEnvVars {
-            FOLDER = "/tmp/dashboards";
-            LABEL = config.sidecar.dashboards.label;
-            LABEL_VALUE = config.sidecar.dashboards.labelValue;
-            METHOD = "WATCH";
-            NAMESPACE = config.sidecar.dashboards.searchNamespace;
-            REQ_METHOD = "POST";
-            REQ_URL = "http://localhost:3000/api/admin/provisioning/dashboards/reload";
-            RESOURCE = "both";
-          }
-          ++ [
-            (adminUserEnv "REQ_USERNAME")
-            (adminPasswordEnv "REQ_PASSWORD")
-          ];
-        securityContext = sidecarSecCtx;
-        volumeMounts = [
-          {
-            name = "sc-dashboard-volume";
-            mountPath = "/tmp/dashboards";
-          }
-        ];
+      # k8s-sidecar serves /healthz on HEALTH_PORT (default 8080): 503 until
+      # the first sync completes, and again if the watchers die or the
+      # Kubernetes API has not answered for 60s. The sidecars share the pod
+      # network, so each needs its own port; these are the
+      # grafana-community chart's (13.2.6), as is the startupProbe. The other
+      # timings are the k8s-sidecar 2.8.1 README's examples. On kind, under
+      # the 100m CPU limit, a sidecar took longer than the README's 35s
+      # liveness delay to open the port and was restarted; the startupProbe
+      # holds liveness off for up to five minutes.
+      sidecarHealth = port: {
+        env = kix.mkEnvVars { HEALTH_PORT = toString port; };
+        probes = {
+          startupProbe = {
+            httpGet = {
+              path = "/healthz";
+              inherit port;
+            };
+            initialDelaySeconds = 5;
+            periodSeconds = 5;
+            failureThreshold = 60;
+          };
+          readinessProbe = {
+            httpGet = {
+              path = "/healthz";
+              inherit port;
+            };
+            initialDelaySeconds = 20;
+            periodSeconds = 5;
+          };
+          livenessProbe = {
+            httpGet = {
+              path = "/healthz";
+              inherit port;
+            };
+            initialDelaySeconds = 35;
+            periodSeconds = 10;
+          };
+        };
       };
+      dashboardHealth = sidecarHealth 8084;
+      datasourceHealth = sidecarHealth 8082;
 
-      datasourceSidecar = lib.optional config.sidecar.datasources.enabled {
-        name = "grafana-sc-datasources";
-        image = sidecarImg;
-        imagePullPolicy = config.sidecarImage.pullPolicy;
-        env =
-          kix.mkEnvVars (
-            {
-              FOLDER = "/etc/grafana/provisioning/datasources";
-              LABEL = config.sidecar.datasources.label;
-              LABEL_VALUE = config.sidecar.datasources.labelValue;
+      # ── Sidecar containers ──────────────────────────────────────────────
+      dashboardSidecar = lib.optional config.sidecar.dashboards.enabled (
+        {
+          name = "grafana-sc-dashboard";
+          image = sidecarImg;
+          imagePullPolicy = config.sidecarImage.pullPolicy;
+          env =
+            kix.mkEnvVars {
+              FOLDER = "/tmp/dashboards";
+              LABEL = config.sidecar.dashboards.label;
+              LABEL_VALUE = config.sidecar.dashboards.labelValue;
               METHOD = "WATCH";
+              NAMESPACE = config.sidecar.dashboards.searchNamespace;
               REQ_METHOD = "POST";
-              REQ_URL = "http://localhost:3000/api/admin/provisioning/datasources/reload";
+              REQ_URL = "http://localhost:3000/api/admin/provisioning/dashboards/reload";
               RESOURCE = "both";
             }
-            // lib.optionalAttrs ((config.sidecar.datasources.searchNamespace or null) != null) {
-              NAMESPACE = config.sidecar.datasources.searchNamespace;
+            ++ dashboardHealth.env
+            ++ [
+              (adminUserEnv "REQ_USERNAME")
+              (adminPasswordEnv "REQ_PASSWORD")
+            ];
+          resources = config.sidecarResources;
+          securityContext = sidecarSecCtx;
+          volumeMounts = [
+            {
+              name = "sc-dashboard-volume";
+              mountPath = "/tmp/dashboards";
             }
-          )
-          ++ [
-            (adminUserEnv "REQ_USERNAME")
-            (adminPasswordEnv "REQ_PASSWORD")
           ];
-        securityContext = sidecarSecCtx;
-        volumeMounts = [
-          {
-            name = "sc-datasources-volume";
-            mountPath = "/etc/grafana/provisioning/datasources";
-          }
-        ];
-      };
+        }
+        // dashboardHealth.probes
+      );
+
+      datasourceSidecar = lib.optional config.sidecar.datasources.enabled (
+        {
+          name = "grafana-sc-datasources";
+          image = sidecarImg;
+          imagePullPolicy = config.sidecarImage.pullPolicy;
+          env =
+            kix.mkEnvVars (
+              {
+                FOLDER = "/etc/grafana/provisioning/datasources";
+                LABEL = config.sidecar.datasources.label;
+                LABEL_VALUE = config.sidecar.datasources.labelValue;
+                METHOD = "WATCH";
+                REQ_METHOD = "POST";
+                REQ_URL = "http://localhost:3000/api/admin/provisioning/datasources/reload";
+                RESOURCE = "both";
+              }
+              // lib.optionalAttrs ((config.sidecar.datasources.searchNamespace or null) != null) {
+                NAMESPACE = config.sidecar.datasources.searchNamespace;
+              }
+            )
+            ++ datasourceHealth.env
+            ++ [
+              (adminUserEnv "REQ_USERNAME")
+              (adminPasswordEnv "REQ_PASSWORD")
+            ];
+          resources = config.sidecarResources;
+          securityContext = sidecarSecCtx;
+          volumeMounts = [
+            {
+              name = "sc-datasources-volume";
+              mountPath = "/etc/grafana/provisioning/datasources";
+            }
+          ];
+        }
+        // datasourceHealth.probes
+      );
 
       # ── RBAC for sidecars ───────────────────────────────────────────────
       # Sidecars need to watch ConfigMaps and Secrets across all namespaces
@@ -892,6 +963,9 @@ in
             template.spec = {
               serviceAccountName = self.serviceAccount.out.name;
               automountServiceAccountToken = true;
+              # Kubernetes' default, set explicitly; the grafana chart
+              # (10.5.15) sets none.
+              terminationGracePeriodSeconds = 30;
               securityContext = config.securityContext;
               initContainers = [
                 {
@@ -903,9 +977,23 @@ in
                     "472:472"
                     "/var/lib/grafana"
                   ];
+                  # The chart's commented `initChownData.resources` example
+                  # (grafana chart 10.5.15).
+                  resources = {
+                    requests = {
+                      cpu = "100m";
+                      memory = "128Mi";
+                    };
+                    limits = {
+                      cpu = "100m";
+                      memory = "128Mi";
+                    };
+                  };
+                  # chown writes only to the mounted volume.
                   securityContext = {
                     runAsNonRoot = false;
                     runAsUser = 0;
+                    readOnlyRootFilesystem = true;
                     capabilities = {
                       add = [ "CHOWN" ];
                       drop = [ "ALL" ];
@@ -958,9 +1046,18 @@ in
                     (kix.port "grafana" 3000)
                   ];
                   resources = config.resources;
+                  # Grafana writes to /var/lib/grafana (storage) and /tmp;
+                  # the grafana-community chart (13.2.6) runs it read-only
+                  # with the same /tmp emptyDir. Logs go to the console.
+                  # Grafana 13 installs zipkin and elasticsearch into
+                  # /var/lib/grafana/plugins at startup and deletes the
+                  # copies in plugins-bundled first; on a read-only root the
+                  # delete fails and neither plugin loads. The emptyDir over
+                  # that directory is the chart's `shadowBundledPlugins`.
                   securityContext = {
                     allowPrivilegeEscalation = false;
                     capabilities.drop = [ "ALL" ];
+                    readOnlyRootFilesystem = true;
                     seccompProfile.type = "RuntimeDefault";
                   };
                   livenessProbe = {
@@ -983,6 +1080,14 @@ in
                     timeoutSeconds = 1;
                   };
                   volumeMounts = [
+                    {
+                      name = "tmp";
+                      mountPath = "/tmp";
+                    }
+                    {
+                      name = "plugins-bundled";
+                      mountPath = "/usr/share/grafana/data/plugins-bundled";
+                    }
                     {
                       name = "config";
                       mountPath = "/etc/grafana/grafana.ini";
@@ -1033,6 +1138,14 @@ in
               ++ dashboardSidecar
               ++ datasourceSidecar;
               volumes = [
+                {
+                  name = "tmp";
+                  emptyDir = { };
+                }
+                {
+                  name = "plugins-bundled";
+                  emptyDir = { };
+                }
                 {
                   name = "config";
                   configMap.name = self.configMap.out.name;

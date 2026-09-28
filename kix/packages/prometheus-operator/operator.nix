@@ -314,6 +314,7 @@ in
       podSpec = {
         serviceAccountName = self.operatorServiceAccount.out.name;
         automountServiceAccountToken = true;
+        inherit (config) terminationGracePeriodSeconds;
         securityContext = {
           runAsNonRoot = true;
           runAsUser = 65534;

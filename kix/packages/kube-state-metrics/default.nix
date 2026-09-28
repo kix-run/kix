@@ -191,6 +191,9 @@ in
             template.spec = {
               serviceAccountName = self.serviceAccount.out.name;
               automountServiceAccountToken = true;
+              # Kubernetes' default, set explicitly; the kube-state-metrics
+              # chart (8.3.1) sets none.
+              terminationGracePeriodSeconds = 30;
               securityContext = {
                 runAsNonRoot = true;
                 runAsUser = 65534;

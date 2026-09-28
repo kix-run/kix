@@ -62,9 +62,16 @@ in
       '';
     };
 
+    # The tailscale-operator chart (1.82.0) sets no resources. The requests
+    # are a judgement for one idle controller; without them Kubernetes
+    # would copy the limits into the requests.
     resources = lib.mkOption {
       type = lib.types.anything;
       default = {
+        requests = {
+          cpu = "100m";
+          memory = "128Mi";
+        };
         limits = {
           cpu = "2";
           memory = "1Gi";
@@ -524,6 +531,8 @@ in
             strategy.type = "Recreate";
             template.spec = {
               serviceAccountName = self.operatorServiceAccount.out.name;
+              # Kubernetes' default, set explicitly; the chart sets none.
+              terminationGracePeriodSeconds = 30;
               nodeSelector = {
                 "kubernetes.io/os" = "linux";
               };
