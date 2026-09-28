@@ -45,6 +45,7 @@
       };
     in
     {
-      root = ref;
+      inherit ref;
+      root = self.ref;
     };
 }

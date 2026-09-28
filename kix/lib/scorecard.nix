@@ -440,7 +440,11 @@ rec {
         builtins.foldl' (
           acc: f:
           let
-            key = f.${field} or "unknown";
+            # A cluster-level rule copies `metadata.namespace` from a
+            # manifest that still carries string context, and an attribute
+            # name may not refer to a store path.
+            value = f.${field} or null;
+            key = if value == null then "unknown" else builtins.unsafeDiscardStringContext value;
           in
           acc // { ${key} = (acc.${key} or 0) + 1; }
         ) { } items;

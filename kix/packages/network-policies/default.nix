@@ -272,22 +272,18 @@ in
         };
       };
 
-      prometheusScrapingAccess =
-        if cwp.prometheusScrapingAccess then
-          mkCiliumPolicy {
-            name = "allow-prometheus-scraping";
-            spec = {
-              ingress = [
-                {
-                  fromEndpoints = [
-                    { matchLabels = prometheusSelector; }
-                  ];
-                }
+      prometheusScrapingAccess = mkCiliumPolicy {
+        name = "allow-prometheus-scraping";
+        spec = {
+          ingress = [
+            {
+              fromEndpoints = [
+                { matchLabels = prometheusSelector; }
               ];
-            };
-          }
-        else
-          null;
+            }
+          ];
+        };
+      };
 
       ciliumHealthChecks = mkCiliumPolicy {
         name = "cilium-health-checks";
@@ -372,52 +368,42 @@ in
           value = mkInternalSystemTraffic istNamespaces nsName;
         }) istNamespaces
       );
-      internalSystemTrafficList = builtins.attrValues internalSystemTrafficPolicies;
 
       # --- Tenant isolation policies ---
 
-      tenantPolicies = lib.mapAttrs mkTenantPolicy config.tenants;
+      tenantPolicies = lib.mapAttrs' (
+        tenantName: tenant:
+        lib.nameValuePair "allow-within-tenant-${tenantName}" (mkTenantPolicy tenantName tenant)
+      ) config.tenants;
 
       # --- Collect all policies ---
 
-      clusterwidePoliciesList =
-        lib.optional cwp.globalInternetAccess globalInternetAccess
-        ++ lib.optional cwp.globalDns globalDns
-        ++ lib.optional cwp.kubernetesApiAccess kubernetesApiAccess
-        ++ lib.optional cwp.ingressNginxAccess ingressNginxAccess
-        ++ lib.optional cwp.prometheusScrapingAccess prometheusScrapingAccess
-        ++ lib.optional cwp.ciliumHealthChecks ciliumHealthChecks
-        ++ lib.optional cwp.fullAccessCidrs.enable fullAccessCidrs
-        ++ lib.optional cwp.stackgresPrometheusAccess stackgresPrometheusAccess
-        ++ lib.optional cwp.stackgresKubeApiAccess stackgresKubeApiAccess;
+      # A policy that is switched off must not be a part: every part renders,
+      # and one outside root's requires is not reached from the PackageInstance.
+      enabledIf = enable: policy: if enable then policy else null;
 
-      tenantPoliciesList = builtins.attrValues tenantPolicies;
+      clusterwidePoliciesByName = lib.filterAttrs (_: p: p != null) {
+        allow-global-internet-access = enabledIf cwp.globalInternetAccess globalInternetAccess;
+        global-dns = enabledIf cwp.globalDns globalDns;
+        kubernetes-api-access = enabledIf cwp.kubernetesApiAccess kubernetesApiAccess;
+        global-access-to-ingress-nginx = enabledIf cwp.ingressNginxAccess ingressNginxAccess;
+        allow-prometheus-scraping = enabledIf cwp.prometheusScrapingAccess prometheusScrapingAccess;
+        cilium-health-checks = enabledIf cwp.ciliumHealthChecks ciliumHealthChecks;
+        allow-access-to-full-access-cidrs = enabledIf cwp.fullAccessCidrs.enable fullAccessCidrs;
+        allow-prometheus-scraping-of-stackgres-clusters = enabledIf cwp.stackgresPrometheusAccess stackgresPrometheusAccess;
+        stackgres-clusters-to-kube-api = enabledIf cwp.stackgresKubeApiAccess stackgresKubeApiAccess;
+      };
 
-      allPolicies = clusterwidePoliciesList ++ tenantPoliciesList ++ internalSystemTrafficList;
+      policies = clusterwidePoliciesByName // tenantPolicies // internalSystemTrafficPolicies;
 
     in
-    # Cluster-wide baseline policies
-    {
-      allow-global-internet-access = globalInternetAccess;
-      global-dns = globalDns;
-      kubernetes-api-access = kubernetesApiAccess;
-      global-access-to-ingress-nginx = ingressNginxAccess;
-      allow-prometheus-scraping = prometheusScrapingAccess;
-      cilium-health-checks = ciliumHealthChecks;
-      allow-access-to-full-access-cidrs = fullAccessCidrs;
-      allow-prometheus-scraping-of-stackgres-clusters = stackgresPrometheusAccess;
-      stackgres-clusters-to-kube-api = stackgresKubeApiAccess;
-    }
-    // builtins.listToAttrs (
-      lib.mapAttrsToList (
-        name: _: lib.nameValuePair "allow-within-tenant-${name}" tenantPolicies.${name}
-      ) config.tenants
-    )
-    // internalSystemTrafficPolicies
+    policies
     // {
+      # root must be a part, so global-dns renders even when `globalDns` is off.
+      global-dns = globalDns;
       root = {
         resource = self.global-dns;
-        requires = allPolicies;
+        requires = builtins.attrValues policies;
       };
     };
 }

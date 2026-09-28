@@ -95,6 +95,34 @@
             touch $out
           '';
       });
+      # Every directory under kix/packages/ evaluated in a synthetic cluster
+      # of its own (kix/package-eval.nix), so a package that no cluster
+      # names still runs through the validators and the scorecard.
+      packageEval = lib.genAttrs systems (system: {
+        every-package-evaluates =
+          let
+            pkgs = inputs.nixpkgs.legacyPackages.${system};
+            result = import ./kix/package-eval.nix {
+              inherit lib;
+              kix = import ./kix/lib { inherit pkgs lib; };
+            };
+          in
+          pkgs.runCommand "every-package-evaluates" { } ''
+            echo "${toString (builtins.length result.names)} kix packages evaluated."
+            echo "Skipped: ${
+              if result.skip == { } then "none" else lib.concatStringsSep ", " (builtins.attrNames result.skip)
+            }"
+            echo "Known failures: ${
+              lib.concatStringsSep ", " (
+                lib.mapAttrsToList (
+                  name: failures: "${name} (${lib.concatMapStringsSep ", " (f: f.rule) failures})"
+                ) result.knownFailures
+              )
+            }"
+            touch $out
+          '';
+      });
+
       # A shell that can build and TEST the CLI.
       #
       # The crane package (`packages.kix`) sets `doCheck = false`, because
@@ -192,7 +220,10 @@
 
       checks = lib.mapAttrs (
         system: clusterChecks:
-        clusterChecks // (libTests.${system} or { }) // (clickhouseSwap.${system} or { })
+        clusterChecks
+        // (libTests.${system} or { })
+        // (clickhouseSwap.${system} or { })
+        // (packageEval.${system} or { })
       ) clusterOutputs.checks;
 
       # Preserve the forPkgs API for external consumers.

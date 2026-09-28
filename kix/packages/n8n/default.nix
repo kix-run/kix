@@ -259,7 +259,10 @@ in
                     }
                   ];
                   volumes = [
-                    { name = "data"; }
+                    {
+                      name = "data";
+                      emptyDir = { };
+                    }
                   ];
                 };
               };
@@ -334,7 +337,10 @@ in
                       }
                     ];
                     volumes = [
-                      { name = "data"; }
+                      {
+                        name = "data";
+                        emptyDir = { };
+                      }
                     ];
                   };
                 };

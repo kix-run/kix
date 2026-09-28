@@ -62,8 +62,10 @@ in
         in
         if globalNames != [ ] then
           builtins.head globalNames
+        else if config.classes != { } then
+          builtins.head (builtins.attrNames config.classes)
         else
-          builtins.head (builtins.attrNames config.classes);
+          throw "priority-classes '${scope.instanceName}': `classes` is empty. Set at least one class, for example `config.classes.high.value = 1000;`.";
 
     in
     classResources

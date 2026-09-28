@@ -60,6 +60,12 @@ in
   meta.version = "0.16.0";
   meta.description = "smartctl_exporter from the upstream Helm chart, a privileged DaemonSet that exports SMART disk health metrics to Prometheus";
   meta.owner = "platform";
+  # smartctl reads SMART data from the node's block devices, which needs a
+  # privileged container running as root.
+  meta.unsafe = [
+    "privileged"
+    "run-as-root"
+  ];
 
   options.values = lib.mkOption {
     type = lib.types.attrsOf lib.types.anything;

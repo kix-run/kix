@@ -81,10 +81,6 @@
         };
       };
 
-      root = self.objectStorage // {
-        out = (self.objectStorage.out or { }) // {
-          inherit name;
-        };
-      };
+      root = self.objectStorage;
     };
 }

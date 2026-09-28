@@ -155,12 +155,8 @@ in
         };
       };
 
-      root = self.cronJob // {
-        requires = [
-          self.serviceAccount
-          self.clusterRole
-          self.clusterRoleBinding
-        ];
-      };
+      # The ClusterRoleBinding and its ClusterRole are inverse dependencies:
+      # the binding names the ServiceAccount that the CronJob uses.
+      root = self.cronJob;
     };
 }

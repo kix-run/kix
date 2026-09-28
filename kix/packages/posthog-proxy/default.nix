@@ -53,6 +53,7 @@
         apiVersion = "v1";
         kind = "Service";
         name = "posthog-proxy";
+        labels."app.kubernetes.io/component" = "ingestion";
         spec = {
           type = "ExternalName";
           externalName = config.posthogHost;
@@ -72,6 +73,7 @@
         apiVersion = "v1";
         kind = "Service";
         name = "posthog-assets-proxy";
+        labels."app.kubernetes.io/component" = "assets";
         spec = {
           type = "ExternalName";
           externalName = config.posthogAssetsHost;

@@ -704,6 +704,7 @@ When a service has a small form and an operator form, build both as separate pac
 - **Match names exactly.** If the diff shows a kix-only resource with a fuzzy match to a cluster resource, rename it.
 - **Don't over-specify.** K8s defaults (e.g. `strategy: RollingUpdate`) are stripped by the diff tool automatically.
 - **Cluster-only resources are fine.** Many cluster resources (operator CRDs, auto-generated secrets) are not kix-managed. Focus on the **Modified** section.
+- **A new package is evaluated by `nix build .#checks.x86_64-linux.every-package-evaluates`** without being named by any cluster. If it has options with no default, or needs an instance the catalog cannot auto-instantiate (a `credentials` secret), add them to the `settings` table in `kix/package-eval.nix`.
 - **Pipe the diff to an LLM.** `./scripts/kix-diff.py ./result cluster-dump/ | pbcopy`
 - **Look at existing packages for patterns:**
   - `packages/reloader/` — clean simple package (single Deployment + Service)
