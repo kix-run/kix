@@ -9,6 +9,9 @@
 
 { lib }:
 
+let
+  helpers = import ./lib/eval/helpers.nix { inherit lib; };
+in
 rec {
 
   # --- Helpers ---
@@ -42,57 +45,23 @@ rec {
       )
     ) (builtins.attrNames clusterInstances);
 
-  # Collect non-PI resources from an instance (mirrors collectResources minus PI).
-  # Also extracts the main resource path from inst.out context, since packages
-  # with only a main resource (e.g. PVC) have their main overridden by the PI
-  # and it won't appear in parts.
-  collectInstanceResources =
-    inst:
-    let
-      parts = removeAttrs inst [
-        "_type"
-        "_meta"
-        "_packageInstance"
-        "_isImport"
-        "main"
-        "fqdn"
-        "out"
-        "overrideParts"
-      ];
-      partResources = builtins.filter (
-        v: v != null && builtins.isAttrs v && (v._type or "") == "k8s-resource"
-      ) (builtins.attrValues parts);
-    in
-    partResources;
+  # Non-PI resources of an instance: the part set `collectResources` in
+  # eval/cluster.nix renders, without the PI and hook resources.
+  collectInstanceResources = helpers.instancePartResources;
 
-  # Store paths of the main resource(s) referenced by inst.out.
-  # inst.out carries the main resource's context (not the PI's),
-  # so extracting context from out.name gives the main resource path.
-  mainResourcePaths =
-    inst:
-    let
-      outName = inst.out.name or "";
-      ctx = if outName == "" then { } else builtins.getContext outName;
-    in
-    builtins.attrNames ctx;
-
-  # All non-PI resource store paths for an instance: parts + main resource path.
+  # All non-PI resource store paths for an instance, deduplicated.
   instanceResourcePaths =
     inst:
     let
       piPath = plainPath inst._packageInstance;
-      partPaths = map plainPath (collectInstanceResources inst);
-      mainPaths = mainResourcePaths inst;
-      allPaths = partPaths ++ mainPaths;
     in
-    # Deduplicate and exclude the PI path
     builtins.attrNames (
       builtins.listToAttrs (
         builtins.filter (e: e.name != piPath) (
-          map (p: {
-            name = p;
+          map (r: {
+            name = plainPath r;
             value = true;
-          }) allPaths
+          }) (collectInstanceResources inst)
         )
       )
     );
@@ -108,6 +77,11 @@ rec {
     );
 
   # --- Invariant 1: No resource depends on a PI ---
+  #
+  # `piPathMap` must hold managed instances only. An import renders nothing
+  # but its marker PackageInstance, so a resource ordered after an import
+  # (for example a workload after an imported DNS provider) depends on that
+  # marker the same way it depends on a mkSecretRef marker.
 
   checkNoResourceDependsOnPI =
     clusterName: instances: piPathMap:
@@ -236,9 +210,7 @@ rec {
 
           reachable = transitiveReachable pi;
           unreached = builtins.filter (p: !(reachable ? ${p})) resPaths;
-          # Only report resources in the registry (main resource path may not be)
-          unreachedInRegistry = builtins.filter (p: clusterRegistry ? ${p}) unreached;
-          unreachedResources = map (p: clusterRegistry.${p}) unreachedInRegistry;
+          unreachedResources = map (p: clusterRegistry.${p}) unreached;
         in
         map (r: {
           resource = "${r.kind}/${r.name}";
@@ -292,6 +264,11 @@ rec {
           value = inst._meta.instanceName;
         }) instances
       );
+      managedPiPathMap = removeAttrs piPathMap (
+        map (inst: plainPath inst._packageInstance) (
+          builtins.filter (inst: inst._isImport or false) instances
+        )
+      );
 
       # Build cluster-wide registry: { storePath = resource; ... }
       allResources = builtins.concatMap (
@@ -304,7 +281,7 @@ rec {
 
       clusterRegistry = buildResourceRegistry allResources;
 
-      inv1 = checkNoResourceDependsOnPI clusterName instances piPathMap;
+      inv1 = checkNoResourceDependsOnPI clusterName instances managedPiPathMap;
       inv3 = checkPIReferencesResources clusterName instances;
       inv4 = checkPIClosureComplete clusterName instances clusterRegistry;
       inv5 = checkActivationOnlyReferencesPIs clusterName cluster.activation piPathMap clusterRegistry;

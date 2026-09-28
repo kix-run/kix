@@ -20,10 +20,6 @@
   mkImport,
 }:
 
-let
-  inherit (helpers) collectTypedAttrs;
-in
-
 {
   buildCluster =
     {
@@ -403,29 +399,7 @@ in
 
       collectResources =
         inst:
-        let
-          raw =
-            inst.raw or (removeAttrs inst [
-              "_type"
-              "_meta"
-              "_packageInstance"
-              "_diagnostics"
-              "_scorecardFindings"
-              "_isImport"
-              "root"
-              "fqdn"
-              "out"
-              "overrideParts"
-            ]);
-        in
-        builtins.filter (v: (v._type or "") == "k8s-resource") (
-          collectTypedAttrs {
-            excludeKeys = [
-              "root"
-              "meta"
-            ];
-          } raw
-        )
+        helpers.instancePartResources inst
         ++ (if inst ? _packageInstance then [ inst._packageInstance ] else [ ])
         ++ (inst._hookResources or [ ]);
 

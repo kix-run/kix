@@ -43,6 +43,12 @@
                 {
                   name = "consumer";
                   image = "example/consumer:1";
+                  securityContext = {
+                    runAsNonRoot = true;
+                    runAsUser = 1000;
+                    allowPrivilegeEscalation = false;
+                    capabilities.drop = [ "ALL" ];
+                  };
                   env = kix.mkEnvVars {
                     CLICKHOUSE_URL = clickhouseDatabase.out.httpUrl;
                     CLICKHOUSE_NATIVE = clickhouseDatabase.out.nativeEndpoint;

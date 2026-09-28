@@ -1197,16 +1197,17 @@ let
 
     # DNS dep injection is core and unconditional: even with netpol
     # disabled, a workload with a cross-instance Service edge must depend
-    # on the DNS provider's root.
+    # on the DNS provider's root resource, not on its PackageInstance.
     t02-netpol-off-dns-dep =
       let
         cluster = mkCluster [ baseInstances ];
         appDeployment = byName "app" (ofKind "Deployment" (manifests cluster));
-        dnsHash = k8s.extractStoreHash cluster.instances.dns.dns.root.outPath;
+        dnsHash = k8s.extractStoreHash cluster.instances.dns.dns.raw.root.outPath;
+        dnsPiHash = k8s.extractStoreHash cluster.instances.dns.dns.root.outPath;
         dbSvcHash = k8s.extractStoreHash cluster.instances.dbns.db.raw.service.outPath;
         annot = dependsOn appDeployment;
       in
-      (lib.hasInfix dnsHash annot && lib.hasInfix dbSvcHash annot)
+      (lib.hasInfix dnsHash annot && lib.hasInfix dbSvcHash annot && !(lib.hasInfix dnsPiHash annot))
       || throw "app depends-on missing dns/db edge; annotation: ${annot}";
 
     # netpol enabled with a conforming enforcer: per-workload egress CNP,
@@ -2008,7 +2009,7 @@ let
         ms = manifests cluster;
         cnps = ofKind "CiliumNetworkPolicy" ms;
         appDeployment = byName "app" (ofKind "Deployment" ms);
-        dnsHash = k8s.extractStoreHash cluster.instances.dns.dns.root.outPath;
+        dnsHash = k8s.extractStoreHash cluster.instances.dns.dns.raw.root.outPath;
         annot = dependsOn appDeployment;
       in
       (

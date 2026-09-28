@@ -1,0 +1,3 @@
+# 2026-09-27 · `clusters/`, `ludo/` · No built cluster takes its DNS from a managed package, so the DNS ordering edge to a managed provider is checked only by kix/lib tests.
+
+Every cluster gets `dns` from the flavor's `platform-dns` import. Clusters that run `packages.coredns` do not give it the `dns` alias, so workloads never order after it. The `pi-wiring-cluster-*` checks therefore never see a workload depend on a managed DNS provider's root resource. Only `t02-netpol-off-dns-dep` and `t39-name-only-no-netpol-edge` in `kix/lib/tests/default.nix` cover that path. Adding `aliases = [ "dns" ]` to a managed coredns in `clusters/test-clickhouse.nix` exercises it.

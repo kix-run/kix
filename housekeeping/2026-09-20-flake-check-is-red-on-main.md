@@ -10,3 +10,4 @@ the suite to find out whether their own change broke something: the run
 stops at the first failure and everything after it goes unchecked.
 `nix build` of the same cluster succeeds, so only the `pi-wiring` check
 sees it.
+- Narrowed 2026-09-27: the pi-wiring checks now read every part of an instance, which fixed `cluster-full` and `cluster-clickhouse`. The one remaining failure is `pi-wiring-cluster-example-import`, which waits on the decision in `2026-09-27-stackgres-database-root-misses-bootstrap-job.md`.

@@ -98,6 +98,11 @@ in
             # Do not add the DNS provider's root as its own dependency.
             if _dnsResolution.namespace == namespaceName && _dnsResolution.instanceName == instanceName then
               null
+            # Depend on the provider's root resource, not on its PackageInstance
+            # (`dnsInst.root`). An import has no parts; its marker is its only
+            # resource, so its `root` is the dependency.
+            else if dnsInst ? raw then
+              dnsInst.raw.root.resource or dnsInst.raw.root
             else if dnsInst ? root then
               dnsInst.root
             else

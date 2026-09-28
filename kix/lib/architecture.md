@@ -84,7 +84,7 @@ A hook is a function `ctx → result` or `{ priority ? 1000; fn; }`. Execution o
 
 Fixpoint safety: a hook may read `workloadInput` and outer-fixpoint data (DI deps, cluster config); it must not force the resource under construction, and returned resources must not close a cycle into the current parts fixpoint.
 
-What stays core regardless of plugins: edge analysis + DNS dep injection (unconditional — workloads referencing cross-instance Services wait on the DNS root even with netpol disabled), the pre-seal splice, the sideband drain, `findRoleProvider` + the role registry, `forNamespace` parenting. Also core: the `scope.networkPolicyEnforcer` **handle contract** — null unless `networkPolicy.enable` is on, an enforcer is declared, and the instance is not the enforcer itself. Packages (stackgres-cluster) branch on this handle; the enable-gate is load-bearing (`eval/instance.nix`).
+What stays core regardless of plugins: edge analysis + DNS dep injection (unconditional — workloads referencing cross-instance Services wait on the DNS provider's root resource, or on its marker when DNS is an import, even with netpol disabled), the pre-seal splice, the sideband drain, `findRoleProvider` + the role registry, `forNamespace` parenting. Also core: the `scope.networkPolicyEnforcer` **handle contract** — null unless `networkPolicy.enable` is on, an enforcer is declared, and the instance is not the enforcer itself. Packages (stackgres-cluster) branch on this handle; the enable-gate is load-bearing (`eval/instance.nix`).
 
 ## Non-obvious patterns
 

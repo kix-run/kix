@@ -39,6 +39,37 @@ rec {
     in
     go 0 attrs;
 
+  # The resources an instance renders from its parts, without its
+  # PackageInstance and hook resources. A managed instance keeps its parts
+  # under `raw`; its top-level keys are the package's `out` interface, which
+  # holds only the resources the package exports. `root` is excluded because
+  # it repeats a resource held under a named part.
+  instancePartResources =
+    inst:
+    let
+      raw =
+        inst.raw or (removeAttrs inst [
+          "_type"
+          "_meta"
+          "_packageInstance"
+          "_diagnostics"
+          "_scorecardFindings"
+          "_isImport"
+          "root"
+          "fqdn"
+          "out"
+          "overrideParts"
+        ]);
+    in
+    builtins.filter (v: (v._type or "") == "k8s-resource") (
+      collectTypedAttrs {
+        excludeKeys = [
+          "root"
+          "meta"
+        ];
+      } raw
+    );
+
   knownFolders = {
     secrets = {
       expectedTypes = [ "k8s-resource" ];

@@ -184,10 +184,12 @@ in
             type = lib.types.bool;
             default = false;
           };
+          # Upstream's chart also offers "sts" (a StatefulSet with a volume
+          # claim template); kix implements only an inline PVC.
           type = lib.mkOption {
-            type = lib.types.str;
+            type = lib.types.enum [ "pvc" ];
             default = "pvc";
-            description = "pvc | sts. Only `pvc` is implemented in kix.";
+            description = "How grafana persists its data. Only `pvc` is implemented; for other storage, wire the `storage` dependency to a persistent-volume-claim instance.";
           };
           size = lib.mkOption {
             type = lib.types.str;
@@ -469,9 +471,7 @@ in
       # Storage precedence: DI alias `storage` wins (existing behaviour);
       # falls back to inline PVC when `persistence.enabled = true && type =
       # "pvc"` AND no DI storage is supplied; falls back to emptyDir
-      # otherwise. STS mode is not implemented; without DI storage,
-      # grafanaStorageVolume throws.
-      stsRequested = config.persistence.enabled && config.persistence.type == "sts";
+      # otherwise.
 
       useInlinePvc =
         storage == null
@@ -488,34 +488,26 @@ in
       # Volume entry that mounts grafana's /var/lib/grafana. Picks PVC
       # (DI / inline / existing-claim) or falls back to emptyDir.
       grafanaStorageVolume =
-        lib.throwIf (stsRequested && storage == null)
-          ''
-            [grafana] persistence.type = "sts" is not implemented in kix.
-            Either use the `storage` DI alias with a sibling
-            persistent-volume-claim instance, or set persistence.type = "pvc".
-          ''
-          (
-            if storage != null then
-              {
-                name = self.storageMount.name;
-              }
-              // self.storageMount.source
-            else if useInlinePvc then
-              {
-                name = "storage";
-                persistentVolumeClaim.claimName = self.persistencePvc.out.name;
-              }
-            else if useExistingClaim then
-              {
-                name = "storage";
-                persistentVolumeClaim.claimName = config.persistence.existingClaim;
-              }
-            else
-              {
-                name = "storage";
-                emptyDir = { };
-              }
-          );
+        if storage != null then
+          {
+            name = self.storageMount.name;
+          }
+          // self.storageMount.source
+        else if useInlinePvc then
+          {
+            name = "storage";
+            persistentVolumeClaim.claimName = self.persistencePvc.out.name;
+          }
+        else if useExistingClaim then
+          {
+            name = "storage";
+            persistentVolumeClaim.claimName = config.persistence.existingClaim;
+          }
+        else
+          {
+            name = "storage";
+            emptyDir = { };
+          };
 
       # ── Extra mount conversion ──────────────────────────────────────────
       # Names supplied via `extraConfigmapMounts`/`extraSecretMounts`/
