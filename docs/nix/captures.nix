@@ -2558,6 +2558,11 @@
     group = "how-to/application-status";
     page = "/docs/how-to/operate-a-cluster/check-resource-status/";
     cwd = "kix-examples/";
+    # First live group after how-to/adoption-stateful-migration, which leaves
+    # how-to-stateful-migration deployed. Kix's cluster-wide listings include
+    # every Kix cluster in the kind cluster, so status, health and diff would
+    # report it (housekeeping/2026-09-27-managed-sweep-ignores-cluster-label.md).
+    resetCluster = true;
     live = [
       {
         prepare = [
