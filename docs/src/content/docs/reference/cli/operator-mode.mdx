@@ -8,7 +8,13 @@ Kix operator running in the cluster makes the changes. The CLI writes an
 Activation record that names the build's Nix store path, then watches the
 record's status until the operator finishes. The operator applies with the
 same engine as `kix deploy` and, while an activation is Active, re-applies
-resources that have drifted.
+resources that have drifted and deletes the record's cluster's resources that
+the build no longer has. It reads only the resources of the record's Kix
+cluster, named by the record's `kix.run/cluster` label (or `spec.cluster` when
+the label is missing), found through the Activation records each resource
+names in `kix.run/activations`. It keeps a resource another Kix cluster's
+current build also contains, both when it prunes and when a deleted record's
+finalizer removes that record's resources.
 
 This page is hand-maintained. Check `cli/kix-cli/src/commands/operator.rs`,
 `cli/kix-operator/src/main.rs` and the command files when in doubt.

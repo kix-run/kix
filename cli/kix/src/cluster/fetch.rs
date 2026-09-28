@@ -3,12 +3,14 @@
 //! Uses `kube` discovery to enumerate API resources, then parallel LIST
 //! calls with label selectors to fetch kix-managed resources.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
+use super::activation::{self, Tenancy};
 use super::client::{ResiliencePolicy, build_client, mark_first_contact, preflight_enabled};
 use super::errors::{FailureClass, classify};
 use crate::manifest::keys;
+use crate::manifest::lifecycle::never_pruned;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::{
     Config,
@@ -60,6 +62,16 @@ pub enum FetchError {
         #[source]
         source: kube::Error,
     },
+
+    #[error("failed to read {resource}: {}", super::errors::describe(source))]
+    GetError {
+        resource: String,
+        #[source]
+        source: kube::Error,
+    },
+
+    #[error("{0}")]
+    RecordsError(#[source] activation::ActivationError),
 }
 
 /// The managed-by label value that kix sets on all resources.
@@ -290,6 +302,181 @@ pub struct ManagedSweep {
     /// visible to kix. Callers print this so a narrower-than-cluster view is
     /// never mistaken for a complete one.
     pub forbidden: Vec<String>,
+    /// Under [`SweepScope::Cluster`]: objects left out because they belong
+    /// only to other Kix clusters, counted per owner (several owners are
+    /// joined with ", ").
+    pub foreign: BTreeMap<String, usize>,
+    /// Under [`SweepScope::Cluster`], when another Kix cluster has records
+    /// here: objects that name no record of any cluster, so Kix cannot tell
+    /// whose they are. Left out of `managed` and `unstamped`.
+    pub unattributed: Vec<DynamicObject>,
+    /// Under [`SweepScope::Records`]: objects of the named cluster that name
+    /// none of the given records, such as leftovers of Superseded builds.
+    pub other_builds: usize,
+    /// The Activation records, read after the objects. Its `cluster` is the
+    /// one the scope named, and empty under [`SweepScope::All`].
+    pub tenancy: Tenancy,
+}
+
+impl ManagedSweep {
+    /// One line per other Kix cluster whose objects the scope left out, and
+    /// one for the unattributed objects, for a command to print.
+    pub fn scope_notes(&self) -> Vec<String> {
+        let mut notes: Vec<String> = self
+            .foreign
+            .iter()
+            .map(|(owner, n)| {
+                let (objects, belong) = if *n == 1 {
+                    ("object", "belongs")
+                } else {
+                    ("objects", "belong")
+                };
+                let clusters = if owner.contains(", ") {
+                    "Kix clusters"
+                } else {
+                    "Kix cluster"
+                };
+                format!("Skipped {n} {objects} that {belong} to {clusters} {owner}.")
+            })
+            .collect();
+        if !self.unattributed.is_empty() {
+            let n = self.unattributed.len();
+            let (objects, name) = if n == 1 {
+                ("object", "names")
+            } else {
+                ("objects", "name")
+            };
+            notes.push(format!(
+                "Skipped {n} Kix {objects} that {name} no Activation record on this cluster; \
+                 another Kix cluster deploys here, so Kix cannot tell whose they are."
+            ));
+        }
+        notes
+    }
+}
+
+/// Which Kix-labelled objects a sweep returns.
+#[derive(Debug, Clone, Copy)]
+pub enum SweepScope<'a> {
+    /// The named Kix cluster's objects, by [`attribute`]: its own and the
+    /// ones it shares with other clusters. Unattributed objects count as its
+    /// own only while no other Kix cluster has records here.
+    Cluster(&'a str),
+    /// Objects naming one of `hashes` in `kix.run/activations`: the closures
+    /// of exactly those records of `cluster`, whether or not the records
+    /// still exist.
+    Records {
+        cluster: &'a str,
+        hashes: &'a HashSet<String>,
+    },
+    /// Every Kix-labelled object, whichever cluster deployed it.
+    All,
+}
+
+/// Whose an object is, by the record hashes it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Attribution {
+    /// Names a record of this cluster and none of another's.
+    Ours,
+    /// Names a record of this cluster and records of these other clusters.
+    Shared(Vec<String>),
+    /// Names records of these other clusters only.
+    Foreign(Vec<String>),
+    /// Names no record on the cluster: its hashes are all retired, it has no
+    /// `kix.run/activations`, or it was never stamped.
+    Unattributed,
+}
+
+/// Attribute a swept object to Kix clusters through the record hashes it
+/// names (see [`activation::named_hashes`]).
+pub fn attribute(obj: &DynamicObject, tenancy: &Tenancy) -> Attribution {
+    let mut ours = false;
+    let mut others: Vec<String> = Vec::new();
+    for hash in activation::named_hashes(obj) {
+        if tenancy.own.contains(hash) {
+            ours = true;
+        } else if let Some(owner) = tenancy.others.get(hash) {
+            others.push(owner.clone());
+        }
+    }
+    others.sort();
+    others.dedup();
+    match (ours, others.is_empty()) {
+        (true, true) => Attribution::Ours,
+        (true, false) => Attribution::Shared(others),
+        (false, false) => Attribution::Foreign(others),
+        (false, true) => Attribution::Unattributed,
+    }
+}
+
+/// Narrow a whole-cluster sweep to `scope`, attributing objects through
+/// `tenancy`, which must be read for the cluster `scope` names.
+pub fn scope_sweep(sweep: ManagedSweep, scope: SweepScope<'_>, tenancy: Tenancy) -> ManagedSweep {
+    match scope {
+        SweepScope::All => ManagedSweep { tenancy, ..sweep },
+        SweepScope::Records { hashes, .. } => {
+            let (managed, rest) = split_by_records(sweep.managed, hashes);
+            let (unstamped, _) = split_by_records(sweep.unstamped, hashes);
+            let other_builds = rest
+                .iter()
+                .filter(|o| {
+                    matches!(
+                        attribute(o, &tenancy),
+                        Attribution::Ours | Attribution::Shared(_)
+                    )
+                })
+                .count();
+            ManagedSweep {
+                managed,
+                unstamped,
+                other_builds,
+                tenancy,
+                ..sweep
+            }
+        }
+        SweepScope::Cluster(_) => {
+            let shared_cluster = !tenancy.others.is_empty();
+            let mut foreign: BTreeMap<String, usize> = BTreeMap::new();
+            let mut unattributed = Vec::new();
+            let mut keep = |objects: Vec<DynamicObject>| -> Vec<DynamicObject> {
+                let mut kept = Vec::new();
+                for obj in objects {
+                    match attribute(&obj, &tenancy) {
+                        Attribution::Ours | Attribution::Shared(_) => kept.push(obj),
+                        Attribution::Foreign(owners) => {
+                            *foreign.entry(owners.join(", ")).or_default() += 1;
+                        }
+                        Attribution::Unattributed if shared_cluster => unattributed.push(obj),
+                        Attribution::Unattributed => kept.push(obj),
+                    }
+                }
+                kept
+            };
+            let managed = keep(sweep.managed);
+            let unstamped = keep(sweep.unstamped);
+            ManagedSweep {
+                managed,
+                unstamped,
+                forbidden: sweep.forbidden,
+                foreign,
+                unattributed,
+                other_builds: 0,
+                tenancy,
+            }
+        }
+    }
+}
+
+/// Split objects into the ones naming one of `hashes` in
+/// `kix.run/activations` (the closures of exactly those records) and the
+/// rest.
+pub fn split_by_records(
+    objects: Vec<DynamicObject>,
+    hashes: &HashSet<String>,
+) -> (Vec<DynamicObject>, Vec<DynamicObject>) {
+    objects
+        .into_iter()
+        .partition(|o| activation::named_hashes(o).any(|h| hashes.contains(h)))
 }
 
 /// Fetch every resource kix applied, in parallel: one LIST per discovered
@@ -303,20 +490,35 @@ pub struct ManagedSweep {
 pub async fn fetch_managed_resources(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
+    scope: SweepScope<'_>,
 ) -> Result<Vec<DynamicObject>, FetchError> {
-    Ok(sweep_managed(client, discovery).await?.managed)
+    Ok(sweep_managed(client, discovery, scope).await?.managed)
 }
 
-/// The full sweep: kix-applied objects plus the unstamped label carriers.
+/// The full sweep: kix-applied objects plus the unstamped label carriers,
+/// narrowed to `scope`. The LIST selects by the managed-by label alone and
+/// [`scope_sweep`] filters client-side, since the compiler stamps no
+/// per-cluster label on ordinary objects.
+///
+/// The Activation records are listed after the objects, for the reason
+/// [`activation::tenancy`] gives.
 pub async fn sweep_managed(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
+    scope: SweepScope<'_>,
 ) -> Result<ManagedSweep, FetchError> {
     let lp = ListParams::default().labels(MANAGED_BY_LABEL);
     let listed = fetch_parallel(client, discovery, &lp).await?;
     let mut sweep = partition_sweep(listed.objects);
     sweep.forbidden = listed.forbidden;
-    Ok(sweep)
+    let cluster = match scope {
+        SweepScope::Cluster(cluster) | SweepScope::Records { cluster, .. } => cluster,
+        SweepScope::All => "",
+    };
+    let tenancy = activation::tenancy(client, discovery, cluster)
+        .await
+        .map_err(FetchError::RecordsError)?;
+    Ok(scope_sweep(sweep, scope, tenancy))
 }
 
 /// Decide what the label sweep really found.
@@ -361,6 +563,10 @@ pub fn partition_sweep(objects: Vec<DynamicObject>) -> ManagedSweep {
         managed,
         unstamped,
         forbidden: Vec::new(),
+        foreign: BTreeMap::new(),
+        unattributed: Vec::new(),
+        other_builds: 0,
+        tenancy: Tenancy::default(),
     }
 }
 
@@ -452,6 +658,151 @@ pub async fn fetch_matching_resources(
         }
     }
     Ok(results)
+}
+
+/// An orphan candidate that another Kix cluster's current build still
+/// contains, so a prune keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedOrphan {
+    pub rid: ResourceId,
+    /// The other Kix clusters, sorted.
+    pub clusters: Vec<String>,
+}
+
+impl SharedOrphan {
+    /// The line a plan prints for it.
+    pub fn describe(&self) -> String {
+        let clusters = if self.clusters.len() == 1 {
+            "Kix cluster"
+        } else {
+            "Kix clusters"
+        };
+        format!(
+            "kept {}, still deployed by {clusters} {}",
+            self.rid,
+            self.clusters.join(", ")
+        )
+    }
+}
+
+/// Split orphan candidates into the ones to prune and the ones another Kix
+/// cluster still deploys, judged from live objects already in hand. Kinds
+/// that [`never_pruned`] protects stay with the prunable ones: the prune
+/// already keeps and reports them.
+pub fn split_shared_orphans(
+    orphans: Vec<ResourceId>,
+    live: &[DynamicObject],
+    tenancy: &Tenancy,
+) -> (Vec<ResourceId>, Vec<SharedOrphan>) {
+    let by_id: std::collections::HashMap<ResourceId, &DynamicObject> = live
+        .iter()
+        .map(|o| (ResourceId::from_value(&to_manifest_value(o)), o))
+        .collect();
+    split_by_lookup(orphans, |rid| by_id.get(rid).copied(), tenancy)
+}
+
+fn split_by_lookup<'a>(
+    orphans: Vec<ResourceId>,
+    live: impl Fn(&ResourceId) -> Option<&'a DynamicObject>,
+    tenancy: &Tenancy,
+) -> (Vec<ResourceId>, Vec<SharedOrphan>) {
+    if tenancy.others_current.is_empty() {
+        return (orphans, Vec::new());
+    }
+    let mut prune = Vec::new();
+    let mut shared = Vec::new();
+    for rid in orphans {
+        if never_pruned(&rid.kind) {
+            prune.push(rid);
+            continue;
+        }
+        let clusters = live(&rid)
+            .map(|o| tenancy.still_deployed_by_others(o))
+            .unwrap_or_default();
+        if clusters.is_empty() {
+            prune.push(rid);
+        } else {
+            shared.push(SharedOrphan { rid, clusters });
+        }
+    }
+    (prune, shared)
+}
+
+/// [`split_shared_orphans`] for a plan made from builds: GET each orphan
+/// candidate to read its `kix.run/activations`, then read the Tenancy of
+/// `cluster` (after the objects, for the reason [`activation::tenancy`]
+/// gives).
+///
+/// This decides what a plan shows. The delete itself goes through
+/// [`super::prune_guard::PruneGuard`], which checks again.
+///
+/// A candidate that is gone or whose kind is not served is prunable (the
+/// delete is then a no-op). Any other GET failure is an error: a prune that
+/// cannot read an object cannot tell whether another cluster still uses it.
+pub async fn split_shared_orphans_live(
+    client: &Client,
+    discovery: &[(ApiResource, Scope)],
+    orphans: Vec<ResourceId>,
+    cluster: &str,
+) -> Result<(Vec<ResourceId>, Vec<SharedOrphan>), FetchError> {
+    if orphans.is_empty() {
+        return Ok((orphans, Vec::new()));
+    }
+    let ar_by_kind: std::collections::HashMap<&str, &(ApiResource, Scope)> = discovery
+        .iter()
+        .map(|pair| (pair.0.kind.as_str(), pair))
+        .collect();
+    let gets = orphans
+        .iter()
+        .filter(|rid| !never_pruned(&rid.kind))
+        .filter_map(|rid| {
+            let (ar, scope) = ar_by_kind.get(rid.kind.as_str())?;
+            let api = api_for(client, ar, scope, rid);
+            Some(async move {
+                let obj = api
+                    .get_opt(&rid.name)
+                    .await
+                    .map_err(|source| FetchError::GetError {
+                        resource: rid.display_id(),
+                        source,
+                    })?;
+                Ok::<_, FetchError>(obj.map(|o| (rid.clone(), o)))
+            })
+        });
+    // Keyed by the candidate's own id: an object read from `default` for a
+    // candidate without a namespace must still match that candidate.
+    let live: std::collections::HashMap<ResourceId, DynamicObject> =
+        futures::future::try_join_all(gets)
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+    let tenancy = activation::tenancy(client, discovery, cluster)
+        .await
+        .map_err(FetchError::RecordsError)?;
+    Ok(split_by_lookup(orphans, |rid| live.get(rid), &tenancy))
+}
+
+/// The API a request about `rid` goes to. A namespaced object whose
+/// manifest names no namespace (`rid.namespace` is [`CLUSTER_SCOPED`]) was
+/// applied to `default`, so it is read and deleted there.
+pub fn api_for(
+    client: &Client,
+    ar: &ApiResource,
+    scope: &Scope,
+    rid: &ResourceId,
+) -> Api<DynamicObject> {
+    match scope {
+        Scope::Namespaced => {
+            let ns = if rid.namespace == CLUSTER_SCOPED {
+                "default"
+            } else {
+                rid.namespace.as_str()
+            };
+            Api::namespaced_with(client.clone(), ns, ar)
+        }
+        Scope::Cluster => Api::all_with(client.clone(), ar),
+    }
 }
 
 /// Strip server-side fields from a DynamicObject for diffing.
@@ -1236,5 +1587,290 @@ mod tests {
             PROBE_GRACE > Duration::ZERO,
             "the transport must win the connect race, not tie it"
         );
+    }
+
+    // --- Scoping the sweep to one Kix cluster ---
+
+    fn record(cluster: Option<&str>, hash: &str, phase: &str) -> DynamicObject {
+        let mut labels = serde_json::Map::new();
+        if let Some(c) = cluster {
+            labels.insert(keys::CLUSTER_LABEL.into(), json!(c));
+        }
+        serde_json::from_value(json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": format!("rec-{hash}"),
+                "labels": labels,
+                "annotations": { (keys::IDENTITY_HASH): hash },
+            },
+            "status": { "phase": phase },
+        }))
+        .unwrap()
+    }
+
+    /// Cluster `a` has records a1 (Superseded) and a2 (Active); cluster `b`
+    /// has b0 (Superseded) and b1 (Active).
+    fn two_clusters(cluster: &str) -> Tenancy {
+        Tenancy::from_records(
+            &[
+                record(Some("a"), "a1", activation::PHASE_SUPERSEDED),
+                record(Some("a"), "a2", activation::PHASE_ACTIVE),
+                record(Some("b"), "b0", activation::PHASE_SUPERSEDED),
+                record(Some("b"), "b1", activation::PHASE_ACTIVE),
+            ],
+            cluster,
+        )
+    }
+
+    fn one_cluster() -> Tenancy {
+        Tenancy::from_records(&[record(Some("a"), "a2", activation::PHASE_ACTIVE)], "a")
+    }
+
+    /// A stamped object naming `activations` (comma-separated) under `key`.
+    fn named(kind: &str, ns: &str, name: &str, key: &str, activations: &str) -> DynamicObject {
+        let mut obj = swept(kind, ns, name, true, false);
+        if !activations.is_empty() {
+            obj.metadata
+                .annotations
+                .get_or_insert_default()
+                .insert(key.to_string(), activations.to_string());
+        }
+        obj
+    }
+
+    fn obj(kind: &str, name: &str, activations: &str) -> DynamicObject {
+        named(kind, "ns", name, keys::ACTIVATIONS, activations)
+    }
+
+    #[test]
+    fn attribution_follows_the_record_hashes_an_object_names() {
+        let t = two_clusters("a");
+        let cases = [
+            ("a2", Attribution::Ours),
+            ("a1", Attribution::Ours),
+            ("a2,b1", Attribution::Shared(vec!["b".into()])),
+            ("b1", Attribution::Foreign(vec!["b".into()])),
+            ("b0,b1", Attribution::Foreign(vec!["b".into()])),
+            ("dead1,dead2", Attribution::Unattributed),
+            ("", Attribution::Unattributed),
+        ];
+        for (acts, want) in cases {
+            assert_eq!(
+                attribute(&obj("ConfigMap", "c", acts), &t),
+                want,
+                "{acts:?}"
+            );
+        }
+        // An unstamped label carrier names nothing.
+        assert_eq!(
+            attribute(&swept("ConfigMap", "ns", "c", false, false), &t),
+            Attribution::Unattributed
+        );
+    }
+
+    #[test]
+    fn attribution_reads_the_retired_activations_key() {
+        let Some(domain) = crate::legacy_domain::DOMAINS.first() else {
+            return;
+        };
+        let t = two_clusters("a");
+        let legacy = named(
+            "ConfigMap",
+            "ns",
+            "c",
+            &format!("{domain}/activations"),
+            "b1",
+        );
+        assert_eq!(
+            attribute(&legacy, &t),
+            Attribution::Foreign(vec!["b".into()])
+        );
+    }
+
+    /// An Activation record names itself by its identity hash, before any
+    /// deploy has stamped `kix.run/activations` on it.
+    #[test]
+    fn a_record_is_attributed_by_its_own_hash() {
+        let t = two_clusters("a");
+        assert_eq!(
+            attribute(&record(Some("b"), "b1", activation::PHASE_ACTIVE), &t),
+            Attribution::Foreign(vec!["b".into()])
+        );
+        assert_eq!(
+            attribute(&record(Some("a"), "a2", activation::PHASE_ACTIVE), &t),
+            Attribution::Ours
+        );
+    }
+
+    fn mixed_sweep() -> ManagedSweep {
+        partition_sweep(vec![
+            obj("Deployment", "a-web", "a2"),
+            obj("Deployment", "b-web", "b1"),
+            obj("ClusterRole", "shared", "a2,b1"),
+            obj("ConfigMap", "leftover", "dead"),
+            swept("ConfigMap", "ns", "kubectl-applied", false, false),
+        ])
+    }
+
+    fn sorted_names(objs: &[DynamicObject]) -> Vec<&str> {
+        let mut v: Vec<&str> = objs
+            .iter()
+            .map(|o| o.metadata.name.as_deref().unwrap())
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Two Kix clusters' objects in one apiserver: each cluster's scope sees
+    /// its own objects and the shared one, never the other's.
+    #[test]
+    fn each_cluster_sees_only_its_own_objects() {
+        let swept_a = scope_sweep(mixed_sweep(), SweepScope::Cluster("a"), two_clusters("a"));
+        assert_eq!(sorted_names(&swept_a.managed), vec!["a-web", "shared"]);
+        assert_eq!(swept_a.foreign, BTreeMap::from([("b".to_string(), 1)]));
+        assert_eq!(
+            sorted_names(&swept_a.unattributed),
+            vec!["kubectl-applied", "leftover"]
+        );
+        assert!(swept_a.unstamped.is_empty());
+
+        let swept_b = scope_sweep(mixed_sweep(), SweepScope::Cluster("b"), two_clusters("b"));
+        assert_eq!(sorted_names(&swept_b.managed), vec!["b-web", "shared"]);
+        assert_eq!(swept_b.foreign, BTreeMap::from([("a".to_string(), 1)]));
+    }
+
+    /// With one Kix cluster on the Kubernetes cluster, the scoped sweep is
+    /// the whole sweep, as before scoping existed.
+    #[test]
+    fn a_single_cluster_keeps_every_object() {
+        let t = one_cluster();
+        let sweep = partition_sweep(vec![
+            obj("Deployment", "web", "a2"),
+            obj("ConfigMap", "leftover", "dead"),
+            obj("ConfigMap", "never-annotated", ""),
+            swept("ConfigMap", "ns", "kubectl-applied", false, false),
+        ]);
+        let scoped = scope_sweep(sweep, SweepScope::Cluster("a"), t);
+        assert_eq!(
+            sorted_names(&scoped.managed),
+            vec!["leftover", "never-annotated", "web"]
+        );
+        assert_eq!(sorted_names(&scoped.unstamped), vec!["kubectl-applied"]);
+        assert!(scoped.foreign.is_empty() && scoped.unattributed.is_empty());
+        assert!(scoped.scope_notes().is_empty());
+
+        // A Kubernetes cluster with no records at all: the same.
+        let none = Tenancy::from_records(&[], "a");
+        let scoped = scope_sweep(mixed_sweep(), SweepScope::Cluster("a"), none);
+        assert_eq!(scoped.managed.len(), 4);
+    }
+
+    #[test]
+    fn a_records_scope_keeps_exactly_those_closures() {
+        let hashes: HashSet<String> = ["a2".to_string()].into();
+        let mut objects = mixed_sweep();
+        objects.managed.push(obj("ConfigMap", "a-older", "a1"));
+        let scope = SweepScope::Records {
+            cluster: "a",
+            hashes: &hashes,
+        };
+        let scoped = scope_sweep(objects, scope, two_clusters("a"));
+        assert_eq!(sorted_names(&scoped.managed), vec!["a-web", "shared"]);
+        assert!(scoped.unstamped.is_empty());
+        // `a-older` names only a Superseded record of `a`.
+        assert_eq!(scoped.other_builds, 1);
+    }
+
+    #[test]
+    fn scope_notes_name_the_other_cluster() {
+        let notes =
+            scope_sweep(mixed_sweep(), SweepScope::Cluster("a"), two_clusters("a")).scope_notes();
+        assert_eq!(notes[0], "Skipped 1 object that belongs to Kix cluster b.");
+        assert!(notes[1].starts_with("Skipped 2 Kix objects that name no Activation record"));
+    }
+
+    /// The sweep lists the Activation records after every object LIST, so
+    /// every hash a listed object names belongs to a record it read.
+    #[tokio::test]
+    async fn the_sweep_reads_the_records_after_the_objects() {
+        use crate::cluster::fake_api::FakeApi;
+        let api = FakeApi::new([]);
+        let client = api.client();
+        let discovery = discover_resources(&client).await.unwrap();
+        let before = api.requests().len();
+        sweep_managed(&client, &discovery, SweepScope::Cluster("a"))
+            .await
+            .unwrap();
+        let requests = api.requests().split_off(before);
+        let records = format!("GET /apis/{}/activations", keys::API_VERSION);
+        let last_object_list = requests
+            .iter()
+            .rposition(|r| r.contains("labelSelector="))
+            .unwrap();
+        let record_list = requests.iter().position(|r| *r == records).unwrap();
+        assert!(last_object_list < record_list, "{requests:#?}");
+    }
+
+    fn rid(kind: &str, name: &str) -> ResourceId {
+        ResourceId {
+            kind: kind.into(),
+            namespace: "ns".into(),
+            name: name.into(),
+        }
+    }
+
+    /// An object both clusters deploy is not pruned by either: dropping it
+    /// from one build keeps it while the other's current record names it.
+    #[test]
+    fn an_orphan_another_cluster_still_deploys_is_kept() {
+        let live = vec![
+            obj("ClusterRole", "shared", "a2,b1"),
+            obj("ClusterRole", "once-shared", "a2,b0"),
+            obj("ConfigMap", "mine", "a2"),
+        ];
+        let orphans = vec![rid("ClusterRole", "shared"), rid("ConfigMap", "mine")];
+        let (prune, kept) = split_shared_orphans(orphans, &live, &two_clusters("a"));
+        assert_eq!(prune, vec![rid("ConfigMap", "mine")]);
+        assert_eq!(
+            kept,
+            vec![SharedOrphan {
+                rid: rid("ClusterRole", "shared"),
+                clusters: vec!["b".into()],
+            }]
+        );
+        assert_eq!(
+            kept[0].describe(),
+            "kept ClusterRole/shared@ns, still deployed by Kix cluster b"
+        );
+
+        // A Namespace is never pruned anyway; the prune lists it as kept.
+        let ns = named(
+            "Namespace",
+            CLUSTER_SCOPED,
+            "shared-ns",
+            keys::ACTIVATIONS,
+            "a2,b1",
+        );
+        let ns_rid = ResourceId::from_value(&to_manifest_value(&ns));
+        let split = split_shared_orphans(vec![ns_rid.clone()], &[ns], &two_clusters("a"));
+        assert_eq!(split, (vec![ns_rid], vec![]));
+
+        let (prune, kept) = split_shared_orphans(
+            vec![rid("ClusterRole", "shared")],
+            &live,
+            &two_clusters("b"),
+        );
+        assert!(prune.is_empty());
+        assert_eq!(kept[0].clusters, vec!["a".to_string()]);
+
+        // A Superseded record of `b` no longer deploys anything.
+        let (prune, kept) = split_shared_orphans(
+            vec![rid("ClusterRole", "once-shared")],
+            &live,
+            &two_clusters("a"),
+        );
+        assert_eq!(prune, vec![rid("ClusterRole", "once-shared")]);
+        assert!(kept.is_empty());
     }
 }

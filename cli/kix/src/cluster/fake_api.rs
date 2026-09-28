@@ -1,0 +1,336 @@
+//! An in-memory apiserver for tests of code that takes a `kube::Client`.
+//!
+//! It serves discovery for a fixed set of kinds (ConfigMap, Namespace,
+//! ClusterRole, Kix's Activation), and GET, LIST (with an equality label
+//! selector) and DELETE (honouring `preconditions`) on the objects it holds.
+//! Every object gets a uid and a resourceVersion when it is added, and a new
+//! resourceVersion on every change. Anything else answers 404.
+//!
+//! [`FakeApi::after_get`] changes an object right after the next GET of it
+//! is answered, which models a concurrent writer between a read and a delete.
+
+use std::sync::{Arc, Mutex};
+
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use kube::Client;
+use serde_json::{Value, json};
+
+use crate::manifest::keys;
+use crate::manifest::lifecycle::RECORD_KIND;
+
+/// `(group, version, kind, plural, namespaced)` of every kind served.
+const KINDS: &[(&str, &str, &str, &str, bool)] = &[
+    ("", "v1", "ConfigMap", "configmaps", true),
+    ("", "v1", "Namespace", "namespaces", false),
+    (
+        "rbac.authorization.k8s.io",
+        "v1",
+        "ClusterRole",
+        "clusterroles",
+        false,
+    ),
+    (keys::DOMAIN, "v1alpha1", RECORD_KIND, "activations", false),
+];
+
+type Hook = Box<dyn FnOnce(&mut Value) + Send>;
+
+#[derive(Default)]
+struct State {
+    objects: Vec<Value>,
+    next_rv: u64,
+    /// `METHOD path` of every request, in order, with `?query` when it has one.
+    requests: Vec<String>,
+    after_get: Vec<(String, Hook)>,
+}
+
+impl State {
+    fn bump(&mut self) -> String {
+        self.next_rv += 1;
+        self.next_rv.to_string()
+    }
+}
+
+/// See the module docs. Clones share one state.
+#[derive(Clone, Default)]
+pub struct FakeApi {
+    state: Arc<Mutex<State>>,
+}
+
+impl FakeApi {
+    pub fn new(objects: impl IntoIterator<Item = Value>) -> Self {
+        let api = FakeApi::default();
+        for o in objects {
+            api.insert(o);
+        }
+        api
+    }
+
+    /// Add an object, assigning it a uid and a resourceVersion.
+    pub fn insert(&self, mut obj: Value) {
+        let mut st = self.state.lock().unwrap();
+        let rv = st.bump();
+        let meta = obj["metadata"].as_object_mut().expect("metadata");
+        meta.insert("uid".into(), json!(format!("uid-{rv}")));
+        meta.insert("resourceVersion".into(), json!(rv));
+        st.objects.push(obj);
+    }
+
+    /// Run `f` on the object named `name` right after the next GET of it,
+    /// and give it a new resourceVersion.
+    pub fn after_get(&self, name: &str, f: impl FnOnce(&mut Value) + Send + 'static) {
+        self.state
+            .lock()
+            .unwrap()
+            .after_get
+            .push((name.to_string(), Box::new(f)));
+    }
+
+    /// Names of the objects of `kind` still held, sorted.
+    pub fn names(&self, kind: &str) -> Vec<String> {
+        let st = self.state.lock().unwrap();
+        let mut v: Vec<String> = st
+            .objects
+            .iter()
+            .filter(|o| o["kind"] == kind)
+            .filter_map(|o| o["metadata"]["name"].as_str().map(str::to_string))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// `METHOD path` of every request so far, with `?query` when it has one.
+    pub fn requests(&self) -> Vec<String> {
+        self.state.lock().unwrap().requests.clone()
+    }
+
+    pub fn client(&self) -> Client {
+        let api = self.clone();
+        let service = tower::service_fn(move |req: http::Request<kube::client::Body>| {
+            let api = api.clone();
+            async move {
+                let method = req.method().clone();
+                let path = req.uri().path().to_string();
+                let query = req.uri().query().unwrap_or("").to_string();
+                let body = req.into_body().collect().await.unwrap().to_bytes();
+                let (status, value) = api.handle(&method, &path, &query, &body);
+                let resp = http::Response::builder()
+                    .status(status)
+                    .header("content-type", "application/json")
+                    .body(Full::new(Bytes::from(value.to_string())))
+                    .unwrap();
+                Ok::<_, std::convert::Infallible>(resp)
+            }
+        });
+        Client::new(service, "default")
+    }
+
+    fn handle(&self, method: &http::Method, path: &str, query: &str, body: &[u8]) -> (u16, Value) {
+        let mut st = self.state.lock().unwrap();
+        let line = if query.is_empty() {
+            format!("{method} {path}")
+        } else {
+            format!("{method} {path}?{query}")
+        };
+        st.requests.push(line);
+        if let Some(doc) = discovery(path) {
+            return (200, doc);
+        }
+        let Some(target) = Target::parse(path) else {
+            return not_found(path);
+        };
+        let selector = label_selector(query);
+        let matches = |o: &Value| {
+            target.holds(o)
+                && selector
+                    .iter()
+                    .all(|(k, v)| o["metadata"]["labels"][k.as_str()].as_str() == Some(v.as_str()))
+        };
+        match (method.as_str(), &target.name) {
+            ("GET", None) => {
+                let items: Vec<Value> = st.objects.iter().filter(|o| matches(o)).cloned().collect();
+                (
+                    200,
+                    json!({
+                        "apiVersion": "v1",
+                        "kind": format!("{}List", target.kind),
+                        "metadata": { "resourceVersion": st.next_rv.to_string() },
+                        "items": items,
+                    }),
+                )
+            }
+            ("GET", Some(_)) => {
+                let Some(i) = st.objects.iter().position(&matches) else {
+                    return not_found(path);
+                };
+                let answer = st.objects[i].clone();
+                let name = target.name.clone().unwrap();
+                if let Some(h) = st.after_get.iter().position(|(n, _)| *n == name) {
+                    let (_, hook) = st.after_get.remove(h);
+                    let rv = st.bump();
+                    hook(&mut st.objects[i]);
+                    st.objects[i]["metadata"]["resourceVersion"] = json!(rv);
+                }
+                (200, answer)
+            }
+            ("DELETE", Some(_)) => {
+                let Some(i) = st.objects.iter().position(&matches) else {
+                    return not_found(path);
+                };
+                let options: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+                let pre = &options["preconditions"];
+                let meta = &st.objects[i]["metadata"];
+                let stale = ["uid", "resourceVersion"]
+                    .iter()
+                    .any(|k| pre[k].is_string() && pre[k] != meta[k]);
+                if stale {
+                    return status(409, "Conflict", "Precondition failed");
+                }
+                let gone = st.objects.remove(i);
+                (200, gone)
+            }
+            _ => status(405, "MethodNotAllowed", "not served by the fake"),
+        }
+    }
+}
+
+struct Target {
+    kind: &'static str,
+    api_version: String,
+    namespaced: bool,
+    namespace: Option<String>,
+    name: Option<String>,
+}
+
+impl Target {
+    fn parse(path: &str) -> Option<Target> {
+        let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
+        let (group, version, rest) = match segs.as_slice() {
+            ["api", v, rest @ ..] => ("", *v, rest),
+            ["apis", g, v, rest @ ..] => (*g, *v, rest),
+            _ => return None,
+        };
+        let (namespace, plural, name) = match rest {
+            ["namespaces", ns, plural, name @ ..] => (Some(ns.to_string()), *plural, name.first()),
+            [plural, name @ ..] => (None, *plural, name.first()),
+            _ => return None,
+        };
+        let &(_, _, kind, _, namespaced) = KINDS
+            .iter()
+            .find(|(g, v, _, p, _)| *g == group && *v == version && *p == plural)?;
+        Some(Target {
+            kind,
+            api_version: if group.is_empty() {
+                version.to_string()
+            } else {
+                format!("{group}/{version}")
+            },
+            namespaced,
+            namespace,
+            name: name.map(|n| n.to_string()),
+        })
+    }
+
+    fn holds(&self, o: &Value) -> bool {
+        let meta = &o["metadata"];
+        o["kind"] == self.kind
+            && o["apiVersion"] == self.api_version.as_str()
+            && (!self.namespaced
+                || self
+                    .namespace
+                    .as_deref()
+                    .is_none_or(|ns| meta["namespace"] == ns))
+            && self.name.as_deref().is_none_or(|n| meta["name"] == n)
+    }
+}
+
+fn discovery(path: &str) -> Option<Value> {
+    let resources = |group: &str, version: &str| -> Value {
+        let list: Vec<Value> = KINDS
+            .iter()
+            .filter(|(g, v, ..)| *g == group && *v == version)
+            .map(|(_, _, kind, plural, namespaced)| {
+                json!({
+                    "name": plural,
+                    "singularName": "",
+                    "namespaced": namespaced,
+                    "kind": kind,
+                    "verbs": ["get", "list", "delete"],
+                })
+            })
+            .collect();
+        let gv = if group.is_empty() {
+            version.to_string()
+        } else {
+            format!("{group}/{version}")
+        };
+        json!({ "kind": "APIResourceList", "apiVersion": "v1", "groupVersion": gv, "resources": list })
+    };
+    let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match segs.as_slice() {
+        ["api"] => Some(
+            json!({ "kind": "APIVersions", "versions": ["v1"], "serverAddressByClientCIDRs": [] }),
+        ),
+        ["api", "v1"] => Some(resources("", "v1")),
+        ["apis"] => {
+            let mut groups: Vec<(&str, &str)> = KINDS
+                .iter()
+                .filter(|(g, ..)| !g.is_empty())
+                .map(|(g, v, ..)| (*g, *v))
+                .collect();
+            groups.dedup();
+            let groups: Vec<Value> = groups
+                .into_iter()
+                .map(|(g, v)| {
+                    let gv = json!({ "groupVersion": format!("{g}/{v}"), "version": v });
+                    json!({ "name": g, "versions": [gv.clone()], "preferredVersion": gv })
+                })
+                .collect();
+            Some(json!({ "kind": "APIGroupList", "apiVersion": "v1", "groups": groups }))
+        }
+        ["apis", g, v] if KINDS.iter().any(|(kg, kv, ..)| kg == g && kv == v) => {
+            Some(resources(g, v))
+        }
+        _ => None,
+    }
+}
+
+/// `k=v` pairs of a `labelSelector` query parameter.
+fn label_selector(query: &str) -> Vec<(String, String)> {
+    query
+        .split('&')
+        .filter_map(|kv| kv.strip_prefix("labelSelector="))
+        .flat_map(|sel| {
+            let decoded = sel
+                .replace("%3D", "=")
+                .replace("%2F", "/")
+                .replace("%2C", ",");
+            decoded
+                .split(',')
+                .filter_map(|pair| {
+                    let (k, v) = pair.split_once('=')?;
+                    Some((k.to_string(), v.to_string()))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn status(code: u16, reason: &str, message: &str) -> (u16, Value) {
+    (
+        code,
+        json!({
+            "kind": "Status",
+            "apiVersion": "v1",
+            "metadata": {},
+            "status": "Failure",
+            "reason": reason,
+            "message": message,
+            "code": code,
+        }),
+    )
+}
+
+fn not_found(path: &str) -> (u16, Value) {
+    status(404, "NotFound", &format!("{path} not found"))
+}

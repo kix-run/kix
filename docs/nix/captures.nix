@@ -2813,6 +2813,7 @@
           "kix"
           "snapshot"
           "save"
+          "how-to-application"
           "./snapshots/how-to-application"
         ];
       }

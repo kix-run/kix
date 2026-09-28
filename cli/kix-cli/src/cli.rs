@@ -325,10 +325,10 @@ impl Command {
                 ComplianceCommand::Attest(s) => Some(&s.cluster),
                 ComplianceCommand::Audit(s) => Some(&s.cluster),
             },
-            Command::Snapshot(_)
-            | Command::Completions(_)
-            | Command::Drift(_)
-            | Command::Pin(_) => None,
+            Command::Snapshot(a) => match &a.command {
+                SnapshotCommand::Save(s) => Some(&s.cluster),
+            },
+            Command::Completions(_) | Command::Drift(_) | Command::Pin(_) => None,
         }
     }
 }
@@ -720,6 +720,12 @@ pub struct GcArgs {
     #[arg(long)]
     pub include_unstamped: bool,
 
+    /// With --hard, also judge Kix objects that name no Activation record
+    /// on the cluster. When another Kix cluster has records here, Kix cannot
+    /// tell whose those objects are, so by default --hard only reports them.
+    #[arg(long, requires = "hard")]
+    pub include_unattributed: bool,
+
     /// Always keep at least this many of the newest Superseded Activation
     /// records (rollback history), whatever their age. Applies in every
     /// mode. 0 keeps none.
@@ -851,12 +857,17 @@ pub struct HealthArgs {
     pub cluster: String,
 }
 
-/// Deliberately no cluster/flake argument: the check compares live objects
-/// against the `kix.run/applied-hash` stamps written at deploy time, so it
-/// runs from any kubeconfig-only context. Uses the global
-/// `--context` and `--output` flags.
+/// No flake argument: the check compares live objects against the
+/// `kix.run/applied-hash` stamps written at deploy time, so it runs from any
+/// kubeconfig-only context. Uses the global `--context` and `--output` flags.
 #[derive(clap::Args)]
-pub struct DriftArgs {}
+pub struct DriftArgs {
+    /// Check only this Kix cluster's objects, found through its Activation
+    /// records. Without it every Kix object is checked and each report names
+    /// the Kix clusters it belongs to.
+    #[arg(long)]
+    pub cluster: Option<String>,
+}
 
 #[derive(clap::Args)]
 pub struct StatusArgs {
@@ -921,12 +932,17 @@ pub struct SnapshotArgs {
 
 #[derive(Subcommand)]
 pub enum SnapshotCommand {
-    /// Save a snapshot of the live cluster state
+    /// Save a snapshot of one Kix cluster's live objects
     Save(SnapshotSaveArgs),
 }
 
+/// Reads the cluster's Activation records to tell its objects from those of
+/// other Kix clusters on the same Kubernetes cluster. Needs no flake.
 #[derive(clap::Args)]
 pub struct SnapshotSaveArgs {
+    /// Kix cluster whose objects to save
+    pub cluster: String,
+
     /// Directory to save the snapshot to
     pub dir: String,
 }

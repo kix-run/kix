@@ -126,6 +126,13 @@ fn to_k8s_event(event: &DeployEvent) -> Option<KEvent> {
             action: "Pruning".into(),
             secondary: None,
         }),
+        DeployEvent::PruneKept { reason, .. } => Some(KEvent {
+            type_: EventType::Normal,
+            reason: "PruneKept".into(),
+            note: Some(reason.clone()),
+            action: "Pruning".into(),
+            secondary: None,
+        }),
         DeployEvent::Finalized {
             activation,
             previous,

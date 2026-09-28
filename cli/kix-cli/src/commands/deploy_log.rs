@@ -120,6 +120,9 @@ impl DeployObserver for LineObserver {
                     println!("{line}");
                 }
             }
+            DeployEvent::PruneKept { reason, .. } => {
+                println!("prune> {reason}");
+            }
             DeployEvent::Finalized {
                 activation,
                 previous,
@@ -232,6 +235,12 @@ impl DeployObserver for JsonObserver {
                 "delete": delete,
                 "resources": resources.iter().map(|r| r.display_id()).collect::<Vec<_>>(),
                 "kept": kept.iter().map(|r| r.display_id()).collect::<Vec<_>>(),
+            }),
+            DeployEvent::PruneKept { resource, reason } => json!({
+                "type": "prune_kept",
+                "elapsed_ms": elapsed_ms,
+                "resource": resource.display_id(),
+                "reason": reason,
             }),
             DeployEvent::Finalized {
                 activation,

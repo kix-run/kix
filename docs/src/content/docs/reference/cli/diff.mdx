@@ -40,6 +40,13 @@ status, fields set by controllers or `kubectl`, and the bookkeeping
 annotations Kix writes after every apply. A cluster that matches its build
 reports no differences.
 
+The live side holds only the named cluster's resources: those whose
+`kix.run/activations` annotation names one of its Activation records. When the
+Kubernetes cluster also runs other Kix clusters, their resources are not
+reported as removals, and stderr says how many were skipped per cluster. A
+resource the build drops that another Kix cluster's current build still
+contains is left out too, since `kix deploy --prune` keeps it.
+
 A manifest directory must carry the Kix annotations that name each resource's
 package and identity hash. The default `kix export` mode strips them, so use
 `--for audit` when the old side comes from an export.

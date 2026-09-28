@@ -51,13 +51,25 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
             );
         }
 
-        let objects = fetch::fetch_managed_resources(&client, &discovery)
-            .await
-            .map_err(|e| miette!("failed to fetch resources: {e}"))?;
+        let sweep = fetch::sweep_managed(
+            &client,
+            &discovery,
+            fetch::SweepScope::Cluster(&args.cluster),
+        )
+        .await
+        .map_err(|e| miette!("failed to fetch resources: {e}"))?;
+        sweep
+            .tenancy
+            .require_records()
+            .map_err(|e| miette!("{e}"))?;
 
         if !global.quiet {
-            eprintln!("Fetched {} resources", objects.len());
+            eprintln!("Fetched {} resources", sweep.managed.len());
+            for note in sweep.scope_notes() {
+                eprintln!("{note}");
+            }
         }
+        let objects = sweep.managed;
 
         // The kix-owned view of each object (same recipe as `kix diff`), so
         // a snapshot compares to a build the way the live cluster does.
@@ -96,10 +108,12 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
         let readme = format!(
             "# Cluster Snapshot\n\n\
              **Timestamp:** {timestamp}\n\
+             **Cluster:** {cluster}\n\
              **Context:** {context}\n\
              **Resources written:** {written}\n\n\
              ## Command\n\n\
-             ```\nkix snapshot save {dir}\n```\n",
+             ```\nkix snapshot save {cluster} {dir}\n```\n",
+            cluster = args.cluster,
             context = global.context.as_deref().unwrap_or("(current)"),
             dir = args.dir,
         );

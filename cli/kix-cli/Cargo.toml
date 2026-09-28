@@ -36,6 +36,8 @@ workspace = true
 features = ["latest"]
 
 [dev-dependencies]
+# The in-memory apiserver, `kix::cluster::fake_api`.
+kix-lib = { workspace = true, features = ["test-util"] }
 assert_cmd.workspace = true
 insta.workspace = true
 predicates.workspace = true

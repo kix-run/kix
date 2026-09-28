@@ -14,16 +14,17 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 
 | Subcommand | Purpose |
 | --- | --- |
-| `save <DIR>` | Fetch every Kix-managed resource from the selected Kubernetes context and write it to `<DIR>` |
+| `save <CLUSTER> <DIR>` | Fetch the named Kix cluster's resources from the selected Kubernetes context and write them to `<DIR>` |
 
-## `kix snapshot save <DIR>`
+## `kix snapshot save <CLUSTER> <DIR>`
 
 ```text
-kix snapshot save <DIR> [--context <CONTEXT>] [--quiet]
+kix snapshot save <CLUSTER> <DIR> [--context <CONTEXT>] [--quiet]
 ```
 
 | Argument or flag | Meaning |
 | --- | --- |
+| `<CLUSTER>` | Kix cluster whose resources to save. Kix finds them through the cluster's Activation records, so the name is the one those records carry in their `kix.run/cluster` label. The command fails when the cluster has no records while other Kix clusters do. |
 | `<DIR>` | Directory to write. An existing directory is replaced in one step, so a failed save never leaves a half-written snapshot. Paths containing `..` are rejected. |
 | `--context <CONTEXT>` | Kubeconfig context to read. Defaults to the current context. |
 | `-q`, `--quiet` | Suppress the progress lines on stderr. |
@@ -34,15 +35,19 @@ and `--no-cache` have no effect.
 ### What is saved
 
 The save lists every resource carrying the Kix managed-by label, keeps the
-ones Kix actually applied, and writes each one as the fields Kix applied.
+ones Kix applied for the named cluster, and writes each one as the fields Kix
+applied. A resource belongs to the cluster when its `kix.run/activations`
+annotation names one of that cluster's Activation records. Resources of other
+Kix clusters on the same Kubernetes cluster are left out, and the save prints
+how many it skipped per cluster. A resource both clusters deploy is saved.
 Kubernetes records which tool set each field through server-side apply, and
 Kix reads that record to keep only its own fields. Server defaults, status,
 and fields written by controllers or by `kubectl` are left out.
 
 Included:
 
-- every namespaced and cluster-scoped resource Kix applied, including
-  `PackageInstance` records and the `Activation` record;
+- every namespaced and cluster-scoped resource Kix applied for the cluster,
+  including `PackageInstance` records and the cluster's `Activation` records;
 - the Kix annotations that identify each resource's package, identity hash,
   and dependencies.
 
@@ -63,7 +68,7 @@ the rendered manifests.
 
 ```text
 <DIR>/
-  README.md                       # timestamp, context, resource count
+  README.md                       # timestamp, cluster, context, resource count
   <namespace>/<name>-<kind>.yaml  # one file per namespaced resource
   _cluster/<name>-<kind>.yaml     # one file per cluster-scoped resource
 ```
@@ -76,7 +81,7 @@ Kinds are lower-cased in file names, for example
 | Code | Meaning |
 | --- | --- |
 | `0` | Snapshot written |
-| `1` | The cluster could not be reached, API discovery failed, or a listing failed |
+| `1` | The cluster could not be reached, API discovery failed, a listing failed, or the named cluster has no Activation records while other Kix clusters do |
 
 ### Using a snapshot
 

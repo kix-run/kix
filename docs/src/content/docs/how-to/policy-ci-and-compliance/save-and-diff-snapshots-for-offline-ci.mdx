@@ -23,7 +23,7 @@ After a successful deploy, save the cluster and publish the directory:
 ```sh title="ci/deploy.sh"
 set -e
 kix deploy production --context "$KIX_CONTEXT"
-kix snapshot save "snapshots/production" --context "$KIX_CONTEXT"
+kix snapshot save production "snapshots/production" --context "$KIX_CONTEXT"
 # Publish snapshots/production as an artifact, or commit it to the
 # snapshots branch, so pull request jobs can download it.
 ```

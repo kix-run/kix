@@ -265,6 +265,16 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             orphan_rids.push(rid.clone());
         }
     }
+    // `--current-activation` has no client yet; `run_deploy_async` checks
+    // once it connects.
+    let (orphan_rids, shared_orphans) = match &pre_client {
+        Some(client) => ctx.runtime.block_on(super::shared_orphans::keep_shared(
+            client,
+            &new_graph.cluster_name,
+            orphan_rids,
+        ))?,
+        None => (orphan_rids, Vec::new()),
+    };
 
     // Build the DAG and streaming plan.
     let resource_graph = ResourceGraph::from_manifests(&new_manifests).into_diagnostic()?;
@@ -290,7 +300,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // Display package-grouped changes.
     if !ctx.global.quiet {
-        let pkg_diff = if let Some(old) = &old_graph {
+        let mut pkg_diff = if let Some(old) = &old_graph {
             plan::diff_graphs(old, &new_graph)
         } else if !old_manifests.is_empty() {
             // Synthesize a package view when the old store graph is unavailable
@@ -302,6 +312,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             // A first deploy adds every package.
             plan::diff_graphs(&StoreGraph::empty(&new_graph.cluster_name), &new_graph)
         };
+        pkg_diff.keep_shared(&shared_orphans);
 
         plan::print_package_plan(&pkg_diff, ctx.global.verbose > 0);
         plan::print_plan_summary(&pkg_diff);
@@ -328,12 +339,19 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
         let fate = if args.prune_mode == Some(PruneMode::No) {
             "kept (--prune-mode=no)".to_string()
+        } else if prune_flag_requested(args) && pre_client.is_none() {
+            // `--current-activation` has not contacted the cluster, so it
+            // cannot yet tell which orphans another Kix cluster deploys.
+            "will be deleted, except any another Kix cluster still deploys; \
+             checked once the deploy connects"
+                .to_string()
         } else if prune_flag_requested(args) {
             "will be deleted".to_string()
         } else {
             format!("kept; {KEPT_ORPHANS_HINT}")
         };
         print!("{}", render_plan_orphans(&orphan_rids, &fate));
+        super::shared_orphans::print(&shared_orphans);
 
         // Where the extra work in this plan came from. Without this the
         // reader sees a deploy of an unchanged config proposing changes, and
@@ -670,8 +688,14 @@ async fn load_old_from_cluster(
                                     result_dir.display(),
                                 );
                             }
-                            let old_manifests =
-                                reconstruct_old_from_live(&client, &discovery).await?;
+                            let old_manifests = reconstruct_old_from_live(
+                                &client,
+                                &discovery,
+                                cluster,
+                                &act,
+                                global.quiet,
+                            )
+                            .await?;
                             Ok((None, old_manifests, Some(client), Some(act)))
                         }
                     }
@@ -683,7 +707,9 @@ async fn load_old_from_cluster(
                             output::yellow("!"),
                         );
                     }
-                    let old_manifests = reconstruct_old_from_live(&client, &discovery).await?;
+                    let old_manifests =
+                        reconstruct_old_from_live(&client, &discovery, cluster, &act, global.quiet)
+                            .await?;
                     Ok((None, old_manifests, Some(client), Some(act)))
                 }
             }
@@ -806,6 +832,14 @@ fn prune_flag_requested(args: &DeployArgs) -> bool {
 /// are excluded: their lifecycle is supersede-managed, never prune (same
 /// policy as the operator's reconcile).
 ///
+/// Only objects naming the Active record, a Failed record of this cluster,
+/// or a build the Active record lists under `status.orphansKeptFrom`: the
+/// closures the store-graph path would read. Objects of other Kix clusters
+/// on the same Kubernetes cluster name none of these, so they never become
+/// orphans. This cluster's objects that name only older builds are left out
+/// too, and unless `quiet` a line says how many and that `kix gc --hard`
+/// finds them.
+///
 /// A failed sweep is an error, not an empty previous state. Planning
 /// against an empty old set would show every resource as "added" and,
 /// with `--prune`, would compute no orphans at all: a plan that looks
@@ -813,18 +847,50 @@ fn prune_flag_requested(args: &DeployArgs) -> bool {
 async fn reconstruct_old_from_live(
     client: &kube::Client,
     discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
+    cluster: &str,
+    active: &activation::ActiveActivation,
+    quiet: bool,
 ) -> Result<Vec<Value>> {
-    let objects = fetch::fetch_managed_resources(client, discovery)
+    let refuse = |e: &dyn std::fmt::Display| {
+        miette!(
+            "cannot reconstruct the previous state from the cluster: {e}. \
+             Refusing to plan from a partial view; retry when the apiserver is healthy."
+        )
+    };
+    let mut hashes: std::collections::HashSet<String> =
+        active.identity_hash.iter().cloned().collect();
+    hashes.extend(
+        active
+            .orphans_kept_from
+            .iter()
+            .map(|s| s.identity_hash.clone()),
+    );
+    if let Some((ar, _)) = activation::find_activation_ar(discovery).map_err(|e| miette!("{e}"))? {
+        let failed = activation::find_failed(client, ar, cluster)
+            .await
+            .map_err(|e| refuse(&e))?;
+        hashes.extend(failed.into_iter().filter_map(|f| f.identity_hash));
+    }
+    let scope = fetch::SweepScope::Records {
+        cluster,
+        hashes: &hashes,
+    };
+    let sweep = fetch::sweep_managed(client, discovery, scope)
         .await
-        .map_err(|e| {
-            miette!(
-                "cannot reconstruct the previous state from the cluster: {e}. \
-                 Refusing to plan from a partial view; retry when the apiserver is healthy."
-            )
-        })?;
-    Ok(fetch::kix_owned_manifests(objects.into_iter().filter(
-        |obj| lifecycle::lifecycle_of_live(obj).prunable(),
-    )))
+        .map_err(|e| refuse(&e))?;
+    if sweep.other_builds > 0 && !quiet {
+        println!(
+            "  {} {} objects of this Kix cluster name only older builds, so this plan leaves them; `kix gc --hard` finds them",
+            output::dim("note:"),
+            sweep.other_builds,
+        );
+    }
+    Ok(fetch::kix_owned_manifests(
+        sweep
+            .managed
+            .into_iter()
+            .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable()),
+    ))
 }
 
 /// Line-oriented observer for DAG-streaming deploys. Emits one line per
@@ -861,6 +927,9 @@ impl DeployObserver for StreamCliObserver {
                 delete,
                 ..
             } => print!("{}", render_prune_start(resources, kept, *delete)),
+            DeployEvent::PruneKept { reason, .. } => {
+                println!("  {} prune: {reason}", output::yellow("="));
+            }
             DeployEvent::Finalized {
                 activation,
                 previous,
@@ -1086,12 +1155,22 @@ async fn run_deploy_async(
 ) -> Result<()> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
 
-    // Reuse pre-established connection or create a new one
-    let client = match pre_client {
-        Some(c) => c,
-        None => fetch::make_client(global.context.as_deref())
-            .await
-            .map_err(|e| miette!("failed to connect to cluster: {e}"))?,
+    // Reuse pre-established connection or create a new one. A plan made
+    // without one has not checked its orphans against other Kix clusters.
+    let (client, orphan_rids) = match pre_client {
+        Some(c) => (c, orphan_rids.to_vec()),
+        None => {
+            let client = fetch::make_client(global.context.as_deref())
+                .await
+                .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+            let (prune, shared) =
+                super::shared_orphans::keep_shared(&client, cluster_name, orphan_rids.to_vec())
+                    .await?;
+            if !global.quiet {
+                super::shared_orphans::print(&shared);
+            }
+            (client, prune)
+        }
     };
 
     let discovery = fetch::discover_resources(&client)
@@ -1210,7 +1289,7 @@ async fn run_deploy_async(
     };
 
     let result =
-        scheduler::run_deploy(ops, plan, orphan_rids, old_manifests, &config, observer).await;
+        scheduler::run_deploy(ops, plan, &orphan_rids, old_manifests, &config, observer).await;
 
     // Tear down the TUI before the summary prints so it lands in normal
     // scrollback below the history lines.
@@ -1934,5 +2013,88 @@ mod prune_flag_tests {
             Err(e) => e,
         };
         assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
+    }
+}
+
+#[cfg(test)]
+mod rebuild_from_live_tests {
+    use super::*;
+    use kix::cluster::activation::{
+        ActiveActivation, KeptOrphanSource, PHASE_ACTIVE, PHASE_FAILED, PHASE_SUPERSEDED,
+    };
+    use kix::cluster::fake_api::FakeApi;
+    use serde_json::json;
+
+    fn record(cluster: &str, hash: &str, phase: &str) -> Value {
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": lifecycle::RECORD_KIND,
+            "metadata": {
+                "name": format!("rec-{hash}"),
+                "labels": {
+                    "app.kubernetes.io/managed-by": "kix",
+                    (keys::CLUSTER_LABEL): cluster,
+                },
+                "annotations": { (keys::IDENTITY_HASH): hash },
+            },
+            "status": { "phase": phase },
+        })
+    }
+
+    fn cm(name: &str, activations: &str) -> Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": name,
+                "namespace": "app",
+                "labels": { "app.kubernetes.io/managed-by": "kix" },
+                "annotations": {
+                    (keys::IDENTITY_HASH): format!("h-{name}"),
+                    (keys::ACTIVATIONS): activations,
+                },
+            },
+        })
+    }
+
+    /// The previous state of `a`, rebuilt from live objects, is the closures
+    /// of its Active record, its Failed record and the build its Active
+    /// record kept orphans from. Leftovers of a Superseded build, and every
+    /// object only `b` deploys, are not in it.
+    #[tokio::test]
+    async fn the_previous_state_is_the_active_failed_and_kept_closures() {
+        let api = FakeApi::new([
+            record("a", "a1", PHASE_SUPERSEDED),
+            record("a", "a2", PHASE_ACTIVE),
+            record("a", "af", PHASE_FAILED),
+            record("b", "b1", PHASE_ACTIVE),
+            cm("current", "a2"),
+            cm("failed-left", "af"),
+            cm("kept-left", "ak"),
+            cm("superseded-left", "a1"),
+            cm("b-web", "b1"),
+            cm("shared", "a2,b1"),
+        ]);
+        let client = api.client();
+        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let active = ActiveActivation {
+            name: "rec-a2".into(),
+            identity_hash: Some("a2".into()),
+            built_via: None,
+            orphans_kept_from: vec![KeptOrphanSource {
+                activation: "rec-ak".into(),
+                identity_hash: "ak".into(),
+                built_via: None,
+            }],
+        };
+        let old = reconstruct_old_from_live(&client, &discovery, "a", &active, true)
+            .await
+            .unwrap();
+        let mut names: Vec<&str> = old
+            .iter()
+            .filter_map(|m| m.pointer("/metadata/name")?.as_str())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["current", "failed-left", "kept-left", "shared"]);
     }
 }

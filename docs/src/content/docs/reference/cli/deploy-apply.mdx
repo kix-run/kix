@@ -48,7 +48,13 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
 1. Builds the cluster.
 2. Reads the running activation from the cluster (or the local cache with
    `--current-activation`). If that build is no longer in the local Nix store,
-   Kix rebuilds the previous state from the live resources it manages.
+   Kix rebuilds the previous state from the live resources whose
+   `kix.run/activations` annotation names the running Activation record, a
+   failed one of the same cluster, or a build listed under
+   `status.orphansKeptFrom`. Resources of other Kix clusters on the same
+   Kubernetes cluster never enter the previous state. Neither do this
+   cluster's resources that name only older builds; the plan says how many,
+   and `kix gc --hard` finds them.
 3. Refuses to start if another deploy of the same cluster is in progress.
    Resources left by an earlier deploy that stopped part way are folded into
    the plan: they are re-applied or reported as orphans.
@@ -62,6 +68,16 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
    reported as kept and never deleted, with or without `--prune`. In
    `--log-format json`, the `prune_start` event lists them under `kept`,
    apart from the `resources` that prune may delete.
+
+   An orphan that another Kix cluster's current build still contains is not
+   pruned. The plan lists it as kept, then as `kept <resource>, still deployed
+   by Kix cluster <name>`, read from the Activation records the live resource
+   names in `kix.run/activations`. `kix rollback --prune` and soft `kix gc`
+   follow the same rule. With `--current-activation` the plan has not read
+   the cluster yet, so it says the check comes once the deploy connects.
+   The prune checks each orphan again right before deleting it, and leaves
+   one that another cluster started deploying, or that changed, since the
+   plan (`prune_kept` in `--log-format json`).
 
    Orphans a deploy keeps stay pruneable. The Activation it finalizes lists
    the builds they came from under `status.orphansKeptFrom`, and the next

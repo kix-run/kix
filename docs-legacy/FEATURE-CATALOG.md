@@ -338,7 +338,7 @@ Pipeline: build activation → load store graph → resolve old activation → D
 
 #### `kix status <CLUSTER>`
 Resource health table.
-- Default (flat): NAME | NAMESPACE | KIND | READY | STATUS | AGE.
+- Default (flat): NAME | NAMESPACE | KIND | READY | STATUS | AGE. Lists only this Kix cluster's objects.
 - `--operator` — Package-grouped view with Activation CR metadata, phase-based coloring (Active=green, Deploying=yellow, Failed=red).
 
 #### `kix list clusters`
@@ -359,7 +359,8 @@ Cluster structure analysis: total resources, namespaces with counts, resource ki
 Garbage-collect stale kix-managed resources.
 - `-y, --yes` — Skip confirmation.
 - **Soft GC** (default) — Diffs old vs new activation store graphs. Fast, no cluster scan.
-- **Hard GC** (`--hard`) — Full cluster-wide scan, matches identity-hashes against expected set.
+- **Hard GC** (`--hard`) — Full cluster-wide scan, matches identity-hashes against expected set. Judges only the named Kix cluster's objects, attributed through the Activation record hashes in `kix.run/activations`; objects another Kix cluster's current build contains are kept.
+- `--include-unattributed` — With `--hard`, also judge objects that name no Activation record while another Kix cluster has records on the Kubernetes cluster. Without it they are listed and kept.
 - `--operator` — Deletes retired Activation CRs under the retention policy. They are all Superseded, so the operator only removes its finalizer and deletes no resources.
 - Record retention, in every mode — Superseded Activation records are rollback history, but each one still on the cluster keeps one entry in `kix.run/activations` on every managed resource, and that annotation is capped at 256 KiB, so they cannot be kept forever. `--keep N` (default 10) always keeps the N newest whatever their age; `--keep-max N` (default 50) never keeps more; `--keep-for 30d` (default) retires anything older beyond the floor (`0` or `off` disables the age rule). Deletes are conditional on the record being unchanged since it was listed. The next deploy drops the retired entries.
 - Deletes in reverse dependency order (dependents first).
@@ -389,8 +390,8 @@ Drift detection: compare intended state vs live cluster.
 - Package states: healthy, external, DEGRADED, AT RISK.
 - Exit code 1 if issues found.
 
-#### `kix snapshot save <DIR>`
-Save live cluster state to directory. Discovers all API resources, fetches all kix-managed resources, writes by namespace. Each object is written as its kix-owned view (the live value projected onto kix's server-side-apply fieldset), so a snapshot compares to a build exactly the way the live cluster does: server defaults and kix's bookkeeping annotations never appear. Path traversal protection. Compare with `kix diff <CLUSTER> --from <DIR>`.
+#### `kix snapshot save <CLUSTER> <DIR>`
+Save one Kix cluster's live state to a directory. Discovers all API resources, fetches the kix-managed resources whose `kix.run/activations` names one of the cluster's Activation records (other Kix clusters on the same Kubernetes cluster are skipped), writes by namespace. Each object is written as its kix-owned view (the live value projected onto kix's server-side-apply fieldset), so a snapshot compares to a build exactly the way the live cluster does: server defaults and kix's bookkeeping annotations never appear. Path traversal protection. Compare with `kix diff <CLUSTER> --from <DIR>`.
 
 #### `kix pin set <KEY>` / `kix pin check` / `kix pin list`
 Resolve image references and record them in a committed pin file (`v2_discussions/archive/138`). Needs no flake and evaluates no cluster.

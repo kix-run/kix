@@ -9,10 +9,15 @@
 //!     same diff that deploy computes; soft GC is "deploy's prune phase, run
 //!     separately."
 //!   - **Hard (`--hard`):** Builds the cluster now and lists every live
-//!     resource carrying the kix label. A resource whose identity hash is not
+//!     resource carrying the kix label that belongs to this Kix cluster, by
+//!     the Activation record hashes in its `kix.run/activations`
+//!     (`fetch::SweepScope::Cluster`). A resource whose identity hash is not
 //!     in that build is garbage; one stamped before the domain move is judged
 //!     by Kubernetes identity instead. Unstamped label carriers are reported
-//!     and deleted only with `--include-unstamped`.
+//!     and deleted only with `--include-unstamped`. When another Kix cluster
+//!     has records here, objects naming no record at all are reported and
+//!     judged only with `--include-unattributed`, and an object another
+//!     cluster's current build contains is kept.
 //!   - **Operator (`--operator`):** Deletes retired Activation records. They
 //!     are Superseded, so the operator's finalizer deletes no resources.
 //!
@@ -39,6 +44,7 @@ use serde_json::Value;
 
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
+use kix::cluster::prune_guard::{PruneGuard, Pruned};
 use kix::eval::build::build_cluster_activation_with_status;
 use kix::eval::store;
 use kix::eval::store_graph::{StoreGraph, store_hash};
@@ -177,36 +183,10 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    // 5. Display package-grouped garbage plan.
-    //    Always render per-resource detail because the user
-    //    must see what exactly will be deleted before confirming.
-    if !garbage_manifests.is_empty() {
-        let pkg_diff = plan::diff_garbage(&old_graph, &new_graph);
-        if !ctx.global.quiet {
-            println!();
-            println!("{}", output::bold("Garbage collection plan"));
-            plan::print_package_plan(&pkg_diff, true);
-            plan::print_plan_summary(&pkg_diff);
-        }
-    }
-    if !kept_garbage.is_empty() && !ctx.global.quiet {
-        println!();
-        println!(
-            "{}",
-            output::bold("Orphans kept by earlier deploys (warn-only)")
-        );
-        let mut rids: Vec<ResourceId> = kept_garbage.iter().map(ResourceId::from_value).collect();
-        rids.sort();
-        for rid in rids.iter().filter(|r| !lifecycle::never_pruned(&r.kind)) {
-            println!("  {} {rid}", output::red("-"));
-        }
-    }
-    if !ctx.global.quiet {
-        print_record_plan(&records, &policy);
-    }
-
-    // 6. Reverse-topological ordering for deletion (dependents first so a
-    //    provider still exists when its consumer is torn down).
+    // 5. Reverse-topological ordering for deletion (dependents first so a
+    //    provider still exists when its consumer is torn down), less what
+    //    another Kix cluster still deploys.
+    let kept_rids: Vec<ResourceId> = kept_garbage.iter().map(ResourceId::from_value).collect();
     let garbage_values: Vec<Value> = garbage_manifests
         .values()
         .cloned()
@@ -217,8 +197,48 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         Err(_) => garbage_values.iter().map(ResourceId::from_value).collect(),
     };
     let (ordered_rids, kept) = split_never_pruned(ordered_rids);
+    let client = ctx
+        .runtime
+        .block_on(fetch::make_client(global.context.as_deref()))
+        .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
+    let (ordered_rids, shared) = ctx.runtime.block_on(super::shared_orphans::keep_shared(
+        &client,
+        &new_graph.cluster_name,
+        ordered_rids,
+    ))?;
+
+    // 6. Display package-grouped garbage plan.
+    //    Always render per-resource detail because the user
+    //    must see what exactly will be deleted before confirming.
+    if !garbage_manifests.is_empty() {
+        let mut pkg_diff = plan::diff_garbage(&old_graph, &new_graph);
+        pkg_diff.keep_shared(&shared);
+        if !ctx.global.quiet {
+            println!();
+            println!("{}", output::bold("Garbage collection plan"));
+            plan::print_package_plan(&pkg_diff, true);
+            plan::print_plan_summary(&pkg_diff);
+        }
+    }
+    let mut kept_rids: Vec<&ResourceId> = kept_rids
+        .iter()
+        .filter(|r| !lifecycle::never_pruned(&r.kind) && !shared.iter().any(|s| &s.rid == *r))
+        .collect();
+    if !kept_rids.is_empty() && !ctx.global.quiet {
+        println!();
+        println!(
+            "{}",
+            output::bold("Orphans kept by earlier deploys (warn-only)")
+        );
+        kept_rids.sort();
+        for rid in kept_rids {
+            println!("  {} {rid}", output::red("-"));
+        }
+    }
     if !ctx.global.quiet {
+        print_record_plan(&records, &policy);
         print_never_pruned(&kept);
+        super::shared_orphans::print(&shared);
     }
     if ordered_rids.is_empty() && records.plan.retire.is_empty() {
         return Ok(());
@@ -233,14 +253,13 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    let (deleted, failed) = if ordered_rids.is_empty() {
-        (0, 0)
-    } else {
-        ctx.runtime
-            .block_on(delete_resources(&global, &ordered_rids))?
-    };
+    let done = ctx.runtime.block_on(delete_resources(
+        &client,
+        &new_graph.cluster_name,
+        &ordered_rids,
+    ))?;
     let (retired, records_failed) = ctx.runtime.block_on(delete_records(&global, &records))?;
-    if failed == 0 {
+    if done.failed == 0 && done.changed == 0 {
         ctx.runtime.block_on(clear_kept(
             &args.cluster,
             &records,
@@ -251,8 +270,8 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     }
     finish(
         &global,
-        deleted,
-        failed + records_failed,
+        done.deleted,
+        done.failed + records_failed,
         Some((retired, records.plan.kept.len())),
     )
 }
@@ -419,9 +438,17 @@ async fn run_hard_async(
     let discovery = fetch::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
-    let sweep = fetch::sweep_managed(&client, &discovery)
-        .await
-        .map_err(|e| miette!("failed to fetch live resources: {e}"))?;
+    // Only this Kix cluster's objects. Another Kix cluster's objects are
+    // absent from this build too, and judging them against it would delete
+    // them.
+    let sweep = fetch::sweep_managed(
+        &client,
+        &discovery,
+        fetch::SweepScope::Cluster(cluster_name),
+    )
+    .await
+    .map_err(|e| miette!("failed to fetch live resources: {e}"))?;
+    let tenancy = sweep.tenancy.clone();
 
     if !global.quiet {
         println!(
@@ -430,9 +457,29 @@ async fn run_hard_async(
             sweep.unstamped.len(),
             crate::output::forbidden_note(&sweep.forbidden),
         );
+        for (owner, n) in &sweep.foreign {
+            println!(
+                "Skipped {n} resources that belong to Kix cluster {}.",
+                output::bold(owner)
+            );
+        }
+        if !sweep.unattributed.is_empty() {
+            print_unattributed(&sweep.unattributed, args.include_unattributed);
+        }
     }
     let forbidden_none = sweep.forbidden.is_empty();
-    let live: Vec<_> = sweep.managed.into_iter().chain(sweep.unstamped).collect();
+    let unattributed_judged = sweep.unattributed.is_empty() || args.include_unattributed;
+    let unattributed = if args.include_unattributed {
+        sweep.unattributed
+    } else {
+        Vec::new()
+    };
+    let live: Vec<_> = sweep
+        .managed
+        .into_iter()
+        .chain(sweep.unstamped)
+        .chain(unattributed)
+        .collect();
 
     // Refuse on a cluster that has been migrated but not deployed since.
     //
@@ -441,17 +488,6 @@ async fn run_hard_async(
     // pre-move one. Every single resource would read as HashNotExpected and
     // be deleted. `check_cluster` cannot catch this: discovery shows only
     // the current group, because the migration is what moved it.
-    let has_key = |obj: &kube::api::DynamicObject, key: &str| {
-        obj.data
-            .pointer("/metadata/annotations")
-            .and_then(|a| a.as_object())
-            .is_some_and(|m| m.contains_key(key))
-            || obj
-                .metadata
-                .annotations
-                .as_ref()
-                .is_some_and(|a| a.contains_key(key))
-    };
     let stale = live
         .iter()
         .filter(|obj| kix::legacy_domain::stamped_before_move(|key| has_key(obj, key)))
@@ -469,90 +505,7 @@ async fn run_hard_async(
 
     // Find resources with identity-hash not in expected set.
     // Activation CRs are handled separately below.
-    let mut garbage: Vec<GarbageEntry> = Vec::new();
-    for obj in &live {
-        if kix::manifest::lifecycle::lifecycle_of_live(obj)
-            == kix::manifest::lifecycle::Lifecycle::Record
-        {
-            continue; // handled in the stale-activation block below
-        }
-
-        let annotations_from_data = obj
-            .data
-            .pointer("/metadata/annotations")
-            .and_then(|a| a.as_object());
-
-        let ann_get = |key: &str| -> Option<String> {
-            if let Some(map) = annotations_from_data
-                && let Some(v) = map.get(key).and_then(|v| v.as_str())
-            {
-                return Some(v.to_string());
-            }
-            obj.metadata
-                .annotations
-                .as_ref()
-                .and_then(|a| keys::get_meta(a, key))
-                .map(str::to_string)
-        };
-
-        let identity_hash = ann_get(keys::IDENTITY_HASH);
-
-        let reason = match &identity_hash {
-            Some(hash) if expected_hashes.contains(hash) => continue,
-            // An object still stamped by a pre-move Kix cannot be judged by
-            // hash at all. Its hash was computed from a store path under the
-            // old domain, and the move changed every path, so it can never
-            // appear in a current expected set. Judging it by hash would
-            // condemn every resource the deploy after a migration has not
-            // reached yet, which is most of a cluster.
-            //
-            // Judge it by Kubernetes identity instead, the rule soft gc and
-            // deploy's prune already use. Present in the build means still
-            // ours, waiting to be re-stamped. Absent means garbage, whatever
-            // it is stamped with.
-            Some(_)
-                if kix::legacy_domain::stamped_before_move(|key| has_key(obj, key))
-                    && expected_ids.contains(&live_identity(obj)) =>
-            {
-                continue;
-            }
-            Some(_) => GarbageReason::HashNotExpected,
-            None => GarbageReason::NoIdentityHash,
-        };
-
-        let kind = obj
-            .data
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
-            .unwrap_or("Unknown")
-            .to_string();
-        let name = obj
-            .metadata
-            .name
-            .as_deref()
-            .unwrap_or("unknown")
-            .to_string();
-        let namespace = obj
-            .metadata
-            .namespace
-            .as_deref()
-            .unwrap_or(CLUSTER_SCOPED)
-            .to_string();
-
-        garbage.push(GarbageEntry {
-            id: ResourceId {
-                kind,
-                name,
-                namespace,
-            },
-            identity_hash,
-            package: ann_get(keys::PACKAGE),
-            package_namespace: ann_get(keys::PACKAGE_NAMESPACE),
-            activations: ann_get(keys::ACTIVATIONS),
-            reason,
-        });
-    }
+    let (mut garbage, shared) = judge_hard(&live, expected_hashes, expected_ids, &tenancy);
 
     // Superseded Activation records under the retention policy. A listing
     // failure is an error, not an empty list: gc must never plan on a
@@ -577,11 +530,17 @@ async fn run_hard_async(
         print_unstamped(&unstamped);
     }
 
+    if !shared.is_empty() && !global.quiet {
+        println!();
+        super::shared_orphans::print(&shared);
+    }
+
     // Hard gc judges every live object against the build, so once it has
     // deleted without failures no kept orphan is left, whether or not this
     // machine can resolve the builds the Active record names. Kinds the
-    // sweep was forbidden to list were not judged.
-    let examined_all = forbidden_none;
+    // sweep was forbidden to list, and unattributed objects left out without
+    // --include-unattributed, were not judged.
+    let examined_all = forbidden_none && unattributed_judged;
 
     if garbage.is_empty() {
         clear_kept(
@@ -628,13 +587,9 @@ async fn run_hard_async(
     }
 
     let rids: Vec<ResourceId> = resource_entries.iter().map(|g| g.id.clone()).collect();
-    let (deleted, failed) = if rids.is_empty() {
-        (0, 0)
-    } else {
-        delete_resources(global, &rids).await?
-    };
+    let done = delete_resources(&client, cluster_name, &rids).await?;
     let (retired, records_failed) = delete_records(global, &records).await?;
-    if failed == 0 {
+    if done.failed == 0 && done.changed == 0 {
         clear_kept(
             &args.cluster,
             &records,
@@ -646,10 +601,134 @@ async fn run_hard_async(
     }
     finish(
         global,
-        deleted,
-        failed + records_failed,
+        done.deleted,
+        done.failed + records_failed,
         Some((retired, records.plan.kept.len())),
     )
+}
+
+/// Judge each live object of this cluster against the build. Returns the
+/// garbage, and apart from it the objects the build dropped that another Kix
+/// cluster's current build still contains. Activation records are skipped:
+/// retention decides those.
+fn judge_hard(
+    live: &[kube::api::DynamicObject],
+    expected_hashes: &HashSet<String>,
+    expected_ids: &HashSet<String>,
+    tenancy: &kix::cluster::activation::Tenancy,
+) -> (Vec<GarbageEntry>, Vec<fetch::SharedOrphan>) {
+    let mut garbage: Vec<GarbageEntry> = Vec::new();
+    let mut shared: Vec<fetch::SharedOrphan> = Vec::new();
+    for obj in live {
+        if kix::manifest::lifecycle::lifecycle_of_live(obj)
+            == kix::manifest::lifecycle::Lifecycle::Record
+        {
+            continue; // the retention policy decides records
+        }
+
+        let annotations_from_data = obj
+            .data
+            .pointer("/metadata/annotations")
+            .and_then(|a| a.as_object());
+
+        let ann_get = |key: &str| -> Option<String> {
+            if let Some(map) = annotations_from_data
+                && let Some(v) = map.get(key).and_then(|v| v.as_str())
+            {
+                return Some(v.to_string());
+            }
+            obj.metadata
+                .annotations
+                .as_ref()
+                .and_then(|a| keys::get_meta(a, key))
+                .map(str::to_string)
+        };
+
+        let identity_hash = ann_get(keys::IDENTITY_HASH);
+
+        let reason = match &identity_hash {
+            Some(hash) if expected_hashes.contains(hash) => continue,
+            // An object still stamped by a pre-move Kix cannot be judged by
+            // hash at all. Its hash was computed from a store path under the
+            // old domain, and the move changed every path, so it can never
+            // appear in a current expected set. Judging it by hash would
+            // condemn every resource the deploy after a migration has not
+            // reached yet, which is most of a cluster.
+            //
+            // Judge it by Kubernetes identity instead, the rule soft gc and
+            // deploy's prune already use. Present in the build means still
+            // ours, waiting to be re-stamped. Absent means garbage, whatever
+            // it is stamped with.
+            Some(_)
+                if kix::legacy_domain::stamped_before_move(|key| has_key(obj, key))
+                    && expected_ids.contains(&live_identity(obj)) =>
+            {
+                continue;
+            }
+            Some(_) => GarbageReason::HashNotExpected,
+            None => GarbageReason::NoIdentityHash,
+        };
+
+        // A protected kind is kept anyway and listed with the others.
+        let others = tenancy.still_deployed_by_others(obj);
+        if !others.is_empty() && !lifecycle::never_pruned(&live_kind(obj)) {
+            shared.push(fetch::SharedOrphan {
+                rid: ResourceId::from_value(&fetch::to_manifest_value(obj)),
+                clusters: others,
+            });
+            continue;
+        }
+
+        let kind = live_kind(obj);
+        let name = obj
+            .metadata
+            .name
+            .as_deref()
+            .unwrap_or("unknown")
+            .to_string();
+        let namespace = obj
+            .metadata
+            .namespace
+            .as_deref()
+            .unwrap_or(CLUSTER_SCOPED)
+            .to_string();
+
+        garbage.push(GarbageEntry {
+            id: ResourceId {
+                kind,
+                name,
+                namespace,
+            },
+            identity_hash,
+            package: ann_get(keys::PACKAGE),
+            package_namespace: ann_get(keys::PACKAGE_NAMESPACE),
+            activations: ann_get(keys::ACTIVATIONS),
+            reason,
+        });
+    }
+    (garbage, shared)
+}
+
+fn live_kind(obj: &kube::api::DynamicObject) -> String {
+    obj.data
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
+        .unwrap_or("Unknown")
+        .to_string()
+}
+
+/// Does the object carry this annotation, in its raw data or typed metadata?
+fn has_key(obj: &kube::api::DynamicObject, key: &str) -> bool {
+    obj.data
+        .pointer("/metadata/annotations")
+        .and_then(|a| a.as_object())
+        .is_some_and(|m| m.contains_key(key))
+        || obj
+            .metadata
+            .annotations
+            .as_ref()
+            .is_some_and(|a| a.contains_key(key))
 }
 
 // ---------------------------------------------------------------------------
@@ -714,6 +793,32 @@ fn print_unstamped(unstamped: &[GarbageEntry]) {
              Pass --include-unstamped to delete them too."
         ),
     );
+}
+
+/// List the objects that name no Activation record while another Kix cluster
+/// has records here, and say whether this run judges them.
+fn print_unattributed(objects: &[kube::api::DynamicObject], included: bool) {
+    println!();
+    println!(
+        "{} {} Kix objects name no Activation record on this cluster, and another \
+         Kix cluster deploys here, so Kix cannot tell whose they are:",
+        output::bold("Unattributed:"),
+        objects.len(),
+    );
+    let mut ids: Vec<ResourceId> = objects
+        .iter()
+        .map(|o| ResourceId::from_value(&fetch::to_manifest_value(o)))
+        .collect();
+    ids.sort();
+    for rid in &ids {
+        println!("    {} {rid}", output::dim("?"));
+    }
+    let note = if included {
+        "--include-unattributed: judged against this build like this cluster's own objects."
+    } else {
+        "Kept. Review them and pass --include-unattributed to judge them against this build."
+    };
+    println!("  {}", output::dim(note));
 }
 
 /// Print grouped, per-resource garbage plan with reasons and owning activation.
@@ -1201,14 +1306,28 @@ fn confirm(args: &GcArgs, prompt: &str) -> Result<bool> {
 // Shared: delete a list of resources from the cluster
 // ---------------------------------------------------------------------------
 
-/// Delete resources in the given order. Returns `(deleted, failed)`; the
-/// caller prints the summary and sets the exit code. Kinds that
-/// `lifecycle::never_pruned` protects are skipped with a message and count
-/// as neither; callers list them with `print_never_pruned` beforehand.
+/// What [`delete_resources`] did.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Deletions {
+    deleted: usize,
+    failed: usize,
+    /// Objects the prune guard left because they changed after it read
+    /// them. They are still this cluster's garbage, so the kept-orphan
+    /// record must not be cleared.
+    changed: usize,
+}
+
+/// Delete `cluster`'s garbage in the given order, each through
+/// [`PruneGuard`], which keeps an object another Kix cluster's current build
+/// still contains or that changed since it was read. The caller prints the
+/// summary and sets the exit code. Kinds that `lifecycle::never_pruned`
+/// protects are skipped with a message and count as nothing; callers list
+/// them with `print_never_pruned` beforehand.
 async fn delete_resources(
-    global: &crate::cli::GlobalArgs,
+    client: &kube::Client,
+    cluster: &str,
     resources: &[ResourceId],
-) -> Result<(usize, usize)> {
+) -> Result<Deletions> {
     let (resources, kept) = split_never_pruned(resources.to_vec());
     for rid in &kept {
         eprintln!(
@@ -1217,69 +1336,53 @@ async fn delete_resources(
             rid
         );
     }
+    let mut done = Deletions::default();
     if resources.is_empty() {
-        return Ok((0, 0));
+        return Ok(done);
     }
-    let client = fetch::make_client(global.context.as_deref())
-        .await
-        .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-    let discovery = fetch::discover_resources(&client)
+    let discovery = fetch::discover_resources(client)
         .await
         .map_err(|e| miette!("{e}"))?;
-
-    let ar_by_kind: HashMap<String, (&kube::discovery::ApiResource, kube::discovery::Scope)> =
-        discovery
-            .iter()
-            .map(|(ar, scope)| (ar.kind.clone(), (ar, scope.clone())))
-            .collect();
-
-    let mut deleted = 0usize;
-    let mut failed = 0usize;
+    let guard = PruneGuard::new(client.clone(), &discovery, cluster);
 
     for rid in &resources {
-        let Some(&(ar, ref scope)) = ar_by_kind.get(&rid.kind) else {
+        let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
             eprintln!(
                 "  {} {}: Kubernetes does not recognize this kind; skipping it",
                 output::red("!"),
                 rid
             );
-            failed += 1;
+            done.failed += 1;
             continue;
         };
-
-        let api: kube::api::Api<kube::api::DynamicObject> = match scope {
-            kube::discovery::Scope::Namespaced => {
-                let ns = if rid.namespace == CLUSTER_SCOPED {
-                    "default"
-                } else {
-                    &rid.namespace
-                };
-                kube::api::Api::namespaced_with(client.clone(), ns, ar)
-            }
-            kube::discovery::Scope::Cluster => kube::api::Api::all_with(client.clone(), ar),
-        };
-
-        match api
-            .delete(&rid.name, &kube::api::DeleteParams::default())
+        match guard
+            .delete(ar, scope, rid, &kube::api::DeleteParams::default())
             .await
         {
-            Ok(_) => {
+            Ok(Pruned::Deleted) => {
                 println!("  {} deleted {}", output::red("-"), rid);
-                deleted += 1;
+                done.deleted += 1;
             }
             // A kept orphan someone already removed by hand. Nothing is left
             // to delete, so it is not a failure.
-            Err(kube::Error::Api(ae)) if ae.code == 404 => {
+            Ok(Pruned::Gone) => {
                 println!("  {} {} already gone", output::dim("="), rid);
+            }
+            Ok(outcome @ (Pruned::Kept(_) | Pruned::Changed(_))) => {
+                if matches!(outcome, Pruned::Changed(_)) {
+                    done.changed += 1;
+                }
+                let reason = outcome.kept_reason().unwrap_or_default();
+                println!("  {} prune: {reason}", output::yellow("="));
             }
             Err(e) => {
                 eprintln!("  {} {}: {}", output::red("!"), rid, e);
-                failed += 1;
+                done.failed += 1;
             }
         }
     }
 
-    Ok((deleted, failed))
+    Ok(done)
 }
 
 fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
@@ -1547,6 +1650,9 @@ mod prompt_tests {
 #[cfg(test)]
 mod delete_tests {
     use super::*;
+    use kix::cluster::activation::PHASE_ACTIVE;
+    use kix::cluster::fake_api::FakeApi;
+    use serde_json::json;
 
     fn rid(kind: &str, name: &str) -> ResourceId {
         ResourceId {
@@ -1556,27 +1662,170 @@ mod delete_tests {
         }
     }
 
-    /// `delete_resources` drops protected kinds before it connects, so a list
-    /// of only a CRD and a Namespace deletes nothing and never reaches the
-    /// (nonexistent) kube context.
+    /// `delete_resources` drops protected kinds before any request, so a
+    /// list of only a CRD and a Namespace deletes nothing.
     #[tokio::test]
     async fn delete_resources_skips_protected_kinds() {
-        #[derive(clap::Parser)]
-        struct Wrapper {
-            #[command(flatten)]
-            global: crate::cli::GlobalArgs,
-        }
-        let global = <Wrapper as clap::Parser>::parse_from([
-            "kix",
-            "--context",
-            "kix-gc-test-no-such-context",
-        ])
-        .global;
+        let api = FakeApi::new([json!({
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": { "name": "gone" },
+        })]);
         let resources = vec![
             rid("CustomResourceDefinition", "widgets.example.com"),
             rid("Namespace", "gone"),
         ];
-        let (deleted, failed) = delete_resources(&global, &resources).await.unwrap();
-        assert_eq!((deleted, failed), (0, 0));
+        let done = delete_resources(&api.client(), "a", &resources)
+            .await
+            .unwrap();
+        assert_eq!(done, Deletions::default());
+        assert!(api.requests().is_empty(), "{:?}", api.requests());
+    }
+
+    fn record(cluster: &str, hash: &str) -> Value {
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": format!("rec-{hash}"),
+                "labels": { (keys::CLUSTER_LABEL): cluster },
+                "annotations": { (keys::IDENTITY_HASH): hash },
+            },
+            "status": { "phase": PHASE_ACTIVE },
+        })
+    }
+
+    fn role(name: &str, activations: &str) -> Value {
+        json!({
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "ClusterRole",
+            "metadata": { "name": name, "annotations": { (keys::ACTIVATIONS): activations } },
+        })
+    }
+
+    /// gc of `a` deletes its own garbage, keeps what `b`'s current build
+    /// contains, and leaves an object that changed after the read without
+    /// counting it as failed.
+    #[tokio::test]
+    async fn delete_resources_goes_through_the_prune_guard() {
+        let api = FakeApi::new([
+            record("a", "a1"),
+            record("b", "b1"),
+            role("mine", "a1"),
+            role("shared", "a1,b1"),
+            role("racing", "a1"),
+        ]);
+        api.after_get("racing", |o| {
+            o["metadata"]["annotations"][keys::ACTIVATIONS] = json!("a1,b1");
+        });
+        let resources = vec![
+            rid("ClusterRole", "mine"),
+            rid("ClusterRole", "shared"),
+            rid("ClusterRole", "racing"),
+        ];
+        let done = delete_resources(&api.client(), "a", &resources)
+            .await
+            .unwrap();
+        assert_eq!(
+            done,
+            Deletions {
+                deleted: 1,
+                failed: 0,
+                changed: 1,
+            }
+        );
+        assert_eq!(api.names("ClusterRole"), vec!["racing", "shared"]);
+    }
+}
+
+#[cfg(test)]
+mod hard_scope_tests {
+    use super::*;
+    use kix::cluster::activation::{PHASE_ACTIVE, Tenancy};
+    use kube::api::DynamicObject;
+    use serde_json::json;
+
+    fn live(kind: &str, name: &str, hash: Option<&str>, activations: &str) -> DynamicObject {
+        let mut annotations = serde_json::Map::new();
+        if let Some(h) = hash {
+            annotations.insert(keys::IDENTITY_HASH.into(), json!(h));
+        }
+        if !activations.is_empty() {
+            annotations.insert(keys::ACTIVATIONS.into(), json!(activations));
+        }
+        serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": kind,
+            "metadata": { "name": name, "namespace": "d", "annotations": annotations },
+        }))
+        .unwrap()
+    }
+
+    fn record(cluster: &str, hash: &str) -> DynamicObject {
+        serde_json::from_value(json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": cluster,
+                "labels": { (keys::CLUSTER_LABEL): cluster },
+                "annotations": { (keys::IDENTITY_HASH): hash },
+            },
+            "status": { "phase": PHASE_ACTIVE },
+        }))
+        .unwrap()
+    }
+
+    fn names(entries: &[GarbageEntry]) -> Vec<&str> {
+        let mut v: Vec<&str> = entries.iter().map(|g| g.id.name.as_str()).collect();
+        v.sort();
+        v
+    }
+
+    /// `kix gc a --hard` over a Kubernetes cluster that also runs Kix cluster
+    /// `b`: `b`'s objects never reach the plan, an object both deploy is kept,
+    /// and objects naming no record are left for the flag.
+    #[test]
+    fn hard_gc_judges_only_this_clusters_objects() {
+        let tenancy = Tenancy::from_records(&[record("a", "a2"), record("b", "b1")], "a");
+        let sweep = fetch::partition_sweep(vec![
+            live("ConfigMap", "a-current", Some("h-cur"), "a2"),
+            live("ConfigMap", "a-stale", Some("h-old"), "a2"),
+            live("ConfigMap", "b-web", Some("h-b"), "b1"),
+            live("ClusterRole", "shared", Some("h-shared"), "a2,b1"),
+            live("ConfigMap", "leftover", Some("h-left"), "retired"),
+        ]);
+        let sweep = fetch::scope_sweep(sweep, fetch::SweepScope::Cluster("a"), tenancy.clone());
+        assert_eq!(sweep.foreign.get("b"), Some(&1));
+        assert_eq!(sweep.unattributed.len(), 1);
+
+        let expected: HashSet<String> = ["h-cur".to_string()].into();
+        let (garbage, shared) = judge_hard(&sweep.managed, &expected, &HashSet::new(), &tenancy);
+        assert_eq!(names(&garbage), vec!["a-stale"]);
+        assert_eq!(shared.len(), 1);
+        assert_eq!(shared[0].rid.name, "shared");
+        assert_eq!(shared[0].clusters, vec!["b".to_string()]);
+
+        // --include-unattributed judges the leftover too.
+        let mut with_flag = sweep.managed.clone();
+        with_flag.extend(sweep.unattributed);
+        let (garbage, _) = judge_hard(&with_flag, &expected, &HashSet::new(), &tenancy);
+        assert_eq!(names(&garbage), vec!["a-stale", "leftover"]);
+    }
+
+    /// With one Kix cluster the plan is what it was before scoping: a
+    /// leftover naming a retired record is garbage without any flag.
+    #[test]
+    fn hard_gc_on_a_single_cluster_is_unchanged() {
+        let tenancy = Tenancy::from_records(&[record("a", "a2")], "a");
+        let sweep = fetch::partition_sweep(vec![
+            live("ConfigMap", "a-current", Some("h-cur"), "a2"),
+            live("ConfigMap", "leftover", Some("h-left"), "retired"),
+        ]);
+        let sweep = fetch::scope_sweep(sweep, fetch::SweepScope::Cluster("a"), tenancy.clone());
+        assert!(sweep.unattributed.is_empty());
+        let expected: HashSet<String> = ["h-cur".to_string()].into();
+        let (garbage, shared) = judge_hard(&sweep.managed, &expected, &HashSet::new(), &tenancy);
+        assert_eq!(names(&garbage), vec!["leftover"]);
+        assert!(shared.is_empty());
     }
 }

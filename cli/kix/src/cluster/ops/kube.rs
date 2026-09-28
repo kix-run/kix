@@ -20,6 +20,7 @@ use super::super::apply::{self, ApplyAction, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
 use super::super::errors::{FailureClass, classify, describe};
 use super::super::fetch::{self, FetchError};
+use super::super::prune_guard::{PruneGuard, Pruned};
 use super::super::readiness::{self, ImportTarget, ReadinessError, ReadinessResult};
 use super::super::secrets::{self, HydrationResult, SecretError};
 use super::{ClusterOps, Finalized, OnStatus};
@@ -115,6 +116,8 @@ pub struct KubeOps {
     /// The `status.orphansKeptFrom` that [`ClusterOps::finalize`] wrote, for
     /// the caller's GC roots. `None` until a finalize succeeds.
     recorded_kept: std::sync::Mutex<Option<Vec<activation::KeptOrphanSource>>>,
+    /// Made at the first prune delete, when discovery has settled.
+    prune_guard: tokio::sync::OnceCell<PruneGuard>,
 }
 
 impl KubeOps {
@@ -126,6 +129,7 @@ impl KubeOps {
             live_activations: std::sync::RwLock::new(None),
             record_pending: std::sync::atomic::AtomicBool::new(false),
             recorded_kept: std::sync::Mutex::new(None),
+            prune_guard: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -278,17 +282,7 @@ impl KubeOps {
     }
 
     fn api_for(&self, ar: &ApiResource, scope: &Scope, rid: &ResourceId) -> Api<DynamicObject> {
-        match scope {
-            Scope::Namespaced => {
-                let ns = if rid.namespace == CLUSTER_SCOPED {
-                    "default"
-                } else {
-                    rid.namespace.as_str()
-                };
-                Api::namespaced_with(self.client.clone(), ns, ar)
-            }
-            Scope::Cluster => Api::all_with(self.client.clone(), ar),
-        }
+        fetch::api_for(&self.client, ar, scope, rid)
     }
 }
 
@@ -663,27 +657,33 @@ impl ClusterOps for KubeOps {
             .map_err(|e| e.to_string())
     }
 
-    async fn delete(&self, rid: &ResourceId) -> Result<(), String> {
+    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, String> {
         let (ar, scope) = self
             .cached_kind(&rid.kind)
             .await
             .ok_or_else(|| format!("kind {} not in discovery cache", rid.kind))?;
-        let api = self.api_for(&ar, &scope, rid);
+        let guard = self
+            .prune_guard
+            .get_or_init(|| async {
+                let discovery = self.discovery.read().await;
+                PruneGuard::new(self.client.clone(), &discovery, &self.cfg.cluster_name)
+            })
+            .await;
         let dp = kube::api::DeleteParams {
             propagation_policy: Some(kube::api::PropagationPolicy::Background),
             dry_run: self.cfg.dry_run,
             ..Default::default()
         };
-        // An object that is already gone is what the prune wanted. This is
-        // routine now that a failed run's whole closure is folded into the
-        // baseline: much of it was never created, and a later run pruning
-        // what an earlier one already removed must not read as a failure,
-        // which would land the new record Degraded for no reason.
-        match api.delete(&rid.name, &dp).await {
-            Ok(_) => Ok(()),
-            Err(kube::Error::Api(ae)) if ae.code == 404 => Ok(()),
-            Err(e) => Err(describe(&e)),
-        }
+        // An object that is already gone (`Pruned::Gone`) is what the prune
+        // wanted. This is routine now that a failed run's whole closure is
+        // folded into the baseline: much of it was never created, and a
+        // later run pruning what an earlier one already removed must not
+        // read as a failure, which would land the new record Degraded for no
+        // reason.
+        guard
+            .delete(&ar, &scope, rid, &dp)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     async fn finalize(
@@ -735,5 +735,67 @@ impl ClusterOps for KubeOps {
                 BEST_EFFORT_TIMEOUT.as_secs()
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod prune_tests {
+    use super::*;
+    use crate::cluster::fake_api::FakeApi;
+    use crate::manifest::keys;
+    use crate::manifest::lifecycle::RECORD_KIND;
+    use serde_json::json;
+
+    /// Deploy's prune deletes through the prune guard: a ClusterRole another
+    /// Kix cluster's Active record names stays, one only this cluster's does
+    /// not.
+    #[tokio::test]
+    async fn a_prune_delete_keeps_what_another_cluster_deploys() {
+        let rec = |cluster: &str, hash: &str| {
+            json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": RECORD_KIND,
+                "metadata": {
+                    "name": cluster,
+                    "labels": { (keys::CLUSTER_LABEL): cluster },
+                    "annotations": { (keys::IDENTITY_HASH): hash },
+                },
+                "status": { "phase": activation::PHASE_ACTIVE },
+            })
+        };
+        let role = |name: &str, activations: &str| {
+            json!({
+                "apiVersion": "rbac.authorization.k8s.io/v1",
+                "kind": "ClusterRole",
+                "metadata": { "name": name, "annotations": { (keys::ACTIVATIONS): activations } },
+            })
+        };
+        let api = FakeApi::new([
+            rec("a", "a1"),
+            rec("b", "b1"),
+            role("mine", "a1"),
+            role("shared", "a1,b1"),
+        ]);
+        let client = api.client();
+        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let ops = KubeOps::new(
+            client,
+            Arc::new(RwLock::new(discovery)),
+            KubeOpsConfig {
+                cluster_name: "a".into(),
+                ..Default::default()
+            },
+        );
+        let rid = |name: &str| ResourceId {
+            kind: "ClusterRole".into(),
+            namespace: CLUSTER_SCOPED.into(),
+            name: name.into(),
+        };
+        assert_eq!(ops.delete(&rid("mine")).await, Ok(Pruned::Deleted));
+        assert!(matches!(
+            ops.delete(&rid("shared")).await,
+            Ok(Pruned::Kept(_))
+        ));
+        assert_eq!(api.names("ClusterRole"), vec!["shared"]);
     }
 }

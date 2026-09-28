@@ -419,6 +419,9 @@ impl ViewState {
             }
             DeployEvent::CrdRediscovery => {}
             DeployEvent::PruneStart { .. } => {}
+            DeployEvent::PruneKept { reason, .. } => {
+                self.warnings.push(format!("prune: {reason}"));
+            }
             DeployEvent::Finalized {
                 activation,
                 previous,

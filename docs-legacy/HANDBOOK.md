@@ -186,10 +186,10 @@ ls result/
 | `kix list packages` | List registered packages | `--cluster <name>` |
 | `kix graph <cluster>` | DAG visualization | `--format tree|dot|json` |
 | `kix inspect <cluster>` | Rendered resources by namespace and kind | |
-| `kix gc <cluster>` | Garbage-collect stale resources; retire old Activation records | `--hard`, `--operator`, `--keep N` (always keep the N newest, default 10), `--keep-max N` (never more than N, default 50), `--keep-for 30d` (retire older, default 30d, `0` off), `--include-unstamped`, `-y` |
+| `kix gc <cluster>` | Garbage-collect stale resources; retire old Activation records | `--hard`, `--operator`, `--keep N` (always keep the N newest, default 10), `--keep-max N` (never more than N, default 50), `--keep-for 30d` (retire older, default 30d, `0` off), `--include-unstamped`, `--include-unattributed`, `-y` |
 | `kix rollback <cluster>` | Roll back to a previous activation | `-y`, `--dry-run`, `--prune`, `--list`, `--operator` |
 | `kix health <cluster>` | Drift detection vs live | |
-| `kix snapshot save <dir>` | Dump live cluster state | |
+| `kix snapshot save <cluster> <dir>` | Dump one Kix cluster's live state | |
 | `kix logs <package>` | Shell-out to `kubectl logs` for the package's primary workload | `-f`, `--tail`, `--since`, `-c`, `-p` |
 | `kix pf <package> <port>` | Shell-out to `kubectl port-forward` | `--address` |
 | `kix images <cluster>` | List all container images (pull-friendly) | `--sources`, `-o json` |
@@ -1527,7 +1527,7 @@ Operator requires `nix-store` binary on the host and read access to `/nix/store/
 | Diff vs live cluster | `kix diff <cluster>` (default mode) |
 | Diff vs snapshot or export dir | `kix diff <cluster> --from <dir>` |
 | Diff between two builds | `kix diff <cluster> --from <result>` |
-| Save live state | `kix snapshot save <dir>` (in-CLI; uses `kix.run/managed-by` label) or `./scripts/kix-dump.py --all <dir>` (Python; broader scope) |
+| Save live state | `kix snapshot save <cluster> <dir>` (in-CLI; the named Kix cluster's objects, found by the `app.kubernetes.io/managed-by=kix` label and attributed through their `kix.run/activations`) or `./scripts/kix-dump.py --all <dir>` (Python; broader scope) |
 | Apply with planning | `kix deploy <cluster>` (use `--dry-run` first) |
 | Markdown for PR comments | `kix diff <cluster> -o markdown` |
 

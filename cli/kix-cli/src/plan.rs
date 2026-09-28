@@ -48,6 +48,28 @@ impl PackageDiff {
             || self.activation.is_some()
     }
 
+    /// Show the orphans another Kix cluster's current build still contains
+    /// as kept rather than removed: the prune keeps them.
+    pub fn keep_shared(&mut self, shared: &[kix::cluster::fetch::SharedOrphan]) {
+        let ids: std::collections::HashSet<&ResourceId> = shared.iter().map(|s| &s.rid).collect();
+        for p in &mut self.removed {
+            let more: Vec<ResourceId> = p
+                .resources
+                .iter()
+                .filter(|id| ids.contains(id) && !p.kept.contains(id))
+                .cloned()
+                .collect();
+            p.kept.extend(more);
+        }
+        for c in self.changed.iter_mut().chain(self.cluster_level.iter_mut()) {
+            let (kept, removed) = std::mem::take(&mut c.removed_resources)
+                .into_iter()
+                .partition(|id| ids.contains(id));
+            c.removed_resources = removed;
+            c.shared_kept.extend(kept);
+        }
+    }
+
     /// Changed packages plus the cluster-level pseudo-package, for renderers
     /// that walk resource-level detail.
     pub fn changed_with_cluster_level(&self) -> impl Iterator<Item = &PackageChangeDiff> {
@@ -91,26 +113,33 @@ pub struct PackageInfo {
     pub key: String, // ns/name
     pub version: Option<String>,
     pub resource_count: usize,
-    /// For a removed package, the resources whose kind
-    /// `lifecycle::never_pruned` protects: they stay on the cluster. Counted
-    /// in `resource_count`. Empty for an added package.
+    /// For a removed package, the resources that stay on the cluster: kinds
+    /// `lifecycle::never_pruned` protects, and any `PackageDiff::keep_shared`
+    /// adds. Counted in `resource_count`. Empty for an added package.
     pub kept: Vec<ResourceId>,
+    /// For a removed package, every resource it had. Empty for an added one.
+    pub resources: Vec<ResourceId>,
 }
 
 impl PackageInfo {
     fn removed(key: &str, pkg: &PackageNode, graph: &StoreGraph) -> Self {
-        let kept = pkg
+        let resources: Vec<ResourceId> = pkg
             .resource_paths
             .iter()
             .filter_map(|p| graph.resources.get(p))
             .map(|node| ResourceId::from_value(&node.manifest))
+            .collect();
+        let kept = resources
+            .iter()
             .filter(|rid| lifecycle::never_pruned(&rid.kind))
+            .cloned()
             .collect();
         PackageInfo {
             key: key.to_string(),
             version: pkg.version.clone(),
             resource_count: pkg.resource_paths.len(),
             kept,
+            resources,
         }
     }
 
@@ -144,17 +173,24 @@ pub struct PackageChangeDiff {
     pub dep_affected_resources: Vec<ResourceId>,
     pub added_resources: Vec<ResourceId>,
     pub removed_resources: Vec<ResourceId>,
+    /// Resources that left the build and that another Kix cluster's current
+    /// build still contains, moved here from `removed_resources` by
+    /// `PackageDiff::keep_shared`.
+    pub shared_kept: Vec<ResourceId>,
 }
 
 impl PackageChangeDiff {
     /// `removed_resources` split into `(removed, kept)`. `kept` holds the
-    /// kinds `lifecycle::never_pruned` protects: they left the build, but
-    /// deploy and `kix gc` never delete them, so renderers do not show them
-    /// as deletions.
+    /// kinds `lifecycle::never_pruned` protects, then `shared_kept`: they
+    /// left the build, but deploy and `kix gc` do not delete them, so
+    /// renderers do not show them as deletions.
     pub fn removed_and_kept(&self) -> (Vec<&ResourceId>, Vec<&ResourceId>) {
-        self.removed_resources
+        let (removed, mut kept): (Vec<&ResourceId>, Vec<&ResourceId>) = self
+            .removed_resources
             .iter()
-            .partition(|id| !lifecycle::never_pruned(&id.kind))
+            .partition(|id| !lifecycle::never_pruned(&id.kind));
+        kept.extend(&self.shared_kept);
+        (removed, kept)
     }
 }
 
@@ -238,6 +274,7 @@ pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
                 version: new_pkg.version.clone(),
                 resource_count: new_pkg.resource_paths.len(),
                 kept: Vec::new(),
+                resources: Vec::new(),
             });
         }
     }
@@ -382,6 +419,7 @@ fn diff_resource_maps(
         dep_affected_resources,
         added_resources,
         removed_resources,
+        shared_kept: Vec::new(),
     }
 }
 
@@ -441,6 +479,7 @@ pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
                     dep_affected_resources: Vec::new(),
                     added_resources: Vec::new(),
                     removed_resources,
+                    shared_kept: Vec::new(),
                 });
             } else {
                 unchanged += 1;

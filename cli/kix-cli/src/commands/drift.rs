@@ -11,7 +11,6 @@ use crate::cli::{DriftArgs, GlobalArgs, OutputFormat};
 use crate::output;
 
 pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
-    let _ = args;
     let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;
 
     let json = global.output == Some(OutputFormat::Json);
@@ -26,9 +25,13 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
         let discovery = fetch::discover_resources(&client)
             .await
             .map_err(|e| miette!("{e}"))?;
-        drift::check_cluster(&client, &discovery)
+        let (reports, tenancy) = drift::check_cluster(&client, &discovery, args.cluster.as_deref())
             .await
-            .map_err(|e| miette!("drift check failed: {e}"))
+            .map_err(|e| miette!("drift check failed: {e}"))?;
+        if args.cluster.is_some() {
+            tenancy.require_records().map_err(|e| miette!("{e}"))?;
+        }
+        Ok::<_, miette::Report>(reports)
     })?;
 
     let drifted = reports
@@ -39,7 +42,13 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
     if json {
         print_json(&reports)?;
     } else {
-        print_text(&reports, global.quiet);
+        // Name each object's clusters only when the check covered more than
+        // one, so a Kubernetes cluster with one Kix cluster reads as before.
+        let clusters: std::collections::BTreeSet<&str> = reports
+            .iter()
+            .flat_map(|r| r.clusters.iter().map(String::as_str))
+            .collect();
+        print_text(&reports, global.quiet, clusters.len() > 1);
     }
 
     if drifted > 0 {
@@ -48,14 +57,18 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
     Ok(())
 }
 
-fn print_text(reports: &[DriftReport], quiet: bool) {
+fn print_text(reports: &[DriftReport], quiet: bool, name_clusters: bool) {
     if !quiet {
         println!("{} kix-managed resources", reports.len());
         println!();
     }
 
     for report in reports {
-        let rid = report.rid.to_string();
+        let rid = if name_clusters {
+            format!("{} [{}]", report.rid, owners_label(&report.clusters))
+        } else {
+            report.rid.to_string()
+        };
         match &report.verdict {
             DriftVerdict::InSync => {
                 println!(
@@ -150,6 +163,15 @@ fn print_owner(owner: &ForeignOwner) {
     }
 }
 
+/// The clusters a report names beside an object.
+fn owners_label(clusters: &[String]) -> String {
+    if clusters.is_empty() {
+        "no Kix cluster".to_string()
+    } else {
+        clusters.join(", ")
+    }
+}
+
 fn count(reports: &[DriftReport], pred: impl Fn(&DriftVerdict) -> bool) -> usize {
     reports.iter().filter(|r| pred(&r.verdict)).count()
 }
@@ -169,6 +191,7 @@ fn print_json(reports: &[DriftReport]) -> Result<()> {
                 "namespace": r.rid.namespace,
                 "name": r.rid.name,
                 "verdict": verdict,
+                "clusters": r.clusters,
                 "foreignOwners": foreign.iter().map(|o| serde_json::json!({
                     "manager": o.manager,
                     "operation": o.operation,

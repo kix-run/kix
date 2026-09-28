@@ -165,6 +165,9 @@ impl DeployObserver for OperatorObserver {
                 let kept: Vec<String> = kept.iter().map(|r| r.display_id()).collect();
                 tracing::info!(activation, count = *count, delete = *delete, resources = ?names, kept = ?kept, "Starting prune");
             }
+            DeployEvent::PruneKept { resource, reason } => {
+                tracing::info!(activation, resource = %resource, "prune: {reason}");
+            }
             DeployEvent::Finalized {
                 activation: new,
                 previous,

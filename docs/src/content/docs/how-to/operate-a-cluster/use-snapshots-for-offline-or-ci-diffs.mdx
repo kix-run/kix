@@ -12,7 +12,8 @@ Use a snapshot when you want `kix diff` without a connection to the cluster:
 on a laptop off the VPN, in a CI job that holds no cluster credentials, or
 when several people need the same old side for a review.
 
-`kix snapshot save` writes the fields Kix applied to each managed resource.
+`kix snapshot save` writes the fields Kix applied to each resource of the
+named cluster.
 `kix diff --from` then compares a build with that directory the same way it
 compares with the live cluster, so the two reports match.
 
@@ -30,7 +31,8 @@ source agree:
 Pass `--context` when the cluster is not the current kubectl context. The
 command reports how many resources it fetched and wrote. The directory holds
 one YAML file per resource, grouped by namespace, plus a `README.md` with the
-timestamp and context.
+timestamp, cluster and context. Resources of other Kix clusters deployed to
+the same Kubernetes cluster are left out.
 
 ## Diff a build against the snapshot
 

@@ -441,6 +441,8 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
             orphan_rids.push(rid.clone());
         }
     }
+    let (orphan_rids, shared_orphans) =
+        super::shared_orphans::keep_shared(&client, &args.cluster, orphan_rids).await?;
 
     let resource_graph = ResourceGraph::from_manifests(&target_manifests).into_diagnostic()?;
     let plan = DeployPlan::from_graph_and_changes(&resource_graph, &all_actions);
@@ -458,13 +460,14 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
 
     // 7. Display plan
     if !ctx.global.quiet {
-        let pkg_diff = match &current_graph {
+        let mut pkg_diff = match &current_graph {
             Some(old) => plan::diff_graphs(old, &target_graph),
             None => plan::diff_graphs(
                 &StoreGraph::empty(&target_graph.cluster_name),
                 &target_graph,
             ),
         };
+        pkg_diff.keep_shared(&shared_orphans);
 
         println!();
         println!(
@@ -475,6 +478,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         );
         plan::print_package_plan(&pkg_diff, ctx.global.verbose > 0);
         plan::print_plan_summary(&pkg_diff);
+        super::shared_orphans::print(&shared_orphans);
     }
 
     let total_apply = plan

@@ -297,3 +297,290 @@ fn deploy_and_gc() {
 
     eprintln!("\n=== All phases passed ===");
 }
+
+// =============================================================================
+// Two Kix clusters in one Kubernetes cluster
+// =============================================================================
+
+/// A flake with Kix clusters `sweep-a` and `sweep-b`, echo servers in
+/// namespaces of their own, both deploying the `shared-role` package: a
+/// ClusterRole, and a ConfigMap whose manifest names no namespace, so it is
+/// applied to `default`.
+struct TwoClusters {
+    dir: tempfile::TempDir,
+}
+
+const SHARED_ROLE_NIX: &str = r#"{ scope, ... }:
+{
+  meta = {
+    version = "1";
+    description = "Objects both test clusters deploy";
+    owner = "test";
+  };
+  build =
+    { self, ... }:
+    {
+      role = scope.mkClusterResource {
+        apiVersion = "rbac.authorization.k8s.io/v1";
+        kind = "ClusterRole";
+        name = "sweep-test-reader";
+        extra.rules = [
+          {
+            apiGroups = [ "" ];
+            resources = [ "configmaps" ];
+            verbs = [ "get" ];
+          }
+        ];
+      };
+      note = scope.mkClusterResource {
+        apiVersion = "v1";
+        kind = "ConfigMap";
+        name = "sweep-test-shared";
+        extra.data.owner = "both";
+      };
+      root = self.role;
+    };
+}
+"#;
+
+impl TwoClusters {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let lock: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(repo_root().join("flake.lock")).unwrap())
+                .unwrap();
+        let rev = lock["nodes"]["nixpkgs"]["locked"]["rev"].as_str().unwrap();
+        let flake = format!(
+            r#"{{
+  inputs = {{
+    nixpkgs.url = "github:NixOS/nixpkgs/{rev}";
+    kix.url = "git+file://{}?dir=kix";
+  }};
+  outputs =
+    inputs:
+    inputs.kix.lib.mkFlake {{
+      inherit inputs;
+      systems = [ "x86_64-linux" ];
+      clusters = {{
+        sweep-a = ./a.nix;
+        sweep-b = ./b.nix;
+      }};
+    }};
+}}
+"#,
+            repo_root().display()
+        );
+        let t = TwoClusters { dir };
+        t.write("flake.nix", &flake);
+        t.write("shared-role.nix", SHARED_ROLE_NIX);
+        t.write_cluster("a", "hello from sweep-a", true);
+        t.write_cluster("b", "hello from sweep-b", true);
+        git(t.path(), &["init", "-q"]);
+        git(t.path(), &["add", "-A"]);
+        t
+    }
+
+    fn path(&self) -> &Path {
+        self.dir.path()
+    }
+
+    fn write(&self, name: &str, text: &str) {
+        std::fs::write(self.path().join(name), text).unwrap();
+        if self.path().join(".git").exists() {
+            git(self.path(), &["add", "-A"]);
+        }
+    }
+
+    fn write_cluster(&self, id: &str, message: &str, shared: bool) {
+        let shared = if shared {
+            "namespaces.shared = { };\n      instances.shared.shared-role.package = import ./shared-role.nix;"
+        } else {
+            ""
+        };
+        let text = format!(
+            r#"{{ kix, packages }}:
+kix.buildCluster {{
+  name = "sweep-{id}";
+  modules = [
+    kix.flavors.kind
+    {{
+      namespaces.echo-{id} = {{ }};
+      {shared}
+      instances.echo-{id}.echo-server = {{
+        package = packages.echo-server;
+        config.message = "{message}";
+      }};
+    }}
+  ];
+}}
+"#
+        );
+        self.write(&format!("{id}.nix"), &text);
+    }
+
+    fn kix(&self, kube_ctx: &str, args: &[&str]) -> (bool, String) {
+        let out = assert_cmd::Command::cargo_bin("kix")
+            .unwrap()
+            .env("NO_COLOR", "true")
+            .arg("--flake")
+            .arg(self.path())
+            .args(["--context", kube_ctx])
+            .args(args)
+            .output()
+            .expect("kix should run");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        eprintln!("$ kix {}\n{text}", args.join(" "));
+        (out.status.success(), text)
+    }
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let ok = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .is_ok_and(|o| o.status.success());
+    assert!(ok, "git {args:?} failed");
+}
+
+/// Every object of Kix cluster `sweep-b` that must survive `sweep-a`'s
+/// commands.
+fn assert_b_intact(kube_ctx: &str) {
+    for (kind, ns, name) in [
+        ("deployment", "echo-b", "echo-server"),
+        ("service", "echo-b", "echo-server"),
+        ("configmap", "echo-b", "echo-server"),
+        ("clusterrole", "", "sweep-test-reader"),
+        ("configmap", "default", "sweep-test-shared"),
+    ] {
+        let mut args = vec!["get", kind, name, "-o", "name"];
+        if !ns.is_empty() {
+            args.extend(["-n", ns]);
+        }
+        let out = kubectl(kube_ctx, &args);
+        assert!(
+            out.status.success(),
+            "{kind}/{name} of sweep-b is gone: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// Two Kix clusters deploy into one kind cluster, sharing a ClusterRole and
+/// an unnamespaced ConfigMap. Every command run for `sweep-a` leaves
+/// `sweep-b`'s objects alone, and a prune by `sweep-a` keeps what `sweep-b`
+/// still deploys.
+///
+/// The kind cluster is `$KIX_KIND_CLUSTER` (default `kix-sweep-scope`); the
+/// test creates and deletes it.
+#[test]
+#[ignore] // Run explicitly: cargo test --test kind_integration_test -- --ignored
+fn two_kix_clusters_share_one_kind_cluster() {
+    if !has_kind() || !has_kubectl() {
+        eprintln!("skipping: kind or kubectl not available");
+        return;
+    }
+    let kind_cluster =
+        std::env::var("KIX_KIND_CLUSTER").unwrap_or_else(|_| "kix-sweep-scope".into());
+    let ctx = format!("kind-{kind_cluster}");
+    kind_delete(&kind_cluster);
+    clear_activation_cache("sweep-a");
+    clear_activation_cache("sweep-b");
+    assert!(kind_create(&kind_cluster), "failed to create kind cluster");
+    struct Cleanup(String);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            kind_delete(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(kind_cluster.clone());
+
+    let flake = TwoClusters::new();
+    assert!(flake.kix(&ctx, &["deploy", "sweep-a", "--yes"]).0);
+    assert!(flake.kix(&ctx, &["deploy", "sweep-b", "--yes"]).0);
+    assert_b_intact(&ctx);
+
+    // 1. `kix diff sweep-a` reports no removals. (It does show the
+    //    unnamespaced ConfigMap as added: the build names it without a
+    //    namespace and the live object sits in `default`.)
+    let (_, out) = flake.kix(&ctx, &["diff", "sweep-a"]);
+    assert!(
+        !out.lines().any(|l| l.trim_start().starts_with("- ")),
+        "diff sweep-a should remove nothing:\n{out}"
+    );
+    assert!(out.contains("belong to Kix cluster sweep-b"), "{out}");
+
+    // 2. `kix status sweep-a` and `kix snapshot save sweep-a` contain none
+    //    of sweep-b's objects.
+    let (ok, out) = flake.kix(&ctx, &["status", "sweep-a"]);
+    assert!(ok && !out.contains("echo-b"), "{out}");
+    let snap = tempfile::tempdir().unwrap();
+    let snap_dir = snap.path().join("a");
+    let (ok, _) = flake.kix(
+        &ctx,
+        &["snapshot", "save", "sweep-a", snap_dir.to_str().unwrap()],
+    );
+    assert!(ok);
+    assert!(!snap_dir.join("echo-b").exists());
+    assert!(snap_dir.join("echo-a").exists());
+
+    // 3. The rebuild-from-live path: the Active record's build is not in
+    //    the store, so deploy reads the previous state from live objects.
+    let records = format!("activations.{}", keys::DOMAIN);
+    let selector = format!("{}=sweep-a", keys::CLUSTER_LABEL);
+    let record = kubectl_stdout(
+        &ctx,
+        &[
+            "get",
+            &records,
+            "-l",
+            &selector,
+            "-o",
+            "jsonpath={range .items[?(@.status.phase==\"Active\")]}{.metadata.name}{end}",
+        ],
+    );
+    let gone = format!(
+        "{}=/nix/store/00000000000000000000000000000000-gone",
+        keys::BUILT_VIA
+    );
+    let annotate = kubectl(
+        &ctx,
+        &["annotate", &records, record.trim(), &gone, "--overwrite"],
+    );
+    assert!(annotate.status.success());
+    clear_activation_cache("sweep-a");
+    flake.write_cluster("a", "hello again from sweep-a", true);
+    let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-a", "--prune", "--yes"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("Reconstructing previous state"), "{out}");
+    assert_b_intact(&ctx);
+
+    // 4. `kix gc sweep-a --hard --yes` deletes nothing of sweep-b's.
+    let (ok, out) = flake.kix(&ctx, &["gc", "sweep-a", "--hard", "--yes"]);
+    assert!(ok, "{out}");
+    assert_b_intact(&ctx);
+
+    // 5. sweep-a drops the shared package; its prune keeps what sweep-b
+    //    still deploys, including the ConfigMap applied to `default`.
+    flake.write_cluster("a", "hello again from sweep-a", false);
+    let (ok, out) = flake.kix(&ctx, &["deploy", "sweep-a", "--prune", "--yes"]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("kept ClusterRole/sweep-test-reader")
+            && out.contains("still deployed by Kix cluster sweep-b"),
+        "{out}"
+    );
+    assert_b_intact(&ctx);
+    let (ok, out) = flake.kix(&ctx, &["gc", "sweep-a", "--hard", "--yes"]);
+    assert!(ok, "{out}");
+    assert_b_intact(&ctx);
+
+    // `--include-unattributed` needs `--hard`.
+    let (ok, out) = flake.kix(&ctx, &["gc", "sweep-a", "--include-unattributed"]);
+    assert!(!ok && out.contains("--hard"), "{out}");
+}

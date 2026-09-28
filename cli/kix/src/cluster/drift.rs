@@ -16,6 +16,7 @@ use kube::{
 };
 use serde_json::Value;
 
+use super::activation::Tenancy;
 use super::fetch::{self, FetchError};
 use super::fieldsv1::{self, KIX_FIELD_MANAGER};
 use crate::manifest::keys;
@@ -60,23 +61,41 @@ pub struct ForeignOwner {
 pub struct DriftReport {
     pub rid: ResourceId,
     pub verdict: DriftVerdict,
+    /// The Kix clusters whose Activation records name the object, sorted.
+    /// Empty when it names no record on the cluster.
+    pub clusters: Vec<String>,
 }
 
-/// Check every kix-managed resource on the cluster.
+/// Check kix-managed resources on the cluster: every one when `cluster` is
+/// `None`, otherwise the ones [`fetch::SweepScope::Cluster`] gives for it.
+/// Also returns the sweep's [`Tenancy`], which names each report's clusters.
 ///
-/// Fetches through [`fetch::fetch_managed_resources`] and hashes raw objects.
+/// Fetches through [`fetch::sweep_managed`] and hashes raw objects.
 /// `fetch::normalize_for_diff` cannot be used because it removes managedFields.
 pub async fn check_cluster(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
-) -> Result<Vec<DriftReport>, FetchError> {
-    let live = fetch::fetch_managed_resources(client, discovery).await?;
-    let mut reports: Vec<DriftReport> = live.iter().map(check_object).collect();
+    cluster: Option<&str>,
+) -> Result<(Vec<DriftReport>, Tenancy), FetchError> {
+    let scope = match cluster {
+        Some(cluster) => fetch::SweepScope::Cluster(cluster),
+        None => fetch::SweepScope::All,
+    };
+    let sweep = fetch::sweep_managed(client, discovery, scope).await?;
+    let mut reports: Vec<DriftReport> = sweep
+        .managed
+        .iter()
+        .map(|obj| DriftReport {
+            clusters: sweep.tenancy.owners_of(obj),
+            ..check_object(obj)
+        })
+        .collect();
     reports.sort_by(|a, b| a.rid.cmp(&b.rid));
-    Ok(reports)
+    Ok((reports, sweep.tenancy))
 }
 
-/// Run the drift check on one live object.
+/// Run the drift check on one live object. `clusters` is left empty;
+/// [`check_cluster`] fills it.
 pub fn check_object(obj: &DynamicObject) -> DriftReport {
     let rid = resource_id(obj);
 
@@ -91,6 +110,7 @@ pub fn check_object(obj: &DynamicObject) -> DriftReport {
         return DriftReport {
             rid,
             verdict: DriftVerdict::Unstamped,
+            clusters: Vec::new(),
         };
     };
 
@@ -104,6 +124,7 @@ pub fn check_object(obj: &DynamicObject) -> DriftReport {
         return DriftReport {
             rid,
             verdict: DriftVerdict::NoFieldset,
+            clusters: Vec::new(),
         };
     };
 
@@ -111,6 +132,7 @@ pub fn check_object(obj: &DynamicObject) -> DriftReport {
         DriftReport {
             rid,
             verdict: DriftVerdict::InSync,
+            clusters: Vec::new(),
         }
     } else {
         DriftReport {
@@ -118,6 +140,7 @@ pub fn check_object(obj: &DynamicObject) -> DriftReport {
             verdict: DriftVerdict::Drifted {
                 foreign: foreign_owners(obj),
             },
+            clusters: Vec::new(),
         }
     }
 }

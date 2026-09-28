@@ -25,6 +25,7 @@ use crate::manifest::types::ResourceId;
 use super::apply::{ApplyError, ApplyResult};
 use super::cancel::CancelToken;
 use super::fetch::FetchError;
+use super::prune_guard::Pruned;
 use super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
 use super::secrets::{HydrationResult, SecretError};
 
@@ -129,8 +130,9 @@ pub trait ClusterOps: Send + Sync + 'static {
     /// because it was unchanged. Best-effort.
     async fn record_activation_on_skipped(&self, rid: &ResourceId) -> Result<(), String>;
 
-    /// Delete an orphan.
-    async fn delete(&self, rid: &ResourceId) -> Result<(), String>;
+    /// Delete an orphan, unless another Kix cluster still deploys it or it
+    /// changed since it was read (see [`super::prune_guard`]).
+    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, String>;
 
     /// Finalize the Activation lifecycle: new one Active (or Degraded), old
     /// one Superseded. `Ok(None)` when there is no Activation to finalize

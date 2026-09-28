@@ -21,6 +21,7 @@ pub mod operator;
 pub mod pf;
 pub mod pin;
 pub mod rollback;
+pub mod shared_orphans;
 pub mod snapshot;
 pub mod status;
 pub mod workload;

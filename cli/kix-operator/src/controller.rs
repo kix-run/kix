@@ -16,7 +16,7 @@
 //!
 //! Both new deployments and drift correction use the same path:
 //! 1. Load desired manifests from `spec.source.path`
-//! 2. Fetch live kix-managed resources from the cluster
+//! 2. Fetch the live kix-managed resources of the record's Kix cluster
 //! 3. Compare identity-hashes (desired vs live) to determine Apply/Skip/Orphan
 //! 4. Wave-plan and apply
 //!
@@ -34,7 +34,7 @@ use std::time::Duration;
 use kube::{
     api::{Api, DynamicObject, Patch, PatchParams},
     client::Client,
-    discovery::{ApiResource, Scope},
+    discovery::ApiResource,
     runtime::controller::Action,
 };
 use serde_json::Value;
@@ -47,6 +47,7 @@ use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::ops::{ClusterOps, KubeOps, KubeOpsConfig};
+use kix::cluster::prune_guard::{PruneGuard, Pruned};
 use kix::cluster::scheduler::{self, DeployPlan, OnErrorPolicy, PrunePolicy, SchedulerConfig};
 use kix::cluster::stream::DeployObserver;
 use kix::cluster::watchdog::StallPolicy;
@@ -121,13 +122,23 @@ fn source_path(activation: &DynamicObject) -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
-/// Extract the cluster name from an Activation CR.
+/// The Kix cluster an Activation CR belongs to: its `kix.run/cluster`
+/// label, which the compiler stamps on every record, else `spec.cluster`,
+/// which a record built by Nix lacks until the CLI finalizes it.
 fn cluster_name(activation: &DynamicObject) -> Option<String> {
     activation
-        .data
-        .pointer("/spec/cluster")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+        .metadata
+        .labels
+        .as_ref()
+        .and_then(|l| keys::get_meta(l, keys::CLUSTER_LABEL))
+        .or_else(|| {
+            activation
+                .data
+                .pointer("/spec/cluster")
+                .and_then(|v| v.as_str())
+        })
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// Extract identity hash from annotations.
@@ -160,6 +171,33 @@ fn load_and_stamp(path: &Path) -> Result<(StoreGraph, Vec<Value>), OperatorError
         .map(|r| r.manifest.clone())
         .collect();
     Ok((graph, manifests))
+}
+
+/// Compare desired manifests with this cluster's live objects by identity
+/// hash, keeping out of the orphans every object another Kix cluster's
+/// current build still contains.
+fn live_changes(
+    desired: &[Value],
+    live: &[DynamicObject],
+    tenancy: &activation::Tenancy,
+) -> (Vec<ChangeAction>, Vec<fetch::SharedOrphan>) {
+    let actions = kix::cluster::apply::detect_changes_live(desired, live);
+    let orphans: Vec<ResourceId> = actions
+        .iter()
+        .filter_map(|a| match a {
+            ChangeAction::Orphan(rid) => Some(rid.clone()),
+            _ => None,
+        })
+        .collect();
+    let (_, shared) = fetch::split_shared_orphans(orphans, live, tenancy);
+    let actions = actions
+        .into_iter()
+        .filter(|a| match a {
+            ChangeAction::Orphan(rid) => !shared.iter().any(|s| &s.rid == rid),
+            _ => true,
+        })
+        .collect();
+    (actions, shared)
 }
 
 /// Build a streaming [`DeployPlan`] + orphan list from change detection.
@@ -195,11 +233,19 @@ pub async fn reconcile_activation(
     ctx: Arc<Context>,
 ) -> Result<Action, OperatorError> {
     let name = activation.metadata.name.as_deref().unwrap_or("<unnamed>");
-    let cluster = cluster_name(&activation).unwrap_or_else(|| name.to_string());
+    // Records are looked up by the cluster label, so a record that names no
+    // cluster finds only itself. The sweep and the prune get an empty name
+    // instead, under which no record counts as this cluster's own.
+    let own_cluster = cluster_name(&activation).unwrap_or_default();
+    let cluster = if own_cluster.is_empty() {
+        name.to_string()
+    } else {
+        own_cluster.clone()
+    };
 
     // Handle deletion (finalizer)
     if activation.metadata.deletion_timestamp.is_some() {
-        return handle_delete(&activation, &ctx, name, &cluster).await;
+        return handle_delete(&activation, &ctx, name, &own_cluster).await;
     }
 
     let phase = activation::read_phase(&activation);
@@ -274,7 +320,7 @@ pub async fn reconcile_activation(
             ensure_finalizer(&ctx.client, &ctx.activation_ar, name, &activation).await?;
 
             // Run reconcile with lifecycle management (will set phase to Active on success)
-            return run_reconcile(&activation, &ctx, name, &cluster, true).await;
+            return run_reconcile(&activation, &ctx, name, &own_cluster, true).await;
         }
 
         // Active and Degraded records run drift detection on requeue. Degraded means the
@@ -299,7 +345,7 @@ pub async fn reconcile_activation(
             ensure_finalizer(&ctx.client, &ctx.activation_ar, name, &activation).await?;
 
             // Run reconcile without lifecycle management (already Active)
-            return run_reconcile(&activation, &ctx, name, &cluster, false).await;
+            return run_reconcile(&activation, &ctx, name, &own_cluster, false).await;
         }
 
         // Deploying: a resume, the same as a Queued one already transitioning.
@@ -322,7 +368,7 @@ pub async fn reconcile_activation(
             }
             tracing::info!(name, "Resuming Deploying activation");
             ensure_finalizer(&ctx.client, &ctx.activation_ar, name, &activation).await?;
-            return run_reconcile(&activation, &ctx, name, &cluster, true).await;
+            return run_reconcile(&activation, &ctx, name, &own_cluster, true).await;
         }
 
         // Failed is terminal. The deploy that owned it has stopped, and the
@@ -345,6 +391,8 @@ pub async fn reconcile_activation(
 /// If `manage_lifecycle` is true, passes `activation_name` to the reconcile engine
 /// so it runs begin_deploy/record_waves/finalize_deploy. Used for new deployments.
 /// If false, run drift correction without lifecycle changes.
+///
+/// `cluster` is the record's Kix cluster, empty when it names none.
 async fn run_reconcile(
     activation: &DynamicObject,
     ctx: &Context,
@@ -386,12 +434,29 @@ async fn run_reconcile(
         .await
         .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
 
-    let live_resources = fetch::fetch_managed_resources(&ctx.client, &discovery)
+    // Only this Kix cluster's objects: every other Kix cluster's objects are
+    // absent from this build and would otherwise be pruned as orphans.
+    let sweep = fetch::sweep_managed(&ctx.client, &discovery, fetch::SweepScope::Cluster(cluster))
         .await
         .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
+    let tenancy = sweep.tenancy.clone();
+    for (owner, count) in &sweep.foreign {
+        tracing::debug!(name, owner = %owner, count, "left out objects of another Kix cluster");
+    }
+    if !sweep.unattributed.is_empty() {
+        tracing::info!(
+            name,
+            count = sweep.unattributed.len(),
+            "left out Kix objects that name no Activation record; another Kix cluster deploys here",
+        );
+    }
+    let live_resources = sweep.managed;
 
     // 5. Compare desired vs live by identity-hash
-    let all_actions = kix::cluster::apply::detect_changes_live(&managed_manifests, &live_resources);
+    let (all_actions, shared) = live_changes(&managed_manifests, &live_resources, &tenancy);
+    for s in &shared {
+        tracing::info!(name, resource = %s.rid, clusters = ?s.clusters, "prune: {}", s.describe());
+    }
 
     let apply_count = all_actions
         .iter()
@@ -516,14 +581,15 @@ async fn run_reconcile(
 /// Handle deletion of an Activation CR (finalizer cleanup).
 ///
 /// Only Active, Deploying or Degraded activations trigger resource cleanup,
-/// and it keeps the kinds `never_pruned` protects.
+/// and it keeps the kinds `never_pruned` protects and the objects another
+/// Kix cluster's current build still contains (see [`delete_closure`]).
 /// Superseded activations just get the finalizer removed (the Active
 /// activation owns those resources now).
 async fn handle_delete(
     activation: &DynamicObject,
     ctx: &Context,
     name: &str,
-    _cluster: &str,
+    cluster: &str,
 ) -> Result<Action, OperatorError> {
     let finalizers = activation.metadata.finalizers.as_deref().unwrap_or(&[]);
 
@@ -572,39 +638,7 @@ async fn handle_delete(
             .filter(|rid| !kix::manifest::lifecycle::never_pruned(&rid.kind))
             .collect();
 
-            let discovery = fetch::discover_resources(&ctx.client)
-                .await
-                .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
-
-            let ar_by_kind: std::collections::HashMap<String, (&ApiResource, Scope)> = discovery
-                .iter()
-                .map(|(ar, scope)| (ar.kind.clone(), (ar, scope.clone())))
-                .collect();
-
-            for rid in &ordered {
-                if let Some(&(ar, ref scope)) = ar_by_kind.get(&rid.kind) {
-                    let api: Api<DynamicObject> = match scope {
-                        Scope::Namespaced => {
-                            let ns = if rid.namespace == kix::manifest::types::CLUSTER_SCOPED {
-                                "default"
-                            } else {
-                                &rid.namespace
-                            };
-                            Api::namespaced_with(ctx.client.clone(), ns, ar)
-                        }
-                        Scope::Cluster => Api::all_with(ctx.client.clone(), ar),
-                    };
-                    match api
-                        .delete(&rid.name, &kube::api::DeleteParams::default())
-                        .await
-                    {
-                        Ok(_) => tracing::info!(name, resource = %rid, "Deleted"),
-                        Err(e) => {
-                            tracing::warn!(name, resource = %rid, error = %e, "Failed to delete")
-                        }
-                    }
-                }
-            }
+            delete_closure(&ctx.client, cluster, name, &ordered).await?;
         }
     } else {
         tracing::info!(
@@ -629,6 +663,41 @@ async fn handle_delete(
 
     tracing::info!(name, "Finalizer removed, Activation can be deleted");
     Ok(Action::await_change())
+}
+
+/// Delete a deleted record's closure in `ordered` order through
+/// [`PruneGuard`]: an object another Kix cluster's current build contains,
+/// such as a shared ClusterRole, stays. `cluster` is the record's Kix
+/// cluster; the record is still listed while its finalizer holds it, so its
+/// own hash counts as this cluster's.
+async fn delete_closure(
+    client: &Client,
+    cluster: &str,
+    name: &str,
+    ordered: &[ResourceId],
+) -> Result<(), OperatorError> {
+    let discovery = fetch::discover_resources(client)
+        .await
+        .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
+    let guard = PruneGuard::new(client.clone(), &discovery, cluster);
+    for rid in ordered {
+        let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
+            continue;
+        };
+        match guard
+            .delete(ar, scope, rid, &kube::api::DeleteParams::default())
+            .await
+        {
+            Ok(Pruned::Deleted) => tracing::info!(name, resource = %rid, "Deleted"),
+            Ok(Pruned::Gone) => {}
+            Ok(kept) => {
+                let reason = kept.kept_reason().unwrap_or_default();
+                tracing::info!(name, resource = %rid, "prune: {reason}");
+            }
+            Err(e) => tracing::warn!(name, resource = %rid, error = %e, "Failed to delete"),
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -676,4 +745,169 @@ pub fn error_policy(
 ) -> Action {
     tracing::warn!(error = %error, "Error during reconciliation, requeueing");
     Action::requeue(ERROR_REQUEUE_INTERVAL)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kix::cluster::activation::Tenancy;
+    use serde_json::json;
+
+    fn annotated(kind: &str, name: &str, hash: &str, activations: &str) -> Value {
+        json!({
+            "apiVersion": "v1",
+            "kind": kind,
+            "metadata": {
+                "name": name,
+                "namespace": "d",
+                "annotations": {
+                    (keys::IDENTITY_HASH): hash,
+                    (keys::ACTIVATIONS): activations,
+                },
+            },
+        })
+    }
+
+    fn live(kind: &str, name: &str, hash: &str, activations: &str) -> DynamicObject {
+        serde_json::from_value(annotated(kind, name, hash, activations)).unwrap()
+    }
+
+    fn record(cluster: &str, hash: &str) -> DynamicObject {
+        serde_json::from_value(json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": cluster,
+                "labels": { (keys::CLUSTER_LABEL): cluster },
+                "annotations": { (keys::IDENTITY_HASH): hash },
+            },
+            "status": { "phase": PHASE_ACTIVE },
+        }))
+        .unwrap()
+    }
+
+    fn orphans(actions: &[ChangeAction]) -> Vec<String> {
+        let mut v: Vec<String> = actions
+            .iter()
+            .filter_map(|a| match a {
+                ChangeAction::Orphan(rid) => Some(rid.name.clone()),
+                _ => None,
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// The reconcile of Kix cluster `a` in a Kubernetes cluster that also
+    /// runs `b`: it prunes its own stale object, never `b`'s, and keeps the
+    /// ClusterRole both deployed after `a` dropped it.
+    #[test]
+    fn reconcile_prunes_only_this_clusters_orphans() {
+        let records = [record("a", "a2"), record("b", "b1")];
+        let objects = vec![
+            live("ConfigMap", "a-web", "h-web", "a2"),
+            live("ConfigMap", "a-stale", "h-stale", "a2"),
+            live("ConfigMap", "b-web", "h-b", "b1"),
+            live("ClusterRole", "shared", "h-shared", "a2,b1"),
+        ];
+        let desired = [annotated("ConfigMap", "a-web", "h-web", "")];
+
+        let tenancy = Tenancy::from_records(&records, "a");
+        let sweep = fetch::scope_sweep(
+            fetch::partition_sweep(objects.clone()),
+            fetch::SweepScope::Cluster("a"),
+            tenancy.clone(),
+        );
+        let (actions, shared) = live_changes(&desired, &sweep.managed, &tenancy);
+        assert_eq!(orphans(&actions), vec!["a-stale"]);
+        assert_eq!(shared.len(), 1);
+        assert_eq!(shared[0].rid.name, "shared");
+
+        // `b`'s reconcile, with `b`'s build unchanged, prunes nothing of `a`.
+        let tenancy = Tenancy::from_records(&records, "b");
+        let sweep = fetch::scope_sweep(
+            fetch::partition_sweep(objects),
+            fetch::SweepScope::Cluster("b"),
+            tenancy.clone(),
+        );
+        let desired = [
+            annotated("ConfigMap", "b-web", "h-b", ""),
+            annotated("ClusterRole", "shared", "h-shared", ""),
+        ];
+        let (actions, shared) = live_changes(&desired, &sweep.managed, &tenancy);
+        assert!(orphans(&actions).is_empty());
+        assert!(shared.is_empty());
+    }
+
+    /// One Kix cluster: every stale object is an orphan, as before scoping.
+    #[test]
+    fn reconcile_on_a_single_cluster_is_unchanged() {
+        let tenancy = Tenancy::from_records(&[record("a", "a2")], "a");
+        let objects = vec![
+            live("ConfigMap", "a-web", "h-web", "a2"),
+            live("ConfigMap", "leftover", "h-left", "retired"),
+        ];
+        let sweep = fetch::scope_sweep(
+            fetch::partition_sweep(objects),
+            fetch::SweepScope::Cluster("a"),
+            tenancy.clone(),
+        );
+        let desired = [annotated("ConfigMap", "a-web", "h-web", "")];
+        let (actions, _) = live_changes(&desired, &sweep.managed, &tenancy);
+        assert_eq!(orphans(&actions), vec!["leftover"]);
+    }
+
+    /// The operator reads a record's cluster from its label before
+    /// `spec.cluster`, and a record naming neither has no cluster.
+    #[test]
+    fn a_records_cluster_comes_from_its_label() {
+        let mut rec = record("a", "a1");
+        rec.data = json!({ "spec": { "cluster": "stale" } });
+        assert_eq!(cluster_name(&rec).as_deref(), Some("a"));
+        rec.metadata.labels = None;
+        assert_eq!(cluster_name(&rec).as_deref(), Some("stale"));
+        rec.data = json!({});
+        assert_eq!(cluster_name(&rec), None);
+    }
+
+    /// Deleting `b`'s Active record tears down `b`'s closure but leaves the
+    /// ClusterRole `a`'s current build also contains.
+    #[tokio::test]
+    async fn finalizer_keeps_what_another_cluster_still_deploys() {
+        use kix::cluster::fake_api::FakeApi;
+        let rec = |cluster: &str, hash: &str| {
+            json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": "Activation",
+                "metadata": {
+                    "name": cluster,
+                    "labels": { (keys::CLUSTER_LABEL): cluster },
+                    "annotations": { (keys::IDENTITY_HASH): hash },
+                },
+                "status": { "phase": PHASE_ACTIVE },
+            })
+        };
+        let role = |name: &str, activations: &str| {
+            json!({
+                "apiVersion": "rbac.authorization.k8s.io/v1",
+                "kind": "ClusterRole",
+                "metadata": { "name": name, "annotations": { (keys::ACTIVATIONS): activations } },
+            })
+        };
+        let api = FakeApi::new([
+            rec("a", "a1"),
+            rec("b", "b1"),
+            role("b-only", "b1"),
+            role("shared", "a1,b1"),
+        ]);
+        let rid = |name: &str| ResourceId {
+            kind: "ClusterRole".into(),
+            namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
+            name: name.into(),
+        };
+        delete_closure(&api.client(), "b", "b", &[rid("b-only"), rid("shared")])
+            .await
+            .unwrap();
+        assert_eq!(api.names("ClusterRole"), vec!["shared"]);
+    }
 }

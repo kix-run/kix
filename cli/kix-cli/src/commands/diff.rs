@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,7 @@ use kix::eval::build_cluster_activation_with_status;
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::serialize::load_manifests_from_dir;
 use kix::manifest::stamp::stamp_annotations;
+use kix::manifest::types::ResourceId;
 
 use crate::cli::{DiffArgs, OutputFormat};
 use crate::output;
@@ -64,7 +66,9 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     } else {
         let spinner = make_spinner(ctx, "Fetching live cluster state...");
         let global = ctx.global.clone();
-        let manifests = ctx.runtime.block_on(fetch_live_manifests(&global))?;
+        let manifests = ctx
+            .runtime
+            .block_on(fetch_live_manifests(&global, &new_graph))?;
         clear_spinner(&spinner);
         StoreGraph::synthesize(&manifests, &new_graph)
     };
@@ -131,7 +135,10 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> DiffResult {
     }
 }
 
-async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<Value>> {
+async fn fetch_live_manifests(
+    global: &crate::cli::GlobalArgs,
+    new_graph: &StoreGraph,
+) -> Result<Vec<Value>> {
     let client = fetch::make_client(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
@@ -144,9 +151,9 @@ async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<Val
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    // The gate. `kix diff` reads no Activation record, so it never reaches
-    // the check inside `find_activation_ar` that every other cluster command
-    // goes through. It still needs one: the live objects below are upgraded
+    // The gate. `kix diff` never calls `find_activation_ar`, so it never
+    // reaches the check inside it that every other cluster command goes
+    // through. It still needs one: the live objects below are upgraded
     // to the current domain before they are compared, which on an
     // unmigrated cluster renames the live `activations.<retired>` CRD to the
     // name the build uses and reports it as matching. The answer would be
@@ -167,9 +174,15 @@ async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<Val
         );
     }
 
-    let sweep = fetch::sweep_managed(&client, &discovery)
-        .await
-        .map_err(|e| miette!("failed to fetch resources: {e}"))?;
+    // Only this Kix cluster's objects: another cluster sharing the
+    // Kubernetes cluster is not a removal.
+    let sweep = fetch::sweep_managed(
+        &client,
+        &discovery,
+        fetch::SweepScope::Cluster(&new_graph.cluster_name),
+    )
+    .await
+    .map_err(|e| miette!("failed to fetch resources: {e}"))?;
 
     if !global.quiet {
         eprintln!(
@@ -178,11 +191,33 @@ async fn fetch_live_manifests(global: &crate::cli::GlobalArgs) -> Result<Vec<Val
             discovery.len() - sweep.forbidden.len(),
             crate::output::forbidden_note(&sweep.forbidden),
         );
+        for note in sweep.scope_notes() {
+            eprintln!("{note}");
+        }
+    }
+
+    // An object this build drops but another Kix cluster still deploys is
+    // kept by `kix deploy --prune`, so it is not a removal either.
+    let in_build: HashSet<ResourceId> = new_graph
+        .resources
+        .values()
+        .map(|r| ResourceId::from_value(&r.manifest))
+        .collect();
+    let tenancy = &sweep.tenancy;
+    let (elsewhere, compared): (Vec<_>, Vec<_>) = sweep.managed.into_iter().partition(|obj| {
+        !in_build.contains(&ResourceId::from_value(&fetch::to_manifest_value(obj)))
+            && !tenancy.still_deployed_by_others(obj).is_empty()
+    });
+    if !global.quiet && !elsewhere.is_empty() {
+        eprintln!(
+            "Not comparing {} objects this build drops that another Kix cluster still deploys.",
+            elsewhere.len()
+        );
     }
 
     // Only the fields kix's server-side apply owns: server defaults and
     // kix's own bookkeeping never enter the comparison.
-    Ok(fetch::kix_owned_manifests(sweep.managed))
+    Ok(fetch::kix_owned_manifests(compared))
 }
 
 fn make_spinner(ctx: &CommandContext, msg: &str) -> Option<indicatif::ProgressBar> {

@@ -149,10 +149,14 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
             .map_err(|e| miette!("failed to find activation: {e}"))?
             .ok_or_else(|| miette!("no active deployment record found for cluster '{}'", args.cluster))?;
 
-        // 3. Fetch all kix-managed resources
-        let live_objects = fetch::fetch_managed_resources(&client, &discovery)
-            .await
-            .map_err(|e| miette!("failed to fetch resources: {e}"))?;
+        // 3. Fetch this cluster's kix-managed resources
+        let live_objects = fetch::fetch_managed_resources(
+            &client,
+            &discovery,
+            fetch::SweepScope::Cluster(&args.cluster),
+        )
+        .await
+        .map_err(|e| miette!("failed to fetch resources: {e}"))?;
 
         Ok::<_, miette::Report>((active, live_objects))
     })?;

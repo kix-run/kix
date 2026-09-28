@@ -219,6 +219,13 @@ pub enum DeployEvent {
         kept: Vec<ResourceId>,
         delete: bool,
     },
+    /// The prune left an orphan in place when it came to delete it: another
+    /// Kix cluster's current build contains it, or it changed since it was
+    /// read. `reason` is the line to show (`Pruned::kept_reason`).
+    PruneKept {
+        resource: ResourceId,
+        reason: String,
+    },
     /// Activation lifecycle finalized. The new CR is Active or Degraded and the
     /// old one Superseded.
     Finalized {

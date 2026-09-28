@@ -32,6 +32,7 @@ use super::apply::{ApplyAction, ApplyError, ApplyResult, ChangeAction, wants_rer
 use super::cancel::CancelToken;
 use super::graph::ResourceGraph;
 use super::ops::ClusterOps;
+use super::prune_guard::Pruned;
 use super::readiness::{self, ImportTarget, ReadinessResult};
 use super::secrets;
 use super::stream::{
@@ -970,7 +971,19 @@ pub async fn run_deploy(
                     )),
                 };
             match deleted {
-                Ok(()) => {
+                Ok(outcome @ (Pruned::Kept(_) | Pruned::Changed(_))) => {
+                    // A changed object is still this cluster's orphan, so the
+                    // record keeps naming its build for the next prune. A
+                    // shared one is the other cluster's to remove.
+                    if matches!(outcome, Pruned::Changed(_)) {
+                        orphans_left = true;
+                    }
+                    emit(DeployEvent::PruneKept {
+                        resource: rid.clone(),
+                        reason: outcome.kept_reason().unwrap_or_default(),
+                    });
+                }
+                Ok(Pruned::Deleted | Pruned::Gone) => {
                     result.pruned += 1;
                     emit(DeployEvent::NodeStateChanged {
                         node: NodeId::Resource(rid.clone()),
@@ -1634,9 +1647,6 @@ pub async fn failed_rerun_nodes(
     discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
     plan: &DeployPlan,
 ) -> Vec<ResourceId> {
-    use kube::api::{Api, DynamicObject};
-    use kube::discovery::Scope;
-
     let mut failed = Vec::new();
     for entry in &plan.nodes {
         let (ChangeAction::Skip(rid), Some(_)) = (&entry.action, &entry.rerun) else {
@@ -1645,17 +1655,7 @@ pub async fn failed_rerun_nodes(
         let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
             continue;
         };
-        let api: Api<DynamicObject> = match scope {
-            Scope::Namespaced => {
-                let ns = if rid.namespace == CLUSTER_SCOPED {
-                    "default"
-                } else {
-                    rid.namespace.as_str()
-                };
-                Api::namespaced_with(client.clone(), ns, ar)
-            }
-            Scope::Cluster => Api::all_with(client.clone(), ar),
-        };
+        let api = super::fetch::api_for(client, ar, scope, rid);
         match api.get_opt(&rid.name).await {
             Ok(Some(live))
                 if readiness::classify_workload_terminal(&live.data, &rid.kind).is_some() =>
@@ -3221,7 +3221,7 @@ mod engine_tests {
         async fn orphans_left(
             policy: PrunePolicy,
             orphans: &[ResourceId],
-            delete: Behaviour<Result<(), String>>,
+            delete: Behaviour<Result<Pruned, String>>,
         ) -> bool {
             let manifests = vec![m("ConfigMap", "keep", &[])];
             let old = [m("ConfigMap", "old", &[]), m("Namespace", "ns", &[])];
@@ -3251,7 +3251,7 @@ mod engine_tests {
         }
         let cm = [rid("ConfigMap", "old")];
         let ns = [rid("Namespace", "ns")];
-        let ok = || Behaviour::Now(Ok(()));
+        let ok = || Behaviour::Now(Ok(Pruned::Deleted));
 
         assert!(orphans_left(PrunePolicy::WarnOnly, &cm, ok()).await);
         assert!(orphans_left(PrunePolicy::Skip, &cm, ok()).await);
@@ -3265,6 +3265,57 @@ mod engine_tests {
             .await
         );
         assert!(!orphans_left(PrunePolicy::WarnOnly, &ns, ok()).await);
+        // A delete the guard refused because the object changed leaves it
+        // for the next prune; one another Kix cluster still deploys does not.
+        let changed = Pruned::Changed(rid("ConfigMap", "old"));
+        assert!(orphans_left(PrunePolicy::Delete, &cm, Behaviour::Now(Ok(changed))).await);
+        let shared = Pruned::Kept(crate::cluster::fetch::SharedOrphan {
+            rid: rid("ConfigMap", "old"),
+            clusters: vec!["b".into()],
+        });
+        assert!(!orphans_left(PrunePolicy::Delete, &cm, Behaviour::Now(Ok(shared))).await);
+    }
+
+    /// An orphan the prune guard keeps is reported as kept, not as pruned or
+    /// failed.
+    #[tokio::test(start_paused = true)]
+    async fn a_kept_prune_delete_is_reported_as_kept() {
+        let manifests = vec![m("ConfigMap", "keep", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        let shared = Pruned::Kept(crate::cluster::fetch::SharedOrphan {
+            rid: rid("ConfigMap", "old"),
+            clusters: vec!["b".into()],
+        });
+        ops.delete_behaviour(Behaviour::Now(Ok(shared)));
+        let rec = Arc::new(Recorder::default());
+        let mut cfg = config(quiet_watchdog());
+        cfg.prune = PrunePolicy::Delete;
+        let orphans = [rid("ConfigMap", "old")];
+        let old = [m("ConfigMap", "old", &[])];
+
+        let result = run_with_orphans(&ops, plan_of(&manifests), &orphans, &old, &cfg, rec.clone())
+            .await
+            .unwrap();
+
+        assert_eq!((result.pruned, result.failed), (0, 0));
+        let kept: Vec<(ResourceId, String)> = rec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                DeployEvent::PruneKept { resource, reason } => {
+                    Some((resource.clone(), reason.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].0, rid("ConfigMap", "old"));
+        assert!(
+            kept[0].1.contains("still deployed by Kix cluster b"),
+            "{kept:?}"
+        );
     }
 
     /// Under `OnErrorPolicy::Stop`, nodes still in flight finish and are

@@ -27,6 +27,7 @@ use crate::manifest::types::ResourceId;
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
 use super::super::fetch::FetchError;
+use super::super::prune_guard::Pruned;
 use super::super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
 use super::super::secrets::{HydrationResult, SecretError};
 use super::{ClusterOps, Finalized, OnStatus};
@@ -197,7 +198,7 @@ pub struct ScriptedOps {
     default_rediscover: Mutex<Behaviour<Result<(), String>>>,
     checkpoint: Mutex<Behaviour<Result<(), String>>>,
     stamp: Mutex<Behaviour<Result<(), String>>>,
-    delete: Mutex<Behaviour<Result<(), String>>>,
+    delete: Mutex<Behaviour<Result<Pruned, String>>>,
     finalize: Mutex<Behaviour<Result<Option<Finalized>, String>>>,
     abort: Mutex<Behaviour<Result<(), String>>>,
     log: Mutex<Vec<Logged>>,
@@ -222,7 +223,7 @@ impl ScriptedOps {
             default_rediscover: Mutex::new(Behaviour::Now(Ok(()))),
             checkpoint: Mutex::new(Behaviour::Now(Ok(()))),
             stamp: Mutex::new(Behaviour::Now(Ok(()))),
-            delete: Mutex::new(Behaviour::Now(Ok(()))),
+            delete: Mutex::new(Behaviour::Now(Ok(Pruned::Deleted))),
             finalize: Mutex::new(Behaviour::Now(Ok(None))),
             abort: Mutex::new(Behaviour::Now(Ok(()))),
             log: Mutex::new(Vec::new()),
@@ -272,7 +273,7 @@ impl ScriptedOps {
         self
     }
 
-    pub fn delete_behaviour(&self, b: Behaviour<Result<(), String>>) -> &Self {
+    pub fn delete_behaviour(&self, b: Behaviour<Result<Pruned, String>>) -> &Self {
         *self.delete.lock().unwrap() = b;
         self
     }
@@ -502,7 +503,7 @@ impl ClusterOps for ScriptedOps {
         b.run().await
     }
 
-    async fn delete(&self, rid: &ResourceId) -> Result<(), String> {
+    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, String> {
         self.record(Call::Delete(rid.clone()));
         let b = self.delete.lock().unwrap().clone();
         b.run().await
