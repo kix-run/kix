@@ -28,6 +28,10 @@
 let
   cfg = config.monitoring;
   ns = cfg.namespace;
+  # Created by the `priority-classes` instance below and named by promtail.
+  # A module cannot read another instance's `out`, so both sides use this
+  # name; eval fails if promtail names a class that no resource creates.
+  promtailPriorityClass = "monitoring-loki";
 in
 {
   options.monitoring = {
@@ -341,12 +345,10 @@ in
             };
           };
 
-          # Promtail hardcodes priorityClassName = "monitoring-loki", so the
-          # PriorityClass must exist before the DaemonSet can schedule pods.
           priority-classes = lib.mkIf cfg.promtail.enabled {
             package = packages.priority-classes;
             config.classes = {
-              "monitoring-loki" = {
+              ${promtailPriorityClass} = {
                 value = 1000000;
                 description = "Monitoring and log shipping workloads (Loki, Promtail)";
               };
@@ -355,6 +357,7 @@ in
 
           promtail = lib.mkIf cfg.promtail.enabled {
             package = packages.promtail;
+            config.priorityClassName = promtailPriorityClass;
           };
         };
       in

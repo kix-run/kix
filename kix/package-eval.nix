@@ -191,11 +191,6 @@ let
       repository = "ghcr.io/example/python-app";
       tag = "1.0.0";
     };
-    # housekeeping/2026-09-27-promtail-needs-an-undeclared-priority-class.md
-    promtail.instances.priority-classes = {
-      package = packages.priority-classes;
-      config.classes.monitoring-loki.value = 1000;
-    };
     secret.config.stringData.password = "password";
     secret-echo.instances = { inherit credentials; };
     secret-ref.config.keys = [ "password" ];

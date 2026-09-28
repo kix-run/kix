@@ -28,7 +28,11 @@
   options = {
     bucket = lib.mkOption {
       type = lib.types.str;
-      description = "S3 bucket name; defaults to scope.instanceName.";
+      description = ''
+        Name of an existing S3 bucket that you own. Required: bucket names
+        are global across all accounts of a provider, so no default can be
+        assumed to be yours.
+      '';
     };
     region = lib.mkOption {
       type = lib.types.str;
@@ -56,7 +60,28 @@
     { self, config, ... }:
     let
       name = scope.instanceName;
+      bucket = config.bucket;
+      # S3 bucket naming rules:
+      # https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
+      bucketProblems =
+        lib.optional (
+          builtins.stringLength bucket < 3 || builtins.stringLength bucket > 63
+        ) "is not 3 to 63 characters long"
+        ++
+          lib.optional (builtins.match "[a-z0-9][a-z0-9.-]*[a-z0-9]" bucket == null)
+            "must use only lowercase letters, digits, dots and hyphens, and start and end with a letter or digit"
+        ++ lib.optional (lib.hasInfix ".." bucket) "contains two adjacent dots"
+        ++ lib.optional (
+          builtins.match "[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+" bucket != null
+        ) "is formatted as an IP address"
+        ++ lib.optional (
+          lib.hasPrefix "xn--" bucket || lib.hasPrefix "sthree-" bucket
+        ) "starts with a reserved prefix (`xn--` or `sthree-`)"
+        ++ lib.optional (lib.hasSuffix "-s3alias" bucket) "ends with the reserved suffix `-s3alias`";
     in
+    assert
+      bucketProblems == [ ]
+      || throw "stackgres-object-storage '${name}': `bucket` \"${bucket}\" is not a valid S3 bucket name: it ${lib.concatStringsSep "; it " bucketProblems}. See https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html";
     {
       objectStorage = scope.mkResource {
         apiVersion = "stackgres.io/v1beta1";
@@ -65,7 +90,7 @@
         extra.spec = {
           type = "s3Compatible";
           s3Compatible = {
-            bucket = config.bucket;
+            inherit bucket;
             inherit (config) region enablePathStyleAddressing endpoint;
             awsCredentials.secretKeySelectors = {
               accessKeyId = {

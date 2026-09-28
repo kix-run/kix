@@ -34,8 +34,6 @@ let
       };
     };
 
-    priorityClassName = "monitoring-loki";
-
     tolerations = [
       # Run on all nodes including control plane.
       {
@@ -115,10 +113,17 @@ in
   meta.unsafe = [ "run-as-root" ];
   meta.owner = "platform";
 
-  options.values = lib.mkOption {
-    type = lib.types.attrsOf lib.types.anything;
-    default = { };
-    description = "Helm values to deep-merge with the chart's package-level values.";
+  options = {
+    values = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      description = "Helm values to deep-merge with the chart's package-level values.";
+    };
+    priorityClassName = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "PriorityClass for the DaemonSet pods. Null leaves it unset, as the upstream chart does, so the pods get the cluster's default priority.";
+    };
   };
 
   build =
@@ -129,6 +134,9 @@ in
       ...
     }:
     let
+      priorityValues = lib.optionalAttrs (config.priorityClassName != null) {
+        inherit (config) priorityClassName;
+      };
       lokiValues = {
         config.clients = [
           {
@@ -139,7 +147,11 @@ in
       };
       resources = scope.helm.importChart {
         inherit chart scope;
-        values = lib.recursiveUpdate (lib.recursiveUpdate defaultValues lokiValues) (config.values or { });
+        values = lib.foldl' lib.recursiveUpdate defaultValues [
+          lokiValues
+          priorityValues
+          (config.values or { })
+        ];
         releaseName = "promtail";
         # Auto-collect loki.out.* context so CNP generation discovers
         # the promtail → loki-gateway egress edge — replaces the
