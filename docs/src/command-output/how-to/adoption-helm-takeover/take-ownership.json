@@ -9,7 +9,7 @@
   "commands": [
     {
       "command": "kix deploy how-to-helm-bridge --force-conflicts -y",
-      "stdout": "~ Deployment/reflector@reflector-system configured\n✔ Deployment/reflector@reflector-system ready\n• activation 'how-to-helm-bridge-7zjjps55cybw' → Active\nDeploy complete: 4 created, 7 configured, 0 unchanged, 0 failed\n",
+      "stdout": "\u001b[33m~\u001b[39m Deployment/reflector@reflector-system \u001b[2mconfigured\u001b[0m\n\u001b[32m✔\u001b[39m Deployment/reflector@reflector-system \u001b[2mready\u001b[0m\n\u001b[32m•\u001b[39m activation 'how-to-helm-bridge-7zjjps55cybw' → Active\nDeploy complete: \u001b[32m4\u001b[39m created, \u001b[33m7\u001b[39m configured, \u001b[2m0\u001b[0m unchanged, \u001b[2m0\u001b[0m failed\n",
       "stderr": "",
       "stdoutDrift": "Deploy complete: 4 created, 7 configured, 0 unchanged, 0 failed\n~ Deployment/reflector@reflector-system configured\n• activation 'how-to-helm-bridge-<activation-id>' → Active\n✔ Deployment/reflector@reflector-system ready\n",
       "stderrDrift": "",

@@ -9,7 +9,7 @@
   "commands": [
     {
       "command": "kix deploy how-to-adoption-takeover --force-conflicts -y",
-      "stdout": "~ Deployment/legacy-web@takeover configured\n✔ Deployment/legacy-web@takeover ready\n• activation 'how-to-adoption-takeover-nphkg40wdk30' → Active\nDeploy complete: 6 created, 4 configured, 0 unchanged, 0 failed\n",
+      "stdout": "\u001b[33m~\u001b[39m Deployment/legacy-web@takeover \u001b[2mconfigured\u001b[0m\n\u001b[32m✔\u001b[39m Deployment/legacy-web@takeover \u001b[2mready\u001b[0m\n\u001b[32m•\u001b[39m activation 'how-to-adoption-takeover-3gdjlxrhh7h4' → Active\nDeploy complete: \u001b[32m6\u001b[39m created, \u001b[33m4\u001b[39m configured, \u001b[2m0\u001b[0m unchanged, \u001b[2m0\u001b[0m failed\n",
       "stderr": "",
       "stdoutDrift": "Deploy complete: 6 created, 4 configured, 0 unchanged, 0 failed\n~ Deployment/legacy-web@takeover configured\n• activation 'how-to-adoption-takeover-<activation-id>' → Active\n✔ Deployment/legacy-web@takeover ready\n",
       "stderrDrift": "",

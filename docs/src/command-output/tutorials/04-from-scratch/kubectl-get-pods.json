@@ -9,7 +9,7 @@
   "commands": [
     {
       "command": "kubectl get pods -n tutorial-04",
-      "stdout": "NAME                           READY   STATUS    RESTARTS   AGE\nhello-world-6f4588d4c5-458tf   1/1     Running   0          7s\n",
+      "stdout": "NAME                          READY   STATUS    RESTARTS   AGE\nhello-world-5dfdf5bdd-qlxhx   1/1     Running   0          9s\n",
       "stderr": "",
       "stdoutDrift": "NAME READY STATUS RESTARTS AGE\nhello-world-<hash> 1/1 Running 0 <DURATION>\n",
       "stderrDrift": "",

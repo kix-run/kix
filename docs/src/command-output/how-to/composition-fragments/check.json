@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-fragments",
-      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    15 manifests evaluated       \n scorecard  pass    0 errors, 4 warnings, 2 info \n",
+      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    15 manifests evaluated       \n scorecard  pass    0 errors, 2 warnings, 0 info \n",
       "stderr": "",
-      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 15 manifests evaluated\nscorecard pass 0 errors, 4 warnings, 2 info\n",
+      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 15 manifests evaluated\nscorecard pass 0 errors, 2 warnings, 0 info\n",
       "stderrDrift": "",
       "exitCode": 0
     }
