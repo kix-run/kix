@@ -1,4 +1,4 @@
-# Secret echo server — test package for SOPS secret integration.
+# Secret echo server: test package for SOPS secret integration.
 #
 # Runs a simple pod that reads secret credentials from env vars and
 # serves them via an HTTP endpoint. Used by integration tests to verify

@@ -1,6 +1,6 @@
 # Reference to an externally-managed secret (Vault, ESO, cert-manager, bootstrap).
 #
-# No manifest produced — creates a store path for dependency tracking
+# No manifest produced. Creates a store path for dependency tracking
 # and exposes the same out API as packages/secret (keyRef, mkEnv,
 # envFrom, volume) with build-time key validation.
 #

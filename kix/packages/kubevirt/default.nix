@@ -1405,7 +1405,7 @@ in
             resources = [ "expand-vm-spec" ];
             verbs = [ "update" ];
           }
-          # Subresources: console, vnc, portforward, guestosinfo, etc (get) — duplicate
+          # Subresources: console, vnc, portforward, guestosinfo, etc (get), duplicate
           {
             apiGroups = [ "subresources.kubevirt.io" ];
             resources = [
@@ -1422,7 +1422,7 @@ in
             ];
             verbs = [ "get" ];
           }
-          # Subresources: pause, unpause, addvolume, removevolume, freeze, unfreeze, softreboot, reset, sev — duplicate
+          # Subresources: pause, unpause, addvolume, removevolume, freeze, unfreeze, softreboot, reset, sev (duplicate)
           {
             apiGroups = [ "subresources.kubevirt.io" ];
             resources = [
@@ -1439,7 +1439,7 @@ in
             ];
             verbs = [ "update" ];
           }
-          # Subresources: expand-spec, portforward (get) — duplicate
+          # Subresources: expand-spec, portforward (get), duplicate
           {
             apiGroups = [ "subresources.kubevirt.io" ];
             resources = [
@@ -1448,7 +1448,7 @@ in
             ];
             verbs = [ "get" ];
           }
-          # Subresources: start, stop, restart, addvolume, removevolume, memorydump (update) — duplicate
+          # Subresources: start, stop, restart, addvolume, removevolume, memorydump (update), duplicate
           {
             apiGroups = [ "subresources.kubevirt.io" ];
             resources = [
@@ -1461,7 +1461,7 @@ in
             ];
             verbs = [ "update" ];
           }
-          # Subresources: expand-vm-spec (update) — duplicate
+          # Subresources: expand-vm-spec (update), duplicate
           {
             apiGroups = [ "subresources.kubevirt.io" ];
             resources = [ "expand-vm-spec" ];

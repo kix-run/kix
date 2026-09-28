@@ -1,9 +1,9 @@
-# Cilium HelmChartConfig — configures RKE2's bundled Cilium via HelmChartConfig.
+# Cilium HelmChartConfig: configures RKE2's bundled Cilium via HelmChartConfig.
 #
 # This package does NOT deploy Cilium itself (RKE2 bundles it). It generates
 # the HelmChartConfig resource that configures Cilium's Helm values.
 #
-# Exposes out.nodePortReliable — false when the config combination (DSR +
+# Exposes out.nodePortReliable: false when the config combination (DSR +
 # BPF masquerade + loopback IPs in nodePort.addresses) is known to cause
 # unreliable NodePort from pods to remote nodes.
 #
@@ -256,7 +256,7 @@ in
 
         externalIPs.enabled = true;
 
-        # HelmChartConfig is cluster-wide — all Cilium agents read the same value.
+        # HelmChartConfig is cluster-wide; all Cilium agents read the same value.
         # 127.0.0.1 works on all RKE2 nodes: servers have the API server locally,
         # agents have RKE2's built-in client-side load balancer on localhost.
         k8sServiceHost = "127.0.0.1";

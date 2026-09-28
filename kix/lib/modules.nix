@@ -58,7 +58,7 @@
                   the package defaults apply.
 
                   For multi-instance disambiguation prefer `deps.<argName>
-                  = ref.<ns>.<inst>` at the consumer site — aliases are
+                  = ref.<ns>.<inst>` at the consumer site. Aliases are
                   not the right tool for that case.  See BEST-PRACTICES
                   §8.4.
                 '';
@@ -68,7 +68,7 @@
                 default = { };
                 description = ''
                   Instance configuration. Multiple modules can contribute
-                  config to the same instance — they merge via deferredModule.
+                  config to the same instance; they merge via deferredModule.
                   Use mkDefault/mkForce for priority control.
                 '';
               };
@@ -87,7 +87,7 @@
                 description = ''
                   Parts overlay functions (scope: self: base: attrset).
                   Applied in order after package evaluation. Multiple modules
-                  contribute overlays — they concatenate.
+                  contribute overlays; they concatenate.
                 '';
               };
               version = lib.mkOption {
@@ -134,7 +134,7 @@
                   connectivity requirements (same schema as
                   networkPolicy.platformIntents). When an enforcer is available,
                   the intents are materialized into CNP resources and injected
-                  as extraDeps on the import's marker — establishing the
+                  as extraDeps on the import's marker. This establishes the
                   dependency chain: workload → import marker → CNPs → enforcer.
                 '';
               };
@@ -142,7 +142,7 @@
                 type = lib.types.bool;
                 default = false;
                 description = ''
-                  Dormant instance — included in DI resolution but only deployed
+                  Dormant instance: included in DI resolution but only deployed
                   if a non-optional instance transitively depends on it.
                   Lets cluster operators pre-configure instances with full control.
                 '';
@@ -250,7 +250,7 @@
       description = ''
         Kubernetes distribution or provider (e.g. "k3s", "kind", "kubeadm",
         "eks", "talos"). The vendor field: carried for display/telemetry only.
-        Nothing in the compiler may branch on it — branch on cluster.roles,
+        Nothing in the compiler may branch on it. Branch on cluster.roles,
         cluster.capabilities, or resolved role providers instead.
       '';
     };
@@ -264,11 +264,11 @@
         CRD-owning package declares behavior on the CRD itself (the
         `factBehavior` arg of `scope.mkCRD` / `scope.mkCRDRef`, delivered
         to every CR built via `scope.mkCR`); this option is the cluster
-        operator's escape hatch — it wins over the CRD declaration and
+        operator's escape hatch: it wins over the CRD declaration and
         also covers builder-less CRs (helm-rendered, raw kind strings).
         Shape: `{ "stackgres.io/SGCluster" = { endpoint = "terminate" |
         "conduct"; podSelector = cr: { ... }; }; }`. "terminate" means the
-        kind's controller dials the endpoints embedded in the resource —
+        kind's controller dials the endpoints embedded in the resource, so
         netpol opens egress for the operand pods named by `podSelector`.
         "conduct" means the resource merely carries the values onward.
         Validated eagerly at cluster eval.
@@ -290,7 +290,7 @@
               default = null;
               description = ''
                 How the environment claims this role (linker semantics):
-                - null: unknown — relying consumers warn.
+                - null: unknown; relying consumers warn.
                 - "absent": role vacant; a managed instance fills it, a
                   consumer without one gets a link error.
                 - "shadowable": environment provides a default (weak symbol,
@@ -306,7 +306,7 @@
               default = null;
               description = ''
                 Display name of the environment's implementation (e.g.
-                "kindnet", "flannel"). Informational only — never branched on.
+                "kindnet", "flannel"). Informational only; never branched on.
               '';
             };
           };
@@ -316,13 +316,12 @@
       description = ''
         Binding modes for environment-provided roles. Keys must be registry
         roles (kix/lib/eval/roles.nix). Managed packages never declare
-        binding modes — a managed instance is strong by nature; modes exist
+        binding modes. A managed instance is strong by nature; modes exist
         only for the environment's claim on a role.
       '';
     };
 
     cluster.capabilities = {
-
 
       multiNode = lib.mkOption {
         type = lib.types.nullOr lib.types.bool;
@@ -360,13 +359,11 @@
         '';
       };
 
-
       gpu = lib.mkOption {
         type = lib.types.nullOr lib.types.bool;
         default = null;
         description = "Whether GPU scheduling (nvidia.com/gpu) is available. null = unknown.";
       };
-
 
       privilegedContainers = lib.mkOption {
         type = lib.types.nullOr lib.types.bool;
@@ -374,7 +371,7 @@
         description = ''
           Whether pods can run privileged, use hostNetwork, hostPID, etc.
           False on GKE Autopilot (hard platform restriction) and effectively
-          false on OpenShift (SCC restricted by default). null = unknown —
+          false on OpenShift (SCC restricted by default). null = unknown:
           relying workloads warn instead of failing.
         '';
       };
@@ -431,7 +428,7 @@
             default = null;
             description = ''
               Optional ISO-8601 timestamp at which the maintenance window
-              ends. Informational — kix does not auto-clear the flag.
+              ends. Informational: kix does not auto-clear the flag.
             '';
           };
         };
@@ -547,7 +544,7 @@
             default = { };
             description = ''
               Cluster-wide rule defaults. Currently supports:
-              severity = "warning"|"error"|"info" — default severity for rules
+              severity = "warning"|"error"|"info": default severity for rules
               that don't specify their own.
             '';
           };
@@ -566,8 +563,8 @@
             default = [ ];
             example = [ "eks.amazonaws.com" ];
             description = ''
-              Annotation domains consumed by something outside kix — a cloud
-              control plane, org-convention metadata. Exempted from the
+              Annotation domains consumed by something outside kix (a cloud
+              control plane, org-convention metadata). Exempted from the
               architecture.annotationDomainOwnership lint alongside the
               reserved Kubernetes domains and domains declared by in-cluster
               packages via meta.annotationDomains (v2_discussions/128).
@@ -595,7 +592,7 @@
           `requires` is spliced into the workload pre-seal (earlier-wave
           guarantee); `resources` ride the `_injectedResources` sideband
           into the instance's part resources. Interceptors read the raw
-          workload input and outer-fixpoint data only — they must never
+          workload input and outer-fixpoint data only. They must never
           force the resource under construction. Resource emission goes
           through ctx.emit (sealing capability only), not the authoring
           scope.
@@ -620,7 +617,7 @@
           Named cluster-level processors, run during cluster aggregation.
           fn :: ctx -> { resources ? [ ]; checks ? [ ]; warnings ? [ ]; }
           Returned resources join the cluster resource set and become the
-          Activation CR's extraDeps in hook execution order — that order is
+          Activation CR's extraDeps in hook execution order. That order is
           content-addressed into the manifest set, so priorities are part
           of the output contract. A check is any lazy value that throws its
           own error message on failure; all checks are forced before the

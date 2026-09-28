@@ -1,4 +1,4 @@
-# cert-manager controller — main reconciliation loop for Certificate/Issuer CRDs.
+# cert-manager controller: main reconciliation loop for Certificate/Issuer CRDs.
 
 {
   self,
@@ -266,7 +266,7 @@ in
     extra.automountServiceAccountToken = true;
   };
 
-  # -- Aggregate roles (no binding — RBAC aggregation labels) --
+  # -- Aggregate roles (no binding; RBAC aggregation labels) --
 
   clusterViewRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";

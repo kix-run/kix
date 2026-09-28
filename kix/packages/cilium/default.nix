@@ -1,4 +1,4 @@
-# cilium — eBPF-based CNI with network policy, load balancing, and observability.
+# cilium: eBPF-based CNI with network policy, load balancing, and observability.
 #
 # Full standalone Cilium deployment wrapping the upstream Helm chart via
 # scope.helm.importChart. Exposes `cnpCrdRef` for CiliumNetworkPolicy
@@ -6,7 +6,7 @@
 # consumers can route generated CNPs/CCNPs through them.
 #
 # For externally-managed Cilium (helm-installed out-of-band) see the
-# sibling `cilium-external` package — auto-discovered alongside this one.
+# sibling `cilium-external` package, auto-discovered alongside this one.
 #
 # Chart:   https://helm.cilium.io/
 # Name:    cilium
@@ -187,7 +187,7 @@ in
       # `cilium-secrets` Namespace (plus a Role/RoleBinding inside it) for
       # TLS-aware CiliumNetworkPolicies and ingress/gateway TLS interception.
       # We use none of that, and a foreign namespace would have to exist in
-      # every cluster scope — so keep the (unused) secrets namespace pointed
+      # every cluster scope, so keep the (unused) secrets namespace pointed
       # at the instance's own namespace and don't create anything.
       nsValues = {
         tls.secretsNamespace = {
@@ -207,7 +207,7 @@ in
       # values are merged over this package's.
       effectiveEnforcement = config.values.policyEnforcementMode or defaultValues.policyEnforcementMode;
 
-      # CRD refs — wired against ALL workloads so the wave engine gates
+      # CRD refs: wired against ALL workloads so the wave engine gates
       # CNP/CCNP application on the entire cilium stack being Ready.
       # Phase 3 auto-discovery doesn't apply here: the cilium chart
       # installs its CRDs at runtime via INSTALL_CRDS, so they don't
@@ -273,7 +273,7 @@ in
       extraRequires = lib.optional (clusterDnsEgress != null) clusterDnsEgress;
       out = {
         inherit cnpCrdRef ccnpCrdRef;
-        # Network-policy rule builder API — see kix/lib/netpol-interface.nix.
+        # Network-policy rule builder API; see kix/lib/netpol-interface.nix.
         # Bind `mkPolicy` to this package's cnpCrdRef so callers don't need
         # to thread the CRD ref separately.
         netpol = ciliumNetpol // {

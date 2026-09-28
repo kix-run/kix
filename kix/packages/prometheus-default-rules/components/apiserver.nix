@@ -1,4 +1,4 @@
-# kube-apiserver monitor — targets the built-in `kubernetes` Service in
+# kube-apiserver monitor: targets the built-in `kubernetes` Service in
 # the `default` namespace; no bridge Service needed.
 
 { lib, kix }:
@@ -129,7 +129,7 @@ in
         monitor-apiserver = mkSmon {
           name = "${scope.instanceName}-apiserver";
           # The `kubernetes` Service in `default` is created by the
-          # apiserver itself at runtime (see header) — kix renders no
+          # apiserver itself at runtime (see header). Kix renders no
           # Service matching this selector, which the
           # monitorSelectorMatchesService rule would flag on any cluster
           # with a kix instance in `default`. Same situation as kubelet.

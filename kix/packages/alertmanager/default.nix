@@ -1,13 +1,13 @@
-# alertmanager — Alertmanager managed by the Prometheus Operator.
+# alertmanager: Alertmanager managed by the Prometheus Operator.
 #
 # Creates an Alertmanager CR that the operator reconciles into a StatefulSet.
 # Routing config (receivers, routes) is cluster-specific.
 #
 # DI deps:
-#   prometheus-operator (required) — provides the Alertmanager CRD
+#   prometheus-operator (required): provides the Alertmanager CRD
 #
 # Exposes:
-#   out.serviceUrl — for Prometheus alerting config
+#   out.serviceUrl: for Prometheus alerting config
 
 {
   scope,
@@ -26,7 +26,7 @@ in
     owner = "platform";
     defaultAliases = [ "alertmanager" ];
     k8s.minVersion = "1.25";
-    # Silences and notification state are recoverable — expendable on
+    # Silences and notification state are recoverable, so expendable on
     # storage backend swaps. See v2_discussions/67_stateful_migration_orchestration.md.
     lifecycle = "ephemeral";
   };
@@ -67,7 +67,7 @@ in
         };
       };
     };
-    # Alertmanager config — receivers, routes, etc.
+    # Alertmanager config: receivers, routes, etc.
     # This is cluster-specific and set in the cluster module.
     config = lib.mkOption {
       type = lib.types.anything;
@@ -215,7 +215,7 @@ in
 
     # ── NetworkPolicy ─────────────────────────────────────────────────────
     # Mirrors templates/alertmanager/networkpolicy.yaml. Cilium flavor lives
-    # in a separate chart template and is skipped here — kix clusters that
+    # in a separate chart template and is skipped here. Kix clusters that
     # need cilium-flavored policy can drop a CiliumNetworkPolicy through the
     # raw-resources package or extend this generator later.
     networkPolicy = lib.mkOption {
@@ -327,7 +327,7 @@ in
         stringData."alertmanager.yaml" = builtins.toJSON config.config;
       };
 
-      # Alertmanager CR — operator reconciles into StatefulSet
+      # Alertmanager CR: operator reconciles into StatefulSet
       alertmanager = mkAlertmanager scope {
         inherit name;
         spec = lib.recursiveUpdate (
@@ -513,7 +513,7 @@ in
         serviceMonitor = mkSmon {
           name = "${name}-self";
           spec = {
-            # ServiceMonitors match SERVICE labels, not pod labels — the
+            # ServiceMonitors match SERVICE labels, not pod labels. The
             # pod-shaped svcSelector never matched the Service and the
             # self-monitor was silently unscraped (caught by
             # monitorSelectorMatchesService, 2026-08-31).
@@ -548,7 +548,7 @@ in
         out = {
           serviceUrl = "http://${self.service.out.fqdn}:9093";
           # The Alertmanager CR's image is reconciled by the operator into a
-          # StatefulSet — not directly in a kix-generated pod spec.
+          # StatefulSet, not directly in a kix-generated pod spec.
           extraImages = [
             (kix.image.ref config.image)
           ];

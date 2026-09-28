@@ -36,7 +36,7 @@ rec {
     };
 
     cni = {
-      description = "Pod network owner. No out contract yet — the role exists for binding-mode conflicts: an exclusive environment CNI (kindnet on stock kind) refuses a managed one at eval instead of breaking the cluster at deploy.";
+      description = "Pod network owner. No out contract yet. The role exists for binding-mode conflicts: an exclusive environment CNI (kindnet on stock kind) refuses a managed one at eval instead of breaking the cluster at deploy.";
       outContract = [ ];
     };
 

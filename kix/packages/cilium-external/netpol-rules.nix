@@ -51,7 +51,7 @@ rec {
     // lib.optionalAttrs denyIngress { ingress = [ { } ]; }
     // lib.optionalAttrs denyEgress { egress = [ { } ]; };
 
-  # DNS egress — allow UDP+TCP 53 to kube-dns in kube-system.
+  # DNS egress: allow UDP+TCP 53 to kube-dns in kube-system.
   dnsEgressRule = {
     toEndpoints = [
       {
@@ -77,7 +77,7 @@ rec {
     ];
   };
 
-  # API server egress — Cilium identity entity.
+  # API server egress: Cilium identity entity.
   # `host`/`remote-node` alongside `kube-apiserver`: when the apiserver is
   # host-networked (e.g. single-node k3s), its IP is the node IP, which
   # Cilium resolves to the reserved `host` identity (or `remote-node` for

@@ -128,7 +128,7 @@ in
       };
 
       # --- Config secret reference ---
-      # User-provided external Secret — wrapped in a SecretRef so volume
+      # User-provided external Secret, wrapped in a SecretRef so volume
       # mounts carry DI context and the deploy engine gates on its existence.
       configSecret = scope.mkSecretRef {
         name = config.configSecretName;

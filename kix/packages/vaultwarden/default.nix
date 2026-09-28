@@ -1,10 +1,10 @@
-# Vaultwarden — self-hosted Bitwarden-compatible password manager.
+# Vaultwarden: self-hosted Bitwarden-compatible password manager.
 #
 # Uses Postgres via DI. Attachments persisted on a storage PVC.
 #
 # Dependencies:
-#   storage        — required, persistent volume for attachments/icons
-#   postgres       — required, database (expects stackgres-style credentials
+#   storage          required, persistent volume for attachments/icons
+#   postgres         required, database (expects stackgres-style credentials
 #                    secret exposed via `out.superuserSecret`)
 #
 # Exposure handled by kix.expose (ingress via DI).

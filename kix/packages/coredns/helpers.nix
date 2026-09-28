@@ -76,7 +76,7 @@ rec {
       ]
     );
 
-  # Render a generic Corefile block — dispatches on shape.
+  # Render a generic Corefile block, dispatching on shape.
   # - { snippet = ...; } -> snippet definition
   # - { header = ...; } -> raw header server block (e.g. "dns://.:53")
   # - otherwise -> standard server block

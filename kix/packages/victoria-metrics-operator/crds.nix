@@ -1,11 +1,11 @@
 # VictoriaMetrics Operator CRD definitions.
 #
 # Two families:
-#   VM-native CRDs — every kind in ./kinds.nix, derived from that table so
+#   VM-native CRDs: every kind in ./kinds.nix, derived from that table so
 #     the set stays complete: the operator crashes at startup if any kind
 #     it indexes is missing (see the invariant note in kinds.nix; enforced
 #     below with an eval-time throw).
-#   prometheus-operator compat CRDs — ServiceMonitor, PodMonitor,
+#   prometheus-operator compat CRDs: ServiceMonitor, PodMonitor,
 #     PrometheusRule, Probe (monitoring.coreos.com). CRDs only, no
 #     prometheus-operator controller: the VM operator's built-in converter
 #     watches these and materializes VM equivalents, so existing kix.monitor
@@ -13,7 +13,7 @@
 #     that already has them, `prometheusOperatorCRDs = "reference"` waits
 #     for the real ones instead of declaring a second opinion.
 #
-# VMSingle / VMAuth and the logs/traces kinds are still not shipped — the
+# VMSingle / VMAuth and the logs/traces kinds are still not shipped. The
 # operator only gates on the indexed set; add the rest when a consumer
 # appears (v2_discussions/133).
 
@@ -38,7 +38,7 @@ let
     else
       throw (
         "victoria-metrics-operator: kinds.nix no longer covers the operator's "
-        + "startup indexer set — missing: ${builtins.concatStringsSep ", " missingIndexed}. "
+        + "startup indexer set. Missing: ${builtins.concatStringsSep ", " missingIndexed}. "
         + "The operator crashes at startup (\"cannot register status condition "
         + "indexers\") when any of these CRDs is absent; restore them in kinds.nix."
       );
@@ -65,7 +65,7 @@ let
 
   # Per-kind extras merged onto the table-derived base.
   #
-  # factBehavior — kinds whose operator-created operand pods dial endpoints
+  # factBehavior: kinds whose operator-created operand pods dial endpoints
   # embedded in the CR spec declare terminate + the operand podSelector so
   # netpol opens egress for the operands, not for whoever references the CR:
   #   VMAgent         remoteWrite[].url
@@ -73,7 +73,7 @@ let
   #                   notifier[].url
   #   VMAlertmanager  receiver endpoints carried in the routing config
   # VMCluster carries no external endpoints (vminsert/vmselect/vmstorage
-  # only dial each other, operator-wired — the doc 96 blindspot): explicit
+  # only dial each other, operator-wired; the doc 96 blindspot): explicit
   # conduct so a fact flowing through the CR never warns as undeclared.
   operandFactBehavior = component: {
     endpoint = "terminate";
@@ -107,16 +107,16 @@ let
 
   # The operator's uniform health convention, declared once for the whole
   # group: every VM CR is ready when status.updateStatus == "operational"
-  # (conditions are consumer-prefixed, never Ready/Available — a generic
+  # (conditions are consumer-prefixed, never Ready/Available, so a generic
   # condition check waits forever; observed live on stage1 with
   # VMServiceScrape). Rides the typed chain into every CR as the
   # `kix.run/readiness` annotation, which the kix CLI evaluates at deploy
-  # time — no kind list in the CLI to keep in sync.
+  # time, so no kind list in the CLI to keep in sync.
   #
   # The claim is VERIFIED only for the consumer kinds (observed live on
   # kind/stage1/stage2); the parked kinds (VTCluster, VLAgent, ...) inherit it
   # on the operator's convention alone. If the operator never writes
-  # updateStatus for some kind, a CR of it waits until timeout — the
+  # updateStatus for some kind, a CR of it waits until timeout. That is the
   # visible, self-diagnosing failure, preferred over generic
   # ready-on-empty racing the operator. Re-verify per-kind when adding
   # out.mk* builders for parked kinds.
@@ -131,8 +131,8 @@ let
   # field in a CR then reaches the operator instead of being refused at
   # apply time, and `kix deploy --dry-run` cannot see it either.
   #
-  # So every kind with a consumer surface (`consumer = true` in kinds.nix
-  # — the out.mk* builders and the sibling packages) carries the real
+  # So every kind with a consumer surface (`consumer = true` in kinds.nix:
+  # the out.mk* builders and the sibling packages) carries the real
   # upstream schema, vendored under ./crds by scripts/vendor-crds.py from
   # the URL in crds/sources.txt. The indexer-floor kinds keep the stub:
   # nothing in kix writes one, and their only job is to exist.

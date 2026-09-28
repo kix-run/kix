@@ -1,4 +1,4 @@
-# Prometheus Operator — deployment, service, RBAC.
+# Prometheus Operator: deployment, service, RBAC.
 #
 # The operator watches monitoring.coreos.com CRDs (Prometheus, Alertmanager,
 # ServiceMonitor, etc.) and reconciles them into running workloads.
@@ -138,7 +138,7 @@ let
         (core.events |> emit)
         (events.events |> emit)
 
-        # Apps — the operator creates StatefulSets for Prometheus/Alertmanager
+        # Apps: the operator creates StatefulSets for Prometheus/Alertmanager
         (apps.statefulsets |> full)
         (apps.deployments |> full)
         (apps.daemonsets |> full)

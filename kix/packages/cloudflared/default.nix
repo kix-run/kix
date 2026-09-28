@@ -1,4 +1,4 @@
-# cloudflared — Cloudflare Tunnel connector.
+# cloudflared: Cloudflare Tunnel connector.
 #
 # Runs the cloudflared agent for a *remotely-managed* tunnel: it dials out to
 # Cloudflare and forwards traffic to in-cluster Services, so there's no need for
@@ -82,7 +82,7 @@ in
       ...
     }:
     {
-      # Tunnel token Secret — inline stringData, or hydrated from a SOPS source.
+      # Tunnel token Secret: inline stringData, or hydrated from a SOPS source.
       tunnelToken = scope.mkSecret {
         name = "${name}-token";
         keys = [ "token" ];

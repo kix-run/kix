@@ -416,7 +416,7 @@ in
         labels = rbacLabels;
       };
 
-      # --- Standalone ClusterRole (no binding — uses nonResourceURLs) ---
+      # --- Standalone ClusterRole (no binding; uses nonResourceURLs) ---
 
       metricsReaderRole = scope.mkClusterResource {
         apiVersion = "rbac.authorization.k8s.io/v1";

@@ -1,4 +1,4 @@
-# prometheus-default-rules — standard Kubernetes monitoring rules and service monitors.
+# prometheus-default-rules: standard Kubernetes monitoring rules and service monitors.
 #
 # Ships the same PrometheusRules and ServiceMonitors that kube-prometheus-stack
 # bundles by default: Kubernetes component alerts, recording rules, and
@@ -11,7 +11,7 @@
 # Source: extracted from kube-prometheus-stack 84.5.0 Helm chart output.
 #
 # DI deps:
-#   prometheus-operator (required) — provides CRD builders
+#   prometheus-operator (required): provides CRD builders
 
 {
   scope,
@@ -103,7 +103,7 @@ in
         default = true;
       };
       # Chart toggles for the four split container resource rule groups.
-      # Absent from upstream values.yaml — default is off, matching helm
+      # Absent from upstream values.yaml; default is off, matching helm
       # render behaviour. Records duplicate `k8s.rules.container_resource`.
       k8sContainerCpuLimits = lib.mkOption {
         type = lib.types.bool;

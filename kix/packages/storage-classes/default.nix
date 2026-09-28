@@ -1,4 +1,4 @@
-# StorageClass package — cluster storage classes.
+# StorageClass package: cluster storage classes.
 #
 # Defines storage classes for Mayastor (replicated NVMe-oF) and OpenEBS
 # LocalPV-ZFS provisioners. Each StorageClass is cluster-scoped.

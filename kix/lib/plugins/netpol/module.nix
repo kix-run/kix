@@ -68,7 +68,7 @@ in
       CiliumNetworkPolicy generation from DI graph. See v2_discussions/37
       and v2_discussions/83. The enforcer that CNPs depend on is looked up
       automatically via `meta.roles ∋ "network-policy-enforcer"` (see
-      `kix/packages/cilium`) — no explicit wiring is required, but an
+      `kix/packages/cilium`). No explicit wiring is required, but an
       enforcer instance MUST be declared when `enable = true`. kix throws
       at cluster eval time if no enforcer is resolved: without the
       store-path edge to cilium, CNPs would race the operator at apply

@@ -1,4 +1,4 @@
-# cert-manager CA injector — injects CA bundles into webhooks, API services, and CRDs.
+# cert-manager CA injector: injects CA bundles into webhooks, API services, and CRDs.
 
 {
   self,

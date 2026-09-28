@@ -1,11 +1,11 @@
-# Prometheus Operator CRD definitions — monitoring.coreos.com.
+# Prometheus Operator CRD definitions: monitoring.coreos.com.
 #
 # Defines the core CRDs that the operator reconciles:
-#   ServiceMonitor, PodMonitor, PrometheusRule — consumed by app packages via DI
-#   Prometheus, Alertmanager — consumed by the prometheus/alertmanager packages
-#   Probe, ScrapeConfig — additional scrape config CRDs
-#   ThanosRuler — Thanos ruler instances
-#   AlertmanagerConfig — namespace-scoped alertmanager routing
+#   ServiceMonitor, PodMonitor, PrometheusRule: consumed by app packages via DI
+#   Prometheus, Alertmanager: consumed by the prometheus/alertmanager packages
+#   Probe, ScrapeConfig: additional scrape config CRDs
+#   ThanosRuler: Thanos ruler instances
+#   AlertmanagerConfig: namespace-scoped alertmanager routing
 
 {
   self,

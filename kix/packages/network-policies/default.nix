@@ -1,4 +1,4 @@
-# NetworkPolicy package — Cilium network policies.
+# NetworkPolicy package: Cilium network policies.
 #
 # Defines Cilium cluster-wide network policies for baseline connectivity
 # (DNS, API server, internet egress, ingress-nginx, Prometheus scraping,
@@ -140,7 +140,7 @@ in
       ingress-nginx ? null,
       kube-prometheus-stack ? null,
       # stackgres-cluster pods get { app = "StackGresCluster"; } assigned by the
-      # operator at runtime — no kix package exposes that selector, so we accept
+      # operator at runtime; no kix package exposes that selector, so we accept
       # an explicit selector override instead.
       stackgres-cluster ? null,
     }:

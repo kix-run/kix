@@ -13,8 +13,8 @@
 # root = Deployment (velero server)
 #
 # Exposes via DI:
-#   velero.out.withBackup    — transformer: include resource in backups
-#   velero.out.withoutBackup — transformer: exclude resource from backups
+#   velero.out.withBackup:    transformer: include resource in backups
+#   velero.out.withoutBackup: transformer: exclude resource from backups
 
 {
   scope,
@@ -796,7 +796,7 @@ in
         ++ (builtins.attrValues self.crds)
         ++ (lib.attrValues scheduleResources);
 
-        # Package-level out extensions — exposed via DI as velero.out.*
+        # Package-level out extensions, exposed via DI as velero.out.*
         out = {
           # Transformer: include a resource in velero backups.
           # Pipe-friendly: `scope.mkResource ({ ... } |> velero.out.withBackup)`

@@ -218,7 +218,7 @@ let
   lithusStorage = {
     meta = {
       version = "lithus-flavor";
-      description = "Lithus OpenEBS storage stock — StorageClasses, StorageProfiles, DiskPools, VolumeSnapshotClasses, mayastor CSIDriver";
+      description = "Lithus OpenEBS storage stock: StorageClasses, StorageProfiles, DiskPools, VolumeSnapshotClasses, mayastor CSIDriver";
       roles = [ "storageClasses" ];
     };
 
@@ -259,7 +259,7 @@ in
   options.cluster.flavor.lithus = {
     workers = mkOption {
       type = types.listOf types.str;
-      description = "Worker node names — one DiskPool emitted per worker.";
+      description = "Worker node names. One DiskPool is emitted per worker.";
     };
     mayastorDiskPath = mkOption {
       type = types.str;

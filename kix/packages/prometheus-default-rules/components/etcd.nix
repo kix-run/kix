@@ -2,7 +2,7 @@
 #
 # Unlike the other components, the SM spec is constructed in Nix (not loaded
 # from frozen JSON) so TLS knobs are pluggable. Real-world etcd scrapes
-# usually require client-cert auth — secrets mounted via Prometheus's
+# usually require client-cert auth: secrets mounted via Prometheus's
 # `secrets:` field, then referenced here as caFile/certFile/keyFile.
 #
 # Example wiring an etcd-client-cert Secret:

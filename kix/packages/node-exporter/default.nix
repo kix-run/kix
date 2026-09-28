@@ -1,4 +1,4 @@
-# node-exporter — Prometheus exporter for hardware and OS metrics.
+# node-exporter: Prometheus exporter for hardware and OS metrics.
 #
 # DaemonSet that runs on every node, exposing /proc and /sys metrics.
 # Ships its own ServiceMonitor and PrometheusRules via optional prometheus DI.
@@ -238,7 +238,7 @@ in
           mkServiceMonitor {
             name = "${name}-monitor";
             spec = {
-              # ServiceMonitors match SERVICE labels, not pod labels — the
+              # ServiceMonitors match SERVICE labels, not pod labels. The
               # daemonset selector never matched the Service and this job
               # was silently unscraped (caught live on stage1, 2026-08-31).
               selector.matchLabels = self.service.out.selector;

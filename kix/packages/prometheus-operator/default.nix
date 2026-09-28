@@ -1,15 +1,15 @@
-# prometheus-operator — Kubernetes operator for Prometheus monitoring stack.
+# prometheus-operator: Kubernetes operator for Prometheus monitoring stack.
 #
 # Manages monitoring.coreos.com CRDs: Prometheus, Alertmanager, ServiceMonitor,
 # PodMonitor, PrometheusRule, Probe, ScrapeConfig, ThanosRuler, AlertmanagerConfig.
 #
 # Exposes CRD builder functions via `out`:
-#   out.mkServiceMonitor  — create ServiceMonitor CRs
-#   out.mkPodMonitor      — create PodMonitor CRs
-#   out.mkPrometheusRule  — create PrometheusRule CRs
-#   out.mkPrometheus      — create Prometheus CRs (used by packages/prometheus)
-#   out.mkAlertmanager    — create Alertmanager CRs (used by packages/alertmanager)
-#   out.mkProbe           — create Probe CRs
+#   out.mkServiceMonitor    create ServiceMonitor CRs
+#   out.mkPodMonitor        create PodMonitor CRs
+#   out.mkPrometheusRule    create PrometheusRule CRs
+#   out.mkPrometheus        create Prometheus CRs (used by packages/prometheus)
+#   out.mkAlertmanager      create Alertmanager CRs (used by packages/alertmanager)
+#   out.mkProbe             create Probe CRs
 #
 # This replaces the `partsOverlays` CRDRef hack in cluster monitoring configs.
 
@@ -299,7 +299,7 @@
               self.operatorService
             ];
 
-          # Expose CRD builders — packages depend on these via DI
+          # Expose CRD builders; packages depend on these via DI
           # Usage: prometheus.out.mkServiceMonitor scope { ... }
           out = {
             inherit (self.crds.serviceMonitors.out) mkCR;
@@ -310,7 +310,7 @@
             mkPrometheus = self.crds.prometheuses.out.mkCR;
             mkAlertmanager = self.crds.alertmanagers.out.mkCR;
             # The operator injects a config-reloader sidecar into Prometheus
-            # and Alertmanager pods — not in any kix-generated manifest.
+            # and Alertmanager pods, not in any kix-generated manifest.
             extraImages = [
               (kix.image.ref config.prometheusConfigReloader.image)
             ];

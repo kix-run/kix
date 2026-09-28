@@ -1,4 +1,4 @@
-# Loki — log aggregation system.
+# Loki: log aggregation system.
 #
 # Wraps the upstream Grafana Loki Helm chart via importChart.
 # Cluster modules pair it with a sibling persistent-volume-claim instance
@@ -9,7 +9,7 @@
 #
 # Defaults: SingleBinary + filesystem object store. That's the only mode
 # that maps cleanly to a single externally-owned PVC. For HA you need
-# StatefulSet volumeClaimTemplates and a real object store — out of scope
+# StatefulSet volumeClaimTemplates and a real object store. That is out of scope
 # for these defaults; override via `config.values` if needed.
 #
 # Chart:   https://grafana.github.io/helm-charts
@@ -77,7 +77,7 @@ let
       };
     };
 
-    # SingleBinary is the only mode this default targets — explicitly zero
+    # SingleBinary is the only mode this default targets; explicitly zero
     # out the SimpleScalable replicas so a stale chart default can't spawn
     # empty StatefulSets.
     write.replicas = 0;
@@ -134,7 +134,7 @@ in
     # below are fixed, and a cluster that needs more must move to
     # SimpleScalable with a real object store via `values`.
     availability.max = "none";
-    # Helm chart is opaque — intra-package edges (gateway → backend) aren't
+    # Helm chart is opaque: intra-package edges (gateway → backend) aren't
     # visible via store-path context.  Declare them explicitly so Cilium
     # allows the traffic under default-deny.
     network.intents = {
@@ -175,7 +175,7 @@ in
         releaseName = "loki";
         # The gateway (nginx) proxies to the loki backend(s). No K8s
         # manifest reference exists between them, so the DAG can't infer
-        # the edge — declare it explicitly. Targets depend on
+        # the edge. Declare it explicitly. Targets depend on
         # deploymentMode (SingleBinary vs SimpleScalable).
         extraEdges =
           if isSingleBinary then

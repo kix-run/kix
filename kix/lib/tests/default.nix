@@ -17,7 +17,7 @@
 
 {
   # Default: the exact nixpkgs the ludo flake pins (read from its lock file,
-  # fetched by narHash — pure, no registry/channel needed).
+  # fetched by narHash: pure, no registry/channel needed).
   lib ? (
     let
       lock = builtins.fromJSON (builtins.readFile ../../../ludo/flake.lock);
@@ -122,7 +122,7 @@ let
 
   # NOTE: all fixtures follow the production convention `root = self.<part>`.
   # A resource living ONLY at `parts.root` is dropped from the manifest set
-  # (collectResources excludes the `root` key) — see the latent-quirk note
+  # (collectResources excludes the `root` key). See the latent-quirk note
   # in architecture.md.
   dnsPackage = {
     meta.version = "test";
@@ -544,7 +544,7 @@ let
   };
 
   # dials db through a ConfigMap: the endpoint fact must conduct through the
-  # carrier's seal — indirection is the default case, not a special one
+  # carrier's seal; indirection is the default case, not a special one
   indirectAppPackage = {
     meta.version = "test";
     build =
@@ -586,7 +586,7 @@ let
 
   # CRD-owning operator: declares TestCluster's fact behavior ON THE CRD
   # REF (behavior is a property of the kind, delivered through the typed
-  # builder chain — mkCRDRef → out.crds → consumer's scope.mkCR).
+  # builder chain: mkCRDRef → out.crds → consumer's scope.mkCR).
   testClusterBehavior = {
     endpoint = "terminate";
     podSelector = cr: {
@@ -671,7 +671,7 @@ let
       };
   };
 
-  # same consumer but builder-less: raw mkResource with a kind string —
+  # same consumer but builder-less: raw mkResource with a kind string;
   # no behavior arrives unless cluster.factBehavior supplies it
   rawCrConsumerPackage = {
     meta.version = "test";
@@ -735,7 +735,7 @@ let
 
   # Minimal enforcer satisfying the full interface contract
   # (plugins/netpol/interface.nix). Rule shapes are inert stubs; mkPolicy
-  # seals a CNP-shaped resource through whatever mkResource it is handed —
+  # seals a CNP-shaped resource through whatever mkResource it is handed,
   # exactly the surface the real cilium packages expose.
   stubEnforcer = {
     meta = {
@@ -867,7 +867,7 @@ let
 
   # v2_discussions/128 fixtures: a package hand-rolling a PVC, and a package
   # writing annotations under a given domain (optionally linking the
-  # `operator` dep — dep args are discovered from literal functionArgs, so
+  # `operator` dep; dep args are discovered from literal functionArgs, so
   # the with-dep variant hardcodes the arg name).
   mkPvcPackage =
     {
@@ -1425,7 +1425,7 @@ let
       }
     ]);
 
-    # Two managed instances claiming the same role throw eagerly — even
+    # Two managed instances claiming the same role throw eagerly, even
     # with nothing looking the role up (netpol stays disabled here).
     t15-duplicate-role-throws = evalFails (mkCluster [
       baseInstances
@@ -1472,7 +1472,7 @@ let
       hasName "agent" (ofKind "DaemonSet" ms) || throw "DaemonSet missing under unknown substrate axiom";
 
     # A role name is a DI alias: a package declaring meta.roles resolves
-    # for consumers taking the role name as a dep arg — no instance-level
+    # for consumers taking the role name as a dep arg. No instance-level
     # aliases needed.
     t19-role-is-di-alias =
       let
@@ -1542,7 +1542,7 @@ let
       !(hasName "stock-sc" (ofKind "ConfigMap" ms)) || throw "stock instantiated without any demand";
 
     # An optional platform import providing the role suppresses the stock
-    # pull — existing environment-provided resolution stays unchanged
+    # pull; existing environment-provided resolution stays unchanged
     # (the ludo-kind case).
     t22-import-suppresses-stock =
       let
@@ -1586,7 +1586,7 @@ let
       || throw "lithus stock not pulled on demand: ${builtins.toJSON (namesOf ms)}";
 
     # lithus with no storage demand compiles WITHOUT OpenEBS in the
-    # artifact — the doc-127 proof case.
+    # artifact (the doc-127 proof case).
     t24-lithus-no-demand-no-openebs =
       let
         ms = manifests (mkCluster [
@@ -1796,13 +1796,13 @@ let
           baseInstances
           scorecardOn
           {
-            # The declarer itself writes under its domain — must not warn.
+            # The declarer itself writes under its domain; must not warn.
             instances.infra.operator.package = mkAnnotatedCmPackage {
               key = "example.io/managed";
               name = "operator-cm";
               metaExtra.annotationDomains = [ "example.io" ];
             };
-            # The consumer links the operator via DI — must not warn.
+            # The consumer links the operator via DI; must not warn.
             instances.appns.writer.package = mkAnnotatedCmPackage {
               key = "example.io/managed";
               withOperatorDep = true;
@@ -1813,7 +1813,7 @@ let
       in
       findings == [ ] || throw "dep/self exemptions failed: ${builtins.toJSON findings}";
 
-    # A domain nobody declares is a dead annotation and warns — unless the
+    # A domain nobody declares is a dead annotation and warns, unless the
     # operator lists it in scorecard.knownAnnotationDomains.
     t31-annotation-domain-unknown-warns =
       let
@@ -1868,7 +1868,7 @@ let
       }";
 
     # An environment binding suppresses the stock pull even without an
-    # import instance — flavors declare `cni` exclusively this way. The
+    # import instance. Flavors declare `cni` exclusively this way. The
     # compiler must not instantiate stock and then refuse its own work.
     t33-env-exclusive-binding-suppresses-stock =
       let
@@ -1885,7 +1885,7 @@ let
       (!(hasName "stock-sc" (ofKind "ConfigMap" ms)) && probe != null && probe.data.sc == "missing")
       || throw "exclusive binding did not suppress stock pull: ${builtins.toJSON probe}";
 
-    # Shadowable: the environment default is the provider — pulling stock
+    # Shadowable: the environment default is the provider; pulling stock
     # would silently shadow it, so the shelf entry stays untouched.
     t34-env-shadowable-binding-suppresses-stock =
       let
@@ -1902,7 +1902,7 @@ let
       || throw "shadowable binding did not suppress stock pull";
 
     # A never-activated optional instance claiming a role a mandatory
-    # instance also provides is NOT a conflict — it emits nothing this
+    # instance also provides is NOT a conflict: it emits nothing this
     # eval, so it must neither win the role nor trip the eager check.
     t35-inactive-optional-role-is-not-a-conflict =
       let
@@ -1958,7 +1958,7 @@ let
     ]);
 
     # Directly wired deps (deps.operator = ref...) count as linking against
-    # the declarer — the domain lint must not false-warn on explicit wiring.
+    # the declarer. The domain lint must not false-warn on explicit wiring.
     t38-annotation-domain-direct-dep-satisfies =
       let
         cluster = mkCluster [
@@ -1991,7 +1991,7 @@ let
     # ---- typed-facts edge semantics (core/facts.nix) ----------------------
 
     # out.name alone is structural: no endpoint fact flows, so netpol derives
-    # NO edge to db (no caller-ingress CNP) — but the identity hit keeps the
+    # NO edge to db (no caller-ingress CNP), but the identity hit keeps the
     # conservative DNS-ordering dep, and the derivation record (depends-on)
     # is untouched.
     t39-name-only-no-netpol-edge =
@@ -2039,7 +2039,7 @@ let
       || throw "endpoint fact did not conduct through ConfigMap; CNPs: ${builtins.toJSON (namesOf cnps)}";
 
     # facts.refOnly is the per-use escape hatch: identity (ordering) kept,
-    # dialing claim stripped — fqdn used as a display string derives no edge.
+    # dialing claim stripped. An fqdn used as a display string derives no edge.
     t41-refonly-strips-edge =
       let
         refOnlyWired = {
@@ -2067,7 +2067,7 @@ let
 
     # A terminate-declared CR absorbing an endpoint fact: netpol opens holes
     # for the OPERAND pods (podSelector over the raw manifest), from the
-    # instance phase — egress in the CR's namespace, caller-ingress into the
+    # instance phase: egress in the CR's namespace, caller-ingress into the
     # target's. The consumer deployment (which only names the CR) gets none.
     t42-cr-terminate-operand-cnps =
       let
@@ -4227,7 +4227,7 @@ let
       }";
 
     # Opting in emits the EnvoyProxy verbatim and points the class at it
-    # by group/kind/name/namespace — the four fields Envoy Gateway's
+    # by group/kind/name/namespace, the four fields Envoy Gateway's
     # processGatewayClassParamsRef resolves.
     t84-envoy-gateway-proxyspec-wires-parametersref =
       let
@@ -5138,7 +5138,7 @@ in
       throw (
         "kix/lib tests FAILED: "
         + builtins.concatStringsSep ", " (builtins.attrNames failures)
-        + " — re-run a single test for its detailed message, e.g. "
+        + ". Re-run a single test for its detailed message, e.g. "
         + "nix eval --impure --expr '(import ./kix/lib/tests { }).tests.<name>'"
       );
 }

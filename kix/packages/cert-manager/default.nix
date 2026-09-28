@@ -1,13 +1,13 @@
-# cert-manager package — jetstack/cert-manager v1.17.1.
+# cert-manager package: jetstack/cert-manager v1.17.1.
 #
 # X.509 certificate management for Kubernetes. Automates issuance and
 # renewal of TLS certificates from various sources (Let's Encrypt, Vault,
 # Venafi, self-signed, etc.).
 #
 # Three components:
-#   controller  — main cert-manager, reconciles Certificate/Issuer CRDs
-#   webhook     — validates and mutates cert-manager resources via admission webhooks
-#   cainjector  — injects CA bundles into webhooks, API services, and CRDs
+#   controller    main cert-manager, reconciles Certificate/Issuer CRDs
+#   webhook       validates and mutates cert-manager resources via admission webhooks
+#   cainjector    injects CA bundles into webhooks, API services, and CRDs
 
 {
   scope,
@@ -40,7 +40,7 @@
       };
       aws-fargate = {
         summary = "Webhook port 10250 clashes with kubelet";
-        detail = "Fargate runs kubelet on port 10250. The webhook secure-port must be changed. No hostNetwork option is available — Fargate controls networking.";
+        detail = "Fargate runs kubelet on port 10250. The webhook secure-port must be changed. No hostNetwork option is available; Fargate controls networking.";
       };
       aws-eks-custom-cni = {
         summary = "Webhook unreachable with custom CNI unless hostNetwork is enabled";
@@ -247,7 +247,7 @@
               self.controllerServiceAccount
               self.controllerService
             ]
-            # Aggregate roles (no binding — not auto-discovered via inverse deps)
+            # Aggregate roles (no binding; not auto-discovered via inverse deps)
             ++ [
               self.clusterViewRole
               self.viewRole

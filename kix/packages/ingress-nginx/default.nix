@@ -1,7 +1,7 @@
 # ingress-nginx kix package.
 #
 # NGINX Ingress Controller for Kubernetes. Supports multiple instances
-# in the same namespace — all resource names are prefixed with
+# in the same namespace; all resource names are prefixed with
 # scope.instanceName to avoid collisions.
 #
 # Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Role,
@@ -236,7 +236,7 @@ in
       # admission Jobs at the bare instance name.
       ctrlName = "${name}${config.controllerNameSuffix}";
 
-      # Derived values — ingressClassName and controllerValue default to
+      # Derived values: ingressClassName and controllerValue default to
       # instance-name-based values when not overridden.
       ingressClassName = if config.ingressClassName != null then config.ingressClassName else name;
 
@@ -467,7 +467,7 @@ in
         # admissionCreate as its creator, which orders this Deployment after
         # the Job and makes deploy wait for the Secret. Controller RBAC
         # must be reachable from root so the ServiceAccount has permissions
-        # to list ingressclasses, services, etc — without these, the
+        # to list ingressclasses, services, etc. Without these, the
         # controller's caches time out and the pod CrashLoops.
         # Service must exist before the controller starts: --publish-service
         # below references it, and the controller fatally exits with
@@ -643,7 +643,7 @@ in
             # the deployment now `requires` this service (so the controller
             # finds its --publish-service at startup). rawSelector is a
             # cheap accessor that doesn't force the workload's manifest
-            # hash — no cycle, and the selector is coupled to the actual
+            # hash: no cycle, and the selector is coupled to the actual
             # workload spec (unlike a hand-rolled label literal).
             selector = self.deployment.rawSelector;
             ports = map addNodePort [
@@ -835,7 +835,7 @@ in
         kind = "Service";
         name = "${ctrlName}-admission";
         # Distinct identity vs the main controller Service
-        # (distinctSameKindLabels) — the upstream chart uses the same
+        # (distinctSameKindLabels); the upstream chart uses the same
         # component value for its admission resources.
         labels = commonLabels // {
           "app.kubernetes.io/component" = "admission-webhook";
@@ -913,7 +913,7 @@ in
       #
       # root.resource is the Deployment, not the Service, even though the
       # Service is the user-facing handle. Why: this package is wired
-      # "inverse" — the Deployment requires the Service (the controller's
+      # "inverse": the Deployment requires the Service (the controller's
       # --publish-service flag fatally exits if the Service doesn't exist
       # at startup), so the Service is upstream of the Deployment in the
       # forward closure. If root were the Service, the PackageInstance's
@@ -923,7 +923,7 @@ in
       # addition to the IngressClass's. Consumer dep edges flow through
       # manifest string-context (see kix/lib/k8s.nix:271), so any package
       # that references `ingressNginx.out.ingressClassName` (notably
-      # kix.expose) gets a direct depends-on edge to the controller pod —
+      # kix.expose) gets a direct depends-on edge to the controller pod,
       # not just to the IngressClass. Without this, the consumer's Ingress
       # only edges to the IngressClass (wave 0) and lands in the same
       # wave as the Service, racing the controller and failing admission

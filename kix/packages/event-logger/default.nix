@@ -1,4 +1,4 @@
-# Event Logger package — watches K8s events and logs them as JSON.
+# Event Logger package: watches K8s events and logs them as JSON.
 #
 # Runs a Python script (via uv) that streams all cluster events to
 # stdout in structured JSON format for log aggregation pipelines.

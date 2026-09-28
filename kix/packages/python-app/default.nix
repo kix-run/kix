@@ -1,4 +1,4 @@
-# python-app kix package — generic Django/Next.js application platform.
+# python-app kix package: generic Django/Next.js application platform.
 #
 # Used by Shopfront (3 environments) and Ledgerly. Supports backend
 # (Django/Gunicorn), frontend (Next.js), caddy (LB/WAF), queue workers,
@@ -6,8 +6,8 @@
 # cert-manager TLS, ConfigMap environment, secrets, and migration hooks.
 #
 # Dependencies:
-#   postgres            — optional, database
-#   valkey              — optional, cache/queue backend. A standalone valkey
+#   postgres              optional, database
+#   valkey                optional, cache/queue backend. A standalone valkey
 #                          arrives as VALKEY_HOST. With Sentinel on, the valkey
 #                          Service also routes to read-only replicas, so the
 #                          app gets VALKEY_SENTINEL_HOST, VALKEY_SENTINEL_PORT
@@ -16,8 +16,8 @@
 #                          django-redis `SentinelClient`, Celery `sentinel://`).
 #                          An app that cannot needs a standalone valkey
 #                          (sentinel.enabled = false, replicaCount = 1).
-#   ingressNginx        — optional, auto-creates ingress when present (+ hosts non-empty)
-#   clusterIssuer       — optional, auto-enables TLS when present
+#   ingressNginx          optional, auto-creates ingress when present (+ hosts non-empty)
+#   clusterIssuer         optional, auto-enables TLS when present
 #
 # root = caddy Service if caddy is enabled, else the backend Service, else
 # the frontend Service.
@@ -233,7 +233,7 @@ in
       description = workerImageDoc;
     };
 
-    # Redis — a single standalone store. It carries no replicaCount, and its
+    # Redis: a single standalone store. It carries no replicaCount, and its
     # Deployment stays at one replica on every availability level, because
     # there is no replication between two copies of it.
     redis = lib.mkOption {
@@ -257,7 +257,7 @@ in
       };
     };
 
-    # Ingress — gated by ingressNginx DI dep + hosts being non-empty.
+    # Ingress: gated by ingressNginx DI dep + hosts being non-empty.
     # TLS auto-enabled when clusterIssuer DI dep is present.
     ingress = lib.mkOption {
       type = lib.types.anything;

@@ -1,4 +1,4 @@
-# PriorityClass package — cluster scheduling priority classes.
+# PriorityClass package: cluster scheduling priority classes.
 #
 # Defines scheduling priority classes for workloads. Each PriorityClass is
 # cluster-scoped (no namespace).

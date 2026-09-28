@@ -1,4 +1,4 @@
-# envoy-gateway kix package — Gateway API resources.
+# envoy-gateway kix package: Gateway API resources.
 #
 # Creates GatewayClass and Gateway resources for the Gateway API, plus an
 # optional EnvoyProxy that tells Envoy Gateway how to provision the data
@@ -8,8 +8,8 @@
 # via Helm at the cluster level). This package provides the Gateway
 # API resources and the DI contract that kix.expose consumes.
 #
-# Supports multiple instances (public gateway, private gateway, etc.)
-# — all resource names derive from scope.instanceName.
+# Supports multiple instances (public gateway, private gateway, etc.);
+# all resource names derive from scope.instanceName.
 #
 # Resources: EnvoyProxy (optional), GatewayClass, Gateway, plus CRD refs
 # for the two Gateway API kinds.
@@ -157,7 +157,7 @@ in
         "app.kubernetes.io/component" = "gateway";
       };
 
-      # Filter out HTTPS listeners with empty certificateRefs — these are
+      # Filter out HTTPS listeners with empty certificateRefs; these are
       # placeholders that the cluster operator hasn't configured yet.
       activeListeners = builtins.filter (
         l: if l.protocol == "HTTPS" && l ? tls.certificateRefs then l.tls.certificateRefs != [ ] else true
@@ -250,7 +250,7 @@ in
             name = self.gateway.out.name;
             namespace = scope.namespaceName;
           };
-          # Selector for network policies — matches the envoy proxy pods
+          # Selector for network policies: matches the envoy proxy pods
           # spawned by the controller for this Gateway.
           selector = selectorLabels;
         };

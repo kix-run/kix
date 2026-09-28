@@ -1,10 +1,10 @@
-# prometheus — Prometheus server managed by the Prometheus Operator.
+# prometheus: Prometheus server managed by the Prometheus Operator.
 #
 # Creates a Prometheus CR that the operator reconciles into a StatefulSet.
 # Configurable retention, storage, resources, and scrape settings.
 #
 # DI deps:
-#   prometheus-operator (required) — provides the Prometheus CRD
+#   prometheus-operator (required): provides the Prometheus CRD
 #
 # Exposes:
 #   out.serviceUrl: "http://prometheus-operated.<ns>.svc:9090" (the operator's Service)
@@ -30,7 +30,7 @@ in
       "promServer"
     ];
     k8s.minVersion = "1.25";
-    # Historical metrics are expendable — fresh start is acceptable on
+    # Historical metrics are expendable; a fresh start is acceptable on
     # storage backend swaps. See v2_discussions/67_stateful_migration_orchestration.md.
     lifecycle = "ephemeral";
   };
@@ -94,7 +94,7 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
     };
-    # Selector scoping — by default, select all ServiceMonitors/PodMonitors/Rules
+    # Selector scoping: by default, select all ServiceMonitors/PodMonitors/Rules
     # across all namespaces (matching the Helm chart's default behavior)
     serviceMonitorSelector = lib.mkOption {
       type = lib.types.anything;
@@ -554,7 +554,7 @@ in
       amConfgsSecretName = "${name}-prometheus-am-confg";
       amRelabelConfgsSecretName = "${name}-prometheus-am-relabel-confg";
 
-      # `additionalScrapeConfigs` accepts a list (kix toJSON's it — JSON is
+      # `additionalScrapeConfigs` accepts a list (kix toJSON's it; JSON is
       # valid YAML, which Prometheus' parser accepts) or a raw string.
       isList = builtins.isList config.additionalScrapeConfigs;
       isStr = builtins.isString config.additionalScrapeConfigs;
@@ -692,7 +692,7 @@ in
         extra.automountServiceAccountToken = true;
       };
 
-      # Prometheus CR — the operator reconciles this into a StatefulSet
+      # Prometheus CR: the operator reconciles this into a StatefulSet
       prometheus = mkPrometheus scope {
         name = name;
         spec = lib.recursiveUpdate (
@@ -744,7 +744,7 @@ in
       # ── Additional scrape / AM / alert-relabel Secrets (inline mode) ─────
       # Chart-equivalent: writes the user-provided list/string to a Secret
       # and references it from the CR. Stored under stringData (server-side
-      # base64-encoded by K8s) — semantically identical to chart's manual
+      # base64-encoded by K8s), semantically identical to chart's manual
       # b64enc into `data`.
       scrapeConfigsSecret =
         if scrapeIsSet then
@@ -981,7 +981,7 @@ in
           # Built on the ref's fqdn: the URL carries the marker's context.
           serviceUrl = "http://${self.service.out.fqdn}:9090";
           # The Prometheus CR's image is reconciled by the operator into a
-          # StatefulSet — not directly in a kix-generated pod spec.
+          # StatefulSet, not directly in a kix-generated pod spec.
           extraImages = [
             (kix.image.ref config.image)
           ];

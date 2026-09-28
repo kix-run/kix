@@ -1,4 +1,4 @@
-# kube-prometheus-stack — full-cluster Prometheus monitoring stack.
+# kube-prometheus-stack: full-cluster Prometheus monitoring stack.
 #
 # Wraps the upstream kube-prometheus-stack Helm chart via importChart.
 # Includes Prometheus, Grafana, Alertmanager, node-exporter, and
@@ -13,7 +13,7 @@
 # canonical `out` shape.
 #
 # Defaults match prometheus-operator's defaultAliases so DI lookups
-# resolve identically — naming the instance `prometheus` claims the
+# resolve identically: naming the instance `prometheus` claims the
 # same alias on both sides.
 #
 # Chart:   oci://ghcr.io/prometheus-community/charts
@@ -257,7 +257,7 @@ in
     description = "The upstream kube-prometheus-stack Helm chart: the Prometheus Operator, Prometheus, Grafana, Alertmanager, node-exporter and kube-state-metrics";
     owner = "platform";
     isHelm = true;
-    # The chart renders grafana's PVC itself (persistence.enabled above) —
+    # The chart renders grafana's PVC itself (persistence.enabled above);
     # the raw-PVC refusal needs an explicit escape here.
     # An imported chart: its node-exporter is on the host network and PID
     # namespace, and grafana's init-chown-data runs as root, as upstream ships.
@@ -267,7 +267,7 @@ in
       "host-network"
     ];
     # Match prometheus-operator's defaultAliases so DI lookups work
-    # like consumers expect — see kix/packages/prometheus-operator/
+    # like consumers expect; see kix/packages/prometheus-operator/
     # default.nix:30-33. Naming the instance `prometheus` claims the
     # same alias on both sides; consumer packages calling
     # `prometheus.out.mkPrometheusRule scope { ... }` work without
@@ -336,7 +336,7 @@ in
         patchResources = declareOperandServices;
       };
 
-      # CRD ref markers — point at the chart-installed CRDs so
+      # CRD ref markers: point at the chart-installed CRDs so
       # consumer-built CRs (PrometheusRule, ServiceMonitor, …) get
       # auto-`requires` edges to the chart wave. Same group + version
       # + scope as the prometheus-operator CRDs.
@@ -385,7 +385,7 @@ in
           mkPodMonitor = pmonRef.out.mkCR;
           mkProbe = probeRef.out.mkCR;
           # mkPrometheus / mkAlertmanager are deliberately not exposed
-          # — the chart owns those CRs.
+          # because the chart owns those CRs.
         };
       };
     };

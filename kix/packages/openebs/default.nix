@@ -1132,7 +1132,7 @@ in
         };
 
       # ==========================================================================
-      #  MAYASTOR — Replicated Block Storage
+      #  MAYASTOR: Replicated Block Storage
       # ==========================================================================
 
       # --- ServiceAccount (shared by all Mayastor components) ---
@@ -2712,7 +2712,7 @@ in
         else
           null;
 
-      # --- io-engine DaemonSet (Mayastor data plane — hugepages, privileged) ---
+      # --- io-engine DaemonSet (Mayastor data plane: hugepages, privileged) ---
       ioEngineDaemonSet =
         if config.mayastor.enabled then
           (scope.mkDaemonSet {
@@ -4080,7 +4080,7 @@ in
           null;
 
       # ==========================================================================
-      #  LocalPV Provisioner (hostpath — optional)
+      #  LocalPV Provisioner (hostpath, optional)
       # ==========================================================================
 
       localPvSa =
@@ -4266,7 +4266,7 @@ in
 
       # ==========================================================================
       #  obs-callhome (telemetry: ships periodic usage reports to OpenEBS)
-      #  Verbatim from the upstream chart — emitted to converge with the
+      #  Verbatim from the upstream chart, emitted to converge with the
       #  Ansible dump. Deployment + sidecar Service, paired with the
       #  shared `mayastorSa` service account.
       # ==========================================================================

@@ -1,4 +1,4 @@
-# kubelet monitor — targets the operator-managed `kubelet` Service in
+# kubelet monitor: targets the operator-managed `kubelet` Service in
 # kube-system (created by the prometheus-operator's --kubelet-service flag).
 # No bridge Service needed.
 #
@@ -9,7 +9,7 @@
 
 { lib, kix }:
 let
-  # Default cAdvisor metric drops mirror the kube-prometheus-stack chart —
+  # Default cAdvisor metric drops mirror the kube-prometheus-stack chart;
   # cAdvisor produces a *lot* of metrics that aren't useful for alerting/
   # dashboards and blow up TSDB cardinality.
   cAdvisorDefaultMetricRelabelings = [
@@ -273,7 +273,7 @@ in
         monitor-kubelet = mkSmon {
           name = "${scope.instanceName}-kubelet";
           # The `kubelet` Service is operator-created at runtime (see header)
-          # — kix renders no Service matching this selector, which the
+          # and kix renders no Service matching this selector, which the
           # monitorSelectorMatchesService rule would otherwise flag.
           annotations.${kix.keys.monitorsExternalService} = "true";
           spec = smonSpec;

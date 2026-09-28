@@ -1,4 +1,4 @@
-# Standalone secret instance — kix-managed (SOPS or inline).
+# Standalone secret instance: kix-managed (SOPS or inline).
 #
 # Creates a K8s Secret with the enriched out API (keyRef, mkEnv,
 # envFrom, volume). Use as a first-class instance in the cluster
@@ -71,7 +71,7 @@
       root = secret;
       # Also expose under a sibling key so cluster.nix's collectResources
       # (which drops the `root` key) sees the Secret. Without this, a
-      # secret-as-root package emits only the PackageInstance marker — not
+      # secret-as-root package emits only the PackageInstance marker, not
       # the Secret itself. Same store-path → dedup'd in the manifest writer.
       inherit secret;
     };

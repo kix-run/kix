@@ -1,12 +1,12 @@
-# Metabase analytics/BI platform — kix package.
+# Metabase analytics/BI platform: kix package.
 #
 # Deploys Metabase backed by PostgreSQL (via StackGres). Simple
 # single-deployment architecture with DI-driven Ingress/TLS.
 #
 # Dependencies:
-#   postgres            — required, database
-#   ingressNginx        — optional, auto-creates ingress when present (+ host is set)
-#   clusterIssuer       — optional, auto-enables TLS when present
+#   postgres              required, database
+#   ingressNginx          optional, auto-creates ingress when present (+ host is set)
+#   clusterIssuer         optional, auto-enables TLS when present
 #
 # Resources: Deployment (web), Service (web, port 80 -> 3000),
 # Ingress (optional, DI-driven).
@@ -192,7 +192,7 @@ in
         # --- Secret ref (external or default name) ---
         appSecret = scope.mkSecretRef {
           name = if config.existingSecret != null then config.existingSecret else "${name}-secrets";
-          keys = [ ]; # keys unknown — external secret, used via envFrom
+          keys = [ ]; # keys unknown: external secret, used via envFrom
         };
 
         # --- Deployment ---

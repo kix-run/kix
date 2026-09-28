@@ -1,9 +1,9 @@
-# victoria-metrics-cluster — VictoriaMetrics cluster (VMCluster CR) in HA
+# victoria-metrics-cluster: VictoriaMetrics cluster (VMCluster CR) in HA
 # mode, the metrics store behind the `prometheusServer` alias
 # (v2_discussions/133 §3.2).
 #
 # Creates a VMCluster CR that the VM operator reconciles into vmstorage /
-# vmselect / vminsert workloads. HA is the default posture — and must be,
+# vmselect / vminsert workloads. HA is the default posture, and must be,
 # because the scorecard cannot see operator-created pods: replication
 # factor 2 over 3 vmstorage nodes, 2 vmselect + 2 vminsert, per-component
 # PDBs and preferred hostname anti-affinity.
@@ -14,12 +14,12 @@
 # vmselect and vmstorage or queries double-count. Both flags derive from
 # the single `scrapeInterval` option so they cannot drift; the agent
 # package reads it back via `out.scrapeInterval`. (The operator's own
-# fallback is 1ms — enough for replication twins, useless for HA-pair
+# fallback is 1ms: enough for replication twins, useless for HA-pair
 # duplicates, which land with distinct timestamps.)
 #
 # DI deps:
-#   vmOperator (required)      — provides the VMCluster CRD + mkVMCluster
-#   storageClasses (optional)  — supplies vmstorage's storageClassName when
+#   vmOperator (required)        provides the VMCluster CRD + mkVMCluster
+#   storageClasses (optional)    supplies vmstorage's storageClassName when
 #                                the option is unset; absent = cluster
 #                                default StorageClass
 #
@@ -27,11 +27,11 @@
 #   out.serviceUrl: "http://vmselect-<name>.<ns>.svc:8481/select/0/prometheus" (the operator's Service)
 #     Prometheus-compatible read path; Grafana auto-wires any
 #     `prometheusServer`-aliased instance exposing this.
-#   out.insertUrl — ".../insert/0/prometheus/api/v1/write" full
+#   out.insertUrl: ".../insert/0/prometheus/api/v1/write" full
 #     remote-write URL (vmagent wants the full path).
-#   out.insertBaseUrl — ".../insert/0/prometheus" (vmalert appends
+#   out.insertBaseUrl: ".../insert/0/prometheus" (vmalert appends
 #     /api/v1/write itself).
-#   out.scrapeInterval — the interval dedup is calibrated to; scrapers
+#   out.scrapeInterval: the interval dedup is calibrated to; scrapers
 #     must use it.
 
 {
@@ -64,7 +64,7 @@ in
     k8s.minVersion = "1.25";
     # Trial posture: historical metrics are expendable on storage swaps
     # (prometheus package precedent). Revisit if VM becomes the long-term
-    # store — v2_discussions/133 §3.2.
+    # store (v2_discussions/133 §3.2).
     lifecycle = "ephemeral";
   };
 
@@ -104,7 +104,7 @@ in
       default = "30s";
       description = ''
         Drives -dedup.minScrapeInterval on vmselect and vmstorage.
-        Scrapers (victoria-metrics-agent) must scrape at this interval —
+        Scrapers (victoria-metrics-agent) must scrape at this interval;
         read it via out.scrapeInterval.
       '';
     };
@@ -232,7 +232,7 @@ in
       ...
     }:
     let
-      # Operand pod labels the operator stamps on VMCluster children —
+      # Operand pod labels the operator stamps on VMCluster children:
       # component name + CR name (CR name = instance name).
       componentSelector = component: {
         "app.kubernetes.io/name" = component;

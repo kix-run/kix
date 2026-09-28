@@ -1,11 +1,11 @@
-# Filebrowser — web-based file manager.
+# Filebrowser: web-based file manager.
 #
 # Single-container app. Mounts a storage PVC at /srv.
 #
 # Dependencies:
-#   storage        — required, persistent volume for files
-#   ingressNginx   — optional, auto-creates ingress when present (+ host is set)
-#   clusterIssuer  — optional, auto-enables TLS when present
+#   storage          required, persistent volume for files
+#   ingressNginx     optional, auto-creates ingress when present (+ host is set)
+#   clusterIssuer    optional, auto-enables TLS when present
 #
 # root = Service (port 80).
 

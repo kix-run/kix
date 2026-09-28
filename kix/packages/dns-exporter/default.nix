@@ -1,4 +1,4 @@
-# DNS Exporter package — tykling/dns_exporter.
+# DNS Exporter package: tykling/dns_exporter.
 #
 # Prometheus exporter for DNS queries. Exposes metrics on port 15353.
 #

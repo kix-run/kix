@@ -1,4 +1,4 @@
-# Standalone SGObjectStorage — S3-compatible backup destination for
+# Standalone SGObjectStorage: S3-compatible backup destination for
 # StackGres clusters.
 #
 # The `stackgres-cluster` package emits an SGObjectStorage when its

@@ -1,4 +1,4 @@
-# StackGres Database — provisions a logical database + role on a StackGres
+# StackGres Database: provisions a logical database + role on a StackGres
 # cluster, materializing application credentials in *this* (consumer)
 # namespace. Designed to be the dep an app actually depends on, instead of
 # depending on the raw stackgres-cluster.
@@ -69,7 +69,7 @@ in
   # Forward this database's `extensions` (which a consumer like immich
   # injects via `deps.database.config.extensions`) up to the underlying
   # postgres cluster, so the operator installs them on the postgres image.
-  # Function-shaped injection — receives this instance's evaluated config
+  # Function-shaped injection: receives this instance's evaluated config
   # so the forwarding picks up whatever extensions consumers requested.
   # Entries can be plain strings or `{ name, version? }` attrsets; both
   # shapes are normalized to the attrset form expected by SGCluster.
@@ -103,7 +103,7 @@ in
         Extensions to CREATE EXTENSION IF NOT EXISTS on the new database.
         Each entry is either a plain extension name (string) or an
         attrset `{ name, version? }` to pin a specific extension version.
-        Note: the extension must already be available in the cluster — declare
+        Note: the extension must already be available in the cluster. Declare
         it on the stackgres-cluster instance's `extensions` option so the
         operator installs it on the underlying postgres image.
       '';
@@ -179,7 +179,7 @@ in
       # `postgres.out.*` values carry Nix string context pointing at the
       # SGCluster's postgresService ServiceRef marker (selector, ports,
       # readiness) and transitively the SGCluster itself. We keep the
-      # context on every value — k8s.mkResource strips it only for the
+      # context on every value. k8s.mkResource strips it only for the
       # toFile filename, so markers and refs built below automatically
       # pick up the SGCluster edge without any `requires` plumbing.
       clusterName = postgres.out.name;
@@ -188,7 +188,7 @@ in
 
       # --- A scope rooted in the postgres namespace ------------------------
       # `scope.forService` reads the dep's `_meta.namespaceName` and hands
-      # back a scope bound to it — so Secret + Job resources land next to
+      # back a scope bound to it, so Secret + Job resources land next to
       # the SGCluster while this package's primary scope (and the
       # consumer-facing credentials Secret) stay in the consumer's namespace.
       backendScope = scope.forService postgres;
@@ -275,7 +275,7 @@ in
       # `clusterName` carries the SGCluster's store-path context; k8s
       # strips it internally only for the toFile filename, while the
       # content-side context flows through to the marker's outPath and
-      # `kix.run/depends-on` annotation — so the wave graph correctly
+      # `kix.run/depends-on` annotation, so the wave graph correctly
       # orders this ref after the SGCluster, no manual `requires` needed.
       superuserRef = backendScope.mkSecretRef {
         name = clusterName;
@@ -456,7 +456,7 @@ in
       #      readiness poll); forwardEdges packs `bootstrapJob`'s
       #      store-path into each string value's context so consumers
       #      traversing `database.out.host` / `.port` automatically pick
-      #      up the Job in their forward closure — no chain hop through
+      #      up the Job in their forward closure: no chain hop through
       #      the Job, no duplicate selector/ports declaration, no new
       #      marker. Wave ordering follows: the consumer's Deployment
       #      hash includes the Job's hash → deploy gates on Job-Complete.
@@ -467,7 +467,7 @@ in
       #      Without this re-exposure, the marker's outPath would be
       #      present in `database.out.host`'s string context but
       #      invisible to `buildWorkloadCnps` (which only indexes
-      #      resources from the consumer's direct deps) — and the
+      #      resources from the consumer's direct deps), and the
       #      consumer's egress CNP would never emit a rule targeting
       #      postgres, producing a CONNECT_TIMEOUT under default-deny.
       #
@@ -480,7 +480,7 @@ in
       root = {
         resource = credentials;
         ## bootstrapPassword is referenced by the Job (via secretKeyRef
-        ## context), so listing it explicitly would be redundant — kix's
+        ## context), so listing it explicitly would be redundant; kix's
         ## forward closure picks it up. The Job itself is not referenced
         ## from `credentials`, so it needs to live in either `requires`
         ## (in-band, blocks readiness) or `postHooks` (runs after package

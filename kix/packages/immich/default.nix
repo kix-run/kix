@@ -1,19 +1,19 @@
-# Immich server — kix package.
+# Immich server: kix package.
 #
 # Deploys the Immich API and web UI. Requires valkey (Redis-compatible)
 # for job queues. Optionally connects to an immich-machine-learning
 # instance for smart features (facial recognition, search, etc.).
 #
 # Dependencies:
-#   valkey              — required, job queue backend; reached through
+#   valkey                required, job queue backend; reached through
 #                          Sentinel when the valkey instance runs it
-#   database            — required, logical database (provided by stackgres-database
+#   database              required, logical database (provided by stackgres-database
 #                          or any package exposing the same out.{host,port,database,
 #                          credentials,connectionEnv} interface). The underlying
 #                          postgres cluster must have the "vector" extension installed.
-#   storage             — required, persistent volume for photo library
-#   machineLearning     — optional, ML inference service
-#   prometheus          — optional, auto-creates ServiceMonitor when present (+ metrics enabled)
+#   storage               required, persistent volume for photo library
+#   machineLearning       optional, ML inference service
+#   prometheus            optional, auto-creates ServiceMonitor when present (+ metrics enabled)
 #
 # Resources: Deployment, Service, optional ConfigMap, optional ServiceMonitor.
 # Ingress handled via kix.expose.
@@ -57,7 +57,7 @@ in
     };
   };
 
-  # Per-dep diagnostics + config injections — co-located with the dep.
+  # Per-dep diagnostics + config injections, co-located with the dep.
   deps = {
     # Declare the database extensions immich requires. The stackgres-database
     # package picks these up via dep config injection and (a) runs
@@ -67,7 +67,7 @@ in
     # configured database + cluster with no cluster-side wiring.
     database.config = {
       # Immich's InitialMigration creates these extensions on first boot:
-      #   - vchord       : VectorChord — image similarity embeddings
+      #   - vchord       : VectorChord, image similarity embeddings
       #                    (upstream Immich's current default; picked by
       #                    getVectorExtension() in preference to `vectors`
       #                    and legacy `vector` / pgvector)
@@ -131,7 +131,7 @@ in
         storageSizeGi = kix.parseGi (dep.out.size or "0");
       in
       lib.optional (storageSizeGi != null && storageSizeGi < 50)
-        "library storage is ${dep.out.size or "unknown"} — recommended minimum is 50Gi for photo libraries";
+        "library storage is ${dep.out.size or "unknown"}; recommended minimum is 50Gi for photo libraries";
   };
 
   # Printed on the build that passes too, as the reminder to undo the
@@ -396,7 +396,7 @@ in
                       )
                       (
                         # Pull immich's per-app db credentials from the database
-                        # instance's local Secret (in *this* namespace — no
+                        # instance's local Secret (in *this* namespace: no
                         # cross-namespace secret reads, no superuser exposure).
                         (database.out.credentials.out.mkEnv {
                           DB_USERNAME = "username";
@@ -436,7 +436,7 @@ in
           }
           # kix.withMounts injects volumes + volumeMounts into the pod spec.
           # This will work if there is only one container, if multiple containers are in the deployment, the containerName must be passed as well otheriwse error.
-          # Nulls are filtered — disabled mounts are silently skipped.
+          # Nulls are filtered; disabled mounts are silently skipped.
           # TODO: should trigger an error if the same volume name is used multiple times (which can happen with the auto-naming)
           |> kix.withMounts [
             self.libraryMount
@@ -455,7 +455,7 @@ in
 
         # --- ServiceMonitor (DI-driven) ---
         # Created when prometheus is injected AND metrics are enabled.
-        # Builder comes from prometheus.out.mkServiceMonitor — no local CRDRef needed.
+        # Builder comes from prometheus.out.mkServiceMonitor; no local CRDRef needed.
         serviceMonitor =
           if hasMetrics then
             prometheus.out.mkServiceMonitor scope {

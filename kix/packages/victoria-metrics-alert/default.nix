@@ -1,4 +1,4 @@
-# victoria-metrics-alert — alerting rule evaluation (VMAlert CR ×2) plus
+# victoria-metrics-alert: alerting rule evaluation (VMAlert CR ×2) plus
 # the Alertmanager it notifies (VMAlertmanager CR ×2)
 # (v2_discussions/133 §3.4).
 #
@@ -12,15 +12,15 @@
 #
 # Notifier wiring is operator-side service discovery: the VMAlert CR
 # selects the VMAlertmanager CR by label, and the operator expands that
-# to every alertmanager replica's pod FQDN — which is what Alertmanager
+# to every alertmanager replica's pod FQDN, which is what Alertmanager
 # HA requires (fan-out to all replicas, not a load-balanced Service).
 # NOTE the vmalert → alertmanager notifier traffic is therefore between
-# operator-created pods with no endpoint fact in any kix manifest — the
+# operator-created pods with no endpoint fact in any kix manifest: the
 # doc 96 netpol blindspot, same class as the intra-VMCluster traffic.
 #
 # DI deps:
-#   vmOperator (required) — VMAlert/VMAlertmanager CRDs + builders
-#   vmCluster (required)  — out.serviceUrl (datasource + remoteRead),
+#   vmOperator (required)   VMAlert/VMAlertmanager CRDs + builders
+#   vmCluster (required)    out.serviceUrl (datasource + remoteRead),
 #                           out.insertBaseUrl (remoteWrite; vmalert
 #                           appends /api/v1/write itself)
 
@@ -136,7 +136,7 @@ in
           reboot) drops them. Set for anything beyond a trial.
         '';
       };
-      # Routing config — receivers, routes, etc. Cluster-specific; same
+      # Routing config: receivers, routes, etc. Cluster-specific; same
       # shape as the alertmanager package's `config` option.
       config = lib.mkOption {
         type = lib.types.anything;

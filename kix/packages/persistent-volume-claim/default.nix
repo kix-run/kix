@@ -1,4 +1,4 @@
-# PersistentVolumeClaim package — operator-managed storage.
+# PersistentVolumeClaim package: operator-managed storage.
 #
 # Creates a PVC backed by a StorageClass. Intended as a first-class
 # instance in the cluster definition, not embedded inside consuming
@@ -12,10 +12,10 @@
 #     flavor's platform-storage default class).
 #
 # Dependencies:
-#   storageClasses — optional, provides the default StorageClass name when
+#   storageClasses   optional, provides the default StorageClass name when
 #                    config.storageClassName is null.
 #
-# root = the PVC (via the `claim` part — the renderable resource must live
+# root = the PVC (via the `claim` part: the renderable resource must live
 # under a non-`root` key, since collectResources drops the `root` key; see the
 # `secret` package for the same pattern, and kixpkgs#25).
 
@@ -45,7 +45,7 @@
       example = "scw-bssd-retain";
       description = ''
         StorageClass name. When set, overrides the class from the
-        `storageClasses` dep — lets one cluster use several classes at once.
+        `storageClasses` dep, letting one cluster use several classes at once.
         When null, the class is taken from the optional `storageClasses` dep.
       '';
     };

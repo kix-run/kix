@@ -1,4 +1,4 @@
-# Cilium (externally managed) — CNP CRD ref marker + netpol API.
+# Cilium (externally managed): CNP CRD ref marker + netpol API.
 #
 # For clusters where cilium is installed out-of-band (RKE2's bundled
 # Cilium, k3s with cilium helm-installed by a bootstrap script, kind
@@ -54,7 +54,7 @@
         requires = [ ];
         out = {
           cnpCrdRef = crdRef;
-          # Network-policy rule builder API — same as the full cilium
+          # Network-policy rule builder API, same as the full cilium
           # package. Bind `mkPolicy` to this package's cnpCrdRef.
           netpol = rules // {
             mkPolicy =

@@ -1,4 +1,4 @@
-# PostHog reverse proxy — kix package.
+# PostHog reverse proxy: kix package.
 #
 # Creates ExternalName Services pointing to PostHog's ingestion and
 # asset hosts, fronted by an Ingress with SSL passthrough config.

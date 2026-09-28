@@ -1,10 +1,10 @@
-# Firezone — self-hosted WireGuard VPN server with web UI.
+# Firezone: self-hosted WireGuard VPN server with web UI.
 #
 # Based on BeanVPN/firezone-helm-chart but with proper secret management
-# (no hardcoded keys — all secrets must be provided via config).
+# (no hardcoded keys; all secrets must be provided via config).
 #
 # Dependencies:
-#   postgres            — required, database backend
+#   postgres              required, database backend
 #
 # Exposure: uses kix.expose (port 13000) for optional ingress/TLS.
 #

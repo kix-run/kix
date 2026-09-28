@@ -1,4 +1,4 @@
-# Promtail — log shipping agent for Loki.
+# Promtail: log shipping agent for Loki.
 #
 # Wraps the upstream Grafana Promtail Helm chart.
 # Deployed as a DaemonSet that ships container logs to Loki.
@@ -50,7 +50,7 @@ let
 
     # --- Promtail config ---
     config = {
-      # Loki push endpoint — overridden in build with DI-resolved URL.
+      # Loki push endpoint, overridden in build with DI-resolved URL.
       clients = [
         {
           url = "http://loki-gateway/loki/api/v1/push";
@@ -154,7 +154,7 @@ in
         ];
         releaseName = "promtail";
         # Auto-collect loki.out.* context so CNP generation discovers
-        # the promtail → loki-gateway egress edge — replaces the
+        # the promtail → loki-gateway egress edge. This replaces the
         # explicit `networkDeps = [ loki.out.fqdn ]` from before.
         deps = [ loki ];
       };

@@ -1,4 +1,4 @@
-# Redis — wraps the upstream Bitnami `redis` Helm chart directly.
+# Redis: wraps the upstream Bitnami `redis` Helm chart directly.
 #
 # We have a separate `valkey` package for new deployments; this exists so
 # clusters that originally rolled out the Bitnami `redis` chart can be
@@ -8,7 +8,7 @@
 # Name:    redis
 # Version: 19.1.0
 #
-# Note: no `defaultAliases = ["redis"]` — the `valkey` package already
+# Note: no `defaultAliases = ["redis"]`: the `valkey` package already
 # claims that alias, and both can legitimately coexist in a cluster.
 # Wire instances explicitly with `package = packages.redis;`.
 

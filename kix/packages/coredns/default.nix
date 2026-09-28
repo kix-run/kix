@@ -6,7 +6,7 @@
 # from the availability level, not written here.
 #
 # Dependencies:
-#   prometheus — optional, gates ServiceMonitor creation and provides CRD ref
+#   prometheus: optional, gates ServiceMonitor creation and provides CRD ref
 #
 # root = Service (kube-dns), selecting the Deployment via .out.selector.
 
@@ -20,7 +20,7 @@
 let
   helpers = import ./helpers.nix { inherit lib; };
 
-  # Selector labels — used for Deployment matchLabels and template labels.
+  # Selector labels: used for Deployment matchLabels and template labels.
   # Other resources derive selectors via .out.selector.
   selectorLabels = {
     "k8s-app" = "coredns";

@@ -1,4 +1,4 @@
-# VictoriaMetrics Operator — deployment, service, RBAC.
+# VictoriaMetrics Operator: deployment, service, RBAC.
 #
 # The operator watches operator.victoriametrics.com CRDs and reconciles
 # them into running workloads, and converts prometheus-operator objects
@@ -7,7 +7,7 @@
 # RBAC is curated from the upstream chart's role.yaml (victoria-metrics-
 # operator 0.67.x, operator v0.74.1). The wide core/apps/rbac grants are
 # required: the operator creates operand workloads, their Services,
-# ServiceAccounts and per-operand RBAC — K8s escalation prevention means
+# ServiceAccounts and per-operand RBAC. K8s escalation prevention means
 # the operator must itself hold everything it grants (nodes, /metrics
 # nonResourceURLs, endpointslices are what vmagent's scrape RBAC needs).
 
@@ -93,12 +93,12 @@ let
   storage = group "storage.k8s.io" [ "storageclasses" ];
   # Legacy + OpenShift groups: the operator writes them into vmagent's
   # scrape ClusterRole verbatim, and K8s escalation prevention refuses the
-  # write unless the operator itself holds them — observed live on kind
+  # write unless the operator itself holds them, observed live on kind
   # (2026-08-31): "attempting to grant RBAC permissions not currently
   # held". They are inert on non-OpenShift clusters but must be granted.
   # FUTURE (purist note, 2026-08-31): granting API groups the cluster will
   # never serve, purely to satisfy the operator's self-escalation check,
-  # is a smell — if the operator gains a flag to skip writing them into
+  # is a smell. If the operator gains a flag to skip writing them into
   # the vmagent ClusterRole, gate these grants on config instead.
   legacyExt = group "extensions" [ "ingresses" ];
   openshiftRoute = group "route.openshift.io" [
@@ -130,7 +130,7 @@ let
       "${name}" =
         grant (
           vmKindRules
-          # Converter input — prometheus-operator compat objects, every
+          # Converter input: prometheus-operator compat objects, every
           # kind in the table whether or not its converter is enabled, so
           # flipping one on needs no RBAC change.
           ++ promCompatRules
@@ -196,7 +196,7 @@ let
             )
             (discovery.endpointslices |> watch)
 
-            # See legacyExt/openshift* note above — vmagent-role grants.
+            # See legacyExt/openshift* note above: vmagent-role grants.
             (legacyExt.ingresses |> watch)
             (openshiftRoute."routers/metrics" |> allow [ "get" ])
             (openshiftRoute."registry/metrics" |> allow [ "get" ])
@@ -283,7 +283,7 @@ in
 
   # ── Deployment ───────────────────────────────────────────────────────
 
-  # Self-scrape via this package's own builder — the operator only
+  # Self-scrape via this package's own builder; the operator only
   # auto-scrapes its operands, never its own Deployment.
   operatorServiceScrape =
     if config.metrics.enabled then

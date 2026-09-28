@@ -1,8 +1,8 @@
 # Valkey (Redis-compatible) kix package.
 #
 # Supports two topologies (controlled by sentinel.enabled):
-#   sentinel=true  — Node StatefulSet with sentinel sidecar for HA failover.
-#   sentinel=false — One standalone primary (Bitnami's `<name>-primary`
+#   sentinel=true:   Node StatefulSet with sentinel sidecar for HA failover.
+#   sentinel=false:  One standalone primary (Bitnami's `<name>-primary`
 #                    StatefulSet, without its replica StatefulSet).
 # Both default from the cluster's availability level (v2_discussions/145):
 # standalone below "node", Sentinel with three pods from "node" up.
@@ -1187,7 +1187,7 @@
         };
       };
 
-      # Assemble the container list — metrics first, then sentinel (if enabled), then valkey
+      # Assemble the container list: metrics first, then sentinel (if enabled), then valkey
       # (matches Bitnami ordering).
       containers =
         lib.optional config.metrics.enabled metricsContainer
@@ -1242,7 +1242,7 @@
         else
           self.secret;
 
-      # --- ConfigMap (scripts — start + prestop) ---
+      # --- ConfigMap (scripts: start + prestop) ---
       configmap = scope.mkResource {
         apiVersion = "v1";
         kind = "ConfigMap";
@@ -1283,7 +1283,7 @@
         };
       };
 
-      # --- ConfigMap (configuration — sentinel.conf + valkey.conf) ---
+      # --- ConfigMap (configuration: sentinel.conf + valkey.conf) ---
       configurationConfigmap = scope.mkResource {
         apiVersion = "v1";
         kind = "ConfigMap";
@@ -1377,7 +1377,7 @@
                     secret = {
                       # `self.authSecret` is `self.secret` in managed mode
                       # and a `mkSecretRef` marker when the user passes
-                      # `existingSecret` — both carry DI context.
+                      # `existingSecret`; both carry DI context.
                       secretName = self.authSecret.out.name;
                       defaultMode = 420; # 0644
                       items = [
@@ -1451,7 +1451,7 @@
           }
           |> scope.mkResource;
 
-      # --- Service (main entry point — exposes both redis and sentinel) ---
+      # --- Service (main entry point; exposes both redis and sentinel) ---
       # Built from the StatefulSet, so a consumer that reads `out.fqdn` waits
       # for the Valkey pods to be Ready.
       mainService =

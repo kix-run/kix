@@ -1,4 +1,4 @@
-# GitHub Actions Runner Scale Set — wraps the upstream gha-runner-scale-set chart.
+# GitHub Actions Runner Scale Set: wraps the upstream gha-runner-scale-set chart.
 #
 # One instance per AutoscalingRunnerSet. The runner-scale-set controller
 # (deployed separately by the `arc` package) reconciles these CRs into

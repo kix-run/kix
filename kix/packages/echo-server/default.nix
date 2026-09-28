@@ -1,4 +1,4 @@
-# Echo server package — simple nginx returning a test page.
+# Echo server package: simple nginx returning a test page.
 #
 # Useful for validating cluster connectivity in local environments (kind).
 # Resources: ConfigMap, Deployment, Service.

@@ -6,17 +6,17 @@
 # DI deps, not sub-components (BEST-PRACTICES §12.5).
 #
 # Dependencies:
-#   database       — required, logical postgres database. stackgres-database,
+#   database         required, logical postgres database. stackgres-database,
 #                    or anything exposing out.{host,port,database,username,
 #                    credentials} with a `password` key on the credentials.
-#   valkey         — required, Redis-compatible cache and job queue
+#   valkey           required, Redis-compatible cache and job queue
 #                    (packages/valkey answers both `valkey` and `redis`),
 #                    reached through Sentinel when the valkey instance runs it.
-#   storage        — required, persistent volume for registry blobs.
-#   clusterIssuer  — optional. TLS on the Ingress (via kix.expose) and the
+#   storage          required, persistent volume for registry blobs.
+#   clusterIssuer    optional. TLS on the Ingress (via kix.expose) and the
 #                    scheme of the derived external URL.
-#   ingressNginx / gateway — optional, exposure (via kix.expose).
-#   prometheus     — optional, ServiceMonitors + PrometheusRule (via kix.monitor).
+#   ingressNginx / gateway: optional, exposure (via kix.expose).
+#   prometheus       optional, ServiceMonitors + PrometheusRule (via kix.monitor).
 #
 # Secrets: one kix-managed Secret (the `credentials` part) holds every credential Harbor needs
 # (see `secretKeys` below). Point `secrets.source` at a SOPS file, or set

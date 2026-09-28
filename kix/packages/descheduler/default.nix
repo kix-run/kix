@@ -1,4 +1,4 @@
-# Descheduler — evicts pods to rebalance cluster utilization.
+# Descheduler: evicts pods to rebalance cluster utilization.
 #
 # Wraps the upstream Kubernetes Descheduler Helm chart.
 # Runs as a Deployment with periodic descheduling.
@@ -22,7 +22,7 @@ let
   };
 
   defaultValues = {
-    # Deployment mode (not CronJob) — matches live cluster.
+    # Deployment mode (not CronJob), matching the live cluster.
     kind = "Deployment";
     # One replica, and it does not follow the availability level. The
     # descheduler is a background rebalancer whose own downtime is not the

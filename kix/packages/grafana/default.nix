@@ -1,21 +1,21 @@
-# grafana — Grafana observability dashboard.
+# grafana: Grafana observability dashboard.
 #
 # Deployment with optional k8s-sidecar containers for auto-provisioning
 # dashboards and datasources from ConfigMaps/Secrets labeled with
 # grafana_dashboard=1 / grafana_datasource=1.
 #
 # DI deps:
-#   storage ? null          — optional PVC for /var/lib/grafana. When absent,
+#   storage ? null            optional PVC for /var/lib/grafana. When absent,
 #                             an emptyDir is used. Provision via a sibling
 #                             `persistent-volume-claim` instance (immich pattern);
 #                             storage sizing/class stays with the cluster op.
-#   prometheus ? null       — prometheus-operator, for ServiceMonitor creation
-#   prometheusServer ? null — auto-wires Prometheus datasource via out.serviceUrl
-#   alertmanager ? null     — auto-wires Alertmanager datasource via out.serviceUrl
-#   loki ? null             — auto-wires Loki datasource (if out.serviceUrl exists)
+#   prometheus ? null         prometheus-operator, for ServiceMonitor creation
+#   prometheusServer ? null   auto-wires Prometheus datasource via out.serviceUrl
+#   alertmanager ? null       auto-wires Alertmanager datasource via out.serviceUrl
+#   loki ? null               auto-wires Loki datasource (if out.serviceUrl exists)
 #
 # Exposes:
-#   out.serviceUrl — "http://<name>.<ns>.svc.cluster.local:80"
+#   out.serviceUrl: "http://<name>.<ns>.svc.cluster.local:80"
 
 {
   scope,
@@ -121,7 +121,7 @@ in
         };
         datasources = {
           enabled = true;
-          # null = inherit k8s-sidecar default ("the pod's namespace" — kix
+          # null = inherit k8s-sidecar default ("the pod's namespace"; kix
           # also grants cluster-wide RBAC so cross-namespace discovery still
           # works without the env). Set to "ALL" or a specific namespace
           # to override. Matches chart's `sidecar.datasources.searchNamespace`.
@@ -183,7 +183,7 @@ in
     # When `enabled = true && type = "pvc"` and the package isn't already
     # receiving a PVC via the `storage` DI alias, kix emits a sibling PVC
     # and mounts it at `/var/lib/grafana`. The chart's `type = "sts"`
-    # (StatefulSet) path is intentionally not implemented — use the DI
+    # (StatefulSet) path is intentionally not implemented. Use the DI
     # `storage` alias and a sibling persistent-volume-claim instance for
     # that workflow.
     persistence = lib.mkOption {
@@ -424,13 +424,13 @@ in
     {
       self,
       config,
-      # Sibling PVC instance (persistent-volume-claim package). Optional —
+      # Sibling PVC instance (persistent-volume-claim package). Optional:
       # when absent the Deployment falls back to emptyDir (useful for
       # ephemeral/kind clusters).
       storage ? null,
-      # prometheus-operator — for ServiceMonitor creation (alias: "prometheus")
+      # prometheus-operator, for ServiceMonitor creation (alias: "prometheus")
       prometheus ? null,
-      # prometheus server — for datasource URL (alias: "prometheusServer")
+      # prometheus server, for datasource URL (alias: "prometheusServer")
       prometheusServer ? null,
       alertmanager ? null,
       loki ? null,
@@ -521,7 +521,7 @@ in
       # ── Extra mount conversion ──────────────────────────────────────────
       # Names supplied via `extraConfigmapMounts`/`extraSecretMounts`/
       # `envFromSecret*`/`envFromConfigMaps` reference external resources
-      # the package doesn't manage — wrap with `kix.untrackedRef` so the
+      # the package doesn't manage. Wrap with `kix.untrackedRef` so the
       # DI-tracking check passes without forcing every caller to wrap by
       # hand. Users who want a tracked edge to a kix-managed resource can
       # pass the resource's `out.name` directly (already context-bearing,
@@ -890,7 +890,7 @@ in
       };
 
       # When `admin.existingSecret` is set, the user-provided Secret is the
-      # source of truth — kix skips its own Secret resource. Reading
+      # source of truth: kix skips its own Secret resource. Reading
       # `self.secret` in that mode is a programmer error; gate consumers
       # off `useExternalAdminSecret` instead.
       secret =
@@ -907,7 +907,7 @@ in
 
       # Inline PVC, only when persistence is enabled in pvc mode and no DI
       # storage is supplied (DI takes precedence). `existingClaim` skips
-      # this — we mount the user's PVC directly.
+      # this; we mount the user's PVC directly.
       persistencePvc =
         if useInlinePvc then
           scope.mkResource (
@@ -1228,7 +1228,7 @@ in
           mkServiceMonitor {
             name = "${name}-monitor";
             spec = {
-              # ServiceMonitors match SERVICE labels, not pod labels — the
+              # ServiceMonitors match SERVICE labels, not pod labels. The
               # deployment selector never matched the Service and grafana
               # was silently unscraped (caught live on kind, 2026-08-31).
               selector.matchLabels = self.service.out.selector;

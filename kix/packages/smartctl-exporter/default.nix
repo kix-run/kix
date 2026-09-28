@@ -1,4 +1,4 @@
-# Smartctl Exporter — SMART disk health metrics for Prometheus.
+# Smartctl Exporter: SMART disk health metrics for Prometheus.
 #
 # Wraps the upstream prometheus-smartctl-exporter Helm chart.
 # Deployed as a DaemonSet with privileged access to host /dev.

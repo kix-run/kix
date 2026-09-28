@@ -1,7 +1,7 @@
-# ClusterIssuer package — cert-manager ACME issuers.
+# ClusterIssuer package: cert-manager ACME issuers.
 #
 # Creates Let's Encrypt ClusterIssuers using Cloudflare DNS01 challenge
-# validation.  ClusterIssuers are cluster-scoped cert-manager CRDs —
+# validation.  ClusterIssuers are cluster-scoped cert-manager CRDs;
 # certificates in any namespace can reference them.
 #
 # Each issuer is independently configurable (email, secret refs, DNS
@@ -125,7 +125,7 @@
         else if kind == "selfSigned" then
           mkSelfSignedIssuer name issuerCfg
         else
-          throw "cluster-issuers (${name}): unknown issuer kind \"${kind}\" — expected acme | selfSigned";
+          throw "cluster-issuers (${name}): unknown issuer kind \"${kind}\"; expected acme | selfSigned";
 
       issuerResources = lib.mapAttrs mkIssuer config.issuers;
       mainResource = issuerResources.${config.mainIssuer};
@@ -161,7 +161,7 @@
         resource = mainResource;
         requires = lib.attrValues otherResources;
 
-        # Package-level out extensions — exposed via DI as cluster-issuer.out.*
+        # Package-level out extensions, exposed via DI as cluster-issuer.out.*
         out = {
           # Args transformer: adds cert-manager annotation to mkResource input args.
           # Pipe-friendly: `scope.mkResource ({ ... } |> clusterIssuer.out.withCert)`

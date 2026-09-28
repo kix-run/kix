@@ -1,4 +1,4 @@
-# cert-manager webhook — validates and mutates cert-manager resources via admission webhooks.
+# cert-manager webhook: validates and mutates cert-manager resources via admission webhooks.
 
 {
   self,

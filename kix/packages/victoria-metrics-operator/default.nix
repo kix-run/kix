@@ -1,26 +1,26 @@
-# victoria-metrics-operator — VictoriaMetrics operator, the drop-in
+# victoria-metrics-operator: VictoriaMetrics operator, the drop-in
 # monitoring provider behind the `prometheus` alias (v2_discussions/133).
 #
 # Manages operator.victoriametrics.com CRDs (VMCluster, VMAgent, VMAlert,
 # VMAlertmanager, VMServiceScrape, VMPodScrape, VMRule, VMProbe) and
 # natively converts prometheus-operator objects into VM equivalents. This
 # package ships the prometheus-operator compat CRDs (ServiceMonitor,
-# PodMonitor, PrometheusRule, Probe — CRDs only, no second controller) and
+# PodMonitor, PrometheusRule, Probe; CRDs only, no second controller) and
 # exposes the same builder surface as the prometheus-operator package, so
 # every existing kix.monitor call and app-package ServiceMonitor works
 # unchanged when this package holds the `prometheus` alias.
 #
-# Deliberately no cluster:conflictsWith prometheus-operator — mixed
+# Deliberately no cluster:conflictsWith prometheus-operator. Mixed
 # clusters are legitimate; DI ambiguity on the `prometheus` alias is the
 # guard against wiring both at once.
 #
 # Exposes CRD builder functions via `out`:
 #   out.mkServiceMonitor / mkPodMonitor / mkPrometheusRule / mkProbe
-#     — prometheus-operator-compatible CRs (converted by the operator)
+#     prometheus-operator-compatible CRs (converted by the operator)
 #   out.mkVMCluster / mkVMAgent / mkVMAlert / mkVMAlertmanager
-#     — used by the victoria-metrics-{cluster,agent,alert} packages
+#     used by the victoria-metrics-{cluster,agent,alert} packages
 #   out.mkVMServiceScrape / mkVMPodScrape / mkVMRule / mkVMProbe
-#     — native scrape/rule CRs
+#     native scrape/rule CRs
 
 {
   scope,
@@ -88,7 +88,7 @@ in
       description = "Value for --zap-log-level.";
     };
     # Self-monitoring: the operator auto-creates scrapes for its operands
-    # but never for its own Deployment — this emits a VMServiceScrape for
+    # but never for its own Deployment; this emits a VMServiceScrape for
     # the operator's metrics Service.
     metrics = kix.options.monitor;
     # Which prometheus-operator kinds the built-in converter turns into
@@ -135,7 +135,7 @@ in
     # That is right where VictoriaMetrics is the only monitoring stack on
     # the cluster.
     #
-    # "reference" is for a cluster that already has them — prometheus-
+    # "reference" is for a cluster that already has them: prometheus-
     # operator itself, usually installed by Helm. Kix emits an import
     # marker per CRD and waits for it to be Established instead of
     # declaring it. Deploying "declare" onto such a cluster stops on a
@@ -145,7 +145,7 @@ in
     # ServiceMonitor on the cluster, so there is no safe default here to
     # guess: say which cluster you are on.
     #
-    # `out.mkServiceMonitor` and its siblings work the same either way —
+    # `out.mkServiceMonitor` and its siblings work the same either way:
     # mkCRDRef returns the same builders mkCRD does. Choosing "reference"
     # on a cluster that does NOT have the CRDs makes the deploy wait for
     # them and time out, which is the visible failure, preferred over
@@ -247,7 +247,7 @@ in
           resource = self.operatorDeployment;
           requires =
             # Every shipped CRD (deployed in early waves before the operator
-            # starts) — derived, so a new kinds.nix entry is auto-included.
+            # starts), derived so a new kinds.nix entry is auto-included.
             builtins.attrValues self.crds
             # Operator resources
             ++ [
@@ -256,7 +256,7 @@ in
             ]
             ++ lib.optional config.metrics.enabled self.operatorServiceScrape;
 
-          # Expose CRD builders — packages depend on these via DI
+          # Expose CRD builders; packages depend on these via DI
           # Usage: prometheus.out.mkServiceMonitor scope { ... }
           out = {
             inherit (self.crds.serviceMonitors.out) mkCR;
@@ -277,7 +277,7 @@ in
             # Kinds marked indexer-floor-only in kinds.nix (VMScrapeConfig,
             # VMUser, ...) get no builders until a consumer appears.
             # The operator injects its config-reloader sidecar into vmagent /
-            # vmalert / vmalertmanager pods — not in any kix-generated
+            # vmalert / vmalertmanager pods, not in any kix-generated
             # manifest. Default image per upstream internal/config/config.go.
             extraImages = [
               "victoriametrics/operator:config-reloader-${config.image.tag}"

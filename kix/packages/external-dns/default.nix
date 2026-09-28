@@ -150,7 +150,7 @@
     let
       name = scope.instanceName;
 
-      # Selector labels — use static app name (external-dns) not instance name.
+      # Selector labels: use static app name (external-dns) not instance name.
       # This matches the Helm chart convention where all external-dns instances
       # share the same app.kubernetes.io/name.
       edSelectorLabels = {
@@ -221,7 +221,7 @@
             )
             # Kong
             (kong.tcpingresses |> watch)
-            # Extensions, networking.k8s.io, Ambassador — shared ingresses/hosts
+            # Extensions, networking.k8s.io, Ambassador: shared ingresses/hosts
             [
               {
                 apiGroups = [
@@ -282,9 +282,9 @@
             (contour.httpproxies |> watch)
             # OpenShift
             (openshift.routes |> watch)
-            # Zalando routegroups — watch
+            # Zalando routegroups: watch
             (zalando.routegroups |> watch)
-            # Zalando routegroups/status — patch, update
+            # Zalando routegroups/status: patch, update
             (
               zalando "routegroups/status"
               |> allow [
@@ -305,7 +305,7 @@
 
       resolvedAffinity = if config.affinity == { } then null else config.affinity;
 
-      # Build CLI args for the external-dns binary — ordered to match bitnami chart.
+      # Build CLI args for the external-dns binary, ordered to match bitnami chart.
       args = [
         "--metrics-address=:${toString config.metricsPort}"
         "--log-level=${config.logLevel}"

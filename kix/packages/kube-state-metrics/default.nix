@@ -1,4 +1,4 @@
-# kube-state-metrics — Kubernetes object state metrics exporter.
+# kube-state-metrics: Kubernetes object state metrics exporter.
 #
 # Single Deployment that listens to the K8s API server and exposes
 # metrics about the state of objects (pods, deployments, nodes, etc.).
@@ -270,7 +270,7 @@ in
           mkServiceMonitor {
             name = "${name}-monitor";
             spec = {
-              # ServiceMonitors match SERVICE labels, not pod labels — the
+              # ServiceMonitors match SERVICE labels, not pod labels. The
               # deployment selector never matched the Service and this job
               # was silently unscraped (caught live on stage1, 2026-08-31).
               selector.matchLabels = self.service.out.selector;

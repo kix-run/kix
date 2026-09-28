@@ -1,4 +1,4 @@
-# Reflector — emberstack/kubernetes-reflector.
+# Reflector: emberstack/kubernetes-reflector.
 #
 # Copies Secrets/ConfigMaps across namespaces based on annotations on the
 # source. kix uses it as the cross-namespace propagation strategy for

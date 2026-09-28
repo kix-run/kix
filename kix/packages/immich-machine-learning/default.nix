@@ -1,7 +1,7 @@
-# Immich machine-learning worker — kix package.
+# Immich machine-learning worker: kix package.
 #
 # ML inference service for Immich: facial recognition, smart search,
-# duplicate detection. Runs independently — immich-server connects
+# duplicate detection. Runs independently; immich-server connects
 # to it via HTTP.
 #
 # Resources: Deployment, Service, optional PersistentVolumeClaim (model cache).

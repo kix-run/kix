@@ -1,4 +1,4 @@
-# cert-manager startupapicheck — post-install Job that verifies the cert-manager
+# cert-manager startupapicheck: post-install Job that verifies the cert-manager
 # API is responsive (webhook reachable, CRDs registered) before signaling success.
 #
 # Upstream Helm chart runs this as a post-install hook with helm.sh/hook

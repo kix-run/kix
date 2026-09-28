@@ -1,4 +1,4 @@
-# Reloader package — stakater/reloader.
+# Reloader package: stakater/reloader.
 #
 # Watches ConfigMaps and Secrets for changes and triggers rolling
 # restarts on Deployments, DaemonSets, and StatefulSets that

@@ -1,14 +1,14 @@
-# n8n workflow automation platform — kix package.
+# n8n workflow automation platform: kix package.
 #
 # Deploys the n8n main instance (UI/API) and queue workers backed by
 # PostgreSQL (via StackGres) and Valkey (Redis-compatible) for Bull
 # queue processing.
 #
 # Dependencies:
-#   postgres            — required, database
-#   valkey              — required, Redis-compatible queue backend
-#   ingressNginx        — optional, auto-creates ingress when present (+ host is set)
-#   clusterIssuer       — optional, auto-enables TLS when present
+#   postgres              required, database
+#   valkey                required, Redis-compatible queue backend
+#   ingressNginx          optional, auto-creates ingress when present (+ host is set)
+#   clusterIssuer         optional, auto-enables TLS when present
 #
 # Resources: ServiceAccount, ConfigMap (env), Deployment (main),
 # Deployment (worker), Service (web UI), Ingress (optional).
@@ -198,7 +198,7 @@ in
         # --- Secret reference (dependency-tracked) ---
         appSecret = scope.mkSecretRef {
           name = if config.existingSecret != null then config.existingSecret else "${name}-app-secret";
-          keys = [ ]; # keys unknown — external secret, used via envFrom
+          keys = [ ]; # keys unknown: external secret, used via envFrom
         };
 
         # --- ServiceAccount ---
@@ -214,15 +214,15 @@ in
           kind = "ConfigMap";
           name = "${name}-app-config";
           data = {
-            # Database — derived from postgres DI dep
+            # Database: derived from postgres DI dep
             DB_TYPE = config.database.type;
             DB_POSTGRESDB_HOST = postgres.out.fqdn;
             DB_POSTGRESDB_DATABASE = config.database.name;
             DB_POSTGRESDB_USER = config.database.user;
-            # Redis / Queue — derived from valkey DI dep
+            # Redis / Queue: derived from valkey DI dep
             QUEUE_BULL_REDIS_HOST = valkey.out.fqdn;
             QUEUE_BULL_REDIS_PORT = valkey.out.port;
-            # Execution mode — queue mode for workers
+            # Execution mode: queue mode for workers
             EXECUTIONS_MODE = "queue";
             # The root filesystem is read-only, /tmp is an emptyDir and
             # N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES (default true) blocks
@@ -247,7 +247,7 @@ in
           };
         };
 
-        # --- Deployment (main — UI + API) ---
+        # --- Deployment (main: UI + API) ---
         deployment =
           {
             name = "${name}";
@@ -352,7 +352,7 @@ in
           }
           |> scope.mkDeployment;
 
-        # --- Deployment (worker — queue workers) ---
+        # --- Deployment (worker: queue workers) ---
         worker =
           if config.worker.enabled then
             {
