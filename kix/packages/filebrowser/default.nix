@@ -33,6 +33,21 @@ in
         tag = "v2.63.18";
       };
     };
+    # Upstream publishes no chart or resource guidance. An idle instance
+    # holds about 15 MiB; the limits leave room for archive downloads.
+    resources = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        requests = {
+          cpu = "10m";
+          memory = "64Mi";
+        };
+        limits = {
+          cpu = "500m";
+          memory = "256Mi";
+        };
+      };
+    };
     ingress = kix.options.ingress;
   };
 
@@ -54,6 +69,8 @@ in
             spec = {
               replicas = 1;
               selector.matchLabels = scope.selectorLabels;
+              # Kubernetes default: filebrowser documents no shutdown drain.
+              template.spec.terminationGracePeriodSeconds = 30;
               template.spec.containers = [
                 {
                   name = "filebrowser";
@@ -64,7 +81,9 @@ in
                     runAsNonRoot = true;
                     runAsUser = 1000;
                     runAsGroup = 1000;
+                    readOnlyRootFilesystem = true;
                   };
+                  resources = config.resources;
                   ports = [
                     {
                       name = "http";
@@ -91,6 +110,20 @@ in
           }
           |> kix.withMounts [
             (kix.mount.pvc storage { mountPath = "/srv"; })
+            # The image's /init.sh copies settings.json into /config on
+            # start, and those settings put the database in /database.
+            (kix.mount.emptyDir {
+              name = "config";
+              mountPath = "/config";
+            })
+            (kix.mount.emptyDir {
+              name = "database";
+              mountPath = "/database";
+            })
+            (kix.mount.emptyDir {
+              name = "tmp";
+              mountPath = "/tmp";
+            })
           ]
           |> scope.mkDeployment;
 

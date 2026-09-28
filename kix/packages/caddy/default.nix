@@ -156,6 +156,20 @@ in
             };
             template.spec = {
               serviceAccountName = self.serviceAccount.out.name;
+              # Caddy's `grace_period` is unbounded by default, so the
+              # Kubernetes default of 30s is what ends a drain.
+              terminationGracePeriodSeconds = 30;
+              # Caddy listens on 80 and 443 as a non-root user. A custom
+              # build such as the default image may lack the
+              # cap_net_bind_service file capability the official image sets
+              # on /usr/bin/caddy, so the pod lowers the privileged-port
+              # floor (a safe sysctl since Kubernetes 1.22).
+              securityContext.sysctls = [
+                {
+                  name = "net.ipv4.ip_unprivileged_port_start";
+                  value = "0";
+                }
+              ];
               containers = [
                 {
                   name = "caddy";
@@ -194,10 +208,15 @@ in
                     timeoutSeconds = 1;
                   };
                   resources = config.resources;
+                  # The official Caddy image defines no user; uid 65532 is
+                  # the conventional unprivileged `nonroot` id.
                   securityContext = {
+                    runAsNonRoot = true;
+                    runAsUser = 65532;
+                    runAsGroup = 65532;
                     allowPrivilegeEscalation = false;
                     privileged = false;
-                    readOnlyRootFilesystem = false;
+                    readOnlyRootFilesystem = true;
                   };
                   volumeMounts = [
                     {
@@ -212,6 +231,23 @@ in
                       readOnly = true;
                       subPath = "crs-setup.conf";
                     }
+                    # The official image sets XDG_DATA_HOME=/data (certificates,
+                    # OCSP staples, locks) and XDG_CONFIG_HOME=/config (autosaved
+                    # config). Both last as long as the pod.
+                    {
+                      name = "data";
+                      mountPath = "/data";
+                    }
+                    {
+                      name = "config";
+                      mountPath = "/config";
+                    }
+                    # The Coraza WAF configured by crs-setup.conf writes request
+                    # bodies over 128 KiB to os.TempDir(), which is /tmp.
+                    {
+                      name = "tmp";
+                      mountPath = "/tmp";
+                    }
                   ];
                 }
               ];
@@ -222,6 +258,18 @@ in
                     secretName = self.configSecret.out.name;
                     defaultMode = 420;
                   };
+                }
+                {
+                  name = "data";
+                  emptyDir = { };
+                }
+                {
+                  name = "config";
+                  emptyDir = { };
+                }
+                {
+                  name = "tmp";
+                  emptyDir = { };
                 }
               ];
             };

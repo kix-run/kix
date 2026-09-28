@@ -28,7 +28,8 @@ let
     One Deployment per entry. `<name>.image` is optional and takes an image
     record (`{ repository, tag, digest?, pullPolicy? }`, or `pins.get
     "<key>"`) rendered through `kix.image.ref`, or a plain reference string.
-    Unset, the worker runs `backend.image`.
+    Unset, the worker runs `backend.image`. `<name>.securityContext`, if
+    set, replaces `backend.securityContext` for that worker.
   '';
 in
 {
@@ -62,11 +63,11 @@ in
         image = {
           pullPolicy = "IfNotPresent";
         };
-        # The backend and migrate containers run under this. Non-root by
-        # default: an image that must run as root sets `runAsNonRoot =
-        # false` here and declares why.
+        # See the option description: every backend-image container runs
+        # under this.
         securityContext = {
           runAsNonRoot = true;
+          readOnlyRootFilesystem = true;
         };
         # A request server: two replicas once a pod restart must not drop the
         # app, three once a whole zone may go. Defaults from the cluster's
@@ -119,6 +120,19 @@ in
         initContainers = [ ]; # list of init container specs
         topologySpreadConstraints = [ ]; # list of topology spread constraint specs
       };
+      description = ''
+        Backend (Django/Gunicorn) settings. User values deep-merge onto these
+        defaults.
+
+        `backend.securityContext` defaults to `{ runAsNonRoot = true;
+        readOnlyRootFilesystem = true; }` and applies to the backend, the
+        migrate hook, and every queue worker, cron worker and custom process
+        (a worker's own `securityContext` replaces it). Each of those
+        containers gets a writable emptyDir at `/tmp`, where Gunicorn keeps
+        its worker heartbeat files. An app that writes anywhere else sets
+        `backend.securityContext.readOnlyRootFilesystem = false`; setting
+        other `securityContext` fields keeps the read-only root.
+      '';
     };
 
     # Frontend (Next.js)
@@ -313,6 +327,14 @@ in
       default = "100%";
     }; # top-level shortcut applied to backend and worker strategies
 
+    # Gunicorn's `graceful_timeout` defaults to 30s, the time workers get
+    # to finish requests after SIGTERM. Applies to the backend, frontend,
+    # caddy and worker Deployments.
+    terminationGracePeriodSeconds = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = 30;
+    };
+
     # Priority
     priorityClassName = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -430,6 +452,17 @@ in
         readOnly = true;
       }) secretFileNames;
 
+      # Writable /tmp for the containers under `backend.securityContext`,
+      # which makes the root filesystem read-only by default.
+      tmpVolume = {
+        name = "tmp";
+        emptyDir = { };
+      };
+      tmpVolumeMount = {
+        name = "tmp";
+        mountPath = "/tmp";
+      };
+
       # ── Common pod spec fragments ───────────────────────────────────
       # secretNames: list of externally-managed secret names (strings).
       # Each is wrapped in mkSecretRef to create a DI-tracked store path,
@@ -454,6 +487,7 @@ in
         {
           inherit containers;
           volumes = volumes ++ secretVolumes;
+          terminationGracePeriodSeconds = config.terminationGracePeriodSeconds;
         }
         // lib.optionalAttrs (initContainers != [ ]) {
           inherit initContainers;
@@ -524,16 +558,13 @@ in
           name = containerName;
           image = imageRef "backend";
           imagePullPolicy = config.backend.image.pullPolicy;
-          securityContext =
-            config.backend.securityContext or {
-              runAsNonRoot = true;
-            };
+          securityContext = config.backend.securityContext;
           envFrom = mkEnvFrom self.configmap config.backend.secrets;
           ports = [
             (kix.port "http" config.backend.port)
           ]
           ++ config.backend.extraPorts;
-          volumeMounts = secretVolumeMounts;
+          volumeMounts = [ tmpVolumeMount ] ++ secretVolumeMounts;
           resources = config.backend.resources;
         }
         // lib.optionalAttrs (config.backend.command != null) {
@@ -615,6 +646,7 @@ in
           secrets ? null,
           ports ? null,
           probes ? null,
+          securityContext ? null,
         }:
         {
           name = workerName;
@@ -630,8 +662,10 @@ in
               image.pullPolicy or config.backend.image.pullPolicy
             else
               config.backend.image.pullPolicy;
+          securityContext =
+            if securityContext != null then securityContext else config.backend.securityContext;
           envFrom = mkEnvFrom self.configmap (if secrets != null then secrets else config.backend.secrets);
-          volumeMounts = secretVolumeMounts;
+          volumeMounts = [ tmpVolumeMount ] ++ secretVolumeMounts;
           inherit resources;
         }
         // lib.optionalAttrs (command != null) { inherit command; }
@@ -685,6 +719,7 @@ in
           secrets ? null,
           ports ? null,
           probes ? null,
+          securityContext ? null,
         }:
         let
           deployStrategy = if strategy != null then strategy else { rollingUpdate.maxSurge = "100%"; };
@@ -713,9 +748,11 @@ in
                       secrets
                       ports
                       probes
+                      securityContext
                       ;
                   })
                 ];
+                volumes = [ tmpVolume ];
               };
             };
           };
@@ -784,6 +821,7 @@ in
             secrets = wCfg.secrets or null;
             ports = wCfg.ports or null;
             probes = wCfg.probes or null;
+            securityContext = wCfg.securityContext or null;
           };
           hpa = mkWorkerHpa {
             hpaName = wn;
@@ -810,6 +848,7 @@ in
           secrets = wCfg.secrets or null;
           ports = wCfg.ports or null;
           probes = wCfg.probes or null;
+          securityContext = wCfg.securityContext or null;
         };
       }) config.cronWorkers;
 
@@ -833,6 +872,7 @@ in
             secrets = pCfg.secrets or null;
             ports = pCfg.ports or null;
             probes = pCfg.probes or null;
+            securityContext = pCfg.securityContext or null;
           };
           serviceKey = "customProcessService-${pName}";
           containerPort = if pCfg ? ports then (builtins.head pCfg.ports).containerPort else null;
@@ -989,6 +1029,7 @@ in
                   mkPodSpec {
                     containers = [ (mkBackendContainer self) ];
                     initContainers = config.backend.initContainers;
+                    volumes = [ tmpVolume ];
                   }
                   // lib.optionalAttrs (config.backend.topologySpreadConstraints != [ ]) {
                     topologySpreadConstraints = config.backend.topologySpreadConstraints;
@@ -1412,16 +1453,13 @@ in
                       name = "migrate";
                       image = imageRef "backend";
                       imagePullPolicy = config.backend.image.pullPolicy;
-                      securityContext =
-                        config.backend.securityContext or {
-                          runAsNonRoot = true;
-                        };
+                      securityContext = config.backend.securityContext;
                       command = config.hooks.migrate.command;
                       envFrom = mkEnvFrom self.configmap config.backend.secrets;
-                      volumeMounts = secretVolumeMounts;
+                      volumeMounts = [ tmpVolumeMount ] ++ secretVolumeMounts;
                     }
                   ];
-                  volumes = secretVolumes;
+                  volumes = [ tmpVolume ] ++ secretVolumes;
                 };
               };
             };

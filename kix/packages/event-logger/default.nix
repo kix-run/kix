@@ -205,6 +205,13 @@ in
         defaultMode = 493; # 0755
       };
 
+      # `uv run --script` resolves the script's dependencies into its cache
+      # on every start, so the cache lives on a writable emptyDir.
+      tmpMount = kix.mount.emptyDir {
+        name = "tmp";
+        mountPath = "/tmp";
+      };
+
       # --- Deployment ---
       deployment =
         {
@@ -215,6 +222,8 @@ in
             selector.matchLabels = commonLabels;
             template.spec = {
               serviceAccountName = self.serviceAccount.out.name;
+              # Kubernetes default: the watcher holds no state to flush.
+              terminationGracePeriodSeconds = 30;
               containers = [
                 {
                   name = "event-logger";
@@ -223,6 +232,17 @@ in
                   command = [ "/app/k8s_event_logger.py" ];
                   env = kix.mkEnvVars {
                     PYTHONUNBUFFERED = "1";
+                    HOME = "/tmp";
+                    UV_CACHE_DIR = "/tmp/uv-cache";
+                  };
+                  # The uv image defines no user of its own; uid 65532 is
+                  # the conventional unprivileged `nonroot` id.
+                  securityContext = {
+                    runAsNonRoot = true;
+                    runAsUser = 65532;
+                    runAsGroup = 65532;
+                    readOnlyRootFilesystem = true;
+                    allowPrivilegeEscalation = false;
                   };
                   resources = config.resources;
                 }
@@ -230,7 +250,10 @@ in
             };
           };
         }
-        |> kix.withMounts [ self.scriptMount ]
+        |> kix.withMounts [
+          self.scriptMount
+          self.tmpMount
+        ]
         |> scope.mkDeployment;
 
       # --- Entry point ---

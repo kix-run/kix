@@ -37,6 +37,18 @@ Values under `env` are written to the application's environment ConfigMap.
 Use `secretEnv` for values that must be stored in a Kubernetes Secret, or
 `backend.secrets` for names of externally managed Secrets.
 
+The backend, the migrate hook and every worker run as a non-root user with a
+read-only root filesystem. Each container gets a writable `/tmp`, which is
+where Gunicorn keeps its worker heartbeat files. If the application writes
+anywhere else, turn the read-only root off:
+
+```nix
+backend.securityContext.readOnlyRootFilesystem = false;
+```
+
+Other fields you set under `backend.securityContext` are merged with the
+defaults, so they leave the root filesystem read-only.
+
 ## Check the generated resources
 
 Evaluate the cluster before deploying it:

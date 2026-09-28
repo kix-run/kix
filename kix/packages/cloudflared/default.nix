@@ -97,6 +97,9 @@ in
             replicas = config.replicas;
             selector.matchLabels = scope.selectorLabels;
             template.spec = {
+              # Matches cloudflared's `--grace-period` default of 30s, the
+              # time it waits for in-flight requests after SIGTERM.
+              terminationGracePeriodSeconds = 30;
               securityContext = {
                 runAsNonRoot = true;
                 runAsUser = 65532;
@@ -106,6 +109,7 @@ in
                 {
                   inherit name;
                   image = kix.image.ref config.image;
+                  imagePullPolicy = config.image.pullPolicy;
                   args = [
                     "tunnel"
                     "--no-autoupdate"

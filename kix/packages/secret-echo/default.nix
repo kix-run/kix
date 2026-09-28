@@ -81,6 +81,9 @@ in
             replicas = 1;
             selector.matchLabels = scope.selectorLabels;
             template.spec = {
+              # nginx drains open connections on the image's SIGQUIT stop
+              # signal; the Kubernetes default bounds that wait.
+              terminationGracePeriodSeconds = 30;
               containers = [
                 {
                   name = "echo";
@@ -91,7 +94,10 @@ in
                     "/etc/config/entrypoint.sh"
                   ];
                   # nginx-unprivileged runs as uid 101 and listens on 8080.
-                  securityContext.runAsNonRoot = true;
+                  securityContext = {
+                    runAsNonRoot = true;
+                    readOnlyRootFilesystem = true;
+                  };
                   ports = [
                     (kix.port "http" 8080)
                   ];
@@ -100,6 +106,14 @@ in
                     DB_PASSWORD = "password";
                     DB_HOST = "host";
                     DB_PORT = "port";
+                  };
+                  livenessProbe = {
+                    httpGet = {
+                      path = "/healthz";
+                      port = 8080;
+                    };
+                    periodSeconds = 10;
+                    failureThreshold = 3;
                   };
                   readinessProbe = {
                     httpGet = {
@@ -119,6 +133,17 @@ in
                       name = "nginx-conf";
                       mountPath = "/etc/nginx/conf.d";
                       readOnly = true;
+                    }
+                    # The entrypoint writes the page here, and
+                    # nginx-unprivileged keeps its pid file and temp paths
+                    # under /tmp.
+                    {
+                      name = "html";
+                      mountPath = "/usr/share/nginx/html";
+                    }
+                    {
+                      name = "tmp";
+                      mountPath = "/tmp";
                     }
                   ];
                   resources = {
@@ -158,6 +183,14 @@ in
                       }
                     ];
                   };
+                }
+                {
+                  name = "html";
+                  emptyDir = { };
+                }
+                {
+                  name = "tmp";
+                  emptyDir = { };
                 }
               ];
             };

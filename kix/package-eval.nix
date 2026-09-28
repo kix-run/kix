@@ -63,7 +63,6 @@ let
   # Error-severity scorecard rules each package fails, with the file that
   # records why. A housekeeping file may cover several packages.
   knownFailures = {
-    caddy = [ nonRoot ];
     clickhouse-logs = [
       {
         rule = "security.nonRoot";
@@ -71,8 +70,6 @@ let
         reason = "kix/packages/clickhouse-logs/default.nix";
       }
     ];
-    dns-exporter = [ nonRoot ];
-    event-logger = [ nonRoot ];
     loki = [ lokiLabels ];
     metabase = [ nonRoot ];
     # The labels finding comes from the auto-instantiated loki.

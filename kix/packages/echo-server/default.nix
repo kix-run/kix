@@ -107,13 +107,19 @@ in
             replicas = config.replicaCount;
             selector.matchLabels = scope.selectorLabels;
             template.spec = {
+              # nginx drains open connections on the image's SIGQUIT stop
+              # signal; the Kubernetes default bounds that wait.
+              terminationGracePeriodSeconds = 30;
               containers = [
                 {
                   name = "nginx";
                   image = "${config.image.repository}:${config.image.tag}";
                   imagePullPolicy = config.image.pullPolicy;
                   # nginx-unprivileged runs as uid 101 and listens on 8080.
-                  securityContext.runAsNonRoot = true;
+                  securityContext = {
+                    runAsNonRoot = true;
+                    readOnlyRootFilesystem = true;
+                  };
                   ports = [
                     (kix.port "http" 8080)
                   ];
@@ -139,6 +145,12 @@ in
                       mountPath = "/etc/nginx/conf.d";
                       readOnly = true;
                     }
+                    # nginx-unprivileged keeps its pid file and temp paths
+                    # under /tmp.
+                    {
+                      name = "tmp";
+                      mountPath = "/tmp";
+                    }
                   ];
                   resources = {
                     requests = {
@@ -156,6 +168,10 @@ in
                 {
                   name = "config";
                   configMap.name = self.configmap.out.name;
+                }
+                {
+                  name = "tmp";
+                  emptyDir = { };
                 }
               ];
             };

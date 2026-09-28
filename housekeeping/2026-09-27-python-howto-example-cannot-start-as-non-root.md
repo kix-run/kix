@@ -1,0 +1,3 @@
+# 2026-09-27 · `kix-examples/how-to/package-stacks/python-cluster.nix` · The Python how-to example builds a pod the kubelet refuses to start.
+
+The example runs `docker.io/library/python:3.13-slim` through `python-app`, whose `backend.securityContext` sets `runAsNonRoot = true` and no `runAsUser`. The image declares no user, so it runs as uid 0 and the kubelet rejects the container with `CreateContainerConfigError`. The `deploy-a-python-app` guide tells readers to `kix deploy` and `curl` this instance, which cannot work. The example needs a numeric `runAsUser` (or an image with a non-root user). `kix check` passes it because the `nonRoot` rule (`kix/lib/rules/security.nix`) accepts `runAsNonRoot = true` without knowing the image's user.

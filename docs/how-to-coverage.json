@@ -520,7 +520,8 @@
       "offlineCaptures": [
         "how-to/package-python/check",
         "how-to/package-python/workload"
-      ]
+      ],
+      "unverifiedNixBlocks": 1
     },
     {
       "page": "package-task-guides/deploy-stackgres",
