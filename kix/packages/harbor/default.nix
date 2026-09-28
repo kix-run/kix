@@ -328,6 +328,19 @@ in
 
     ingress = kix.options.ingress;
 
+    caBundleSecretName = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Name of an existing Secret in the instance's namespace whose `ca.crt`
+        key holds extra CA certificates (PEM) for core, jobservice, registry,
+        registryctl and the exporter to trust: a registry replicated from, an
+        OIDC provider, or a database behind a private CA. Mounted at
+        /harbor_cust_cert/custom-ca.crt, as the upstream chart's
+        `caBundleSecretName` does.
+      '';
+    };
+
     secrets = {
       source = lib.mkOption {
         type = lib.types.nullOr lib.types.path;
@@ -432,9 +445,44 @@ in
           allowPrivilegeEscalation = false;
           capabilities.drop = [ "ALL" ];
           privileged = false;
+          # Each container mounts an emptyDir at every path it writes: /tmp,
+          # plus /etc/core/ca and /etc/core/token for core and /var/log/jobs
+          # for jobservice. The Photon images' entrypoints run install_cert.sh first, which
+          # appends /etc/harbor/ssl/*/ca.crt (internal TLS, which this
+          # package does not configure) and /harbor_cust_cert/* to
+          # /etc/pki/tls/certs/ca-bundle.crt in the image. Each container's
+          # `command` and `args` are the exec line of its v2.12.2 entrypoint
+          # script instead, and `caTrustEnv` has the Go binaries read
+          # /harbor_cust_cert directly.
+          readOnlyRootFilesystem = true;
           runAsNonRoot = true;
           seccompProfile.type = "RuntimeDefault";
         };
+        # Go's crypto/x509 on Linux reads the first bundle file it finds
+        # (/etc/pki/tls/certs/ca-bundle.crt on Photon) plus every file in
+        # each SSL_CERT_DIR directory. The first two entries are Go's
+        # defaults; a directory that does not exist is skipped. Every
+        # component this applies to is a Go binary (harbor v2.12.2 builds
+        # with Go 1.23).
+        caTrustEnv = kix.mkEnvVars {
+          SSL_CERT_DIR = "/etc/ssl/certs:/etc/pki/tls/certs:/harbor_cust_cert";
+        };
+        caBundleMount =
+          if self.caBundle == null then
+            null
+          else
+            kix.mount.secret self.caBundle {
+              name = "ca-bundle-certs";
+              mountPath = "/harbor_cust_cert/custom-ca.crt";
+              subPath = "ca.crt";
+            };
+
+        tmpMount =
+          name:
+          kix.mount.emptyDir {
+            inherit name;
+            mountPath = "/tmp";
+          };
 
         harborPodDefaults = {
           securityContext = {
@@ -490,6 +538,15 @@ in
         # ============================================================
         # Secrets
         # ============================================================
+
+        caBundle =
+          if config.caBundleSecretName == null then
+            null
+          else
+            scope.mkSecretRef {
+              name = config.caBundleSecretName;
+              keys = [ "ca.crt" ];
+            };
 
         credentials = builtins.seq _secretsCheck (
           scope.mkSecret {
@@ -601,6 +658,7 @@ in
                   {
                     name = "core";
                     image = kix.image.ref config.core.image;
+                    command = [ "/harbor/harbor_core" ];
                     imagePullPolicy = config.core.image.pullPolicy;
                     livenessProbe = coreProbe;
                     readinessProbe = coreProbe;
@@ -624,7 +682,8 @@ in
                       ++ kix.mkEnvVars {
                         _REDIS_URL_CORE = "${redisUrl 0}?idle_timeout_seconds=30";
                         _REDIS_URL_REG = "${redisUrl 2}?idle_timeout_seconds=30";
-                      };
+                      }
+                      ++ caTrustEnv;
                     ports = [ (kix.port "http" 8080) ] ++ metricsContainerPort;
                     resources = config.core.resources;
                     securityContext = containerSecurityContext;
@@ -677,6 +736,8 @@ in
               name = "psc";
               mountPath = "/etc/core/token";
             })
+            (tmpMount "tmp")
+            caBundleMount
           ]
           |> scope.mkDeployment;
 
@@ -780,6 +841,8 @@ in
               mountPath = "/etc/nginx/nginx.conf";
               subPath = "nginx.conf";
             })
+            # nginx.conf puts the pid file and every temp path under /tmp.
+            (tmpMount "tmp")
           ]
           |> scope.mkDeployment;
 
@@ -897,7 +960,8 @@ in
                 (
                   valkey.out.authSecret.out.keyRef valkey.out.authPasswordKey // { name = "REGISTRY_REDIS_PASSWORD"; }
                 )
-              ];
+              ]
+              ++ caTrustEnv;
           in
           {
             name = "${name}-registry";
@@ -921,6 +985,11 @@ in
                   {
                     name = "registry";
                     image = kix.image.ref config.registry.image;
+                    command = [ "/usr/bin/registry_DO_NOT_USE_GC" ];
+                    args = [
+                      "serve"
+                      "/etc/registry/config.yml"
+                    ];
                     imagePullPolicy = config.registry.image.pullPolicy;
                     ports = [ (kix.port "registry" 5000) ] ++ metricsContainerPort;
                     livenessProbe = registryProbe // {
@@ -936,6 +1005,11 @@ in
                   {
                     name = "registryctl";
                     image = kix.image.ref config.registryctl.image;
+                    command = [ "/home/harbor/harbor_registryctl" ];
+                    args = [
+                      "-c"
+                      "/etc/registryctl/config.yml"
+                    ];
                     imagePullPolicy = config.registryctl.image.pullPolicy;
                     ports = [ (kix.port "registryctl" 8080) ];
                     livenessProbe = registryCtlProbe // {
@@ -965,7 +1039,12 @@ in
                         name = self.registryDataMount.name;
                         mountPath = "/storage";
                       }
-                    ];
+                    ]
+                    # The registry container's withMountsOn below adds the
+                    # volume itself.
+                    ++ lib.optional (caBundleMount != null) {
+                      inherit (caBundleMount) name mountPath subPath;
+                    };
                     resources = config.registryctl.resources;
                     securityContext = containerSecurityContext;
                   }
@@ -988,7 +1067,10 @@ in
               defaultMode = 420;
             })
             self.registryDataMount
+            (tmpMount "registry-tmp")
+            caBundleMount
           ]
+          |> kix.withMountsOn "registryctl" [ (tmpMount "registryctl-tmp") ]
           |> scope.mkDeployment;
 
         # ============================================================
@@ -1103,6 +1185,11 @@ in
                   {
                     name = "jobservice";
                     image = kix.image.ref config.jobservice.image;
+                    command = [ "/harbor/harbor_jobservice" ];
+                    args = [
+                      "-c"
+                      "/etc/jobservice/config.yml"
+                    ];
                     imagePullPolicy = config.jobservice.image.pullPolicy;
                     ports = [ (kix.port "http" 8080) ] ++ metricsContainerPort;
                     livenessProbe = jobserviceProbe // {
@@ -1132,7 +1219,8 @@ in
                         POSTGRESQL_DATABASE = database.out.database;
                         POSTGRESQL_SSLMODE = config.database.sslmode;
                         JOB_SERVICE_POOL_REDIS_URL = redisUrl 1;
-                      };
+                      }
+                      ++ caTrustEnv;
                     resources = config.jobservice.resources;
                     securityContext = containerSecurityContext;
                   }
@@ -1152,6 +1240,8 @@ in
               name = "job-logs";
               mountPath = "/var/log/jobs";
             })
+            (tmpMount "tmp")
+            caBundleMount
           ]
           |> scope.mkDeployment;
 
@@ -1225,6 +1315,7 @@ in
                       name = "exporter";
                       image = kix.image.ref config.exporter.image;
                       imagePullPolicy = config.exporter.image.pullPolicy;
+                      command = [ "/harbor/harbor_exporter" ];
                       args = [
                         "-log-level"
                         "info"
@@ -1241,7 +1332,8 @@ in
                         (self.credentials.out.mkEnv { HARBOR_ADMIN_PASSWORD = "adminPassword"; })
                         ++ (database.out.credentials.out.mkEnv { HARBOR_DATABASE_PASSWORD = "password"; })
                         ++ redisPasswordEnv
-                        ++ kix.mkEnvVars { HARBOR_REDIS_URL = redisUrl 1; };
+                        ++ kix.mkEnvVars { HARBOR_REDIS_URL = redisUrl 1; }
+                        ++ caTrustEnv;
                       resources = config.exporter.resources;
                       securityContext = containerSecurityContext;
                     }
@@ -1249,6 +1341,10 @@ in
                 };
               };
             }
+            |> kix.withMounts [
+              (tmpMount "tmp")
+              caBundleMount
+            ]
             |> scope.mkDeployment;
 
         # ============================================================

@@ -116,6 +116,82 @@ let
     }
   ];
 
+  # The openebs chart (4.2.0) sets no terminationGracePeriodSeconds except on
+  # NATS; the rest get Kubernetes' default, set explicitly.
+  terminationGracePeriodSeconds = 30;
+
+  # Resources where the chart (4.2.0) sets none. The lvm-localpv and
+  # zfs-localpv charts suggest requests of 10m and 32Mi in their values.yaml;
+  # the limits are a judgement. On kind the CSI sidecars and the ZFS and LVM
+  # plugins held 5 to 14 MiB idle.
+  csiContainerResources = {
+    requests = {
+      cpu = "10m";
+      memory = "32Mi";
+    };
+    limits = {
+      cpu = "200m";
+      memory = "128Mi";
+    };
+  };
+  # The ZFS and LVM node plugins run zfs and lvm commands for each volume
+  # operation, so they get more headroom than the sidecars.
+  nodePluginResources = {
+    requests = {
+      cpu = "10m";
+      memory = "32Mi";
+    };
+    limits = {
+      cpu = "500m";
+      memory = "256Mi";
+    };
+  };
+  # The init containers wait in a shell loop (`nc`, a sysfs check) or run
+  # one `chown`.
+  initResources = {
+    requests = {
+      cpu = "10m";
+      memory = "16Mi";
+    };
+    limits = {
+      cpu = "100m";
+      memory = "32Mi";
+    };
+  };
+  # NATS keeps JetStream in a 5Mi memory store (mayastor chart 2.8.0); it
+  # held about 8 MiB idle on kind.
+  natsResources = {
+    requests = {
+      cpu = "10m";
+      memory = "32Mi";
+    };
+    limits = {
+      cpu = "500m";
+      memory = "128Mi";
+    };
+  };
+  natsSidecarResources = {
+    requests = {
+      cpu = "10m";
+      memory = "16Mi";
+    };
+    limits = {
+      cpu = "100m";
+      memory = "64Mi";
+    };
+  };
+  # The localpv-provisioner chart's commented example (4.2.0).
+  localPvResources = {
+    requests = {
+      cpu = "100m";
+      memory = "128Mi";
+    };
+    limits = {
+      cpu = "100m";
+      memory = "128Mi";
+    };
+  };
+
   # --- RBAC DSL ---
   inherit (scope.rbac)
     group
@@ -1192,6 +1268,7 @@ in
                   "openebs.io/logging" = "true";
                 };
                 spec = {
+                  inherit terminationGracePeriodSeconds;
                   securityContext = {
                     fsGroup = 1001;
                   };
@@ -1200,6 +1277,8 @@ in
                       name = "volume-permissions";
                       image = config.mayastor.image.alpineBash;
                       imagePullPolicy = "IfNotPresent";
+                      resources = initResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       command = [
                         "/bin/bash"
                         "-ec"
@@ -1219,8 +1298,27 @@ in
                       name = "etcd";
                       image = config.mayastor.etcd.image;
                       imagePullPolicy = "IfNotPresent";
+                      # The bitnami etcd chart sets none (8.6.0, which mayastor
+                      # pins); the limits are a judgement for Mayastor's small
+                      # keyspace.
+                      resources = {
+                        requests = {
+                          cpu = "100m";
+                          memory = "128Mi";
+                        };
+                        limits = {
+                          cpu = "1";
+                          memory = "512Mi";
+                        };
+                      };
+                      # The image's setup scripts write to /tmp and, when
+                      # ETCD_CFG_* variables are set, to
+                      # /opt/bitnami/etcd/conf; everything else goes to the
+                      # data volume. Later bitnami etcd charts mount emptyDirs
+                      # at the same two paths for a read-only root.
                       securityContext = {
                         allowPrivilegeEscalation = false;
+                        readOnlyRootFilesystem = true;
                         runAsNonRoot = true;
                         runAsUser = 1001;
                       };
@@ -1367,7 +1465,25 @@ in
                           name = "data";
                           mountPath = "/bitnami/etcd";
                         }
+                        {
+                          name = "tmp";
+                          mountPath = "/tmp";
+                        }
+                        {
+                          name = "conf";
+                          mountPath = "/opt/bitnami/etcd/conf";
+                        }
                       ];
+                    }
+                  ];
+                  volumes = [
+                    {
+                      name = "tmp";
+                      emptyDir = { };
+                    }
+                    {
+                      name = "conf";
+                      emptyDir = { };
                     }
                   ];
                 };
@@ -1614,12 +1730,18 @@ in
                       name = "pid";
                       emptyDir = { };
                     }
+                    {
+                      name = "tmp";
+                      emptyDir = { };
+                    }
                   ];
                   containers = [
                     {
                       name = "nats";
                       image = config.mayastor.nats.image;
                       imagePullPolicy = "IfNotPresent";
+                      resources = natsResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       command = [
                         "nats-server"
                         "--config"
@@ -1666,6 +1788,12 @@ in
                           name = "pid";
                           mountPath = "/var/run/nats";
                         }
+                        # JetStream creates its store directory, /tmp/nats,
+                        # even with a memory-only store.
+                        {
+                          name = "tmp";
+                          mountPath = "/tmp";
+                        }
                       ];
                       livenessProbe = {
                         httpGet = {
@@ -1706,6 +1834,8 @@ in
                       name = "reloader";
                       image = config.mayastor.nats.reloaderImage;
                       imagePullPolicy = "IfNotPresent";
+                      resources = natsSidecarResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       command = [
                         "nats-server-config-reloader"
                         "-pid"
@@ -1728,6 +1858,8 @@ in
                       name = "metrics";
                       image = config.mayastor.nats.exporterImage;
                       imagePullPolicy = "IfNotPresent";
+                      resources = natsSidecarResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "-connz"
                         "-routez"
@@ -1809,6 +1941,7 @@ in
                   "openebs.io/logging" = "true";
                 };
                 spec = {
+                  inherit terminationGracePeriodSeconds;
                   serviceAccount = self.mayastorSa;
                   priorityClassName = self.priorityClass.out.name;
                   nodeSelector = {
@@ -1820,6 +1953,8 @@ in
                       name = "etcd-probe";
                       image = config.mayastor.image.alpineSh;
                       imagePullPolicy = "IfNotPresent";
+                      resources = initResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       command = [
                         "sh"
                         "-c"
@@ -1832,6 +1967,7 @@ in
                       name = "agent-core";
                       image = config.mayastor.image.agentCore;
                       imagePullPolicy = "IfNotPresent";
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--store=${self.etcdService.out.name}:2379"
                         "--request-timeout=5s"
@@ -1876,6 +2012,7 @@ in
                       name = "agent-ha-cluster";
                       image = config.mayastor.image.agentHaCluster;
                       imagePullPolicy = "IfNotPresent";
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "-g=[::]:50052"
                         "--store=http://${self.etcdService.out.name}:2379"
@@ -1971,6 +2108,7 @@ in
                   "openebs.io/logging" = "true";
                 };
                 spec = {
+                  inherit terminationGracePeriodSeconds;
                   priorityClassName = self.priorityClass.out.name;
                   nodeSelector = {
                     "kubernetes.io/arch" = "amd64";
@@ -1981,6 +2119,8 @@ in
                       name = "agent-core-grpc-probe";
                       image = config.mayastor.image.alpineSh;
                       imagePullPolicy = "IfNotPresent";
+                      resources = initResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       command = [
                         "sh"
                         "-c"
@@ -1991,6 +2131,8 @@ in
                       name = "etcd-probe";
                       image = config.mayastor.image.alpineSh;
                       imagePullPolicy = "IfNotPresent";
+                      resources = initResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       command = [
                         "sh"
                         "-c"
@@ -2003,6 +2145,7 @@ in
                       name = "api-rest";
                       image = config.mayastor.image.apiRest;
                       imagePullPolicy = "IfNotPresent";
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--dummy-certificates"
                         "--no-auth"
@@ -2080,6 +2223,7 @@ in
                   "openebs.io/logging" = "true";
                 };
                 spec = {
+                  inherit terminationGracePeriodSeconds;
                   serviceAccount = self.mayastorSa;
                   priorityClassName = self.priorityClass.out.name;
                   nodeSelector = {
@@ -2091,6 +2235,8 @@ in
                       name = "agent-core-grpc-probe";
                       image = config.mayastor.image.alpineSh;
                       imagePullPolicy = "IfNotPresent";
+                      resources = initResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       command = [
                         "sh"
                         "-c"
@@ -2101,6 +2247,8 @@ in
                       name = "etcd-probe";
                       image = config.mayastor.image.alpineSh;
                       imagePullPolicy = "IfNotPresent";
+                      resources = initResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       command = [
                         "sh"
                         "-c"
@@ -2113,6 +2261,7 @@ in
                       name = "operator-diskpool";
                       image = config.mayastor.image.operatorDiskpool;
                       imagePullPolicy = "IfNotPresent";
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "-e http://${self.apiRestService.out.name}:8081"
                         "-n${ns}"
@@ -2170,6 +2319,7 @@ in
                   "openebs.io/logging" = "true";
                 };
                 spec = {
+                  inherit terminationGracePeriodSeconds;
                   hostNetwork = true;
                   serviceAccount = self.mayastorSa;
                   dnsPolicy = "ClusterFirstWithHostNet";
@@ -2183,6 +2333,8 @@ in
                       name = "api-rest-probe";
                       image = config.mayastor.image.alpineSh;
                       imagePullPolicy = "IfNotPresent";
+                      resources = initResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       command = [
                         "sh"
                         "-c"
@@ -2195,6 +2347,8 @@ in
                       name = "csi-provisioner";
                       image = config.mayastor.csiController.csiProvisioner;
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--v=2"
                         "--csi-address=$(ADDRESS)"
@@ -2223,6 +2377,8 @@ in
                       name = "csi-attacher";
                       image = config.mayastor.csiController.csiAttacher;
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--v=2"
                         "--timeout=36s"
@@ -2245,6 +2401,8 @@ in
                       name = "csi-snapshotter";
                       image = config.mayastor.csiController.csiSnapshotter;
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--v=2"
                         "--csi-address=$(ADDRESS)"
@@ -2266,6 +2424,8 @@ in
                       name = "csi-snapshot-controller";
                       image = config.mayastor.csiController.snapshotController;
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--v=2"
                         "--leader-election=false"
@@ -2276,6 +2436,8 @@ in
                       name = "csi-resizer";
                       image = config.mayastor.csiController.csiResizer;
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--v=2"
                         "--csi-address=$(ADDRESS)"
@@ -2298,6 +2460,7 @@ in
                       name = "csi-controller";
                       image = config.mayastor.image.csiController;
                       imagePullPolicy = "IfNotPresent";
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--csi-socket=/var/lib/csi/sockets/pluginproxy/csi.sock"
                         "--rest-endpoint=http://${self.apiRestService.out.name}:8081"
@@ -2366,6 +2529,7 @@ in
                   "openebs.io/logging" = "true";
                 };
                 spec = {
+                  inherit terminationGracePeriodSeconds;
                   serviceAccount = self.mayastorSa;
                   hostNetwork = true;
                   dnsPolicy = "ClusterFirstWithHostNet";
@@ -2374,6 +2538,8 @@ in
                     {
                       name = "nvme-tcp-probe";
                       image = config.mayastor.image.alpineSh;
+                      resources = initResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       command = [
                         "sh"
                         "-c"
@@ -2461,6 +2627,7 @@ in
                       name = "csi-driver-registrar";
                       image = config.mayastor.csiNodeRegistrar;
                       imagePullPolicy = "IfNotPresent";
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--csi-address=/csi/csi.sock"
                         "--kubelet-registration-path=/var/lib/kubelet/plugins/io.openebs.mayastor/csi.sock"
@@ -2563,6 +2730,7 @@ in
                   "openebs.io/logging" = "true";
                 };
                 spec = {
+                  inherit terminationGracePeriodSeconds;
                   hostNetwork = true;
                   dnsPolicy = "ClusterFirstWithHostNet";
                   nodeSelector = {
@@ -2574,6 +2742,8 @@ in
                       name = "agent-core-grpc-probe";
                       image = config.mayastor.image.alpineSh;
                       imagePullPolicy = "IfNotPresent";
+                      resources = initResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       command = [
                         "sh"
                         "-c"
@@ -2584,6 +2754,8 @@ in
                       name = "etcd-probe";
                       image = config.mayastor.image.alpineSh;
                       imagePullPolicy = "IfNotPresent";
+                      resources = initResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       command = [
                         "sh"
                         "-c"
@@ -2596,6 +2768,8 @@ in
                       name = "metrics-exporter-io-engine";
                       image = config.mayastor.image.metricsExporter;
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       env = [
                         {
                           name = "MY_NODE_NAME";
@@ -2800,6 +2974,7 @@ in
                   "openebs.io/logging" = "true";
                 };
                 spec = {
+                  inherit terminationGracePeriodSeconds;
                   hostNetwork = true;
                   dnsPolicy = "ClusterFirstWithHostNet";
                   nodeSelector = nodeAgentSelector;
@@ -2808,6 +2983,8 @@ in
                       name = "agent-cluster-grpc-probe";
                       image = config.mayastor.image.alpineSh;
                       imagePullPolicy = "IfNotPresent";
+                      resources = initResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       command = [
                         "sh"
                         "-c"
@@ -3077,6 +3254,7 @@ in
                   "openebs.io/version" = zfsVersion;
                 };
                 spec = {
+                  inherit terminationGracePeriodSeconds;
                   serviceAccount = self.zfsControllerSa;
                   priorityClassName = self.zfsControllerPriorityClass.out.name;
                   containers = [
@@ -3084,6 +3262,8 @@ in
                       name = "csi-provisioner";
                       image = config.zfsLocalPv.csiProvisioner;
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--csi-address=$(ADDRESS)"
                         "--v=5"
@@ -3118,6 +3298,8 @@ in
                       name = "csi-resizer";
                       image = "registry.k8s.io/sig-storage/csi-resizer:v1.8.0";
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--v=5"
                         "--csi-address=$(ADDRESS)"
@@ -3139,6 +3321,8 @@ in
                       name = "csi-snapshotter";
                       image = "registry.k8s.io/sig-storage/csi-snapshotter:v6.2.2";
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--csi-address=$(ADDRESS)"
                       ];
@@ -3159,6 +3343,8 @@ in
                       name = "snapshot-controller";
                       image = "registry.k8s.io/sig-storage/snapshot-controller:v6.2.2";
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--v=5"
                       ];
@@ -3167,6 +3353,8 @@ in
                       name = "openebs-zfs-plugin";
                       image = "openebs/zfs-driver:${zfsVersion}";
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--endpoint=$(OPENEBS_CSI_ENDPOINT)"
                         "--plugin=$(OPENEBS_CONTROLLER_DRIVER)"
@@ -3247,6 +3435,7 @@ in
                   "openebs.io/version" = zfsVersion;
                 };
                 spec = {
+                  inherit terminationGracePeriodSeconds;
                   serviceAccount = self.zfsNodeSa;
                   hostNetwork = true;
                   priorityClassName = self.zfsNodePriorityClass.out.name;
@@ -3255,6 +3444,8 @@ in
                       name = "csi-node-driver-registrar";
                       image = "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.8.0";
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--v=5"
                         "--csi-address=$(ADDRESS)"
@@ -3298,6 +3489,7 @@ in
                       name = "openebs-zfs-plugin";
                       image = "openebs/zfs-driver:${zfsVersion}";
                       imagePullPolicy = "IfNotPresent";
+                      resources = nodePluginResources;
                       securityContext = {
                         privileged = true;
                         allowPrivilegeEscalation = true;
@@ -3528,6 +3720,7 @@ in
                   "openebs.io/version" = lvmVersion;
                 };
                 spec = {
+                  inherit terminationGracePeriodSeconds;
                   serviceAccount = self.lvmControllerSa;
                   priorityClassName = self.lvmControllerPriorityClass.out.name;
                   containers = [
@@ -3535,6 +3728,8 @@ in
                       name = "csi-provisioner";
                       image = config.lvmLocalPv.csiProvisioner;
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--csi-address=$(ADDRESS)"
                         "--v=5"
@@ -3569,6 +3764,8 @@ in
                       name = "csi-resizer";
                       image = "registry.k8s.io/sig-storage/csi-resizer:v1.8.0";
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--v=5"
                         "--csi-address=$(ADDRESS)"
@@ -3590,6 +3787,8 @@ in
                       name = "csi-snapshotter";
                       image = "registry.k8s.io/sig-storage/csi-snapshotter:v6.2.2";
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--csi-address=$(ADDRESS)"
                       ];
@@ -3610,6 +3809,8 @@ in
                       name = "snapshot-controller";
                       image = "registry.k8s.io/sig-storage/snapshot-controller:v6.2.2";
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--v=5"
                       ];
@@ -3618,6 +3819,8 @@ in
                       name = "openebs-lvm-plugin";
                       image = "openebs/lvm-driver:${lvmVersion}";
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--endpoint=$(OPENEBS_CSI_ENDPOINT)"
                         "--kube-api-burst=0"
@@ -3700,6 +3903,7 @@ in
                   "openebs.io/version" = lvmVersion;
                 };
                 spec = {
+                  inherit terminationGracePeriodSeconds;
                   serviceAccount = self.lvmNodeSa;
                   priorityClassName = self.lvmNodePriorityClass.out.name;
                   containers = [
@@ -3707,6 +3911,8 @@ in
                       name = "csi-node-driver-registrar";
                       image = "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.8.0";
                       imagePullPolicy = "IfNotPresent";
+                      resources = csiContainerResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--v=5"
                         "--csi-address=$(ADDRESS)"
@@ -3750,6 +3956,7 @@ in
                       name = "openebs-lvm-plugin";
                       image = "openebs/lvm-driver:${lvmVersion}";
                       imagePullPolicy = "IfNotPresent";
+                      resources = nodePluginResources;
                       securityContext = {
                         privileged = true;
                         allowPrivilegeEscalation = true;
@@ -3913,6 +4120,7 @@ in
                   "openebs.io/component-name" = "${name}-localpv-provisioner";
                 };
                 spec = {
+                  inherit terminationGracePeriodSeconds;
                   serviceAccount = self.localPvSa;
                   tolerations = controlPlaneTolerations;
                   containers = [
@@ -3920,6 +4128,8 @@ in
                       name = "openebs-localpv-provisioner";
                       image = config.localPvProvisioner.image;
                       imagePullPolicy = "IfNotPresent";
+                      resources = localPvResources;
+                      securityContext.readOnlyRootFilesystem = true;
                       env = [
                         {
                           name = "LEADER_ELECTION_ENABLED";
@@ -3971,6 +4181,19 @@ in
                         initialDelaySeconds = 30;
                         periodSeconds = 60;
                       };
+                      # The provisioner writes its glog files to /tmp.
+                      volumeMounts = [
+                        {
+                          name = "tmp";
+                          mountPath = "/tmp";
+                        }
+                      ];
+                    }
+                  ];
+                  volumes = [
+                    {
+                      name = "tmp";
+                      emptyDir = { };
                     }
                   ];
                 };
@@ -4108,6 +4331,7 @@ in
                   "openebs.io/logging" = "true";
                 };
                 spec = {
+                  inherit terminationGracePeriodSeconds;
                   serviceAccount = self.mayastorSa;
                   imagePullSecrets = null;
                   nodeSelector = {
@@ -4117,6 +4341,15 @@ in
                     {
                       name = "obs-callhome";
                       image = "docker.io/openebs/mayastor-obs-callhome:v2.8.0";
+                      securityContext.readOnlyRootFilesystem = true;
+                      # Each report is encrypted through a temporary file in
+                      # /encryption_dir.
+                      volumeMounts = [
+                        {
+                          name = "encryption-dir";
+                          mountPath = "/encryption_dir";
+                        }
+                      ];
                       args = [
                         "-e http://${self.apiRestService.out.name}:8081"
                         "-n ${ns}"
@@ -4144,6 +4377,7 @@ in
                     {
                       name = "obs-callhome-stats";
                       image = "docker.io/openebs/mayastor-obs-callhome-stats:v2.8.0";
+                      securityContext.readOnlyRootFilesystem = true;
                       args = [
                         "--namespace=${ns}"
                         "--release-name=${name}"
@@ -4175,6 +4409,12 @@ in
                           memory = "16Mi";
                         };
                       };
+                    }
+                  ];
+                  volumes = [
+                    {
+                      name = "encryption-dir";
+                      emptyDir = { };
                     }
                   ];
                 };

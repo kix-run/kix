@@ -61,6 +61,18 @@ in
         {
           name = "velero-plugin-for-aws";
           image = "velero/velero-plugin-for-aws:v1.11.1";
+          # The chart leaves init container resources to the user. The
+          # container copies one plugin binary into /target and exits.
+          resources = {
+            requests = {
+              cpu = "10m";
+              memory = "32Mi";
+            };
+            limits = {
+              cpu = "100m";
+              memory = "64Mi";
+            };
+          };
           volumeMounts = [
             {
               name = "plugins";
@@ -89,8 +101,18 @@ in
     };
     nodeAgent = lib.mkOption {
       type = lib.types.anything;
+      # The requests are the velero chart's (8.3.0) example for
+      # `nodeAgent.resources`. There are no default limits: velero's
+      # customize-installation docs (v1.15) leave node-agent unbounded so
+      # backups and restores are not throttled or OOM-killed. Set
+      # `nodeAgent.resources.limits` to bound it.
       default = {
-        resources = { };
+        resources = {
+          requests = {
+            cpu = "500m";
+            memory = "512Mi";
+          };
+        };
       };
     };
     resources = lib.mkOption {
@@ -205,6 +227,20 @@ in
       ]
       ++ lib.optional (config.features != "") "--features=${config.features}";
 
+      # The chart's `livenessProbe` and `readinessProbe` defaults (8.3.0).
+      metricsProbe = {
+        httpGet = {
+          path = "/metrics";
+          port = "http-monitoring";
+          scheme = "HTTP";
+        };
+        initialDelaySeconds = 10;
+        periodSeconds = 30;
+        timeoutSeconds = 5;
+        failureThreshold = 5;
+        successThreshold = 1;
+      };
+
       # Credential env vars shared by server and node-agent
       credentialEnvVars = lib.optionals hasCredentials [
         {
@@ -224,6 +260,21 @@ in
           value = "/credentials/cloud";
         }
       ];
+
+      # The root filesystem is read-only, so kopia's writes go to the /scratch
+      # emptyDir. Velero v1.15.2 keeps the repository config at
+      # $HOME/udmrepo (pkg/repository/udmrepo/repo_options.go,
+      # getRepoConfigFile) and leaves kopia's cache directory unset, which
+      # kopia resolves to os.UserCacheDir(), $HOME/.cache/kopia
+      # (repo/caching.go). Velero's other writes outside the backed-up
+      # volumes go to /tmp (temp files, the credentials file store) or
+      # /scratch (restic's cache). Repository maintenance Jobs and data
+      # mover pods copy this env and the volumes from the server and
+      # node-agent pod specs.
+      kopiaHomeEnvVar = {
+        name = "HOME";
+        value = "/scratch";
+      };
 
       # --- Schedule CRs (built in let so they can be spread into self) ---
       scheduleResources = lib.mapAttrs (
@@ -429,10 +480,15 @@ in
               serviceAccount = self.serviceAccount;
               automountServiceAccountToken = true;
               terminationGracePeriodSeconds = 3600;
-              initContainers = map (ic: {
-                inherit (ic) name image volumeMounts;
-                imagePullPolicy = config.image.pullPolicy;
-              }) config.initContainers;
+              initContainers = map (
+                ic:
+                {
+                  inherit (ic) name image volumeMounts;
+                  imagePullPolicy = config.image.pullPolicy;
+                  securityContext.readOnlyRootFilesystem = true;
+                }
+                // lib.optionalAttrs (ic ? resources) { inherit (ic) resources; }
+              ) config.initContainers;
               containers = [
                 {
                   name = "velero";
@@ -456,6 +512,7 @@ in
                       name = "VELERO_SCRATCH_DIR";
                       value = "/scratch";
                     }
+                    kopiaHomeEnvVar
                   ];
                   ports = [
                     {
@@ -464,31 +521,13 @@ in
                       protocol = "TCP";
                     }
                   ];
-                  livenessProbe = {
-                    httpGet = {
-                      path = "/metrics";
-                      port = "http-monitoring";
-                      scheme = "HTTP";
-                    };
-                    initialDelaySeconds = 10;
-                    periodSeconds = 30;
-                    timeoutSeconds = 5;
-                    failureThreshold = 5;
-                    successThreshold = 1;
-                  };
-                  readinessProbe = {
-                    httpGet = {
-                      path = "/metrics";
-                      port = "http-monitoring";
-                      scheme = "HTTP";
-                    };
-                    initialDelaySeconds = 10;
-                    periodSeconds = 30;
-                    timeoutSeconds = 5;
-                    failureThreshold = 5;
-                    successThreshold = 1;
-                  };
+                  livenessProbe = metricsProbe;
+                  readinessProbe = metricsProbe;
                   resources = config.resources;
+                  # The chart's `containerSecurityContext.readOnlyRootFilesystem`
+                  # adds the /tmp emptyDir below; /plugins and /scratch are
+                  # emptyDirs already.
+                  securityContext.readOnlyRootFilesystem = true;
                   volumeMounts =
                     lib.optionals hasCredentials [
                       {
@@ -504,6 +543,10 @@ in
                       {
                         name = "scratch";
                         mountPath = "/scratch";
+                      }
+                      {
+                        name = "tmpdir";
+                        mountPath = "/tmp";
                       }
                     ];
                 }
@@ -525,6 +568,10 @@ in
                   }
                   {
                     name = "scratch";
+                    emptyDir = { };
+                  }
+                  {
+                    name = "tmpdir";
                     emptyDir = { };
                   }
                 ];
@@ -563,6 +610,8 @@ in
                 spec = {
                   serviceAccount = self.serviceAccount;
                   automountServiceAccountToken = true;
+                  # The chart gives node-agent the server's grace period.
+                  terminationGracePeriodSeconds = 3600;
                   securityContext = {
                     runAsUser = 0;
                   };
@@ -587,6 +636,7 @@ in
                             name = "VELERO_SCRATCH_DIR";
                             value = "/scratch";
                           }
+                          kopiaHomeEnvVar
                         ];
                         ports = [
                           {
@@ -595,6 +645,11 @@ in
                             protocol = "TCP";
                           }
                         ];
+                        # The chart probes only the server, on its metrics
+                        # endpoint; node-agent serves the same endpoint.
+                        livenessProbe = metricsProbe;
+                        readinessProbe = metricsProbe;
+                        securityContext.readOnlyRootFilesystem = true;
                         volumeMounts =
                           lib.optionals hasCredentials [
                             {
@@ -616,6 +671,10 @@ in
                             {
                               name = "scratch";
                               mountPath = "/scratch";
+                            }
+                            {
+                              name = "tmpdir";
+                              mountPath = "/tmp";
                             }
                           ];
                       }
@@ -642,6 +701,10 @@ in
                       }
                       {
                         name = "scratch";
+                        emptyDir = { };
+                      }
+                      {
+                        name = "tmpdir";
                         emptyDir = { };
                       }
                     ];

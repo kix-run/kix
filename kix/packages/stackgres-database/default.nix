@@ -374,6 +374,14 @@ in
                     "-c"
                   ];
                   args = [ bootstrapScript ];
+                  # psql writes no files; /tmp covers the shell's here-documents.
+                  securityContext.readOnlyRootFilesystem = true;
+                  volumeMounts = [
+                    {
+                      name = "tmp";
+                      mountPath = "/tmp";
+                    }
+                  ];
                   env = [
                     {
                       name = "PGHOST";
@@ -395,6 +403,12 @@ in
                   ++ (bootstrapPassword.out.mkEnv {
                     NEW_PASSWORD = "password";
                   });
+                }
+              ];
+              volumes = [
+                {
+                  name = "tmp";
+                  emptyDir = { };
                 }
               ];
             };

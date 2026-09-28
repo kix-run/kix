@@ -173,6 +173,8 @@ in
           };
           spec = {
             serviceAccountName = self.cainjectorServiceAccount.out.name;
+            # Kubernetes' default, set explicitly; the chart (v1.17.1) sets none.
+            terminationGracePeriodSeconds = 30;
             enableServiceLinks = false;
             securityContext = common.podSecurityContext;
             containers = [
@@ -200,6 +202,7 @@ in
                     };
                   }
                 ];
+                inherit (config.cainjector) resources;
                 securityContext = common.containerSecurityContext;
               }
             ];

@@ -36,6 +36,15 @@ let
     "operator.cdi.kubevirt.io" = "";
   };
 
+  metricsProbe = {
+    httpGet = {
+      path = "/metrics";
+      port = "metrics";
+    };
+    initialDelaySeconds = 5;
+    periodSeconds = 10;
+    timeoutSeconds = 10;
+  };
 in
 {
   meta = {
@@ -62,12 +71,18 @@ in
       # CDI custom resource. See meta.availability.max.
       default = 1;
     };
+    # Requests from cdi-operator.yaml (v1.62.0), which sets no limits. An
+    # idle cdi-operator held up to 70 MiB on kind with CDI deployed.
     resources = lib.mkOption {
       type = lib.types.anything;
       default = {
         requests = {
           cpu = "100m";
           memory = "150Mi";
+        };
+        limits = {
+          cpu = "500m";
+          memory = "512Mi";
         };
       };
     };
@@ -934,10 +949,18 @@ in
                       protocol = "TCP";
                     }
                   ];
+                  # cdi-operator.yaml (v1.62.0) sets no probes and the
+                  # operator serves no health endpoint. These follow
+                  # virt-operator's upstream probe on its metrics endpoint.
+                  readinessProbe = metricsProbe;
+                  livenessProbe = metricsProbe // {
+                    initialDelaySeconds = 15;
+                  };
                   resources = config.resources;
                   securityContext = {
                     allowPrivilegeEscalation = false;
                     capabilities.drop = [ "ALL" ];
+                    readOnlyRootFilesystem = true;
                     runAsNonRoot = true;
                     seccompProfile.type = "RuntimeDefault";
                   };

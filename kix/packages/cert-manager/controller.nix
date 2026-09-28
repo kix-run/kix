@@ -400,62 +400,62 @@ in
           };
           spec = {
             serviceAccountName = self.controllerServiceAccount.out.name;
+            # Kubernetes' default, set explicitly; the chart (v1.17.1) sets none.
+            terminationGracePeriodSeconds = 30;
             enableServiceLinks = false;
             securityContext = common.podSecurityContext;
             containers = [
-              (
-                {
-                  name = "cert-manager-controller";
-                  image = "${config.image.repository}:${config.image.tag}";
-                  imagePullPolicy = config.image.pullPolicy;
-                  args = [
-                    "--v=2"
-                    "--cluster-resource-namespace=$(POD_NAMESPACE)"
-                    "--acme-http01-solver-image=${config.acmesolver.image.repository}:${config.acmesolver.image.tag}"
-                    "--leader-election-namespace=${ns}"
-                  ]
-                  ++ lib.optional config.dns01RecursiveNameserversOnly "--dns01-recursive-nameservers-only"
-                  ++ lib.optional (
-                    config.dns01RecursiveNameservers != ""
-                  ) "--dns01-recursive-nameservers=${config.dns01RecursiveNameservers}"
-                  ++ [ "--max-concurrent-challenges=60" ];
-                  ports = [
-                    {
-                      name = "http-metrics";
-                      containerPort = 9402;
-                      protocol = "TCP";
-                    }
-                    {
-                      name = "http-healthz";
-                      containerPort = 9403;
-                      protocol = "TCP";
-                    }
-                  ];
-                  securityContext = common.containerSecurityContext;
-                  env = [
-                    {
-                      name = "POD_NAMESPACE";
-                      valueFrom.fieldRef = {
-                        apiVersion = "v1";
-                        fieldPath = "metadata.namespace";
-                      };
-                    }
-                  ];
-                  livenessProbe = {
-                    httpGet = {
-                      port = "http-healthz";
-                      path = "/livez";
-                      scheme = "HTTP";
+              ({
+                name = "cert-manager-controller";
+                image = "${config.image.repository}:${config.image.tag}";
+                imagePullPolicy = config.image.pullPolicy;
+                args = [
+                  "--v=2"
+                  "--cluster-resource-namespace=$(POD_NAMESPACE)"
+                  "--acme-http01-solver-image=${config.acmesolver.image.repository}:${config.acmesolver.image.tag}"
+                  "--leader-election-namespace=${ns}"
+                ]
+                ++ lib.optional config.dns01RecursiveNameserversOnly "--dns01-recursive-nameservers-only"
+                ++ lib.optional (
+                  config.dns01RecursiveNameservers != ""
+                ) "--dns01-recursive-nameservers=${config.dns01RecursiveNameservers}"
+                ++ [ "--max-concurrent-challenges=60" ];
+                ports = [
+                  {
+                    name = "http-metrics";
+                    containerPort = 9402;
+                    protocol = "TCP";
+                  }
+                  {
+                    name = "http-healthz";
+                    containerPort = 9403;
+                    protocol = "TCP";
+                  }
+                ];
+                securityContext = common.containerSecurityContext;
+                env = [
+                  {
+                    name = "POD_NAMESPACE";
+                    valueFrom.fieldRef = {
+                      apiVersion = "v1";
+                      fieldPath = "metadata.namespace";
                     };
-                    initialDelaySeconds = 10;
-                    periodSeconds = 10;
-                    timeoutSeconds = 15;
-                    successThreshold = 1;
-                    failureThreshold = 8;
+                  }
+                ];
+                livenessProbe = {
+                  httpGet = {
+                    port = "http-healthz";
+                    path = "/livez";
+                    scheme = "HTTP";
                   };
-                }
-                // lib.optionalAttrs (config.resources != null) { resources = config.resources; }
-              )
+                  initialDelaySeconds = 10;
+                  periodSeconds = 10;
+                  timeoutSeconds = 15;
+                  successThreshold = 1;
+                  failureThreshold = 8;
+                };
+                inherit (config) resources;
+              })
             ];
             nodeSelector = {
               "kubernetes.io/os" = "linux";

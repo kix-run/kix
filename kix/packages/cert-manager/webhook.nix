@@ -117,6 +117,8 @@ in
           };
           spec = {
             serviceAccountName = self.webhookServiceAccount.out.name;
+            # Kubernetes' default, set explicitly; the chart (v1.17.1) sets none.
+            terminationGracePeriodSeconds = 30;
             enableServiceLinks = false;
             securityContext = common.podSecurityContext;
             containers = [
@@ -174,6 +176,7 @@ in
                   successThreshold = 1;
                   failureThreshold = 3;
                 };
+                inherit (config.webhook) resources;
                 securityContext = common.containerSecurityContext;
                 env = [
                   {

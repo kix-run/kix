@@ -659,6 +659,8 @@ in
             metadata.labels = operatorSelectorLabels;
             spec = {
               serviceAccountName = self.serviceAccount.out.name;
+              # Kubernetes' default, set explicitly; the chart (1.19.0) sets none.
+              terminationGracePeriodSeconds = 30;
               securityContext = {
                 runAsNonRoot = true;
                 runAsUser = 1000;
@@ -806,11 +808,17 @@ in
                     failureThreshold = 3;
                   };
                   resources = config.operator.resources;
+                  # The operator writes only to /tmp.
+                  securityContext.readOnlyRootFilesystem = true;
                   volumeMounts = [
                     {
                       name = "operator-certs";
                       mountPath = "/etc/operator/certs";
                       readOnly = true;
+                    }
+                    {
+                      name = "tmp";
+                      mountPath = "/tmp";
                     }
                   ];
                 }
@@ -824,6 +832,10 @@ in
                     optional = true;
                     defaultMode = 420;
                   };
+                }
+                {
+                  name = "tmp";
+                  emptyDir = { };
                 }
               ];
             };

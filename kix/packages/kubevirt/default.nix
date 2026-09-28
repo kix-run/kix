@@ -35,6 +35,16 @@ let
     "prometheus.kubevirt.io" = "true";
   };
 
+  metricsProbe = {
+    httpGet = {
+      path = "/metrics";
+      port = 8443;
+      scheme = "HTTPS";
+    };
+    initialDelaySeconds = 5;
+    periodSeconds = 10;
+    timeoutSeconds = 10;
+  };
 in
 {
   meta = {
@@ -70,12 +80,18 @@ in
         availability level (v2_discussions/145).
       '';
     };
+    # Requests from kubevirt-operator.yaml (v1.5.0), which sets no
+    # limits. virt-operator held up to 160 MiB on kind with KubeVirt deployed.
     resources = lib.mkOption {
       type = lib.types.anything;
       default = {
         requests = {
           cpu = "10m";
           memory = "450Mi";
+        };
+        limits = {
+          cpu = "1";
+          memory = "1Gi";
         };
       };
     };
@@ -1748,20 +1764,18 @@ in
                       protocol = "TCP";
                     }
                   ];
-                  readinessProbe = {
-                    httpGet = {
-                      path = "/metrics";
-                      port = 8443;
-                      scheme = "HTTPS";
-                    };
-                    initialDelaySeconds = 5;
-                    periodSeconds = 10;
-                    timeoutSeconds = 10;
+                  # kubevirt-operator.yaml (v1.5.0) has this readiness probe
+                  # only; virt-operator serves no other health endpoint, so
+                  # the liveness probe uses the same one.
+                  readinessProbe = metricsProbe;
+                  livenessProbe = metricsProbe // {
+                    initialDelaySeconds = 15;
                   };
                   resources = config.resources;
                   securityContext = {
                     allowPrivilegeEscalation = false;
                     capabilities.drop = [ "ALL" ];
+                    readOnlyRootFilesystem = true;
                     seccompProfile.type = "RuntimeDefault";
                   };
                   volumeMounts = [

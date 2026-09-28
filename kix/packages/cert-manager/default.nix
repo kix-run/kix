@@ -77,12 +77,24 @@
           node = 2;
           zone = 2;
         };
+        # The webhook keeps no cache, so its memory stays flat as the
+        # cluster grows.
+        resources = {
+          requests = {
+            cpu = "10m";
+            memory = "32Mi";
+          };
+          limits = {
+            cpu = "200m";
+            memory = "128Mi";
+          };
+        };
       };
       description = ''
-        Webhook component config. Sets the `image` attrset and
-        `replicaCount` for the admission webhook that validates and mutates
-        cert-manager CRs. The replica count defaults from the cluster's
-        availability level (v2_discussions/145).
+        Webhook component config. Sets the `image` attrset, `replicaCount`
+        and container `resources` for the admission webhook that validates
+        and mutates cert-manager CRs. The replica count defaults from the
+        cluster's availability level (v2_discussions/145).
       '';
     };
     cainjector = lib.mkOption {
@@ -100,12 +112,29 @@
           node = 2;
           zone = 2;
         };
+        # cainjector caches the Secrets, CRDs and webhook configurations it
+        # injects into, so memory grows with the cluster; raise the limit
+        # on large clusters.
+        resources = {
+          requests = {
+            cpu = "10m";
+            memory = "64Mi";
+          };
+          limits = {
+            cpu = "500m";
+            memory = "512Mi";
+          };
+        };
       };
       description = ''
-        CA-injector component config. Sets the `image` attrset and
-        `replicaCount` for the controller that injects CA bundles into
+        CA-injector component config. Sets the `image` attrset,
+        `replicaCount` and container `resources` for the controller that injects CA bundles into
         webhooks, APIServices, and CRDs. The replica count defaults from the
-        cluster's availability level (v2_discussions/145).
+        cluster's availability level (v2_discussions/145). The 512Mi memory
+        limit suits a small cluster; cainjector's cache grows with the
+        Secrets, CRDs and webhook configurations it watches, so raise
+        `resources.limits.memory` on a large one (cert-manager's
+        installation best-practice guide, "Scalability").
       '';
     };
     acmesolver = lib.mkOption {
@@ -145,12 +174,32 @@
         out-of-band.
       '';
     };
+    # The chart (v1.17.1) sets no resources and its values.yaml suggests
+    # requests of 10m and 32Mi; cert-manager's best-practice guide asks
+    # for limits sized to the cluster and publishes no figures. The
+    # controller caches the full content of the TLS Secrets its
+    # Certificates own and the metadata of every other Secret, so memory
+    # grows with the number of certificates; each component held under
+    # 30 MiB on an idle kind cluster.
     resources = lib.mkOption {
-      type = lib.types.nullOr lib.types.anything;
-      default = null;
+      type = lib.types.anything;
+      default = {
+        requests = {
+          cpu = "10m";
+          memory = "64Mi";
+        };
+        limits = {
+          cpu = "500m";
+          memory = "512Mi";
+        };
+      };
       description = ''
-        Optional resource requests/limits attrset applied to the controller
-        container. `null` leaves the container's resource block unset.
+        Resource requests and limits for the controller container. The
+        512Mi memory limit suits a small cluster. The controller's memory
+        grows roughly with the total size of the TLS Secrets its
+        Certificates own (cert-manager's "Scaling cert-manager" guide), so
+        raise `limits.memory` on a cluster with many certificates or large
+        RSA keys.
       '';
     };
     dns01RecursiveNameservers = lib.mkOption {
