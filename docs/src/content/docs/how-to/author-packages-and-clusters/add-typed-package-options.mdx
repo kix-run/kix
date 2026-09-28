@@ -56,6 +56,34 @@ build = {
 `config` includes defaults as well as values set by the instance. Package code
 therefore does not need a separate fallback for `replicas` or `environment`.
 
+## Default one option from another
+
+When one option's default depends on another option, return `config` beside
+`options`. It is a module, written as an attribute set or as a
+`{ config, lib, ... }:` function:
+
+```nix title="web-package.nix"
+options = {
+  replicas = lib.mkOption { type = lib.types.int; default = 1; };
+  minAvailable = lib.mkOption { type = lib.types.int; default = 0; };
+};
+config = { config, ... }: {
+  minAvailable = lib.mkDefault (config.replicas - 1);
+};
+```
+
+Write package defaults with `lib.mkDefault`. Kix evaluates every
+`lib.mkDefault` in a package's `config` at a lower priority than the
+instance's, so a value the instance sets wins, even when the instance also
+uses `lib.mkDefault`. A plain value in the package's `config` is a fixed
+setting instead, and conflicts with a different plain value on the instance.
+Evaluation errors from this module name it `package config of
+<namespace>/<instance>`.
+
+Packages use this for images released together, where each component's tag
+follows the main image's tag. See
+[`kix.options.image`](/docs/reference/kix-helpers/image-and-pin-helpers/#images-released-together).
+
 ## Configure an instance
 
 Set option values under `config`:

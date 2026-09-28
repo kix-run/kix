@@ -63,7 +63,12 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
    working tree has uncommitted changes.
 5. Asks for confirmation, then creates the Activation record and applies.
    Unchanged resources are skipped. A deploy with nothing to change exits
-   without applying.
+   without applying. Before the record is created, the run stops if the
+   cluster serves a resource's kind as namespaced and its manifest has no
+   `metadata.namespace`, naming each such resource. Cross-resource
+   [check 18](/docs/reference/scorecard/cross-resource-validation-checks/#check-18-and-the-deploy-time-check)
+   refuses most of these at evaluation; this covers custom kinds whose
+   CustomResourceDefinition is not in the build.
 6. Prunes orphans when asked. Namespaces and CustomResourceDefinitions are
    reported as kept and never deleted, with or without `--prune`. In
    `--log-format json`, the `prune_start` event lists them under `kept`,

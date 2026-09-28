@@ -63,6 +63,10 @@ have been applied:
   cwd="kix-examples/"
 />
 
+Pruning never deletes a Namespace or CustomResourceDefinition. It also keeps
+an orphan that another Kix cluster in the same Kubernetes cluster still
+deploys. The plan lists both as kept.
+
 Use `--prune-mode no` to prevent deletion even if a surrounding script also
 passes `--prune`:
 

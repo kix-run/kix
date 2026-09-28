@@ -9,11 +9,11 @@
   "commands": [
     {
       "command": "kix diff 04-from-scratch",
-      "stdout": "\u001b[36m⠁\u001b[0m Fetching live cluster state...                                                Discovering API resources...\nFetching managed resources (60 resource types)...\nFetched 17 resources across 60 resource types\n3 packages: 2 unchanged, 0 changed, 0 added, 1 removed\n\n  \u001b[1m_cluster\u001b[0m\n    \u001b[33m~\u001b[39m \u001b[33mcluster-level resources\u001b[39m (1 kept)\n      \u001b[33m!\u001b[39m \u001b[33mNamespace/tutorial-02\u001b[39m \u001b[2m(kept)\u001b[0m\n  \u001b[1mtutorial-02\u001b[0m\n    \u001b[31m-\u001b[39m \u001b[31mhello-world\u001b[39m 1.27 (3 resources)\n\n",
+      "stdout": "\u001b[36m⠁\u001b[0m Fetching live cluster state...                                                Discovering API resources...\nFetching managed resources (60 resource types)...\nFetched 10 resources across 60 resource types\nSkipped 7 objects that belong to Kix cluster 02-hello-world.\n2 packages: 2 unchanged, 0 changed, 0 added, 0 removed\n\u001b[32mNo differences found.\u001b[39m\n",
       "stderr": "",
-      "stdoutDrift": "\n! Namespace/tutorial-02 (kept)\n- hello-world 1.27 (3 resources)\n3 packages: 2 unchanged, 0 changed, 0 added, 1 removed\nFetched 17 resources across 60 resource types\nFetching managed resources (60 resource types)...\n_cluster\ntutorial-02\n~ cluster-level resources (1 kept)\n⠁ Fetching live cluster state... Discovering API resources...\n",
+      "stdoutDrift": "2 packages: 2 unchanged, 0 changed, 0 added, 0 removed\nFetched 10 resources across 60 resource types\nFetching managed resources (60 resource types)...\nNo differences found.\nSkipped 7 objects that belong to Kix cluster 02-hello-world.\n⠁ Fetching live cluster state... Discovering API resources...\n",
       "stderrDrift": "",
-      "exitCode": 2
+      "exitCode": 0
     }
   ]
 }

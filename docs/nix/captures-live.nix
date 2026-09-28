@@ -100,12 +100,11 @@ let
     "kubectl"
   ];
 
-  # Several kix commands treat every kix-managed resource in the
-  # Kubernetes cluster as belonging to the cluster you named: `kix diff`
-  # reports another kix cluster's resources as removals, and `kix gc
-  # --hard` would delete them. The tutorial groups deploy three other
-  # clusters into the shared kind cluster, so a group that needs a
-  # truthful whole-cluster view has to start from an empty one.
+  # `kix diff`, `status`, `snapshot save` and `gc` read only the Kix
+  # cluster named on the command line, and print a line counting the
+  # objects of each other Kix cluster they skipped. The tutorial groups
+  # deploy three other clusters into the shared kind cluster, so a group
+  # whose output must not mention them starts from an empty one.
   resetClusterShell =
     group:
     if (group.resetCluster or false) then

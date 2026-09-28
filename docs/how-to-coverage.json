@@ -198,7 +198,7 @@
       "offlineCaptures": [
         "how-to/application-typed-options/check-invalid-environment"
       ],
-      "unverifiedNixBlocks": 2
+      "unverifiedNixBlocks": 3
     },
     {
       "page": "author-packages-and-clusters/compose-multi-team-clusters-with-mergefragments",
@@ -339,8 +339,10 @@
       ],
       "offlineCaptures": [
         "how-to/dependency-auto-instantiation/check",
-        "how-to/dependency-auto-instantiation/graph"
-      ]
+        "how-to/dependency-auto-instantiation/graph",
+        "how-to/dependency-contested-name/check"
+      ],
+      "unverifiedNixBlocks": 1
     },
     {
       "page": "debug-dependency-wiring/visualize-the-dependency-graph-with-kix-graph",

@@ -74,7 +74,10 @@ Ask Kix what is different from the live cluster:
 <Command expandable {...diffCleanOutput} />
 
 If your live cluster already matches the checked result, the diff should be
-empty or say there is nothing to change.
+empty or say there is nothing to change. If the hello-world cluster from the
+[local setup tutorial](/docs/tutorials/02-local-setup-and-first-run/) is still
+deployed in the same kind cluster, Kix reports that it skipped its objects:
+`kix diff` compares only the Kix cluster you name.
 
 Now make a visible edit in `tutorial-04/cluster.nix`:
 

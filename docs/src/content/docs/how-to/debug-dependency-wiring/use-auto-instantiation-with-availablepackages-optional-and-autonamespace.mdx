@@ -11,6 +11,7 @@ import optionalInstance from '/src/snippets/how-to/auto-instantiation/cluster/op
 import autoInstantiationConsumer from '/src/snippets/how-to/auto-instantiation/cluster/autoInstantiationConsumer.json';
 import check from '/src/command-output/how-to/dependency-auto-instantiation/check.json';
 import graph from '/src/command-output/how-to/dependency-auto-instantiation/graph.json';
+import contestedCheck from '/src/command-output/how-to/dependency-contested-name/check.json';
 
 Use auto-instantiation when a cluster has a standard package for a dependency,
 but should include it only when something needs it. Use an optional instance
@@ -51,7 +52,9 @@ and set `optional = true`:
 <Snippet {...optionalInstance} />
 
 Kix excludes this instance when nothing depends on `metrics`. A required
-`metrics` argument activates it with the configuration shown above.
+`metrics` argument activates it with the configuration shown above. So does a
+consumer that wires it explicitly with `deps.<arg> = ref.platform.metrics`,
+whatever the argument is called.
 
 ## Add the consumer
 
@@ -76,6 +79,35 @@ Inspect the dependency graph to confirm where the providers were created:
 The graph contains `database@platform`, `metrics@platform`, and `api@apps`.
 Both provider ConfigMaps appear before the application ConfigMap that consumes
 their outputs.
+
+## Choose between catalog packages that answer one name
+
+A catalog entry answers its own name, the package's `meta.roles` and
+`meta.defaultAliases`, and the entry's `aliases`. When a required argument
+names something more than one entry answers, Kix stops the build. Here a second entry, `postgres`, lists `database` among its aliases:
+
+<Command {...contestedCheck} />
+
+The error lists each entry and why it answers the name. To choose one,
+declare it as an optional instance named after the dependency. Kix looks for
+instances before the catalog, and still creates this one only when something
+depends on it:
+
+```nix title="cluster.nix"
+instances.platform.database = {
+  package = databasePackage;
+  optional = true;
+};
+```
+
+Alternatively, remove the other entries from `availablePackages`.
+
+When the name is a role the environment already provides, set
+`cluster.roles.<role>.binding` instead.
+
+A name several entries answer is not an error while nothing requires it, so a
+catalog built from a whole package set still evaluates. An argument the
+consumer wires with `deps.<arg>` makes no demand on the catalog.
 
 :::note[Explanation]
 See [Dependency resolution and why explicit deps matter](/docs/explanation/dependency-resolution-and-why-explicit-deps-matter/)

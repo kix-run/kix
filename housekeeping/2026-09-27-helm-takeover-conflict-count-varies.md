@@ -6,3 +6,4 @@ second conflict warning for `ServiceAccount/reflector@reflector-system`.
 `halt-on-first-failure` cancels the remaining resources only after the applies
 already in flight finish, so the count depends on timing. The live capture
 for this page cannot be stable while the output depends on that timing.
+- Hit again 2026-09-28 while recapturing the live docs: "1 failed, 6 cancelled".

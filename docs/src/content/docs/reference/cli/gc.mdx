@@ -5,7 +5,7 @@ description: "Delete Kix-managed resources a cluster no longer declares, and ret
 
 `kix gc` removes what a cluster's build no longer contains. It has three
 modes: soft (the default) compares the last deployed build with a fresh one,
-`--hard` scans every Kix-managed resource on the cluster, and `--operator`
+`--hard` scans every Kix-managed resource of the named cluster, and `--operator`
 deletes Activation records and lets the Kix operator clean up after them.
 Every mode also retires old Superseded Activation records.
 

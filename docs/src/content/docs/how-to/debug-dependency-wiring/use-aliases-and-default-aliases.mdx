@@ -77,37 +77,22 @@ Evaluate the cluster after adding an alias:
 
 <Command commands={["kix check production"]} />
 
-If more than one eligible instance has the requested name or alias, Kix
-reports an ambiguous dependency. Wire that consumer directly with
-`deps.<name> = ref.<namespace>.<instance>` instead of adding another alias.
-This records the choice at the consumer, where the dependency is easiest to
-understand.
-
-The explicit entry does not clear the ambiguity by itself. Kix first runs a
-dependency-resolution pass while constructing the cluster graph. That pass
-cannot use `ref` overrides because the cluster fixpoint is still being built.
-It therefore reports the ambiguity before reading the consumer's `deps`.
-
-To satisfy the first pass, leave exactly one of the providers with the
-contested name or default alias. Give every other provider a unique alias:
+If more than one instance in the consumer's namespace has the requested name
+or alias, Kix reports that the dependency matches multiple instances. Wire
+that consumer to the provider it should use:
 
 ```nix title="cluster.nix"
-instances.nginx-system = {
-  public = {
-    package = packages.ingress-nginx;
-    aliases = [ "ingressNginxPublic" ];
-  };
-
-  # Keeps the package's default `ingressNginx` alias, so phase 1 resolves.
-  private = {
-    package = packages.ingress-nginx;
-  };
+instances.apps.web = {
+  package = packages.web;
+  deps.cache = ref.apps.redis-primary;
 };
 ```
 
-The aliases prevent the early ambiguity. The consumer's
-`deps.ingressNginx = ref.nginx-system.public` remains the authoritative choice
-of controller.
+This records the choice at the consumer, where the dependency is easiest to
+understand.
+
+Aliases can also make two `availablePackages` entries answer one name. See
+[Choose between catalog packages that answer one name](/docs/how-to/debug-dependency-wiring/use-auto-instantiation-with-availablepackages-optional-and-autonamespace/#choose-between-catalog-packages-that-answer-one-name).
 
 :::note[Explanation]
 See [Dependency resolution and why explicit deps matter](/docs/explanation/dependency-resolution-and-why-explicit-deps-matter/)

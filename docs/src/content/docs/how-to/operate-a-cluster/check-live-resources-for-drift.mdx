@@ -22,7 +22,9 @@ it.
 
 `drift` reads Kix-managed resources from the selected Kubernetes context. It
 does not need a source checkout, cluster name, or Nix evaluation because each
-deployed resource carries the information needed for the comparison.
+deployed resource carries the information needed for the comparison. When
+several Kix clusters deploy into one Kubernetes cluster, pass
+`--cluster <name>` to check only that cluster's resources.
 
 ## Read the verdicts
 

@@ -357,10 +357,11 @@ scenario that can exercise a group of related guides.
 - Every step is bounded by `timeout` (default 600s). A step that stops making
   progress fails the run by name. Raise it for a genuinely slow command; do
   not raise it to hide one that stopped terminating.
-- Set `resetCluster = true` on the first live group that needs a whole-cluster
-  view. `kix diff` and `kix gc --hard` read every kix-managed resource in the
-  Kubernetes cluster and judge it against the one cluster you named, so the
-  tutorial deployments would otherwise show up as that cluster's removals.
+- Set `resetCluster = true` on the first live group whose output must not
+  depend on what earlier groups deployed. `kix diff`, `status`, `snapshot
+  save` and `gc` read only the Kix cluster you named, but print a line
+  counting the objects of each other Kix cluster they skipped, so the
+  tutorial deployments would otherwise appear in the capture.
 - Put a group that deliberately breaks the cluster last. A deploy whose probe
   fails leaves a Degraded activation, and later groups preparing a deploy
   would inherit the broken cluster.

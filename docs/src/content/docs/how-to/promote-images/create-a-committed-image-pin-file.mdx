@@ -82,8 +82,9 @@ options.image = kix.options.image {
 };
 ```
 
-Render the container image with `kix.image.ref` and carry through the pull
-policy:
+A pin carries no pull policy, so the package's `pullPolicy` default still
+applies. Render the container image with `kix.image.ref` and carry through the
+pull policy:
 
 <Snippet {...renderPinnedImage} />
 

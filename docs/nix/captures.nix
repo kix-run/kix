@@ -559,6 +559,35 @@
   }
 
   {
+    # A second catalog entry answers `database` through its aliases, so the
+    # application's demand for `database` is refused.
+    group = "how-to/dependency-contested-name";
+    page = "/docs/how-to/debug-dependency-wiring/use-auto-instantiation-with-availablepackages-optional-and-autonamespace/";
+    cwd = "kix-examples/";
+    setup = [
+      {
+        mutate = {
+          file = "how-to/auto-instantiation/cluster.nix";
+          oldString = "autoNamespace = \"platform\";";
+          newString = "autoNamespace = \"platform\";\n      availablePackages.postgres = {\n        package = databasePackage;\n        aliases = [ \"database\" ];\n      };";
+        };
+      }
+    ];
+    offline = [
+      {
+        capture = "check";
+        run = [
+          "kix"
+          "check"
+          "how-to-auto-instantiation"
+        ];
+        allowFailure = true;
+        stdoutGrep = "kix: dependency 'database'|^ *(database|postgres) \\(|Kix does not choose|instances\\.<namespace>\\.database|remove the others";
+      }
+    ];
+  }
+
+  {
     group = "how-to/scorecard-rules";
     page = "/docs/how-to/policy-ci-and-compliance/add-scorecard-rules/";
     cwd = "kix-examples/";

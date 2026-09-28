@@ -1,4 +1,151 @@
 ---
 title: "`image`, `image.ref`, and `pins`"
-description: TODO
+description: "The shared image option, the helpers that render and test an image reference, and the pin-file reader."
 ---
+
+These helpers give every package the same image shape, so a cluster can pass
+a committed pin to any package and the digest reaches the manifest.
+
+This page is hand-maintained. Check `kix/lib/vocab/compose.nix` and
+`kix/lib/vocab/pins.nix` when in doubt.
+
+## `kix.options.image`
+
+```nix
+options.image = kix.options.image {
+  repository = "docker.io/library/nginx";
+  tag = "1.27-alpine";
+};
+```
+
+Returns one `lib.mkOption` whose type is a submodule. The arguments are the
+package's defaults:
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `repository` | required | Image repository, registry host included. |
+| `tag` | required | The package's tag. |
+| `digest` | `null` | The package's resolved digest for `tag`. |
+| `pullPolicy` | `"IfNotPresent"` | `imagePullPolicy` for containers using the image. `null` leaves the field unset, so Kubernetes chooses: `Always` for `:latest`, `IfNotPresent` otherwise. |
+| `tagText` | `null` | The Nix expression the option reference shows as the tag's default, for a tag the package's `config` sets from another option. See [Images released together](#images-released-together). |
+| `description` | a generic description | Replaces the option's description. |
+
+### Fields an instance can set
+
+| Field | Type | Default |
+|---|---|---|
+| `repository` | string | the package's `repository` |
+| `tag` | string | the package's `tag` |
+| `digest` | null or string | the package's `digest` while `tag` equals the package's tag, otherwise `null` |
+| `pullPolicy` | null or string | the package's `pullPolicy` |
+| `sourceRev` | null or string | `null`. The source revision the image was built from, when Kix built it. |
+| `promotedBy` | null or string | `null`. Who resolved the pin. |
+| `resolvedAt` | null or string | `null`. When the pin was resolved, RFC 3339. |
+| `note` | null or string | `null`. Free text that Kix never reads. |
+
+An instance that sets some fields keeps the package's defaults for the rest:
+
+| Instance sets | Result |
+|---|---|
+| nothing | The package's repository, tag, digest and pull policy. |
+| `repository` only, such as a registry mirror | The package's tag, digest and pull policy under the new repository. |
+| `pullPolicy` only | The package's repository, tag and digest. |
+| `tag` only, to a different tag | The package's repository and pull policy, and no digest, because the package's digest belongs to its own tag. |
+| a whole pin from `pins.get` | The pin's repository, tag and digest, and the package's pull policy. |
+
+`sourceRev`, `promotedBy`, `resolvedAt` and `note` are declared so the option
+accepts a whole pin record.
+
+### Images released together
+
+A package whose images share one release can default one image's tag from
+another. The package returns `config` beside `options`, and `tagText` makes
+the option reference show that default:
+
+```nix
+let
+  release = "v1.17.1";
+in
+{
+  options = {
+    image = kix.options.image {
+      repository = "quay.io/jetstack/cert-manager-controller";
+      tag = release;
+    };
+    webhook.image = kix.options.image {
+      repository = "quay.io/jetstack/cert-manager-webhook";
+      tag = release;
+      tagText = "config.image.tag";
+    };
+  };
+  config = { config, ... }: {
+    webhook.image.tag = lib.mkDefault config.image.tag;
+  };
+}
+```
+
+Declare both tags from the same binding. The declared `tag` is the value the
+digest rule compares with, so a follower declared with an older tag would
+render the main tag without a digest. When an instance moves `image.tag`, the
+follower's tag moves with it and its own digest is dropped. An instance can
+still set `webhook.image.tag` directly.
+
+A `lib.mkDefault` in a package's `config` sits below any value an instance or
+dependency injection sets, including one set with `lib.mkDefault`. See
+[Add typed package options](/docs/how-to/author-packages-and-clusters/add-typed-package-options/#default-one-option-from-another)
+for the priority rules.
+
+## `kix.image.ref`
+
+```nix
+image = kix.image.ref config.image;
+imagePullPolicy = config.image.pullPolicy;
+```
+
+Renders `repository:tag`, followed by `@digest` when `digest` is not null.
+Throws when `repository` or `tag` is missing or empty. It does not validate
+the digest or contact a registry.
+
+A `null` `pullPolicy` renders no `imagePullPolicy`, because Kix drops null
+fields from manifests.
+
+## `kix.image.isPinned`
+
+```nix
+kix.image.isPinned config.image
+```
+
+True when the image has a non-null `digest`. It does not validate the digest.
+
+## `kix.pins`
+
+```nix
+pins = kix.pins ./pins.json;
+```
+
+Reads a pin file or an attrset of pins. `mkFlake { pins = ./pins.json; }`
+does the same for every cluster function that takes a `pins` argument.
+
+| Attribute | Result |
+|---|---|
+| `pins.get <key>` | The pin, shape-checked, ready to assign to an image option. A missing key throws with the `kix pin set` command that adds it. |
+| `pins.ref <key>` | `kix.image.ref (pins.get <key>)`. |
+| `pins.keys` | Every pin name in the file. |
+| `pins.all` | Every pin, shape-checked. |
+
+Each pin needs `repository` and `tag`. `digest`, `sourceRev`, `promotedBy`,
+`resolvedAt` and `note` are optional, and any other field is an error. A
+digest must be `sha256:` followed by 64 lower-case hexadecimal characters.
+The file declares `"version": 1` and holds the pins under `images`; a bare
+map of pins is also accepted. The shape check does not contact a registry;
+`kix pin check` does.
+
+:::tip[Use it in a task]
+See [Create a committed image pin file](/docs/how-to/promote-images/create-a-committed-image-pin-file/)
+to resolve a tag, commit the pin and pass it to a package.
+:::
+
+:::note[Reference]
+See [`pin`](/docs/reference/cli/pin/) for the commands that write and verify
+the pin file.
+:::

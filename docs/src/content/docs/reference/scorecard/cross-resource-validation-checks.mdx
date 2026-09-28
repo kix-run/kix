@@ -1,4 +1,87 @@
 ---
 title: "Cross-resource validation checks"
-description: TODO
+description: "The checks every cluster evaluation runs over the finished manifests, and what each one skips."
 ---
+
+Every cluster evaluation runs these checks over the finished manifest list:
+`nix build`, and every `kix` command that evaluates a cluster, including
+`kix build`, `kix check` and `kix deploy`. They ask whether the object a name
+points at exists in the build, and whether a selector matches a pod template
+in the build. They are always on, and `scorecard.maxSeverity` does not cap
+them.
+
+This page is hand-maintained. Check `kix/lib/eval/validate.nix` when in doubt;
+`kix/lib/tests/validate.nix` holds a failing and a passing case for each
+check.
+
+## Checks
+
+| # | Check | Skips |
+|---|---|---|
+| 1 | A workload's `serviceAccountName` names a ServiceAccount in its namespace. | `default`; unset |
+| 2 | A RoleBinding or ClusterRoleBinding `roleRef` names a Role or ClusterRole in the build. | names starting `system:` or ending `-psp`; `admin`, `edit`, `view`, `cluster-admin` |
+| 3 | `volumes[].configMap.name` names a ConfigMap in the namespace. | Secrets |
+| 4 | A Service selector matches at least one pod template. | no selector; the control-plane scrape selectors (kube-dns, kube-scheduler and similar); a Service that declares `kix.run/operand-of` |
+| 5 | An HPA `scaleTargetRef` exists. | |
+| 6 | A StatefulSet `serviceName` names a headless Service (`clusterIP: None`) in the namespace. | unset |
+| 7 | No two resources share kind, namespace and name. | |
+| 8 | Every resource carries `app.kubernetes.io/managed-by: kix`. | |
+| 9 | A workload's `selector.matchLabels` is within its pod template labels (Deployment, StatefulSet, DaemonSet, Job). | |
+| 10 | Ingress backends name a Service in the namespace. | |
+| 11 | Every `metadata.namespace` has a Namespace resource in the build. | `_`-prefixed namespaces used for cluster-level instances |
+| 12 | A NetworkPolicy `podSelector` matches at least one pod template. | empty selector |
+| 13 | A named Service `targetPort` exists on a container of a selected pod. | numeric ports; Services that select no pod template in the build |
+| 14 | A PodDisruptionBudget `selector.matchLabels` matches at least one pod template. | no `matchLabels`; a PodDisruptionBudget that declares `kix.run/operand-of` |
+| 15 | A Job's pod template labels satisfy no Service selector in its namespace, since the Service would route traffic to the Job's pod. | Services without a selector |
+| 16 | `kix.run/rerun` appears on Jobs only, with the value `on-change`. | |
+| 17 | A workload's `priorityClassName` names a PriorityClass in the build. | `system-cluster-critical`, `system-node-critical` |
+| 18 | A resource of a namespaced kind sets `metadata.namespace`. | kinds whose scope Kix does not know (see below) |
+
+## Check 18 and the deploy-time check
+
+Check 18 covers built-in namespaced kinds, matched by API group, and custom
+kinds whose CustomResourceDefinition in the same build declares
+`spec.scope: Namespaced`. It fails, for example, when
+`scope.mkClusterResource` builds a ConfigMap. Create such a resource with a
+namespaced scope (`scope.mkResource`) or set `metadata.namespace`.
+
+A custom kind whose CustomResourceDefinition is installed from outside the
+build is checked against the cluster instead. `kix deploy` reads the
+cluster's API discovery and refuses the whole plan before applying anything
+when such a resource has no namespace. `kix diff` against a live cluster
+prints the same error for each one.
+
+## How names resolve
+
+A reference is looked up in the referrer's namespace only, unless the
+referenced kind is a built-in cluster-scoped kind, such as a ClusterRole named
+by a RoleBinding. A Service, NetworkPolicy or PodDisruptionBudget selector
+matches pod templates in its own namespace only.
+
+These also count as present:
+
+- a name wrapped in [`kix.untrackedRef`](/docs/reference/kix-helpers/facts-and-untrackedref/),
+  in the referring resource's namespace, whatever its kind;
+- a `scope.mkServiceRef` or `scope.mkSecretRef` marker, as the Service or
+  Secret it describes, and its declared pod selector as pods for checks 4
+  and 12;
+- a custom resource named by `kix.run/operand-of: <group>/<Kind>/<name>` on a
+  Service or PodDisruptionBudget, when that resource is in the build in the
+  same namespace, for checks 4 and 14.
+
+Check 6 reads `clusterIP: None` from a rendered Service, so a marker does not
+satisfy it.
+
+## Failure shape
+
+Failures stop the evaluation and are listed together:
+
+```text
+error: Cluster 'ludo-kind' has 1 failed assertion(s):
+  - [validate] Service data/postgres-metrics selector {"app":"pg"} matches no workload pod template
+```
+
+:::note[Explanation]
+See [Cross-resource validation at cluster evaluation time](/docs/explanation/cross-resource-validation-at-cluster-evaluation-time/)
+for how these checks differ from the scorecard rules.
+:::

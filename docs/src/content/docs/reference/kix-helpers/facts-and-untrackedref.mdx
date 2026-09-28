@@ -1,6 +1,91 @@
 ---
 title: "`facts` and `untrackedRef`"
-description: TODO
+description: "Declare a name that Kix does not render, and say which resource creates the object it names."
 ---
 
-{/* Stub. Source: kix/lib/core/markers.nix (mkUntrackedRef, readExpectation), kix/lib/core/resource.nix. `kix.untrackedRef` takes a bare name string (a claim with no ordering) or `{ kind; name; by; apiVersion ? "v1"; }` where `by` is the package part that creates the object: the resource then depends on `by` and carries kix.run/expects so deploy waits for the object. The attrset form is experimental; the fallbacks are written next to mkUntrackedRef. Test: kix/lib/tests t97. Scorecard rule architecture.untrackedReferences lists refs that do not name both kind and by, and names the form to use. */}
+{/* Stub for `kix.facts` (refOnly, connect, structural). Source: kix/lib/core/facts.nix. */}
+
+This page is hand-maintained. Check `kix/lib/core/markers.nix`
+(`mkUntrackedRef`, `passiveKinds`) and `kix/lib/core/resource.nix` when in
+doubt.
+
+## `kix.untrackedRef`
+
+```nix
+kix.untrackedRef "cluster-ca"
+kix.untrackedRef { name; kind ? null; apiVersion ? "v1"; by ? null; }
+```
+
+Returns `name` as a string that marks it as a reference to an object Kix does
+not render. The cross-resource checks accept the name in the referring
+resource's namespace, so a volume, `envFrom` or `serviceAccountName` can name
+an object the cluster, an operator or another system provides.
+
+| Form | Deploy order | `kix.run/expects` | Listed by `architecture.untrackedReferences` |
+|---|---|---|---|
+| `"name"` | none | none | yes |
+| `{ name; kind; }` | none | the object; deploy waits for it before applying the referrer | yes |
+| `{ name; by = creator; }` | the referrer deploys after `creator` | none | yes |
+| `{ name; kind; by = creator; }` | the referrer deploys after `creator` | the object | no, unless another reference to the name in that namespace omits `kind` or `by` |
+| `{ name; by = "self"; }` | none | none | no, while exactly one resource in the cluster carries a self reference to the name |
+
+`kix.run/expects` makes `kix deploy` wait up to 180 seconds for the object to
+exist. The attribute-set forms are experimental.
+
+### `by`
+
+`by` names the resource that creates the object: a Job, a workload, or an
+operator's custom resource.
+
+```nix
+secretName = kix.untrackedRef {
+  kind = "Secret";
+  name = "admission-cert";
+  by = self.certJob;
+};
+```
+
+`by` refuses a built-in kind that creates no object a manifest refers to by
+name, such as ConfigMap, Secret, Service, PersistentVolumeClaim,
+ServiceAccount, the RBAC kinds, NetworkPolicy, PodDisruptionBudget,
+StorageClass, CustomResourceDefinition, the admission webhook and policy
+kinds, and APIService. The list is matched by API group, so a custom kind that
+shares a built-in name is accepted. Every other kind is accepted, including
+Namespace (the control plane creates `kube-root-ca.crt` and the `default`
+ServiceAccount in each namespace) and Ingress.
+
+### `by = "self"`
+
+Use it when the resource holding the reference creates the object itself,
+such as an operator Deployment that mounts an optional Secret and then
+creates it:
+
+```nix
+volumes = [
+  {
+    name = "certs";
+    secret = {
+      secretName = kix.untrackedRef { name = "operator-certs"; by = "self"; };
+      optional = true;
+    };
+  }
+];
+```
+
+It adds no dependency and no `kix.run/expects`, because the object appears
+only after the referrer runs. Evaluation fails when:
+
+- the reference also sets `kind` or `apiVersion`;
+- the referring resource is one of the built-in kinds `by` refuses;
+- a workload's pod requires the object: a secret, configMap or projected
+  volume, `env` or `envFrom` reference without `optional = true`, a
+  PersistentVolumeClaim, or `serviceAccountName`.
+
+A self reference passed to another resource, for example through `out`, is
+an ordinary claim there, and the `architecture.untrackedReferences` audit
+lists the name.
+
+:::note[Explanation]
+See [Escape hatches](/docs/explanation/escape-hatches-raw-resources-extra-overlays-kix-untrackedref-raw-kubernetes-fields/)
+for when to reach for `kix.untrackedRef`.
+:::

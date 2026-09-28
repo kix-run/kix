@@ -467,10 +467,9 @@ the regression test, not the definition. Reference: the `clickhouse`
 packages (`v2_discussions/148`, `kix/packages/clickhouse/contract.nix`,
 `checks.clickhouse-swap`).
 
-Auto-instantiation does not pick between implementations. With both on
-the shelf, a demanded alias is refused until the cluster selects one with
-an optional instance named after the alias, which is created only when
-something depends on it:
+When both implementations are on the shelf, auto-instantiation refuses a
+demanded alias until the cluster selects one with an optional instance
+named after the alias, which is created only when something depends on it:
 
 ```nix
 instances.data.clickhouse = {
