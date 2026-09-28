@@ -38,6 +38,15 @@ in
     ];
   };
 
+  # Firezone's migrations run CREATE EXTENSION for these three, and
+  # StackGres installs an extension on the postgres image only when the
+  # SGCluster lists it.
+  deps.postgres.config.extensions = [
+    { name = "pgcrypto"; }
+    { name = "btree_gist"; }
+    { name = "citext"; }
+  ];
+
   options = {
     image = lib.mkOption {
       type = lib.types.anything;
@@ -141,6 +150,24 @@ in
 
     ingress = kix.options.ingress;
 
+    # Neither the BeanVPN chart nor Firezone 0.7's docs set resources. An
+    # idle instance holds under 100 MiB; startup (migrations) takes about
+    # 15 CPU-seconds. The ConfigMap's ERL_FLAGS sizes the BEAM for two
+    # CPUs; set `env.ERL_FLAGS` when changing limits.cpu.
+    resources = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        requests = {
+          cpu = "100m";
+          memory = "256Mi";
+        };
+        limits = {
+          cpu = "2";
+          memory = "1Gi";
+        };
+      };
+    };
+
     env = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
@@ -197,6 +224,11 @@ in
 
         hasSaml = config.saml.cert != null && config.saml.key != null;
 
+        # The image's bootstrap script writes a telemetry id and, without
+        # SAML files, a self-signed SAML pair into /var/firezone, so that
+        # directory is an emptyDir and the Secret's files live beside it.
+        secretsDir = "/var/firezone-secrets";
+
         dbPasswordEnv =
           if config.database.passwordSecretRef != null then
             [
@@ -231,6 +263,19 @@ in
             WIREGUARD_IPV6_ADDRESS = wg.ipv6Address;
             TELEMETRY_ENABLED = if config.telemetry.enabled then "true" else "false";
             RESET_ADMIN_ON_BOOT = if config.admin.resetOnBoot then "true" else "false";
+            WIREGUARD_PRIVATE_KEY_PATH = "${secretsDir}/private_key";
+            # The BEAM starts one scheduler per node core. On a 32-core kind
+            # node under a 1-CPU limit, startup ran past Postgrex's 15s
+            # handshake timeout and never finished; two schedulers, matching
+            # the default CPU limit, start in about 15 CPU-seconds.
+            ERL_FLAGS = "+S 2:2";
+            # The BEAM sizes its port table from the open-file limit, which
+            # containerd can leave at 2^31; that table alone took 1.6 GiB.
+            ERL_MAX_PORTS = "65536";
+          }
+          // lib.optionalAttrs hasSaml {
+            SAML_CERTFILE_PATH = "${secretsDir}/saml.crt";
+            SAML_KEYFILE_PATH = "${secretsDir}/saml.key";
           };
         };
 
@@ -263,7 +308,7 @@ in
 
         # --- Mounts ---
         filesMount = kix.mount.secret self.filesSecret {
-          mountPath = "/var/firezone";
+          mountPath = secretsDir;
           defaultMode = 256; # 0400
         };
 
@@ -275,6 +320,8 @@ in
               replicas = config.replicaCount;
               selector.matchLabels = scope.selectorLabels;
               template.spec = {
+                # Kubernetes default: Firezone 0.7 documents no shutdown drain.
+                terminationGracePeriodSeconds = 30;
                 initContainers = [
                   {
                     name = "init-sysctl";
@@ -288,7 +335,20 @@ in
                         sysctl -w net.ipv6.conf.all.forwarding=1
                       ''
                     ];
-                    securityContext.privileged = true;
+                    securityContext = {
+                      privileged = true;
+                      readOnlyRootFilesystem = true;
+                    };
+                    resources = {
+                      requests = {
+                        cpu = "10m";
+                        memory = "16Mi";
+                      };
+                      limits = {
+                        cpu = "100m";
+                        memory = "32Mi";
+                      };
+                    };
                   }
                 ];
                 containers = [
@@ -305,16 +365,63 @@ in
                       self.envSecret.out.envFrom
                     ];
                     env = kix.mkEnv config.env dbPasswordEnv;
-                    securityContext.capabilities.add = [
-                      "NET_ADMIN"
-                      "SYS_MODULE"
-                    ];
+                    # Firezone 0.7 has no health endpoint; "/" redirects to
+                    # the sign-in page once the web server is up.
+                    livenessProbe = {
+                      httpGet = {
+                        path = "/";
+                        port = "http";
+                      };
+                      periodSeconds = 10;
+                      timeoutSeconds = 5;
+                      failureThreshold = 6;
+                    };
+                    readinessProbe = {
+                      httpGet = {
+                        path = "/";
+                        port = "http";
+                      };
+                      periodSeconds = 10;
+                      timeoutSeconds = 5;
+                      failureThreshold = 3;
+                    };
+                    startupProbe = {
+                      httpGet = {
+                        path = "/";
+                        port = "http";
+                      };
+                      periodSeconds = 5;
+                      failureThreshold = 60;
+                    };
+                    resources = config.resources;
+                    securityContext = {
+                      readOnlyRootFilesystem = true;
+                      capabilities.add = [
+                        "NET_ADMIN"
+                        "SYS_MODULE"
+                      ];
+                    };
                   }
                 ];
               };
             };
           }
-          |> kix.withMounts [ self.filesMount ]
+          |> kix.withMounts [
+            self.filesMount
+            (kix.mount.emptyDir {
+              name = "state";
+              mountPath = "/var/firezone";
+            })
+            # The Elixir release writes RELEASE_TMP under /app/tmp.
+            (kix.mount.emptyDir {
+              name = "release-tmp";
+              mountPath = "/app/tmp";
+            })
+            (kix.mount.emptyDir {
+              name = "tmp";
+              mountPath = "/tmp";
+            })
+          ]
           |> scope.mkDeployment;
 
         # --- Service ---

@@ -14,7 +14,7 @@
 # PodDisruptionBudget is derived by the compiler from the availability
 # level, not written here.
 #
-# root = primary Service.
+# root = main Service (every Valkey pod).
 
 {
   scope,
@@ -1378,9 +1378,12 @@
             targetPort = 26379;
             protocol = "TCP";
           };
+          # With Sentinel on, this Service selects every pod, replicas
+          # included, and no Service selects the primary alone. A client
+          # that writes must ask Sentinel for the primary (sentinelPort,
+          # primarySet); one that cannot needs Sentinel off and one pod.
           outputs = {
             port = "6379";
-            primaryFqdn = "${name}-primary.${scope.namespaceName}.svc.cluster.local";
           }
           // lib.optionalAttrs config.sentinel.enabled {
             sentinelPort = "26379";
@@ -1560,7 +1563,7 @@
           null;
 
       # --- Entry point ---
-      # root = primary Service. Exposes both redis (6379) and sentinel (26379) ports.
+      # root = main Service. Exposes redis (6379) and, with Sentinel on, sentinel (26379).
       # Consumers connect to sentinel to discover the current primary via
       # SENTINEL get-master-addr-by-name.
       root = {

@@ -17,6 +17,19 @@
 
 let
   name = scope.instanceName;
+
+  # init-chown-data runs as root. When security.nonRoot would fail the
+  # build, fail it here instead with the override that lets the migration
+  # deploy through.
+  chownOverrideHint = "initChownData adds the root init container init-chown-data, which fails the security.nonRoot scorecard rule. For the migration deploy, set scorecard.ruleOverrides.byNamespace.${scope.namespaceName}.\"security.nonRoot\".severity = \"warning\" in the cluster definition. Once the pod has started, remove that override and set initChownData = false.";
+  nonRootFailsBuild =
+    clusterConfig:
+    kix.scorecard.effectiveSeverity {
+      inherit clusterConfig;
+      rule = "security.nonRoot";
+      namespaceName = scope.namespaceName;
+      owner = "app-team";
+    } == "error";
 in
 {
   meta = {
@@ -29,12 +42,16 @@ in
     # persistence.enabled hand-rolls the model-cache claim; the preferred
     # path is a `storage` dep + sibling persistent-volume-claim instance.
     # Grant kept until refactored (audited by unsafeGrants).
-    # The upstream image runs as root; the model cache is written by it.
     unsafe = [
       "raw-pvc"
-      "run-as-root"
     ];
   };
+
+  # Printed on the build that passes too, as the reminder to undo the
+  # override afterwards.
+  warnings =
+    { config, ... }:
+    lib.optional config.initChownData chownOverrideHint;
 
   options = {
     image = lib.mkOption {
@@ -60,12 +77,45 @@ in
         availability level (v2_discussions/145).
       '';
     };
+    initChownData = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Run `chown -R 1000:1000 /cache` as root in an init container
+        before the model server starts. It runs as uid 1000, and fsGroup
+        does not change ownership on hostPath or local-path volumes, so a
+        cache volume written by an earlier root-run release stays
+        unwritable. This matters only with persistence.enabled, and
+        deleting the claim so the models download again works too. Enable
+        this for the first deploy after such an upgrade. The init container
+        fails the `security.nonRoot` scorecard rule, so that deploy also
+        needs
+        `scorecard.ruleOverrides.byNamespace.<namespace>."security.nonRoot".severity = "warning"`.
+        Remove both once the pod has started.
+      '';
+    };
     persistence = lib.mkOption {
       type = lib.types.anything;
       default = {
         enabled = false;
         size = "10Gi";
         storageClass = null;
+      };
+    };
+    # Neither the immich-charts chart nor the compose file sets resources.
+    # With the default CLIP and facial-recognition models loaded the worker
+    # held about 1 GiB on kind; the limit leaves room for larger models.
+    resources = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        requests = {
+          cpu = "250m";
+          memory = "1Gi";
+        };
+        limits = {
+          cpu = "4";
+          memory = "4Gi";
+        };
       };
     };
   };
@@ -125,6 +175,44 @@ in
             replicas = config.replicaCount;
             selector.matchLabels = scope.selectorLabels;
             strategy.type = "RollingUpdate";
+            # Kubernetes default: Immich documents no shutdown drain.
+            template.spec.terminationGracePeriodSeconds = 30;
+            # The image defines no user. Immich supports any non-root uid that
+            # can write /cache (docs FAQ, "run as non-root"). OnRootMismatch
+            # relabels the cache only while its root lacks the group.
+            template.spec.securityContext = {
+              runAsNonRoot = true;
+              runAsUser = 1000;
+              runAsGroup = 1000;
+              fsGroup = 1000;
+              fsGroupChangePolicy = "OnRootMismatch";
+            };
+            template.spec.${if config.initChownData then "initContainers" else null} = lib.singleton (
+              if nonRootFailsBuild clusterConfig then
+                throw "${name}: ${chownOverrideHint}"
+              else
+                {
+                  name = "init-chown-data";
+                  image = "docker.io/library/busybox:1.38.0";
+                  command = [
+                    "chown"
+                    "-R"
+                    "1000:1000"
+                    self.cacheMount.mountPath
+                  ];
+                  securityContext = {
+                    runAsNonRoot = false;
+                    runAsUser = 0;
+                    allowPrivilegeEscalation = false;
+                    readOnlyRootFilesystem = true;
+                    capabilities = {
+                      add = [ "CHOWN" ];
+                      drop = [ "ALL" ];
+                    };
+                  };
+                  volumeMounts = [ { inherit (self.cacheMount) name mountPath; } ];
+                }
+            );
             template.spec.containers = [
               {
                 name = "immich-machine-learning";
@@ -143,12 +231,21 @@ in
                 startupProbe = healthCheck // {
                   failureThreshold = 60;
                 };
+                resources = config.resources;
+                securityContext = {
+                  allowPrivilegeEscalation = false;
+                  readOnlyRootFilesystem = true;
+                };
               }
             ];
           };
         }
         |> kix.withMounts [
           self.cacheMount
+          (kix.mount.emptyDir {
+            name = "tmp";
+            mountPath = "/tmp";
+          })
         ]
         |> scope.mkDeployment;
 

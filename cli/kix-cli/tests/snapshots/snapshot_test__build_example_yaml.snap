@@ -2080,8 +2080,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
-    kix.run/depends-on: '68ma8mgsdkfr3wyx4jf2zn48srgvshc1,amcy3an3i9m37k3xvvkjsbrw1w5nhwrl,awzwpm53w1kb4ysngrwmj47whaddgkih,g88kajifw5dyqxmfsir9cfz7l1zl1lvs,hay8ixm1jpr4s01la7296sj2wxd960hr,jfv5x3q25ifqwp7nnh1x1696g5vz8dsn,mqbsfh83bl97z64yk9sg5mlc1flfci9p'
-    kix.run/identity-hash: sc2annc8q3k11l9dvxdw1n67pd0rf18g
+    kix.run/depends-on: '68ma8mgsdkfr3wyx4jf2zn48srgvshc1,amcy3an3i9m37k3xvvkjsbrw1w5nhwrl,awzwpm53w1kb4ysngrwmj47whaddgkih,g88kajifw5dyqxmfsir9cfz7l1zl1lvs,hay8ixm1jpr4s01la7296sj2wxd960hr,mq9c5fv0s5rqllykn6ks80mhlq6fh5i8,mqbsfh83bl97z64yk9sg5mlc1flfci9p'
+    kix.run/identity-hash: kmbw7lig49a2lc49d7w8fd09fgi4mr7b
     kix.run/package: immich
     kix.run/package-namespace: immich
   labels:
@@ -2149,6 +2149,16 @@ spec:
             port: http
           periodSeconds: 10
           timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: '4'
+            memory: '4Gi'
+          requests:
+            cpu: '250m'
+            memory: '1Gi'
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
         startupProbe:
           failureThreshold: 30
           httpGet:
@@ -2159,17 +2169,28 @@ spec:
         volumeMounts:
         - mountPath: /usr/src/app/upload
           name: storage
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      terminationGracePeriodSeconds: 30
       volumes:
       - name: storage
         persistentVolumeClaim:
           claimName: storage
+      - emptyDir: {}
+        name: tmp
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
     kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih
-    kix.run/identity-hash: '8fx07k4b82jzc3afvsnal6hvw1abvdhj'
+    kix.run/identity-hash: '7c5jjr3kz8j453h33z5hjn9fhcgsx284'
     kix.run/package: machine-learning
     kix.run/package-namespace: immich
   labels:
@@ -2223,6 +2244,16 @@ spec:
             port: http
           periodSeconds: 10
           timeoutSeconds: 1
+        resources:
+          limits:
+            cpu: '4'
+            memory: '4Gi'
+          requests:
+            cpu: '250m'
+            memory: '1Gi'
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
         startupProbe:
           failureThreshold: 60
           httpGet:
@@ -2233,6 +2264,15 @@ spec:
         volumeMounts:
         - mountPath: /cache
           name: cache
+        - mountPath: /tmp
+          name: tmp
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      terminationGracePeriodSeconds: 30
       topologySpreadConstraints:
       - labelSelector:
           matchLabels:
@@ -2247,6 +2287,8 @@ spec:
       volumes:
       - emptyDir: {}
         name: cache
+      - emptyDir: {}
+        name: tmp
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -3041,15 +3083,15 @@ apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
   annotations:
-    kix.run/built-via: /nix/store/by13rkv3nahxs7m1pbmmlsib46fjb28c-k8s-activation-example
-    kix.run/depends-on: '0iq67p4var2drxj3fnik545qgdf2hlgy,87ynfd4131bzczch3fwzwnkgv5xgvlx3,azsh2xz3xqmx9nm8rdyx85cir5skgzm7,g7460cvrkvf78xng9w741vw95fg0618j,jbxbg4y1yi3g7r9glqahavayqmq4ivyy,jq5w4w734v394dkabnsl2913g6ccdvsm,q6wsjv11wyzvny3qv67m1ikmifldwlsg,qm3q27fq9bpg01ya29alsf8kq6g5z07g,wgr11rv93ss5ppb4ym2l9k1kzwm2h1zp,yd165yf11lfpldh835wvq7l3kl1bjc7s,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
-    kix.run/identity-hash: l80h1xcnxr6k01km0wsqdspznh918x4w
+    kix.run/built-via: /nix/store/jfzbri6sbqga4dn976iryl8xzx7jbxnx-k8s-activation-example
+    kix.run/depends-on: '0iq67p4var2drxj3fnik545qgdf2hlgy,87ynfd4131bzczch3fwzwnkgv5xgvlx3,azsh2xz3xqmx9nm8rdyx85cir5skgzm7,g7460cvrkvf78xng9w741vw95fg0618j,i6q3y1ijsm7rl41jbi3gpmwcxqh8s79b,jbxbg4y1yi3g7r9glqahavayqmq4ivyy,jq5w4w734v394dkabnsl2913g6ccdvsm,qm3q27fq9bpg01ya29alsf8kq6g5z07g,vdfbbxv7p28973qh765rp1vkpmm1723z,yd165yf11lfpldh835wvq7l3kl1bjc7s,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
+    kix.run/identity-hash: icjpvmcshzy8xvgxwpxv3g4g1rgg1q8y
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
   labels:
     app.kubernetes.io/managed-by: kix
     kix.run/cluster: example
-  name: example-l80h1xcnxr6k
+  name: example-icjpvmcshzy8
 spec:
   instances:
     cache:
@@ -3119,8 +3161,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: a11g3yw3743nc98p4bil3cfvxykl77cj,awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: q6wsjv11wyzvny3qv67m1ikmifldwlsg
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,l68ljih9cag0bjajykqbcs31gvp9knc9,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: i6q3y1ijsm7rl41jbi3gpmwcxqh8s79b
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/root: immich-server
@@ -3163,8 +3205,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,jfv5x3q25ifqwp7nnh1x1696g5vz8dsn,vc4lw2i2hl8317anzdd6wxvz67kvbijh,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: wgr11rv93ss5ppb4ym2l9k1kzwm2h1zp
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,mq9c5fv0s5rqllykn6ks80mhlq6fh5i8,vc4lw2i2hl8317anzdd6wxvz67kvbijh,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: vdfbbxv7p28973qh765rp1vkpmm1723z
     kix.run/inverse-deps: PodDisruptionBudget/machine-learning
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
@@ -6633,8 +6675,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,sc2annc8q3k11l9dvxdw1n67pd0rf18g
-    kix.run/identity-hash: a11g3yw3743nc98p4bil3cfvxykl77cj
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,kmbw7lig49a2lc49d7w8fd09fgi4mr7b
+    kix.run/identity-hash: l68ljih9cag0bjajykqbcs31gvp9knc9
     kix.run/package: immich
     kix.run/package-namespace: immich
   labels:
@@ -6658,8 +6700,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: '8fx07k4b82jzc3afvsnal6hvw1abvdhj,awzwpm53w1kb4ysngrwmj47whaddgkih'
-    kix.run/identity-hash: jfv5x3q25ifqwp7nnh1x1696g5vz8dsn
+    kix.run/depends-on: '7c5jjr3kz8j453h33z5hjn9fhcgsx284,awzwpm53w1kb4ysngrwmj47whaddgkih'
+    kix.run/identity-hash: mq9c5fv0s5rqllykn6ks80mhlq6fh5i8
     kix.run/package: machine-learning
     kix.run/package-namespace: immich
   labels:

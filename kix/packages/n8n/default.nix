@@ -49,6 +49,26 @@ in
     availability.max = "none";
   };
 
+  # n8n 1.74 reaches Redis through QUEUE_BULL_REDIS_HOST (or cluster
+  # nodes) and has no Sentinel client. With Sentinel on, the valkey Service
+  # also routes to replicas, where Bull's writes fail with READONLY, and a
+  # standalone valkey with several pods runs that many unrelated primaries.
+  # So n8n asks its valkey for one standalone pod. That costs no redundancy
+  # n8n has, since its main instance is already a single pod.
+  deps.valkey = {
+    config = {
+      sentinel.enabled = false;
+      replicaCount = 1;
+    };
+    # Catches a valkey the injection above does not reach, such as an import.
+    assertions =
+      dep:
+      lib.optional (dep.out ? sentinelPort) {
+        assertion = false;
+        message = "n8n '${name}' needs a standalone valkey with one pod: n8n 1.74 has no Sentinel client, so its queue writes would reach read-only replicas through the valkey Service. Set sentinel.enabled = false and replicaCount = 1 on the valkey instance.";
+      };
+  };
+
   options = {
     image = lib.mkOption {
       type = lib.types.anything;
@@ -89,6 +109,18 @@ in
         };
         port = 5679;
         concurrency = 10;
+        # The 8gears/n8n chart sets no resources. Workers run the same
+        # workflow code as the main instance, so they get its defaults.
+        resources = {
+          requests = {
+            cpu = "100m";
+            memory = "256Mi";
+          };
+          limits = {
+            cpu = "1";
+            memory = "1Gi";
+          };
+        };
       };
     };
     port = lib.mkOption {
@@ -116,6 +148,15 @@ in
     env = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
+      description = ''
+        Extra n8n environment variables, applied over the package's own.
+        n8n runs with a read-only root filesystem, and
+        N8N_RESTRICT_FILE_ACCESS_TO defaults to "/tmp", an emptyDir that
+        does not survive a restart, so file nodes can read and write only
+        there. The package mounts no other writable volume. Setting
+        N8N_RESTRICT_FILE_ACCESS_TO here (";"-separated directories)
+        widens what file nodes may read.
+      '';
     };
     existingSecret = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -183,10 +224,16 @@ in
             DB_POSTGRESDB_DATABASE = config.database.name;
             DB_POSTGRESDB_USER = config.database.user;
             # Redis / Queue — derived from valkey DI dep
-            QUEUE_BULL_REDIS_HOST = valkey.out.primaryFqdn;
+            QUEUE_BULL_REDIS_HOST = valkey.out.fqdn;
             QUEUE_BULL_REDIS_PORT = valkey.out.port;
             # Execution mode — queue mode for workers
             EXECUTIONS_MODE = "queue";
+            # The root filesystem is read-only, /tmp is an emptyDir and
+            # N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES (default true) blocks
+            # ~/.n8n, so /tmp is the only place the Read/Write Files from
+            # Disk node can write. Limiting file nodes to it makes a path
+            # elsewhere fail with n8n's "not allowed" error, not EROFS.
+            N8N_RESTRICT_FILE_ACCESS_TO = "/tmp";
           }
           // config.env;
         };
@@ -196,8 +243,11 @@ in
           apiVersion = "v1";
           kind = "ConfigMap";
           name = "${name}-worker-config";
+          # A worker starts its /healthz server only when
+          # QUEUE_HEALTH_CHECK_ACTIVE is true, and PORT does not apply to it.
           data = {
-            PORT = toString config.worker.port;
+            QUEUE_HEALTH_CHECK_ACTIVE = "true";
+            QUEUE_HEALTH_CHECK_PORT = toString config.worker.port;
           };
         };
 
@@ -216,6 +266,9 @@ in
                 };
                 spec = {
                   serviceAccountName = self.serviceAccount.out.name;
+                  # The 8gears/n8n chart's value; n8n's own
+                  # N8N_GRACEFUL_SHUTDOWN_TIMEOUT also defaults to 30s.
+                  terminationGracePeriodSeconds = 30;
                   securityContext = {
                     fsGroup = 1000;
                     runAsNonRoot = true;
@@ -231,6 +284,18 @@ in
                       ports = [
                         (kix.port "http" config.port)
                       ];
+                      # Probes follow the 8gears/n8n chart: n8n listens only
+                      # after migrations, so the startup probe allows five
+                      # minutes, and /healthz/readiness also reports the
+                      # database connection.
+                      startupProbe = {
+                        httpGet = {
+                          path = "/healthz";
+                          port = "http";
+                        };
+                        periodSeconds = 10;
+                        failureThreshold = 30;
+                      };
                       livenessProbe = {
                         httpGet = {
                           path = "/healthz";
@@ -242,7 +307,7 @@ in
                       };
                       readinessProbe = {
                         httpGet = {
-                          path = "/healthz";
+                          path = "/healthz/readiness";
                           port = "http";
                         };
                         periodSeconds = 10;
@@ -250,10 +315,23 @@ in
                         failureThreshold = 3;
                       };
                       resources = config.resources;
+                      securityContext = {
+                        allowPrivilegeEscalation = false;
+                        readOnlyRootFilesystem = true;
+                      };
                       volumeMounts = [
                         {
                           name = "data";
                           mountPath = "/home/node/.n8n";
+                        }
+                        {
+                          name = "tmp";
+                          mountPath = "/tmp";
+                        }
+                        # n8n compiles its static assets into ~/.cache on start.
+                        {
+                          name = "cache";
+                          mountPath = "/home/node/.cache";
                         }
                       ];
                     }
@@ -261,6 +339,14 @@ in
                   volumes = [
                     {
                       name = "data";
+                      emptyDir = { };
+                    }
+                    {
+                      name = "tmp";
+                      emptyDir = { };
+                    }
+                    {
+                      name = "cache";
                       emptyDir = { };
                     }
                   ];
@@ -286,6 +372,7 @@ in
                   };
                   spec = {
                     serviceAccountName = self.serviceAccount.out.name;
+                    terminationGracePeriodSeconds = 30;
                     securityContext = {
                       fsGroup = 1000;
                       runAsNonRoot = true;
@@ -321,17 +408,31 @@ in
                         };
                         readinessProbe = {
                           httpGet = {
-                            path = "/healthz";
+                            path = "/healthz/readiness";
                             port = "health";
                           };
                           periodSeconds = 10;
                           timeoutSeconds = 1;
                           failureThreshold = 3;
                         };
+                        resources = config.worker.resources;
+                        securityContext = {
+                          allowPrivilegeEscalation = false;
+                          readOnlyRootFilesystem = true;
+                        };
                         volumeMounts = [
                           {
                             name = "data";
                             mountPath = "/home/node/.n8n";
+                          }
+                          {
+                            name = "tmp";
+                            mountPath = "/tmp";
+                          }
+                          # n8n compiles its static assets into ~/.cache on start.
+                          {
+                            name = "cache";
+                            mountPath = "/home/node/.cache";
                           }
                         ];
                       }
@@ -339,6 +440,14 @@ in
                     volumes = [
                       {
                         name = "data";
+                        emptyDir = { };
+                      }
+                      {
+                        name = "tmp";
+                        emptyDir = { };
+                      }
+                      {
+                        name = "cache";
                         emptyDir = { };
                       }
                     ];

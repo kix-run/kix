@@ -19,19 +19,32 @@
 
 let
   name = scope.instanceName;
+
+  # init-chown-data runs as root. When security.nonRoot would fail the
+  # build, fail it here instead with the override that lets the migration
+  # deploy through.
+  chownOverrideHint = "initChownData adds the root init container init-chown-data, which fails the security.nonRoot scorecard rule. For the migration deploy, set scorecard.ruleOverrides.byNamespace.${scope.namespaceName}.\"security.nonRoot\".severity = \"warning\" in the cluster definition. Once the pod has started, remove that override and set initChownData = false.";
+  nonRootFailsBuild =
+    clusterConfig:
+    kix.scorecard.effectiveSeverity {
+      inherit clusterConfig;
+      rule = "security.nonRoot";
+      namespaceName = scope.namespaceName;
+      owner = "app-team";
+    } == "error";
 in
 {
   meta = {
     version = "1.36.0";
     description = "Vaultwarden: Bitwarden-compatible password manager";
     owner = "app-team";
-    # The upstream image runs as root and writes /data as root. Running it as
-    # another user needs fsGroup on the data volume, which not every
-    # provisioner honours; a change to test on a cluster, not by hand.
-    unsafe = [
-      "run-as-root"
-    ];
   };
+
+  # Printed on the build that passes too, as the reminder to undo the
+  # override afterwards.
+  warnings =
+    { config, ... }:
+    lib.optional config.initChownData chownOverrideHint;
 
   options = {
     image = lib.mkOption {
@@ -63,11 +76,40 @@ in
       default = { };
       description = "Extra environment variables (SCREAMING_SNAKE_CASE).";
     };
+    # The guerzon/vaultwarden chart sets no resources; these are the values
+    # its values.yaml suggests.
+    resources = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        requests = {
+          cpu = "50m";
+          memory = "256Mi";
+        };
+        limits = {
+          cpu = "300m";
+          memory = "1Gi";
+        };
+      };
+    };
     ingress = kix.options.ingress;
     adminToken = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = "Argon2 hash for admin panel access. Null disables admin panel.";
+    };
+    initChownData = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Run `chown -R 1001:1001 /data` as root in an init container before
+        Vaultwarden starts. Vaultwarden runs as uid 1001, and fsGroup does
+        not change ownership on hostPath or local-path volumes, so a volume
+        written by an earlier root-run release stays unwritable. Enable
+        this for the first deploy after such an upgrade. The init container
+        fails the `security.nonRoot` scorecard rule, so that deploy also
+        needs `scorecard.ruleOverrides.byNamespace.<namespace>."security.nonRoot".severity = "warning"`.
+        Remove both once the pod has started.
+      '';
     };
   };
 
@@ -107,6 +149,8 @@ in
         # vaultwarden role/db, connect with the superuser to the default
         # `postgres` database.
         databaseUrl = "postgresql://$(DB_USERNAME):$(DB_PASSWORD)@${postgres.out.fqdn}:${postgres.out.port}/postgres";
+
+        dataMount = kix.mount.pvc storage { mountPath = "/data"; };
       in
       {
         deployment =
@@ -117,6 +161,47 @@ in
               strategy.type = "Recreate";
               selector.matchLabels = scope.selectorLabels;
               template.spec = {
+                # Kubernetes default: Rocket's own shutdown grace is a few
+                # seconds.
+                terminationGracePeriodSeconds = 30;
+                # The image defines no user. uid 1001 and the fsGroup follow
+                # the guerzon/vaultwarden chart's suggested security context;
+                # fsGroup makes the data volume writable on provisioners that
+                # honour it, and OnRootMismatch skips the recursive relabel
+                # once the volume root already has that group.
+                securityContext = {
+                  runAsNonRoot = true;
+                  runAsUser = 1001;
+                  runAsGroup = 1001;
+                  fsGroup = 1001;
+                  fsGroupChangePolicy = "OnRootMismatch";
+                };
+                ${if config.initChownData then "initContainers" else null} = lib.singleton (
+                  if nonRootFailsBuild clusterConfig then
+                    throw "${name}: ${chownOverrideHint}"
+                  else
+                    {
+                      name = "init-chown-data";
+                      image = "docker.io/library/busybox:1.38.0";
+                      command = [
+                        "chown"
+                        "-R"
+                        "1001:1001"
+                        dataMount.mountPath
+                      ];
+                      securityContext = {
+                        runAsNonRoot = false;
+                        runAsUser = 0;
+                        allowPrivilegeEscalation = false;
+                        readOnlyRootFilesystem = true;
+                        capabilities = {
+                          add = [ "CHOWN" ];
+                          drop = [ "ALL" ];
+                        };
+                      };
+                      volumeMounts = [ { inherit (dataMount) name mountPath; } ];
+                    }
+                );
                 containers = [
                   {
                     name = "vaultwarden";
@@ -157,13 +242,18 @@ in
                       initialDelaySeconds = 5;
                       failureThreshold = 3;
                     };
+                    resources = config.resources;
+                    securityContext = {
+                      allowPrivilegeEscalation = false;
+                      readOnlyRootFilesystem = true;
+                    };
                   }
                 ];
               };
             };
           }
           |> kix.withMounts [
-            (kix.mount.pvc storage { mountPath = "/data"; })
+            dataMount
           ]
           |> scope.mkDeployment;
 

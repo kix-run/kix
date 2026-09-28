@@ -28,6 +28,19 @@
 
 let
   name = scope.instanceName;
+
+  # init-chown-data runs as root. When security.nonRoot would fail the
+  # build, fail it here instead with the override that lets the migration
+  # deploy through.
+  chownOverrideHint = "initChownData adds the root init container init-chown-data, which fails the security.nonRoot scorecard rule. For the migration deploy, set scorecard.ruleOverrides.byNamespace.${scope.namespaceName}.\"security.nonRoot\".severity = \"warning\" in the cluster definition. Once the pod has started, remove that override and set initChownData = false.";
+  nonRootFailsBuild =
+    clusterConfig:
+    kix.scorecard.effectiveSeverity {
+      inherit clusterConfig;
+      rule = "security.nonRoot";
+      namespaceName = scope.namespaceName;
+      owner = "app-team";
+    } == "error";
 in
 {
   meta = {
@@ -40,11 +53,6 @@ in
     compatibleWith.database = {
       reason = "immich requires the VectorChord (vchord) extension plus uuid-ossp, cube, earthdistance, unaccent, pg_trgm on its postgres backend";
     };
-    # The upstream server image runs as root; non-root needs fsGroup on the
-    # library volume, which not every provisioner honours.
-    unsafe = [
-      "run-as-root"
-    ];
   };
 
   # Per-dep diagnostics + config injections — co-located with the dep.
@@ -124,6 +132,12 @@ in
         "library storage is ${dep.out.size or "unknown"} — recommended minimum is 50Gi for photo libraries";
   };
 
+  # Printed on the build that passes too, as the reminder to undo the
+  # override afterwards.
+  warnings =
+    { config, ... }:
+    lib.optional config.initChownData chownOverrideHint;
+
   options = {
     image = lib.mkOption {
       type = lib.types.anything;
@@ -164,7 +178,40 @@ in
         enabled = false;
       };
     };
+    # Neither the immich-charts chart nor the compose file sets resources.
+    # Immich's requirements page asks for 6 GB of RAM and 2 cores for the
+    # whole stack; the server's share leaves room for thumbnail and video
+    # jobs, which run in-process.
+    resources = lib.mkOption {
+      type = lib.types.anything;
+      default = {
+        requests = {
+          cpu = "250m";
+          memory = "1Gi";
+        };
+        limits = {
+          cpu = "4";
+          memory = "4Gi";
+        };
+      };
+    };
     ingress = kix.options.ingress;
+    initChownData = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Run `chown -R 1000:1000 /usr/src/app/upload` as root in an init
+        container before immich-server starts. The server runs as uid
+        1000, and fsGroup does not change ownership on hostPath or
+        local-path volumes, so a library written by an earlier root-run
+        release stays unwritable. The chown walks the whole library, so a
+        large one takes a while. Enable this for the first deploy after
+        such an upgrade. The init container fails the `security.nonRoot`
+        scorecard rule, so that deploy also needs
+        `scorecard.ruleOverrides.byNamespace.<namespace>."security.nonRoot".severity = "warning"`.
+        Remove both once the pod has started.
+      '';
+    };
   };
 
   build = [
@@ -221,6 +268,10 @@ in
         # Volume name auto-derives from the resource's out.name.
         libraryMount = kix.mount.pvc storage { mountPath = "/usr/src/app/upload"; };
         configMount = kix.mount.configMap self.configMap { mountPath = "/config"; };
+        tmpMount = kix.mount.emptyDir {
+          name = "tmp";
+          mountPath = "/tmp";
+        };
 
         # --- Server Deployment ---
         deployment =
@@ -230,6 +281,46 @@ in
               replicas = config.replicaCount;
               selector.matchLabels = scope.selectorLabels;
               strategy.type = "RollingUpdate";
+              # Kubernetes default: Immich documents no shutdown drain.
+              template.spec.terminationGracePeriodSeconds = 30;
+              # uid 1000 is the image's `node` user. Immich supports any
+              # non-root uid that can write the library (docs FAQ, "run as
+              # non-root"); fsGroup grants that on provisioners that honour it.
+              # OnRootMismatch relabels the library only while its root lacks
+              # the group, not on every start.
+              template.spec.securityContext = {
+                runAsNonRoot = true;
+                runAsUser = 1000;
+                runAsGroup = 1000;
+                fsGroup = 1000;
+                fsGroupChangePolicy = "OnRootMismatch";
+              };
+              template.spec.${if config.initChownData then "initContainers" else null} = lib.singleton (
+                if nonRootFailsBuild clusterConfig then
+                  throw "${name}: ${chownOverrideHint}"
+                else
+                  {
+                    name = "init-chown-data";
+                    image = "docker.io/library/busybox:1.38.0";
+                    command = [
+                      "chown"
+                      "-R"
+                      "1000:1000"
+                      self.libraryMount.mountPath
+                    ];
+                    securityContext = {
+                      runAsNonRoot = false;
+                      runAsUser = 0;
+                      allowPrivilegeEscalation = false;
+                      readOnlyRootFilesystem = true;
+                      capabilities = {
+                        add = [ "CHOWN" ];
+                        drop = [ "ALL" ];
+                      };
+                    };
+                    volumeMounts = [ { inherit (self.libraryMount) name mountPath; } ];
+                  }
+              );
               template.spec.containers = [
                 {
                   name = "immich-server";
@@ -284,6 +375,11 @@ in
                   startupProbe = healthCheck // {
                     failureThreshold = 30;
                   };
+                  resources = config.resources;
+                  securityContext = {
+                    allowPrivilegeEscalation = false;
+                    readOnlyRootFilesystem = true;
+                  };
                 }
               ];
             };
@@ -295,6 +391,7 @@ in
           |> kix.withMounts [
             self.libraryMount
             self.configMount
+            self.tmpMount
           ]
           # scope.mkDeployment sets apiVersion/kind, auto-copies selector to
           # template labels (preventing mismatch), then compiles to storepath via mkResource.

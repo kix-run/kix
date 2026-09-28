@@ -71,7 +71,6 @@ let
       }
     ];
     loki = [ lokiLabels ];
-    metabase = [ nonRoot ];
     # The labels finding comes from the auto-instantiated loki.
     promtail = [ lokiLabels ];
     redis = [
