@@ -824,8 +824,11 @@ in
                 {
                   name = "operator-certs";
                   secret = {
-                    # Created by the stackgres operator at runtime, not by kix.
-                    secretName = kix.untrackedRef "${name}-certs";
+                    # The operator creates this Secret at runtime (INSTALL_CERTS=true).
+                    secretName = kix.untrackedRef {
+                      name = "${name}-certs";
+                      by = "self";
+                    };
                     optional = true;
                     defaultMode = 420;
                   };

@@ -172,6 +172,7 @@ Docs worth keeping alive but with no near-term implementation pressure. Only rea
 | 72 | [AI cluster recipes](interesting_thoughts/72_ai_cluster_recipes.md) | GPU/AI cluster recipes for validated hardware + stack combinations. Linked to `26` (Nix-built images). |
 | 89 | [Eval operator mode](interesting_thoughts/89_eval_operator_mode.md) | In-cluster `nix eval`: operator pulls git, evals, applies. Pull model, no-CI deploy. |
 | 133 | [Cluster read-back surface](interesting_thoughts/133_cluster_readback_surface.md) | Follow-ups from the 2026-07-26 annotation bug fixes. What Kix can reason about from stamped annotations without a build. Confirmed seal-path parse ambiguity; the case for moving hook ephemerality out of the local nix store and into `depends-on`; and why the now-reliable `kix.dev/activations` set is still only an *upper bound* on referencing activations (matters before `55` builds ref-counted cleanup on it). |
+| 152 | [Cluster doer registry](interesting_thoughts/152_cluster_doer_registry.md) | Packages declare which of their kinds create other objects, so `kix.untrackedRef`'s `by` can require a known creator instead of rejecting a denylist of passive built-in kinds. |
 
 ---
 

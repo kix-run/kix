@@ -3222,6 +3222,350 @@ let
         builtins.toJSON (web.metadata.annotations or { })
       }, audit: ${builtins.toJSON untrackedFindings}";
 
+    # `by = "self"` on a Deployment's own optional Secret stamps no
+    # expectation and no dependency, and the audit does not list it. It is
+    # rejected with a kind, and in a ConfigMap. `by` rejects a passive
+    # built-in kind (ConfigMap) and accepts a custom kind of the same name
+    # as a built-in one (a Knative Service).
+    t115-untracked-ref-self-created-and-passive-by =
+      let
+        deployWith =
+          secretName:
+          {
+            self,
+            scope,
+            ...
+          }:
+          {
+            operator = scope.mkDeployment {
+              name = "operator";
+              spec = {
+                replicas = 1;
+                selector.matchLabels = scope.selectorLabels;
+                template = {
+                  metadata.labels = scope.selectorLabels;
+                  spec = {
+                    containers = [
+                      (
+                        {
+                          name = "operator";
+                          image = "example/operator:1";
+                          volumeMounts = [
+                            {
+                              name = "certs";
+                              mountPath = "/certs";
+                            }
+                          ];
+                        }
+                        // containerBase
+                      )
+                    ];
+                    volumes = [
+                      {
+                        name = "certs";
+                        secret = {
+                          inherit secretName;
+                          optional = true;
+                        };
+                      }
+                    ];
+                  };
+                };
+              };
+            };
+            root = self.operator;
+          };
+        clusterWith =
+          build:
+          mkCluster [
+            baseInstances
+            scorecardOn
+            {
+              instances.appns.a.package = {
+                meta.version = "test";
+                inherit build;
+              };
+            }
+          ];
+        cluster = clusterWith (
+          {
+            self,
+            scope,
+            kix,
+            ...
+          }@args:
+          deployWith (kix.untrackedRef {
+            name = "operator-certs";
+            by = "self";
+          }) args
+        );
+        operator = byName "operator" (ofKind "Deployment" (manifests cluster));
+        bareOperator = byName "operator" (
+          ofKind "Deployment" (
+            manifests (
+              clusterWith (
+                {
+                  self,
+                  scope,
+                  kix,
+                  ...
+                }@args:
+                deployWith (kix.untrackedRef "operator-certs") args
+              )
+            )
+          )
+        );
+        untrackedFindings = builtins.filter (f: lib.hasSuffix "untrackedReferences" (f.rule or "")) (
+          (cluster.scorecardReport or { findings = [ ]; }).findings
+        );
+        selfWithKind = evalFails (
+          clusterWith (
+            {
+              self,
+              scope,
+              kix,
+              ...
+            }@args:
+            deployWith (kix.untrackedRef {
+              kind = "Secret";
+              name = "operator-certs";
+              by = "self";
+            }) args
+          )
+        );
+        cmWith =
+          ref:
+          { self, scope, ... }:
+          {
+            cm = scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "c";
+              data.x = ref self;
+            };
+            root = self.cm;
+          };
+        selfInConfigMap = evalFails (
+          clusterWith (
+            {
+              self,
+              scope,
+              kix,
+              ...
+            }@args:
+            cmWith (
+              _:
+              kix.untrackedRef {
+                name = "s";
+                by = "self";
+              }
+            ) args
+          )
+        );
+        byWith =
+          creator:
+          evalFails (
+            clusterWith (
+              {
+                self,
+                scope,
+                kix,
+                ...
+              }@args:
+              let
+                built = cmWith (
+                  self:
+                  kix.untrackedRef {
+                    kind = "Secret";
+                    name = "s";
+                    by = self.creator;
+                  }
+                ) args;
+              in
+              built
+              // {
+                creator = scope.mkResource creator;
+              }
+            )
+          );
+        byConfigMap = byWith {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "other";
+        };
+        byKnativeService = byWith {
+          apiVersion = "serving.knative.dev/v1";
+          kind = "Service";
+          name = "minter";
+        };
+        byNamespace = byWith {
+          apiVersion = "v1";
+          kind = "Namespace";
+          name = "other";
+        };
+        byAPIService = byWith {
+          apiVersion = "apiregistration.k8s.io/v1";
+          kind = "APIService";
+          name = "v1.example.io";
+        };
+      in
+      (
+        !(operator.metadata.annotations ? ${kixKeys.expects})
+        && dependsOn operator == dependsOn bareOperator
+        && untrackedFindings == [ ]
+        && selfWithKind
+        && selfInConfigMap
+        && byConfigMap
+        && !byKnativeService
+        && !byNamespace
+        && byAPIService
+      )
+      || throw "untracked ref by self: ${
+        builtins.toJSON {
+          annotations = operator.metadata.annotations or { };
+          audit = untrackedFindings;
+          inherit
+            selfWithKind
+            selfInConfigMap
+            byConfigMap
+            byKnativeService
+            byNamespace
+            byAPIService
+            ;
+        }
+      }";
+
+    # A `by = "self"` reference names its creator only while one resource
+    # carries it: a second Deployment mounting the same name puts it in the
+    # untrackedReferences audit. A workload that requires the object (a
+    # Secret volume without `optional = true`, serviceAccountName) is
+    # rejected. An optional secretKeyRef and a plain env value build.
+    t125-untracked-ref-self-binds-to-one-carrier =
+      let
+        deployment =
+          scope: name: podSpec:
+          scope.mkDeployment {
+            inherit name;
+            spec = {
+              replicas = 1;
+              selector.matchLabels.app = name;
+              template = {
+                metadata.labels.app = name;
+                spec = {
+                  containers = [
+                    (
+                      {
+                        name = "c";
+                        image = "example/${name}:1";
+                      }
+                      // containerBase
+                      // (podSpec.container or { })
+                    )
+                  ];
+                }
+                // removeAttrs podSpec [ "container" ];
+              };
+            };
+          };
+        certsVolume = ref: optional: {
+          volumes = [
+            {
+              name = "certs";
+              secret = {
+                secretName = ref;
+              }
+              // lib.optionalAttrs optional { inherit optional; };
+            }
+          ];
+        };
+        clusterWith =
+          operator: consumer:
+          mkCluster [
+            baseInstances
+            scorecardOn
+            {
+              instances.appns.a.package = {
+                meta.version = "test";
+                build =
+                  {
+                    self,
+                    scope,
+                    kix,
+                    ...
+                  }:
+                  let
+                    ref = kix.untrackedRef {
+                      name = "operator-certs";
+                      by = "self";
+                    };
+                  in
+                  {
+                    operator = deployment scope "operator" (operator ref);
+                    root = self.operator;
+                  }
+                  // lib.optionalAttrs (consumer != null) {
+                    consumer = deployment scope "consumer" (consumer ref);
+                  };
+              };
+            }
+          ];
+        auditOf =
+          cluster:
+          map (f: f.resource) (
+            builtins.filter (f: lib.hasSuffix "untrackedReferences" (f.rule or "")) (
+              (cluster.scorecardReport or { findings = [ ]; }).findings
+            )
+          );
+        builds = cluster: !(evalFails cluster);
+        operatorMounts = ref: certsVolume ref true;
+        secondCarrier = clusterWith operatorMounts (ref: certsVolume ref true);
+        required = evalFails (clusterWith operatorMounts (ref: certsVolume ref false));
+        serviceAccount = evalFails (
+          clusterWith operatorMounts (ref: {
+            serviceAccountName = ref;
+          })
+        );
+        optionalKeyRef = clusterWith operatorMounts (ref: {
+          container.env = [
+            {
+              name = "CERT";
+              valueFrom.secretKeyRef = {
+                name = ref;
+                key = "tls.crt";
+                optional = true;
+              };
+            }
+          ];
+        });
+        envValue = clusterWith (
+          ref:
+          certsVolume ref true
+          // {
+            container.env = [
+              {
+                name = "CERT_SECRET";
+                value = ref;
+              }
+            ];
+          }
+        ) null;
+      in
+      (
+        builds secondCarrier
+        && auditOf secondCarrier == [ "operator-certs" ]
+        && required
+        && serviceAccount
+        && builds optionalKeyRef
+        && builds envValue
+        && auditOf envValue == [ ]
+      )
+      || throw "untracked ref self carriers: ${
+        builtins.toJSON {
+          secondCarrierAudit = auditOf secondCarrier;
+          inherit required serviceAccount;
+        }
+      }";
+
     t57-service-ref-fqdn-carries-cluster-domain =
       let
         refPackage = {

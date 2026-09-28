@@ -1795,8 +1795,11 @@ in
                 {
                   name = "kubevirt-operator-certs";
                   secret = {
-                    # Created by the kubevirt operator at runtime, not by kix.
-                    secretName = kix.untrackedRef "kubevirt-operator-certs";
+                    # virt-operator creates this Secret at runtime; its Role grants create on the name.
+                    secretName = kix.untrackedRef {
+                      name = "kubevirt-operator-certs";
+                      by = "self";
+                    };
                     optional = true;
                   };
                 }

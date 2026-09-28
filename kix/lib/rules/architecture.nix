@@ -161,11 +161,12 @@ in
   # every eval passed, and the pods sat in Init with "secret not found".
   # List every bare claim in a build in one place, so a reviewer reads a
   # list instead of finding them one mount at a time. A name is not listed
-  # when every reference to it in its namespace names the kind and creator
-  # (`kix.untrackedRef { kind; name; by; }`): the referrer depends on the
-  # creator and deploy waits for the object.
+  # when every reference to it in its namespace names its creator: with
+  # `kix.untrackedRef { kind; name; by; }` the referrer depends on the
+  # creator and deploy waits for the object, and with `by = "self"` held
+  # by exactly one resource in the cluster, that resource is the creator.
   untrackedReferences = {
-    description = "Audit: names declared external with kix.untrackedRef that do not name both a kind and a creator";
+    description = "Audit: names declared external with kix.untrackedRef that do not name their creator";
     level = "cluster";
     severity = "info";
     tags = [
@@ -190,7 +191,8 @@ in
           message =
             "'${refName}' is declared external with kix.untrackedRef, so Kix does not create it "
             + "and no check confirms that anything else does. Name the creator and the kind "
-            + "(kix.untrackedRef { kind; name; by; }) so deploy waits for it, or check that something really does: "
+            + "(kix.untrackedRef { kind; name; by; }) so deploy waits for it, or use by = \"self\" when the "
+            + "resource holding the reference creates it. Otherwise check that something really does: "
             + "an operator that mints it at runtime, or a step outside Kix.";
         }
       ) (builtins.attrNames (lib.filterAttrs (_: v: !(v.creatorNamed or false)) externalNames));

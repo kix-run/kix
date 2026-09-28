@@ -641,7 +641,13 @@
       # removes string context. Key entries by the referring resource's
       # namespace so an exemption does not apply across namespaces. Each
       # value is { creatorNamed; }, true only when every reference to that
-      # key named its kind and creator.
+      # key names its creator: with `kind` and `by` (markers.hasCreator), or
+      # with `by = "self"` when exactly one resource in the cluster carries a
+      # self reference to that name. A self reference that reaches a second
+      # resource, such as a consumer mounting the name from the creator's
+      # `out`, says nothing about which of them creates the object. The count
+      # is cluster-wide because such a consumer in another namespace would be
+      # the only carrier in its own namespace.
       externalRefNames =
         let
           markersOf =
@@ -657,7 +663,7 @@
                   [
                     {
                       name = builtins.unsafeDiscardStringContext v;
-                      creatorNamed = builtins.all k8s.markers.namesCreator ms;
+                      markers = ms;
                     }
                   ]
                 else
@@ -678,6 +684,26 @@
             builtins.unsafeDiscardStringContext (
               toString (r.rawManifest.metadata.namespace or "cluster-scoped")
             );
+          refsByResource = map (r: {
+            ns = nsOf r;
+            refs = walk r.rawManifest;
+          }) allResources;
+          # Self-reference name -> number of resources carrying it.
+          selfCarriers = builtins.foldl' (acc: name: acc // { ${name} = (acc.${name} or 0) + 1; }) { } (
+            builtins.concatMap (
+              rr:
+              lib.unique (
+                builtins.concatMap (
+                  ref:
+                  map (p: (k8s.markers.readMarker p).name) (builtins.filter k8s.markers.isSelfCreated ref.markers)
+                ) rr.refs
+              )
+            ) refsByResource
+          );
+          namesCreator =
+            p:
+            k8s.markers.hasCreator p
+            || (k8s.markers.isSelfCreated p && selfCarriers.${(k8s.markers.readMarker p).name} == 1);
         in
         builtins.foldl'
           (
@@ -690,12 +716,12 @@
           { }
           (
             builtins.concatMap (
-              r:
-              map (n: {
-                key = "${nsOf r}/${n.name}";
-                inherit (n) creatorNamed;
-              }) (walk r.rawManifest)
-            ) allResources
+              rr:
+              map (ref: {
+                key = "${rr.ns}/${ref.name}";
+                creatorNamed = builtins.all namesCreator ref.markers;
+              }) rr.refs
+            ) refsByResource
           );
 
       clusterDiagnostics = meta.collectClusterDiagnostics {

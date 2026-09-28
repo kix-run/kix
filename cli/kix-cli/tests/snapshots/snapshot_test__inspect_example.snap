@@ -42,7 +42,7 @@ Resource kinds:
 
 Resources:
   (cluster-scoped):
-    Activation/example-rdxcifhx48cd
+    Activation/example-hdy4q2xpsnsx
     ClusterRole/cert-manager-cainjector
     ClusterRole/cert-manager-cluster-view
     ClusterRole/cert-manager-controller-approve:cert-manager-io

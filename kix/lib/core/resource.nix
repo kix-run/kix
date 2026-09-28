@@ -292,12 +292,83 @@ rec {
 
       depEntries = implicitEntries ++ requiresEntries ++ extraEntries;
 
+      untrackedMarkers = builtins.filter markers.isUntrackedRefPath (
+        builtins.attrNames (builtins.getContext manifestJson)
+      );
+
+      # A `by = "self"` reference claims this resource creates the object.
+      _selfCreatedCheck =
+        let
+          selfCreated = builtins.filter markers.isSelfCreated untrackedMarkers;
+        in
+        if selfCreated != [ ] && markers.isPassiveKind { inherit apiVersion kind; } then
+          throw "kix.untrackedRef (${(markers.readMarker (builtins.head selfCreated)).name}): `by = \"self\"` is used in ${kind} '${name}', a built-in kind that creates no object a manifest refers to by name. Name the resource that creates it with `by`, or use the string form"
+        else
+          null;
+
+      # A pod does not start until every object its spec names without
+      # `optional = true` exists, so a workload cannot require an object it
+      # creates itself. Names passed as args or env values are not checked.
+      _selfRequiredCheck =
+        let
+          lst = x: if builtins.isList x then x else [ ];
+          required =
+            obj: field: if obj.${field} or null == null || obj.optional or false then [ ] else [ obj.${field} ];
+          workloadKinds = {
+            v1 = [ "Pod" ];
+            "apps/v1" = [
+              "Deployment"
+              "StatefulSet"
+              "DaemonSet"
+              "ReplicaSet"
+            ];
+            "batch/v1" = [
+              "Job"
+              "CronJob"
+            ];
+          };
+          podSpec =
+            if kind == "Pod" then
+              rawManifest.spec or { }
+            else if kind == "CronJob" then
+              rawManifest.spec.jobTemplate.spec.template.spec or { }
+            else
+              rawManifest.spec.template.spec or { };
+          containers = lst (podSpec.containers or [ ]) ++ lst (podSpec.initContainers or [ ]);
+          volumeRefs = builtins.concatMap (
+            v:
+            required (v.secret or { }) "secretName"
+            ++ required (v.configMap or { }) "name"
+            ++ required (v.persistentVolumeClaim or { }) "claimName"
+            ++ builtins.concatMap (
+              src: required (src.secret or { }) "name" ++ required (src.configMap or { }) "name"
+            ) (lst (v.projected.sources or [ ]))
+          ) (lst (podSpec.volumes or [ ]));
+          envRefs = builtins.concatMap (
+            c:
+            builtins.concatMap (
+              e:
+              required (e.valueFrom.secretKeyRef or { }) "name"
+              ++ required (e.valueFrom.configMapKeyRef or { }) "name"
+            ) (lst (c.env or [ ]))
+            ++ builtins.concatMap (
+              ef: required (ef.secretRef or { }) "name" ++ required (ef.configMapRef or { }) "name"
+            ) (lst (c.envFrom or [ ]))
+          ) containers;
+          refs = volumeRefs ++ envRefs ++ required podSpec "serviceAccountName";
+          selfRequired = builtins.concatMap markers.selfCreatedNames (builtins.filter builtins.isString refs);
+        in
+        if !(builtins.elem kind (workloadKinds.${apiVersion} or [ ])) || selfRequired == [ ] then
+          null
+        else
+          throw "kix.untrackedRef (${builtins.head selfRequired}): `by = \"self\"` is used in ${kind} '${name}' where the pod requires the object, and the pod cannot start to create it. Set `optional = true` on the reference if this ${kind} creates it; otherwise name the resource that creates it with `by`";
+
       # Objects this manifest expects something else to have created: the
       # untracked references that named a kind (core/markers.nix,
       # experimental). Deploy waits for each before applying this resource.
-      expectations = builtins.filter (e: e != null) (
-        map markers.readExpectation (
-          builtins.filter markers.isUntrackedRefPath (builtins.attrNames (builtins.getContext manifestJson))
+      expectations = builtins.seq _selfCreatedCheck (
+        builtins.seq _selfRequiredCheck (
+          builtins.filter (e: e != null) (map markers.readExpectation untrackedMarkers)
         )
       );
       expectEntries = lib.unique (map (e: "${e.apiVersion}|${e.kind}|${e.name}") expectations);
