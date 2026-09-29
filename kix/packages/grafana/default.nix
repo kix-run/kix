@@ -432,6 +432,8 @@ in
     };
     # Rename the Prometheus one when VictoriaMetrics answers the alias, so
     # the picker says what it is. Keep the uid, so dashboards still find it.
+    # To rename a datasource an existing Grafana already has, also list its
+    # old name in `deleteDatasources`.
     prometheusDatasource =
       autoDatasourceOption "Prometheus" "prometheusServer" "Prometheus"
         "prometheus";
@@ -443,6 +445,29 @@ in
       type = lib.types.listOf lib.types.anything;
       default = [ ];
       description = "Extra datasources appended to auto-discovered ones.";
+    };
+    deleteDatasources = lib.mkOption {
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            name = lib.mkOption { type = lib.types.str; };
+            orgId = lib.mkOption {
+              type = lib.types.int;
+              default = 1;
+            };
+          };
+        }
+      );
+      default = [ ];
+      example = [ { name = "Prometheus"; } ];
+      description = ''
+        Datasources Grafana deletes from its database, by name, before it
+        provisions the ones above. Grafana matches a provisioned datasource
+        by name, so a renamed one looks new, and adding it fails while the
+        old entry still holds its uid ("data source with the same uid
+        already exists"). List the old name here to rename one. Deleting a
+        name that does not exist does nothing, so the entry can stay.
+      '';
     };
     dashboardProviders = lib.mkOption {
       type = lib.types.listOf lib.types.anything;
@@ -1050,10 +1075,15 @@ in
             grafana_datasource = "1";
           };
           data = {
-            "datasources.yaml" = builtins.toJSON {
-              apiVersion = 1;
-              datasources = allDatasources;
-            };
+            "datasources.yaml" = builtins.toJSON (
+              {
+                apiVersion = 1;
+                datasources = allDatasources;
+              }
+              // lib.optionalAttrs (config.deleteDatasources != [ ]) {
+                inherit (config) deleteDatasources;
+              }
+            );
           };
         };
       };

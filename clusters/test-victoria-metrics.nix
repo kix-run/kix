@@ -130,6 +130,9 @@ kix.buildCluster {
           package = packages.grafana;
           # The auto-wired datasource is VictoriaMetrics, not Prometheus.
           config.prometheusDatasource.name = "VictoriaMetrics";
+          # The rename path: drop the entry an older Grafana kept under the
+          # default name, which holds the same uid.
+          config.deleteDatasources = [ { name = "Prometheus"; } ];
         };
         scrape-consumer = {
           package = scrapeConsumerPackage;
