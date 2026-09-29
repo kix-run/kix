@@ -40,8 +40,9 @@ in
     # persistence.inlinePvc hand-rolls a claim; the preferred path is the
     # `storage` dep + sibling persistent-volume-claim instance. Grant kept
     # until the inline option is removed (audited by unsafeGrants).
-    # init-chown-data runs as root to hand the data volume to uid 472. The
-    # grafana container itself runs as 472.
+    # With `initChownData.enabled`, init-chown-data runs as root to hand the
+    # data volume to uid 472. Off by default; the grafana container itself
+    # always runs as 472.
     unsafe = [
       "raw-pvc"
       "run-as-root"
@@ -163,7 +164,12 @@ in
           existingSecret = lib.mkOption {
             type = lib.types.str;
             default = "";
-            description = "Name of an existing Secret holding admin creds.";
+            description = ''
+              Name of an existing Secret holding admin creds. When something
+              creates that Secret at deploy time, such as an operator,
+              pass `kix.untrackedRef { kind = "Secret"; name = "..."; }` so
+              the deploy waits for it before starting Grafana.
+            '';
           };
           userKey = lib.mkOption {
             type = lib.types.str;
@@ -308,7 +314,11 @@ in
     envFromSecret = lib.mkOption {
       type = lib.types.str;
       default = "";
-      description = "Single Secret name appended to the grafana container's envFrom.";
+      description = ''
+        Single Secret name appended to the grafana container's envFrom. As
+        with `admin.existingSecret`, pass `kix.untrackedRef { kind =
+        "Secret"; name = "..."; }` for a Secret created at deploy time.
+      '';
     };
     envFromSecrets = lib.mkOption {
       type = lib.types.listOf (
@@ -346,8 +356,12 @@ in
     dashboardProviders = lib.mkOption {
       type = lib.types.listOf lib.types.anything;
       default = [ ];
-      description = "Extra dashboard providers appended to defaults.";
+      description = "Dashboard providers in addition to the sidecar's. None by default.";
     };
+    # `fsGroup` is what gives Grafana its data volume: the kubelet makes the
+    # volume group 472, group-writable and setgid. `OnRootMismatch` limits
+    # that to mounts where the top directory is wrong, rather than walking
+    # the whole volume on every start.
     securityContext = lib.mkOption {
       type = lib.types.anything;
       default = {
@@ -355,7 +369,20 @@ in
         runAsUser = 472;
         runAsGroup = 472;
         fsGroup = 472;
+        fsGroupChangePolicy = "OnRootMismatch";
       };
+    };
+    initChownData.enabled = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Run a root init container that chowns /var/lib/grafana to 472:472
+        before Grafana starts. Only for a volume whose driver ignores
+        `fsGroup`; everywhere else `securityContext.fsGroup` already gives
+        Grafana the volume. The container carries DAC_READ_SEARCH as well as
+        CHOWN, because Grafana creates directories with mode 0700 and root
+        needs it to read inside them on the next start.
+      '';
     };
     metrics = kix.options.monitor;
     extraEnv = lib.mkOption {
@@ -447,7 +474,9 @@ in
       # When set, kix skips its own Secret and wires both the grafana
       # container env and the sidecars' REQ_USERNAME/REQ_PASSWORD to the
       # external Secret via `secretKeyRef`. The external-secret name passes
-      # through `kix.untrackedRef` so the DI-tracking check accepts it.
+      # through `kix.untrackedRef` so the DI-tracking check accepts it; as
+      # with the mounts below, a caller's `{ kind = "Secret"; ... }`
+      # reference survives the wrap.
       useExternalAdminSecret = config.admin.existingSecret != "";
 
       adminUserEnv =
@@ -523,9 +552,10 @@ in
       # `envFromSecret*`/`envFromConfigMaps` reference external resources
       # the package doesn't manage. Wrap with `kix.untrackedRef` so the
       # DI-tracking check passes without forcing every caller to wrap by
-      # hand. Users who want a tracked edge to a kix-managed resource can
-      # pass the resource's `out.name` directly (already context-bearing,
-      # so `untrackedRef` is a no-op equivalent).
+      # hand. Wrapping keeps the context a caller's value already carries,
+      # so a caller that passes `kix.untrackedRef { kind = "Secret"; name =
+      # "..."; }` still makes kix wait for that Secret to exist before it
+      # applies the Deployment.
       extraConfigmapVolumes = map (m: {
         inherit (m) name;
         configMap = {
@@ -633,11 +663,15 @@ in
 
       mergedIni = lib.recursiveUpdate defaultIni config.grafanaIni;
 
-      # Serialize grafana.ini as INI format
+      # Booleans render as `true`/`false`. `toString` would give `1` and an
+      # empty string, and Grafana reads an empty value as the setting's
+      # default, so `false` would be lost.
+      renderIniValue = v: if builtins.isBool v then (if v then "true" else "false") else toString v;
+
       renderIniSection =
         sectionName: attrs:
         let
-          lines = lib.mapAttrsToList (k: v: "${k} = ${toString v}") attrs;
+          lines = lib.mapAttrsToList (k: v: "${k} = ${renderIniValue v}") attrs;
         in
         "[${sectionName}]\n${lib.concatStringsSep "\n" lines}\n";
 
@@ -652,18 +686,6 @@ in
       );
 
       # ── Dashboard providers ─────────────────────────────────────────────
-      defaultProviders = [
-        {
-          name = "default";
-          orgId = 1;
-          folder = "default";
-          type = "file";
-          disableDeletion = false;
-          editable = true;
-          options.path = "/var/lib/grafana/dashboards/standard";
-        }
-      ];
-
       sidecarProvider = {
         name = "sidecarProvider";
         orgId = 1;
@@ -677,6 +699,50 @@ in
           foldersFromFilesStructure = false;
           path = "/tmp/dashboards";
         };
+      };
+
+      # Only with `initChownData.enabled`; see the option.
+      initChownContainer = {
+        name = "init-chown-data";
+        image = "docker.io/library/busybox:1.38.0";
+        command = [
+          "chown"
+          "-R"
+          "472:472"
+          "/var/lib/grafana"
+        ];
+        # The chart's commented `initChownData.resources` example
+        # (grafana chart 10.5.15).
+        resources = {
+          requests = {
+            cpu = "100m";
+            memory = "128Mi";
+          };
+          limits = {
+            cpu = "100m";
+            memory = "128Mi";
+          };
+        };
+        # chown writes only to the mounted volume.
+        securityContext = {
+          runAsNonRoot = false;
+          runAsUser = 0;
+          readOnlyRootFilesystem = true;
+          capabilities = {
+            add = [
+              "CHOWN"
+              "DAC_READ_SEARCH"
+            ];
+            drop = [ "ALL" ];
+          };
+          seccompProfile.type = "RuntimeDefault";
+        };
+        volumeMounts = [
+          {
+            name = "storage";
+            mountPath = "/var/lib/grafana";
+          }
+        ];
       };
 
       # ── Sidecar security context ────────────────────────────────────────
@@ -851,7 +917,7 @@ in
           "grafana.ini" = grafanaIniStr;
           "dashboardproviders.yaml" = builtins.toJSON {
             apiVersion = 1;
-            providers = defaultProviders ++ config.dashboardProviders;
+            providers = config.dashboardProviders;
           };
         };
       };
@@ -960,47 +1026,6 @@ in
               # (10.5.15) sets none.
               terminationGracePeriodSeconds = 30;
               securityContext = config.securityContext;
-              initContainers = [
-                {
-                  name = "init-chown-data";
-                  image = "docker.io/library/busybox:1.38.0";
-                  command = [
-                    "chown"
-                    "-R"
-                    "472:472"
-                    "/var/lib/grafana"
-                  ];
-                  # The chart's commented `initChownData.resources` example
-                  # (grafana chart 10.5.15).
-                  resources = {
-                    requests = {
-                      cpu = "100m";
-                      memory = "128Mi";
-                    };
-                    limits = {
-                      cpu = "100m";
-                      memory = "128Mi";
-                    };
-                  };
-                  # chown writes only to the mounted volume.
-                  securityContext = {
-                    runAsNonRoot = false;
-                    runAsUser = 0;
-                    readOnlyRootFilesystem = true;
-                    capabilities = {
-                      add = [ "CHOWN" ];
-                      drop = [ "ALL" ];
-                    };
-                    seccompProfile.type = "RuntimeDefault";
-                  };
-                  volumeMounts = [
-                    {
-                      name = "storage";
-                      mountPath = "/var/lib/grafana";
-                    }
-                  ];
-                }
-              ];
               containers = [
                 {
                   name = "grafana";
@@ -1164,6 +1189,9 @@ in
                 "kubernetes.io/os" = "linux";
               }
               // config.nodeSelector;
+            }
+            // lib.optionalAttrs config.initChownData.enabled {
+              initContainers = [ initChownContainer ];
             };
           };
         }
@@ -1233,11 +1261,15 @@ in
               # was silently unscraped (caught live on kind, 2026-08-31).
               selector.matchLabels = self.service.out.selector;
               endpoints = [
-                {
-                  port = "http-web";
-                  interval = config.metrics.interval or "30s";
-                  path = "/metrics";
-                }
+                (
+                  {
+                    port = "http-web";
+                    path = "/metrics";
+                  }
+                  // lib.optionalAttrs (config.metrics.interval != null) {
+                    inherit (config.metrics) interval;
+                  }
+                )
               ];
             };
           }

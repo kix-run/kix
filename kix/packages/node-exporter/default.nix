@@ -243,10 +243,14 @@ in
               # was silently unscraped (caught live on stage1, 2026-08-31).
               selector.matchLabels = self.service.out.selector;
               endpoints = [
-                {
-                  port = "http-metrics";
-                  interval = config.metrics.interval or "30s";
-                }
+                (
+                  {
+                    port = "http-metrics";
+                  }
+                  // lib.optionalAttrs (config.metrics.interval != null) {
+                    inherit (config.metrics) interval;
+                  }
+                )
               ];
             };
           }

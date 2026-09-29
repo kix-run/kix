@@ -89,11 +89,14 @@ pre-commit:
 
     # Unused bindings. Attrset pattern names are exempt: kix reads them
     # with builtins.functionArgs to resolve a package's dependencies.
+    # `--inputs-from .` takes deadnix from this flake's locked nixpkgs, not
+    # the machine's registry. deadnix before 1.3 cannot parse the `|>` pipe
+    # operator: it prints a parse error and passes the file unchecked.
     deadnix:
       glob: "*.nix"
       exclude:
         - "docs/src/snippets/**/*.nix"
-      run: nix run nixpkgs#deadnix -- --fail --no-lambda-pattern-names {staged_files}
+      run: nix run --inputs-from . nixpkgs#deadnix -- --fail --no-lambda-pattern-names {staged_files}
 
     format-python:
       glob: "scripts/**/*.py"
