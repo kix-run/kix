@@ -1,6 +1,93 @@
 ---
 title: "`expose`"
-description: TODO
+description: "Add an Ingress or Gateway API HTTPRoute for one Service or a set of path backends."
 ---
 
-{/* Stub. Source: kix/lib/vocab/compose.nix (expose). In Gateway mode `expose { paths = [ { path; svc; port?; pathType?; } ]; }` renders one HTTPRoute through httpRoute.fromPaths; Ingress mode keeps the Ingress path list. Gateway API is the default direction; Ingress stays supported. Test: kix/lib/tests t96. */}
+`kix.expose` returns a package build function. Add it to the package's `build`
+list after the function that creates the backend Services:
+
+```nix
+build = [
+  ({ self, scope, ... }: {
+    service = scope.mkResource { /* ... */ };
+    root = self.service;
+  })
+  (kix.expose { service = "service"; })
+];
+```
+
+The helper has optional `gateway`, `ingressNginx`, and `clusterIssuer` build
+arguments. It emits an HTTPRoute when a Gateway provider is resolved, or an
+Ingress when an ingress-nginx provider is resolved. Resolving both exposure
+providers is an evaluation error; wire exactly one with the instance's
+`deps` when both are available.
+
+No route is emitted when neither provider is available or when no host can be
+resolved. The host comes from `config.ingress.host`, then falls back to
+`<instance>.<cluster.domain>`.
+
+## Backend modes
+
+Set exactly one of `service` and `paths`.
+
+`service` names one part in the package's returned attrset:
+
+```nix
+kix.expose {
+  service = "service";
+  port = 8080;
+}
+```
+
+`paths` routes several paths, possibly to different Service parts:
+
+```nix
+kix.expose {
+  paths = [
+    { path = "/api"; service = "apiService"; }
+    { path = "/"; service = "frontendService"; port = 80; }
+  ];
+}
+```
+
+Each path accepts `path`, `service`, optional `port`, and optional `pathType`.
+The default path type is `Prefix`. In Gateway mode it is translated to
+`PathPrefix`; `Exact` is supported in both modes. A missing port is read from
+the Service's `out.port`, and evaluation fails when neither is available.
+
+## Arguments
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `service` | `null` | Name of the single backend Service part. Mutually exclusive with `paths`. |
+| `paths` | `null` | Path records for one Ingress or HTTPRoute. Mutually exclusive with `service`. |
+| `partName` | `"ingress"` | Part name for the generated Ingress or HTTPRoute. Derived network-policy part names also start with this value. |
+| `defaultAnnotations` | `{ }` | Base Ingress annotations. `config.ingress.annotations` takes precedence on duplicate keys. Ignored in Gateway mode. |
+| `port` | `null` | Single-backend Service port. `null` reads `out.port`. |
+| `timeouts` | `null` | Gateway API rule timeouts. Copied to every rule and ignored in Ingress mode. |
+| `tlsSecret`, `tlsSecretPart`, `tlsSecretName` | `null` | Ways to name the Ingress TLS Secret. `tlsSecretPart` selects a package part; `tlsSecret` takes a resource; `tlsSecretName` takes a tracked string. |
+
+## TLS
+
+Ingress mode enables TLS when a `clusterIssuer` dependency is resolved. The
+issuer helper annotates the Ingress, and Kix adds a TLS entry for the host. If
+no Secret is supplied, its name is `<instance>-tls`.
+
+A Secret resource must be in the package namespace. A `tlsSecretName` string
+must carry Kix dependency context, either from a resource's `out.name` or from
+`kix.untrackedRef`. Raw string literals are rejected. Gateway mode leaves TLS
+to the Gateway listener and ignores these Ingress TLS settings.
+
+## Generated network policy
+
+With ingress-nginx and a network-policy provider, Kix derives an ingress rule
+from the controller pods to each backend. The ingress controller package must
+export `out.podSelector` and `out.podNamespace`; Kix warns when it cannot
+derive the rule. Gateway mode does not derive this rule because the Gateway
+reference does not describe its data-plane pods.
+
+:::tip[Use it in a task]
+See [Expose a Service with Ingress](/docs/how-to/platform-capabilities/expose-a-service-with-ingress/),
+[Expose a Service with Gateway API](/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/),
+and [Add TLS through cluster issuers](/docs/how-to/platform-capabilities/add-tls-through-cluster-issuers/).
+:::

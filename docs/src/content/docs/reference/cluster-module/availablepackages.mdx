@@ -1,4 +1,79 @@
 ---
 title: "`availablePackages`"
-description: TODO
+description: "A catalog from which Kix creates package instances when dependencies demand them."
 ---
+
+`availablePackages` is the cluster's catalog for demand-driven package
+creation. A catalog entry stays dormant until dependency resolution needs a
+name that the entry provides.
+
+```nix
+availablePackages = {
+  database = packages.postgres;
+
+  metrics = {
+    package = packages.prometheus;
+    namespace = "platform";
+    aliases = [ "monitoring" ];
+  };
+};
+```
+
+## Schema
+
+| Property | Value |
+|---|---|
+| Type | attribute set of package values or entry attribute sets |
+| Default | `{ }` |
+| Set at | `availablePackages.<name>` |
+
+A direct package value is shorthand for `{ package = <value>; }`. A full
+entry accepts:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `package` | package function or package attribute set | required | Package to instantiate. |
+| `namespace` | null or string | `null` | Fixed namespace for instances created from this entry. |
+| `aliases` | list of strings | `[ ]` | Additional dependency names answered by the entry. |
+
+An entry also answers its attribute name, the package's `meta.roles`, and its
+`meta.defaultAliases`.
+
+## When Kix creates an instance
+
+Required package build arguments create dependency demand. Kix first looks
+for an explicit instance or import. If none resolves the name, it consults
+`availablePackages` and creates the matching catalog entry with default
+configuration. Dependencies of the created package are resolved in the same
+way, so creation is transitive.
+
+An optional build argument normally creates no demand. A known platform role
+is an exception: Kix may use a catalog entry as the default provider when the
+role has no explicit instance, import, or environment binding.
+
+The new instance uses the catalog entry's name, even when an alias or role
+caused its creation. Its namespace is chosen in this order:
+
+1. the entry's `namespace`;
+2. the cluster's `autoNamespace`; or
+3. the requesting instance's namespace.
+
+Catalog entries have default package configuration. To preconfigure a
+dormant provider, declare it under `instances` with `optional = true`.
+
+## Ambiguous names
+
+Kix does not rank catalog entries. If several entries answer a demanded name,
+evaluation stops and lists every claimant. Remove the extra entries or
+declare the selected package as an optional instance named after the
+dependency.
+
+A contested name is allowed while nothing demands it. This makes it possible
+to expose a broad package set as a catalog and resolve only the portion a
+cluster uses.
+
+## Related
+
+- [Use auto-instantiation with `availablePackages`, `optional`, and `autoNamespace`](/docs/how-to/debug-dependency-wiring/use-auto-instantiation-with-availablepackages-optional-and-autonamespace/)
+- [`autoNamespace`](/docs/reference/cluster-module/autonamespace/)
+- [`optional`](/docs/reference/instance-schema/optional/)

@@ -1,6 +1,104 @@
 ---
 title: "CRDs and CRD refs"
-description: TODO
+description: "Declare an installed or external CustomResourceDefinition and build typed custom resources that wait for API discovery and use the right scope."
 ---
 
-{/* Stub. Source: kix/lib/scope/builders.nix (mkCRD forwards `ownership`), scope.mkCRDRef { installedBy } marks a CRD another package installs so the CRD barrier waits on it (kix/packages/openebs DiskPool is a user), scope.mkCR. Full upstream CRDs with operator-managed fields use ownership.cede (kix/packages/cdi). */}
+Use `scope.mkCRD` when the package deploys a CustomResourceDefinition. Use
+`scope.mkCRDRef` when the definition is already installed or another resource
+creates it. Both return the same typed custom-resource builders.
+
+The builders add an ordering dependency on the CRD marker. During deploy,
+Kix waits for the CRD to be served and refreshes API discovery before applying
+the custom resource. A plain `requires` edge to an operator Deployment cannot
+provide that guarantee.
+
+This page is hand-maintained. Check `kix/lib/scope/builders.nix` and
+`kix/lib/core/resource.nix` when in doubt.
+
+## Install a CRD with the package
+
+Pass the upstream CRD's `spec` to `scope.mkCRD`:
+
+```nix
+widgetCrd = scope.mkCRD {
+  spec = builtins.fromJSON (builtins.readFile ./widgets.example.com.json);
+  readiness.condition = {
+    type = "Ready";
+    status = "True";
+  };
+};
+```
+
+`mkCRD` derives the custom resource's group, kind, plural, scope, and default
+version from the spec. It chooses the version marked `storage = true`, or the
+first version when none is marked. The CRD itself is cluster-scoped.
+
+Accepted optional fields are:
+
+| Field | Meaning |
+| --- | --- |
+| `labels`, `annotations` | Metadata added to the CRD. |
+| `ownership.cede` | CRD fields that another manager may own, commonly `spec.versions` or conversion-webhook fields. It has the same behavior as on [`mkResource`](/docs/reference/scope-helpers/mkresource/#field-ownership). |
+| `readiness` | Readiness rule stamped on every custom resource made from this declaration. Use either `{ path; equals; }` or `{ condition = { type; status; }; }`. |
+| `factBehavior` | Whether custom resources of this kind conduct endpoint facts or terminate them in operator-created pods. |
+
+`readiness` describes the custom resources, not the CRD. The deploy engine
+handles the CRD's own availability through the CRD barrier.
+
+## Refer to a CRD installed elsewhere
+
+Describe the API without rendering its definition:
+
+```nix
+widgetCrd = scope.mkCRDRef {
+  group = "example.com";
+  kind = "Widget";
+  plural = "widgets";
+  version = "v1";
+  crdScope = "Namespaced";
+  installedBy = self.widgetOperator;
+  readiness.condition = {
+    type = "Ready";
+    status = "True";
+  };
+};
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `group`, `kind`, `plural` | required | Identity of the custom API. |
+| `version` | `v1` | API version used for custom resources unless one overrides it. |
+| `crdScope` | `Namespaced` | `Namespaced` or `Cluster`; selects the resource builder. |
+| `installedBy` | `null` | Resource, or list of resources, that installs the CRD. The CRD marker waits for them. |
+| `readiness` | `null` | Default readiness rule for custom resources. |
+| `factBehavior` | `null` | Endpoint fact behavior for this custom kind. |
+
+With no `installedBy`, the marker represents a CRD the platform has already
+installed. Kix still verifies through discovery that the API is available
+before applying dependent custom resources.
+
+## Build custom resources
+
+Pass either declaration to `scope.mkCR`:
+
+```nix
+widget = scope.mkCR self.widgetCrd {
+  name = scope.instanceName;
+  spec = {
+    size = 3;
+  };
+};
+```
+
+For a namespaced CRD, the resource lands in the consumer's package namespace.
+For a cluster-scoped CRD, it has no namespace. The helper supplies
+`apiVersion`, `kind`, and the CRD dependency. Pass `version = "v1beta1"` on
+one custom resource to select another served version; the helper does not
+validate that the CRD actually serves the override.
+
+`scope.mkCR crd args` is the convenient form of `crd.out.mkCR scope args`.
+The declaration also exposes `crd.out.cr args`, which enriches the arguments
+with `apiVersion`, `kind`, and `requires` but does not seal them in a scope.
+
+See [Declare readiness for custom resources](/docs/how-to/author-packages-and-clusters/declare-readiness-for-custom-resources/)
+for readiness behavior and validation.

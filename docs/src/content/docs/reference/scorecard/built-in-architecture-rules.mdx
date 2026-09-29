@@ -1,4 +1,74 @@
 ---
 title: "Built-in architecture rules"
-description: TODO
+description: "The built-in checks for dependency wiring, selectors, monitoring targets, service addresses, and audited exceptions."
 ---
+
+The architecture rule set lives in `kix.rules.architecture`.
+
+| Rule | Level | Declared severity | What it checks |
+|---|---|---|---|
+| `architecture.annotationDomainOwnership` | package | `warning` | Domain-qualified resource annotations have a known consumer, and the package depends on that consumer when Kix manages it. |
+| `architecture.untrackedReferences` | cluster | `info` | Audits `kix.untrackedRef` names that do not identify their creator. |
+| `architecture.unsafeGrants` | package | `info` | Reports every `meta.unsafe` grant. |
+| `architecture.distinctWorkloadSelectors` | package | `error` | One workload selector does not also select another workload's pods. |
+| `architecture.consistentPortNames` | package | `warning` | A named container port means one number across the instance. |
+| `architecture.distinctSameKindLabels` | package | `error` | Label-selectable resources of one kind can be distinguished by labels. Currently checks Services. |
+| `architecture.selectorCoherence` | manifest | `warning` | A Service selector carries dependency context from a workload. |
+| `architecture.monitorSelectorMatchesService` | cluster | `error` | A ServiceMonitor or VMServiceScrape selects exactly one compatible Service. |
+| `architecture.externalMonitorTargets` | manifest | `info` | Audits monitors marked as targeting a Service outside Kix. |
+| `architecture.fqdnWithoutContext` | manifest | `warning` | A workload's cluster Service address carries context from a Service or ServiceRef. |
+
+## Annotation domains
+
+`annotationDomainOwnership` examines `metadata.annotations` on package
+resources. An annotation with a DNS-shaped prefix before `/` must use:
+
+- a Kubernetes, Kix, Helm, or Kubebuilder reserved domain;
+- a domain listed in `scorecard.knownAnnotationDomains`; or
+- a domain declared by a package in the cluster through
+  `meta.annotationDomains`.
+
+In the last case, the package using the annotation must depend on the package
+that declared the domain. Pod-template annotations and dotless prefixes such
+as `checksum/config` are outside this check.
+
+## Workload and Service identity
+
+`distinctWorkloadSelectors` checks selectors on Deployments, StatefulSets,
+DaemonSets, and Jobs against the pod labels of those kinds and CronJobs. It
+reports a selector that also claims another workload's pods.
+
+`distinctSameKindLabels` currently compares Services within one package
+instance. Equal label sets fail, as does a set that is a subset of another,
+because a selector for the smaller set matches both Services.
+
+`selectorCoherence` accepts an empty Service selector or one with at least one
+value carrying Nix dependency context. Use
+[`kix.service.fromWorkload`](/docs/reference/kix-helpers/service-fromworkload/)
+for the normal traced-selector path.
+
+## Monitor targets
+
+`monitorSelectorMatchesService` compares monitor selectors with Service
+`metadata.labels`, then checks that an endpoint port exists on the matched
+Service. It reports zero matches, no compatible port, or more than one
+scrapable Service.
+
+The rule skips a monitor when it uses `matchExpressions`, selects namespaces
+outside Kix's complete view, or carries
+`kix.run/monitors-external-service: "true"`. The separate
+`externalMonitorTargets` rule reports that exception at info severity.
+`scope.mkServiceRef` markers with declared labels and ports count as Services.
+
+## Service addresses
+
+`fqdnWithoutContext` looks for strings containing a `<service>.<namespace>.svc`
+fragment in workloads. A literal address cannot contribute deployment or
+network-policy information, so the rule asks for the Service or ServiceRef's
+`out.fqdn` value, or a managed Service's `out.url` helper.
+
+:::note[Severity and build failures]
+The table shows each rule's declared severity. Findings are capped by
+`scorecard.maxSeverity`, whose default is `warning`; declared errors fail
+evaluation only when the cap permits `error`.
+:::

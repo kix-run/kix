@@ -3,6 +3,8 @@ title: "`check`"
 description: "Evaluate a cluster, report each validation step as pass, fail, or skip, and optionally write scorecard findings as SARIF."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix check` evaluates a cluster and reports the result of each validation step
 in a table. It does not contact a cluster. Use it as the local and CI gate
 before a deploy.
@@ -55,10 +57,10 @@ Kix then writes the evaluation failure as one error result. Its rule ID is
 
 ## Examples
 
-```text
-kix check demo
-kix check demo --sarif > kix-results.sarif
-```
+<Command commands={[
+  "kix check demo",
+  "kix check demo --sarif > kix-results.sarif",
+]} />
 
 ## Exit status
 

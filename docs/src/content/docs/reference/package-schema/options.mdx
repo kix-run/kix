@@ -1,4 +1,67 @@
 ---
 title: "`options`"
-description: TODO
+description: "The typed configuration interface a package exposes to its instances."
 ---
+
+```nix
+options = {
+  replicas = lib.mkOption {
+    type = lib.types.ints.positive;
+    default = 1;
+    description = "Number of application replicas.";
+  };
+};
+```
+
+`options` is an attribute set of Nix module option declarations. It defines
+the values accepted under `instances.<namespace>.<name>.config` and the
+evaluated `config` passed to the package's build entries.
+
+The attribute is optional. Its default is `{ }`.
+
+## Option declarations
+
+Declare options with `lib.mkOption`. The commonly used fields are:
+
+| Field | Meaning |
+|---|---|
+| `type` | Validation and merge behavior for the value. |
+| `default` | Value used when no module sets the option. |
+| `description` | Explanation shown in generated option reference material. |
+| `example` | Example value for reference material. |
+
+Nested attribute paths create nested configuration:
+
+```nix
+options.metrics.enabled = lib.mkOption {
+  type = lib.types.bool;
+  default = true;
+};
+```
+
+Kix also provides reusable declarations such as `kix.options.image`,
+`kix.options.ingress`, `kix.options.monitor`, and
+`kix.options.healthCheck`.
+
+## Evaluation
+
+Kix evaluates four sources together:
+
+1. defaults declared in `options`;
+2. defaults or fixed values in the package's top-level `config` module;
+3. configuration injected by dependent packages; and
+4. the instance's `config` modules.
+
+A `lib.mkDefault` in the package's own `config` takes precedence over an
+option declaration's `default`, while an instance value or dependency
+injection takes precedence over that package default. Standard Nix module
+types, merge rules, `lib.mkForce`, and validation still apply.
+
+The resulting values are passed to each build entry as `config`. Setting an
+undeclared option is an evaluation error.
+
+## Related
+
+- [Add typed package options](/docs/how-to/author-packages-and-clusters/add-typed-package-options/)
+- [`kix.options.image`](/docs/reference/kix-helpers/image-and-pin-helpers/)
+- [`config`](/docs/reference/instance-schema/config/)

@@ -1,6 +1,87 @@
 ---
 title: "Set the cluster availability level"
-description: TODO
+description: "Declare the cluster's failure domains, choose its default availability level, and override individual instances."
 ---
 
-{/* Stub. Operator recipe: declare cluster.capabilities.multiNode and availabilityZones, read the derived cluster.availability.substrate, pin cluster.availability.default, override one instance, read the emitted topologySpreadConstraints and PodDisruptionBudget. Source: clusters/test-spread.nix, scripts/kind-spread.sh, PR 115 and 116 bodies. */}
+import Command from '/src/components/Command.astro';
+
+Declare the cluster substrate first. Kix derives the default availability
+level and workload placement from these capabilities.
+
+## Declare nodes and zones
+
+For a multi-node cluster spanning three zones:
+
+```nix title="cluster.nix"
+cluster.capabilities.multiNode = true;
+cluster.capabilities.availabilityZones = [ "a" "b" "c" ];
+```
+
+Use the zone values your nodes actually carry. An empty list means the cluster
+is known to occupy one zone. Leave a capability unset only when the environment
+really is unknown; Kix warns when it cannot verify the derived level.
+
+Kix derives `cluster.availability.substrate` from these declarations. It also
+uses that value as `cluster.availability.default` unless you set another
+default.
+
+## Choose a lower default
+
+The default may be lower than the substrate when the cluster does not require
+the strongest available failure guarantee:
+
+```nix title="cluster.nix"
+cluster.availability.default = "node";
+```
+
+The levels are `none`, `pod`, `node`, and `zone`. Setting a level above a
+fully declared substrate is an evaluation error.
+
+## Override one instance
+
+An instance may request another level up to the substrate limit:
+
+```nix title="cluster.nix"
+instances.apps.preview = {
+  package = packages.echo-server;
+  availability = "none";
+};
+```
+
+This override affects the level passed to the package and the placement Kix
+derives for its workloads. Explicit package option values, such as a replica
+count set directly by the instance, still win over the package's defaults.
+
+## Use custom topology labels
+
+The default keys are Kubernetes's well-known zone and hostname labels. Change
+them when the cluster uses another failure-domain vocabulary:
+
+```nix title="cluster.nix"
+cluster.topology.zoneKey = "infrastructure.example.com/rack";
+cluster.topology.hostKey = "infrastructure.example.com/hypervisor";
+```
+
+The labels must exist on the nodes before a hard `node` or `zone` constraint
+can schedule its pods. `kix deploy` warns when a schedulable node lacks a label
+required by a hard constraint.
+
+## Inspect the result
+
+Evaluate the cluster, then inspect the generated constraints and budgets:
+
+<Command commands={[
+  "kix check demo",
+  "kix build demo -o json | jq '.[] | select(.kind == \"Deployment\" or .kind == \"StatefulSet\" or .kind == \"PodDisruptionBudget\") | {kind, name: .metadata.name, replicas: .spec.replicas, spread: .spec.template.spec.topologySpreadConstraints, maxUnavailable: .spec.maxUnavailable}'",
+]} />
+
+Multi-replica Deployments and StatefulSets receive derived spread and a PDB.
+A confirmed single-node cluster has no failure-domain keys, so Kix derives
+neither.
+
+:::note[Reference]
+See [`cluster.availability`](/docs/reference/cluster-module/cluster-availability/),
+[`cluster.topology`](/docs/reference/cluster-module/cluster-topology/), and the
+per-instance [`availability`](/docs/reference/instance-schema/availability/)
+field for the exact options.
+:::

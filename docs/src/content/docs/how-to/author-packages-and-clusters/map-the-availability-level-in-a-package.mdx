@@ -1,6 +1,91 @@
 ---
 title: "Map the availability level in a package"
-description: TODO
+description: "Choose replica and quorum defaults from the cluster's availability requirement, and declare honest package or workload limits."
 ---
 
-{/* Stub. Package author recipe: take the `availability` argument, map replica counts with kix.availability.pick, gate HA features with atLeast, set meta.availability.max for a package that cannot run more than one copy, and know that author-written topologySpreadConstraints win over the derived ones. Source: kix/packages/echo-server, kix/packages/valkey, docs-legacy/BEST-PRACTICES.md section 6.1. Add the per-workload form: pass `availability.max = "pod"` to one builder call when a single controller must stay at one replica while the package's stateful workloads spread; kix/packages/openebs shows both in one package. */}
+Accept the `availability` argument in the package function. It is the resolved
+level for this instance, after the cluster default, instance override, and
+package ceiling have been applied.
+
+```nix title="package.nix"
+{ scope, lib, kix, availability }:
+{
+  # ...
+}
+```
+
+## Map every level
+
+Use `kix.availability.pick` for a replica or quorum default:
+
+```nix title="package.nix"
+options.replicaCount = lib.mkOption {
+  type = lib.types.int;
+  default = kix.availability.pick availability {
+    none = 1;
+    pod = 2;
+    node = 2;
+    zone = 3;
+  };
+};
+```
+
+The table must contain all four levels. This keeps a later cluster-level
+change from reaching an undefined package state. An instance may still set
+`config.replicaCount` explicitly because this mapping is an option default.
+
+Use `kix.availability.atLeast` when a feature switches on at one level:
+
+```nix title="package.nix"
+options.sentinel.enabled = lib.mkOption {
+  type = lib.types.bool;
+  default = kix.availability.atLeast "node" availability;
+};
+```
+
+Choose the mapping from the application's behavior. A stateless server and a
+quorum store often need different counts at the same level.
+
+## Declare a package ceiling
+
+If the package as a whole cannot meet a level, declare the highest one it can
+provide:
+
+```nix title="package.nix"
+meta.availability.max = "pod";
+```
+
+Kix lowers the level passed to the package and warns when an instance requests
+more. The ceiling describes a real limitation; it must not hide a replica
+default that the package could map correctly.
+
+## Limit one workload
+
+A package may contain one single-replica controller beside workloads that use
+the full availability level. Put the ceiling on that builder call:
+
+```nix title="package.nix"
+controller = scope.mkDeployment {
+  name = "${scope.instanceName}-controller";
+  availability.max = "pod";
+  spec.replicas = 1;
+  # ...
+};
+```
+
+This lowers derived placement checks for the controller only. The package's
+`availability` argument and its other workloads are unchanged.
+
+## Leave placement to Kix
+
+Kix derives topology spread and a PodDisruptionBudget for multi-replica
+Deployments and StatefulSets. Set `topologySpreadConstraints` directly only
+when the package needs a rule the availability model cannot express. Once a
+workload supplies its own constraints, the package must also supply a PDB that
+selects it.
+
+:::note[Reference]
+See [`kix.availability`](/docs/reference/kix-helpers/availability/) and
+[`meta.availability`](/docs/reference/meta/availability/) for the exact helper
+and ceiling contracts.
+:::

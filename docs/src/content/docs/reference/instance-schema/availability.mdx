@@ -1,6 +1,29 @@
 ---
 title: "`availability`"
-description: TODO
+description: "Override the cluster availability level for one package instance."
 ---
 
-{/* Stub. Source: kix/lib/plugins/availability/module.nix (instances.<ns>.<inst>.availability). Per-instance override of cluster.availability.default; may exceed the cluster default up to the substrate level. */}
+Set `instances.<namespace>.<instance>.availability` to override
+`cluster.availability.default` for one instance.
+
+```nix
+instances.apps.preview = {
+  package = packages.echo-server;
+  availability = "none";
+};
+```
+
+| Property | Value |
+|---|---|
+| Type | `null` or `none \| pod \| node \| zone` |
+| Default | `null`, which uses `cluster.availability.default` |
+| Upper bound | `cluster.availability.substrate` |
+
+An override may be higher or lower than the cluster default, provided the
+substrate supports it. A package's `meta.availability.max` may lower the
+resolved level further and emits a warning when it does.
+
+The resolved value is passed to the package as its `availability` argument and
+controls derived placement and PodDisruptionBudgets. Explicit instance options,
+including replica counts, still override package defaults derived from the
+level.

@@ -1,4 +1,84 @@
 ---
 title: "`deps`"
-description: TODO
+description: "Configuration and diagnostics a package attaches to its declared dependencies."
 ---
+
+The package-level `deps` attribute lets a consuming package configure and
+validate the instances resolved for its build arguments.
+
+```nix
+deps.database = {
+  config.extensions = [ "pg_trgm" ];
+
+  assertions = database: [
+    {
+      assertion = lib.versionAtLeast database.out.version "16";
+      message = "database version 16 or newer is required";
+    }
+  ];
+};
+```
+
+Each key should match a dependency argument declared by one or more build
+entries.
+
+## Entry fields
+
+| Field | Type | Meaning |
+|---|---|---|
+| `config` | attribute set or function | Configuration injected into the resolved dependency instance. |
+| `warnings` | dependency view to list of strings | Non-fatal diagnostics about the resolved dependency. |
+| `assertions` | dependency view to list of assertions | Conditions that must hold for evaluation to succeed. |
+
+An assertion has the Nix module shape `{ assertion = <bool>; message =
+<string>; }`.
+
+## Configuration injection
+
+Configuration flows from the consumer to its provider. For example, a
+monitoring consumer can ask the resolved Prometheus package to enable a
+feature without knowing which instance supplies `prometheus`:
+
+```nix
+deps.prometheus.config.serviceMonitor.enable = true;
+```
+
+The injected fields are evaluated against the provider package's `options`.
+They override declared option defaults and package-level `lib.mkDefault`
+values. A conflicting plain value from the provider instance remains a Nix
+module conflict.
+
+`config` may be a function of the consumer's evaluated configuration:
+
+```nix
+deps.database.config = consumerConfig: {
+  backups.enable = consumerConfig.production;
+};
+```
+
+Kix resolves these injections in a configuration-only fixed point before it
+evaluates the full package views. Wrap an instance config value with
+`kix.mkLocked` when dependency injection must not change that top-level
+field. An attempted injection then fails with the consumer that supplied it.
+
+Injection applies only when the dependency resolves to an instance reference.
+An instance-level `deps.<argument>` containing a direct value receives no
+configuration injection or package compatibility checks.
+
+## Diagnostics
+
+`warnings` and `assertions` receive the resolved build-argument value. This is
+normally a dependency view with `out`, `raw`, and package metadata. If the
+instance supplied a direct value under `deps.<argument>`, the callback receives
+that value instead. Kix evaluates diagnostics after building the instance.
+Warnings are emitted during evaluation. Failed assertions are collected with
+the cluster's other evaluation failures.
+
+If an optional build argument resolves to no dependency, its package-level
+diagnostics are skipped.
+
+## Related
+
+- [`deps` on an instance](/docs/reference/instance-schema/deps/)
+- [Package diagnostics](/docs/reference/package-schema/package-diagnostics/)
+- [Dependency resolution and why explicit deps matter](/docs/explanation/dependency-resolution-and-why-explicit-deps-matter/)

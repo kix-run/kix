@@ -1,6 +1,75 @@
 ---
 title: "Scorecard levels: manifest, package, namespace, cluster"
-description: TODO
+description: "Why scorecard rules run at four scopes, what each scope can see, and how severity turns the same findings from advice into policy."
 ---
 
-{/* Stub. Manifest and package rules score what ships: package parts plus the resources kix derives (PodDisruptionBudgets, NetworkPolicies, Namespaces). The default cap at warning keeps a first cluster building while every rule still reports; raising scorecard.maxSeverity is the switch from advice to policy. Source: kix/lib/eval/instance.nix (shippedResources), kix/lib/scorecard.nix (capSeverity). */}
+A scorecard rule should run at the smallest scope that contains the evidence it
+needs. Kix has four levels because a container setting, a package contract, a
+namespace policy, and a cluster-wide relationship are different questions.
+Putting all of them in one manifest loop would either hide necessary context
+or make every rule reconstruct the cluster model for itself.
+
+## The four levels
+
+| Level | Unit evaluated | Suitable questions |
+| --- | --- | --- |
+| `manifest` | One shipped Kubernetes resource | Does every container have resource bounds? Is this workload privileged? |
+| `package` | One evaluated package instance and all resources it ships | Does the package declare an owner? Does a dependency justify an annotation domain it uses? |
+| `namespace` | Active instances and resources in one real namespace | Does a managed namespace have a policy resource? Are namespace-wide controls present? |
+| `cluster` | All active instances and their resources | Do references resolve across the finished cluster? Are cluster-wide names and relationships consistent? |
+
+The distinction is about available evidence, not severity. A manifest rule can
+be an error and a cluster rule can be informational.
+
+## Rules score what ships
+
+Manifest and package rules see the complete output associated with an
+instance. This includes package parts, resources injected by typed builders,
+and resources produced by instance processors. A derived
+PodDisruptionBudget or NetworkPolicy is therefore subject to the same
+manifest policy as a resource the package returned directly.
+
+Namespace and cluster rules run after active instances have been assembled.
+They do not count dormant optional instances as deployed. Sentinel namespaces
+used for cluster-level instances are also excluded from namespace-level
+evaluation.
+
+This ordering matters because a rule evaluates the compiled cluster, not just
+the author's input. Policy can check the behavior Kix will deploy after
+defaults, dependency resolution, and resource derivation have done their
+work.
+
+## Findings and enforcement are separate decisions
+
+Each rule produces findings at its declared severity. Overrides can adjust a
+rule for one owner or namespace, and `scorecard.maxSeverity` then caps the
+effective result. The default cap is `warning`, so even a built-in rule that
+declares `error` reports a warning in a new cluster.
+
+That cap lets teams enable the full scorecard before every existing problem
+has been fixed. The findings remain visible and can be counted in reports,
+but they do not stop evaluation. Raising `maxSeverity` to `error` turns
+effective error findings into failed cluster assertions. The same rules and
+the same compiled resources are evaluated; only the enforcement ceiling
+changes.
+
+Disabling a rule is different from capping it. A disabled rule does not run
+its `appliesTo` or `check` function and produces no finding. A capped rule
+still runs and reports at the lower effective severity.
+
+Scorecards complement Kix's structural validation. Cross-resource checks,
+such as requiring an Ingress backend Service to exist, are always-on compiler
+correctness checks and are not affected by scorecard severity or overrides.
+
+:::tip[Apply this to a cluster]
+See [Add scorecard rules](/docs/how-to/policy-ci-and-compliance/add-scorecard-rules/)
+to select and extend rules, then
+[Fail the build on scorecard findings](/docs/how-to/policy-ci-and-compliance/fail-the-build-on-scorecard-findings/)
+when the cluster is ready to enforce error findings.
+:::
+
+:::note[Reference]
+See [Rule schema](/docs/reference/scorecard/rule-schema/) for the exact context
+at each level and [Severity override schema](/docs/reference/scorecard/severity-override-schema/)
+for precedence and pattern matching.
+:::

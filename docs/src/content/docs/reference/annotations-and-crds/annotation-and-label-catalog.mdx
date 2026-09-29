@@ -1,6 +1,113 @@
 ---
 title: "Annotation and label catalog"
-description: TODO
+description: "The metadata Kix writes on rendered and live Kubernetes objects, including ownership, graph, lifecycle, import, and policy markers."
 ---
 
-{/* Stub. Source: kix/lib/core/annotations.nix for every kix.run/* key. Add kix.run/cede-fields and kix.run/expects (each has its own page) and the namespace label pod-security.kubernetes.io/enforce written from meta.podSecurity, plus kix.run/monitors-external-service on a ServiceMonitor that watches a Service kix does not manage. */}
+Kix uses the `kix.run` domain for its annotations, labels, and CRD API group.
+Most entries in this catalog are compiler or deploy-engine records. Package
+authors should use the helper that produces a marker instead of writing its
+serialized value by hand.
+
+This page is hand-maintained. The canonical key lists are
+`kix/lib/core/annotations.nix` and `cli/kix/src/manifest/keys.rs`.
+
+## Labels
+
+| Label | Written on | Meaning |
+| --- | --- | --- |
+| `app.kubernetes.io/managed-by=kix` | Managed resources and Kix records | Selects the objects Kix may inspect. This label alone does not prove that Kix applied an object; the identity and activation annotations provide that evidence. |
+| `kix.run/cluster` | `Activation` records | Names the Kix cluster that owns the record. The CLI uses it to isolate several Kix clusters sharing one Kubernetes cluster. |
+| `pod-security.kubernetes.io/enforce` | Namespaces Kix creates | The Pod Security Admission level derived from package `meta.podSecurity` declarations. See [`meta.podSecurity`](/docs/reference/meta/podsecurity/). |
+
+Kix also applies ordinary recommended Kubernetes labels, such as
+`app.kubernetes.io/name` and `app.kubernetes.io/instance`. Their exact set
+depends on the resource builder and package, so they are not control-plane
+stamps.
+
+## Build identity and live ownership
+
+| Annotation | Meaning |
+| --- | --- |
+| `kix.run/identity-hash` | Identity of the sealed manifest in the Nix store. Dependency hashes make this change when an input resource changes, even if the manifest body does not. |
+| `kix.run/package` | Owning package instance name. |
+| `kix.run/package-namespace` | Namespace of the owning package instance. |
+| `kix.run/lifecycle` | Package lifecycle classification, used when Kix detects stateful migration pairs. |
+| `kix.run/built-via` | Build result path from which an Activation can reload manifests. |
+| `kix.run/activations` | Comma-separated activation identity hashes that currently reference a live object. This is the authority used for pruning and garbage collection. |
+| `kix.run/applied-hash` | Hash of the fields Kix owned after its last apply. `kix drift` compares the current owned fields with this value. |
+
+The CLI adds the identity and package annotations when it loads a build. It
+updates `activations` and `applied-hash` on the live object after applying it.
+Do not use either live annotation as package input.
+
+## Deployment graph and apply behavior
+
+| Annotation | Meaning |
+| --- | --- |
+| `kix.run/depends-on` | Comma-separated typed identity hashes that form the deployment DAG. Kix derives this from Nix string context and explicit resource dependencies. |
+| `kix.run/readiness` | JSON readiness rule for a custom resource. See [`kix.run/readiness`](/docs/reference/annotations-and-crds/kix-run-readiness/). |
+| `kix.run/rerun` | `on-change` on a Job that must be deleted and created again instead of patched. |
+| `kix.run/cede-fields` | Field paths another server-side apply manager may own. See [`kix.run/cede-fields`](/docs/reference/annotations-and-crds/kix-run-cede-fields/). |
+| `kix.run/expects` | Objects that a controller or hook must create before this resource can proceed. See [`kix.run/expects`](/docs/reference/annotations-and-crds/kix-run-expects/). |
+
+The Kix operator also places `kix.run/operator-gc` in an Activation's
+`metadata.finalizers`. It is a finalizer value, not an annotation. It keeps
+the record present until the operator has cleaned up the resources for which
+that Activation was responsible.
+
+## Activation and PackageInstance records
+
+| Annotation | Meaning |
+| --- | --- |
+| `kix.run/root` | Root resource of a `PackageInstance`. |
+| `kix.run/inverse-deps` | Resources outside the instance that depend on it. Recorded for package graph metadata; the CLI does not currently interpret this annotation. |
+| `kix.run/package-requires` | Additional resources in the package's forward closure. The CLI does not currently give this annotation separate scheduling behavior. |
+| `kix.run/post-hooks` | Resources designated as post-hooks by the package. The CLI does not currently schedule them after the rest of the package. |
+| `kix.run/previous` | Activation superseded by this Activation. |
+| `kix.run/deployed-at` | RFC 3339 deployment timestamp. |
+| `kix.run/mode` | `import` on a `PackageInstance` that represents an object Kix references but does not own. |
+| `kix.run/auto-instantiated` | `true` when Kix created the instance from `availablePackages`. |
+| `kix.run/optional-activated` | `true` when dependency demand activated an instance declared with `optional = true`. |
+
+## Import markers
+
+An imported object is represented by a `PackageInstance` marker. These
+annotations preserve enough of the external object's contract for dependency
+resolution and readiness checks.
+
+| Annotation | Meaning |
+| --- | --- |
+| `kix.run/import-kind` | Imported object's kind. |
+| `kix.run/import-apiversion` | Imported object's `apiVersion`. |
+| `kix.run/import-name` | Imported object's name. |
+| `kix.run/import-fqdn` | Fully qualified domain name of an imported Service. |
+| `kix.run/import-secret-keys` | Comma-separated keys an imported Secret must contain. |
+| `kix.run/service-selector` | Imported Service selector encoded as JSON. |
+| `kix.run/service-ports` | Imported Service ports encoded as JSON. |
+| `kix.run/service-labels` | Imported Service labels encoded as JSON. |
+
+## Secrets
+
+| Annotation | Meaning |
+| --- | --- |
+| `kix.run/sops-source` | Nix store path of the SOPS file decrypted at apply time. |
+| `kix.run/content-hash` | Hash of decrypted Secret content. |
+| `kix.run/secret-keys` | Comma-separated keys the Secret declares. |
+| `kix.run/secret-type` | Kubernetes Secret type. |
+| `kix.run/classification` | Data classification supplied by the package. |
+| `kix.run/rotation-policy` | Rotation policy supplied by the package. |
+
+## Derived resources and package-specific markers
+
+| Annotation | Meaning |
+| --- | --- |
+| `kix.run/derived` | `true` when Kix derived the resource instead of the package author declaring it directly. |
+| `kix.run/policy-type` | Derivation rule that produced a NetworkPolicy or another policy resource. |
+| `kix.run/operand-of` | `<group>/<Kind>/<name>` of the operator-managed custom resource whose pods a Service selects. |
+| `kix.run/monitors-external-service` | `true` on a ServiceMonitor that deliberately selects a Service outside Kix; suppresses the normal selector validation. |
+| `kix.run/role` | Role a resource plays within its package. |
+| `kix.run/db-cluster` | Database cluster name attached by database packages. |
+
+Kix reserves its current domain and retired domains such as `kix.dev`.
+Package-owned annotations should use a domain declared through
+`meta.annotationDomains`, not the `kix.run` namespace.

@@ -1,38 +1,48 @@
 ---
 title: "Built-in reliability rules"
-description: "The reliability rule set: resource bounds, probes, PDBs, graceful shutdown, and volume source validation."
+description: "The built-in checks for resource bounds, probes, graceful shutdown, and valid volume sources."
 ---
 
-{/* Maintainer note: this page currently documents only volumeHasSource,
-    added with the collapse-rule normalization work (kixpkgs#9). The rest of
-    the reliability rules (boundedResources, probes, PDB, gracefulShutdown,
-    ...) still need writing up; restructure this page when the scorecard
-    reference section gets its real authoring pass. Rule source:
-    kix/lib/rules/reliability.nix. */}
+The reliability rule set lives in `kix.rules.reliability`. Its manifest rules
+apply to Deployments, StatefulSets, and DaemonSets.
 
-The reliability rule set lives in `kix.rules.reliability`. This page is
-incomplete: it currently documents one rule, and the rest of the set is
-listed in `kix/lib/rules/reliability.nix` until this section is written up.
+| Rule | Declared severity | What it checks |
+|---|---|---|
+| `reliability.boundedResources` | `warning` | Every regular and init container has CPU and memory under both `resources.requests` and `resources.limits`. |
+| `reliability.hasResourceLimits` | `warning` | Every regular and init container has a `resources.limits` attribute. |
+| `reliability.hasResourceRequests` | `warning` | Every regular and init container has a `resources.requests` attribute. |
+| `reliability.hasProbes` | `warning` | Every regular container has both `livenessProbe` and `readinessProbe`. Init containers are not checked. |
+| `reliability.gracefulShutdown` | `info` | `terminationGracePeriodSeconds` is present and not zero. |
+| `reliability.volumeHasSource` | `error` | Every rendered pod volume has a source. |
 
-## volumeHasSource
+`boundedResources` checks the four individual CPU and memory fields.
+`hasResourceLimits` and `hasResourceRequests` check only that their containing
+attributes exist, so the bounded rule is the stricter policy.
 
-| | |
-|---|---|
-| Level | `manifest` |
-| Severity | `error` (fails the build) |
-| Applies to | Deployment, StatefulSet, DaemonSet |
-| Tags | `reliability`, `correctness` |
+## `volumeHasSource`
 
-Every pod volume must carry a source (`emptyDir`, `configMap`, `secret`,
-`persistentVolumeClaim`, ...). A volume with a name and no source is
-rejected by the Kubernetes apiserver, so this rule turns an apply-time
-failure into a build-time one.
+A volume with a name and no source is rejected by the Kubernetes API server.
+The rule normalizes each volume as the renderer will before inspecting it.
+This catches a less obvious case: a helper builds a source from optional
+arguments, every argument is null, and normalization removes the empty
+wrapper.
 
-The check normalizes each volume the same way the renderer will. That
-matters for the one case that is invisible in package source: a volume
-source built by a constructor whose optional arguments are all null
-collapses to absent at render time. The rule sees the collapsed result and
-reports the volume by name. The message states the fixes in order of
-likelihood: add a source, write a literal `{ }` for an intentionally empty
-source, or wrap helper output in
-[`kix.keep`](/docs/reference/kix-helpers/keep/).
+Write a literal empty attribute set for a source whose empty form has meaning:
+
+```nix
+volumes = [
+  {
+    name = "tmp";
+    emptyDir = { };
+  }
+];
+```
+
+When a constructor's result must remain present even if all of its members
+are null, wrap it in [`kix.keep`](/docs/reference/kix-helpers/keep/).
+
+:::note[Severity and build failures]
+The table shows each rule's declared severity. Every finding is still capped
+by `scorecard.maxSeverity`, whose default is `warning`. Set the cap to `error`
+before `volumeHasSource` or another error-severity rule can fail evaluation.
+:::

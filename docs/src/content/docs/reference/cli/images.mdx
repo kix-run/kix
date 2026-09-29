@@ -3,6 +3,8 @@ title: "`images`"
 description: "List every container image a cluster uses, deduplicated and sorted, optionally with the resources and containers that reference each one."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix images` evaluates a cluster and lists the container images it needs. It
 does not contact a cluster. Use the list to pull, mirror, or preload images
 before deploying to an environment without registry access.
@@ -41,11 +43,11 @@ namespace `_cluster`. A cluster with no images prints
 
 ## Examples
 
-```text
-kix images demo
-kix images demo --sources
-kix images demo | xargs -n1 docker pull
-```
+<Command commands={[
+  "kix images demo",
+  "kix images demo --sources",
+  "kix images demo | xargs -n1 docker pull",
+]} />
 
 ## Exit status
 

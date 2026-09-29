@@ -1,6 +1,85 @@
 ---
 title: "Cede fields to a controller"
-description: TODO
+description: "Let an operator or Kubernetes controller retain ownership of selected fields without hiding unrelated apply conflicts."
 ---
 
-{/* Stub. Recipe for a resource whose controller rewrites part of its spec after apply, for example a CRD whose operator manages spec.versions or a webhook configuration whose operator injects caBundle and rules. Declare `ownership.cede = [ "spec.versions[*]" ]` on the resource, deploy, and read the retry line in the apply output. Contrast with handle-server-side-apply-conflicts-safely, which forces ownership the other way. Source: kix/lib/core/resource.nix, cli/kix/src/cluster/apply.rs, kix/packages/cdi, kix/packages/stackgres-operator. Needs a kix-examples adoption scenario and a live capture of the retried apply. */}
+import Command from '/src/components/Command.astro';
+
+Use `ownership.cede` when Kix must supply a field to create a resource but a
+controller is supposed to manage that field afterward. Common examples are an
+operator that rewrites a CRD's served versions or admission webhook rules.
+
+Ceding is deliberately narrow. Kix retries an apply only when every field in
+the API server's conflict response is covered by a declared path. An
+unexpected conflict still stops the deploy.
+
+## Declare the controller-owned paths
+
+Set `ownership.cede` on the resource that Kix renders:
+
+```nix
+crd = scope.mkCRD {
+  spec = upstream.spec;
+  ownership.cede = [ "spec.versions" ];
+};
+```
+
+Use paths from the API server's conflict message, without the leading dot. A
+path covers its descendants, so `spec.versions` also covers a conflict on an
+entry below that field.
+
+For lists, `[*]` matches any indexed or keyed element. This is useful when a
+controller rewrites the rules in every webhook:
+
+```nix
+webhook = scope.mkClusterResource {
+  apiVersion = "admissionregistration.k8s.io/v1";
+  kind = "ValidatingWebhookConfiguration";
+  name = scope.instanceName;
+  ownership.cede = [ "webhooks[*].rules" ];
+  extra.webhooks = upstream.webhooks;
+};
+```
+
+Declare the smallest path the controller needs. Ceding `webhooks[*].rules`
+does not permit a conflict on `webhooks[*].clientConfig`, for example.
+
+## Deploy without forcing ownership
+
+Deploy normally:
+
+<Command
+  commands={[
+    "kix deploy my-cluster",
+  ]}
+/>
+
+On creation, Kix sends the complete field. After the controller takes
+ownership, a later deploy can receive a `409 Conflict`. If all reported paths
+are ceded, Kix logs that another manager owns the ceded fields and retries once
+with those conflicting fields removed. The controller's values remain in the
+live object.
+
+Do not use `--force-conflicts` for this transition. That flag tells the API
+server to give the fields to Kix, so there is no conflict for the ceding logic
+to handle.
+
+## Verify the resulting ownership
+
+Inspect the resource after the controller has reconciled it:
+
+<Command
+  commands={[
+    "kubectl get validatingwebhookconfiguration my-operator -o yaml --show-managed-fields",
+  ]}
+/>
+
+Under `metadata.managedFields`, confirm that the controller owns the paths you
+ceded and that Kix still owns the fields it should manage. If the deploy still
+fails, read every path in the conflict. Add another path only when that field
+is intentionally controlled by the same controller.
+
+`ownership.cede` does not ignore validation failures, immutable-field errors,
+or conflicts outside the declaration. For the opposite transition, where Kix
+must take a field from another manager, follow [Handle server-side apply
+conflicts safely](/docs/how-to/adopt-existing-resources/handle-server-side-apply-conflicts-safely/).

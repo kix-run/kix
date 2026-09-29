@@ -3,6 +3,8 @@ title: "`drift`"
 description: "Report Kix-managed resources whose applied fields have changed since the last deploy, and which tool changed them."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix drift` checks whether the fields Kix applied to each resource still hold
 the values it applied. Every apply writes a `kix.run/applied-hash` annotation;
 the check recomputes that hash from the live object and compares. It needs
@@ -62,10 +64,10 @@ and `noFieldset` counts.
 
 ## Examples
 
-```text
-kix drift --context prod
-kix drift --cluster prod -o json
-```
+<Command commands={[
+  "kix drift --context prod",
+  "kix drift --cluster prod -o json",
+]} />
 
 ## Exit status
 

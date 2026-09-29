@@ -1,6 +1,32 @@
 ---
 title: "`cluster.topology`"
-description: TODO
+description: "The node-label keys Kix uses for zone and host failure domains."
 ---
 
-{/* Stub. Source: kix/lib/plugins/availability/module.nix (cluster.topology.zoneKey and hostKey, defaulting to the well-known labels, and the read-only failureDomainKeys computed from them). Packages whose pods are rendered by an operator read clusterConfig.cluster.topology.failureDomainKeys instead of naming a key. */}
+`cluster.topology` names the node labels used by derived workload placement.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `zoneKey` | string | `topology.kubernetes.io/zone` | Label whose value identifies an availability zone or equivalent outer failure domain. |
+| `hostKey` | string | `kubernetes.io/hostname` | Label whose value identifies a node or equivalent host failure domain. |
+| `failureDomainKeys` | read-only list of strings | derived | Ordered keys Kix uses for spread, outermost first. |
+
+`failureDomainKeys` is derived from cluster capabilities:
+
+| Capabilities | Value |
+|---|---|
+| `multiNode = false` | `[ ]` |
+| more than one declared availability zone | `[ zoneKey hostKey ]` |
+| otherwise | `[ hostKey ]` |
+
+Cloud controllers normally apply the default labels. Set another key for a
+cluster organized around racks, hypervisors, or provider-specific labels:
+
+```nix
+cluster.topology.zoneKey = "infrastructure.example.com/rack";
+```
+
+Packages whose operator creates the eventual Pods can read
+`clusterConfig.cluster.topology.failureDomainKeys` and write the corresponding
+affinity into their custom resource. Ordinary Deployments and StatefulSets do
+not need to read it; Kix derives their spread constraints.

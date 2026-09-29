@@ -3,6 +3,8 @@ title: "`pin`"
 description: "Resolve image tags to digests, record them in a committed pin file, and verify that every recorded digest still exists."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix pin` reads and writes a pin file: committed JSON that records which
 digest each image reference resolved to. A cluster definition reads it with
 `pins.get "<key>"`. `kix pin` does not evaluate the flake or the cluster, so it
@@ -46,7 +48,7 @@ kix pin set <KEY> [--tag <TAG>] [--repository <REPO>]
 | `<KEY>` | Pin name, as the cluster definition reads it with `pins.get "<KEY>"`. |
 | `--tag <TAG>` | Tag to promote to. Required for a new pin; otherwise the existing tag is kept. |
 | `--repository <REPO>` | Repository including the registry host. Required for a new pin; otherwise the existing repository is kept. |
-| `--digest <DIGEST>` | Record this digest instead of asking the registry, for example in an air-gapped promotion. Must be `sha256:` followed by 64 hexadecimal characters. Conflicts with `--no-resolve`. |
+| `--digest <DIGEST>` | Record this digest instead of asking the registry, for example in an air-gapped promotion. Use `sha256:` followed by 64 lowercase hexadecimal characters. Conflicts with `--no-resolve`. |
 | `--no-resolve` | Write the pin without a digest. Kix then never checks that the tag exists, and prints a warning. |
 | `--source-rev <REV>` | Source revision the image was built from. `kix pin check --source-rev` compares against it. Kept from the existing pin when omitted. |
 | `--promoted-by <WHO>` | Who promoted it. Defaults to the CI run (`ci:<workflow>#<run>` on GitHub Actions, or the job URL on GitLab, Jenkins, and Buildkite), otherwise `user@host`. |
@@ -110,11 +112,11 @@ object. Any other `-o` value prints text.
 
 ## Examples
 
-```text
-kix pin set web --repository ghcr.io/acme/web --tag v1.4.0 --init
-kix pin set web --tag v1.5.0 --source-rev "$GITHUB_SHA"
-kix pin check --source-rev "$GITHUB_SHA"
-```
+<Command commands={[
+  "kix pin set web --repository ghcr.io/acme/web --tag v1.4.0 --init",
+  "kix pin set web --tag v1.5.0 --source-rev \"$GITHUB_SHA\"",
+  "kix pin check --source-rev \"$GITHUB_SHA\"",
+]} />
 
 :::tip[Use it in a task]
 See [Create a committed image pin file](/docs/how-to/promote-images/create-a-committed-image-pin-file/)

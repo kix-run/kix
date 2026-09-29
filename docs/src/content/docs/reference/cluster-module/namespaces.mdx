@@ -1,6 +1,46 @@
 ---
 title: "`namespaces`"
-description: TODO
+description: "Configure Namespace metadata, quotas, network policies, and Pod Security Admission."
 ---
 
-{/* Stub. Source: kix/lib/modules.nix (namespaces.<ns> options), kix/lib/eval/cluster.nix (nsResources), kix/lib/eval/namespace.nix. Includes `podSecurity`, which sets the pod-security.kubernetes.io/enforce label; a package's meta.podSecurity can raise the level a namespace gets but a hand-set stricter level is a build error. `global` no longer exists; there is no cluster-wide config attribute. */}
+Kix creates a Namespace resource for each namespace used by an instance. Add a
+`namespaces.<name>` entry to configure that resource or to create a namespace
+before it contains an instance.
+
+```nix
+namespaces.apps = {
+  labels.owner = "application-team";
+  annotations."example.com/contact" = "on-call@example.com";
+  podSecurity = "restricted";
+  resourceQuota = {
+    requests.cpu = "4";
+    requests.memory = "8Gi";
+  };
+  networkPolicies.default-deny = {
+    podSelector = { };
+    policyTypes = [ "Ingress" "Egress" ];
+  };
+};
+```
+
+| Field | Type | Default | Effect |
+|---|---|---|---|
+| `labels` | attribute set of strings | `{ }` | Additional Namespace labels. Kix also writes `kubernetes.io/metadata.name` and `app.kubernetes.io/managed-by`. |
+| `annotations` | attribute set of strings | `{ }` | Namespace annotations. |
+| `resourceQuota` | `null` or attribute set | `null` | Creates `ResourceQuota/<namespace>-quota` with this value as `spec.hard`. |
+| `networkPolicies` | attribute set | `{ }` | Creates one Kubernetes NetworkPolicy per entry, named `<namespace>-<entry>`, with the entry value as `spec`. |
+| `podSecurity` | `null`, `privileged`, `baseline`, or `restricted` | `null` | Sets the `pod-security.kubernetes.io/enforce` label. |
+
+Package metadata also contributes to Pod Security Admission. Kix takes the
+most permissive `meta.podSecurity` requested by an instance in the namespace.
+An explicitly configured namespace level that is stricter than a package
+requires is an evaluation error. When package declarations exist, their most
+permissive value is rendered; a more permissive namespace value does not
+raise it further.
+
+The `networkPolicies` field writes standard Kubernetes NetworkPolicy objects
+directly. It is separate from `cluster.networkPolicy`, which derives policies
+from package dependencies through the configured policy provider.
+
+See [`meta.podSecurity`](/docs/reference/meta/podsecurity/) for the package
+declaration.

@@ -1,4 +1,62 @@
 ---
 title: "Rule schema"
-description: TODO
+description: "The fields, evaluation levels, contexts, and finding shape of a scorecard rule."
 ---
+
+Rules are grouped by category under `scorecard.rules`. Their full name is
+`<category>.<attribute>`:
+
+```nix
+scorecard.rules.organization.requiresOwner = {
+  description = "Packages must declare an owner";
+  level = "package";
+  severity = "warning";
+  tags = [ "governance" ];
+  appliesTo = { meta, ... }: (meta.deprecated or null) == null;
+  check = { meta, ... }:
+    if (meta.owner or null) == null then
+      [ { message = "package has no owner"; } ]
+    else
+      [ ];
+};
+```
+
+## Fields
+
+| Field | Required | Meaning |
+|---|---|---|
+| `description` | no | Human-readable rule description used by reference and reporting tools. |
+| `level` | yes | `manifest`, `package`, `namespace`, or `cluster`. An unknown or missing value is an evaluation error. |
+| `severity` | no | `info`, `warning`, or `error`. Falls back to `scorecard.ruleDefaults.severity`, then `warning`. |
+| `tags` | no | List copied to every finding. Default `[ ]`. |
+| `appliesTo` | no | Function from the level context to a boolean. The rule is skipped when it returns false. |
+| `check` | yes | Function from the level context to a list of finding records. Return `[ ]` when the input passes. |
+
+A finding record normally sets `message`. When omitted, Kix uses `check failed`.
+Cluster-level findings may also set `namespace` and `resource` to
+identify an affected manifest.
+
+## Context by level
+
+| Level | Main context fields | Finding location supplied by Kix |
+|---|---|---|
+| `manifest` | `resource`, `meta`, `instanceName`, `namespaceName` | namespace, instance, and resource name |
+| `package` | `resources`, `parts`, `config`, `meta`, `instanceName`, `namespaceName` | namespace and instance |
+| `namespace` | `instances`, `resources`, `namespaceName`, `networkPolicyKinds` | namespace |
+| `cluster` | `allInstances`, `allResources`, `clusterConfig`, `externalNames` | none, unless the finding supplies namespace and resource |
+
+Package context also includes the annotation-domain and resolved-dependency
+indexes used by built-in architecture rules. These are compiler-facing data;
+custom package rules usually need only the fields in the table.
+
+`resources` at package level includes the package's shipped resources, not
+just the objects written directly in its build function. This lets a rule see
+derived resources associated with the instance.
+
+The effective severity is resolved before `appliesTo` or `check` runs. A
+disabled rule therefore calls neither function.
+
+:::tip[Use it in a task]
+See [Add scorecard rules](/docs/how-to/policy-ci-and-compliance/add-scorecard-rules/)
+for adding a category and checking its output.
+:::

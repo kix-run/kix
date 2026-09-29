@@ -17,6 +17,10 @@ can be added through the same package when the application needs them.
 This guide assumes the application image is already available from a container
 registry and listens on a known port.
 
+The package has no default application image. Set `backend.image.repository`
+and `backend.image.tag`, or assign a record from `pins.get`, before enabling
+the backend.
+
 ## Add the application instance
 
 Add an instance to the application namespace and configure its backend image,
@@ -28,6 +32,16 @@ The example uses Python's built-in HTTP server so the complete configuration
 stays small. Replace `backend.command` and `backend.args` with your image's
 normal startup command, or omit them when the image already declares its
 entrypoint.
+
+Set `backend.enabled = false` for an application that has no backend. Kix then
+omits the backend Deployment, Service, and HPA. Enable `frontend` or `caddy` so
+the instance still has a root resource. A migration hook or worker without its
+own `image` continues to use `backend.image`, even when the backend itself is
+disabled.
+
+Queue workers, cron workers, and custom processes accept either a complete
+image reference string or the same image record used by the backend. Assign a
+pin record when a worker runs a separately released image.
 
 Set `backend.port` to the container's listening port. Kix uses it for the
 container port and the internal Service. The liveness and readiness probes use

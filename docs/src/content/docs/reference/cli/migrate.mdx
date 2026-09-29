@@ -3,6 +3,8 @@ title: "`migrate`"
 description: "One-off cluster migrations: move a cluster's Kix records from the retired `kix.dev` API group to `kix.run`."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix migrate` holds one-off migrations of a cluster's Kix records. It has one
 subcommand, `domain`, which moves Activation records from the retired
 `kix.dev` API group to `kix.run`. Kix refuses to operate on a cluster whose
@@ -48,10 +50,10 @@ and repairs a copy whose status did not land.
 
 ## Examples
 
-```text
-kix migrate domain demo --dry-run
-kix migrate domain demo --yes
-```
+<Command commands={[
+  "kix migrate domain demo --dry-run",
+  "kix migrate domain demo --yes",
+]} />
 
 ## Exit status
 

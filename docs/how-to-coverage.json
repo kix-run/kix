@@ -26,7 +26,8 @@
     {
       "page": "adopt-existing-resources/cede-fields-to-a-controller",
       "scenario": "adoption",
-      "status": "planned"
+      "status": "implemented",
+      "unverifiedNixBlocks": 2
     },
     {
       "page": "adopt-existing-resources/handle-server-side-apply-conflicts-safely",
@@ -270,12 +271,13 @@
       "page": "author-packages-and-clusters/keep-intentionally-empty-values",
       "scenario": "application",
       "status": "implemented",
-      "unverifiedNixBlocks": 5
+      "unverifiedNixBlocks": 4
     },
     {
       "page": "author-packages-and-clusters/map-the-availability-level-in-a-package",
       "scenario": "application",
-      "status": "planned"
+      "status": "implemented",
+      "unverifiedNixBlocks": 5
     },
     {
       "page": "author-packages-and-clusters/reuse-one-package-for-multiple-instances",
@@ -762,7 +764,8 @@
     {
       "page": "platform-capabilities/set-the-cluster-availability-level",
       "scenario": "platform",
-      "status": "planned"
+      "status": "implemented",
+      "unverifiedNixBlocks": 4
     },
     {
       "page": "platform-capabilities/use-externally-managed-secrets",

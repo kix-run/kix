@@ -3,6 +3,8 @@ title: "`rollback`"
 description: "Re-apply a previous activation of a cluster from the local Nix store, or list the activations available to roll back to."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix rollback` switches a cluster back to one of its Superseded activations.
 It does not build: it finds the target activation's build in the local Nix
 store and applies it through the same engine as `kix deploy`. With `--list`
@@ -47,11 +49,11 @@ stops at the first failure.
 
 ## Examples
 
-```text
-kix rollback demo --list
-kix rollback demo --dry-run
-kix rollback demo --yes
-```
+<Command commands={[
+  "kix rollback demo --list",
+  "kix rollback demo --dry-run",
+  "kix rollback demo --yes",
+]} />
 
 ## Exit status
 

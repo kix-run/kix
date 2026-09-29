@@ -1,6 +1,45 @@
 ---
 title: "`kix.run/cede-fields`"
-description: TODO
+description: "Records the field paths that Kix may omit when another server-side apply manager owns them."
 ---
 
-{/* Stub. Source: kix/lib/core/annotations.nix (cedeFields), kix/lib/core/resource.nix (ownership argument and cedeAnnotations), cli/kix/src/cluster/apply.rs (ceded_fields, conflict_paths, without_ceded_conflicts). Value: the field paths a resource's `ownership.cede` lists, in API server managed-fields syntax with `[*]` as the list wildcard. Deploy retries a 409 that is confined to those paths with the fields removed from the apply, and fails any conflict that reaches outside them. Test: apply.rs ceded_conflict_is_stripped_and_others_are_not. Users: kix/packages/cdi (spec.versions), kix/packages/stackgres-operator (webhook rules). */}
+This annotation is generated from a resource's `ownership.cede` argument:
+
+```nix
+ownership.cede = [
+  "spec.versions"
+  "webhooks[*].rules"
+];
+```
+
+The rendered value is a comma-separated list:
+
+```yaml
+kix.run/cede-fields: spec.versions,webhooks[*].rules
+```
+
+Paths use the field notation returned in Kubernetes server-side apply
+conflicts, without the leading dot. A declared path is a prefix: ceding
+`spec.versions` covers fields below `spec.versions`. The `[*]` segment matches
+any indexed or keyed list element.
+
+When an apply returns `409 Conflict`, Kix reads the conflicting paths from the
+API server's message. It retries once with the conflicting fields removed only
+when all of them are covered by this annotation. No retry occurs when:
+
+- the resource has no ceded paths;
+- the response contains no parseable field path;
+- any conflicting path falls outside the declaration.
+
+The retry uses ordinary server-side apply with the `kix` field manager. When
+`--force-conflicts` is active, the API server transfers ownership instead of
+returning the conflict that triggers this behavior.
+
+Prefer `ownership.cede` over writing the annotation directly. The Nix API
+checks that the declaration is a list of strings and keeps the annotation in
+sync with the resource definition.
+
+:::tip[Use it in a task]
+See [Cede fields to a controller](/docs/how-to/adopt-existing-resources/cede-fields-to-a-controller/)
+for the ownership workflow and verification steps.
+:::

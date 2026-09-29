@@ -3,6 +3,8 @@ title: "`gc`"
 description: "Delete Kix-managed resources a cluster no longer declares, and retire old Activation records under a retention policy."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix gc` removes what a cluster's build no longer contains. It has three
 modes: soft (the default) compares the last deployed build with a fresh one,
 `--hard` scans every Kix-managed resource of the named cluster, and `--operator`
@@ -40,6 +42,12 @@ kix gc <CLUSTER> [-y] [--hard [--include-unstamped] [--include-unattributed]] [-
 | Soft | The build from the last `kix deploy` or `kix rollback` on this machine, and the builds the Active record lists under `status.orphansKeptFrom` | Resources whose kind, namespace and name are absent from the fresh build. Exits with a message if no previous deploy is recorded here. |
 | `--hard` | Every Kix-managed resource of the named cluster | Resources whose identity hash is not in the fresh build |
 | `--operator` | Activation records | Retired records; the operator deletes their resources |
+
+:::caution[Soft gc can omit cluster-level garbage from its plan]
+Soft gc currently deletes stale resources that belong to no package, but its
+confirmation plan does not list them. Use `--hard` when you need the plan to
+inventory those resources before deletion.
+:::
 
 `--hard` judges the resources of the cluster you name. Each resource Kix
 deploys lists, in its `kix.run/activations` annotation, the Activation records
@@ -86,11 +94,11 @@ since it was listed.
 
 ## Examples
 
-```text
-kix gc demo
-kix gc demo --hard --yes
-kix gc demo --keep 5 --keep-for 14d
-```
+<Command commands={[
+  "kix gc demo",
+  "kix gc demo --hard --yes",
+  "kix gc demo --keep 5 --keep-for 14d",
+]} />
 
 ## Exit status
 

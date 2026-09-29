@@ -3,6 +3,8 @@ title: "`export`"
 description: "Build a cluster and write every manifest as plain Kubernetes YAML, one file per resource, either without Kix annotations or with them kept for audit."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix export` builds the cluster's activation and writes each resource to its
 own YAML file. It does not contact a cluster. The default `exit` mode produces
 YAML with no Kix annotations or Kix-internal resources, which `kubectl`, Flux,
@@ -57,11 +59,11 @@ subdirectories and `.yaml` files, or a symlink, and names the first such entry.
 
 ## Examples
 
-```text
-kix export demo --out handoff/
-kubectl diff --server-side -R -f handoff/
-kix export demo --for audit --out evidence/ --force
-```
+<Command commands={[
+  "kix export demo --out handoff/",
+  "kubectl diff --server-side -R -f handoff/",
+  "kix export demo --for audit --out evidence/ --force",
+]} />
 
 ## Exit status
 

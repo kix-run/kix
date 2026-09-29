@@ -21,8 +21,9 @@ scorecard.maxSeverity = "error";
 ```
 
 Rules that declare `severity = "error"`, and rules raised to it through
-`ruleOverrides`, now fail evaluation at the first finding. Warnings and
-informational findings are unaffected.
+`ruleOverrides`, now produce failed assertions. Kix collects the failed
+assertions and stops the cluster evaluation. Warnings and informational
+findings are unaffected.
 
 ## Raise the cap on every cluster in a flake
 

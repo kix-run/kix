@@ -3,6 +3,8 @@ title: "`deploy` / `apply`"
 description: "Build a cluster, show the plan against what is running, and apply it in dependency order, waiting for each resource to become ready."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix deploy` builds a cluster, compares the build with the activation the
 cluster runs now, shows a package-grouped plan, asks for confirmation, and
 applies the changed resources with server-side apply. Each resource starts as
@@ -37,7 +39,7 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
 | `--accept-migrations` | Proceed when the plan removes and adds stateful resources in the same slot. Without it such a deploy stops, even with `--yes`. Kix does not copy data. |
 | `--current-activation` | Take the previous activation from the local cache instead of the cluster. The plan is computed offline, so it cannot see deploys that stopped part way or orphans that earlier deploys kept; the new Activation lists the builds those orphans came from again, so a later plain deploy can prune them. With `--dry-run` nothing contacts the cluster. |
 | `--operator` | Hand the build to the Kix operator instead of applying it from this machine. See [Operator mode](/docs/reference/cli/operator-mode/). |
-| `--log-format <FORMAT>` | `pretty` (default): coloured progress, or `line` when stdin is not a terminal. `line`: one plain line per resource outcome. `json`: one JSON event per line. |
+| `--log-format <FORMAT>` | `pretty` (default): interactive progress, coloured when stdout is a terminal; falls back to `line` when stdin is not a terminal. `line`: one plain line per resource outcome. `json`: JSON deploy events, one per line. The plan and final summary are still plain text on the same stream. |
 | `--tui` | Draw a live dependency tree while deploying. Ignored when stdin is not a terminal. |
 | `--group-by-ns` | With `--tui`, group the tree by namespace instead of package. Execution order does not change. |
 | `--fold-height <ROWS>` | With `--tui`, cap the live view at this many rows. Default: half the terminal height, between 10 and 40. |
@@ -117,11 +119,15 @@ non-interactive.
 
 ## Examples
 
-```text
-kix deploy demo --dry-run
-kix deploy demo --yes --prune --timeout 10m
-kix apply demo --yes --log-format json > deploy.ndjson
-```
+<Command commands={[
+  "kix deploy demo --dry-run",
+  "kix deploy demo --yes --prune --timeout 10m",
+  "kix apply demo --yes --log-format json",
+]} />
+
+`--log-format json` does not currently produce a standalone NDJSON document:
+the plan and completion summary remain plain text. A consumer must separate
+JSON event lines from the surrounding text.
 
 ## Exit status
 

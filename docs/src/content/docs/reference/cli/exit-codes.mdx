@@ -24,7 +24,7 @@ This page is hand-maintained. Check the `std::process::exit` calls in
 | --- | --- |
 | `kix diff` | `2` when there is at least one difference or a stateful migration was detected. `0` means no differences. |
 | `kix check` | `1` when any step reports `fail`: cluster evaluation, which includes error-level scorecard findings, or the scorecard report. Applies with `--sarif` too. |
-| `kix deploy` | `1` when a resource operation fails or the run is stopped or cancelled, when stateful migrations are detected without `--accept-migrations`, or when confirmation is needed on a non-interactive terminal without `--yes`. With `--operator`, `1` when the Activation reaches phase `Failed`. |
+| `kix deploy` | `1` when a resource operation fails or the run is stopped or cancelled, when stateful migrations are detected without `--accept-migrations`, or when confirmation is needed on a non-interactive terminal without `--yes`. With `--operator`, a `Failed` or unexpectedly `Superseded` Activation and a 10-minute wait timeout are also errors. A completed `Degraded` Activation currently exits `0`. |
 | `kix rollback` | `1` when the rollback fails, or when confirmation is needed on a non-interactive terminal without `--yes`. |
 | `kix gc` | `1` when any deletion fails, or when confirmation is needed on a non-interactive terminal without `--yes`. |
 | `kix migrate domain` | `1` when confirmation is needed on a non-interactive terminal without `--yes`. |

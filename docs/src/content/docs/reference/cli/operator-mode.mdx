@@ -51,7 +51,9 @@ A timeout ends the CLI only. The operator keeps working on the record.
 ## Requirements
 
 - The Activation CRD is installed, and the account can list Activation
-  records. Every `--operator` command checks this first.
+  records. The mutating `--operator` commands check this before changing
+  anything. `status --operator` discovers the type as part of reading status
+  and reports no active activation when it is not installed.
 - The operator is running and watches the `kix.run` API group.
 - The operator can read the store path the CLI wrote. It loads manifests from
   `spec.source.path` and needs `nix-store` and read access to `/nix/store`, so

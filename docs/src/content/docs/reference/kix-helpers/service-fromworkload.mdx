@@ -1,4 +1,68 @@
 ---
 title: "`service.fromWorkload`"
-description: TODO
+description: "Build a Service from a workload's selector and declared container ports."
 ---
+
+`kix.service.fromWorkload` returns an unsealed Service definition whose
+selector and default ports come from a workload resource. Pass the result to
+`scope.mkResource` to add the instance namespace, labels, validation, and
+`out` interface.
+
+```nix
+service =
+  self.deployment
+  |> kix.service.fromWorkload { name = scope.instanceName; }
+  |> scope.mkResource;
+```
+
+The workload must expose `out.selector` and keep its containers under
+`rawManifest.spec.template.spec.containers`, as Deployments, StatefulSets,
+DaemonSets, and Jobs do.
+
+## Arguments
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `name` | required | Service name. |
+| `type` | `"ClusterIP"` | Kubernetes Service type. |
+| `ports` | derived | Complete `spec.ports` list. When omitted, Kix creates one Service port for every declared container port. |
+| `outputs` | `{ }` | Additional values to expose through `out`. These are merged with the derived `out.port`. |
+| other attributes | none | Merged into the generated Service definition. Use `spec` additions for fields such as `clusterIP` or `externalTrafficPolicy`. |
+
+The generated selector is `workload.out.selector`. Additional attributes are
+merged afterward, so do not replace `spec.selector`; doing so gives up the
+selector guarantee this helper provides.
+
+When `ports` is omitted, each container port contributes its number and
+protocol, plus its name when it has one. The first Service port is exported as
+`out.port` unless `outputs.port` replaces it.
+
+When an explicit Service port uses a named `targetPort`, Kix checks that the
+workload declares a container port with that name. It then writes the numeric
+container port into the Service. This keeps generated network-policy ports
+usable by policy engines that do not accept named ports there.
+
+```nix
+service =
+  self.deployment
+  |> kix.service.fromWorkload {
+    name = scope.instanceName;
+    ports = [
+      {
+        name = "http";
+        port = 80;
+        targetPort = "http";
+      }
+    ];
+  }
+  |> scope.mkResource;
+```
+
+The workload reference in `out.selector` also carries its resource identity.
+Sealing the Service records that dependency, so deployment waits for the
+workload before treating the Service as ready.
+
+:::tip[Use it in a task]
+See [Create a local package](/docs/how-to/author-packages-and-clusters/create-a-local-package/)
+for a complete Deployment and Service package.
+:::

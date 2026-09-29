@@ -1,4 +1,63 @@
 ---
 title: "Severity override schema"
-description: TODO
+description: "Match scorecard rules by exact name, package owner, or namespace and resolve their effective severity."
 ---
+
+`scorecard.ruleOverrides` has three sections:
+
+```nix
+scorecard.ruleOverrides = {
+  byRule."reliability.hasProbes" = {
+    enabled = true;
+    severity = "error";
+  };
+
+  byOwner."platform"."security.*".severity = "warning";
+  byNamespace."preview-*"."reliability.*".severity = "info";
+};
+```
+
+## Sections
+
+| Section | Match | Supported fields |
+|---|---|---|
+| `byRule.<full-rule-name>` | Exact full rule name | `enabled`, `severity` |
+| `byOwner.<owner-pattern>.<rule-pattern>` | Package `meta.owner`, then full rule name | `severity` |
+| `byNamespace.<namespace-pattern>.<rule-pattern>` | Namespace, then full rule name | `severity` |
+
+`enabled = false` is supported only under `byRule`. Its default is true.
+Severities are `info`, `warning`, and `error`; an unknown value is an
+evaluation error.
+
+Owner, namespace, and their nested rule patterns support an exact string,
+`*` for every value, or a trailing `*` for prefix matching. `byRule` keys are
+exact and do not expand wildcards.
+
+Avoid overlapping patterns within one section. Kix selects the first matching
+entry in Nix attribute order, not the most specific pattern.
+
+## Precedence
+
+Kix resolves a rule in this order:
+
+1. `byRule.<full-name>.enabled = false` disables it.
+2. A `byRule` severity.
+3. A matching `byOwner` severity.
+4. A matching `byNamespace` severity.
+5. The rule's own `severity`.
+6. `scorecard.ruleDefaults.severity`.
+7. `warning`.
+
+It then applies `scorecard.maxSeverity` as an upper bound. Raising an override
+to `error` does not fail a build while the cap remains at its default of
+`warning`.
+
+Owner overrides apply to manifest and package rules because those rules run
+for a package instance. Namespace overrides also apply to namespace rules.
+Cluster-level rules have neither owner nor namespace context, so only
+`byRule` can override them.
+
+:::tip[Use it in a task]
+See [Override scorecard severity](/docs/how-to/policy-ci-and-compliance/override-scorecard-severity/)
+and [Disable scorecard rules](/docs/how-to/policy-ci-and-compliance/disable-scorecard-rules/).
+:::

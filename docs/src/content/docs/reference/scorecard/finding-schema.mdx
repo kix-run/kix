@@ -1,4 +1,53 @@
 ---
 title: "Finding schema"
-description: TODO
+description: "The fields in each scorecard finding and the summary stored with a cluster build."
 ---
+
+An enabled scorecard produces a report with `findings` and `summary`:
+
+```json
+{
+  "findings": [
+    {
+      "rule": "reliability.hasProbes",
+      "severity": "warning",
+      "level": "manifest",
+      "namespace": "apps",
+      "instance": "web",
+      "resource": "web",
+      "message": "container 'web' has no livenessProbe",
+      "tags": ["reliability", "observability"]
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "errors": 0,
+    "warnings": 1,
+    "info": 0,
+    "byNamespace": { "apps": 1 },
+    "byRule": { "reliability.hasProbes": 1 }
+  }
+}
+```
+
+## Finding fields
+
+| Field | Type | Meaning |
+|---|---|---|
+| `rule` | string | Full `<category>.<rule>` name. |
+| `severity` | `info`, `warning`, or `error` | Effective severity after defaults, overrides, and `maxSeverity`. |
+| `level` | `manifest`, `package`, `namespace`, or `cluster` | Evaluation level of the rule. |
+| `namespace` | string or null | Affected namespace when the rule has one. |
+| `instance` | string or null | Affected package instance for manifest and package rules. |
+| `resource` | string or null | Resource name for manifest rules, or an identity supplied by a cluster rule. |
+| `message` | string | Rule result. Defaults to `check failed` when the rule omits it. |
+| `tags` | list of strings | Tags copied from the rule definition. |
+
+Summary counts use the effective severity. `byNamespace` groups a null
+namespace under `unknown`; `byRule` uses the full rule name.
+
+The activation build contains this report as `kix-scorecard.json`. `kix check`
+uses it for the scorecard row and converts its findings to SARIF with
+`--sarif`. When an error-severity finding fails evaluation, no build report is
+produced; `kix check --sarif` converts the evaluation failure into one SARIF
+error result instead.

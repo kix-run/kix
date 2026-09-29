@@ -1,4 +1,69 @@
 ---
 title: "`deps`"
-description: TODO
+description: "Explicit values or instance references for a package's dependency arguments."
 ---
+
+```nix
+instances.apps.web = {
+  package = packages.web;
+  deps.database = ref.data.postgres;
+};
+```
+
+`deps` overrides automatic dependency resolution for named build arguments.
+Its keys are dependency argument names from the package's `build` functions.
+
+## Schema
+
+| Property | Value |
+|---|---|
+| Type | attribute set of any value |
+| Default | `{ }` |
+| Set at | `instances.<namespace>.<name>.deps.<argument>` |
+
+## Instance references
+
+Use `ref.<namespace>.<instance>` to choose a specific managed instance or
+import:
+
+```nix
+instances.apps.web.deps.cache = ref.platform.redis;
+```
+
+Kix resolves the reference to the full package view. The normal checks still
+apply, including `meta.scope`, compatibility constraints, and dependency
+configuration injection. A reference to a dormant optional instance also
+activates it.
+
+Use explicit references when several instances answer the same argument name
+or when the dependency should cross a namespace boundary.
+
+## Direct values
+
+Any value other than an instance reference is passed directly to the build
+argument:
+
+```nix
+instances.apps.web.deps.region = "eu-west-1";
+```
+
+A direct value is not a package instance. It has no package outputs,
+dependency metadata, compatibility checks, or injected configuration. This
+form is useful only when the build argument's contract expects that value.
+
+Setting a dependency to `null` behaves like leaving it unset. Kix then uses
+automatic resolution or the build argument's default.
+
+## Auto-instantiation
+
+An explicitly wired dependency makes no name-based demand on
+`availablePackages`. If the value is a reference to an optional instance,
+Kix activates that instance directly. Other explicit values suppress catalog
+lookup for that argument.
+
+## Related
+
+- [Wire cross-namespace dependencies explicitly](/docs/how-to/debug-dependency-wiring/wire-cross-namespace-dependencies-explicitly/)
+- [Debug a missing dependency](/docs/how-to/debug-dependency-wiring/debug-a-missing-dependency/)
+- [`aliases`](/docs/reference/instance-schema/aliases/)
+- [`availablePackages`](/docs/reference/cluster-module/availablepackages/)

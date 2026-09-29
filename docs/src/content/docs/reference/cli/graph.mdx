@@ -3,6 +3,8 @@ title: "`graph`"
 description: "Print a cluster's resource dependency graph as a tree, a Graphviz DOT file, or JSON nodes and edges."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix graph` evaluates a cluster and prints the dependency graph between its
 rendered resources. It does not contact a cluster. An edge means one resource
 must be applied and ready before another. Edges come from the
@@ -48,11 +50,11 @@ JSON.
 
 ## Examples
 
-```text
-kix graph demo
-kix graph demo --format dot | dot -Tsvg > graph.svg
-kix graph demo --format json | jq '.edges | length'
-```
+<Command commands={[
+  "kix graph demo",
+  "kix graph demo --format dot | dot -Tsvg > graph.svg",
+  "kix graph demo --format json | jq '.edges | length'",
+]} />
 
 ## Exit status
 

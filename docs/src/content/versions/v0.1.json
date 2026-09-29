@@ -43,6 +43,16 @@
           ]
         },
         {
+          "label": "Promote images",
+          "items": [
+            {
+              "autogenerate": {
+                "directory": "how-to/promote-images"
+              }
+            }
+          ]
+        },
+        {
           "label": "Debug dependency wiring",
           "items": [
             {

@@ -3,6 +3,8 @@ title: "`compliance` commands"
 description: "Produce a CycloneDX SBOM, an unsigned SLSA provenance statement, or a full audit bundle from a cluster build."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix compliance` turns data Kix already has about a cluster build into formats
 auditors and compliance tools read. `sbom` and `attest` print one document to
 stdout; `audit` writes a directory of files. None of them changes the cluster.
@@ -93,11 +95,11 @@ The directory contains:
 
 ## Examples
 
-```text
-kix compliance sbom demo > sbom.json
-kix compliance attest demo --from-cluster --builder-id "$RUN_URL"
-kix compliance audit demo --framework iso27001 --out audit/
-```
+<Command commands={[
+  "kix compliance sbom demo > sbom.json",
+  "kix compliance attest demo --from-cluster --builder-id \"$RUN_URL\"",
+  "kix compliance audit demo --framework iso27001 --out audit/",
+]} />
 
 :::tip[Use it in a task]
 See [Generate an audit bundle](/docs/how-to/policy-ci-and-compliance/generate-an-audit-bundle/),

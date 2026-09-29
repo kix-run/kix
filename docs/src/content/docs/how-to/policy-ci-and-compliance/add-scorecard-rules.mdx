@@ -79,9 +79,11 @@ Kix reports the number of scorecard errors, warnings, and informational
 findings. Every finding is capped at `scorecard.maxSeverity`, which defaults
 to `warning`, so a new cluster prints what the rules found and still builds.
 With the cap raised to `error`, an error-severity finding becomes a failed
-assertion: evaluation stops at the first error, the cluster does not build,
-and only that finding is reported. Warnings and informational findings are
-collected across the cluster and reported together. See
+assertion. Kix collects the failed assertions, reports them together, and does
+not build the cluster. Because evaluation failed, `kix check` reports the
+failure in its `eval` step rather than producing a separate scorecard summary.
+Warnings and informational findings are collected across the cluster and
+reported together when evaluation succeeds. See
 [Fail the build on scorecard findings](/docs/how-to/policy-ci-and-compliance/fail-the-build-on-scorecard-findings/)
 for the cap.
 

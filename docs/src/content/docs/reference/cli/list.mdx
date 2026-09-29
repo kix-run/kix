@@ -3,6 +3,8 @@ title: "`list`"
 description: "List the clusters a flake defines, or its packages, optionally with each package's install status in one cluster."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix list` reads the flake and prints the clusters or packages it exposes. It
 does not contact a cluster. Use it to find the names other commands accept.
 
@@ -53,11 +55,11 @@ declares an owner; the rest show `-`. JSON entries have `name`, `version`, and
 
 ## Examples
 
-```text
-kix list clusters
-kix list packages --cluster demo
-kix --flake ../infra list clusters -o json
-```
+<Command commands={[
+  "kix list clusters",
+  "kix list packages --cluster demo",
+  "kix --flake ../infra list clusters -o json",
+]} />
 
 ## Exit status
 

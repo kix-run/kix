@@ -17,8 +17,13 @@ Run `gc` with the cluster name:
 <Command commands={["kix gc how-to-application"]} cwd="kix-examples/" />
 
 The normal mode compares the previously deployed Activation with a fresh build
-of the cluster. It prints every resource and Activation record it plans to
-delete, then asks for confirmation.
+of the cluster. It prints the resources found by that comparison and the
+Activation records it plans to delete, then asks for confirmation.
+
+Soft gc can also find stale cluster-level resources that belong to no package.
+It currently deletes those after confirmation without listing them in the
+plan. Use hard mode when the confirmation plan must be a complete inventory of
+live garbage.
 
 It also deletes orphans that a `kix deploy` without `--prune` listed and kept.
 That deploy records the builds they came from on its Activation, and the plan

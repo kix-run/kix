@@ -7,8 +7,8 @@ import Command from '/src/components/Command.astro';
 import dryRun from '/src/command-output/how-to/application-deploy-controls/dry-run.json';
 
 Use deploy controls when the ordinary `kix deploy <cluster>` workflow needs a
-safer preview, different wait limits, orphan cleanup, or machine-readable
-output. This guide assumes Kix can reach the target Kubernetes context.
+safer preview, different wait limits, orphan cleanup, or structured event
+logs. This guide assumes Kix can reach the target Kubernetes context.
 
 ## Preview the apply
 
@@ -84,9 +84,9 @@ deleted" before asking for confirmation. The `--yes` flag skips that prompt.
 
 ## Choose terminal or CI output
 
-The default `pretty` format is colored for an interactive terminal and falls
-back to line-oriented output when stdout is not a terminal. Select `line`
-explicitly for stable CI logs:
+The default `pretty` format falls back to line-oriented output when stdin is
+not a terminal. Colour is a separate decision and is disabled when stdout is
+not a terminal. Select `line` explicitly for stable CI logs:
 
 <Command
   commands={[
@@ -95,11 +95,13 @@ explicitly for stable CI logs:
   cwd="kix-examples/"
 />
 
-Use `json` for newline-delimited JSON events that another program will read:
+Use `json` when another program needs the deploy events. The plan and final
+summary are still plain text on the same stream, so filter valid JSON lines
+before treating the result as NDJSON:
 
 <Command
   commands={[
-    "kix deploy how-to-application --dry-run --log-format json > deploy.ndjson",
+    "kix deploy how-to-application --dry-run --log-format json | jq -R -c 'fromjson? // empty' > deploy-events.ndjson",
   ]}
   cwd="kix-examples/"
 />

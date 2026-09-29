@@ -1,4 +1,87 @@
 ---
 title: "`build`"
-description: TODO
+description: "The package function or functions that produce named resources and a root."
 ---
+
+`build` is the required package entry that constructs resources. It may be
+one function or a list of functions:
+
+```nix
+build = { self, config, scope, database, ... }: {
+  deployment = scope.mkDeployment {
+    name = scope.instanceName;
+    spec.replicas = config.replicas;
+  };
+
+  root = self.deployment;
+};
+```
+
+## Arguments
+
+| Argument | Value |
+|---|---|
+| `self` | Lazy fixed point containing the parts returned by every build entry. |
+| `config` | Evaluated values declared by the package's `options`. |
+| `clusterConfig` | Full evaluated cluster configuration. |
+| `scope` | Constructors and instance context for the current namespace. |
+| `lib` | The nixpkgs library. |
+| `kix` | Kix composition helpers. |
+| `deps` | All resolved package dependencies in one attribute set. |
+| `availability` | Resolved availability level for this instance. |
+
+Any other named argument is a dependency request. A required argument must
+resolve to an instance, import, direct `deps` value, or catalog entry. An
+argument with a default is optional:
+
+```nix
+build = { self, scope, database, metrics ? null, ... }: {
+  # ...
+};
+```
+
+Usually a package names dependencies as individual arguments. `deps` is
+useful to generic build entries that need to inspect all resolved
+dependencies.
+
+## Result
+
+The function returns an attribute set of named parts. Resource values may be
+nested, including in the reserved `secrets` and `crds` folders. The result
+must contain `root`, pointing to a resource also assigned to a named part.
+
+Use `self.<part>` when one part reads another. Values in `out` carry Nix
+string context, so fields such as `self.service.out.name` record the resource
+dependency as well as producing the Kubernetes name. Use a resource's
+`requires` list when no rendered field naturally carries the dependency.
+
+## Multiple build entries
+
+A list lets reusable entries contribute parts and declare their own
+dependencies:
+
+```nix
+build = [
+  ({ self, scope, ... }: {
+    deployment = scope.mkDeployment { /* ... */ };
+    service = kix.service.fromWorkload { name = scope.instanceName; } self.deployment
+      |> scope.mkResource;
+    root = self.service;
+  })
+  (kix.expose { service = "service"; })
+  (kix.monitor { service = "service"; port = "metrics"; })
+];
+```
+
+Kix imports path entries, discovers dependencies from every function's
+arguments, and shallow-merges their returned attribute sets in list order.
+Part names should therefore be unique unless a later entry intentionally
+replaces an earlier value.
+
+Cluster-wide and instance `partsOverlays` run after the build entries.
+
+## Related
+
+- [`root`](/docs/reference/package-schema/root/)
+- [Build entries](/docs/reference/package-schema/build-entries/)
+- [`partsOverlays`](/docs/reference/instance-schema/partsoverlays/)

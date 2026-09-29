@@ -1,6 +1,51 @@
 ---
 title: "`kix.availability`"
-description: TODO
+description: "Helpers for comparing an availability level and mapping it to package defaults."
 ---
 
-{/* Stub. Source: kix/lib/core/availability.nix exported through kix/lib/vocab/default.nix. Document levels, rank, pick (refuses an incomplete table) and atLeast, and the `availability` package function argument they consume. Reference mappings: kix/packages/echo-server, kix/packages/valkey. */}
+Packages receive their resolved availability level as the `availability`
+function argument. `kix.availability` exposes the ordered level vocabulary and
+helpers for turning that value into package behavior.
+
+The levels, from lowest to highest, are `none`, `pod`, `node`, and `zone`.
+
+## `pick`
+
+```nix
+kix.availability.pick availability {
+  none = 1;
+  pod = 2;
+  node = 2;
+  zone = 3;
+}
+```
+
+Returns the table entry for `availability`. Every level is required; an
+incomplete table is an evaluation error.
+
+Use `pick` for option defaults such as replica counts, quorum sizes, or storage
+replication factors. The mapping belongs to the package because only the
+package knows what each level requires.
+
+## `atLeast`
+
+```nix
+kix.availability.atLeast "node" availability
+```
+
+Returns `true` when `availability` is `node` or `zone`. Use it for a feature
+that becomes useful at a threshold, such as enabling an automatic-failover
+topology.
+
+## `rank` and `levels`
+
+`kix.availability.rank level` returns the zero-based position of a level.
+`kix.availability.levels` is the ordered list of all four strings. Most package
+code should use `pick` or `atLeast`, which express the decision directly.
+
+An unknown level passed to any comparison helper is an evaluation error.
+
+:::tip[Use it in a task]
+See [Map the availability level in a package](/docs/how-to/author-packages-and-clusters/map-the-availability-level-in-a-package/)
+for option defaults and ceilings.
+:::

@@ -48,12 +48,18 @@ Add the Deployment:
 <Snippet {...applicationDeployment} />
 
 `scope.mkDeployment` fills in the standard workload metadata and validates the
-Deployment shape. The example also uses `scope.selectorLabels` so the workload
-and its Service agree on the Pod selector.
+Deployment shape. The example uses `scope.selectorLabels` for the workload's
+selector and pod-template labels. Kix also adds
+`app.kubernetes.io/name` to workloads built through the scope helpers.
 
 Finish with a Service and select the package root:
 
 <Snippet {...applicationService} />
+
+`kix.service.fromWorkload` reads the selector and container ports from the
+Deployment, so the Service cannot drift onto a different set of pods. It also
+carries the workload dependency into the Service before `scope.mkResource`
+seals it.
 
 The root is the resource that represents the instance to its consumers. A
 service-shaped package normally uses its Service as the root.

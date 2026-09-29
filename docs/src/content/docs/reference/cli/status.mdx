@@ -3,6 +3,8 @@ title: "`status`"
 description: "Show readiness for the Kix-managed resources on a cluster, as a flat table or grouped by package under the Active activation."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix status` lists live Kix-managed resources with whether each is ready.
 The default view is one flat table. With `--operator` it reads the cluster's
 Active Activation record and groups resources by package.
@@ -22,7 +24,8 @@ kix status <CLUSTER> [--operator] [-o text|json|yaml]
 | `<CLUSTER>` | Cluster name. The flat view evaluates it from the flake first; `--operator` uses it to find the Active record. |
 | `--operator` | Package-grouped view built from the Active Activation record. |
 | `-o`, `--output` | `text` (default), `json` or `yaml`. `markdown` prints text. |
-| `--flake`, `--context`, `--no-cache` | See [Global flags](/docs/reference/cli/global-flags/). |
+| `--flake`, `--no-cache` | Select and evaluate the cluster for the flat view. Ignored with `--operator`. |
+| `--context` | Select the kubeconfig context in either view. |
 
 ## Flat view
 
@@ -55,14 +58,16 @@ but the cluster lacks shows as `NotFound`.
 The live resources are the same set the flat view shows.
 
 Package grouping needs the Active record's build in the local Nix store.
-Without it every resource is listed under "Unowned resources".
+Without it every resource is listed under "Unowned resources". The operator
+view does not evaluate the flake, so `--flake`, `--no-cache`, and
+`--override-input` have no effect.
 
 ## Examples
 
-```text
-kix status demo
-kix status demo --operator -o json
-```
+<Command commands={[
+  "kix status demo",
+  "kix status demo --operator -o json",
+]} />
 
 ## Exit status
 

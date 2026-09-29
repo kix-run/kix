@@ -1,13 +1,58 @@
 ---
 title: "`facts` and `untrackedRef`"
-description: "Declare a name that Kix does not render, and say which resource creates the object it names."
+description: "Describe endpoint use and declare references to objects that Kix does not render."
 ---
 
-{/* Stub for `kix.facts` (refOnly, connect, structural). Source: kix/lib/core/facts.nix. */}
-
 This page is hand-maintained. Check `kix/lib/core/markers.nix`
-(`mkUntrackedRef`, `passiveKinds`) and `kix/lib/core/resource.nix` when in
-doubt.
+(`mkUntrackedRef`, `passiveKinds`), `kix/lib/core/facts.nix`, and
+`kix/lib/core/resource.nix` when in doubt.
+
+## `kix.facts`
+
+Kix attaches endpoint facts to Service addresses such as `out.fqdn` and
+`out.url`. When an address reaches a workload, those facts let Kix derive
+network-policy rules and DNS dependencies. Facts do not change the rendered
+string and do not become deploy-order dependencies by themselves.
+
+Most packages get the right behavior by passing an `out` address directly.
+The helpers below cover cases where a value is not used in its default role.
+
+### `refOnly`
+
+```nix
+kix.facts.refOnly service.out.fqdn
+```
+
+Marks an endpoint value as a reference rather than a connection. It preserves
+the resource identity carried by the string, so deploy ordering remains, but
+it suppresses the network-policy edge and the warning that a Service was
+referenced without using its address.
+
+Use it when an address-shaped output becomes display text, a label, or other
+structural data that the workload does not dial.
+
+### `connect`
+
+```nix
+kix.facts.connect service.factTokens.endpoint service.out.name
+```
+
+Attaches a resource's endpoint facts to another string. Use it when the
+consumer dials a value that does not receive endpoint facts automatically.
+The second argument should still carry the resource identity when deploy
+ordering is required, as `service.out.name` does in this example.
+
+### `structural`
+
+```nix
+outputs.replicas = kix.facts.structural (toString config.replicas);
+```
+
+Marks a package-defined `outputs` value as descriptive rather than an
+address. `scope.mkResource` exposes the value through `out`, preserves its
+resource identity, and treats any endpoint context it acquired as
+reference-only. This prevents a consumer that reads the output from creating
+a false network-policy edge.
 
 ## `kix.untrackedRef`
 

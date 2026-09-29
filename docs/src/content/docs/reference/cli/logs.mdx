@@ -3,6 +3,8 @@ title: "`logs`"
 description: "Stream logs from a package's primary workload by running `kubectl logs` with the workload's label selector."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix logs` builds the cluster, finds the named package's primary workload, and
 replaces itself with `kubectl logs` for every pod that workload selects. It
 saves looking up the namespace and label selector by hand. `kubectl` must be on
@@ -45,10 +47,10 @@ container prefix.
 
 ## Examples
 
-```text
-kix logs demo web -f
-kix logs demo production/web --since 10m -c app
-```
+<Command commands={[
+  "kix logs demo web -f",
+  "kix logs demo production/web --since 10m -c app",
+]} />
 
 ## Exit status
 

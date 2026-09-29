@@ -1,6 +1,38 @@
 ---
 title: "`unsafe`"
-description: TODO
+description: "Declare a narrowly scoped, audited exception to Kix package safety rules."
 ---
 
-{/* Stub. Source: kix/lib/rules/security.nix, kix/lib/modules.nix (meta.unsafe). Each grant switches off the matching security rule for that package and is reported by the scorecard: raw-pvc, host-network, privileged, run-as-root. Users with a reason comment: kix/packages/velero, firezone, kube-prometheus-stack, node-exporter, grafana, promtail. */}
+`meta.unsafe` is a list of named exceptions to structural and security rules:
+
+```nix
+meta = {
+  version = "1.0.0";
+  unsafe = [ "run-as-root" ];
+};
+```
+
+The vocabulary is closed. An unknown name is an evaluation error, including
+when the package does not render a resource that would use the exception.
+
+| Grant | Effect |
+|---|---|
+| `raw-pvc` | Allows the package to build a `PersistentVolumeClaim` directly. Without it, packages must receive storage through a dependency. |
+| `host-network` | Exempts the package from `security.noHostNetwork`, which checks `hostNetwork`, `hostPID`, and `hostIPC`. |
+| `privileged` | Exempts the package from `security.noPrivileged`. |
+| `run-as-root` | Exempts the package from `security.nonRoot`. |
+
+Every declared grant produces an info-level
+`architecture.unsafeGrants` scorecard finding. This keeps the exception
+visible even though the waived rule does not report a finding.
+
+Grants do not change the target cluster's capabilities or Kubernetes
+admission policy. For example, `privileged` suppresses the scorecard rule, but
+a workload still fails evaluation when
+`cluster.capabilities.privilegedContainers = false`, and the API server may
+still reject it under Pod Security Admission.
+
+Keep the list on the package, not on an individual cluster instance, and add a
+source comment explaining why the workload cannot satisfy the normal rule.
+The grant then travels with every use of the package and remains visible in
+the scorecard.

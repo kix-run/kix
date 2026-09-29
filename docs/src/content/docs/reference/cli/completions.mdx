@@ -3,11 +3,17 @@ title: "`completions`"
 description: "Print a shell completion script for `kix` to stdout, for bash, zsh, fish, elvish, or PowerShell."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix completions` prints a completion script for the named shell to stdout.
 The script completes subcommands, flags, and fixed flag values. It does not
 complete cluster or package names. The command reads no flake and contacts no
 cluster, and it ignores the global flags. Of the global flags,
 `kix completions --help` lists only `-v`, `-q` and `--no-color`.
+
+Generated completion scripts currently still suggest hidden global flags such
+as `--flake` and `--context` for commands that ignore them. The command accepts
+those flags, but they have no effect there.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 `cli/kix-cli/src/commands/completions.rs` when in doubt.
@@ -26,18 +32,18 @@ kix completions <SHELL>
 
 Load completions into the current shell:
 
-```text
-source <(kix completions bash)
-kix completions fish | source
-```
+<Command commands={[
+  "source <(kix completions bash)",
+  "kix completions fish | source",
+]} />
 
 Install them for every new shell:
 
-```text
-kix completions bash > ~/.local/share/bash-completion/completions/kix
-kix completions zsh > "${fpath[1]}/_kix"
-kix completions fish > ~/.config/fish/completions/kix.fish
-```
+<Command commands={[
+  "kix completions bash > ~/.local/share/bash-completion/completions/kix",
+  "kix completions zsh > \"${fpath[1]}/_kix\"",
+  "kix completions fish > ~/.config/fish/completions/kix.fish",
+]} />
 
 The zsh file must go in a directory on `fpath` before `compinit` runs.
 Regenerate the script after upgrading Kix so new flags complete.

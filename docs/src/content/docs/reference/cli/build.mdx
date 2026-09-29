@@ -3,6 +3,8 @@ title: "`build`"
 description: "Evaluate a cluster and print its rendered Kubernetes manifests as multi-document YAML or a JSON array."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix build` evaluates a cluster from the flake and prints every rendered
 manifest to stdout. It does not contact a cluster. Use it to read or pipe the
 exact objects Kix would deploy.
@@ -29,10 +31,10 @@ for `--override-input`.
 
 ## Examples
 
-```text
-kix build demo > demo.yaml
-kix build demo -o json | jq '[.[] | .kind] | unique'
-```
+<Command commands={[
+  "kix build demo > demo.yaml",
+  "kix build demo -o json | jq '[.[] | .kind] | unique'",
+]} />
 
 ## Exit status
 

@@ -3,6 +3,8 @@ title: "`pf`"
 description: "Forward local ports to a package's primary workload by running `kubectl port-forward` against it."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix pf` builds the cluster, finds the named package's primary workload, and
 replaces itself with `kubectl port-forward` against that workload. `kubectl`
 picks the pod and picks a new one when the pod is replaced. `port-forward` is
@@ -33,10 +35,10 @@ suppresses the line naming the target.
 
 ## Examples
 
-```text
-kix pf demo web 8080:80
-kix pf demo postgres 5432 --address 0.0.0.0
-```
+<Command commands={[
+  "kix pf demo web 8080:80",
+  "kix pf demo postgres 5432 --address 0.0.0.0",
+]} />
 
 ## Exit status
 

@@ -33,12 +33,15 @@ warning and the default applies.
 | --- | --- |
 | `429 Too Many Requests` | Every method |
 | `5xx` response or lost connection | Idempotent methods: `GET`, `HEAD`, `OPTIONS`, `PUT`, `PATCH`, `DELETE` |
-| Connection that never opened | Every method, including `POST` |
+| Connection refused or reset before opening | Every method, including `POST` |
+| TCP connect timeout | Not retried |
 
 The wait between attempts starts at 0.5 seconds and doubles up to 8 seconds,
 with jitter. A `Retry-After` header takes precedence, up to 30 seconds. All
-attempts of one request share a 60-second budget. When the attempts or the
-budget run out, the command receives the last response or error unchanged.
+attempts of one request share a 60-second retry budget: Kix does not start a
+backoff that would cross it. An individual attempt still has the per-attempt
+request deadline above. When the attempts or retry budget run out, the command
+receives the last response or error unchanged.
 
 ## Reachability check
 

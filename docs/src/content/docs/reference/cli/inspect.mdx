@@ -3,6 +3,8 @@ title: "`inspect`"
 description: "Summarise the resources a cluster renders: count, namespaces, kinds, and every resource grouped by namespace."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix inspect` evaluates a cluster and prints an inventory of its rendered
 resources. It does not contact a cluster. Use it to confirm what a cluster
 contains before reading the full manifests with
@@ -47,10 +49,10 @@ guide below shows.
 
 ## Examples
 
-```text
-kix inspect demo
-kix inspect demo -o json | jq '.kindCounts'
-```
+<Command commands={[
+  "kix inspect demo",
+  "kix inspect demo -o json | jq '.kindCounts'",
+]} />
 
 ## Exit status
 

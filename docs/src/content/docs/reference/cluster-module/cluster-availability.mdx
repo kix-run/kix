@@ -1,6 +1,48 @@
 ---
 title: "`cluster.availability`"
-description: TODO
+description: "The cluster-wide availability requirement and the maximum level supported by the declared substrate."
 ---
 
-{/* Stub. Source: kix/lib/plugins/availability/module.nix (options cluster.availability.default and the read-only cluster.availability.substrate), v2_discussions/archive/145_availability_level.md, docs-legacy/HANDBOOK.md "Availability level". Levels none | pod | node | zone; default derived from cluster.capabilities; a level above the substrate is a build error. */}
+`cluster.availability` contains the cluster default and the level its declared
+capabilities can support.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `default` | `none \| pod \| node \| zone` | `substrate` | Availability level passed to instances that do not override it. |
+| `substrate` | read-only level | derived | Highest level supported by `cluster.capabilities`. |
+
+The levels form an ordered scale:
+
+| Level | Workload must tolerate |
+|---|---|
+| `none` | No failure guarantee. |
+| `pod` | One pod loss or a rolling update. |
+| `node` | One node loss. |
+| `zone` | One availability-zone loss. |
+
+## Substrate derivation
+
+| Capabilities | `substrate` |
+|---|---|
+| `multiNode = false` | `none` |
+| more than one `availabilityZones` entry | `zone` |
+| otherwise | `node` |
+
+The result is certain only when the capabilities needed for that decision are
+declared. Kix warns when a capability is unknown. It rejects a requested
+`default` above a certain substrate.
+
+```nix
+cluster.capabilities.multiNode = true;
+cluster.capabilities.availabilityZones = [ "eu-west-1a" "eu-west-1b" ];
+cluster.availability.default = "zone";
+```
+
+Packages receive the resolved level and map it onto replica counts, quorums,
+or HA features. Kix derives topology spread and PodDisruptionBudgets from the
+same level.
+
+:::tip[Use it in a task]
+See [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/)
+for capability declarations and inspection commands.
+:::

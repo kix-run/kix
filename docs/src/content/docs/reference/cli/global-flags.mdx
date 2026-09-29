@@ -3,6 +3,8 @@ title: "Global flags"
 description: "Flags and environment variables every `kix` command accepts: output format, verbosity, colour, kubeconfig context, flake selection, and the eval cache."
 ---
 
+import Command from '/src/components/Command.astro';
+
 These flags are accepted by every `kix` command and may appear before or
 after the subcommand. A command that has no use for a flag ignores it, and its
 `--help` does not list it. `kix --help` lists them all.
@@ -18,7 +20,7 @@ This page is hand-maintained. Check `GlobalArgs` and `SCOPED_GLOBALS` in
 | `-o`, `--output <FORMAT>` | Varies by command | `text`, `json`, `yaml`, or `markdown`. See [Output formats](/docs/reference/cli/output-formats/) for which commands honour which values. |
 | `-v`, `--verbose` | Off | Log more to stderr. Repeat for more: `-v` logs Kix at info level, `-vv` at debug, `-vvv` everything at debug. |
 | `-q`, `--quiet` | Off | Suppress progress and informational output, and log errors only. Results still print. |
-| `--no-color` | Off | Disable coloured output. |
+| `--no-color` | Off | Disable coloured result output. Deploy and gc progress lines currently still use terminal clear-line control sequences. |
 | `--context <CONTEXT>` | Current kubeconfig context | Kubeconfig context for every command that talks to a cluster. `logs` and `pf` pass it to `kubectl`. |
 | `--flake <FLAKE>` | `.` | Flake to evaluate clusters from. A value without `:` is a local path, resolved against the working directory; anything else, such as `github:org/repo`, is passed to Nix as a flake reference. Commands that use the [eval cache](/docs/reference/cli/eval-cache-behavior/) currently fail on a remote reference. |
 | `--no-cache` | Off | Skip the Kix eval cache and evaluate from Nix every time. See [Eval cache behavior](/docs/reference/cli/eval-cache-behavior/). |
@@ -34,7 +36,7 @@ where the table shows them; elsewhere they are accepted and have no effect.
 | Command | `-o` | `--context` | `--flake` | `--no-cache` | `--override-input` |
 | --- | --- | --- | --- | --- | --- |
 | `build`, `check`, `graph`, `inspect`, `images`, `list` | yes | | yes | yes | yes |
-| `status` | yes | yes | yes | yes | yes |
+| `status` | yes | yes | flat view only | flat view only | flat view only |
 | `diff` | yes | yes | yes | | yes |
 | `deploy`, `gc`, `migrate domain`, `logs`, `pf` | | yes | yes | | yes |
 | `export` | | | yes | | yes |
@@ -55,7 +57,7 @@ only with `--list`.
 
 | Variable | Effect |
 | --- | --- |
-| `NO_COLOR` | Any value disables colour, as `--no-color` does. Colour is also off when `TERM=dumb` or stdout is not a terminal. |
+| `NO_COLOR` | Any value disables colour, as `--no-color` does. Colour is also off when `TERM=dumb` or stdout is not a terminal. Deploy and gc have the progress-line exception noted above. |
 | `KIX_LOG` | A tracing filter, such as `kix=debug` or `debug`, that replaces the level chosen by `-v` and `-q`. |
 | `KIX_NO_INTERACTIVE` | Any value makes Kix treat the terminal as non-interactive, so commands that ask for confirmation refuse to prompt and need `--yes`. Stdin that is not a terminal has the same effect. |
 
@@ -65,11 +67,11 @@ Registry credentials for `kix pin` are listed on [`kix pin`](/docs/reference/cli
 
 ## Examples
 
-```text
-kix --flake ../infra list clusters
-kix deploy demo --context kind-demo -v
-kix build demo --override-input kixpkgs git+file:///home/me/src/kixpkgs
-```
+<Command commands={[
+  "kix --flake ../infra list clusters",
+  "kix deploy demo --context kind-demo -v",
+  "kix build demo --override-input kixpkgs git+file:///home/me/src/kixpkgs",
+]} />
 
 :::tip[Use it in a task]
 See [Install and run the Kix CLI](/docs/how-to/start-and-inspect/install-and-run-the-kix-cli/)

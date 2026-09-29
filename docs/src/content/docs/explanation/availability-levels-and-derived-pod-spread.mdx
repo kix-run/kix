@@ -1,6 +1,83 @@
 ---
 title: "Availability levels and derived pod spread"
-description: TODO
+description: "How one failure-scope setting drives replicas, topology spread, and disruption budgets across a cluster."
 ---
 
-{/* Stub. Why one failure-scope vocabulary (none | pod | node | zone) instead of per-package HA switches, why it is derived from the substrate and capped by it, and why spread and PDBs are compiled in rather than written by each package. Source: v2_discussions/archive/145_availability_level.md and archive/143_pod_spread_and_failure_zones.md. */}
+Availability is a property of the cluster and the service it must provide, not
+of a Deployment in isolation. Kix represents that requirement with four
+levels:
+
+| Level | Required outcome |
+|---|---|
+| `none` | A failure or rolling update may cause downtime. |
+| `pod` | Losing one pod, or replacing pods during an update, must not cause downtime. |
+| `node` | Losing one node must not cause downtime. |
+| `zone` | Losing one availability zone must not cause downtime. |
+
+The cluster's declared capabilities establish the largest level its substrate
+can support. Packages then translate the chosen level into their own replica
+and quorum counts. Kix uses the same level to derive placement constraints and
+PodDisruptionBudgets for those workloads.
+
+## One requirement, several compiled decisions
+
+A stateless server may map `pod` to two replicas and `zone` to three. A quorum
+store may need three members from `pod` upward. Another package may support
+only one active controller and declare that it cannot meet `node` availability.
+
+Keeping those mappings in each package preserves the application's operational
+knowledge. Keeping the requested level on the cluster lets an operator change
+the failure requirement without learning every package's replica options.
+
+For a multi-replica Deployment or StatefulSet, Kix also derives:
+
+- topology spread across the cluster's failure-domain keys;
+- hard placement on the domain named by the requested level;
+- best-effort placement on the remaining domains;
+- a PodDisruptionBudget with `maxUnavailable = 1`.
+
+The derived constraints use `maxSkew = 1`. They balance replicas across the
+available domains; they do not require one replica per domain. Five replicas
+can therefore occupy three zones as `2/2/1`.
+
+## The substrate is a boundary
+
+`cluster.capabilities.multiNode` and
+`cluster.capabilities.availabilityZones` determine the substrate level. A
+confirmed single-node cluster supports `none`. A cluster with more than one
+declared zone supports `zone`. Other multi-node clusters support `node`.
+
+Kix rejects a requested level above a fully declared substrate. When the
+relevant capability is unknown, Kix warns because it cannot verify that the
+placement rule can be satisfied.
+
+This distinction keeps configuration honest. A replica count of three cannot
+make a single-node cluster survive a node loss, and a zone constraint cannot
+help when the nodes have no usable zone labels.
+
+## Package and workload ceilings
+
+A package declares `meta.availability.max` when the whole package cannot meet
+a higher level. Kix lowers the resolved level to that ceiling and warns that
+the instance does not meet the cluster's request.
+
+Some packages contain both replicated data services and single-replica
+controllers. A workload builder can set `availability.max` for that one
+workload. The rest of the package still receives the full instance level.
+
+## Explicit placement takes ownership
+
+When a package supplies `topologySpreadConstraints`, Kix does not add its own
+constraints or derive a PodDisruptionBudget for that workload. The package has
+taken responsibility for both placement and voluntary-disruption safety. Kix
+warns when no PDB in the instance selects those pods.
+
+:::tip[Use it in a task]
+See [Set the cluster availability level](/docs/how-to/platform-capabilities/set-the-cluster-availability-level/)
+to configure a cluster and inspect the generated resources.
+:::
+
+:::tip[Author a package]
+See [Map the availability level in a package](/docs/how-to/author-packages-and-clusters/map-the-availability-level-in-a-package/)
+for replica mappings and ceilings.
+:::

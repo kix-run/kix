@@ -3,6 +3,8 @@ title: "`health`"
 description: "Check that every dependency of the cluster's Active activation is present on the cluster, grouped by package."
 ---
 
+import Command from '/src/components/Command.astro';
+
 `kix health` checks that the resources of a cluster's Active activation are
 all present. It reads the `kix.run/depends-on` annotations on live resources
 and confirms each named dependency exists, identified by its identity hash.
@@ -55,10 +57,10 @@ by hash, and a self-deleting Job that is gone reads as missing.
 
 ## Examples
 
-```text
-kix health demo
-kix health demo -vv
-```
+<Command commands={[
+  "kix health demo",
+  "kix health demo -vv",
+]} />
 
 ## Exit status
 

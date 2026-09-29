@@ -1,6 +1,36 @@
 ---
 title: "`podSecurity`"
-description: TODO
+description: "Declare the Pod Security Admission level a package needs from its namespace."
 ---
 
-{/* Stub. Source: kix/lib/modules.nix (meta.podSecurity and namespaces.<ns>.podSecurity, enum privileged | baseline | restricted), kix/lib/eval/cluster.nix (namespacePodSecurity: the namespace gets the most permissive level any instance in it declares, and a hand-set stricter level is a build error), kix/lib/eval/namespace.nix (pod-security.kubernetes.io/enforce label). Test: kix/lib/tests t92. User: kix/packages/kubevirt declares privileged. */}
+Set `meta.podSecurity` when a package's pods need a particular Kubernetes Pod
+Security Standards level:
+
+```nix
+meta = {
+  version = "1.0.0";
+  podSecurity = "privileged";
+};
+```
+
+The value is one of `privileged`, `baseline`, or `restricted`, ordered from
+most to least permissive. Kix evaluates the declarations of every instance in
+a namespace and writes the most permissive requested level to the Namespace:
+
+```yaml
+pod-security.kubernetes.io/enforce: privileged
+```
+
+When no instance declares a level and the cluster does not configure one, Kix
+writes no Pod Security Admission label.
+
+The cluster can set `namespaces.<name>.podSecurity` directly. Kix rejects a
+value that is stricter than any package in the namespace requests because
+Kubernetes would refuse that package's pods. When package declarations exist,
+their most permissive level is the one rendered; a more permissive namespace
+setting does not raise it further.
+
+`meta.podSecurity` controls the namespace admission label. It does not exempt
+a package from scorecard rules or from cluster capability checks. Use
+[`meta.unsafe`](/docs/reference/meta/unsafe/) only for one of its specific,
+audited exceptions.

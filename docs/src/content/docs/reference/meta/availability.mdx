@@ -1,6 +1,44 @@
 ---
 title: "`availability`"
-description: TODO
+description: "Declare the highest availability level a package or one of its workloads can provide."
 ---
 
-{/* Stub. Source: kix/lib/eval/instance.nix (ceiling), v2_discussions/archive/145_availability_level.md section 5.4. meta.availability.max caps the level a package receives and warns when the cluster asked for more. A workload builder call (mkDeployment, mkStatefulSet, mkDaemonSet, mkCronJob, mkJob) also takes `availability.max` for one workload; kix/lib/scope/builders.nix sealWorkload caps that workload and records `_availability` on the sealed resource, which the availability plugin reads for spread and PDBs. Test: kix/lib/tests a21. User: kix/packages/openebs (single-replica controllers at pod, etcd and NATS at zone). */}
+`meta.availability.max` states the highest availability level the entire
+package can provide.
+
+```nix
+meta.availability.max = "pod";
+```
+
+The value is one of `none`, `pod`, `node`, or `zone`. When an instance requests
+a higher level, Kix passes the ceiling to the package and warns that the
+instance does not meet the requested level.
+
+Use a package ceiling only for a package-wide limitation. Do not use it merely
+because one replica option has not been mapped from the availability argument.
+
+## Per-workload ceiling
+
+Workload builders also accept `availability.max`:
+
+```nix
+controller = scope.mkDeployment {
+  name = "${scope.instanceName}-controller";
+  availability.max = "pod";
+  spec.replicas = 1;
+  # ...
+};
+```
+
+This ceiling applies only to that workload's derived placement, disruption
+budget, and replica-shortfall checks. It does not change the package's
+`availability` argument or the level used by sibling workloads.
+
+Per-workload ceilings are useful for a package with replicated data services
+and a controller that must remain single-replica. Kix emits a warning naming
+the lowered workload.
+
+:::note[Reference]
+See [`kix.availability`](/docs/reference/kix-helpers/availability/) for mapping
+the package argument onto replica and quorum defaults.
+:::

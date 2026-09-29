@@ -50,7 +50,9 @@ Command-specific flags take priority over `-o`:
 
 Text output is coloured when stdout is a terminal. `--no-color`, a set
 `NO_COLOR`, or `TERM=dumb` turns it off. JSON and YAML output are never
-coloured.
+coloured. Deploy and gc progress lines currently still contain terminal
+clear-line control sequences with `--no-color`; redirecting stderr may
+therefore preserve those sequences.
 
 :::note[Reference]
 See [`kix diff`](/docs/reference/cli/diff/#output-formats) for the JSON and

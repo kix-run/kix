@@ -1,6 +1,50 @@
 ---
 title: "Built-in security rules"
-description: TODO
+description: "The built-in checks for workload identity, privilege, image references, read-only filesystems, and namespace network policy."
 ---
 
-{/* Stub. Source: kix/lib/rules/security.nix. Rules run on every cluster by default (capped at warning). Each rule is disabled for a package by the matching meta.unsafe grant. security.nonRoot expects runAsNonRoot or a non-zero runAsUser on the pod or every container; images that run as uid 0 need the run-as-root grant. The container collector tolerates `initContainers = null` from Helm output. */}
+The security rule set lives in `kix.rules.security`. Rules run by default, but
+their findings are capped at `scorecard.maxSeverity`, which defaults to
+`warning`.
+
+| Rule | Level | Declared severity | What it checks |
+|---|---|---|---|
+| `security.nonRoot` | manifest | `error` | Every regular and init container resolves to `runAsNonRoot = true`, or to a non-zero `runAsUser` when `runAsNonRoot` is unset. |
+| `security.noPrivileged` | manifest | `error` | No regular or init container sets `securityContext.privileged = true`. |
+| `security.readOnlyRootfs` | manifest | `warning` | Every regular and init container sets `securityContext.readOnlyRootFilesystem = true`. |
+| `security.noHostNetwork` | manifest | `error` | The pod does not enable `hostNetwork`, `hostPID`, or `hostIPC`. |
+| `security.noLatestTag` | manifest | `warning` | Every container image has an explicit tag other than `latest`. |
+| `security.noUnresolvedPlaceholder` | manifest | `warning` | No image reference contains a common placeholder or the start of an unexpanded Nix-style variable. |
+| `security.hasNetworkPolicy` | namespace | `warning` | A namespace containing a Deployment, StatefulSet, or DaemonSet also contains a policy kind supplied by its network-policy provider. |
+
+The manifest rules apply to Deployments, StatefulSets, DaemonSets, and Jobs.
+For `nonRoot`, a container-level setting overrides the pod setting. A
+container with `runAsNonRoot = false` therefore fails even if the pod sets it
+to true.
+
+`noUnresolvedPlaceholder` recognizes `REPLACE_ME`, `REPLACEME`, `CHANGE_ME`,
+`CHANGEME`, `PLACEHOLDER`, `TODO`, `FIXME`, `XXX`, and `${...` in image
+references. It cannot tell whether a plausible tag or digest exists; use
+`kix pin check` for registry verification.
+
+## Package exceptions
+
+Three rules have matching [`meta.unsafe`](/docs/reference/meta/unsafe/)
+grants:
+
+| Rule | Grant |
+|---|---|
+| `security.nonRoot` | `run-as-root` |
+| `security.noPrivileged` | `privileged` |
+| `security.noHostNetwork` | `host-network` |
+
+The exception removes that rule from the package and produces an info-level
+`architecture.unsafeGrants` audit finding. There is no grant for
+`readOnlyRootfs`, image checks, or `hasNetworkPolicy`; change their severity
+through scorecard policy when necessary.
+
+:::note[Severity and build failures]
+An `error` in the table is the rule's declared severity. It fails evaluation
+only when `scorecard.maxSeverity` permits errors. The default cap lowers it to
+a warning. See [Fail the build on scorecard findings](/docs/how-to/policy-ci-and-compliance/fail-the-build-on-scorecard-findings/).
+:::
