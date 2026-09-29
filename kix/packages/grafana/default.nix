@@ -14,6 +14,10 @@
 #   alertmanager ? null       auto-wires Alertmanager datasource via out.serviceUrl
 #   loki ? null               auto-wires Loki datasource (if out.serviceUrl exists)
 #
+# Each auto-wired datasource has a fixed uid, set by `prometheusDatasource`,
+# `alertmanagerDatasource` and `lokiDatasource`. Dashboards find their
+# datasource by uid, so a fixed one lets a dashboard move between clusters.
+#
 # Exposes:
 #   out.serviceUrl: "http://<name>.<ns>.svc.cluster.local:80"
 
@@ -26,6 +30,28 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
+
+  # The display name and uid of one auto-wired datasource.
+  autoDatasourceOption =
+    kind: dep: defaultName: defaultUid:
+    lib.mkOption {
+      type = lib.types.submodule {
+        options = {
+          name = lib.mkOption {
+            type = lib.types.str;
+            default = defaultName;
+            description = "Display name in the datasource picker.";
+          };
+          uid = lib.mkOption {
+            type = lib.types.str;
+            default = defaultUid;
+            description = "Stable identifier that dashboards refer to.";
+          };
+        };
+      };
+      default = { };
+      description = "Name and uid of the ${kind} datasource wired from the `${dep}` dependency.";
+    };
 in
 {
   meta = {
@@ -48,6 +74,24 @@ in
       "run-as-root"
     ];
   };
+
+  # Grafana's own default login. Anyone who reaches Grafana can use it.
+  warnings =
+    { config, ... }:
+    lib.optional (config.admin.existingSecret == "" && config.adminPassword == "admin")
+      "grafana: the admin password is the default `admin`. Set `admin.existingSecret` to a Secret holding the credentials.";
+
+  assertions =
+    { config, ... }:
+    [
+      {
+        assertion =
+          !(config.sidecar.dashboards.enabled || config.sidecar.datasources.enabled)
+          || config.sidecarSources.configMaps
+          || config.sidecarSources.secrets;
+        message = "grafana: the sidecars are on but `sidecarSources` turns off both ConfigMaps and Secrets, so they have nothing to read.";
+      }
+    ];
 
   options = {
     nodeSelector = lib.mkOption {
@@ -131,6 +175,44 @@ in
           labelValue = "1";
         };
       };
+    };
+    # What the sidecars read. Reading Secrets means watching every Secret in
+    # the cluster, so a Grafana that is broken into exposes all of them.
+    # Dashboards and datasources rarely need to be secret; a datasource
+    # password can come from the environment instead.
+    sidecarSources = lib.mkOption {
+      type = lib.types.submodule {
+        options = {
+          configMaps = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            description = ''
+              When true, Grafana loads dashboards and datasources from
+              ConfigMaps. The sidecars watch for ConfigMaps labelled
+              `grafana_dashboard: "1"` or `grafana_datasource: "1"` (the
+              labels are set in `sidecar`) and load each one within
+              seconds, including changes and deletions. By default,
+              dashboards come from every namespace and datasources only
+              from Grafana's own; `sidecar.*.searchNamespace` changes that.
+              Grafana gets read access to every ConfigMap in the cluster,
+              whatever `searchNamespace` says.
+            '';
+          };
+          secrets = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = ''
+              When true, Grafana loads dashboards and datasources from
+              Secrets, with the same labels and namespaces as `configMaps`.
+              Grafana gets read access to every Secret in the cluster, so
+              anyone who breaks into Grafana can read all of them. Turn it
+              on only if a datasource definition has to hold a credential
+              and cannot take it from Grafana's environment.
+            '';
+          };
+        };
+      };
+      default = { };
     };
     # grafana.ini overrides merged on top of defaults
     grafanaIni = lib.mkOption {
@@ -348,6 +430,15 @@ in
       );
       default = [ ];
     };
+    # Rename the Prometheus one when VictoriaMetrics answers the alias, so
+    # the picker says what it is. Keep the uid, so dashboards still find it.
+    prometheusDatasource =
+      autoDatasourceOption "Prometheus" "prometheusServer" "Prometheus"
+        "prometheus";
+    alertmanagerDatasource =
+      autoDatasourceOption "Alertmanager" "alertmanager" "Alertmanager"
+        "alertmanager";
+    lokiDatasource = autoDatasourceOption "Loki" "loki" "Loki" "loki";
     datasources = lib.mkOption {
       type = lib.types.listOf lib.types.anything;
       default = [ ];
@@ -468,6 +559,15 @@ in
       mkServiceMonitor = if prometheus != null then prometheus.out.mkServiceMonitor scope else null;
 
       sidecarImg = kix.image.ref config.sidecarImage;
+
+      # k8s-sidecar's RESOURCE: which kinds the sidecars watch.
+      sidecarResource =
+        if config.sidecarSources.configMaps && config.sidecarSources.secrets then
+          "both"
+        else if config.sidecarSources.secrets then
+          "secret"
+        else
+          "configmap";
 
       # ── Admin secret indirection ────────────────────────────────────────
       # Chart's `admin.existingSecret` lets users supply pre-existing creds.
@@ -614,18 +714,16 @@ in
       # ── Auto-wired datasources from DI ──────────────────────────────────
       autoDatasources =
         lib.optional (prometheusServer != null) {
-          name = "Prometheus";
+          inherit (config.prometheusDatasource) name uid;
           type = "prometheus";
-          uid = "prometheus";
           url = prometheusServer.out.serviceUrl;
           access = "proxy";
           isDefault = true;
           jsonData.httpMethod = "POST";
         }
         ++ lib.optional (alertmanager != null) {
-          name = "Alertmanager";
+          inherit (config.alertmanagerDatasource) name uid;
           type = "alertmanager";
-          uid = "alertmanager";
           url = alertmanager.out.serviceUrl;
           access = "proxy";
           jsonData = {
@@ -636,7 +734,7 @@ in
         # Loki wiring: if the loki instance exposes out.serviceUrl, use it.
         # For Helm-wrapped Loki, pass the URL via config.datasources instead.
         ++ lib.optional (loki != null && loki ? out && loki.out ? serviceUrl) {
-          name = "Loki";
+          inherit (config.lokiDatasource) name uid;
           type = "loki";
           url = loki.out.serviceUrl;
           access = "proxy";
@@ -645,8 +743,13 @@ in
       allDatasources = autoDatasources ++ config.datasources;
 
       # ── grafana.ini ─────────────────────────────────────────────────────
+      # No calls home: no usage reports, no update checks.
       defaultIni = {
-        analytics.check_for_updates = true;
+        analytics = {
+          reporting_enabled = false;
+          check_for_updates = false;
+          check_for_plugin_updates = false;
+        };
         "dataproxy".keep_alive_seconds = 600;
         "dataproxy".timeout = 600;
         log.mode = "console";
@@ -812,7 +915,7 @@ in
               NAMESPACE = config.sidecar.dashboards.searchNamespace;
               REQ_METHOD = "POST";
               REQ_URL = "http://localhost:3000/api/admin/provisioning/dashboards/reload";
-              RESOURCE = "both";
+              RESOURCE = sidecarResource;
             }
             ++ dashboardHealth.env
             ++ [
@@ -845,7 +948,7 @@ in
                 METHOD = "WATCH";
                 REQ_METHOD = "POST";
                 REQ_URL = "http://localhost:3000/api/admin/provisioning/datasources/reload";
-                RESOURCE = "both";
+                RESOURCE = sidecarResource;
               }
               // lib.optionalAttrs ((config.sidecar.datasources.searchNamespace or null) != null) {
                 NAMESPACE = config.sidecar.datasources.searchNamespace;
@@ -869,7 +972,7 @@ in
       );
 
       # ── RBAC for sidecars ───────────────────────────────────────────────
-      # Sidecars need to watch ConfigMaps and Secrets across all namespaces
+      # Sidecars watch the kinds in `sidecarSources` across all namespaces.
       needsClusterRbac = config.sidecar.dashboards.enabled || config.sidecar.datasources.enabled;
 
       inherit (scope.rbac)
@@ -890,10 +993,10 @@ in
           ];
           labels = scope.selectorLabels;
           roles = {
-            "${name}" = grant [
-              (core.configmaps |> watch)
-              (core.secrets |> watch)
-            ];
+            "${name}" = grant (
+              lib.optional config.sidecarSources.configMaps (core.configmaps |> watch)
+              ++ lib.optional config.sidecarSources.secrets (core.secrets |> watch)
+            );
           };
         }
       );

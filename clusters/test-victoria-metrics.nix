@@ -110,14 +110,6 @@ kix.buildCluster {
     {
       namespaces.monitoring-system = { };
 
-      # The full rule set runs by default. Pre-existing finding in the
-      # grafana package (here only as the datasource auto-wire consumer):
-      # its container securityContext lacks runAsNonRoot. Downgraded from
-      # error so it doesn't fail a fixture about the VM packages. The probe
-      # Job kix.healthCheck renders passes this rule at error (t66 in
-      # kix/lib/tests); the VM packages' own workloads are operator-created.
-      scorecard.ruleOverrides.byNamespace."*"."security.nonRoot".severity = "warning";
-
       instances.monitoring-system = {
         vm-operator = {
           package = packages.victoria-metrics-operator;
@@ -136,6 +128,8 @@ kix.buildCluster {
         };
         grafana = {
           package = packages.grafana;
+          # The auto-wired datasource is VictoriaMetrics, not Prometheus.
+          config.prometheusDatasource.name = "VictoriaMetrics";
         };
         scrape-consumer = {
           package = scrapeConsumerPackage;
