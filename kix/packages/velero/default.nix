@@ -135,11 +135,16 @@ in
       type = lib.types.str;
       default = "cluster-admin";
     };
+    # `prefix` (optional) puts every Velero object under that directory of the
+    # bucket. Velero marks a location Unavailable when the bucket's top level
+    # holds directories it does not own, so a bucket shared with other backup
+    # tools needs one.
     backupStorageLocation = lib.mkOption {
       type = lib.types.anything;
       default = {
         provider = "velero.io/aws";
         bucket = "velero-backups";
+        prefix = null;
         config = {
           region = "eu-central";
           s3ForcePathStyle = "true";
@@ -153,6 +158,24 @@ in
         secretName = null;
         secretContents = null;
       };
+    };
+    # The key that encrypts the kopia repositories Velero writes for
+    # file-system backups. Velero reads it from the Secret
+    # `velero-repo-credentials`, key `repository-password`, in its own
+    # namespace, and creates that Secret with a fixed key compiled into Velero
+    # when it is absent. The key is set when a repository is first created, so
+    # changing it later means new repositories and fresh backups.
+    #
+    # "velero-default": Velero creates the Secret with its compiled-in key.
+    # "existing-secret": the operator creates the Secret before the first
+    # deploy. The server and node-agent wait for it, so Velero never creates a
+    # repository with the compiled-in key.
+    repositoryPassword = lib.mkOption {
+      type = lib.types.enum [
+        "velero-default"
+        "existing-secret"
+      ];
+      default = "velero-default";
     };
     volumePolicies = lib.mkOption {
       type = lib.types.nullOr lib.types.anything;
@@ -418,6 +441,17 @@ in
         else
           null;
 
+      # --- Secret reference (kopia repository key) ---
+      # Velero looks this Secret up by its fixed name.
+      repositoryPasswordSecret =
+        if config.repositoryPassword == "existing-secret" then
+          scope.mkSecretRef {
+            name = "velero-repo-credentials";
+            keys = [ "repository-password" ];
+          }
+        else
+          null;
+
       # --- ConfigMap (volume policies) ---
       configmap =
         if config.volumePolicies != null then
@@ -586,7 +620,9 @@ in
             };
           };
         };
-        requires = builtins.attrValues self.crds;
+        requires =
+          builtins.attrValues self.crds
+          ++ lib.optional (self.repositoryPasswordSecret != null) self.repositoryPasswordSecret;
       };
 
       # --- DaemonSet (node-agent) ---
@@ -719,7 +755,9 @@ in
                 };
               };
             };
-            requires = builtins.attrValues self.crds;
+            requires =
+              builtins.attrValues self.crds
+              ++ lib.optional (self.repositoryPasswordSecret != null) self.repositoryPasswordSecret;
           }
         else
           null;
@@ -736,6 +774,9 @@ in
           accessMode = "ReadWrite";
           objectStorage = {
             bucket = config.backupStorageLocation.bucket;
+          }
+          // lib.optionalAttrs ((config.backupStorageLocation.prefix or null) != null) {
+            inherit (config.backupStorageLocation) prefix;
           };
           config = lib.filterAttrs (_: v: v != "") (
             config.backupStorageLocation.config
@@ -792,6 +833,7 @@ in
         ++ lib.optional (self.configmap != null) self.configmap
         ++ lib.optional (self.nodeAgent != null) self.nodeAgent
         ++ lib.optional (self.secret != null) self.secret
+        ++ lib.optional (self.repositoryPasswordSecret != null) self.repositoryPasswordSecret
         ++ lib.optional (self.volumeSnapshotLocation != null) self.volumeSnapshotLocation
         ++ (builtins.attrValues self.crds)
         ++ (lib.attrValues scheduleResources);

@@ -56,6 +56,8 @@ let
     status = "True";
   };
 
+  # `version` is the API version the operator serves for the kind, where it
+  # is not v1. A CR built at another version is rejected by the API server.
   crdDefs = {
     sgCluster = {
       kind = "SGCluster";
@@ -114,6 +116,7 @@ let
     };
     sgObjectStorage = {
       kind = "SGObjectStorage";
+      version = "v1beta1";
       shortNames = [ "sgobs" ];
       webhook = true;
     };
@@ -125,6 +128,7 @@ let
     };
     sgShardedCluster = {
       kind = "SGShardedCluster";
+      version = "v1beta1";
       shortNames = [ "sgshr" ];
       webhook = true;
       readiness = sgClusterReadiness;
@@ -158,6 +162,7 @@ let
     };
     sgStream = {
       kind = "SGStream";
+      version = "v1alpha1";
       shortNames = [ "sgstr" ];
       webhook = true;
     };
@@ -883,7 +888,7 @@ in
           group = sgGroup;
           kind = def.kind;
           plural = resolvedNames.${attr}.plural;
-          version = "v1";
+          version = def.version or "v1";
           factBehavior = def.factBehavior or null;
           readiness = def.readiness or null;
           # Tie markers to the operator Deployment: the CLI readiness check

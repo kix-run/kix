@@ -336,8 +336,12 @@ in
                   };
                   securityContext = {
                     allowPrivilegeEscalation = false;
-                    # The image runs as its own non-root user.
+                    # The image's user is `nonroot:nonroot`, a name. The
+                    # kubelet refuses runAsNonRoot unless it can see a numeric
+                    # user, so the image's uid and gid are stated here.
                     runAsNonRoot = true;
+                    runAsUser = 65532;
+                    runAsGroup = 65532;
                     capabilities = {
                       add = [ "NET_BIND_SERVICE" ];
                       drop = [ "ALL" ];
