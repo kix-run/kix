@@ -10,6 +10,9 @@ whenever Adam corrects writing style.
 - **No em dashes (—).** Rewrite the sentence with a comma, colon, period, or
   parentheses instead. This applies everywhere, including page titles and
   terminal/demo output.
+- **Use the Oxford comma.** In a list of three or more items, put a comma
+  before the final "and" or "or": "check, plan, and deploy", not "check, plan
+  and deploy".
 
 ## Banned words and phrases
 
