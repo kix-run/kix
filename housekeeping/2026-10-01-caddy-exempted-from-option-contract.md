@@ -1,0 +1,5 @@
+# 2026-10-01 · `kix/packages/caddy` · caddy breaks the option contract and defaults to a site-specific image, so `kix/package-eval.nix` exempts it from the contract.
+
+Its `resources`, `service`, `customDomainsService` and `hpa` options are `types.anything` with non-empty defaults, so an instance that sets one key loses the rest and a misspelled key passes. The default image is `ghcr.io/northwind/shopfront/caddy:2.10.0-cf`, a private build named after a customer. `hpa` renames HorizontalPodAutoscaler fields (`targetCPUUtilization`) instead of taking the HPA `spec`, `replicaCount` is not the `replicas` name other packages use, and the Caddyfile arrives through a Secret named by the string option `configSecretName`, wrapped in `scope.mkSecretRef` with `keys = [ ]`. Certificates live on an emptyDir (`2026-09-27-caddy-certificates-last-only-as-long-as-pod.md`). No cluster in kixpkgs, the monorepo or kix-examples instantiates it.
+
+Decision required from Adam: rework caddy as a public package (upstream image, HPA `spec`, the Caddyfile through DI) or delete it. Either way, remove its entry from `optionContractExemptions` in `kix/package-eval.nix`.

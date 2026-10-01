@@ -24,12 +24,17 @@
 # `sourceDomainLiteralExceptions` and `versionExceptions` list the packages
 # known to fail them; like `knownFailures`, a listed package that passes
 # fails the check until its entry is removed.
+#
+# `optionContractExemptions` lists the packages kept although their options
+# break the option contract (kix/lib/eval/options.nix). A listed package
+# whose options pass fails the check until its entry is removed.
 
 { kix, lib }:
 
 let
   piChecks = import ./pi-checks.nix { inherit lib; };
   versions = import ./lib/core/version.nix { inherit lib; };
+  optionContract = import ./lib/eval/options.nix { inherit lib; };
 
   # The clusterDomain of every synthetic cluster.
   evalClusterDomain = "eval.kix.test";
@@ -263,6 +268,14 @@ let
     cilium-rke2 = "housekeeping/2026-10-01-platform-providers-carry-placeholder-versions.md";
   };
 
+  # Packages kept unreworked although their options break the option
+  # contract. Each names the housekeeping entry that records what is wrong
+  # and the decision the package waits on.
+  optionContractExemptions = {
+    caddy = "housekeeping/2026-10-01-caddy-exempted-from-option-contract.md";
+    firezone = "housekeeping/2026-10-01-firezone-exempted-from-option-contract.md";
+  };
+
   # Packages that cannot be evaluated on their own, with the reason.
   skip = { };
 
@@ -337,6 +350,26 @@ let
     else
       lib.assertMsg ok "kix/packages/${name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\" or \"v1.19.6\".";
 
+  # The contract violations of a package's options, read the way the
+  # cluster evaluation reads them (phase 1, availability "none").
+  optionContractViolations =
+    name: package:
+    optionContract.optionContractViolations {
+      options =
+        (kix.callPackagePhase1 {
+          inherit package;
+          scope = {
+            instanceName = name;
+            namespaceName = name;
+          };
+        }).options or { };
+    };
+
+  checkOptionContractExemption =
+    name: package:
+    lib.assertMsg (optionContractViolations name package != [ ])
+      "kix/packages/${name}: its options satisfy the option contract now; remove it from optionContractExemptions in kix/package-eval.nix and delete ${optionContractExemptions.${name}}";
+
   evaluatePackage =
     name: package:
     let
@@ -372,6 +405,7 @@ let
     in
     assert checkSource name;
     assert checkVersion name package;
+    assert optionContractExemptions ? ${name} -> checkOptionContractExemption name package;
     builtins.addErrorContext "while evaluating kix/packages/${name} in its synthetic cluster" (
       builtins.deepSeq cluster.rawManifests (
         builtins.seq (piChecks.validatePIWiring "package-${name}" cluster) (
@@ -398,6 +432,7 @@ let
     ++ builtins.attrNames skip
     ++ sourceDomainLiteralExceptions
     ++ builtins.attrNames versionExceptions
+    ++ builtins.attrNames optionContractExemptions
   );
 
   evaluated = lib.mapAttrsToList evaluatePackage (removeAttrs packages (builtins.attrNames skip));
@@ -409,6 +444,7 @@ in
     skip
     sourceDomainLiteralExceptions
     versionExceptions
+    optionContractExemptions
     ;
 
   # One package, for finding the failure when `names` throws.
@@ -417,6 +453,6 @@ in
   # Forcing this evaluates every package that is not skipped.
   names =
     assert lib.assertMsg (strayKeys == [ ])
-      "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions` or `versionExceptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a directory under kix/packages/";
+      "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions`, `versionExceptions` or `optionContractExemptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a directory under kix/packages/";
     builtins.deepSeq evaluated evaluated;
 }
