@@ -58,6 +58,7 @@
         external-dns = ./test-external-dns.nix;
         external-dns-tryout = ./test-external-dns-tryout.nix;
         velero = ./test-velero.nix;
+        mayastor = ./test-mayastor.nix;
       };
     };
 }

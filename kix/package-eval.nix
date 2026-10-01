@@ -252,6 +252,19 @@ let
         config.password = "password";
       };
     };
+    # A class, a pool, and a Prometheus provider, so the StorageClass, the
+    # DiskPool and its CRD reference, and the io-engine metrics Service,
+    # ServiceMonitor, and alerts are built.
+    mayastor = {
+      config = {
+        storageClasses.mayastor-1.parameters.repl = "1";
+        diskPools.pool-1 = {
+          node = "node-1";
+          disks = [ "/dev/disk/by-id/example" ];
+        };
+      };
+      instances.prometheus-operator.package = packages.prometheus-operator;
+    };
     persistent-volume-claim.config.size = "1Gi";
     posthog-proxy.config.host = "posthog.example.com";
     priority-classes.config.classes.default.value = 1000;
