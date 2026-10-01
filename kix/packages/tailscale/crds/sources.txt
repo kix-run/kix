@@ -1,0 +1,9 @@
+# tailscale/tailscale at the operator release (release in default.nix, with a leading v).
+https://raw.githubusercontent.com/tailscale/tailscale/v1.102.4/cmd/k8s-operator/deploy/crds/tailscale.com_connectors.yaml
+https://raw.githubusercontent.com/tailscale/tailscale/v1.102.4/cmd/k8s-operator/deploy/crds/tailscale.com_dnsconfigs.yaml
+https://raw.githubusercontent.com/tailscale/tailscale/v1.102.4/cmd/k8s-operator/deploy/crds/tailscale.com_peerrelays.yaml
+https://raw.githubusercontent.com/tailscale/tailscale/v1.102.4/cmd/k8s-operator/deploy/crds/tailscale.com_proxyclasses.yaml
+https://raw.githubusercontent.com/tailscale/tailscale/v1.102.4/cmd/k8s-operator/deploy/crds/tailscale.com_proxygrouppolicies.yaml
+https://raw.githubusercontent.com/tailscale/tailscale/v1.102.4/cmd/k8s-operator/deploy/crds/tailscale.com_proxygroups.yaml
+https://raw.githubusercontent.com/tailscale/tailscale/v1.102.4/cmd/k8s-operator/deploy/crds/tailscale.com_recorders.yaml
+https://raw.githubusercontent.com/tailscale/tailscale/v1.102.4/cmd/k8s-operator/deploy/crds/tailscale.com_tailnets.yaml
