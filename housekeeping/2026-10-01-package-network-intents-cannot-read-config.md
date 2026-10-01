@@ -4,5 +4,5 @@
 on an option. `kix/packages/external-dns` therefore allows TCP 443 to the
 world for every provider, including `inmemory`, which calls nothing, and
 cannot open port 53 for `rfc2136`, 8081 for `pdns`, 80 for `pihole`, or 2379
-for `coredns` and `skydns`. It warns for those providers under an enforcer and
-the user adds a namespace NetworkPolicy by hand.
+for `coredns` and `skydns`. Under an enforcer it warns for those providers,
+and the user adds a namespace NetworkPolicy for the port.
