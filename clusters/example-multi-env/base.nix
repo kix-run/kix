@@ -47,5 +47,12 @@
     valkey = {
       package = packages.valkey;
     };
+    # Development only; outside it, a SOPS `source` with
+    # keys = [ "password" ], or a secret-ref.
+    valkey-password = {
+      package = packages.secret;
+      aliases = [ "valkeyPassword" ];
+      config.stringData.password = "development-only-password";
+    };
   };
 }

@@ -124,13 +124,14 @@ kix.buildCluster {
             aliases = [ "storage" ];
             config.size = "200Gi";
           };
+          harbor-valkey-password = {
+            package = packages.secret;
+            aliases = [ "valkeyPassword" ];
+            config.stringData.password = "dev-valkey-password";
+          };
           harbor-valkey = {
             package = packages.valkey;
-            config = {
-              sentinel.enabled = false;
-              replicaCount = 1;
-              auth.password = "dev-valkey-password";
-            };
+            config.sentinel.enabled = false;
           };
           harbor-pg = {
             package = packages."stackgres-cluster";

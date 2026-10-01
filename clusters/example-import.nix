@@ -34,7 +34,8 @@ kix.buildCluster {
         # Valkey exists in the cluster but is managed externally.
         # mkImport with `from` runs the valkey package build in import mode
         # (lightweight mkResource) to derive out.name, out.fqdn, out.port.
-        # Only a marker PackageInstance CR is deployed.
+        # Only a marker PackageInstance CR is deployed. An import carries
+        # no out.authSecret, so immich connects to it without a password.
         cache = {
           valkey = {
             package = kix.mkImport { from = packages.valkey; };
@@ -51,7 +52,9 @@ kix.buildCluster {
         };
 
         # Immich namespace: server + ML worker + per-app database instance.
-        # valkey resolves via DI from the cache namespace (cluster-wide).
+        # valkey resolves via DI from the cache namespace: an import is
+        # cluster-scoped, while a managed valkey serves only its own
+        # namespace.
         # The stackgres-database instance below lives in *this* namespace
         # but talks to the imported postgres in the `database` namespace —
         # demonstrating the cross-namespace flow without cross-namespace
