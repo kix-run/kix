@@ -1,6 +1,7 @@
 # Tests for the StorageClass vocabulary (vocab/storage-class.nix):
 # kix.types.storageClass, and kix.storage.mkClasses with its rendering,
-# checks and the class it gives consumers that name none.
+# checks and the class it gives consumers that name none. Then the
+# storage-classes and persistent-volume-claim packages that build on it.
 
 {
   lib,
@@ -13,6 +14,7 @@
   hasName,
   evalFails,
   requiredScConsumer,
+  kixKeys,
   ...
 }:
 
@@ -41,6 +43,7 @@ let
           who = "class-author ${scope.namespaceName}/${scope.instanceName}";
           optionPath = "config.classes";
           classes = config.classes;
+          parts = self.classes;
         };
       in
       {
@@ -90,6 +93,7 @@ let
           who = "driver ${scope.namespaceName}/${scope.instanceName}";
           optionPath = "config.classes";
           classes = config.classes;
+          parts = self.classes;
           provisioner = "driver.example.com";
         };
       in
@@ -133,6 +137,47 @@ let
   consumed = cluster: (byName "sc-consumer" (ofKind "ConfigMap" (manifests cluster))).data.sc;
   classNamed = name: cluster: byName name (ofKind "StorageClass" (manifests cluster));
   shadowable.cluster.roles.storageClasses.binding = "shadowable";
+
+  dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+  # The identity hash a consumer's depends-on lists for a part of an
+  # instance.
+  hashOf =
+    cluster: ns: inst: path:
+    builtins.unsafeDiscardStringContext
+      (lib.attrByPath path (throw "no part ${toString path}") cluster.instances.${ns}.${inst}.raw)
+      .out.identityHash;
+
+  storageClassesPackage = import ../../../packages/storage-classes;
+  pvcPackage = import ../../../packages/persistent-volume-claim;
+
+  # A cluster with one claim in `apps` and, when `classes` is set, a
+  # storage-classes instance in kube-system. No flavor, so nothing else
+  # provides the storageClasses role.
+  pvcCluster =
+    {
+      claim,
+      classes ? null,
+    }:
+    mkCluster [
+      {
+        instances.apps.data = {
+          package = pvcPackage;
+          config = claim;
+        };
+      }
+      (lib.optionalAttrs (classes != null) {
+        instances.kube-system.storage-classes = {
+          package = storageClassesPackage;
+          config = { inherit classes; };
+        };
+      })
+    ];
+  claimOf = cluster: byName "data" (ofKind "PersistentVolumeClaim" (manifests cluster));
+  # A claim that passes every check, so each refusal test changes one field.
+  validClaim = {
+    size = "1Gi";
+    storageClassName = "local";
+  };
 in
 {
   # One class and no annotation: consumers get it, and the manifest holds
@@ -292,4 +337,154 @@ in
       })
     )
     || throw "driver classes: ${builtins.toJSON sc}";
+
+  # out.storageClassName carries the class's identity, so the consumer is
+  # applied after the class.
+  storage-consumer-depends-on-class =
+    let
+      c = clusterWith { classes.local = local; };
+      consumer = byName "sc-consumer" (ofKind "ConfigMap" (manifests c));
+    in
+    lib.hasInfix (hashOf c "storage" "sc" [
+      "classes"
+      "local"
+    ]) (dependsOn consumer)
+    || throw "consumer depends-on lacks the class: ${dependsOn consumer}";
+
+  # A partsOverlays replacement of the class is the dependency, so the
+  # consumer never names a class hash that is not in the build.
+  storage-overlaid-class-is-the-dependency =
+    let
+      c = clusterWith {
+        classes.local = local;
+        extra.instances.storage.sc.partsOverlays = [
+          (
+            scope: _self: super: {
+              classes = super.classes // {
+                local = scope.mkClusterResource {
+                  apiVersion = "storage.k8s.io/v1";
+                  kind = "StorageClass";
+                  name = "local";
+                  labels.overlaid = "true";
+                  extra.provisioner = "rancher.io/local-path";
+                };
+              };
+            }
+          )
+        ];
+      };
+      consumer = byName "sc-consumer" (ofKind "ConfigMap" (manifests c));
+    in
+    (
+      (classNamed "local" c).metadata.labels.overlaid == "true"
+      && lib.hasInfix (hashOf c "storage" "sc" [
+        "classes"
+        "local"
+      ]) (dependsOn consumer)
+    )
+    || throw "overlaid class: consumer depends-on ${dependsOn consumer}";
+
+  # A claim that names no class takes the storage-classes class and
+  # depends on it.
+  storage-classes-claim-depends-on-class =
+    let
+      c = pvcCluster {
+        claim.size = "1Gi";
+        classes.local = local;
+      };
+      claim = claimOf c;
+    in
+    (
+      claim.spec.storageClassName == "local"
+      && lib.hasInfix (hashOf c "kube-system" "storage-classes" [
+        "classes"
+        "local"
+      ]) (dependsOn claim)
+    )
+    || throw "storage-classes claim: ${builtins.toJSON claim}";
+
+  storage-classes-empty-throws =
+    !evalFails (pvcCluster {
+      claim = validClaim;
+      classes.local = local;
+    })
+    && evalFails (pvcCluster {
+      claim = validClaim;
+      classes = { };
+    });
+
+  # The rendered spec is exactly the three fields with options, and an
+  # integer size is rendered as a string.
+  storage-pvc-renders-spec =
+    let
+      claim = claimOf (pvcCluster {
+        claim = validClaim // {
+          size = 1073741824;
+        };
+      });
+    in
+    claim.spec == {
+      storageClassName = "local";
+      accessModes = [ "ReadWriteOnce" ];
+      resources.requests.storage = "1073741824";
+    }
+    || throw "claim spec: ${builtins.toJSON claim.spec}";
+
+  storage-pvc-no-class-throws = evalFails (pvcCluster { claim.size = "1Gi"; });
+
+  # `""` requests no class, for a claim bound to a named PersistentVolume.
+  storage-pvc-empty-class-binds-volume =
+    let
+      claim = claimOf (pvcCluster {
+        claim = {
+          size = "1Gi";
+          storageClassName = "";
+          extraSpec.volumeName = "pv-data";
+        };
+      });
+    in
+    (claim.spec.storageClassName == "" && claim.spec.volumeName == "pv-data")
+    || throw "empty class: ${builtins.toJSON claim.spec}";
+
+  storage-pvc-mode-refusals =
+    let
+      withModes = accessModes: pvcCluster { claim = validClaim // { inherit accessModes; }; };
+    in
+    !evalFails (withModes [
+      "ReadWriteOnce"
+      "ReadOnlyMany"
+    ])
+    && evalFails (withModes [
+      "ReadWriteOncePod"
+      "ReadWriteOnce"
+    ])
+    && evalFails (withModes [
+      "ReadWriteOnce"
+      "ReadWriteOnce"
+    ])
+    && evalFails (withModes [
+      "ReadWriteOncePod"
+      "ReadWriteOncePod"
+    ]);
+
+  # Zero and sub-byte sizes are refused.
+  storage-pvc-size-refusals =
+    let
+      withSize = size: pvcCluster { claim = validClaim // { inherit size; }; };
+    in
+    !evalFails (withSize "1")
+    && evalFails (withSize "0Gi")
+    && evalFails (withSize "0.0Mi")
+    && evalFails (withSize "500m")
+    && evalFails (withSize 0);
+
+  # extraSpec cannot set the fields that have options.
+  storage-pvc-extraspec-locks =
+    let
+      withExtra = extraSpec: pvcCluster { claim = validClaim // { inherit extraSpec; }; };
+    in
+    !evalFails (withExtra { volumeMode = "Block"; })
+    && evalFails (withExtra { storageClassName = "other"; })
+    && evalFails (withExtra { accessModes = [ "ReadWriteMany" ]; })
+    && evalFails (withExtra { resources.requests.storage = "2Gi"; });
 }

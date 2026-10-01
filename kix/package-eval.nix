@@ -174,15 +174,15 @@ let
         provider = null;
       };
     };
-    clickhouse.instances = { inherit credentials; };
+    clickhouse.instances = { inherit credentials storage; };
     clickhouse-cluster.instances = { inherit credentials; };
     clickhouse-database = {
       config.password = "password";
-      instances = { inherit credentials; };
+      instances = { inherit credentials storage; };
     };
     clickhouse-keeper.instances = { inherit credentials; };
     clickhouse-logs.instances = {
-      inherit credentials;
+      inherit credentials storage;
       clickhouse-database = {
         package = packages.clickhouse-database;
         config.password = "password";
@@ -195,6 +195,7 @@ let
       config.clusterIP = "10.96.0.53";
       instances.prometheus-operator.package = packages.prometheus-operator;
     };
+    filebrowser.instances = { inherit storage; };
     firezone.config = {
       domain = "firezone.example.com";
       admin = {
@@ -212,9 +213,12 @@ let
       };
     };
     harbor = {
-      instances.database = {
-        package = packages.stackgres-database;
-        config.password = "password";
+      instances = {
+        inherit storage;
+        database = {
+          package = packages.stackgres-database;
+          config.password = "password";
+        };
       };
       config.externalURL = "https://harbor.example.com";
       config.secrets.values = {
@@ -229,10 +233,14 @@ let
         tokenPrivateKey = "key";
       };
     };
-    immich.instances.database = {
-      package = packages.stackgres-database;
-      config.password = "password";
+    immich.instances = {
+      inherit storage;
+      database = {
+        package = packages.stackgres-database;
+        config.password = "password";
+      };
     };
+    persistent-volume-claim.config.size = "1Gi";
     posthog-proxy.config.host = "posthog.example.com";
     priority-classes.config.classes.default.value = 1000;
     python-app.config.backend.image = {
@@ -247,6 +255,13 @@ let
       bucket = "backups";
       credentialsSecretName = "backup-credentials";
     };
+    # No default annotation: the kind flavour already has a default class.
+    storage-classes.config.classes.local-path-retain = {
+      provisioner = "rancher.io/local-path";
+      reclaimPolicy = "Retain";
+      volumeBindingMode = "WaitForFirstConsumer";
+    };
+    vaultwarden.instances = { inherit storage; };
   };
 
   # Packages whose source writes cluster.local outside a comment.

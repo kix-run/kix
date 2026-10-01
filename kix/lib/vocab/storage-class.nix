@@ -118,9 +118,14 @@ in
   # none get. Returns `{ resources; storageClassName; }`:
   #   - `resources`: one resource per class, keyed like `classes`. Forcing the
   #     attrset runs the checks below.
-  #   - `storageClassName`: the class annotated default when exactly one is,
-  #     else the only class. Otherwise reading it throws, so a package can
-  #     put it in `out` and the build fails only when a consumer relies on it.
+  #   - `storageClassName`: the `out.name` of the class annotated default when
+  #     exactly one is, else of the only class. Otherwise reading it throws,
+  #     so a package can put it in `out` and the build fails only when a
+  #     consumer relies on it.
+  # `parts` is the attrset the package stores `resources` under, read
+  # through `self` (for example `self.classes`). `storageClassName` is taken
+  # from it, so a consumer's manifest depends on the class as finally built,
+  # including any `partsOverlays` change, and is applied after it.
   # `who` prefixes every message and `optionPath` names the option `classes`
   # came from. `provisioner`, when a string, is set on every class; null
   # reads each class's own `provisioner` field. `requires` is added to every
@@ -132,6 +137,7 @@ in
       who,
       optionPath,
       classes,
+      parts,
       provisioner ? null,
       requires ? [ ],
     }:
@@ -192,11 +198,11 @@ in
         if names == [ ] then
           throw "${who}: out.storageClassName was read, but ${optionPath} defines no classes."
         else if builtins.length annotated == 1 then
-          builtins.head annotated
+          parts.${builtins.head annotated}.out.name
         else if annotated != [ ] then
           throw "${who}: out.storageClassName was read, but ${optionPath} annotates ${builtins.concatStringsSep ", " annotated} as the cluster default. Keep the annotation on one class."
         else if builtins.length names == 1 then
-          builtins.head names
+          parts.${builtins.head names}.out.name
         else
           throw "${who}: out.storageClassName was read, but ${optionPath} has ${toString (builtins.length names)} classes (${namesText}) and none is chosen for consumers that name no class. ${lib.toUpper (builtins.substring 0 1 remedies)}${builtins.substring 1 (-1) remedies}.";
     };

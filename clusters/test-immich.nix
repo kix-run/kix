@@ -1,9 +1,9 @@
 # clusters/test-immich.nix — Immich with auto-instantiation.
 #
 # Only immich, its storage PVC, the per-app database (which needs an
-# explicit dev password) and storage-classes are declared. The cluster has
-# no flavor, so storage-classes provides the PVC's class; an optional
-# dependency does not auto-instantiate it. valkey, the
+# explicit dev password) and storage-classes are declared. storage-classes
+# is declared because the cluster has no flavor to provide a class, and an
+# optional dependency does not auto-instantiate it. valkey, the
 # stackgres-cluster postgres backend, and the database's required
 # extensions are all picked up via auto-instantiation + dep config
 # injection — immich declares it needs `vector`, the database forwards
@@ -19,7 +19,13 @@ kix.buildCluster {
     {
       availablePackages = packages;
 
-      instances.kube-system.storage-classes.package = packages.storage-classes;
+      instances.kube-system.storage-classes = {
+        package = packages.storage-classes;
+        config.classes.local-path = {
+          provisioner = "rancher.io/local-path";
+          volumeBindingMode = "WaitForFirstConsumer";
+        };
+      };
 
       # Operator is cluster-scoped — declare once to avoid duplicate CRDs.
       instances.stackgres-system.stackgres-operator = {

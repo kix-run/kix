@@ -24,10 +24,17 @@ kix.buildCluster {
 
       instances = {
         kube-system = {
+          # region:storageClassesInstance
+          # rancher.io/local-path exists only where local-path-provisioner is
+          # installed; name your cluster's CSI driver here.
           storage-classes = {
             package = packages.storage-classes;
-            aliases = [ "storageClasses" ];
+            config.classes.local-path = {
+              provisioner = "rancher.io/local-path";
+              volumeBindingMode = "WaitForFirstConsumer";
+            };
           };
+          # endregion:storageClassesInstance
 
           coredns = {
             package = packages.coredns;
