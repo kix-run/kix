@@ -91,10 +91,12 @@ let
       };
   };
 
-  withApp = instances: mkCluster [
-    baseInstances
-    { inherit instances; }
-  ];
+  withApp =
+    instances:
+    mkCluster [
+      baseInstances
+      { inherit instances; }
+    ];
 
   annotationsOf = m: m.metadata.annotations or { };
 
@@ -183,7 +185,17 @@ let
         };
     };
 
-  activationCluster = modules: manifests (mkCluster ([ baseInstances optionalImport ] ++ modules));
+  activationCluster =
+    modules:
+    manifests (
+      mkCluster (
+        [
+          baseInstances
+          optionalImport
+        ]
+        ++ modules
+      )
+    );
 
   # The import's marker: a PackageInstance named after the import instance
   # in its namespace, in import mode.
@@ -260,7 +272,9 @@ in
 
   lib-reference-checks-cr-at-served-crd-version-passes =
     let
-      ms = manifests (withApp { appns.gadgets.package = gadgetPackage { }; });
+      ms = manifests (withApp {
+        appns.gadgets.package = gadgetPackage { };
+      });
     in
     (byName "g" (ofKind "Gadget" ms)).apiVersion == "example.com/v1"
     || throw "a Gadget at the CRD's served version was not built";
@@ -322,7 +336,8 @@ in
 
   # Nothing resolves to the import, so it stays inactive.
   lib-reference-checks-unused-import-stays-inactive =
-    importMarker (activationCluster [ ]) == null || throw "an unused optional import emitted its marker";
+    importMarker (activationCluster [ ]) == null
+    || throw "an unused optional import emitted its marker";
 
   # A mandatory managed instance answers `x`; the import is not the
   # resolution and stays inactive.

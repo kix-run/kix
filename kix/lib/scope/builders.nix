@@ -772,7 +772,9 @@ in
           _validatedVersion =
             if version == null then
               throw "${who}: set version to the API version the CustomResourceDefinition serves for this kind (for example \"v1\" or \"v1beta1\"). Kix does not install this CRD, so it cannot read the version, and a wrong one fails every apply of this kind."
-            else if !(builtins.isString version && builtins.match "[a-z]([-a-z0-9]*[a-z0-9])?" version != null) then
+            else if
+              !(builtins.isString version && builtins.match "[a-z]([-a-z0-9]*[a-z0-9])?" version != null)
+            then
               throw "${who}: version ${builtins.toJSON version} is not an API version. Kubernetes API versions are lowercase RFC 1035 labels, such as \"v1\" or \"v1beta1\"."
             else
               version;

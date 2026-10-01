@@ -420,8 +420,9 @@
 
       # Optional imports that a dependency of an active managed instance
       # resolved to, keyed "<ns>/<instance>" as activatedOptionals is. The
-      # import's marker is then emitted, so the deploy waits for the resource
-      # it names. A dependency wired with a value other than a `ref` is
+      # import's marker is then emitted, and the deploy checks the resource
+      # it names when the import gives a kind. A dependency wired with a
+      # value other than a `ref` is
       # skipped: phase 1 resolves it through the index, but the build binds
       # the value instead.
       activatedImports = builtins.listToAttrs (
