@@ -21,7 +21,8 @@
 #
 # cluster.network.podCidr defaults to RKE2's cluster-cidr, 10.42.0.0/16.
 #
-# Platform imports: DNS (coredns, bundled). No default storage.
+# Platform imports: DNS (coredns), the VolumeSnapshot API
+# (rke2-snapshot-controller). No default storage.
 
 {
   config,
@@ -129,6 +130,14 @@ in
       dns.binding = lib.mkDefault "shadowable";
       storageClasses.binding = lib.mkDefault "absent"; # no default StorageClass
       loadBalancer.binding = lib.mkDefault "absent";
+      # RKE2 installs the snapshot CRDs and controller (the
+      # rke2-snapshot-controller and rke2-snapshot-controller-crd charts). A
+      # cluster that disables both charts sets the binding to "absent" and
+      # runs a snapshot-controller instance.
+      snapshotController = {
+        binding = lib.mkDefault "exclusive";
+        provider = lib.mkDefault "rke2-snapshot-controller";
+      };
     };
 
     cluster.network.environmentCilium = lib.mkIf (primary == "cilium") (
@@ -158,6 +167,36 @@ in
             name = "coredns";
             fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
           };
+        };
+        optional = true;
+      };
+
+      platform-snapshot-controller = {
+        package = kix.mkImport {
+          roles = [ "snapshotController" ];
+          crds = [
+            {
+              group = "snapshot.storage.k8s.io";
+              kind = "VolumeSnapshotClass";
+              plural = "volumesnapshotclasses";
+              version = "v1";
+              crdScope = "Cluster";
+            }
+            {
+              group = "snapshot.storage.k8s.io";
+              kind = "VolumeSnapshotContent";
+              plural = "volumesnapshotcontents";
+              version = "v1";
+              crdScope = "Cluster";
+            }
+            {
+              group = "snapshot.storage.k8s.io";
+              kind = "VolumeSnapshot";
+              plural = "volumesnapshots";
+              version = "v1";
+              crdScope = "Namespaced";
+            }
+          ];
         };
         optional = true;
       };
