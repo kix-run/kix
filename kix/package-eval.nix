@@ -175,22 +175,6 @@ let
         provider = null;
       };
     };
-    cilium-rke2 = {
-      config = {
-        internalCidr = "10.44.0.0/14";
-        clusterNodes.node1 = {
-          role = "server";
-          ip = "192.0.2.1";
-          hostNumber = 1;
-        };
-      };
-      module = _: {
-        cluster.roles.cni = {
-          binding = "absent";
-          provider = null;
-        };
-      };
-    };
     clickhouse.instances = { inherit credentials; };
     clickhouse-cluster.instances = { inherit credentials; };
     clickhouse-database = {
@@ -269,10 +253,7 @@ let
   ];
 
   # Packages whose meta.version is not a version, with the reason.
-  versionExceptions = {
-    cilium-external = "housekeeping/2026-10-01-platform-providers-carry-placeholder-versions.md";
-    cilium-rke2 = "housekeeping/2026-10-01-platform-providers-carry-placeholder-versions.md";
-  };
+  versionExceptions = { };
 
   # Packages kept unreworked although their options break the option
   # contract. Each names the housekeeping entry that records what is wrong

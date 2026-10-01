@@ -42,11 +42,6 @@ kix.buildCluster {
         };
         instances.kube-system.cilium = {
           package = packages.cilium;
-          config.values = {
-            kubeProxyReplacement = false;
-            prometheus.enabled = false;
-            ipam.operator.clusterPoolIPv4PodCIDRList = [ "10.244.0.0/16" ];
-          };
         };
 
         instances.ingress-system.ingress-nginx = {

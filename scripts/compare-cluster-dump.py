@@ -225,8 +225,8 @@ def _is_runtime_resource(doc: dict) -> bool:
     if annotations.get("objectset.rio.cattle.io/owner-name", "").startswith("rke2-"):
         return True
     # Cilium CRDs and cluster-scoped resources are deployed by RKE2's
-    # bundled cilium, not by kix.  The cilium-rke2 kix package only
-    # generates a HelmChartConfig (a configuration overlay), not the
+    # bundled cilium, not by kix. Under RKE2 the kix `cilium` package
+    # generates only a HelmChartConfig (a configuration overlay), not the
     # operator itself.
     # Evidence: cilium CRDs have no helm annotations — they're created
     # by the cilium agent DaemonSet at startup.
