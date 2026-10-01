@@ -44,6 +44,11 @@ rec {
       description = "Service type=LoadBalancer implementation. Presence (managed provider or environment binding) gates LoadBalancer Services.";
       outContract = [ ];
     };
+
+    snapshotController = {
+      description = "CSI snapshot controller and the snapshot.storage.k8s.io API, one per cluster. Consumers build VolumeSnapshotClass and VolumeSnapshot through out.crds. An environment that runs its own controller binds the role exclusive, so a second, managed controller is refused at eval.";
+      outContract = [ "crds" ];
+    };
   };
 
   roleNames = builtins.attrNames registry;

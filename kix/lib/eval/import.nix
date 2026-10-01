@@ -34,6 +34,11 @@ rec {
       # a managed instance with the same role shadows it). The role name is
       # also the import's DI alias, so no instance-level `aliases` are needed.
       roles ? [ ],
+      # CustomResourceDefinitions the environment installs, each given as
+      # scope.mkCRDRef's arguments without `installedBy`. Each entry becomes
+      # `out.crds.<kind>`, a handle consumers pass to scope.mkCR, and a CRD
+      # marker the deploy waits for while the import is active.
+      crds ? [ ],
     }:
     {
       _type = "kix-import";
@@ -42,6 +47,7 @@ rec {
         out
         kind
         apiVersion
+        crds
         ;
       meta = {
         inherit roles;
@@ -327,6 +333,82 @@ rec {
               };
           };
 
+      # Markers for the CRDs the import declares, built with the import's
+      # namespace and labels.
+      crdHandleArgs = [
+        "group"
+        "kind"
+        "plural"
+        "version"
+        "crdScope"
+        "factBehavior"
+        "readiness"
+      ];
+      who = "Import instance '${namespaceName}/${instanceName}'";
+      checkCrdEntry =
+        entry:
+        let
+          unknown = builtins.attrNames (removeAttrs entry crdHandleArgs);
+          missing = builtins.filter (k: !(entry ? ${k})) [
+            "group"
+            "kind"
+            "plural"
+          ];
+        in
+        if !builtins.isAttrs entry then
+          throw "${who}: each mkImport crds entry is an attribute set of scope.mkCRDRef arguments; got ${builtins.typeOf entry}."
+        else if missing != [ ] then
+          throw "${who}: a mkImport crds entry is missing ${builtins.concatStringsSep ", " missing}. Give group, kind, plural and version as the CustomResourceDefinition declares them."
+        else if unknown != [ ] then
+          throw "${who}: mkImport crds entry ${entry.group}/${entry.kind} has unknown keys ${builtins.concatStringsSep ", " unknown}. Accepted keys: ${builtins.concatStringsSep ", " crdHandleArgs}. The environment installs an import's CRDs, so installedBy does not apply."
+        else
+          entry;
+      mkCrdHandle = k8s.mkCRDRefHandle {
+        mkResource =
+          args:
+          mkResource (
+            args
+            // {
+              namespace = namespaceResource;
+              labels = clusterLabels // {
+                "app.kubernetes.io/instance" = instanceName;
+                "app.kubernetes.io/managed-by" = "kix";
+              };
+            }
+          );
+        inherit instanceName namespaceName;
+        site = "mkImport crds";
+        unservedFix = "correct version in the mkImport crds entry that declares the kind";
+      };
+
+      crdEntries =
+        let
+          entries =
+            if builtins.isList importDef.crds then
+              map checkCrdEntry importDef.crds
+            else
+              throw "${who}: mkImport crds is a list of scope.mkCRDRef argument sets; got ${builtins.typeOf importDef.crds}.";
+          kinds = map (e: e.kind) entries;
+          repeated = lib.unique (builtins.filter (k: lib.count (x: x == k) kinds > 1) kinds);
+        in
+        if repeated == [ ] then
+          entries
+        else
+          throw "${who}: mkImport crds declares ${builtins.concatStringsSep ", " repeated} more than once. out.crds holds one handle per kind; keep one entry for each.";
+      crdHandleList = map (entry: {
+        inherit (entry) kind;
+        handle = mkCrdHandle entry;
+      }) crdEntries;
+      crdHandles = builtins.foldl' (
+        acc: h:
+        helpers.mergeCollide
+          "${who}: mkImport crds declares a kind the package's out.crds already has. Kind"
+          acc
+          { ${h.kind} = h.handle; }
+      ) (derived.out.crds or { }) crdHandleList;
+
+      out = derived.out // lib.optionalAttrs (crdEntries != [ ]) { crds = crdHandles; };
+
       networkConfig = clusterConfig.networkPolicy or { enable = false; };
       rawPlatformIntents = instCfg.platformIntents or { };
 
@@ -415,9 +497,9 @@ rec {
       _type = "k8s-instance";
       _isImport = true;
       _packageInstance = markerResource;
-      _hookResources = materializedIntentPolicies;
+      _hookResources = materializedIntentPolicies ++ map (h: h.handle) crdHandleList;
       root = markerResource;
-      out = derived.out;
+      inherit out;
       _meta = {
         inherit instanceName namespaceName;
         namespace = namespaceName;

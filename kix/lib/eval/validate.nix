@@ -722,11 +722,10 @@ rec {
       # --- 17. priorityClassName references ---
       # The apiserver rejects every pod of a workload naming a PriorityClass
       # that does not exist ("no PriorityClass with name X was found"), at
-      # admission, so the workload applies and then never schedules. kubevirt
-      # shipped that way, and the openebs ZFS and LVM drivers named four
-      # classes the package never built. PriorityClass is cluster-scoped, so
-      # `hasResource` finds one built anywhere in the cluster; the `system-`
-      # classes ship with Kubernetes itself.
+      # admission, so the workload applies and then never schedules.
+      # PriorityClass is cluster-scoped, so `hasResource` finds one built
+      # anywhere in the cluster; the `system-` classes ship with Kubernetes
+      # itself.
 
       builtInPriorityClasses = [
         "system-cluster-critical"

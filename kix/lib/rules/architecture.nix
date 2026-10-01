@@ -156,9 +156,8 @@ in
   };
 
   # An untracked reference says "something else creates this". A bare
-  # claim is checked by nothing: the openebs etcd StatefulSet mounted a
-  # Secret whose comment said the operator made it at runtime, nothing did,
-  # every eval passed, and the pods sat in Init with "secret not found".
+  # claim is checked by nothing: when nothing creates the object, every eval
+  # passes and a pod that mounts it waits in Init with "secret not found".
   # List every bare claim in a build in one place, so a reviewer reads a
   # list instead of finding them one mount at a time. A name is not listed
   # when every reference to it in its namespace names its creator: with
