@@ -509,6 +509,46 @@ rec {
     else
       throw "${who}: deps.${arg} resolved to secret \"${dep.out.name}\", which declares ${declaredText}; this package reads ${lib.concatStringsSep " and " wanted}. Add them to that instance's keys (a SOPS secret lists them in keys), or wire another secret with deps.${arg} = ref.<ns>.<instance>.";
 
+  # A network policy for pods an operator creates from a custom resource.
+  # Derived policy covers only workloads the package renders, so the package
+  # states these pods' traffic itself. `spec` is in the enforcer's policy
+  # format and carries the selector for the operand pods (Cilium:
+  # `endpointSelector`). `scope` decides the policy's namespace; pass
+  # `scope.forService dep` for a policy in a dependency's namespace.
+  #
+  # Null when the scope has no enforcer (network policy off, no provider,
+  # or the enforcer's own instance), so callers filter nulls before adding
+  # the policy to `root.requires`.
+  #
+  #   peerIngress = kix.operandPolicy {
+  #     inherit scope;
+  #     name = "${name}-peers";
+  #     spec = {
+  #       endpointSelector.matchLabels = podSelector;
+  #       ingress = [ { fromEndpoints = [ { matchLabels = podSelector; } ]; } ];
+  #     };
+  #   };
+  operandPolicy =
+    {
+      scope,
+      name,
+      spec,
+    }:
+    if scope.networkPolicyEnforcer == null then
+      null
+    else
+      scope.networkPolicyEnforcer.netpol.mkPolicy {
+        mkResource = scope.mkResource;
+        extraArgs = {
+          inherit name spec;
+          labels = {
+            ${kixKeys.derived} = "true";
+            ${kixKeys.policyType} = "operator-managed-workload";
+          };
+          extraDeps = [ ];
+        };
+      };
+
   service = {
     extractPorts =
       workload:

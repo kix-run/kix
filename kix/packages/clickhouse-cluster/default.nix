@@ -279,23 +279,6 @@ in
         netpol = if scope.networkPolicyEnforcer == null then null else scope.networkPolicyEnforcer.netpol;
         operatorScope = scope.forService clickhouseOperator;
         operatorNamespace = operatorScope.namespaceName;
-        mkOperandPolicy =
-          policyScope: policyName: spec:
-          if netpol == null then
-            null
-          else
-            netpol.mkPolicy {
-              mkResource = policyScope.mkResource;
-              extraArgs = {
-                name = policyName;
-                labels = {
-                  ${kix.keys.derived} = "true";
-                  ${kix.keys.policyType} = "operator-managed-workload";
-                };
-                inherit spec;
-                extraDeps = [ ];
-              };
-            };
         httpOnly = [
           {
             ports = [
@@ -376,46 +359,58 @@ in
 
         # Replica to replica: fetches (9009), distributed DDL and queries
         # (9000), and name resolution for them.
-        replicaEgress = mkOperandPolicy scope "${name}-replicas-egress" {
-          endpointSelector.matchLabels = podSelector;
-          egress = [
-            netpol.dnsEgressRule
-            { toEndpoints = [ { matchLabels = podSelector; } ]; }
-          ];
+        replicaEgress = kix.operandPolicy {
+          inherit scope;
+          name = "${name}-replicas-egress";
+          spec = {
+            endpointSelector.matchLabels = podSelector;
+            egress = [
+              netpol.dnsEgressRule
+              { toEndpoints = [ { matchLabels = podSelector; } ]; }
+            ];
+          };
         };
-        replicaIngress = mkOperandPolicy scope "${name}-replicas-ingress" {
-          endpointSelector.matchLabels = podSelector;
-          ingress = [
-            { fromEndpoints = [ { matchLabels = podSelector; } ]; }
-            # The operator propagates schema to a new replica and its
-            # exporter reads metrics, both over HTTP.
-            {
-              fromEndpoints = [
-                {
-                  matchLabels = clickhouseOperator.out.podSelector // {
-                    "k8s:io.kubernetes.pod.namespace" = operatorNamespace;
-                  };
-                }
-              ];
-              toPorts = httpOnly;
-            }
-          ];
+        replicaIngress = kix.operandPolicy {
+          inherit scope;
+          name = "${name}-replicas-ingress";
+          spec = {
+            endpointSelector.matchLabels = podSelector;
+            ingress = [
+              { fromEndpoints = [ { matchLabels = podSelector; } ]; }
+              # The operator propagates schema to a new replica and its
+              # exporter reads metrics, both over HTTP.
+              {
+                fromEndpoints = [
+                  {
+                    matchLabels = clickhouseOperator.out.podSelector // {
+                      "k8s:io.kubernetes.pod.namespace" = operatorNamespace;
+                    };
+                  }
+                ];
+                toPorts = httpOnly;
+              }
+            ];
+          };
         };
         # The other end of that second rule, in the operator's namespace.
-        operatorEgress = mkOperandPolicy operatorScope "${scope.namespaceName}-${name}-operator-egress" {
-          endpointSelector.matchLabels = clickhouseOperator.out.podSelector;
-          egress = [
-            {
-              toEndpoints = [
-                {
-                  matchLabels = podSelector // {
-                    "k8s:io.kubernetes.pod.namespace" = scope.namespaceName;
-                  };
-                }
-              ];
-              toPorts = httpOnly;
-            }
-          ];
+        operatorEgress = kix.operandPolicy {
+          scope = operatorScope;
+          name = "${scope.namespaceName}-${name}-operator-egress";
+          spec = {
+            endpointSelector.matchLabels = clickhouseOperator.out.podSelector;
+            egress = [
+              {
+                toEndpoints = [
+                  {
+                    matchLabels = podSelector // {
+                      "k8s:io.kubernetes.pod.namespace" = scope.namespaceName;
+                    };
+                  }
+                ];
+                toPorts = httpOnly;
+              }
+            ];
+          };
         };
 
         root = {
