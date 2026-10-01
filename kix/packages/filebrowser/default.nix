@@ -1,13 +1,32 @@
-# Filebrowser: web-based file manager.
+# filebrowser: the File Browser web file manager, serving the files on one
+# volume.
 #
-# Single-container app. Mounts a storage PVC at /srv.
+# Installs a Deployment and a Service on port 80, and a route through
+# `kix.expose` when the cluster has an ingress controller or a gateway.
 #
 # Dependencies:
-#   storage          required, persistent volume for files
-#   ingressNginx     optional, auto-creates ingress when present (+ host is set)
-#   clusterIssuer    optional, auto-enables TLS when present
+#   storage (required)   a claim, mounted at /srv, whose files it serves
+#   an ingress controller or gateway, a cluster issuer (optional): read by
+#                        `kix.expose` for the route and its TLS
 #
-# root = Service (port 80).
+# Minimal instance:
+#
+#   instances.files = {
+#     storage = {
+#       package = packages.persistent-volume-claim;
+#       config.size = "10Gi";
+#     };
+#     filebrowser.package = packages.filebrowser;   # takes deps.storage
+#   };
+#
+# `out`: the Service's `name`, `fqdn`, and `port` (80).
+#
+# Escape hatches: `ingress` for the route's host and annotations, and the
+# instance's `partsOverlays`.
+#
+# Limits: File Browser keeps its user database in an emptyDir, so users
+# and settings reset when the pod restarts. One replica, because the
+# database is a single file.
 
 {
   scope,

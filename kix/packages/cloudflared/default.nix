@@ -1,13 +1,31 @@
-# cloudflared: Cloudflare Tunnel connector.
+# cloudflared: the Cloudflare Tunnel connector for a remotely managed
+# tunnel.
 #
-# Runs the cloudflared agent for a *remotely-managed* tunnel: it dials out to
-# Cloudflare and forwards traffic to in-cluster Services, so there's no need for
-# a LoadBalancer, public node port, or Ingress. Public-hostname routing for a
-# remotely-managed tunnel is configured in the Cloudflare dashboard (or API);
-# this package just runs the connector and holds the tunnel token in a Secret.
+# Installs a Deployment that dials out to Cloudflare and forwards traffic to
+# in-cluster Services, so the cluster needs no LoadBalancer, public node
+# port, or Ingress for the hostnames the tunnel serves, and a Secret holding
+# the tunnel token. Public hostnames and their target Services are set in
+# the Cloudflare dashboard or API, not here.
 #
-# Provide the token inline (`token`, dev) or via a SOPS-encrypted file
-# (`tokenSource`, prod). root = the cloudflared Deployment.
+# Config: the tunnel token, as `tokenSource` (a SOPS-encrypted file with a
+# `token` key) or `token` (the token itself, which then sits in the cluster
+# file and the Nix store).
+#
+# Minimal instance:
+#
+#   instances.edge.tunnel = {
+#     package = packages.cloudflared;
+#     config.tokenSource = ./secrets/tunnel-token.sops.yaml;
+#   };
+#
+# `out`: the Deployment's `name`. The default alias `tunnel` lets other
+# packages depend on it.
+#
+# Escape hatches: the instance's `partsOverlays`.
+#
+# Limits: the hostnames and target Services live in Cloudflare, so Kix
+# derives no dependency or network policy from them. The metrics port
+# (2000) serves the probes; the package renders no ServiceMonitor.
 
 {
   scope,
@@ -21,7 +39,7 @@ let
 in
 {
   meta = {
-    version = "0.1.0";
+    version = "2026.9.3";
     description = "Cloudflare Tunnel connector (cloudflared)";
     owner = "platform";
     lifecycle = "stateless";

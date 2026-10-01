@@ -1,8 +1,23 @@
-# DNS Exporter package: tykling/dns_exporter.
+# dns-exporter: tykling/dns_exporter, a Prometheus exporter that runs DNS
+# queries on request and reports the results as metrics.
 #
-# Prometheus exporter for DNS queries. Exposes metrics on port 15353.
+# Installs a Deployment and a Service on port 15353. It needs no
+# dependencies and no config. Prometheus asks it for a query through the
+# `/query` path with `server` and `query_name` parameters, usually from a
+# ScrapeConfig or a Probe the cluster author writes.
 #
-# Resources: Deployment, Service.
+# Minimal instance:
+#
+#   instances.monitoring.dns-exporter.package = packages.dns-exporter;
+#
+# `out`: the Service's `name`, `fqdn`, and `port` (15353).
+#
+# Escape hatches: the instance's `partsOverlays`, for example to mount a
+# dns_exporter config file.
+#
+# Limits: the package renders no scrape target of its own, so nothing is
+# probed until a cluster adds one. It runs with the exporter's built-in
+# defaults and has no config-file option.
 
 {
   scope,
@@ -16,7 +31,7 @@ let
 in
 {
   meta = {
-    version = "1.0.0";
+    version = "1.2.3";
     description = "dns_exporter, a Prometheus exporter that runs DNS queries and reports the results as metrics";
     owner = "platform";
   };
@@ -56,11 +71,7 @@ in
   };
 
   build =
-    {
-      self,
-      config,
-      clusterConfig,
-    }:
+    { self, config, ... }:
     {
       deployment =
         {

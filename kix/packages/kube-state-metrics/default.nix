@@ -1,8 +1,24 @@
-# kube-state-metrics: Kubernetes object state metrics exporter.
+# kube-state-metrics: the exporter that turns the state of Kubernetes
+# objects (pods, deployments, nodes, and more) into metrics.
 #
-# Single Deployment that listens to the K8s API server and exposes
-# metrics about the state of objects (pods, deployments, nodes, etc.).
-# Ships its own ServiceMonitor via optional prometheus DI.
+# Installs a Deployment, its ServiceAccount, a ClusterRole that can list and
+# watch the kinds it reports, and a Service on port 8080 (metrics) and 8081
+# (its own telemetry). With a `prometheus` dependency and `metrics.enabled`,
+# it also renders a ServiceMonitor through `prometheus.out.mkServiceMonitor`.
+#
+# Dependencies:
+#   prometheus (optional)   the scraper whose ServiceMonitor builder it uses
+#
+# Minimal instance:
+#
+#   instances.monitoring.kube-state-metrics.package = packages.kube-state-metrics;
+#
+# `out`: the Service's `name`, `fqdn`, and `port`.
+#
+# Escape hatches: the instance's `partsOverlays`.
+#
+# Limits: one replica at every availability level (`availability.max =
+# "pod"`), because a second unsharded replica duplicates every series.
 
 {
   scope,
