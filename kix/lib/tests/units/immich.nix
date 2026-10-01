@@ -41,7 +41,7 @@ let
   };
 in
 {
-  # metrics.interval = "30s" renders interval, scheme and path on both
+  # metrics.interval = "30s" renders interval, scheme, and path on both
   # endpoints; without an interval neither endpoint has one.
   immich-monitor-extra-endpoint-interval =
     let

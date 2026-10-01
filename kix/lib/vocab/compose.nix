@@ -1782,7 +1782,7 @@ rec {
   #
   # `scheme` and `tlsConfig` (a ServiceMonitor endpoint `tlsConfig`) apply
   # to the primary endpoint only. Each of `extraEndpoints` is a ServiceMonitor
-  # endpoint over the defaults `scheme = "http"`, `path = "/metrics"` and the
+  # endpoint over the defaults `scheme = "http"`, `path = "/metrics"`, and the
   # instance's `metrics.interval` when that is set.
   monitor =
     {

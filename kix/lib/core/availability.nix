@@ -82,7 +82,7 @@ let
   # spread list:
   #
   #   kix.availability.spreadConstraints {
-  #     level = availability.level;
+  #     level = availability;
   #     selector = operandSelector;
   #     topology = clusterConfig.cluster.topology;
   #   }
