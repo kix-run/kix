@@ -28,6 +28,8 @@
 let
   cfg = config.monitoring;
   ns = cfg.namespace;
+  # The module's `kix` argument carries only `mkImport`, so the quantity
+  # type comes from its file rather than `kix.types.quantity`.
   quantity = import ../vocab/quantity.nix { inherit lib; };
   # Created by the `priority-classes` instance below and named by promtail.
   # A module cannot read another instance's `out`, so both sides use this
@@ -83,7 +85,7 @@ in
       routing = lib.mkOption {
         type = lib.types.nullOr lib.types.anything;
         default = null;
-        description = "Override alertmanager routing config (receivers, routes).";
+        description = "Alertmanager configuration, passed to the alertmanager instance's `settings`. Null uses that package's configuration, which routes every alert to the receiver `null`.";
       };
     };
 
@@ -226,10 +228,10 @@ in
               externalUrl = cfg.prometheus.externalUrl;
             }
             // lib.optionalAttrs cfg.alertmanager.enabled {
-              # The alertmanager package no longer renders its own Service; it
-              # refs the operator's `alertmanager-operated` (port `web`). The
-              # operator turns this into Alertmanager service discovery, so
-              # the name must be a Service that exists in the namespace.
+              # The operator's `alertmanager-operated` Service (port `web`),
+              # which the alertmanager package refs. The operator turns this
+              # into Alertmanager service discovery, so the name must be a
+              # Service that exists in the namespace.
               alerting.alertmanagers = [
                 {
                   namespace = ns;
@@ -243,7 +245,7 @@ in
           alertmanager = lib.mkIf cfg.alertmanager.enabled {
             package = packages.alertmanager;
             config = lib.optionalAttrs (cfg.alertmanager.routing != null) {
-              config = cfg.alertmanager.routing;
+              settings = cfg.alertmanager.routing;
             };
           };
 
@@ -276,7 +278,10 @@ in
           storage = lib.mkIf (cfg.grafana.enabled && cfg.grafana.persistence.enabled) {
             package = packages."persistent-volume-claim";
             config = {
-              inherit (cfg.grafana.persistence) size storageClassName;
+              inherit (cfg.grafana.persistence) storageClassName;
+              # The claim's `size` option is a string; the quantity type also
+              # accepts a plain number of bytes.
+              size = toString cfg.grafana.persistence.size;
             };
           };
 

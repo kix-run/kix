@@ -7,8 +7,8 @@
 # recording-rule results back through vminsert so they persist. State is
 # restored on restart via remoteRead. VMAlertmanager rather than the
 # alertmanager package so the prometheus-operator controller isn't
-# needed; the routing `config`/`secrets` options mirror the alertmanager
-# package's shape (ludo's Telegram wiring is the reference consumer).
+# needed; the `settings` and `secrets` options have the alertmanager
+# package's shape, and both packages render the same default settings.
 #
 # Notifier wiring is operator-side service discovery: the VMAlert CR
 # selects the VMAlertmanager CR by label, and the operator expands that
@@ -33,33 +33,14 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
+  who = "victoria-metrics-alert ${ns}/${name}";
 
   inherit (import ../victoria-metrics-operator/cr-image.nix { inherit lib kix; })
     crImage
     crImageVersionTag
     ;
 
-  # Routes every alert, Watchdog included, to a receiver that drops it.
-  defaultAlertmanagerConfig = {
-    global.resolve_timeout = "5m";
-    route = {
-      group_by = [
-        "namespace"
-        "alertname"
-      ];
-      group_wait = "30s";
-      group_interval = "5m";
-      repeat_interval = "12h";
-      receiver = "null";
-      routes = [
-        {
-          receiver = "null";
-          matchers = [ "alertname = Watchdog" ];
-        }
-      ];
-    };
-    receivers = [ { name = "null"; } ];
-  };
+  defaultAlertmanagerSettings = import ../alertmanager/default-settings.nix;
 in
 {
   meta = {
@@ -100,6 +81,8 @@ in
       default = true;
       description = "Evaluate all VMRules (and converted PrometheusRules) cluster-wide.";
     };
+    # No CPU limit: a CFS quota delays rule evaluation under bursts. The
+    # memory limit bounds the process.
     resources = kix.options.resources {
       requests = {
         cpu = "100m";
@@ -112,11 +95,12 @@ in
     extraArgs = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
+      description = "vmalert flags for the VMAlert CR's `extraArgs`, keyed by flag name without the leading dash.";
     };
     extraSpec = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
-      description = "Extra fields deep-merged into the VMAlert CR spec.";
+      description = "Extra fields deep-merged into the VMAlert CR spec. The package refuses `datasource.url`, `remoteWrite.url`, `remoteRead.url`, and `notifiers`, which come from the vmCluster dependency and the alertmanager this package runs, and `image`, `replicaCount`, `evaluationInterval`, `selectAllByDefault`, `resources`, and `extraArgs`, which have options of their own.";
     };
 
     alertmanager = {
@@ -155,11 +139,11 @@ in
           reboot) drops them. Set for anything beyond a trial.
         '';
       };
-      config = lib.mkOption {
+      settings = lib.mkOption {
         type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
         default = null;
         defaultText = lib.literalMD "null: the package's configuration, which routes every alert to the receiver `null`";
-        description = "Alertmanager configuration (route, receivers, inhibit_rules), rendered to alertmanager.yaml. A value replaces the package's configuration as a whole. Null uses the package's configuration, which routes every alert to the receiver `null`.";
+        description = "The Alertmanager configuration file, alertmanager.yaml (`global`, `route`, `receivers`, `inhibit_rules`, `templates`). A value replaces the package's configuration as a whole rather than merging into it, because the package's routing tree names its own `null` receiver. Null uses the package's configuration, which routes every alert to the receiver `null`.";
       };
       secrets = lib.mkOption {
         type = lib.types.listOf lib.types.str;
@@ -170,6 +154,7 @@ in
         type = lib.types.listOf lib.types.str;
         default = [ ];
       };
+      # No CPU limit, as for vmalert above.
       resources = kix.options.resources {
         requests = {
           cpu = "50m";
@@ -182,7 +167,7 @@ in
       extraSpec = lib.mkOption {
         type = lib.types.attrsOf lib.types.anything;
         default = { };
-        description = "Extra fields deep-merged into the VMAlertmanager CR spec.";
+        description = "Extra fields deep-merged into the VMAlertmanager CR spec. The package refuses `configSecret`, which holds `alertmanager.settings`, and `image`, `replicaCount`, `retention`, `storage`, `secrets`, `configMaps`, and `resources`, which have options of their own.";
       };
     };
     # After vmalert is ready, run ./health-check.py as a Job in this
@@ -275,18 +260,59 @@ in
         alertmanagerConfig = scope.mkSecret {
           name = "${name}-alertmanager-config";
           stringData."alertmanager.yaml" = builtins.toJSON (
-            if config.alertmanager.config == null then defaultAlertmanagerConfig else config.alertmanager.config
+            if config.alertmanager.settings == null then
+              defaultAlertmanagerSettings
+            else
+              config.alertmanager.settings
           );
         };
 
         vmAlertmanager = vmOperator.out.mkVMAlertmanager scope {
           inherit name;
-          spec = lib.recursiveUpdate alertmanagerBaseSpec config.alertmanager.extraSpec;
+          spec = kix.mergeGuarded {
+            inherit who;
+            what = "alertmanager.extraSpec";
+            locked = map lib.toList [
+              "configSecret"
+              "image"
+              "replicaCount"
+              "retention"
+              "storage"
+              "secrets"
+              "configMaps"
+              "resources"
+            ];
+          } alertmanagerBaseSpec config.alertmanager.extraSpec;
         };
 
         vmAlert = vmOperator.out.mkVMAlert scope {
           inherit name;
-          spec = lib.recursiveUpdate vmAlertBaseSpec config.extraSpec;
+          spec = kix.mergeGuarded {
+            inherit who;
+            locked = [
+              [
+                "datasource"
+                "url"
+              ]
+              [
+                "remoteWrite"
+                "url"
+              ]
+              [
+                "remoteRead"
+                "url"
+              ]
+            ]
+            ++ map lib.toList [
+              "notifiers"
+              "image"
+              "replicaCount"
+              "evaluationInterval"
+              "selectAllByDefault"
+              "resources"
+              "extraArgs"
+            ];
+          } vmAlertBaseSpec config.extraSpec;
         };
 
         root = {

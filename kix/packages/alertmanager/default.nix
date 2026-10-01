@@ -19,27 +19,7 @@ let
   name = scope.instanceName;
   ns = scope.namespaceName;
 
-  # Routes every alert, Watchdog included, to a receiver that drops it.
-  defaultConfig = {
-    global.resolve_timeout = "5m";
-    route = {
-      group_by = [
-        "namespace"
-        "alertname"
-      ];
-      group_wait = "30s";
-      group_interval = "5m";
-      repeat_interval = "12h";
-      receiver = "null";
-      routes = [
-        {
-          receiver = "null";
-          matchers = [ "alertname = Watchdog" ];
-        }
-      ];
-    };
-    receivers = [ { name = "null"; } ];
-  };
+  defaultSettings = import ./default-settings.nix;
 in
 {
   meta = {
@@ -86,11 +66,11 @@ in
         memory = "1Gi";
       };
     };
-    config = lib.mkOption {
+    settings = lib.mkOption {
       type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
       default = null;
       defaultText = lib.literalMD "null: the package's configuration, which routes every alert to the receiver `null`";
-      description = "Alertmanager configuration (route, receivers, inhibit_rules), rendered to alertmanager.yaml. A value replaces the package's configuration as a whole. Null uses the package's configuration, which routes every alert to the receiver `null`.";
+      description = "The Alertmanager configuration file, alertmanager.yaml (`global`, `route`, `receivers`, `inhibit_rules`, `templates`). A value replaces the package's configuration as a whole rather than merging into it, because the package's routing tree names its own `null` receiver. Null uses the package's configuration, which routes every alert to the receiver `null`.";
     };
     priorityClassName = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -323,7 +303,7 @@ in
       alertmanagerConfig = scope.mkSecret {
         name = "alertmanager-${name}";
         stringData."alertmanager.yaml" = builtins.toJSON (
-          if config.config == null then defaultConfig else config.config
+          if config.settings == null then defaultSettings else config.settings
         );
       };
 
@@ -370,9 +350,9 @@ in
       };
 
       # The operator creates `alertmanager-operated` (headless, port web
-      # 9093) over the pods it stamps with svcSelector. A ServiceRef to it
-      # replaces the Service kix used to render over the same pods; see the
-      # prometheus package for the reasoning (v2_discussions/135).
+      # 9093) over the pods it stamps with svcSelector. A ServiceRef
+      # describes it; the prometheus package's `service` part gives the
+      # reasons (v2_discussions/135).
       service = scope.mkServiceRef {
         name = "alertmanager-operated";
         selector = svcSelector;
@@ -394,10 +374,9 @@ in
       # the labels the Prometheus Operator stamps on Alertmanager pods. Those
       # pods are not in the build, so the PDB declares the CR whose pods it
       # selects (kix.run/operand-of), which the cross-resource check accepts.
-      # This is the one PDB a package still writes by hand, and it is not a
-      # duplicate of the derived one: the availability plugin derives a PDB
-      # from a rendered workload's replica count, and there is no rendered
-      # workload here.
+      # The package renders this PDB itself, and it is not a duplicate of
+      # a derived one: the availability plugin derives a PDB from a rendered
+      # workload's replica count, and there is no rendered workload here.
       podDisruptionBudget = lib.optionalAttrs config.podDisruptionBudget.enabled {
         pdb = scope.mkResource {
           apiVersion = "policy/v1";

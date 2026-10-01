@@ -100,6 +100,8 @@ in
       default = { };
       description = "Labels attached to every scraped sample (e.g. cluster identity).";
     };
+    # No CPU limit: a CFS quota throttles scrape bursts. The memory limit
+    # bounds the process.
     resources = kix.options.resources {
       requests = {
         cpu = "250m";
@@ -117,7 +119,7 @@ in
     extraSpec = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
-      description = "Extra fields deep-merged into the VMAgent CR spec.";
+      description = "Extra fields deep-merged into the VMAgent CR spec. The package refuses `remoteWrite` and `scrapeInterval`, which come from the vmCluster dependency, and `image`, `replicaCount`, `selectAllByDefault`, `resources`, and `extraArgs`, which have options of their own.";
     };
 
     # After the agent is ready, run ./health-check.py as a Job in this
@@ -191,7 +193,18 @@ in
       {
         vmAgent = vmOperator.out.mkVMAgent scope {
           inherit name;
-          spec = lib.recursiveUpdate baseSpec config.extraSpec;
+          spec = kix.mergeGuarded {
+            who = "victoria-metrics-agent ${scope.namespaceName}/${name}";
+            locked = map lib.toList [
+              "remoteWrite"
+              "scrapeInterval"
+              "image"
+              "replicaCount"
+              "selectAllByDefault"
+              "resources"
+              "extraArgs"
+            ];
+          } baseSpec config.extraSpec;
         };
 
         root = {
