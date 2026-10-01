@@ -145,7 +145,7 @@ rec {
       };
       # Shelf packages bypass buildRolesIndex until instantiated, so validate
       # meta.roles here so a typo'd role on a catalog entry throws instead
-      # of silently never matching a weak demand.
+      # of silently never matching a demand.
       shelfRoles = map (roles.assertKnownRole "meta.roles of ${context}") (packageMeta.roles or [ ]);
     in
     lib.unique (explicitAliases ++ shelfRoles ++ (packageMeta.defaultAliases or [ ]));

@@ -997,8 +997,10 @@ let
       };
   };
 
-  # Stock-catalog fixtures: a role-claiming shelf package and a consumer
-  # whose storageClasses dep is OPTIONAL (like persistent-volume-claim).
+  # Stock-catalog fixtures: a role-claiming shelf package and two consumers
+  # that write the class they resolved into ConfigMap `sc-consumer`, one
+  # with an OPTIONAL storageClasses dep (like persistent-volume-claim) and
+  # one with a REQUIRED one.
   stockStorage = mkCmPackage {
     name = "stock-sc";
     metaExtra.roles = [ "storageClasses" ];
@@ -1020,6 +1022,26 @@ let
           kind = "ConfigMap";
           name = "sc-consumer";
           extra.data.sc = if storageClasses == null then "missing" else storageClasses.out.storageClassName;
+        };
+        root = self.cm;
+      };
+  };
+
+  requiredScConsumer = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        storageClasses,
+        ...
+      }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "sc-consumer";
+          extra.data.sc = storageClasses.out.storageClassName;
         };
         root = self.cm;
       };
@@ -1077,47 +1099,6 @@ let
           resource = self.cm;
           out.who = "via-${z.out.who}";
         };
-      };
-  };
-
-  # Transitive weak-demand fixtures: a shelf package with its own weak
-  # storageClasses demand, and a consumer whose REQUIRED dep pulls it.
-  weakMiddlePackage = {
-    meta.version = "test";
-    build =
-      {
-        self,
-        scope,
-        storageClasses ? null,
-        ...
-      }:
-      {
-        cm = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "middle";
-          extra.data.sc = if storageClasses == null then "missing" else storageClasses.out.storageClassName;
-        };
-        root = self.cm;
-      };
-  };
-
-  weakMiddleConsumer = {
-    meta.version = "test";
-    build =
-      {
-        self,
-        scope,
-        middle,
-        ...
-      }:
-      {
-        cm = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "top-consumer";
-        };
-        root = self.cm;
       };
   };
 
@@ -1240,6 +1221,7 @@ let
       hasName
       byName
       evalFails
+      requiredScConsumer
       ;
   };
 
@@ -1583,30 +1565,11 @@ let
           metaExtra.roles = [ "storageClasses" ];
           out.storageClassName = "stub-sc";
         };
-        consumer = {
-          meta.version = "test";
-          build =
-            {
-              self,
-              scope,
-              storageClasses,
-              ...
-            }:
-            {
-              cm = scope.mkResource {
-                apiVersion = "v1";
-                kind = "ConfigMap";
-                name = "sc-consumer";
-                extra.data.sc = storageClasses.out.storageClassName;
-              };
-              root = self.cm;
-            };
-        };
         ms = manifests (mkCluster [
           baseInstances
           {
             instances.storage.provider.package = storageStub;
-            instances.appns.consumer.package = consumer;
+            instances.appns.consumer.package = requiredScConsumer;
           }
         ]);
         probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
@@ -1614,11 +1577,11 @@ let
       (probe != null && probe.data.sc == "stub-sc")
       || throw "role-as-alias resolution failed: ${builtins.toJSON probe}";
 
-    # --- stock catalogs / weak role demand (doc 127 §5) ---
+    # --- stock catalogs (doc 127 §5) ---
 
-    # An OPTIONAL dep on a role name pulls the role provider from
-    # availablePackages when nothing else provides it.
-    t20-weak-role-demand-pulls-stock =
+    # An optional dependency places no demand, even on a role name: the
+    # role provider on the shelf stays there and the dependency is null.
+    t20-optional-role-dep-does-not-pull-stock =
       let
         ms = manifests (mkCluster [
           baseInstances
@@ -1629,8 +1592,8 @@ let
         ]);
         probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
       in
-      (hasName "stock-sc" (ofKind "ConfigMap" ms) && probe != null && probe.data.sc == "stock-sc-name")
-      || throw "stock not pulled by weak role demand: ${builtins.toJSON probe}";
+      (!(hasName "stock-sc" (ofKind "ConfigMap" ms)) && probe != null && probe.data.sc == "missing")
+      || throw "optional role dependency pulled stock: ${builtins.toJSON probe}";
 
     # No demand → the catalog entry stays on the shelf (demand-rooted
     # closure: nothing is installed because a flavor bundled it).
@@ -1643,10 +1606,10 @@ let
       in
       !(hasName "stock-sc" (ofKind "ConfigMap" ms)) || throw "stock instantiated without any demand";
 
-    # An optional platform import providing the role suppresses the stock
-    # pull; existing environment-provided resolution stays unchanged
-    # (the ludo-kind case).
-    t22-import-suppresses-stock =
+    # An optional dependency on a role resolves to a platform import that
+    # provides it, as the kind flavour's platform-storage import does for
+    # ludo-kind, and the shelf provider is not pulled.
+    t22-optional-role-dep-resolves-import =
       let
         ms = manifests (mkCluster [
           baseInstances
@@ -1665,40 +1628,7 @@ let
         probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
       in
       (!(hasName "stock-sc" (ofKind "ConfigMap" ms)) && probe != null && probe.data.sc == "import-sc")
-      || throw "import did not suppress stock pull: ${builtins.toJSON probe}";
-
-    # The real lithus flavor: preset + catalog. A PVC-shaped demand pulls
-    # the whole OpenEBS stock (StorageClasses, per-worker DiskPools) and
-    # the consumer resolves the default class through the role.
-    t23-lithus-stock-on-demand =
-      let
-        ms = manifests (mkCluster [
-          ../flavors/lithus.nix
-          { cluster.flavor.lithus.workers = [ "w1" ]; }
-          { instances.appns.consumer.package = optionalScConsumer; }
-        ]);
-        probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
-      in
-      (
-        hasName "lbs1-pool1-2x" (ofKind "StorageClass" ms)
-        && hasName "w1-pool1" (ofKind "DiskPool" ms)
-        && probe != null
-        && probe.data.sc == "lbs1-pool1-2x"
-      )
-      || throw "lithus stock not pulled on demand: ${builtins.toJSON (namesOf ms)}";
-
-    # lithus with no storage demand compiles WITHOUT OpenEBS in the
-    # artifact (the doc-127 proof case).
-    t24-lithus-no-demand-no-openebs =
-      let
-        ms = manifests (mkCluster [
-          ../flavors/lithus.nix
-          { cluster.flavor.lithus.workers = [ "w1" ]; }
-          { instances.appns.probe.package = probePackage; }
-        ]);
-      in
-      (ofKind "StorageClass" ms == [ ] && ofKind "DiskPool" ms == [ ])
-      || throw "lithus emitted storage stock without demand: ${builtins.toJSON (namesOf ms)}";
+      || throw "optional role dependency did not resolve the import: ${builtins.toJSON probe}";
 
     # --- capability-ownership decomposition (v2_discussions/128) ---
 
@@ -1942,19 +1872,19 @@ let
       )
       || throw "unknown-domain lint wrong: unknown=${builtins.toJSON unknownFindings} known=${builtins.toJSON knownFindings}";
 
-    # --- weak-role wiring (PR 29 review findings 2-5) ---
+    # --- role demand wiring (PR 29 review findings 2-5) ---
 
-    # Role providers are cluster-scoped: weak demand from two namespaces
-    # shares ONE stock instance instead of instantiating two strong
-    # providers of the same role (which would be a duplicate-role error).
-    t32-weak-role-multi-namespace-shares-stock =
+    # Role providers are cluster-scoped: demand from two namespaces shares
+    # ONE stock instance instead of instantiating two strong providers of
+    # the same role (which would be a duplicate-role error).
+    t32-role-demand-multi-namespace-shares-stock =
       let
         ms = manifests (mkCluster [
           baseInstances
           {
             availablePackages.stock-storage.package = stockStorage;
-            instances.ns1.consumer1.package = optionalScConsumer;
-            instances.ns2.consumer2.package = optionalScConsumer;
+            instances.ns1.consumer1.package = requiredScConsumer;
+            instances.ns2.consumer2.package = requiredScConsumer;
           }
         ]);
         stockCms = builtins.filter (m: (m.metadata.name or "") == "stock-sc") (ofKind "ConfigMap" ms);
@@ -1965,43 +1895,9 @@ let
         && builtins.length probes == 2
         && builtins.all (p: p.data.sc == "stock-sc-name") probes
       )
-      || throw "multi-namespace weak demand not deduped: stock=${toString (builtins.length stockCms)} probes=${
+      || throw "multi-namespace role demand not deduped: stock=${toString (builtins.length stockCms)} probes=${
         builtins.toJSON (map (p: p.data.sc) probes)
       }";
-
-    # An environment binding suppresses the stock pull even without an
-    # import instance. Flavors declare `cni` exclusively this way. The
-    # compiler must not instantiate stock and then refuse its own work.
-    t33-env-exclusive-binding-suppresses-stock =
-      let
-        ms = manifests (mkCluster [
-          baseInstances
-          {
-            cluster.roles.storageClasses.binding = "exclusive";
-            availablePackages.stock-storage.package = stockStorage;
-            instances.appns.consumer.package = optionalScConsumer;
-          }
-        ]);
-        probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
-      in
-      (!(hasName "stock-sc" (ofKind "ConfigMap" ms)) && probe != null && probe.data.sc == "missing")
-      || throw "exclusive binding did not suppress stock pull: ${builtins.toJSON probe}";
-
-    # Shadowable: the environment default is the provider; pulling stock
-    # would silently shadow it, so the shelf entry stays untouched.
-    t34-env-shadowable-binding-suppresses-stock =
-      let
-        ms = manifests (mkCluster [
-          baseInstances
-          {
-            cluster.roles.storageClasses.binding = "shadowable";
-            availablePackages.stock-storage.package = stockStorage;
-            instances.appns.consumer.package = optionalScConsumer;
-          }
-        ]);
-      in
-      !(hasName "stock-sc" (ofKind "ConfigMap" ms))
-      || throw "shadowable binding did not suppress stock pull";
 
     # A never-activated optional instance claiming a role a mandatory
     # instance also provides is NOT a conflict: it emits nothing this
@@ -2025,39 +1921,36 @@ let
       (builtins.length stockCms == 1 && probe != null && probe.data.sc == "stock-sc-name")
       || throw "inactive optional treated as role conflict: stock=${toString (builtins.length stockCms)} probe=${builtins.toJSON probe}";
 
-    # Weak role demand propagates transitively: a catalog package pulled in
-    # by a REQUIRED dep has its own weak storageClasses demand honored.
-    t36-weak-role-demand-transitive =
+    # A typo'd role on a shelf entry throws (same closed vocabulary as
+    # instantiated meta.roles) instead of silently never matching. The shelf
+    # is read only when something demands from it, so the consumer's
+    # storageClasses dependency is required, and stock-storage answers it
+    # once the typo'd entry is gone.
+    t37-catalog-role-typo-throws =
       let
-        ms = manifests (mkCluster [
+        shelf = extra: [
           baseInstances
           {
-            availablePackages.middle.package = weakMiddlePackage;
-            availablePackages.stock-storage.package = stockStorage;
-            instances.appns.top.package = weakMiddleConsumer;
+            availablePackages = {
+              stock-storage.package = stockStorage;
+            }
+            // extra;
+            instances.appns.consumer.package = requiredScConsumer;
           }
-        ]);
-        middleCm = byName "middle" (ofKind "ConfigMap" ms);
+        ];
       in
       (
-        hasName "stock-sc" (ofKind "ConfigMap" ms)
-        && middleCm != null
-        && middleCm.data.sc == "stock-sc-name"
+        builtins.length (manifests (mkCluster (shelf { }))) > 0
+        && evalFails (
+          mkCluster (shelf {
+            bad-storage.package = mkCmPackage {
+              name = "bad";
+              metaExtra.roles = [ "storageClases" ];
+            };
+          })
+        )
       )
-      || throw "transitive weak demand not honored: ${builtins.toJSON middleCm}";
-
-    # A typo'd role on a shelf entry throws (same closed vocabulary as
-    # instantiated meta.roles) instead of silently never matching.
-    t37-catalog-role-typo-throws = evalFails (mkCluster [
-      baseInstances
-      {
-        availablePackages.bad-storage.package = mkCmPackage {
-          name = "bad";
-          metaExtra.roles = [ "storageClases" ];
-        };
-        instances.appns.consumer.package = optionalScConsumer;
-      }
-    ]);
+      || throw "a typo'd role on a shelf entry did not throw, or the control cluster failed";
 
     # Directly wired deps (deps.operator = ref...) count as linking against
     # the declarer. The domain lint must not false-warn on explicit wiring.
@@ -4638,7 +4531,7 @@ let
         application =
           { ... }:
           {
-            consumer.package = optionalScConsumer;
+            consumer.package = requiredScConsumer;
           };
         cluster = publicKix.buildCluster {
           name = "mkenv-role";
@@ -5644,31 +5537,6 @@ let
       in
       whoOf ms == "managed" || throw "managed optional did not outrank the import: ${whoOf ms}";
 
-    t112-contested-weak-role-demand-throws = evalFails (mkCluster [
-      baseInstances
-      {
-        availablePackages.stock-a.package = stockStorage;
-        availablePackages.stock-b.package = stockStorage;
-        instances.appns.consumer.package = optionalScConsumer;
-      }
-    ]);
-
-    # An environment binding retires the weak demand, so the contested
-    # role is never looked up.
-    t113-env-binding-retires-contested-weak-role-demand =
-      let
-        ms = manifests (mkCluster [
-          baseInstances
-          {
-            cluster.roles.storageClasses.binding = "shadowable";
-            availablePackages.stock-a.package = stockStorage;
-            availablePackages.stock-b.package = stockStorage;
-            instances.appns.consumer.package = optionalScConsumer;
-          }
-        ]);
-      in
-      !(hasName "stock-sc" ms) || throw "bound role still pulled stock";
-
     # `deps.x = ref...` wires the dependency, so the consumer places no
     # demand on the shelf, contested or not.
     t114-explicit-deps-wiring-places-no-shelf-demand =
@@ -6259,6 +6127,7 @@ in
       xConsumer
       stockStorage
       optionalScConsumer
+      requiredScConsumer
       ;
   };
   result =

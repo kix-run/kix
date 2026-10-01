@@ -31,7 +31,7 @@ rec {
     };
 
     storageClasses = {
-      description = "Default StorageClass provider. Consumers (persistent-volume-claim, stackgres-cluster, ...) read out.storageClassName.";
+      description = "StorageClass provider. Consumers (persistent-volume-claim, stackgres-cluster, ...) read out.storageClassName, the class a claim uses when it names none.";
       outContract = [ "storageClassName" ];
     };
 

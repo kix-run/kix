@@ -48,7 +48,6 @@
         explicitInstances = cfg.instances;
         availablePackages = cfg.availablePackages;
         autoNamespace = cfg.autoNamespace;
-        clusterRoles = cfg.cluster.roles;
       };
 
       mergedInstances = lib.recursiveUpdate autoResult.autoInstances cfg.instances;

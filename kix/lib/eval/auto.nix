@@ -101,26 +101,15 @@ rec {
       shelfByNs
     ];
 
-  # An optional dependency whose argument name is a registry role still
-  # demands that role. Optional means "compile
-  # even when nothing provides it", not "don't pull curated stock". These
-  # deps seed auto-instantiation, but only as a last resort: an existing
-  # instance, platform import, or environment binding providing the role
-  # always wins (see weakStockDemands below).
-  getWeakRoleDeps = getDepsWhere (
-    name: spec: (spec.optional or false) && builtins.elem name roles.roleNames
-  );
-
+  # Instances pulled from availablePackages to satisfy demands. Only a
+  # required dependency places a demand. An optional dependency resolves
+  # against existing instances and imports, and is null otherwise; it never
+  # pulls a shelf package.
   computeAutoInstances =
     {
       explicitInstances,
       availablePackages,
       autoNamespace,
-      # An environment-bound role with an exclusive
-      # or shadowable) is provided by the platform, so weak demand must not
-      # pull stock for it (stock would either fight the environment CNI or
-      # silently shadow the platform default).
-      clusterRoles ? { },
     }:
     let
       normalizedAvail = normalizeAvailablePackages availablePackages;
@@ -218,15 +207,6 @@ rec {
       # Key to every optional instance that answers it; pickOptional chooses.
       optionalByKey = builtins.zipAttrsWith (_: opts: opts) optionalByKeyList;
 
-      # Roles the environment itself provides. "absent" and null (unknown)
-      # leave the role vacant, allowing stock to fill it.
-      isEnvBoundRole =
-        role:
-        builtins.elem ((clusterRoles.${role} or { }).binding or null) [
-          "exclusive"
-          "shadowable"
-        ];
-
       # Role providers are cluster-scoped: a stock pull for a role-named dep
       # is keyed by the role itself rather than the requesting namespace. Two
       # consumers in two namespaces share one provider instead of
@@ -238,22 +218,6 @@ rec {
           if builtins.elem depName roles.roleNames then "role:${depName}" else "${depName}@${requesterNs}";
         inherit depName requesterNs requester;
       };
-
-      # Weak demands that actually pull stock: the role resolves nowhere
-      # else: no explicit instance, platform import, or environment binding,
-      # and the catalog has a provider. Applied to
-      # explicit instances AND to every package the closure discovers, so
-      # demand propagates transitively (an auto-instantiated package's own
-      # weak role deps still pull their stock).
-      weakStockDemands =
-        pkg:
-        builtins.filter (
-          role:
-          !(mandatoryKeys ? ${role})
-          && !(optionalByKey ? ${role})
-          && !(isEnvBoundRole role)
-          && availableByKey ? ${role}
-        ) (getWeakRoleDeps pkg);
 
       # The demands an instance places on optional instances and the shelf.
       # A dependency answered by a mandatory instance places none. One wired
@@ -271,7 +235,7 @@ rec {
           ) (map (d: wired.${d}) (builtins.filter (d: wired ? ${d}) (getAllDeps instCfg.package)));
         in
         map (d: mkItem d ns requester) (
-          builtins.filter (d: !(wired ? ${d})) (required ++ weakStockDemands instCfg.package)
+          builtins.filter (d: !(wired ? ${d})) required
         )
         ++ map (v: {
           key = "ref:${v.namespace}/${v.instanceName}";
