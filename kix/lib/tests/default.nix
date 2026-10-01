@@ -618,6 +618,7 @@ let
             group = "test.io";
             kind = "TestCluster";
             plural = "testclusters";
+            version = "v1";
             inherit factBehavior;
           };
           root = {

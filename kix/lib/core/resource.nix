@@ -750,7 +750,13 @@ rec {
       group,
       kind,
       version,
+      # Versions the CRD serves. `cr` refuses any other, so a wrong version
+      # fails the build instead of every apply of the custom resource.
+      servedVersions,
       crdScope,
+      # Appended to every CR's `requires` after the CRD (a chart's workloads,
+      # any of which can be the CRD's webhook).
+      extraRequires ? [ ],
       # Validated behavior to pass to each CR for endpoint fact handling.
       factBehavior ? null,
       # Stamp kix.run/readiness on each CR for the CLI to evaluate at deploy.
@@ -769,16 +775,21 @@ rec {
       _validatedReadiness = validateReadiness "mkCRDBuilders" "${group}/${kind}" readiness;
 
       # A CR can override the default version, normally the CRD's storage
-      # version. The caller must choose a served version; this helper does not
-      # have the served-version list to validate it. Retain the CRD dependency
-      # and behavior declarations with either version.
+      # version, with another served one.
+      checkServed =
+        v:
+        if builtins.elem v servedVersions then
+          v
+        else
+          throw "${group}/${kind}: version \"${v}\" is not served (${builtins.concatStringsSep ", " servedVersions}). Use a served version, or correct version on the scope.mkCRDRef that declares the kind.";
+
       cr =
         args:
         removeAttrs args [ "version" ]
         // {
-          apiVersion = "${group}/${args.version or version}";
+          apiVersion = "${group}/${checkServed (args.version or version)}";
           kind = crKind;
-          requires = (args.requires or [ ]) ++ [ crdOrRef ];
+          requires = (args.requires or [ ]) ++ [ crdOrRef ] ++ extraRequires;
         }
         // lib.optionalAttrs (factBehavior != null) { inherit factBehavior; }
         // lib.optionalAttrs (_validatedReadiness != null) {

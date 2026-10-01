@@ -1993,7 +1993,7 @@ mod tests {
             "apiVersion": keys::API_VERSION,
             "kind": "PackageInstance",
             "metadata": {
-                "name": "crd-ref-sgclusters-stackgres-io",
+                "name": "crd-ref-stackgres-operator-sgclusters-stackgres-io",
                 "namespace": "data",
                 "annotations": {
                     keys::MODE: "import",

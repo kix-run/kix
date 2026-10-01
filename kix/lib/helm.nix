@@ -16,6 +16,7 @@
 { pkgs, lib }:
 
 let
+  k8s = import ./core { inherit lib; };
   helmDag = import ./helm-dag.nix { inherit lib; };
   helpers = import ./eval/helpers.nix { inherit lib; };
 
@@ -660,28 +661,12 @@ rec {
             if group == null || crKind == null || version == null then
               null
             else
-              let
-                crApiVersion = "${group}/${version}";
-                cr =
-                  args:
-                  args
-                  // {
-                    apiVersion = crApiVersion;
-                    kind = crKind;
-                    requires = (args.requires or [ ]) ++ [ crdRes ] ++ chartWorkloads;
-                  };
-                mkCR =
-                  consumerScope: args:
-                  let
-                    enriched = cr args;
-                  in
-                  if crdScope == "Cluster" then
-                    consumerScope.mkClusterResource enriched
-                  else
-                    consumerScope.mkResource enriched;
-              in
-              {
-                inherit cr mkCR;
+              k8s.mkCRDBuilders {
+                crdOrRef = crdRes;
+                extraRequires = chartWorkloads;
+                kind = crKind;
+                servedVersions = map (v: v.name) (builtins.filter (v: v.served or true) versions);
+                inherit group version crdScope;
               };
 
           crdBuilders = builtins.foldl' (
