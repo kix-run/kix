@@ -94,7 +94,7 @@ let
     else
       null;
 
-  # [ whole fraction suffix ], or null outside the grammar.
+  # { whole; frac; suffix; } as strings, or null outside the grammar.
   split =
     q:
     let

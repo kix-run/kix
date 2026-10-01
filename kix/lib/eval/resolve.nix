@@ -247,7 +247,7 @@ rec {
         attrs: if builtins.isAttrs attrs then lib.mapAttrs (_: unwrapLocked) attrs else attrs;
 
       # Each module carries the file that defined it, so a module-system
-      # error names that file rather than `<unknown-file>`.
+      # error names the file that set the value.
       wrappedModules = map (
         d:
         let

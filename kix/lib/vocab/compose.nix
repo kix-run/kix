@@ -196,7 +196,7 @@ rec {
       builtins.floor (bytes / 1073741824);
 
   # The env attrset for `kix.mkEnvVars`: the package's `defaults`, then the
-  # instance's `env` (an `kix.options.env` value), then the variables the
+  # instance's `env` (a `kix.options.env` value), then the variables the
   # package owns. Each entry of `owned` is
   #   { vars ? { }; names ? [ ]; from; fix; }
   # `vars` are added to the result and may not appear in `env`; `names` may
