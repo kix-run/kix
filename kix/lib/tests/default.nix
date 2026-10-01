@@ -14,6 +14,9 @@
 #
 # Success prints { ok = true; passed = [ ... ]; }. Any failure throws with
 # the failing test names and details.
+#
+# Each file in ./units is loaded into the same matrix. Add tests for a new
+# feature there as `units/<topic>.nix`, with test names `<topic>-<what>`.
 
 {
   # Default: the exact nixpkgs the ludo flake pins (read from its lock file,
@@ -1217,7 +1220,51 @@ let
 
   # ------------------------------------------------------------------- tests
 
-  tests = {
+  # Arguments each file under ./units receives. A unit file is a function
+  # `{ lib, mkCluster, ... }:` that returns tests named `<unit>-<what>`.
+  unitHelpers = {
+    inherit
+      lib
+      k8s
+      eval
+      kixlib
+      publicKix
+      kixKeys
+      mkCluster
+      baseInstances
+      netpolOn
+      mkCmPackage
+      manifests
+      ofKind
+      namesOf
+      hasName
+      byName
+      evalFails
+      ;
+  };
+
+  # Merges test sets and throws on a repeated name, which `//` would
+  # otherwise resolve by dropping one of the tests.
+  mergeTests =
+    source: acc: more:
+    let
+      repeated = builtins.attrNames (builtins.intersectAttrs acc more);
+    in
+    if repeated == [ ] then
+      acc // more
+    else
+      throw "kix/lib tests: ${source} repeats test names already defined: ${builtins.concatStringsSep ", " repeated}";
+
+  # Every ./units/*.nix, in file-name order.
+  unitTestFiles = lib.attrNames (
+    lib.filterAttrs (n: type: type == "regular" && lib.hasSuffix ".nix" n) (builtins.readDir ./units)
+  );
+
+  tests = lib.foldl' (
+    acc: file: mergeTests "units/${file}" acc (import (./units + "/${file}") unitHelpers)
+  ) inlineTests unitTestFiles;
+
+  inlineTests = {
     t00-mkforce-replaces-anything-default =
       let
         config = eval.evaluateInstanceConfig {
@@ -6188,15 +6235,6 @@ let
       evalFails
       ;
     validate = import ../eval/validate.nix { inherit lib; };
-  }
-  // import ./options-typing.nix {
-    inherit
-      lib
-      eval
-      kixlib
-      mkCluster
-      manifests
-      ;
   };
 
   failures = lib.filterAttrs (

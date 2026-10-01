@@ -1,7 +1,7 @@
 # Tests for the typed option helpers (vocab/quantity.nix, the option and
 # guard helpers in vocab/compose.nix), the option contract walker
 # (eval/options.nix) and instance-config error locations (eval/resolve.nix).
-# Imported by ./default.nix into the same test matrix.
+# Loaded by ../default.nix with the other files in this directory.
 
 {
   lib,
@@ -9,6 +9,7 @@
   kixlib,
   mkCluster,
   manifests,
+  ...
 }:
 
 let
@@ -211,7 +212,7 @@ in
         {
           scorecard = {
             enable = true;
-            rules.reliability = import ../rules/reliability.nix { inherit lib; };
+            rules.reliability = import ../../rules/reliability.nix { inherit lib; };
           };
           instances.appns.web = {
             package = resourcesPackage;
