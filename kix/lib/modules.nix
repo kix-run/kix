@@ -1,6 +1,9 @@
 # NixOS module options consumed by buildCluster.
 
 { lib, ... }:
+let
+  versions = import ./core/version.nix { inherit lib; };
+in
 {
   imports = [
     ./plugins/netpol/module.nix
@@ -244,11 +247,17 @@
     };
 
     k8sVersion = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
+      type = lib.types.nullOr (
+        lib.types.addCheck lib.types.str versions.isVersion
+        // {
+          description = "Kubernetes version such as \"1.31\" or \"v1.31.2-gke.1209000\"";
+        }
+      );
       default = null;
       description = ''
         Target Kubernetes version (e.g. "1.30"). Used by package meta
-        compatibility checks (meta.k8s.minVersion / maxVersion).
+        compatibility checks (meta.k8s.minVersion / maxVersion). A version
+        less precise than a package's constraint is reported as a warning.
       '';
     };
 
