@@ -1,11 +1,12 @@
-# Types, default profile, checks and renderer for the descheduler's
+# Types, default profile, checks, and renderer for the descheduler's
 # DeschedulerPolicy (apiVersion descheduler/v1alpha2), mirrored from
-# descheduler v0.36.0: pkg/api/v1alpha2/types.go, pkg/api/types.go and each
+# descheduler v0.36.0: pkg/api/v1alpha2/types.go, pkg/api/types.go, and each
 # plugin's types.go and validation.go under pkg/framework/plugins.
 #
 # Every field carries its upstream JSON name. Scalars are null until set and
-# lists empty; `render` drops nulls, empty lists and empty attrsets, so the
-# rendered policy holds only what was set.
+# lists empty; `render` drops nulls, empty lists, and empty attrsets, so the
+# rendered policy holds only what was set. A profile's pluginConfig renders
+# DefaultEvictor and the plugins that profile enables, nothing else.
 #
 # Not declared:
 # - plugins.presort, plugins.sort: no v0.36.0 plugin implements them.
@@ -23,8 +24,9 @@
 let
   t = lib.types;
 
-  # A Go time.Duration as time.ParseDuration reads it ("90s", "1h30m").
-  durationRegex = "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$";
+  # An unsigned Go time.Duration as time.ParseDuration reads it ("90s",
+  # "1h30m", ".5s", "0"). Both micro signs (U+00B5, U+03BC) spell "µs".
+  durationRegex = "^(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$";
   duration = t.strMatching durationRegex;
 
   nullable =
@@ -156,7 +158,7 @@ let
               listOf
                 (t.submodule {
                   options.name = lib.mkOption {
-                    type = t.str;
+                    type = t.nonEmptyStr;
                     description = "StorageClass name.";
                   };
                 })
@@ -290,33 +292,46 @@ let
 
   pluginNames = builtins.attrNames pluginArgs;
 
-  profileType = t.submodule {
-    options = {
-      plugins = sub {
-        deschedule = sub {
-          enabled = listOf (t.enum deschedulePlugins) "Deschedule plugins this profile runs.";
-        } "Plugins that evict pods one by one.";
-        balance = sub {
-          enabled = listOf (t.enum balancePlugins) "Balance plugins this profile runs.";
-        } "Plugins that evict pods to rebalance groups or nodes.";
-      } "Plugins this profile runs, by extension point.";
-      pluginConfig = sub (lib.mapAttrs (
-        plugin: options: sub options "Arguments of ${plugin}."
-      ) pluginArgs) "Plugin arguments, one attrset per plugin.";
-    };
-    # Safety defaults on every profile. extraEnabled is at normal priority,
-    # so an instance's list adds to it and removing PodsWithPVC takes
-    # lib.mkForce.
-    config.pluginConfig.DefaultEvictor = {
-      nodeFit = lib.mkDefault true;
-      podProtections.extraEnabled = [ "PodsWithPVC" ];
-    };
-  };
+  profileType = t.submodule (
+    { config, ... }:
+    {
+      options = {
+        plugins = sub {
+          deschedule = sub {
+            enabled = listOf (t.enum deschedulePlugins) "Deschedule plugins this profile runs.";
+          } "Plugins that evict pods one by one.";
+          balance = sub {
+            enabled = listOf (t.enum balancePlugins) "Balance plugins this profile runs.";
+          } "Plugins that evict pods to rebalance groups or nodes.";
+        } "Plugins this profile runs, by extension point.";
+        pluginConfig = sub (lib.mapAttrs (
+          plugin: options: sub options "Arguments of ${plugin}."
+        ) pluginArgs) "Plugin arguments, one attrset per plugin.";
+      };
+      # Safety defaults on every profile. extraEnabled is at normal priority,
+      # so an instance's list adds to it and removing PodsWithPVC takes
+      # lib.mkForce.
+      config.pluginConfig = {
+        DefaultEvictor = {
+          nodeFit = lib.mkDefault true;
+          podProtections.extraEnabled = [ "PodsWithPVC" ];
+        };
+        # `kubectl cordon` adds this taint. Excluding it keeps a cordon as
+        # "no new pods" instead of draining the node within one interval.
+        # Upstream rejects excludedTaints beside includedTaints, so the
+        # default steps aside when the profile sets includedTaints.
+        RemovePodsViolatingNodeTaints.excludedTaints = lib.mkIf (
+          builtins.elem "RemovePodsViolatingNodeTaints" config.plugins.deschedule.enabled
+          && config.pluginConfig.RemovePodsViolatingNodeTaints.includedTaints == [ ]
+        ) (lib.mkDefault [ "node.kubernetes.io/unschedulable" ]);
+      };
+    }
+  );
 
   # The package's profile, as a definition of `policy.profiles` with one
   # lib.mkDefault per leaf so an instance can change one value and keep the
-  # rest. `policy` is the evaluated option, read only by the mkIf.
-  defaultProfile = policy: {
+  # rest.
+  defaultProfile = {
     default = {
       plugins = {
         balance.enabled = lib.mkDefault [
@@ -351,13 +366,6 @@ let
             pods = 50;
           };
         };
-        # `kubectl cordon` adds this taint. Excluding it keeps a cordon as
-        # "no new pods" instead of draining the node within one interval.
-        # Upstream rejects excludedTaints beside includedTaints, so the
-        # default steps aside when an instance sets includedTaints.
-        RemovePodsViolatingNodeTaints.excludedTaints = lib.mkIf (
-          policy.profiles.default.pluginConfig.RemovePodsViolatingNodeTaints.includedTaints == [ ]
-        ) (lib.mkDefault [ "node.kubernetes.io/unschedulable" ]);
       };
     };
   };
@@ -386,8 +394,11 @@ let
 
   enabledIn = profile: profile.plugins.deschedule.enabled ++ profile.plugins.balance.enabled;
 
-  # Problems the binary would report at startup and then exit on, as
-  # messages naming the profile. Each cites the upstream rule.
+  # Problems the descheduler reports at startup and then exits on, as
+  # messages naming the profile. They mirror each plugin's validation.go and
+  # validateDeschedulerConfiguration (pkg/descheduler/policyconfig.go), which
+  # validates every pluginConfig entry. Plugin rules are checked only for
+  # enabled plugins, because `render` writes no other plugin's args.
   checkPolicy =
     policy:
     let
@@ -403,14 +414,27 @@ let
             r: low.targetThresholds ? ${r} && low.thresholds.${r} > low.targetThresholds.${r}
           ) lowNames;
           taints = args.RemovePodsViolatingNodeTaints;
+          lifetime = args.PodLifeTime;
+          priority = args.DefaultEvictor.priorityThreshold;
           at = "policy.profiles.${name}.pluginConfig";
+          bothSet = s: s.include != [ ] && s.exclude != [ ];
+          namespacesBoth = builtins.filter (p: args.${p} ? namespaces && bothSet args.${p}.namespaces) (
+            lib.unique (enabledIn profile)
+          );
+          emptyConditions = builtins.filter (
+            i: lib.all (v: v == null) (builtins.attrValues (builtins.elemAt lifetime.conditions i))
+          ) (lib.range 0 (builtins.length lifetime.conditions - 1));
         in
-        lib.optional
-          (
-            low.metricsUtilization.source == "KubernetesMetrics"
-            && !(builtins.any (p: p.source == "KubernetesMetrics") policy.metricsProviders)
-          )
-          "${at}.LowNodeUtilization.metricsUtilization.source is KubernetesMetrics, but policy.metricsProviders has no KubernetesMetrics entry, so the descheduler has no metrics client and the plugin fails each run. Add policy.metricsProviders = [ { source = \"KubernetesMetrics\"; } ]."
+        lib.optional (priority != null && priority.name != null && priority.value != null)
+          "${at}.DefaultEvictor.priorityThreshold sets both name and value; the descheduler exits at startup. Keep one."
+        ++
+          lib.optional
+            (
+              on "LowNodeUtilization"
+              && low.metricsUtilization.source == "KubernetesMetrics"
+              && !(builtins.any (p: p.source == "KubernetesMetrics") policy.metricsProviders)
+            )
+            "${at}.LowNodeUtilization.metricsUtilization.source is KubernetesMetrics, but policy.metricsProviders has no KubernetesMetrics entry, so the descheduler has no metrics client and the plugin fails each run. Add policy.metricsProviders = [ { source = \"KubernetesMetrics\"; } ]."
         ++
           lib.optional (on "LowNodeUtilization" && (lowNames == [ ] || lowTargets == [ ]))
             "profile ${name} enables LowNodeUtilization with empty ${at}.LowNodeUtilization.thresholds or targetThresholds; the descheduler exits at startup. Set both, with the same resource names."
@@ -425,8 +449,9 @@ let
           lib.optional (on "HighNodeUtilization" && args.HighNodeUtilization.thresholds == { })
             "profile ${name} enables HighNodeUtilization with empty ${at}.HighNodeUtilization.thresholds; the descheduler exits at startup. Set thresholds."
         ++
-          lib.optional (taints.includedTaints != [ ] && taints.excludedTaints != [ ])
-            "${at}.RemovePodsViolatingNodeTaints sets both includedTaints and excludedTaints; the descheduler exits at startup. Keep one. On profile default, excludedTaints defaults to [ \"node.kubernetes.io/unschedulable\" ] only while includedTaints is empty, so setting includedTaints alone drops it."
+          lib.optional
+            (on "RemovePodsViolatingNodeTaints" && taints.includedTaints != [ ] && taints.excludedTaints != [ ])
+            "${at}.RemovePodsViolatingNodeTaints sets both includedTaints and excludedTaints; the descheduler exits at startup. Keep one. excludedTaints defaults to [ \"node.kubernetes.io/unschedulable\" ] only while includedTaints is empty, so setting includedTaints alone drops it."
         ++
           lib.optional
             (
@@ -444,18 +469,31 @@ let
           lib.optional
             (
               on "PodLifeTime"
-              && args.PodLifeTime.maxPodLifeTimeSeconds == null
-              && args.PodLifeTime.states == [ ]
-              && args.PodLifeTime.conditions == [ ]
-              && args.PodLifeTime.exitCodes == [ ]
+              && lifetime.maxPodLifeTimeSeconds == null
+              && lifetime.states == [ ]
+              && lifetime.conditions == [ ]
+              && lifetime.exitCodes == [ ]
             )
-            "profile ${name} enables PodLifeTime with none of maxPodLifeTimeSeconds, states, conditions, or exitCodes under ${at}.PodLifeTime; the descheduler exits at startup. Set at least one.";
+            "profile ${name} enables PodLifeTime with none of maxPodLifeTimeSeconds, states, conditions, or exitCodes under ${at}.PodLifeTime; the descheduler exits at startup. Set at least one."
+        ++
+          lib.optional (on "PodLifeTime" && bothSet lifetime.ownerKinds)
+            "${at}.PodLifeTime.ownerKinds sets both include and exclude; the descheduler exits at startup. Keep one."
+        ++ lib.optionals (on "PodLifeTime") (
+          map (
+            i:
+            "${at}.PodLifeTime.conditions entry ${toString i} sets none of type, status, reason, or minTimeSinceLastTransitionSeconds; the descheduler exits at startup. Set at least one."
+          ) emptyConditions
+        )
+        ++ map (
+          p:
+          "${at}.${p}.namespaces sets both include and exclude; the descheduler exits at startup. Keep one."
+        ) namespacesBoth;
     in
     lib.optional (builtins.length policy.metricsProviders > 1)
       "policy.metricsProviders has ${toString (builtins.length policy.metricsProviders)} entries; the descheduler accepts each source once and exits at startup otherwise. Keep one."
     ++ lib.concatLists (lib.mapAttrsToList perProfile policy.profiles);
 
-  # Drops nulls, empty lists and empty attrsets at every depth.
+  # Drops nulls, empty lists, and empty attrsets at every depth.
   clean =
     v:
     if builtins.isAttrs v then
@@ -479,10 +517,10 @@ let
       };
       argsOf = p: clean (if p == "DefaultEvictor" then evictorArgs else profile.pluginConfig.${p});
       # A plugin enabled without a pluginConfig entry stops the binary at
-      # startup, so every enabled plugin gets one, even with no args.
-      configured = builtins.filter (
-        p: p == "DefaultEvictor" || builtins.elem p enabled || argsOf p != { }
-      ) pluginNames;
+      # startup, so every enabled plugin gets one, even with no args. The
+      # binary validates every entry but reads only the enabled plugins'
+      # args, so a disabled plugin's settings are left out.
+      configured = builtins.filter (p: p == "DefaultEvictor" || builtins.elem p enabled) pluginNames;
     in
     {
       inherit name;

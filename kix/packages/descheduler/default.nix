@@ -1,19 +1,43 @@
-# Kubernetes descheduler: evicts pods that break their placement rules or
-# crowd busy nodes, through the eviction API, so the scheduler places them
-# again and PodDisruptionBudgets hold. root = the Deployment.
+# descheduler: runs the Kubernetes descheduler, which evicts pods that break
+# their placement rules or crowd busy nodes, through the eviction API, so the
+# scheduler places them again and PodDisruptionBudgets hold. root = the
+# Deployment.
 #
-# The policy (`policy`, typed in policy.nix) goes into a ConfigMap; a change
-# rolls the pods through a checksum annotation, because the binary reads the
-# file once at startup. Leader election is always on, with the Lease named
-# after the instance in the instance's namespace, so the replicas the
-# availability level gives run the policy one at a time.
+# Installs a ServiceAccount; ConfigMap <name>-policy with the policy; a
+# ClusterRole and ClusterRoleBinding <name>-<namespace> for the nodes, pods,
+# claims, namespaces, PDBs, and PriorityClasses the descheduler reads, the
+# evictions it creates, and its Events; a Role and RoleBinding
+# <name>-leader-election for its Lease; and the Deployment. With the optional
+# `prometheus` dep and `metrics.enabled`, also Service <name>-metrics and a
+# ServiceMonitor that scrapes it over HTTPS.
 #
-# Never evicted by default: pods with an emptyDir, hostPath or
-# PersistentVolumeClaim volume, system-critical pods, DaemonSet pods and
-# failed bare pods. Most Kix workloads mount an emptyDir at /tmp, so the
-# default profile moves few of them; the `policy` description shows a
-# profile that opts a selected workload in. The default profile leaves the
-# taint `kubectl cordon` adds alone, so a cordon does not drain the node.
+# The policy (`policy`, typed in policy.nix) goes into the ConfigMap; a
+# change rolls the pods through a checksum annotation, because the binary
+# reads the file once at startup. Leader election is always on, with the
+# Lease named after the instance in the instance's namespace, so the
+# replicas the availability level gives run the policy one at a time.
+#
+# No dependency or option is required:
+#
+#   instances.descheduler.descheduler = {
+#     package = packages.descheduler;
+#     # config.policy.profiles.default.pluginConfig.LowNodeUtilization.thresholds.cpu = 30;
+#   };
+#
+# out: none beyond what root (the Deployment) provides; no package depends
+# on the descheduler.
+#
+# Escape hatches: `extraArgs` for flags (the flags the package sets from
+# other options are refused), and `partsOverlays` replacing the
+# `policyConfigMap` part for policy fields policy.nix does not declare.
+#
+# Never evicted by default: pods with an emptyDir, hostPath, or
+# PersistentVolumeClaim volume, system-critical pods, DaemonSet pods, and
+# failed bare pods. Many Kix workloads mount an emptyDir at /tmp
+# (kix.mount.emptyDir), so the default profile moves few of them; the
+# `policy` description shows a profile that opts a selected workload in.
+# Every profile that enables RemovePodsViolatingNodeTaints leaves the taint
+# `kubectl cordon` adds alone, so a cordon does not drain the node.
 #
 # DefaultEvictor's nodeFit is on, so a pod is evicted only when another node
 # could run it. On a single-node cluster nothing is ever evicted, and each
@@ -66,7 +90,7 @@ in
     policy = lib.mkOption {
       type = policyLib.policyType;
       default = { };
-      defaultText = lib.literalMD "profile `default`: balance RemoveDuplicates, RemovePodsViolatingTopologySpreadConstraint and LowNodeUtilization (thresholds 20, targetThresholds 50 for cpu, memory and pods); deschedule RemovePodsHavingTooManyRestarts (100, init containers included), RemovePodsViolatingNodeTaints (excluding `node.kubernetes.io/unschedulable`), RemovePodsViolatingNodeAffinity (required) and RemovePodsViolatingInterPodAntiAffinity";
+      defaultText = lib.literalMD "profile `default`: balance RemoveDuplicates, RemovePodsViolatingTopologySpreadConstraint, and LowNodeUtilization (thresholds 20, targetThresholds 50 for cpu, memory, and pods); deschedule RemovePodsHavingTooManyRestarts (100, init containers included), RemovePodsViolatingNodeTaints (excluding `node.kubernetes.io/unschedulable`), RemovePodsViolatingNodeAffinity (required), and RemovePodsViolatingInterPodAntiAffinity";
       example = lib.literalExpression ''
         {
           profiles.default.pluginConfig.LowNodeUtilization.thresholds.cpu = 30;
@@ -86,10 +110,16 @@ in
         Every profile gets DefaultEvictor `nodeFit = true` and
         `podProtections.extraEnabled = [ "PodsWithPVC" ]`; the binary's own
         protections (PodsWithLocalStorage, DaemonSetPods, SystemCriticalPods,
-        FailedBarePods) stay on. So a pod with an emptyDir, hostPath or
+        and FailedBarePods) stay on. So a pod with an emptyDir, hostPath, or
         PersistentVolumeClaim volume is never evicted. The example's
         `spread-tmp` profile lets the topology-spread plugin move one
         selected workload whose emptyDir holds nothing worth keeping.
+
+        A profile that enables RemovePodsViolatingNodeTaints gets
+        `excludedTaints = [ "node.kubernetes.io/unschedulable" ]` while its
+        `includedTaints` is empty, so `kubectl cordon` does not drain the
+        node. Setting `excludedTaints` replaces that list; keep
+        `"node.kubernetes.io/unschedulable"` in yours to keep that.
 
         Each value of profile `default` is a default of its own:
         `thresholds.cpu = 30` keeps the other thresholds, while
@@ -97,6 +127,10 @@ in
         `profiles = lib.mkForce { mine = { … }; }` replaces the default
         profile; the safety defaults above still apply. An `extraEnabled`
         list adds to PodsWithPVC; removing it takes `lib.mkForce`.
+
+        A profile's `pluginConfig` renders DefaultEvictor and the plugins
+        that profile enables. Settings of a plugin it does not enable are
+        left out of the ConfigMap.
 
         For a field a newer image accepts and this option does not declare,
         replace the `policyConfigMap` part through `partsOverlays` with a
@@ -115,6 +149,8 @@ in
       description = "Flags appended after the package's own, which include `--v=3` (a later `--v` wins). `--dry-run` also turns leader election off in the binary. Flags the package sets from other options are refused.";
     };
 
+    # No CPU limit, as in upstream's own Deployment
+    # (kubernetes/deployment/deployment.yaml).
     resources = kix.options.resources {
       requests = {
         cpu = "500m";
@@ -127,9 +163,9 @@ in
   };
 
   config =
-    { config, ... }:
+    { ... }:
     {
-      policy.profiles = policyLib.defaultProfile config.policy;
+      policy.profiles = policyLib.defaultProfile;
     };
 
   assertions =
@@ -150,8 +186,6 @@ in
       {
         self,
         config,
-        scope,
-        kix,
         prometheus ? null,
         ...
       }:
@@ -244,7 +278,7 @@ in
             spec = {
               replicas = kix.availability.pick availability {
                 none = 1;
-                pod = 2;
+                pod = 1;
                 node = 2;
                 zone = 2;
               };
@@ -254,7 +288,9 @@ in
                 spec = {
                   serviceAccount = self.serviceAccount;
                   # SIGTERM cancels the run in progress and releases the
-                  # Lease; Kubernetes' default grace period covers both.
+                  # Lease. 30 is the Kubernetes default, written out because
+                  # the reliability.gracefulShutdown scorecard rule reports a
+                  # pod spec without the field.
                   terminationGracePeriodSeconds = 30;
                   securityContext = {
                     runAsNonRoot = true;
@@ -286,8 +322,6 @@ in
                         };
                         periodSeconds = 10;
                       };
-                      # No CPU limit, as in upstream's own Deployment
-                      # (kubernetes/deployment/deployment.yaml).
                       inherit (config) resources;
                       securityContext = {
                         allowPrivilegeEscalation = false;

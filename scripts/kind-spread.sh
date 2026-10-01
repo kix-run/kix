@@ -71,6 +71,7 @@ nodes_pinned=$(placement pinned | sort -u | wc -l)
 check "pinned: 3 pods on 3 distinct nodes (got $nodes_pinned)" test "$nodes_pinned" -eq 3
 check "zoned has a PDB" kubectl --context "$CTX" -n echo get pdb zoned -o name
 check "pinned has a PDB" kubectl --context "$CTX" -n echo get pdb pinned -o name
+check "movable has a PDB" kubectl --context "$CTX" -n echo get pdb movable -o name
 check "unspread has no PDB" test -z "$(kubectl --context "$CTX" -n echo get pdb unspread -o name --ignore-not-found)"
 check "unspread: no constraints" test -z "$(kubectl --context "$CTX" -n echo get deploy unspread -o jsonpath='{.spec.template.spec.topologySpreadConstraints}')"
 
@@ -105,9 +106,13 @@ check "movable: 3 pods in 3 distinct zones" test "$(zones_of movable)" -eq 3
 node_c=$("${k[@]}" get nodes -l topology.kubernetes.io/zone=c -o jsonpath='{.items[0].metadata.name}')
 pods_on_c() { "${k[@]}" -n echo get pods -l app.kubernetes.io/instance="$1" --field-selector=spec.nodeName="$node_c" -o name; }
 movable_c=$(pods_on_c movable)
+cordoned_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 "${k[@]}" cordon "$node_c"
 sleep 75   # two descheduling intervals
 check "cordon: movable pod on $node_c still there after two intervals" "${k[@]}" -n echo get "$movable_c"
+# The leader logs this line at the end of every run.
+runs=$("${k[@]}" -n descheduler logs -l app.kubernetes.io/instance=descheduler --since-time="$cordoned_at" --tail=-1 | grep -c 'Number of evictions' || true)
+check "cordon: the descheduler ran at least twice while cordoned (got $runs)" test "$runs" -ge 2
 
 # Push one movable and one zoned pod out of zone c; the replacements land in
 # a and b, because the cordoned node leaves the zone count (nodeTaintsPolicy
@@ -120,8 +125,9 @@ check "movable while cordoned: 2 zones" test "$(zones_of movable)" -eq 2
 check "zoned while cordoned: 2 zones" test "$(zones_of zoned)" -eq 2
 "${k[@]}" uncordon "$node_c"
 
-# Up to 180s: a standby replica takes over only after the 137s Lease
-# duration, plus one interval.
+# Up to 180s: the next run (30s interval), the eviction, and the
+# replacement pod's scheduling and readiness, with margin for slow kind
+# nodes.
 restored=0
 for _ in $(seq 1 36); do
   if [ "$(zones_of movable)" -eq 3 ]; then restored=1; break; fi

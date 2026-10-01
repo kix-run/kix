@@ -59,7 +59,11 @@ kix.buildCluster {
         # No volumes, so the descheduler may move it: three replicas from
         # the level, one per zone.
         movable.package = {
-          meta.version = "test";
+          meta = {
+            version = "test";
+            owner = "platform";
+            description = "HTTP test server with no volumes, which the descheduler may evict";
+          };
           build =
             {
               self,
@@ -70,7 +74,7 @@ kix.buildCluster {
             }:
             {
               deployment = scope.mkDeployment {
-                name = "movable";
+                name = scope.instanceName;
                 spec = {
                   replicas = kix.availability.pick availability {
                     none = 1;
@@ -126,7 +130,8 @@ kix.buildCluster {
                   };
                 };
               };
-              service = self.deployment |> kix.service.fromWorkload { name = "movable"; } |> scope.mkResource;
+              service =
+                self.deployment |> kix.service.fromWorkload { name = scope.instanceName; } |> scope.mkResource;
               root = self.service;
             };
         };
