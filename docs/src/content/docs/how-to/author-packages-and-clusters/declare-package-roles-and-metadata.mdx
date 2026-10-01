@@ -25,7 +25,9 @@ Use these fields to describe the package:
   `ephemeral`. Kix records it in the `kix.run/lifecycle` annotation. Replacing
   a package marked `stateful` triggers the deployment migration gate.
 - `scope` constrains dependencies. With `scope = "namespace"`, instances in
-  other namespaces cannot depend on the package. The default is `cluster`.
+  other namespaces cannot depend on the package: automatic resolution skips it
+  for consumers in other namespaces, and an explicit
+  `deps.<x> = ref.<ns>.<instance>` to it fails. The default is `cluster`.
 
 `version`, `description`, and `owner` describe the package. `lifecycle` and
 `scope` affect evaluation and deployment behavior, so choose them carefully.

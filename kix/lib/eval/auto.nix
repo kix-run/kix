@@ -209,6 +209,7 @@ rec {
             ${key} = {
               inherit ns instName;
               isImport = (instCfg.package._type or "") == "kix-import";
+              scope = packageMeta.scope or "cluster";
             };
           }) keys
         ) (builtins.attrNames (optional.${ns} or { }))
@@ -288,19 +289,24 @@ rec {
           "dependency '${item.depName}' of ${item.requester} has no instance";
 
       # The optional instance answering a demanded key, chosen as resolveArg
-      # chooses: a managed instance over an import, then the requester's
-      # namespace over the others. More than one at the deciding step is
-      # refused.
+      # chooses: instances with meta.scope = "namespace" in other namespaces
+      # are skipped, then a managed instance wins over an import, then the
+      # requester's namespace over the others. More than one at the deciding
+      # step is refused; null when none is left.
       pickOptional =
         item:
         let
-          all = optionalByKey.${item.depName};
+          all = builtins.filter (o: o.ns == item.requesterNs || o.scope != "namespace") (
+            optionalByKey.${item.depName}
+          );
           managed = builtins.filter (o: !o.isImport) all;
           candidates = if managed != [ ] then managed else all;
           sameNs = builtins.filter (o: o.ns == item.requesterNs) candidates;
           tier = if sameNs != [ ] then sameNs else candidates;
         in
-        if builtins.length tier == 1 then
+        if tier == [ ] then
+          null
+        else if builtins.length tier == 1 then
           builtins.head tier
         else
           throw "kix: dependency '${item.depName}' of ${item.requester} matches ${toString (builtins.length tier)} optional instances${

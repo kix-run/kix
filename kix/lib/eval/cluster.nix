@@ -207,6 +207,7 @@
                 inherit packageMeta;
               };
               isImport = (instCfg.package._type or "") == "kix-import";
+              scope = packageMeta.scope or "cluster";
             };
           }
         ) nsInsts

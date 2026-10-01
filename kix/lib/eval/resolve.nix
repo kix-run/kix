@@ -82,7 +82,15 @@ rec {
 
     else
       let
-        candidates = resolutionIndex.byKey.${argName} or [ ];
+        # An instance with meta.scope = "namespace" serves only its own
+        # namespace, so it is never a candidate for a requester elsewhere.
+        # Filtering before the managed-over-import preference lets an import
+        # elsewhere answer when the only managed candidates are such instances.
+        allCandidates = resolutionIndex.byKey.${argName} or [ ];
+        isForeignNamespaced =
+          c: c.namespace != requesterNamespace && (c.meta.scope or "cluster") == "namespace";
+        candidates = builtins.filter (c: !isForeignNamespaced c) allCandidates;
+        skipped = builtins.filter isForeignNamespaced allCandidates;
 
         managed = builtins.filter (c: !(c.meta.isImport or false)) candidates;
         effectiveCandidates = if managed != [ ] then managed else candidates;
@@ -122,7 +130,12 @@ rec {
         { found = false; }
 
       else
-        throw "dependency '${argName}' was not found for namespace '${requesterNamespace}'. Add an instance with that name or alias, or set deps.${argName} explicitly.";
+        throw "dependency '${argName}' was not found for namespace '${requesterNamespace}'.${
+          lib.optionalString (skipped != [ ])
+            " Instances in other namespaces (${
+              builtins.concatStringsSep ", " (map (c: "${c.namespace}/${c.instName}") skipped)
+            }) declare meta.scope = \"namespace\" and serve only their own namespace."
+        } Add an instance with that name or alias, or set deps.${argName} explicitly.";
 
   # The definitions of an instance's `config` (a deferredModule value), as
   # `{ file; value; }`. deferredModule wraps each definition in
