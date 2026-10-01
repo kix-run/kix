@@ -29,6 +29,12 @@
     my-app = {
       package = packages.vaultwarden; # placeholder — use your app package
     };
+
+    # my-app's `storage` dependency. A claim has no default size.
+    storage = {
+      package = packages.persistent-volume-claim;
+      config.size = "1Gi";
+    };
   };
 
   instances.infra = {

@@ -1,32 +1,30 @@
-# PersistentVolumeClaim package: operator-managed storage.
+# persistent-volume-claim: one PersistentVolumeClaim as its own cluster
+# instance, so a claim appears in the dependency graph and gets the
+# stateful lifecycle protection of kix diff. Packages that need a volume take
+# it through their `storage` dependency.
 #
-# Creates a PVC backed by a StorageClass. Intended as a first-class
-# instance in the cluster definition, not embedded inside consuming
-# packages. This ensures PVCs are visible in the dependency graph
-# and get lifecycle protection from kix-diff.
+# The claim's class is `config.storageClassName` when set, else the class the
+# optional `storageClasses` provider gives consumers that name none
+# (`out.storageClassName`). With neither, the build fails.
 #
-# The StorageClass is resolved one of two ways:
-#   - set `storageClassName` explicitly (lets one cluster use several classes
-#     at once, e.g. block RWO for a DB and File Storage RWX for blobs), OR
-#   - leave it null and let the optional `storageClasses` dep supply it (the
-#     flavor's platform-storage default class).
-#
-# Dependencies:
-#   storageClasses   optional, provides the default StorageClass name when
-#                    config.storageClassName is null.
-#
-# root = the PVC (via the `claim` part: the renderable resource must live
-# under a non-`root` key, since collectResources drops the `root` key; see the
-# `secret` package for the same pattern, and kixpkgs#25).
+# root = the PVC.
 
 {
   scope,
   lib,
+  kix,
 }:
 
+let
+  accessModeNames = [
+    "ReadWriteOnce"
+    "ReadOnlyMany"
+    "ReadWriteMany"
+    "ReadWriteOncePod"
+  ];
+in
 {
   meta = {
-    version = "1.0.0";
     description = "A PersistentVolumeClaim as its own cluster instance, with its StorageClass set explicitly or taken from the storageClasses dependency";
     owner = "platform";
     lifecycle = "stateful";
@@ -39,63 +37,115 @@
   };
 
   options = {
+    size = lib.mkOption {
+      # A string so that consumers can parse `out.size` as a quantity with a
+      # unit; immich reads it with kix.parseGi.
+      type = lib.types.addCheck kix.types.quantity builtins.isString;
+      example = "20Gi";
+      description = ''
+        Requested capacity, as a Kubernetes quantity string such as "20Gi".
+        Required: a generic claim cannot know how much its consumer stores.
+        Rendered as `spec.resources.requests.storage` and published as
+        `out.size`. The apiserver accepts an increase only when the class
+        allows volume expansion, and refuses a decrease.
+      '';
+    };
     storageClassName = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      example = "scw-bssd-retain";
+      example = "local-path-retain";
       description = ''
-        StorageClass name. When set, overrides the class from the
-        `storageClasses` dep, letting one cluster use several classes at once.
-        When null, the class is taken from the optional `storageClasses` dep.
+        StorageClass of the claim. Null takes `out.storageClassName` from the
+        `storageClasses` dependency. `""` requests no class, for binding to a
+        pre-provisioned PersistentVolume named in `extraSpec.volumeName`. The
+        apiserver refuses a change on a bound claim.
       '';
     };
-    size = lib.mkOption {
-      type = lib.types.str;
-      default = "10Gi";
-      description = "Storage size (K8s quantity, e.g. 50Gi, 1Ti)";
-    };
     accessModes = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
+      type = lib.types.nonEmptyListOf (lib.types.enum accessModeNames);
       default = [ "ReadWriteOnce" ];
-      description = "PVC access modes";
+      description = ''
+        Access modes of the claim. `ReadWriteMany` and `ReadOnlyMany` need a
+        provisioner that supports shared mounts; the claim stays Pending
+        otherwise. `ReadWriteOncePod` cannot be combined with another mode.
+      '';
+    };
+    extraSpec = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      example = lib.literalExpression ''{ volumeMode = "Block"; }'';
+      description = ''
+        Merged into the claim's `spec`, for fields without an option of their
+        own: `volumeMode`, `dataSource`, `dataSourceRef`, `selector`,
+        `volumeName` and `volumeAttributesClassName`. `storageClassName`,
+        `accessModes` and `resources.requests.storage` are set by their
+        options and refused here.
+      '';
     };
   };
 
   build =
     {
-      self,
       config,
-      clusterConfig,
-      # Optional: only consulted when config.storageClassName is null. Default
-      # null so the package works with an explicit class and no dep wired.
       storageClasses ? null,
+      ...
     }:
     let
+      who = "persistent-volume-claim ${scope.namespaceName}/${scope.instanceName}";
+      modes = config.accessModes;
+      modesText = "[ ${lib.concatMapStringsSep " " (m: "\"${m}\"") modes} ]";
+      repeated = lib.filter (m: lib.count (x: x == m) modes > 1) (lib.unique modes);
+
       storageClassName =
         if config.storageClassName != null then
           config.storageClassName
         else if storageClasses != null then
           storageClasses.out.storageClassName
         else
-          throw "persistent-volume-claim: set the `storageClassName` option or wire a `storageClasses` dependency.";
-      claim = scope.mkResource {
-        apiVersion = "v1";
-        kind = "PersistentVolumeClaim";
-        name = scope.instanceName;
-        spec = {
-          inherit storageClassName;
-          accessModes = config.accessModes;
-          resources.requests.storage = config.size;
-        };
-        outputs = {
-          size = config.size;
-        };
-      };
+          throw "${who}: no StorageClass for this claim. Set config.storageClassName, or give the cluster a storageClasses provider: a flavor whose environment has a default class, a storage-classes instance, a CSI driver instance with aliases = [ \"storageClasses\" ], or an import of the environment's class: instances.kube-system.platform-storage.package = kix.mkImport { kind = \"StorageClass\"; apiVersion = \"storage.k8s.io/v1\"; roles = [ \"storageClasses\" ]; out = { name = \"<class>\"; storageClassName = \"<class>\"; }; }.";
+
+      checks =
+        if builtins.elem "ReadWriteOncePod" modes && builtins.length modes > 1 then
+          throw "${who}: accessModes ${modesText} combines ReadWriteOncePod with other modes; the apiserver refuses that. Use [ \"ReadWriteOncePod\" ] alone."
+        else if repeated != [ ] then
+          throw "${who}: accessModes lists ${builtins.head repeated} more than once. List each mode once."
+        else if builtins.match "0*(\\.0*)?(m|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei)?" config.size != null then
+          throw "${who}: size = \"${config.size}\" must be greater than zero."
+        else
+          null;
+
+      claim = builtins.seq checks (
+        scope.mkResource {
+          apiVersion = "v1";
+          kind = "PersistentVolumeClaim";
+          name = scope.instanceName;
+          spec =
+            kix.mergeGuarded
+              {
+                inherit who;
+                locked = [
+                  [ "storageClassName" ]
+                  [ "accessModes" ]
+                  [
+                    "resources"
+                    "requests"
+                    "storage"
+                  ]
+                ];
+              }
+              {
+                inherit storageClassName;
+                accessModes = modes;
+                resources.requests.storage = config.size;
+              }
+              config.extraSpec;
+          outputs.size = config.size;
+        }
+      );
     in
     {
-      # NB: resource lives under `claim` (rendered); `root` only points at it
-      # (same store path → dedup'd by the manifest writer). collectResources
-      # drops the `root` key, so a PVC-as-root would never render. See kixpkgs#25.
+      # instancePartResources skips the `root` key, so the PVC is rendered
+      # from this named part.
       inherit claim;
       root = claim;
     };
