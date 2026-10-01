@@ -126,7 +126,6 @@ let
       domainLiteral
     ];
     n8n = [ domainLiteralViaValkey ];
-    openebs = [ domainLiteral ];
     # The labels and domain findings come from the auto-instantiated loki.
     promtail = [
       lokiLabels
@@ -293,7 +292,6 @@ let
 
   # Packages whose source writes cluster.local outside a comment.
   sourceDomainLiteralExceptions = [
-    "openebs"
     "valkey"
   ];
 
