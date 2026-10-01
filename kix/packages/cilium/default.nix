@@ -12,11 +12,48 @@
 #
 # Every other combination is an evaluation error. In the helmChartConfig
 # delivery the environment's helm-controller merges the HelmChartConfig into
-# the Cilium chart it installed (RKE2: kube-system/rke2-cilium). In every
-# delivery the instance provides `out.netpol` and the CRD references that
-# generated policies wait on.
+# the Cilium chart it installed (RKE2: kube-system/rke2-cilium).
 #
-# Chart: https://helm.cilium.io/ cilium 1.19.6
+# Minimal instance, on kind created with disableDefaultCNI:
+#
+#   imports = [ kix.flavors.kind ];
+#   cluster.roles.cni.binding = "absent";
+#   instances.kube-system.cilium.package = packages.cilium;
+#
+# The chart delivery uses Cilium's cluster-pool IPAM unless
+# values.ipam.mode selects another mode, and then takes the pool from
+# cluster.network.podCidr, which the kind, k3s, and rke2 flavours default.
+# On RKE2 with `cni: cilium` in the server config, set
+# cluster.flavor.rke2.cni = [ "cilium" ] and declare the instance in
+# kube-system.
+#
+# Policy enforcement follows networkPolicy.enable: "always" when Kix writes
+# allow rules, "default" otherwise. Under "always" the instance also writes
+# two CiliumClusterwideNetworkPolicies: cluster DNS for every pod, and
+# Cilium's health probes between nodes.
+#
+# out: `out.crds.CiliumNetworkPolicy` and
+# `out.crds.CiliumClusterwideNetworkPolicy` (build CRs with
+# `scope.mkCR dep.out.crds.<Kind>`), and `out.netpol`, the enforcer
+# contract the netpol plugin builds generated policy with. Every delivery
+# provides both.
+#
+# Escape hatch: `values`, Helm values merged over the delivery's defaults.
+# The none delivery writes no Cilium configuration and refuses them.
+#
+# Known limits:
+# - Cilium as an enforcer beside another CNI (chaining) is not supported;
+#   the package always claims `cni`.
+# - meta.version is the chart version. In the other deliveries the
+#   environment picks the Cilium version.
+# - Agent, operator, and Hubble metrics are off and not wired to
+#   kix.monitor.
+# - helmChartConfig delivery: RKE2 also applies any rke2-cilium
+#   HelmChartConfig in the server's manifests directory, so a cluster that
+#   keeps that file has two writers for one object. Remove the file.
+# - helmChartConfig delivery: removing the instance makes
+#   `kix deploy --prune` delete the HelmChartConfig, and helm-controller
+#   then reinstalls the environment's Cilium with its chart defaults.
 
 {
   scope,
@@ -28,10 +65,12 @@
 let
   rules = import ./netpol-rules.nix { inherit lib; };
 
+  release = "1.19.6";
+
   chart = scope.helm.fetchHelmChart {
     repo = "https://helm.cilium.io/";
     name = "cilium";
-    version = "1.19.6";
+    version = release;
     hash = "sha256-IcQ89ThB+asDdQR9lapMZAUepSu9LGeUFuZAj18ckXk=";
   };
 in
@@ -41,8 +80,8 @@ in
     # deliveries the environment picks the Cilium version and
     # meta.compatibleWith still compares against this one
     # (housekeeping/2026-10-01-platform-providers-carry-placeholder-versions.md).
-    version = "1.19.6";
-    description = "Cilium: CNI, load balancer, and CiliumNetworkPolicy enforcer. Installs the chart, configures an environment's bundled Cilium, or uses one the environment installed";
+    version = release;
+    description = "Cilium: CNI and CiliumNetworkPolicy enforcer. Installs the chart, configures an environment's bundled Cilium, or uses one the environment installed";
     owner = "platform";
     # A CNI programs the node's own networking and loads BPF into the
     # kernel, so the agent, envoy and operator pods run on the host
@@ -127,27 +166,35 @@ in
         else
           "none";
 
+      # The modes Cilium's agent accepts. The build branches on the mode, so
+      # an unknown one is refused below.
+      enforcementModes = [
+        "default"
+        "always"
+        "never"
+      ];
       # Under "always" every endpoint without an allow rule loses its
       # traffic, so the default follows whether Kix writes allow rules.
       effectiveEnforcement =
         config.values.policyEnforcementMode or (if netpolEnabled then "always" else "default");
       effectiveAudit = config.values.policyAuditMode or false;
+      # The chart's default IPAM mode.
+      ipamMode = config.values.ipam.mode or "cluster-pool";
 
       # The operator is leader-elected, so a second replica is a warm
       # standby. The chart gives it a required hostname anti-affinity, so
-      # a second replica on a single-node cluster stays Pending.
-      operatorReplicas =
-        if (clusterConfig.cluster.capabilities.multiNode or null) == false then
-          1
-        else
-          kix.availability.pick availability {
-            none = 1;
-            pod = 1;
-            node = 2;
-            zone = 2;
-          };
+      # a second replica on a single-node cluster stays Pending; the
+      # availability level is "none" there.
+      operatorReplicas = kix.availability.pick availability {
+        none = 1;
+        pod = 1;
+        node = 2;
+        zone = 2;
+      };
 
       # Values the package sets in both deliveries that configure Cilium.
+      # No `ipam` here: RKE2's chart sets `ipam.mode = "kubernetes"`, which
+      # ignores a cluster-pool list unless `ipam.mode` is set beside it.
       configureValues = {
         policyEnforcementMode = effectiveEnforcement;
         policyAuditMode = false;
@@ -158,28 +205,30 @@ in
         rollOutCiliumPods = true;
       };
 
-      chartValues = lib.recursiveUpdate configureValues {
-        ipam.operator.clusterPoolIPv4PodCIDRList = [ podCidr ];
-        # The operator runs on the host network, so its metrics port
-        # (chart default on) is a host port that nothing scrapes.
-        operator.prometheus.enabled = false;
-        # The chart's default Hubble TLS (`hubble.tls.auto.method = "helm"`)
-        # generates certificates at template time, so every render differs.
-        hubble.enabled = false;
-        # Since 1.17 the chart defaults `tls.secretsNamespace` to a dedicated
-        # `cilium-secrets` Namespace (plus a Role/RoleBinding inside it) for
-        # TLS-aware CiliumNetworkPolicies and ingress/gateway TLS interception.
-        # Kix uses none of that, and a foreign namespace would have to exist in
-        # every cluster scope, so the unused secrets namespace points at the
-        # instance's own namespace and nothing is created.
-        tls.secretsNamespace = {
-          create = false;
-          name = scope.namespaceName;
-        };
-      };
+      chartValues = lib.recursiveUpdate configureValues (
+        lib.optionalAttrs (ipamMode == "cluster-pool") {
+          ipam.operator.clusterPoolIPv4PodCIDRList = [ podCidr ];
+        }
+        // {
+          # The operator runs on the host network, so its metrics port
+          # (chart default on) is a host port that nothing scrapes.
+          operator.prometheus.enabled = false;
+          # The chart's default Hubble TLS (`hubble.tls.auto.method = "helm"`)
+          # generates certificates at template time, so every render differs.
+          hubble.enabled = false;
+          # Since 1.17 the chart defaults `tls.secretsNamespace` to a dedicated
+          # `cilium-secrets` Namespace (plus a Role/RoleBinding inside it) for
+          # TLS-aware CiliumNetworkPolicies and ingress/gateway TLS interception.
+          # Kix uses none of that, and a foreign namespace would have to exist in
+          # every cluster scope, so the unused secrets namespace points at the
+          # instance's own namespace and nothing is created.
+          tls.secretsNamespace = {
+            create = false;
+            name = scope.namespaceName;
+          };
+        }
+      );
 
-      # No `ipam` here: RKE2's chart sets `ipam.mode = "kubernetes"`, which
-      # ignores a cluster-pool list unless `ipam.mode` is set beside it.
       values = lib.recursiveUpdate (
         if delivery == "chart" then chartValues else configureValues
       ) config.values;
@@ -193,8 +242,12 @@ in
           throw "${who}: writes HelmChartConfig ${env.helmChartConfig.name}, which the environment reads only in namespace ${env.helmChartConfig.namespace}. Declare the instance under instances.${env.helmChartConfig.namespace}."
         else if delivery == "none" && config.values != { } then
           throw "${who}: does not install or configure Cilium: cluster.network.environmentCilium.helmChartConfig is null, so the environment's Cilium keeps its own settings and `values` would be ignored. Remove `values`, or set environmentCilium.helmChartConfig if the environment merges a HelmChartConfig into its Cilium chart (on RKE2: cluster.flavor.rke2.cni = [ \"cilium\" ])."
-        else if delivery == "chart" && podCidr == null then
-          throw "${who}: installs Cilium with cluster-pool IPAM and needs the pod range. Set cluster.network.podCidr to the range the cluster assigns pods: kind's networking.podSubnet, RKE2's cluster-cidr (default 10.42.0.0/16), kubeadm's --pod-network-cidr. The kind and k3s flavours set their defaults."
+        else if !(builtins.elem effectiveEnforcement enforcementModes) then
+          throw "${who}: values.policyEnforcementMode is ${builtins.toJSON effectiveEnforcement}; Cilium accepts \"default\", \"always\", or \"never\"."
+        else if !(builtins.isBool effectiveAudit) then
+          throw "${who}: values.policyAuditMode is ${builtins.toJSON effectiveAudit}; it takes true or false."
+        else if delivery == "chart" && ipamMode == "cluster-pool" && podCidr == null then
+          throw "${who}: installs Cilium with cluster-pool IPAM and needs the pod range. Set cluster.network.podCidr to the range the cluster assigns pods: kind's networking.podSubnet, RKE2's cluster-cidr (default 10.42.0.0/16), kubeadm's --pod-network-cidr. The kind, k3s, and rke2 flavours set their defaults. Or select another IPAM mode in values.ipam.mode."
         else
           null;
 
@@ -249,8 +302,42 @@ in
           }
         else
           null;
-      dnsEgressParts = lib.optionalAttrs (clusterDnsEgress != null) { inherit clusterDnsEgress; };
-      dnsEgressRequires = lib.optional (clusterDnsEgress != null) clusterDnsEgress;
+
+      # Under "always" Cilium's health endpoint is in default deny too, and
+      # its probes between nodes fail. Cilium's documentation pairs that
+      # mode with this rule.
+      clusterHealth =
+        if delivery != "none" && effectiveEnforcement == "always" then
+          scope.mkCR ccnpCrd {
+            name = "cilium-health-probes";
+            labels = {
+              ${kix.keys.derived} = "true";
+            };
+            spec = {
+              endpointSelector.matchLabels."reserved:health" = "";
+              ingress = [
+                {
+                  fromEntities = [
+                    "health"
+                    "remote-node"
+                  ];
+                }
+              ];
+              egress = [
+                {
+                  toEntities = [
+                    "health"
+                    "remote-node"
+                  ];
+                }
+              ];
+            };
+          }
+        else
+          null;
+
+      clusterPolicies = lib.filterAttrs (_: p: p != null) { inherit clusterDnsEgress clusterHealth; };
+      clusterPolicyRequires = builtins.attrValues clusterPolicies;
 
       crdParts = {
         ciliumNetworkPolicies = cnpCrd;
@@ -273,9 +360,10 @@ in
         extraParts = {
           crds = crdParts;
         }
-        // dnsEgressParts;
-        # The DNS policy hangs off nothing in the chart, so root names it.
-        extraRequires = dnsEgressRequires;
+        // clusterPolicies;
+        # The clusterwide policies hang off nothing in the chart, so root
+        # names them.
+        extraRequires = clusterPolicyRequires;
         inherit out;
       };
 
@@ -302,11 +390,11 @@ in
             cnpCrd
             ccnpCrd
           ]
-          ++ dnsEgressRequires;
+          ++ clusterPolicyRequires;
           inherit out;
         };
       }
-      // dnsEgressParts;
+      // clusterPolicies;
 
       noneParts = {
         crds = crdParts;
@@ -330,7 +418,7 @@ in
     in
     builtins.seq checks (
       lib.warnIf warnAlwaysWithoutRules
-        "${who}: enforces policy on every endpoint (policyEnforcementMode = \"always\"), but networkPolicy.enable is false, so Kix writes no allow rules. Every pod without a policy from another source loses its traffic. Enable networkPolicy, set values.policyAuditMode = true, or remove values.policyEnforcementMode."
+        "${who}: enforces policy on every endpoint (policyEnforcementMode = \"always\"), but networkPolicy.enable is false, so Kix writes no allow rules. Every pod without a policy from another source loses all traffic except cluster DNS. Enable networkPolicy, set values.policyAuditMode = true, or remove values.policyEnforcementMode."
         parts
     );
 }

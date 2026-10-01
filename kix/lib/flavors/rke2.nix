@@ -6,7 +6,7 @@
 # Longhorn, MetalLB, etc.
 #
 # The cni role follows cluster.flavor.rke2.cni, which must match the `cni`
-# list of RKE2's server config. canal, calico and flannel own the role
+# list of RKE2's server config. canal, calico, and flannel own the role
 # exclusively. With cilium, RKE2 installs its bundled Cilium chart and a
 # `cilium` instance in kube-system configures it through the HelmChartConfig
 # kube-system/rke2-cilium. With none, the role is vacant for a managed CNI.
@@ -18,6 +18,8 @@
 # ship (rancher/rke2 charts/chart_versions.yaml). An intent whose selector
 # matches no pod selects nothing, so components a cluster disables are
 # harmless.
+#
+# cluster.network.podCidr defaults to RKE2's cluster-cidr, 10.42.0.0/16.
 #
 # Platform imports: DNS (coredns, bundled). No default storage.
 
@@ -89,7 +91,7 @@ in
     default = [ "canal" ];
     description = ''
       The `cni` list of RKE2's server config. Kix cannot read it, so it must
-      match. Kix reads it to bind the cni role: canal, calico and flannel
+      match. Kix reads it to bind the cni role: canal, calico, and flannel
       are exclusive; cilium is shadowable with RKE2's HelmChartConfig
       kube-system/rke2-cilium, so a `cilium` instance configures RKE2's
       bundled Cilium; none leaves the role vacant for a managed CNI. multus
@@ -99,6 +101,9 @@ in
 
   config = {
     cluster.provider = lib.mkDefault "rke2";
+
+    # RKE2's default cluster-cidr.
+    cluster.network.podCidr = lib.mkDefault "10.42.0.0/16";
 
     cluster.roles = {
       cni = lib.mkMerge [
@@ -200,7 +205,8 @@ in
 
         # The apiserver rule also admits the `host` and `remote-node`
         # identities on every port, which covers the kubelets metrics-server
-        # scrapes on 10250.
+        # scrapes on 10250
+        # (housekeeping/2026-10-01-apiserver-egress-rule-allows-every-host-port.md).
         rke2-metrics-server-egress = inKubeSystem { app = "rke2-metrics-server"; } {
           egress = [ apiserver ];
         };
@@ -230,6 +236,7 @@ in
             {
               egress = [
                 apiserver
+                # Proxies to backends on any port in any namespace.
                 { to = "all-pods"; }
               ];
             };
@@ -272,6 +279,7 @@ in
         rke2-traefik-egress = inKubeSystem { "app.kubernetes.io/name" = "rke2-traefik"; } {
           egress = [
             apiserver
+            # Proxies to backends on any port in any namespace.
             { to = "all-pods"; }
           ];
         };

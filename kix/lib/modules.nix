@@ -468,8 +468,9 @@ in
         default = null;
         description = ''
           Pod network CIDR (e.g. '10.244.0.0/16'). Read by the cilium
-          package as its IPAM pool when it installs the chart. The kind and
-          k3s flavours set their defaults.
+          package as its IPAM pool when it installs the chart with
+          cluster-pool IPAM. The kind, k3s, and rke2 flavours set their
+          defaults.
         '';
       };
       environmentCilium = lib.mkOption {

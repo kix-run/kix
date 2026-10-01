@@ -1,0 +1,3 @@
+# 2026-10-01 · `cli/kix/src/manifest/lifecycle.rs` · Prune cannot keep an object that the environment still needs after its instance is removed.
+
+`never_pruned` keeps only Namespaces and CustomResourceDefinitions, by kind. No annotation keeps a single object. The `cilium` package's helmChartConfig delivery writes `HelmChartConfig/kube-system/rke2-cilium`, which RKE2's helm-controller merges into its bundled Cilium. Removing the instance makes `kix deploy --prune` delete that object, and helm-controller then reinstalls Cilium with RKE2's chart defaults, which can change IPAM and kube-proxy replacement under running pods. The package header and the Cilium how-to page state this as a known limit.

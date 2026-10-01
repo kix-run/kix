@@ -1,10 +1,12 @@
 # Tests for the cilium package's deliveries, the environmentCilium cluster
 # fact, and the rke2 flavour's cni list and platform intents. None renders
-# the cilium chart: the chart delivery needs a Helm build, which this
-# eval-only matrix cannot run.
+# the cilium chart: chart-delivery tests use a Helm stub whose importChart
+# emits the values it receives as one ConfigMap.
 
 {
   lib,
+  k8s,
+  eval,
   mkCluster,
   manifests,
   ofKind,
@@ -18,6 +20,79 @@
 let
   ciliumPackage = import ../../../packages/cilium;
   rke2 = import ../../flavors/rke2.nix;
+
+  # Stands in for kix/lib/helm.nix, which needs nixpkgs to render a chart.
+  # The chart delivery's root and parts are kept; the chart's own resources
+  # are replaced by the ConfigMap `cilium-values`.
+  stubHelm = {
+    fetchHelmChart = _: "cilium-chart";
+    importChart =
+      { scope, values, ... }:
+      let
+        rendered = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "cilium-values";
+          data.values = builtins.toJSON values;
+        };
+      in
+      {
+        workloads = [ ];
+        get = _kind: _name: rendered;
+        mkParts =
+          {
+            root,
+            extraParts ? { },
+            extraRequires ? [ ],
+            out ? { },
+          }:
+          extraParts
+          // {
+            chartValues = rendered;
+            root = {
+              resource = root;
+              requires = extraRequires;
+              inherit out;
+            };
+          };
+      };
+  };
+  stubEval = import ../../eval {
+    inherit lib k8s;
+    helm = stubHelm;
+  };
+
+  # A chart-delivery cluster (cni binding absent), built with the Helm stub.
+  chartCluster =
+    {
+      podCidr ? "10.244.0.0/16",
+      netpol ? false,
+      binding ? "absent",
+      multiNode ? null,
+      config ? { },
+    }:
+    stubEval.buildCluster {
+      name = "test";
+      modules = [
+        {
+          cluster.capabilities = lib.optionalAttrs (multiNode != null) { inherit multiNode; };
+          cluster.roles.cni = lib.optionalAttrs (binding != null) {
+            inherit binding;
+            provider = null;
+          };
+          cluster.network.podCidr = podCidr;
+          networkPolicy.enable = netpol;
+          instances.kube-system.cilium = {
+            package = ciliumPackage;
+            inherit config;
+          };
+        }
+      ];
+    };
+
+  chartValuesOf =
+    cluster:
+    builtins.fromJSON (byName "cilium-values" (ofKind "ConfigMap" (manifests cluster))).data.values;
 
   # Reads the cluster facts the cilium package derives its delivery from.
   factsProbe = {
@@ -330,32 +405,152 @@ in
     || throw "platform intents: ${builtins.toJSON { inherit wide narrow; }}";
 
   # A shadowable cni binding without environmentCilium cannot say whether
-  # the environment's CNI is Cilium.
-  cilium-shadowable-without-environment = evalFails (mkCluster [
-    {
-      cluster.roles.cni.binding = "shadowable";
-      cluster.network.podCidr = "10.244.0.0/16";
-      instances.net.cilium.package = ciliumPackage;
-    }
-  ]);
+  # the environment's CNI is Cilium. Control: the same cluster with
+  # environmentCilium set builds.
+  cilium-shadowable-without-environment =
+    let
+      withEnvironment =
+        environment:
+        mkCluster [
+          {
+            cluster.roles.cni.binding = "shadowable";
+            cluster.network.podCidr = "10.244.0.0/16";
+            cluster.network.environmentCilium = environment;
+            instances.net.cilium.package = ciliumPackage;
+          }
+        ];
+    in
+    (
+      evalFails (withEnvironment null)
+      && !(evalFails (withEnvironment {
+        helmChartConfig = null;
+      }))
+    )
+    || throw "shadowable without environmentCilium: refusal or control wrong";
 
   # Without a cni binding Kix cannot tell whether a CNI is already
   # running. The refusal comes before the chart would be rendered.
-  cilium-null-binding = evalFails (mkCluster [
-    {
-      cluster.network.podCidr = "10.244.0.0/16";
-      instances.net.cilium.package = ciliumPackage;
-    }
-  ]);
+  # Control: the same chart-delivery cluster with binding "absent" builds.
+  cilium-null-binding =
+    (
+      evalFails (chartCluster {
+        binding = null;
+      })
+      && !(evalFails (chartCluster { }))
+    )
+    || throw "null cni binding: refusal or control wrong";
 
-  # The chart delivery needs the pod range for its IPAM pool. The refusal
-  # comes before the chart would be rendered.
-  cilium-chart-needs-podcidr = evalFails (mkCluster [
-    {
-      cluster.roles.cni.binding = "absent";
-      instances.net.cilium.package = ciliumPackage;
-    }
-  ]);
+  # The chart delivery needs the pod range for its default cluster-pool
+  # IPAM, and writes it as the pool. Another IPAM mode needs no pod range.
+  cilium-chart-needs-podcidr =
+    let
+      withPool = chartValuesOf (chartCluster { });
+      kubernetesIpam = chartValuesOf (chartCluster {
+        podCidr = null;
+        config.values.ipam.mode = "kubernetes";
+      });
+    in
+    (
+      evalFails (chartCluster {
+        podCidr = null;
+      })
+      && withPool.ipam.operator.clusterPoolIPv4PodCIDRList == [ "10.244.0.0/16" ]
+      && kubernetesIpam.ipam == { mode = "kubernetes"; }
+    )
+    || throw "chart IPAM: ${builtins.toJSON { inherit withPool kubernetesIpam; }}";
+
+  # The chart delivery's defaults: enforcement follows networkPolicy.enable,
+  # audit is off, the operator's metrics port and Hubble are off, and the
+  # operator runs one replica on a single-node cluster.
+  cilium-chart-delivery-values =
+    let
+      off = chartValuesOf (chartCluster { });
+      on = chartValuesOf (chartCluster {
+        netpol = true;
+        multiNode = false;
+      });
+    in
+    (
+      off.policyEnforcementMode == "default"
+      && on.policyEnforcementMode == "always"
+      && on.policyAuditMode == false
+      && on.operator.prometheus.enabled == false
+      && on.hubble.enabled == false
+      && on.operator.replicas == 1
+      && off.operator.replicas == 2
+      && !(on ? kubeProxyReplacement)
+    )
+    || throw "chart values: ${builtins.toJSON { inherit off on; }}";
+
+  # Under "always" the instance writes the cluster DNS and health-probe
+  # CiliumClusterwideNetworkPolicies; under "default" it writes neither,
+  # because a policy that selects an endpoint puts it into default deny.
+  cilium-always-writes-clusterwide-policies =
+    let
+      on = manifests (chartCluster {
+        netpol = true;
+      });
+      off = manifests (chartCluster { });
+      health = byName "cilium-health-probes" on;
+      named = ms: namesOf (ofKind "CiliumClusterwideNetworkPolicy" ms);
+    in
+    (
+      lib.sort lib.lessThan (named on) == [
+        "cilium-cluster-dns-egress"
+        "cilium-health-probes"
+      ]
+      && named off == [ ]
+      && health.spec.endpointSelector.matchLabels == { "reserved:health" = ""; }
+      &&
+        (builtins.head health.spec.ingress).fromEntities == [
+          "health"
+          "remote-node"
+        ]
+      &&
+        (builtins.head health.spec.egress).toEntities == [
+          "health"
+          "remote-node"
+        ]
+    )
+    || throw "clusterwide policies: ${
+      builtins.toJSON {
+        on = named on;
+        off = named off;
+      }
+    }";
+
+  # The build branches on values.policyEnforcementMode, so a value Cilium's
+  # agent rejects fails evaluation. Control: "never" builds.
+  cilium-enforcement-mode-checked =
+    (
+      evalFails (rke2CiliumCluster {
+        config.values.policyEnforcementMode = "Always";
+      })
+      && !(evalFails (rke2CiliumCluster {
+        config.values.policyEnforcementMode = "never";
+      }))
+    )
+    || throw "policyEnforcementMode: refusal or control wrong";
+
+  # The rke2 default (canal, exclusive) refuses a cilium instance, because
+  # it would install a second CNI. Control: cni = [ "cilium" ] builds.
+  cilium-rke2-canal-refuses-instance =
+    let
+      withCni =
+        cni:
+        mkCluster [
+          rke2
+          (
+            { lib, ... }:
+            {
+              cluster.flavor.rke2.cni = lib.mkIf (cni != null) cni;
+              instances.kube-system.cilium.package = ciliumPackage;
+            }
+          )
+        ];
+    in
+    (evalFails (withCni null) && !(evalFails (withCni [ "cilium" ])))
+    || throw "rke2 canal default: refusal or control wrong";
 
   # An explicit "always" with network policy off warns and still builds,
   # with the cluster DNS egress policy.
