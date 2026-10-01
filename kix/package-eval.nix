@@ -53,6 +53,20 @@ let
     };
   };
 
+  # A claim for packages that take a `storage` dependency. Its alias comes
+  # from the package's `defaultAliases`.
+  storage = {
+    package = packages.persistent-volume-claim;
+    config.size = "1Gi";
+  };
+
+  # A `valkeyPassword` secret for packages that connect to valkey.
+  valkeyPassword = {
+    package = packages.secret;
+    aliases = [ "valkeyPassword" ];
+    config.stringData.password = "password";
+  };
+
   nonRoot = {
     rule = "security.nonRoot";
     reason = "housekeeping/2026-09-27-five-packages-fail-non-root-rule.md";
