@@ -28,6 +28,13 @@ let
         max = 63;
         desc = "a lowercase RFC 1035 label: start with a letter, then letters, digits or '-', ending alphanumeric";
       }
+    else if kind == "CronJob" then
+      {
+        pattern = "[a-z0-9]([-a-z0-9.]*[a-z0-9])?";
+        max = 52;
+        desc = "a lowercase DNS-1123 subdomain: letters, digits, '-' or '.', starting and ending alphanumeric";
+        maxReason = "the CronJob controller appends an 11-character suffix to the names of the Jobs it creates";
+      }
     else if kind == "Namespace" then
       {
         pattern = "[a-z0-9]([-a-z0-9]*[a-z0-9])?";
@@ -211,7 +218,9 @@ in
         if kind == "" || name == "" || exempt then
           null
         else if tooLong then
-          throw "[${instanceName}] ${kind} name '${name}' is ${toString (builtins.stringLength name)} characters; Kubernetes allows at most ${toString rule.max} for this kind."
+          throw "[${instanceName}] ${kind} name '${name}' is ${toString (builtins.stringLength name)} characters; Kubernetes allows at most ${toString rule.max} for this kind${
+            lib.optionalString (rule ? maxReason) ", because ${rule.maxReason}"
+          }."
         else if malformed then
           throw "[${instanceName}] ${kind} name '${name}' is not valid. It must be ${rule.desc}.${hint}"
         else

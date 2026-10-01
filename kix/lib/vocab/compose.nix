@@ -262,6 +262,10 @@ rec {
   # Use kix.keys.<name> for annotation keys defined in core/annotations.nix.
   keys = kixKeys;
 
+  # Values Kix gives its own keys, from core/annotations.nix:
+  #   annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
+  keyValues = kixAnnotations.values;
+
   # Package helpers for endpoint facts; see core/facts.nix for their contracts.
   facts = {
     inherit (import ../core/facts.nix { inherit lib; }) refOnly connect structural;
@@ -1021,16 +1025,29 @@ rec {
     # `tagText` is the Nix expression the option reference shows as the
     # tag's default, for a package whose `config` sets the tag from another
     # option. `tag` stays the declared default the digest rule compares with.
+    #
+    # A package that has no image of its own (a framework package that runs
+    # the user's application) leaves `repository`, `tag`, or both null. A
+    # null argument gives its field no default, so an instance must set it;
+    # reading the image without it fails with the module system's "accessed
+    # but has no value defined" error, naming the field's option path. The
+    # option's own default is then `{ }`: a submodule option with no default
+    # and no definition evaluates to an attrset without its fields.
+    #
+    #   options.image = kix.options.image { };
     image =
       {
-        repository,
-        tag,
+        repository ? null,
+        tag ? null,
         digest ? null,
         pullPolicy ? "IfNotPresent",
         tagText ? null,
         description ? "Container image for this instance. Set it from a pin file (`kix.pins`) so the deployed reference is committed and resolved.",
       }:
+      assert lib.assertMsg (digest == null || tag != null)
+        "kix.options.image: digest ${digest} is set without the tag it was resolved from. Pass `tag` too.";
       let
+        hasDefault = repository != null && tag != null;
         default = {
           inherit
             repository
@@ -1049,26 +1066,29 @@ rec {
         };
       in
       lib.mkOption {
-        inherit description default;
+        inherit description;
         type = lib.types.submodule (
           { config, ... }:
           {
             options = {
-              repository = lib.mkOption {
-                type = lib.types.str;
-                default = repository;
-                description = "Image repository, registry host included.";
-              };
-              tag =
-                lib.mkOption {
+              repository = lib.mkOption (
+                {
                   type = lib.types.str;
-                  default = tag;
+                  description = "Image repository, registry host included.";
+                }
+                // lib.optionalAttrs (repository != null) { default = repository; }
+              );
+              tag = lib.mkOption (
+                {
+                  type = lib.types.str;
                   description = "Image tag. What was asked for.";
                 }
-                // lib.optionalAttrs (tagText != null) { defaultText = lib.literalExpression tagText; };
+                // lib.optionalAttrs (tag != null) { default = tag; }
+                // lib.optionalAttrs (tagText != null) { defaultText = lib.literalExpression tagText; }
+              );
               digest = lib.mkOption {
                 type = lib.types.nullOr lib.types.str;
-                default = if config.tag == tag then digest else null;
+                default = if tag != null && config.tag == tag then digest else null;
                 defaultText = lib.literalMD "the package's digest while `tag` is the package's tag, otherwise null";
                 description = "Resolved manifest digest, `sha256:` followed by 64 hex characters. What will actually run. Null means not resolved.";
               };
@@ -1101,7 +1121,20 @@ rec {
           }
         );
       }
-      // lib.optionalAttrs (tagText != null) {
+      // (
+        if hasDefault then
+          { inherit default; }
+        else
+          {
+            default = { };
+            defaultText = lib.literalMD "none: an instance sets ${
+              lib.concatMapStringsSep " and " (f: "`${f}`") (
+                lib.optional (repository == null) "repository" ++ lib.optional (tag == null) "tag"
+              )
+            }";
+          }
+      )
+      // lib.optionalAttrs (hasDefault && tagText != null) {
         defaultText = lib.literalExpression (
           lib.generators.toPretty {
             multiline = true;
