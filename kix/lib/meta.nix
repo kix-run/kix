@@ -182,7 +182,9 @@ rec {
         let
           depInfo = resolvedDepMeta.${depName} or null;
           dep = if depInfo != null then depInfo.instance else null;
-          depVersion = dep._meta.version or (dep.out.version or null);
+          # A managed instance carries its package's meta; an import may
+          # publish out.version.
+          depVersion = dep._meta.packageMeta.version or (dep.out.version or null);
         in
         if dep == null then
           noDiagnostics
