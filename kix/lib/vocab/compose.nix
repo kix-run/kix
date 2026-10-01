@@ -221,7 +221,9 @@ rec {
     }:
     env:
     let
-      hits = group: builtins.filter (n: env ? ${n}) (builtins.attrNames (group.vars or { }) ++ group.names or [ ]);
+      hits =
+        group:
+        builtins.filter (n: env ? ${n}) (builtins.attrNames (group.vars or { }) ++ group.names or [ ]);
       lines = builtins.concatMap (
         group:
         let
@@ -257,13 +259,16 @@ rec {
     args:
     let
       flagOf =
-        arg: lib.findFirst (flag: arg == flag || lib.hasPrefix "${flag}=" arg) null (builtins.attrNames owned);
+        arg:
+        lib.findFirst (flag: arg == flag || lib.hasPrefix "${flag}=" arg) null (builtins.attrNames owned);
       lines = builtins.concatMap (
         arg:
         let
           flag = flagOf arg;
         in
-        lib.optional (flag != null) "${who}: ${option} sets \"${arg}\", which the package owns: ${owned.${flag}}"
+        lib.optional (
+          flag != null
+        ) "${who}: ${option} sets \"${arg}\", which the package owns: ${owned.${flag}}"
       ) args;
     in
     if lines != [ ] then throw (lib.concatStringsSep "\n" lines) else args;

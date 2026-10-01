@@ -114,17 +114,18 @@ let
   fieldDefaults =
     t:
     let
-      r = builtins.tryEval
-        (lib.evalModules {
-          modules = [
-            {
-              options.v = lib.mkOption {
-                type = t;
-                default = { };
-              };
-            }
-          ];
-        }).config.v;
+      r =
+        builtins.tryEval
+          (lib.evalModules {
+            modules = [
+              {
+                options.v = lib.mkOption {
+                  type = t;
+                  default = { };
+                };
+              }
+            ];
+          }).config.v;
     in
     if r.success && builtins.isAttrs r.value then r.value else null;
 
@@ -207,7 +208,12 @@ let
       + remedies name
     else
       "option `${name}` is a submodule whose own default sets `${key}`, but the field `${field}` "
-      + (if problem.kind == "noDefault" then "has no default" else "has the default ${showValue problem.value}")
+      + (
+        if problem.kind == "noDefault" then
+          "has no default"
+        else
+          "has the default ${showValue problem.value}"
+      )
       + ". An instance that sets any field discards the option's default, so `${key}` falls back to the field. "
       + "Put the value on the field's `default` and give `${name}` the default { }.";
 

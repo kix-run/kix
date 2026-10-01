@@ -76,8 +76,7 @@ let
 
   violations = options: eval.optionContractViolations { inherit options; };
 
-  messagesMention =
-    needle: vs: vs != [ ] && builtins.all (v: lib.hasInfix needle v.message) vs;
+  messagesMention = needle: vs: vs != [ ] && builtins.all (v: lib.hasInfix needle v.message) vs;
 
   t = lib.types;
 in
@@ -119,14 +118,15 @@ in
     in
     (
       unparsed == [ ]
-      && results == {
-        a = 1610612736;
-        b = 500000;
-        c = 500;
-        d = 250;
-        e = 1050;
-        f = null;
-      }
+      &&
+        results == {
+          a = 1610612736;
+          b = 500000;
+          c = 500;
+          d = 250;
+          e = 1050;
+          f = null;
+        }
       && builtins.all (q: !(kixlib.types.quantity.check q)) [
         "128mb"
         "1gi"
@@ -171,12 +171,13 @@ in
           memory = "256Mi";
         };
       }
-      && cleared == {
-        requests = {
-          cpu = "100m";
-          memory = "128Mi";
-        };
-      }
+      &&
+        cleared == {
+          requests = {
+            cpu = "100m";
+            memory = "128Mi";
+          };
+        }
     )
     || throw "resources: one=${builtins.toJSON one} cleared=${builtins.toJSON cleared}";
 
@@ -223,10 +224,7 @@ in
       );
       message = (builtins.head findings).message;
     in
-    (
-      builtins.length findings == 1
-      && lib.hasInfix "missing resource settings: limits.cpu." message
-    )
+    (builtins.length findings == 1 && lib.hasInfix "missing resource settings: limits.cpu." message)
     || throw "boundedResources findings: ${builtins.toJSON findings}";
 
   lib-options-typing-env-type =
@@ -240,14 +238,17 @@ in
     in
     (
       throws (optionValue env [ { PORT = 8080; } ])
-      && throws (optionValue env [
-        { P = "x"; }
-        { P = "y"; }
-      ])
+      && throws (
+        optionValue env [
+          { P = "x"; }
+          { P = "y"; }
+        ]
+      )
       && kixlib.mkEnvVars cfg.env == [ ]
-      && optionValue env [ { F.valueFrom.fieldRef.fieldPath = "metadata.name"; } ] == {
-        F.valueFrom.fieldRef.fieldPath = "metadata.name";
-      }
+      &&
+        optionValue env [ { F.valueFrom.fieldRef.fieldPath = "metadata.name"; } ] == {
+          F.valueFrom.fieldRef.fieldPath = "metadata.name";
+        }
     )
     || throw "env: ${builtins.toJSON cfg.env}";
 
@@ -275,9 +276,15 @@ in
         LOG = "debug";
         DB_HOST = "db";
       }
-      && throws (merge { DB_HOST = "x"; })
-      && throws (merge { DB_HOST = null; })
-      && throws (merge { API_KEY = "k"; })
+      && throws (merge {
+        DB_HOST = "x";
+      })
+      && throws (merge {
+        DB_HOST = null;
+      })
+      && throws (merge {
+        API_KEY = "k";
+      })
     )
     || throw "mergeEnv: ${builtins.toJSON (merge { })}";
 
@@ -337,13 +344,14 @@ in
           "b"
         ];
       })
-      && check {
-        dep = secretDep [
-          "id"
-          "key"
-        ];
-        anyOf = groups;
-      } != null
+      &&
+        check {
+          dep = secretDep [
+            "id"
+            "key"
+          ];
+          anyOf = groups;
+        } != null
       && throws (check {
         dep = secretDep [ "id" ];
         anyOf = groups;
@@ -352,10 +360,11 @@ in
         dep = secretDep null;
         keys = [ "a" ];
       })
-      && check {
-        dep = null;
-        keys = [ "a" ];
-      } == null
+      &&
+        check {
+          dep = null;
+          keys = [ "a" ];
+        } == null
     )
     || throw "checkSecretKeys passed or refused the wrong secrets";
 
@@ -377,10 +386,11 @@ in
         "a.b"
         "hpa"
       ]
-      && map (v: v.head) vs == [
-        "a"
-        "hpa"
-      ]
+      &&
+        map (v: v.head) vs == [
+          "a"
+          "hpa"
+        ]
       && messagesMention "kix.options.resources" vs
       && lib.hasInfix "option `a.b` has type" (builtins.head vs).message
     )
@@ -490,10 +500,11 @@ in
         };
       }
     )
-    && eval.checkOptionContract {
-      who = "ns/inst";
-      options = { };
-    } == null;
+    &&
+      eval.checkOptionContract {
+        who = "ns/inst";
+        options = { };
+      } == null;
 
   # With the instance's names, an option's location is
   # `instances.<ns>.<instance>.config.<option>`, and each definition names

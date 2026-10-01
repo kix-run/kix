@@ -11,9 +11,7 @@
 let
   pattern = "([0-9]+)?(\\.([0-9]+))?(m|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei)?";
 
-  pow =
-    base: n:
-    if n == 0 then 1 else base * pow base (n - 1);
+  pow = base: n: if n == 0 then 1 else base * pow base (n - 1);
 
   # Each suffix as a multiplier of the base unit, written as a fraction so
   # `m` stays exact in integer arithmetic.
@@ -109,7 +107,11 @@ let
       {
         whole = if whole == null then "" else whole;
         frac = if frac == null then "" else frac;
-        suffix = let x = builtins.elemAt m 3; in if x == null then "" else x;
+        suffix =
+          let
+            x = builtins.elemAt m 3;
+          in
+          if x == null then "" else x;
       };
 
   valid = q: split q != null;
