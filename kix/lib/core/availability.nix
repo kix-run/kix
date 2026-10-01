@@ -7,6 +7,12 @@
 #   node  the loss of one node causes no downtime      (needs multiNode)
 #   zone  the loss of one zone causes no downtime      (needs two or more zones)
 #
+# The same words serve as a ceiling, the highest level a workload supports
+# (`meta.availability.max` for every workload of a package, `availability.max`
+# on one builder call). The ceiling `none` means the workload runs one pod at
+# a time; the availability plugin refuses a Deployment or StatefulSet above
+# one replica under it.
+#
 # Pure: no module system, no scope. `resolve` is called once per instance
 # by eval/instance.nix; `pick`, `atLeast` and `spreadConstraints` are what
 # packages see as `kix.availability`.
@@ -29,6 +35,25 @@ let
       throw "availability: '${toString level}' is not one of ${lib.concatStringsSep ", " levels}"
     else
       i;
+
+  # A ceiling (`meta.availability.max`, or `availability.max` on a builder
+  # call) must be a level. `where` is "ns/inst" and `what` names the field,
+  # so the message points at the declaration rather than at `rank`.
+  checkCeiling =
+    {
+      value,
+      where,
+      what,
+    }:
+    let
+      shown = if builtins.isString value then "\"${value}\"" else "a ${builtins.typeOf value}";
+    in
+    if builtins.isString value && builtins.elem value levels then
+      value
+    else
+      throw "[${where}] ${what} = ${shown} is not an availability level. Use one of ${
+        lib.concatMapStringsSep ", " (l: "\"${l}\"") levels
+      }.";
 
   # atLeast "node" level: true for node and zone.
   atLeast = min: level: rank level >= rank min;
@@ -124,11 +149,21 @@ let
       capabilities,
       clusterDefault,
       instanceOverride ? null,
+      # meta.availability.max as the package wrote it
       ceiling ? null,
       # "ns/inst", for messages
       where,
     }:
     let
+      packageCeiling =
+        if ceiling == null then
+          null
+        else
+          checkCeiling {
+            value = ceiling;
+            inherit where;
+            what = "meta.availability.max";
+          };
       sub = substrate capabilities;
       requested = if instanceOverride != null then instanceOverride else clusterDefault;
       requestedFrom =
@@ -137,8 +172,8 @@ let
         else
           "cluster.availability.default";
       overSubstrate = rank requested > rank sub.level;
-      capped = ceiling != null && rank requested > rank ceiling;
-      level = if capped then ceiling else requested;
+      capped = packageCeiling != null && rank requested > rank packageCeiling;
+      level = if capped then packageCeiling else requested;
       needs =
         if requested == "zone" then
           "two or more cluster.capabilities.availabilityZones"
@@ -157,9 +192,9 @@ let
       inherit
         level
         requested
-        ceiling
         capped
         ;
+      ceiling = packageCeiling;
       substrate = sub;
       warnings =
         lib.optional (overSubstrate && !sub.certain) (
@@ -168,7 +203,7 @@ let
         )
         ++ lib.optional capped (
           "[${where}] availability \"${requested}\" was requested but the package declares "
-          + "meta.availability.max = \"${ceiling}\", so it runs at \"${ceiling}\". "
+          + "meta.availability.max = \"${packageCeiling}\", so it runs at \"${packageCeiling}\". "
           + "This instance does not meet the requested availability level."
         );
     };
@@ -177,6 +212,7 @@ in
   inherit
     levels
     rank
+    checkCeiling
     atLeast
     pick
     substrate

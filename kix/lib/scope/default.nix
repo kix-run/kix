@@ -47,6 +47,7 @@ rec {
       # the instance's resolved availability (core/availability.nix resolve)
       availability ? {
         level = "none";
+        ceiling = null;
         warnings = [ ];
       },
       factBehaviorOverrides ? { },

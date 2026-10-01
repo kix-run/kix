@@ -28,6 +28,12 @@
 # `optionContractExemptions` lists the packages kept although their options
 # break the option contract (kix/lib/eval/options.nix). A listed package
 # whose options pass fails the check until its entry is removed.
+#
+# Every package is evaluated twice: on the kind flavour alone (availability
+# "none") and with three availability zones declared ("zone"). Replica
+# counts depend on the level, and a builder ceiling (`availability.max` on
+# one workload) can leave them level-dependent, so a package can pass at
+# "none" and fail the replica guard under a `none` ceiling at "zone".
 
 { kix, lib }:
 
@@ -368,10 +374,28 @@ let
   checkOptionContractExemption =
     name: package:
     lib.assertMsg (optionContractViolations name package != [ ])
-      "kix/packages/${name}: its options satisfy the option contract now; remove it from optionContractExemptions in kix/package-eval.nix and delete ${optionContractExemptions.${name}}";
+      "kix/packages/${name}: its options satisfy the option contract now; remove it from optionContractExemptions in kix/package-eval.nix and delete ${
+        optionContractExemptions.${name}
+      }";
+
+  # The availability levels every package is evaluated at, as cluster
+  # modules added after the kind flavour.
+  levelModules = {
+    none = { };
+    zone = {
+      cluster.capabilities = {
+        multiNode = true;
+        availabilityZones = [
+          "a"
+          "b"
+          "c"
+        ];
+      };
+    };
+  };
 
   evaluatePackage =
-    name: package:
+    level: name: package:
     let
       s = settings.${name} or { };
       failures = knownFailures.${name} or [ ];
@@ -379,6 +403,7 @@ let
         name = "package-${name}";
         modules = [
           kix.flavors.kind
+          levelModules.${level}
           {
             clusterDomain = evalClusterDomain;
             scorecard.maxSeverity = "error";
@@ -406,25 +431,27 @@ let
     assert checkSource name;
     assert checkVersion name package;
     assert optionContractExemptions ? ${name} -> checkOptionContractExemption name package;
-    builtins.addErrorContext "while evaluating kix/packages/${name} in its synthetic cluster" (
-      builtins.deepSeq cluster.rawManifests (
-        builtins.seq (piChecks.validatePIWiring "package-${name}" cluster) (
-          builtins.deepSeq cluster.scorecardReport (
-            builtins.foldl' (
-              acc: f:
-              assert lib.assertMsg (cluster.scorecardReport.summary.byRule ? ${f.rule})
-                "${name} no longer fails ${f.rule}; remove it from knownFailures in kix/package-eval.nix ${
-                  if lib.hasPrefix "housekeeping/" f.reason then
-                    "and update or delete ${f.reason}"
-                  else
-                    "and the exception described in ${f.reason}"
-                }";
-              acc
-            ) name failures
+    builtins.addErrorContext
+      "while evaluating kix/packages/${name} in its synthetic cluster at availability \"${level}\""
+      (
+        builtins.deepSeq cluster.rawManifests (
+          builtins.seq (piChecks.validatePIWiring "package-${name}" cluster) (
+            builtins.deepSeq cluster.scorecardReport (
+              builtins.foldl' (
+                acc: f:
+                assert lib.assertMsg (cluster.scorecardReport.summary.byRule ? ${f.rule})
+                  "${name} no longer fails ${f.rule}; remove it from knownFailures in kix/package-eval.nix ${
+                    if lib.hasPrefix "housekeeping/" f.reason then
+                      "and update or delete ${f.reason}"
+                    else
+                      "and the exception described in ${f.reason}"
+                  }";
+                acc
+              ) name failures
+            )
           )
         )
-      )
-    );
+      );
 
   strayKeys = lib.filter (key: !(packages ? ${key})) (
     builtins.attrNames settings
@@ -435,7 +462,11 @@ let
     ++ builtins.attrNames optionContractExemptions
   );
 
-  evaluated = lib.mapAttrsToList evaluatePackage (removeAttrs packages (builtins.attrNames skip));
+  levels = builtins.attrNames levelModules;
+
+  evaluated = lib.concatMap (
+    level: lib.mapAttrsToList (evaluatePackage level) (removeAttrs packages (builtins.attrNames skip))
+  ) levels;
 in
 {
   inherit
@@ -445,12 +476,15 @@ in
     sourceDomainLiteralExceptions
     versionExceptions
     optionContractExemptions
+    levels
     ;
 
-  # One package, for finding the failure when `names` throws.
-  evaluate = name: evaluatePackage name packages.${name};
+  # One package at one level ("none" or "zone"), for finding the failure
+  # when `names` throws.
+  evaluate = level: name: evaluatePackage level name packages.${name};
 
-  # Forcing this evaluates every package that is not skipped.
+  # Forcing this evaluates every package that is not skipped, at every
+  # level. Each package name appears once per level.
   names =
     assert lib.assertMsg (strayKeys == [ ])
       "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions`, `versionExceptions` or `optionContractExemptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a directory under kix/packages/";

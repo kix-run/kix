@@ -192,7 +192,8 @@ in
           workloadKind,
           selector,
           hostNetwork,
-          # Highest availability level this workload supports, or null.
+          # Highest availability level this workload supports (checked by
+          # workloadCeilingOf), or null.
           workloadCeiling ? null,
         }:
         let
@@ -202,21 +203,53 @@ in
           capped =
             workloadCeiling != null
             && availabilityLib.rank availability.level > availabilityLib.rank workloadCeiling;
-          workloadAvailability =
-            if capped then
-              availability
-              // {
-                level = workloadCeiling;
-                ceiling = workloadCeiling;
-                capped = true;
-                warnings = [ ];
-              }
+          packageCeiling = availability.ceiling or null;
+          # The lower of the builder and package ceilings. On a tie the
+          # package is named, because a partsOverlays entry that drops the
+          # builder's availability.max still leaves the package ceiling.
+          builderIsLower =
+            workloadCeiling != null
+            && (
+              packageCeiling == null || availabilityLib.rank workloadCeiling < availabilityLib.rank packageCeiling
+            );
+          effectiveCeiling = if builderIsLower then workloadCeiling else packageCeiling;
+          ceilingFrom =
+            if builderIsLower then
+              "builder"
+            else if packageCeiling != null then
+              "package"
             else
-              availability;
+              null;
+          # The availability plugin reads `ceiling` and `ceilingFrom` after
+          # sealing, so they are set whether or not the builder ceiling caps.
+          workloadAvailability =
+            (
+              if capped then
+                availability
+                // {
+                  level = workloadCeiling;
+                  capped = true;
+                  warnings = [ ];
+                }
+              else
+                availability
+            )
+            // {
+              ceiling = effectiveCeiling;
+              inherit ceilingFrom;
+            };
+          cappedConsequence =
+            {
+              none = "is a single point of failure: a pod crash, a rolling update or a node loss causes downtime";
+              pod = "does not survive the loss of its node";
+              node = "does not survive the loss of a zone";
+            }
+            .${workloadCeiling} or "";
           ceilingWarnings = lib.optional capped (
-            "${workloadKind} '${workloadInput.name or "?"}' declares availability.max = "
-            + "\"${workloadCeiling}\", so it runs at \"${workloadCeiling}\" under availability "
-            + "\"${availability.level}\". The rest of the instance is unaffected."
+            "[${namespaceName}/${instanceName}] ${workloadKind} '${workloadInput.name or "?"}' supports at most "
+            + "\"${workloadCeiling}\" (availability.max on its builder call), so under availability "
+            + "\"${availability.level}\" it ${cappedConsequence}. This is a limit of the package; "
+            + "the instance's other workloads run at \"${availability.level}\"."
           );
           edgeReport = edgeAnalysis.edgesFor workloadInput;
           edges = edgeReport.edges;
@@ -284,13 +317,41 @@ in
         workload
         // {
           outPath = builtins.foldl' (acc: warning: builtins.trace warning acc) workload.outPath (
-            interceptorWarnings ++ map (w: "[${instanceName}] ${w}") (ceilingWarnings ++ edgeReport.warnings)
+            interceptorWarnings ++ ceilingWarnings ++ map (w: "[${instanceName}] ${w}") edgeReport.warnings
           );
           _injectedResources = interceptorResources;
           rawSelector = selector;
           # Resolved level used by instance processors after sealing.
           _availability = workloadAvailability;
         };
+
+      # The `availability` argument of a workload builder: an attrset whose
+      # only key is `max`, a ceiling for this workload alone. Returns the
+      # checked ceiling or null.
+      workloadCeilingOf =
+        kind: attrs:
+        let
+          where = "${namespaceName}/${instanceName}";
+          subject = "${kind} '${attrs.name or "?"}'";
+          a = attrs.availability;
+          unknown = builtins.attrNames (removeAttrs a [ "max" ]);
+        in
+        if !(attrs ? availability) then
+          null
+        else if kind == "DaemonSet" then
+          throw "[${where}] ${subject} sets availability, but a DaemonSet runs one pod per node, so availability.max has no effect on it. Remove it."
+        else if !builtins.isAttrs a then
+          throw "[${where}] ${subject} availability is a ${builtins.typeOf a}. Write availability.max = \"<level>\"."
+        else if unknown != [ ] then
+          throw "[${where}] ${subject} availability has unknown key(s) ${lib.concatStringsSep ", " unknown}. The only key is max."
+        else if (a.max or null) == null then
+          null
+        else
+          availabilityLib.checkCeiling {
+            value = a.max;
+            inherit where;
+            what = "${subject} availability.max";
+          };
 
       # Force pod validation through outPath so rawSelector remains available
       # without sealing the workload. Validation can traverse ConfigMap and
@@ -349,6 +410,8 @@ in
               };
             };
 
+          workloadCeiling = workloadCeilingOf kind attrs;
+
           baseArgs =
             removeAttrs attrs [
               "spec"
@@ -362,6 +425,7 @@ in
         in
         withChecks
           [
+            workloadCeiling
             (validators.checkDaemonSet kind)
             (validators.checkSpreadFeasible {
               inherit kind;
@@ -384,8 +448,7 @@ in
           (sealWorkload {
             workloadInput = baseArgs;
             workloadKind = kind;
-            inherit selector hostNetwork;
-            workloadCeiling = (attrs.availability or { }).max or null;
+            inherit selector hostNetwork workloadCeiling;
           });
 
       # Process a CronJob's nested pod template through the same validation,
@@ -422,6 +485,8 @@ in
             };
           };
 
+          workloadCeiling = workloadCeilingOf kind attrs;
+
           baseArgs =
             removeAttrs attrs [
               "spec"
@@ -435,6 +500,7 @@ in
         in
         withChecks
           [
+            workloadCeiling
             (validators.checkPrivileged templateSpec)
             (validators.checkNamespacedRefs templateSpec)
             (validators.checkContainerResources templateSpec)
@@ -444,8 +510,7 @@ in
           (sealWorkload {
             workloadInput = baseArgs;
             workloadKind = kind;
-            inherit selector hostNetwork;
-            workloadCeiling = (attrs.availability or { }).max or null;
+            inherit selector hostNetwork workloadCeiling;
           });
 
       mkJob =
@@ -482,6 +547,8 @@ in
               };
             };
 
+          workloadCeiling = workloadCeilingOf kind attrs;
+
           # Copy the Job selector to its metadata labels.
           baseArgs =
             removeAttrs attrs [
@@ -496,6 +563,7 @@ in
         in
         withChecks
           [
+            workloadCeiling
             (validators.checkPrivileged templateSpec)
             (validators.checkNamespacedRefs templateSpec)
             (validators.checkContainerResources templateSpec)
@@ -505,8 +573,7 @@ in
           (sealWorkload {
             workloadInput = baseArgs;
             workloadKind = kind;
-            inherit selector hostNetwork;
-            workloadCeiling = (attrs.availability or { }).max or null;
+            inherit selector hostNetwork workloadCeiling;
           });
 
       # Apply workload validation to chart output. Skip checkNamespacedRefs

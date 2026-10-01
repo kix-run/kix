@@ -337,6 +337,12 @@ let
   mkLevelPackage =
     {
       metaExtra ? { },
+      table ? {
+        none = 1;
+        pod = 2;
+        node = 2;
+        zone = 3;
+      },
     }:
     {
       scope,
@@ -350,14 +356,9 @@ let
         version = "test";
       }
       // metaExtra;
-      options.replicaCount = lib.mkOption {
-        type = lib.types.int;
-        default = kix.availability.pick availability {
-          none = 1;
-          pod = 2;
-          node = 2;
-          zone = 3;
-        };
+      options.replicas = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = kix.availability.pick availability table;
       };
       build =
         {
@@ -372,7 +373,7 @@ let
           deployment = scope.mkDeployment {
             name = "web";
             spec = {
-              replicas = config.replicaCount;
+              replicas = config.replicas;
               selector.matchLabels = scope.selectorLabels;
               template = {
                 metadata.labels = scope.selectorLabels;
@@ -1223,6 +1224,12 @@ let
       byName
       evalFails
       requiredScConsumer
+      containerBase
+      mkReplicatedPackage
+      mkLevelPackage
+      levelSeenBy
+      singleNode
+      multiZone
       ;
   };
 
@@ -4853,7 +4860,18 @@ let
         &&
           levelSeenBy [
             multiZone
-            { instances.appns.capped.package = mkLevelPackage { metaExtra.availability.max = "pod"; }; }
+            {
+              # Constant above "pod": the package never sees a higher level.
+              instances.appns.capped.package = mkLevelPackage {
+                metaExtra.availability.max = "pod";
+                table = {
+                  none = 1;
+                  pod = 2;
+                  node = 2;
+                  zone = 2;
+                };
+              };
+            }
           ] == "pod"
       )
       || throw "ceiling not applied: ${builtins.toJSON keys}";
@@ -5106,7 +5124,7 @@ let
         &&
           replicasUnder [
             multiZone
-            { instances.appns.web.config.replicaCount = 7; }
+            { instances.appns.web.config.replicas = 7; }
           ] == 7
         &&
           levelSeenBy [

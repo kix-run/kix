@@ -95,8 +95,9 @@
           '';
       });
       # Every directory under kix/packages/ evaluated in a synthetic cluster
-      # of its own (kix/package-eval.nix), so a package that no cluster
-      # names still runs through the validators and the scorecard.
+      # of its own (kix/package-eval.nix), once at availability "none" and
+      # once at "zone", so a package that no cluster names still runs
+      # through the validators and the scorecard.
       packageEval = lib.genAttrs systems (system: {
         every-package-evaluates =
           let
@@ -107,7 +108,9 @@
             };
           in
           pkgs.runCommand "every-package-evaluates" { } ''
-            echo "${toString (builtins.length result.names)} kix packages evaluated."
+            echo "${
+              toString (builtins.length result.names / builtins.length result.levels)
+            } kix packages evaluated at availability ${lib.concatStringsSep " and " result.levels}."
             echo "Skipped: ${
               if result.skip == { } then "none" else lib.concatStringsSep ", " (builtins.attrNames result.skip)
             }"
