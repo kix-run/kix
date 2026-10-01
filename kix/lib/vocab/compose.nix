@@ -327,6 +327,10 @@ rec {
   # that carries a netpol edge, a credential reference, a quorum size) or
   # that has an option of its own. `locked` is a list of attribute paths;
   # `who` names the package instance and `what` the option, for the error.
+  #
+  # A locked path is also refused when `overrides` sets one of its ancestors
+  # to a value that is not an attribute set: recursiveUpdate would replace
+  # the whole subtree, so `{ a = null; }` removes a locked `a.b`.
   mergeGuarded =
     {
       who,
@@ -335,12 +339,35 @@ rec {
     }:
     base: overrides:
     let
-      touched = builtins.filter (path: lib.hasAttrByPath path overrides) locked;
+      # The proper prefix of `path` that `overrides` sets to a
+      # non-attrset, or null when there is none.
+      replacingAncestor =
+        path:
+        lib.findFirst (
+          prefix:
+          lib.hasAttrByPath prefix overrides && !builtins.isAttrs (lib.getAttrFromPath prefix overrides)
+        ) null (map (n: lib.take n path) (lib.range 1 (builtins.length path - 1)));
+
+      describe =
+        path:
+        let
+          shown = lib.concatStringsSep "." path;
+          ancestor = replacingAncestor path;
+          value = lib.getAttrFromPath ancestor overrides;
+        in
+        if lib.hasAttrByPath path overrides then
+          shown
+        else if ancestor == null then
+          null
+        else
+          "${shown} (replaced by `${lib.concatStringsSep "." ancestor} = ${
+            if value == null then "null" else "<${builtins.typeOf value}>"
+          }`)";
+
+      touched = builtins.filter (d: d != null) (map describe locked);
     in
     if touched != [ ] then
-      throw "${who}: ${what} overrides ${
-        lib.concatMapStringsSep ", " (lib.concatStringsSep ".") touched
-      }, which the package sets for correctness. Use the option that owns it."
+      throw "${who}: ${what} overrides ${lib.concatStringsSep ", " touched}, which the package sets for correctness. Use the option that owns it."
     else
       lib.recursiveUpdate base overrides;
 

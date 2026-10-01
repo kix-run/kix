@@ -185,3 +185,11 @@ says what it changes and how it merges:
 | The program's own configuration file | `settings` | `kix.mergeGuarded` over the built-in configuration |
 | A program's command-line flags | `extraArgs` | appended after the package's flags, through `kix.guardArgs` |
 | Anything else | instance `partsOverlays`, resource `extra` | see [`partsOverlays`](/docs/reference/instance-schema/partsoverlays/) |
+
+`kix.mergeGuarded` refuses an override of a path the package owns. It also
+refuses an override that sets an ancestor of an owned path to a value that
+is not an attribute set, because that value would replace the owned path
+too: with `common.path_prefix` owned, `settings.common = null` is an error.
+A package that offers `settings` drops null values after the merge
+(`lib.filterAttrsRecursive (_: v: v != null)`), so an instance removes a
+built-in key it does not own by setting it to `null`.
