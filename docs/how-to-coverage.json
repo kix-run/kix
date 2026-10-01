@@ -650,7 +650,7 @@
         "externalDnsInstance",
         "externalDnsKindTryout"
       ],
-      "unverifiedNixBlocks": 1
+      "unverifiedNixBlocks": 2
     },
     {
       "page": "platform-capabilities/add-tls-through-cluster-issuers",
