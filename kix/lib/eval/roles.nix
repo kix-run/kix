@@ -13,7 +13,7 @@
 # Out-contracts are shallow (attribute presence on the provider's `out`).
 # They are enforced lazily on the findRoleProvider path because eager checking
 # would force provider instances out of fixpoint order. Deep contracts
-# (e.g. the 13-attr enforcer interface) stay with their consumer
+# (e.g. the 14-attr enforcer interface) stay with their consumer
 # (plugins/netpol/interface.nix).
 
 { lib }:
@@ -36,7 +36,7 @@ rec {
     };
 
     cni = {
-      description = "Pod network owner. No out contract yet. The role exists for binding-mode conflicts: an exclusive environment CNI (kindnet on stock kind) refuses a managed one at eval instead of breaking the cluster at deploy.";
+      description = "Pod network owner. No out contract yet. The role exists for binding-mode conflicts: an exclusive environment CNI (kindnet on stock kind) refuses a managed one at eval instead of breaking the cluster at deploy. Under shadowable the environment installed the CNI (cluster.network.environmentCilium) and the claimant uses it.";
       outContract = [ ];
     };
 

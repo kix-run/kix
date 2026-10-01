@@ -29,6 +29,9 @@
 {
   cluster.provider = lib.mkDefault "kind";
 
+  # kind's default networking.podSubnet.
+  cluster.network.podCidr = lib.mkDefault "10.244.0.0/16";
+
   cluster.roles = {
     cni = {
       binding = lib.mkDefault "exclusive";

@@ -3,7 +3,9 @@
 # Pre-installs: flannel CNI, local-path StorageClass, servicelb, traefik.
 # Flannel does not enforce NetworkPolicy. To replace it with Cilium, run
 # k3s with `--flannel-backend=none --disable-network-policy` and override
-# `cluster.roles.cni.binding = "absent"` (see ludo/cluster.nix).
+# `cluster.roles.cni.binding = "absent"` (see ludo/cluster.nix). The
+# cilium package takes its IPAM pool from cluster.network.podCidr, which
+# defaults here to k3s's cluster-cidr.
 #
 # Platform imports: DNS (coredns, bundled), storage (local-path). k3s
 # creates the local-path StorageClass on every new cluster
@@ -19,6 +21,9 @@
 }:
 {
   cluster.provider = lib.mkDefault "k3s";
+
+  # k3s's default --cluster-cidr.
+  cluster.network.podCidr = lib.mkDefault "10.42.0.0/16";
 
   cluster.roles = {
     cni = {
