@@ -6,7 +6,9 @@
 # pre-installed. No ingress controller by default (AGIC and nginx are
 # opt-in addons).
 #
-# Platform imports: DNS (coredns, managed by AKS), storage (managed-csi).
+# Platform imports: DNS (coredns, managed by AKS), storage (managed-csi,
+# the default class the Azure Disks CSI driver creates:
+# https://learn.microsoft.com/azure/aks/azure-disk-csi).
 
 {
   config,
@@ -54,9 +56,12 @@
 
     platform-storage = {
       package = kix.mkImport {
+        kind = "StorageClass";
+        apiVersion = "storage.k8s.io/v1";
         roles = [ "storageClasses" ];
         out = {
           storageClassName = "managed-csi";
+          name = "managed-csi";
         };
       };
       optional = true;

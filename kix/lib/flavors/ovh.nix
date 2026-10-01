@@ -61,12 +61,15 @@
 
     platform-storage = {
       package = kix.mkImport {
+        kind = "StorageClass";
+        apiVersion = "storage.k8s.io/v1";
         roles = [ "storageClasses" ];
         out = {
           # OVH's default StorageClass. Override per-cluster for the other
           # csi-cinder-* classes, or for a hostPath/local-path provisioner on a
           # single-node minimal cluster.
           storageClassName = "csi-cinder-high-speed";
+          name = "csi-cinder-high-speed";
         };
       };
       optional = true;

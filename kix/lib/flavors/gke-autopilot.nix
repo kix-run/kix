@@ -11,7 +11,9 @@
 # cni and loadBalancer are environment-owned exclusively because Autopilot does
 # not permit user-run network infrastructure.
 #
-# Platform imports: DNS (kube-dns), storage (premium-rwo via PD CSI).
+# Platform imports: DNS (kube-dns), storage (premium-rwo via PD CSI). GKE
+# creates the standard-rwo and premium-rwo StorageClasses with the PD CSI
+# driver (https://cloud.google.com/kubernetes-engine/docs/how-to/persistent-volumes/gce-pd-csi-driver).
 # Note: kube-system imports use gke-managed namespace since Autopilot
 # blocks user deployments to kube-system.
 
@@ -65,9 +67,12 @@
 
     platform-storage = {
       package = kix.mkImport {
+        kind = "StorageClass";
+        apiVersion = "storage.k8s.io/v1";
         roles = [ "storageClasses" ];
         out = {
           storageClassName = "premium-rwo";
+          name = "premium-rwo";
         };
       };
       optional = true;

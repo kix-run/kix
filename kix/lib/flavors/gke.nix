@@ -5,7 +5,9 @@
 # CiliumNetworkPolicy. The cni role is environment-owned and exclusive.
 # Built-in GCE ingress controller. PD CSI with volume snapshot support.
 #
-# Platform imports: DNS (kube-dns), storage (standard-rwo via PD CSI).
+# Platform imports: DNS (kube-dns), storage (standard-rwo via PD CSI). GKE
+# creates the standard-rwo and premium-rwo StorageClasses with the PD CSI
+# driver (https://cloud.google.com/kubernetes-engine/docs/how-to/persistent-volumes/gce-pd-csi-driver).
 # These participate in DI so packages can resolve against them. If the
 # cluster installs its own storage-classes or DNS package, it takes
 # priority automatically (managed shadows import in DI resolution).
@@ -66,9 +68,12 @@
 
     platform-storage = {
       package = kix.mkImport {
+        kind = "StorageClass";
+        apiVersion = "storage.k8s.io/v1";
         roles = [ "storageClasses" ];
         out = {
           storageClassName = "standard-rwo";
+          name = "standard-rwo";
         };
       };
       optional = true;

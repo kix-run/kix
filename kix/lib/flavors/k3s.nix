@@ -5,7 +5,11 @@
 # k3s with `--flannel-backend=none --disable-network-policy` and override
 # `cluster.roles.cni.binding = "absent"` (see ludo/cluster.nix).
 #
-# Platform imports: DNS (coredns, bundled), storage (local-path).
+# Platform imports: DNS (coredns, bundled), storage (local-path). k3s
+# creates the local-path StorageClass on every new cluster
+# (https://docs.k3s.io/storage). A server started with
+# `--disable local-storage` has no such class, and the import below is then
+# wrong for that cluster.
 
 {
   config,
@@ -53,9 +57,12 @@
 
     platform-storage = {
       package = kix.mkImport {
+        kind = "StorageClass";
+        apiVersion = "storage.k8s.io/v1";
         roles = [ "storageClasses" ];
         out = {
           storageClassName = "local-path";
+          name = "local-path";
         };
       };
       optional = true;

@@ -72,6 +72,8 @@
 
     platform-storage = {
       package = kix.mkImport {
+        kind = "StorageClass";
+        apiVersion = "storage.k8s.io/v1";
         roles = [ "storageClasses" ];
         out = {
           # Kapsule's default StorageClass. Override per-cluster for the other
@@ -79,6 +81,7 @@
           # class (sfs-standard, RWX, requiring a BASIC3+ node and the
           # scw-filestorage-csi cluster tag).
           storageClassName = "sbs-default";
+          name = "sbs-default";
         };
       };
       optional = true;
