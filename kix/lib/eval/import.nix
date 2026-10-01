@@ -66,6 +66,7 @@ rec {
         mkImportResource (
           removeAttrs args [ "labels" ]
           // {
+            inherit clusterDomain;
             namespace = ns;
             labels =
               clusterLabels
