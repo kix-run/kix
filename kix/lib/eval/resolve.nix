@@ -190,7 +190,9 @@ rec {
   # from another with `lib.mkDefault` (see `packageDefaultPriority`).
   # `packageConfigFile` names that module in module-system errors. With
   # `namespaceName` and `instanceName`, option errors name the option as
-  # `instances.<ns>.<instance>.config.<option>`.
+  # `instances.<ns>.<instance>.config.<option>`. Every module, the package's
+  # and the instance's, can take `clusterConfig` as a module argument, so a
+  # default can derive from a cluster fact such as `clusterDomain`.
   evaluateInstanceConfig =
     {
       packageOptions,
@@ -300,6 +302,7 @@ rec {
               instanceName
               "config"
             ];
+            specialArgs = { inherit clusterConfig; };
             modules = [
               { options = packageOptions; }
               packageConfigModule
