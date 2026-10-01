@@ -51,9 +51,11 @@ does not affect incoming traffic to these Pods.
 :::
 
 `to` and `from` accept fixed values rather than arbitrary selectors. `to`
-accepts `dns`, `world`, and `apiserver`; `from` accepts `all-pods` and `world`.
-Anything else fails evaluation with `unknown egress intent target` or
-`unknown ingress intent source`.
+accepts `dns`, `world`, and `apiserver`; `from` accepts `all-pods`, `world`,
+and `apiserver`, which admits the Kubernetes API server calling an admission
+webhook or an aggregated API in the selected Pods. Anything else fails
+evaluation with `unknown egress intent target` or `unknown ingress intent
+source`.
 
 `scope = "clusterwide"` creates a cluster-wide policy. The
 `targetNamespace` label constraint keeps it scoped to the intended namespace.

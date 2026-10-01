@@ -12,7 +12,7 @@ use super::CommandContext;
 /// A single container image reference found in the cluster manifests.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 struct ImageEntry {
-    /// Full image reference (e.g. "quay.io/jetstack/cert-manager-controller:v1.17.1")
+    /// Full image reference (e.g. "quay.io/jetstack/cert-manager-controller:v1.21.2")
     image: String,
     /// Resources that reference this image
     sources: Vec<ImageSource>,
