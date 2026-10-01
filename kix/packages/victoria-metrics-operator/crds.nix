@@ -108,13 +108,13 @@ let
   # The operator's uniform health convention, declared once for the whole
   # group: every VM CR is ready when status.updateStatus == "operational"
   # (conditions are consumer-prefixed, never Ready/Available, so a generic
-  # condition check waits forever; observed live on stage1 with
-  # VMServiceScrape). Rides the typed chain into every CR as the
-  # `kix.run/readiness` annotation, which the kix CLI evaluates at deploy
-  # time, so no kind list in the CLI to keep in sync.
+  # condition check waits forever, as it does for VMServiceScrape). Rides
+  # the typed chain into every CR as the `kix.run/readiness` annotation,
+  # which the kix CLI evaluates at deploy time, so no kind list in the CLI
+  # to keep in sync.
   #
-  # The claim is VERIFIED only for the consumer kinds (observed live on
-  # kind/stage1/stage2); the parked kinds (VTCluster, VLAgent, ...) inherit it
+  # The claim is verified against a running operator only for the
+  # consumer kinds; the parked kinds (VTCluster, VLAgent, ...) inherit it
   # on the operator's convention alone. If the operator never writes
   # updateStatus for some kind, a CR of it waits until timeout. That is the
   # visible, self-diagnosing failure, preferred over generic

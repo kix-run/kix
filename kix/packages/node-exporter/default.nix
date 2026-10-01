@@ -235,9 +235,7 @@ in
           mkServiceMonitor {
             name = "${name}-monitor";
             spec = {
-              # ServiceMonitors match SERVICE labels, not pod labels. The
-              # daemonset selector never matched the Service and this job
-              # was silently unscraped (caught live on stage1, 2026-08-31).
+              # A ServiceMonitor selects Services, not pods.
               selector.matchLabels = self.service.out.selector;
               endpoints = [
                 (
@@ -289,10 +287,10 @@ in
                     labels.severity = "warning";
                     annotations = {
                       summary = "Node memory usage above 90%.";
-                      # `| float64` is not a template function in Prometheus OR vmalert;
-                      # Prometheus only fails such templates lazily when the alert
-                      # fires, while the VM operator's converter validates eagerly
-                      # and rejected the whole rule group (caught live on stage1).
+                      # `| float64` is not a template function in Prometheus or
+                      # vmalert. Prometheus fails such a template only when the
+                      # alert fires; the VM operator's converter validates it
+                      # eagerly and rejects the whole rule group.
                       description = "Node {{ $labels.instance }} memory usage is {{ printf \"%.0f\" $value }}%.";
                     };
                   }

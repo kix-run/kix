@@ -2,7 +2,7 @@
 # Consumed by crds.nix (CRD resources) and operator.nix (RBAC plurals),
 # so the shipped CRDs and the operator's permissions cannot drift apart.
 #
-# RUNTIME INVARIANT (learned on kind, 2026-08-31): the operator requires
+# Runtime invariant: the operator requires
 # its COMPLETE CRD bundle. Slim-shipping a subset of the group is not an
 # option, twice over:
 #   1. At startup it unconditionally registers status-condition field

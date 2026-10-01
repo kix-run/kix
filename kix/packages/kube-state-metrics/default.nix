@@ -267,9 +267,7 @@ in
           mkServiceMonitor {
             name = "${name}-monitor";
             spec = {
-              # ServiceMonitors match SERVICE labels, not pod labels. The
-              # deployment selector never matched the Service and this job
-              # was silently unscraped (caught live on stage1, 2026-08-31).
+              # A ServiceMonitor selects Services, not pods.
               selector.matchLabels = self.service.out.selector;
               endpoints = [
                 (

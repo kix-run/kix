@@ -47,9 +47,8 @@ in
   # calibrated to the cluster's value, so a differing agent override
   # double-counts samples. Surfaced through the structured diagnostics
   # channel so it lands in kix's warning output, not a bare eval trace.
-  # FUTURE (purist note, 2026-08-31): arguably an assertion, or remove
-  # the agent-side option so drift cannot exist. Kept a warning while
-  # the trial wants easy experimentation.
+  # It is a warning rather than an error so that a trial can scrape at
+  # another interval.
   warnings =
     { config, deps, ... }:
     lib.optional
