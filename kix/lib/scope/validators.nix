@@ -49,8 +49,23 @@ let
       };
 
   quantity = import ../vocab/quantity.nix { inherit lib; };
+
+  # True when a Service spec's `loadBalancerClass` carries string context,
+  # which means it was read from a provider's `out` (tailscale's
+  # `out.loadBalancerClass`), so a provider in the build serves the Service.
+  # A raw class string is false. An external balancer that publishes a class
+  # with context must also open the Service's pods to its own callers, since
+  # derived policy then gives the Service no ingress from outside the cluster.
+  hasProviderClass =
+    spec:
+    let
+      class = spec.loadBalancerClass or null;
+    in
+    builtins.isString class && builtins.hasContext class;
 in
 {
+  inherit hasProviderClass;
+
   mkValidators =
     {
       instanceName,
@@ -240,6 +255,9 @@ in
         else
           null;
 
+      # A Service whose loadBalancerClass comes from a provider in the build
+      # is served by that provider, so the cluster's loadBalancer role does
+      # not apply to it.
       checkLoadBalancer =
         args:
         let
@@ -247,7 +265,12 @@ in
           status = roleStatus "loadBalancer";
           serviceDesc = "[${instanceName}] Service '${args.name or "unknown"}' uses type=LoadBalancer";
         in
-        if (args.kind or "") == "Service" && specType == "LoadBalancer" && capabilities != { } then
+        if
+          (args.kind or "") == "Service"
+          && specType == "LoadBalancer"
+          && capabilities != { }
+          && !(hasProviderClass (args.spec or { }) || hasProviderClass (args.extra.spec or { }))
+        then
           if status == "absent" then
             throw (
               serviceDesc
