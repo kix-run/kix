@@ -7,6 +7,10 @@
   baseInstances,
   manifests,
   evalFails,
+  netpolOn,
+  ofKind,
+  byName,
+  kixKeys,
   ...
 }:
 
@@ -128,6 +132,35 @@ let
       }
     ];
 
+  # The velero package with its two secrets, its store wired to the base
+  # instances' db Service, under network policy.
+  veleroCluster = mkCluster [
+    baseInstances
+    netpolOn
+    (
+      { ref, ... }:
+      {
+        instances.velero = {
+          cloud = {
+            package = import ../../../packages/secret;
+            aliases = [ "cloudCredentials" ];
+            config.stringData.cloud = "[default]";
+          };
+          velero-repo-credentials = {
+            package = import ../../../packages/secret;
+            aliases = [ "repositoryPassword" ];
+            config.stringData.repository-password = "key";
+          };
+          velero = {
+            package = import ../../../packages/velero;
+            config.backupStorageLocation.objectStorage.bucket = "b";
+            deps.objectStorage = ref.dbns.db;
+          };
+        };
+      }
+    )
+  ];
+
   findingsOf =
     rule: cluster:
     builtins.filter (f: f.rule == rule && f.instance == "backup") cluster.scorecardReport.findings;
@@ -168,4 +201,28 @@ in
       && builtins.length (manifests cluster) > 0
     )
     || throw "noClusterAdmin with the grant: findings ${builtins.toJSON found}, audit ${builtins.toJSON audit}";
+
+  # The policies derived for a terminate-declared CR do not require the CR:
+  # the location's readiness (Available) needs the store connection those
+  # policies open, so requiring it would leave the deploy waiting until it
+  # times out.
+  velero-operand-policies-do-not-wait-for-cr =
+    let
+      ms = manifests veleroCluster;
+      bslHash = builtins.unsafeDiscardStringContext veleroCluster.instances.velero.velero.raw.backupStorageLocation.out.identityHash;
+      cnps = ofKind "CiliumNetworkPolicy" ms;
+      egress = byName "velero-backupstoragelocation-default-egress" cnps;
+      ingress = byName "velero-backupstoragelocation-default-to-db-ingress" cnps;
+      dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+    in
+    (
+      egress != null
+      && ingress != null
+      && ingress.metadata.namespace == "dbns"
+      && !(lib.hasInfix bslHash (dependsOn egress))
+      && !(lib.hasInfix bslHash (dependsOn ingress))
+    )
+    || throw "operand policies: egress ${builtins.toJSON (egress.metadata or null)}, ingress ${
+      builtins.toJSON (ingress.metadata or null)
+    }";
 }

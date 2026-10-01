@@ -303,6 +303,11 @@ in
       # the resolved behavior rides on the resource itself (threaded through
       # the CRD builder chain or the cluster override at seal time, with no
       # index lookup needed here
+      #
+      # The policies do not require the CR. A CR whose readiness needs the
+      # connection (a Velero BackupStorageLocation is Available only once
+      # its store answers) would otherwise wait for policies that wait for
+      # it, until the deploy times out.
       terminatingCrs =
         # Self-enforcer instances arrive with a null enforcer, so no policies
         if networkPolicyEnforcer == null then
@@ -357,7 +362,7 @@ in
                         }
                       ) crEdges;
                     };
-                    extraDeps = [ r ];
+                    extraDeps = [ ];
                   };
                 })
               ];
@@ -386,7 +391,7 @@ in
                         })
                       ];
                     };
-                    extraDeps = [ r ];
+                    extraDeps = [ ];
                   };
                 }
               ) crEdges;
