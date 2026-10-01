@@ -1,0 +1,3 @@
+# 2026-10-01 · `kix/packages/victoria-metrics-operator/operator.nix` · The operator's ClusterRole grants the `extensions` and `route.openshift.io` groups on every cluster.
+
+The operator copies these rules into the ClusterRole it creates for vmagent, and Kubernetes refuses to let it grant permissions it does not hold ("attempting to grant RBAC permissions not currently held"). So the package grants API groups that a non-OpenShift cluster never serves, only to pass that escalation check. If the operator gains a flag to leave them out of the vmagent ClusterRole, the grants can follow cluster config instead.

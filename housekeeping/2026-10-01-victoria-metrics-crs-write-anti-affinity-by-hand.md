@@ -1,3 +1,0 @@
-# 2026-10-01 · `kix/packages/victoria-metrics-{agent,alert,cluster}` · The VMAgent, VMAlert and VMCluster specs carry a hand-written `podAntiAffinity` rule.
-
-Packages are not meant to write spread or anti-affinity: Kix derives spread from the availability level, and for operator-placed pods `kix.availability.spreadConstraints { level; selector; topology; }` produces the rule. The hand-written copies use a fixed weight and the cluster's failure-domain keys at every level, so they do not follow the instance's availability. The rule is the `antiAffinity` helper in the cluster and alert packages and an inline `podAntiAffinity` in the agent.

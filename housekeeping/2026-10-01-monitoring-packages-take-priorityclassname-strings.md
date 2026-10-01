@@ -1,3 +1,0 @@
-# 2026-10-01 · `kix/packages/{alertmanager,prometheus,prometheus-operator,victoria-metrics-operator}` · Four monitoring packages take a `priorityClassName` string option instead of an optional `priorityClass` dependency.
-
-A string names a PriorityClass that no edge in the graph connects to the workload, so a missing or misspelled class shows up only at deploy time, and Kix cannot order the PriorityClass before the pods. The rework convention (`aggregate/CONVENTIONS.md` §2.6, ORDER D7) is an optional `priorityClass ? null` dependency read as `priorityClass.out.name`, as arc-runner-set does. No rework unit owns these four packages.
