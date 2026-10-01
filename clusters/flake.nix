@@ -58,6 +58,8 @@
         external-dns = ./test-external-dns.nix;
         external-dns-tryout = ./test-external-dns-tryout.nix;
         velero = ./test-velero.nix;
+        reloader = ./test-reloader/kind.nix;
+        reloader-scoped = ./test-reloader/scoped.nix;
       };
     };
 }
