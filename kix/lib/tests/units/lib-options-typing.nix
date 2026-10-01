@@ -1,6 +1,7 @@
 # Tests for the typed option helpers (vocab/quantity.nix, the option and
 # guard helpers in vocab/compose.nix), the option contract walker
-# (eval/options.nix) and instance-config error locations (eval/resolve.nix).
+# (eval/options.nix), instance-config error locations (eval/resolve.nix),
+# and the options the sweep retyped in the monitoring packages and module.
 # Loaded by ../default.nix with the other files in this directory.
 
 {
@@ -14,6 +15,7 @@
 
 let
   throws = v: !(builtins.tryEval (builtins.deepSeq v v)).success;
+  evalFails' = ms: throws ms;
 
   # The value of one option `o` after the module system merges `defs`.
   optionValue =
@@ -21,6 +23,23 @@ let
     (lib.evalModules {
       modules = [ { options.o = o; } ] ++ map (d: { config.o = d; }) defs;
     }).config.o;
+
+  pkg = name: import (../../../packages + "/${name}");
+
+  # The VictoriaMetrics operator plus one instance of `package` in
+  # monitoring-system, with `config`.
+  vmCluster =
+    instances:
+    manifests (mkCluster [
+      {
+        instances.monitoring-system = {
+          vm-operator.package = pkg "victoria-metrics-operator";
+          vm-cluster.package = pkg "victoria-metrics-cluster";
+        }
+        // instances;
+      }
+    ]);
+  vmSpec = kind: ms: (lib.findFirst (m: m.kind == kind) { spec = null; } ms).spec;
 
   resourcesOption = kixlib.options.resources {
     requests = {
@@ -544,4 +563,204 @@ in
       && builtins.elem "config injected into echo/echo-server by web/app" cfg.probe.files
     )
     || throw "instance option location: ${builtins.toJSON cfg.probe}";
+
+  # vm-cluster derives -dedup.minScrapeInterval from scrapeInterval and the
+  # claim class from vmstorage.storageClassName; the escape hatches that
+  # reach the same fields are refused.
+  lib-options-typing-vm-cluster-owned-fields =
+    let
+      withConfig =
+        config:
+        vmCluster {
+          vm-cluster.package = pkg "victoria-metrics-cluster";
+          vm-cluster.config = config;
+        };
+      spec = vmSpec "VMCluster" (withConfig {
+        vmstorage.storageClassName = "fast";
+        vmstorage.storage.resources.requests.storage = "50Gi";
+      });
+    in
+    (
+      spec.vmstorage.storage.volumeClaimTemplate.spec == {
+        resources.requests.storage = "50Gi";
+        storageClassName = "fast";
+      }
+      && spec.vmselect.extraArgs."dedup.minScrapeInterval" == "30s"
+      && evalFails' (withConfig {
+        vmselect.extraArgs."dedup.minScrapeInterval" = "1m";
+      })
+      && evalFails' (withConfig {
+        vmstorage.storage.storageClassName = "fast";
+      })
+    )
+    || throw "vm-cluster owned fields: ${builtins.toJSON spec.vmstorage}";
+
+  # vm-agent keeps its own flag beside an instance flag, and refuses an
+  # extraSpec that replaces the remote-write target the vmCluster
+  # dependency gives it.
+  lib-options-typing-vm-agent-args =
+    let
+      agent =
+        config:
+        vmCluster {
+          vm-agent = {
+            package = pkg "victoria-metrics-agent";
+            inherit config;
+          };
+        };
+      spec = vmSpec "VMAgent" (agent {
+        extraArgs."promscrape.maxScrapeSize" = "32MiB";
+      });
+    in
+    (
+      spec.extraArgs == {
+        "promscrape.streamParse" = "true";
+        "promscrape.maxScrapeSize" = "32MiB";
+      }
+      && evalFails' (agent {
+        extraSpec.remoteWrite = [ { url = "http://elsewhere"; } ];
+      })
+      && evalFails' (agent {
+        extraSpec.scrapeInterval = "10s";
+      })
+    )
+    || throw "vm-agent extraArgs: ${builtins.toJSON spec.extraArgs}";
+
+  # vm-alert renders the shared default Alertmanager settings when none are
+  # set, and refuses an extraSpec that replaces its datasource.
+  lib-options-typing-vm-alert-settings =
+    let
+      alert =
+        config:
+        vmCluster {
+          vm-alert = {
+            package = pkg "victoria-metrics-alert";
+            inherit config;
+          };
+        };
+      secret = lib.findFirst (
+        m: m.kind == "Secret" && lib.hasSuffix "-alertmanager-config" m.metadata.name
+      ) null (alert { });
+      settings = builtins.fromJSON secret.stringData."alertmanager.yaml";
+    in
+    (
+      settings == import ../../../packages/alertmanager/default-settings.nix
+      && evalFails' (alert {
+        extraSpec.datasource.url = "http://elsewhere";
+      })
+    )
+    || throw "vm-alert settings: ${builtins.toJSON settings}";
+
+  # A selector an instance sets replaces the package's default selector as
+  # a whole. The stub DaemonSet gives the selector a pod to match.
+  lib-options-typing-default-rules-selector-replaces =
+    let
+      proxyPackage = {
+        meta.version = "test";
+        build =
+          { self, scope, ... }:
+          {
+            root = self.daemonset;
+            daemonset = scope.mkDaemonSet {
+              name = "proxy";
+              spec = {
+                selector.matchLabels.component = "proxy";
+                template.spec.containers = [
+                  {
+                    name = "proxy";
+                    image = "registry.example/proxy:1";
+                  }
+                ];
+              };
+            };
+          };
+      };
+      ms = manifests (mkCluster [
+        {
+          instances.kube-system.proxy.package = proxyPackage;
+          instances.monitoring-system = {
+            prometheus-operator.package = pkg "prometheus-operator";
+            rules = {
+              package = pkg "prometheus-default-rules";
+              config.monitors.kubeProxy.selector.component = "proxy";
+            };
+          };
+        }
+      ]);
+      service = lib.findFirst (
+        m: m.kind == "Service" && lib.hasInfix "kube-proxy" (m.metadata.name or "")
+      ) null ms;
+    in
+    (service != null && service.spec.selector == { component = "proxy"; })
+    || throw "kube-proxy bridge Service: ${builtins.toJSON service}";
+
+  # node-exporter keeps its host paths, and an instance flag replaces the
+  # package's value of the same filesystem flag.
+  lib-options-typing-node-exporter-args =
+    let
+      argsOf =
+        config:
+        (lib.findFirst (m: m.kind == "DaemonSet") null (
+          manifests (mkCluster [
+            {
+              instances.monitoring-system.node-exporter = {
+                package = pkg "node-exporter";
+                inherit config;
+              };
+            }
+          ])
+        )).spec.template.spec.containers;
+      args =
+        (builtins.head (argsOf {
+          extraArgs = [ "--collector.filesystem.fs-types-exclude=^tmpfs$" ];
+        })).args;
+    in
+    (
+      builtins.elem "--path.sysfs=/host/sys" args
+      && builtins.elem "--collector.filesystem.fs-types-exclude=^tmpfs$" args
+      &&
+        builtins.length (builtins.filter (lib.hasPrefix "--collector.filesystem.fs-types-exclude") args)
+        == 1
+      && builtins.any (lib.hasPrefix "--collector.filesystem.mount-points-exclude") args
+      && throws (argsOf {
+        extraArgs = [ "--path.sysfs=/sys" ];
+      })
+    )
+    || throw "node-exporter args: ${builtins.toJSON args}";
+
+  # The monitoring module passes grafana.persistence to the claim it
+  # creates, a byte count included.
+  lib-options-typing-monitoring-grafana-persistence =
+    let
+      packages = lib.genAttrs [
+        "alertmanager"
+        "grafana"
+        "kube-state-metrics"
+        "loki"
+        "node-exporter"
+        "persistent-volume-claim"
+        "priority-classes"
+        "prometheus"
+        "prometheus-default-rules"
+        "prometheus-operator"
+        "promtail"
+      ] pkg;
+      claim = lib.findFirst (m: m.kind == "PersistentVolumeClaim") null (
+        manifests (mkCluster [
+          ../../modules/monitoring.nix
+          {
+            _module.args.packages = packages;
+            monitoring = {
+              enabled = true;
+              grafana.persistence = {
+                size = 10737418240;
+                storageClassName = "fast";
+              };
+            };
+          }
+        ])
+      );
+    in
+    (claim.spec.storageClassName == "fast" && claim.spec.resources.requests.storage == "10737418240")
+    || throw "grafana claim: ${builtins.toJSON claim}";
 }

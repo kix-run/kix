@@ -28,6 +28,18 @@ let
   name = scope.instanceName;
   ns = scope.namespaceName;
 
+  # `fsGroup` is what gives Grafana its data volume: the kubelet makes the
+  # volume group 472, group-writable and setgid. `OnRootMismatch` limits
+  # that to mounts where the top directory is wrong, rather than walking
+  # the whole volume on every start.
+  defaultSecurityContext = {
+    runAsNonRoot = true;
+    runAsUser = 472;
+    runAsGroup = 472;
+    fsGroup = 472;
+    fsGroupChangePolicy = "OnRootMismatch";
+  };
+
   # The display name and uid of one auto-wired datasource.
   autoDatasourceOption =
     kind: dep: defaultName: defaultUid:
@@ -84,9 +96,9 @@ in
       {
         assertion =
           !(config.sidecar.dashboards.enabled || config.sidecar.datasources.enabled)
-          || config.sidecarSources.configMaps
-          || config.sidecarSources.secrets;
-        message = "grafana: the sidecars are on but `sidecarSources` turns off both ConfigMaps and Secrets, so they have nothing to read.";
+          || config.sidecar.sources.configMaps
+          || config.sidecar.sources.secrets;
+        message = "grafana: the sidecars are on but `sidecar.sources` turns off both ConfigMaps and Secrets, so they have nothing to read.";
       }
     ];
 
@@ -99,11 +111,6 @@ in
     image = kix.options.image {
       repository = "docker.io/grafana/grafana";
       tag = "13.1.1";
-    };
-    sidecarImage = kix.options.image {
-      repository = "quay.io/kiwigrid/k8s-sidecar";
-      tag = "2.8.1";
-      description = "Image for the k8s-sidecar containers that load dashboards, datasources and alerting resources from labelled ConfigMaps and Secrets.";
     };
     replicas = lib.mkOption {
       type = lib.types.int;
@@ -120,24 +127,25 @@ in
         single writer.
       '';
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "100m";
-          memory = "128Mi";
-        };
-        limits = {
-          cpu = "1";
-          memory = "1Gi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "100m";
+        memory = "128Mi";
+      };
+      limits = {
+        cpu = "1";
+        memory = "1Gi";
       };
     };
-    # The grafana chart (10.5.15) leaves `sidecar.resources` empty and
-    # suggests these values in a comment.
-    sidecarResources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
+    sidecar = {
+      image = kix.options.image {
+        repository = "quay.io/kiwigrid/k8s-sidecar";
+        tag = "2.8.1";
+        description = "Image for the k8s-sidecar containers that load dashboards, datasources and alerting resources from labelled ConfigMaps and Secrets.";
+      };
+      # The grafana chart (10.5.15) leaves its `sidecar.resources` value
+      # empty and suggests these values in a comment.
+      resources = kix.options.resources {
         requests = {
           cpu = "50m";
           memory = "50Mi";
@@ -146,70 +154,91 @@ in
           cpu = "100m";
           memory = "100Mi";
         };
+        description = "Resources for each k8s-sidecar container.";
       };
-      description = "Resources for each k8s-sidecar container.";
-    };
-    # Note: persistence (PVC size / storageClass) is now controlled by a
-    # sibling `storage` instance of `persistent-volume-claim`. Leaving this
-    # option out of grafana keeps package config focused on grafana itself.
-    sidecar = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        dashboards = {
-          enabled = true;
-          searchNamespace = "ALL";
-          label = "grafana_dashboard";
-          labelValue = "1";
-        };
-        datasources = {
-          enabled = true;
-          # null = inherit k8s-sidecar default ("the pod's namespace"; kix
-          # also grants cluster-wide RBAC so cross-namespace discovery still
-          # works without the env). Set to "ALL" or a specific namespace
-          # to override. Matches chart's `sidecar.datasources.searchNamespace`.
-          searchNamespace = null;
-          label = "grafana_datasource";
-          labelValue = "1";
-        };
-      };
-    };
-    # What the sidecars read. Reading Secrets means watching every Secret in
-    # the cluster, so a Grafana that is broken into exposes all of them.
-    # Dashboards and datasources rarely need to be secret; a datasource
-    # password can come from the environment instead.
-    sidecarSources = lib.mkOption {
-      type = lib.types.submodule {
-        options = {
-          configMaps = lib.mkOption {
-            type = lib.types.bool;
-            default = true;
-            description = ''
-              When true, Grafana loads dashboards and datasources from
-              ConfigMaps. The sidecars watch for ConfigMaps labelled
-              `grafana_dashboard: "1"` or `grafana_datasource: "1"` (the
-              labels are set in `sidecar`) and load each one within
-              seconds, including changes and deletions. By default,
-              dashboards come from every namespace and datasources only
-              from Grafana's own; `sidecar.*.searchNamespace` changes that.
-              Grafana gets read access to every ConfigMap in the cluster,
-              whatever `searchNamespace` says.
-            '';
-          };
-          secrets = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-            description = ''
-              When true, Grafana loads dashboards and datasources from
-              Secrets, with the same labels and namespaces as `configMaps`.
-              Grafana gets read access to every Secret in the cluster, so
-              anyone who breaks into Grafana can read all of them. Turn it
-              on only if a datasource definition has to hold a credential
-              and cannot take it from Grafana's environment.
-            '';
+      # What the sidecars read. Reading Secrets means watching every Secret in
+      # the cluster, so a Grafana that is broken into exposes all of them.
+      # Dashboards and datasources rarely need to be secret; a datasource
+      # password can come from the environment instead.
+      sources = lib.mkOption {
+        type = lib.types.submodule {
+          options = {
+            configMaps = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = ''
+                When true, Grafana loads dashboards and datasources from
+                ConfigMaps. The sidecars watch for ConfigMaps labelled
+                `grafana_dashboard: "1"` or `grafana_datasource: "1"` (set
+                in `sidecar.dashboards` and `sidecar.datasources`) and
+                load each one within seconds, including changes and
+                deletions. By default,
+                dashboards come from every namespace and datasources only
+                from Grafana's own; `sidecar.*.searchNamespace` changes that.
+                Grafana gets read access to every ConfigMap in the cluster,
+                whatever `searchNamespace` says.
+              '';
+            };
+            secrets = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                When true, Grafana loads dashboards and datasources from
+                Secrets, with the same labels and namespaces as `configMaps`.
+                Grafana gets read access to every Secret in the cluster, so
+                anyone who breaks into Grafana can read all of them. Turn it
+                on only if a datasource definition has to hold a credential
+                and cannot take it from Grafana's environment.
+              '';
+            };
           };
         };
+        default = { };
       };
-      default = { };
+      dashboards = {
+        enabled = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Run the k8s-sidecar container that loads dashboards from labelled ConfigMaps or Secrets.";
+        };
+        searchNamespace = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = "ALL";
+          description = "Namespace the sidecar searches (k8s-sidecar's NAMESPACE): `ALL` or one namespace name. Null leaves NAMESPACE unset, so the sidecar searches Grafana's own namespace.";
+        };
+        label = lib.mkOption {
+          type = lib.types.str;
+          default = "grafana_dashboard";
+          description = "Label key that marks a ConfigMap or Secret as holding dashboards.";
+        };
+        labelValue = lib.mkOption {
+          type = lib.types.str;
+          default = "1";
+          description = "Value of `label` that the sidecar matches.";
+        };
+      };
+      datasources = {
+        enabled = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Run the k8s-sidecar container that loads datasources from labelled ConfigMaps or Secrets.";
+        };
+        searchNamespace = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = "Namespace the sidecar searches (k8s-sidecar's NAMESPACE): `ALL` or one namespace name. Null leaves NAMESPACE unset, so the sidecar searches Grafana's own namespace.";
+        };
+        label = lib.mkOption {
+          type = lib.types.str;
+          default = "grafana_datasource";
+          description = "Label key that marks a ConfigMap or Secret as holding datasources.";
+        };
+        labelValue = lib.mkOption {
+          type = lib.types.str;
+          default = "1";
+          description = "Value of `label` that the sidecar matches.";
+        };
+      };
     };
     # grafana.ini overrides merged on top of defaults
     grafanaIni = lib.mkOption {
@@ -471,19 +500,11 @@ in
       default = [ ];
       description = "Dashboard providers in addition to the sidecar's. None by default.";
     };
-    # `fsGroup` is what gives Grafana its data volume: the kubelet makes the
-    # volume group 472, group-writable and setgid. `OnRootMismatch` limits
-    # that to mounts where the top directory is wrong, rather than walking
-    # the whole volume on every start.
     securityContext = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        runAsNonRoot = true;
-        runAsUser = 472;
-        runAsGroup = 472;
-        fsGroup = 472;
-        fsGroupChangePolicy = "OnRootMismatch";
-      };
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      defaultText = lib.literalExpression (lib.generators.toPretty { } defaultSecurityContext);
+      description = "Pod securityContext, deep-merged over the package's, which runs Grafana as user and group 472. A null value removes the package's key, for example `fsGroupChangePolicy = null`.";
     };
     initChownData.enabled = lib.mkOption {
       type = lib.types.bool;
@@ -580,13 +601,13 @@ in
       hasMetrics = config.metrics.enabled && prometheus != null;
       mkServiceMonitor = if prometheus != null then prometheus.out.mkServiceMonitor scope else null;
 
-      sidecarImg = kix.image.ref config.sidecarImage;
+      sidecarImg = kix.image.ref config.sidecar.image;
 
       # k8s-sidecar's RESOURCE: which kinds the sidecars watch.
       sidecarResource =
-        if config.sidecarSources.configMaps && config.sidecarSources.secrets then
+        if config.sidecar.sources.configMaps && config.sidecar.sources.secrets then
           "both"
-        else if config.sidecarSources.secrets then
+        else if config.sidecar.sources.secrets then
           "secret"
         else
           "configmap";
@@ -927,7 +948,7 @@ in
         {
           name = "grafana-sc-dashboard";
           image = sidecarImg;
-          imagePullPolicy = config.sidecarImage.pullPolicy;
+          imagePullPolicy = config.sidecar.image.pullPolicy;
           env =
             kix.mkEnvVars {
               FOLDER = "/tmp/dashboards";
@@ -944,7 +965,7 @@ in
               (adminUserEnv "REQ_USERNAME")
               (adminPasswordEnv "REQ_PASSWORD")
             ];
-          resources = config.sidecarResources;
+          resources = config.sidecar.resources;
           securityContext = sidecarSecCtx;
           volumeMounts = [
             {
@@ -960,7 +981,7 @@ in
         {
           name = "grafana-sc-datasources";
           image = sidecarImg;
-          imagePullPolicy = config.sidecarImage.pullPolicy;
+          imagePullPolicy = config.sidecar.image.pullPolicy;
           env =
             kix.mkEnvVars (
               {
@@ -972,7 +993,7 @@ in
                 REQ_URL = "http://localhost:3000/api/admin/provisioning/datasources/reload";
                 RESOURCE = sidecarResource;
               }
-              // lib.optionalAttrs ((config.sidecar.datasources.searchNamespace or null) != null) {
+              // lib.optionalAttrs (config.sidecar.datasources.searchNamespace != null) {
                 NAMESPACE = config.sidecar.datasources.searchNamespace;
               }
             )
@@ -981,7 +1002,7 @@ in
               (adminUserEnv "REQ_USERNAME")
               (adminPasswordEnv "REQ_PASSWORD")
             ];
-          resources = config.sidecarResources;
+          resources = config.sidecar.resources;
           securityContext = sidecarSecCtx;
           volumeMounts = [
             {
@@ -994,7 +1015,7 @@ in
       );
 
       # ── RBAC for sidecars ───────────────────────────────────────────────
-      # Sidecars watch the kinds in `sidecarSources` across all namespaces.
+      # Sidecars watch the kinds in `sidecar.sources` across all namespaces.
       needsClusterRbac = config.sidecar.dashboards.enabled || config.sidecar.datasources.enabled;
 
       inherit (scope.rbac)
@@ -1016,8 +1037,8 @@ in
           labels = scope.selectorLabels;
           roles = {
             "${name}" = grant (
-              lib.optional config.sidecarSources.configMaps (core.configmaps |> watch)
-              ++ lib.optional config.sidecarSources.secrets (core.secrets |> watch)
+              lib.optional config.sidecar.sources.configMaps (core.configmaps |> watch)
+              ++ lib.optional config.sidecar.sources.secrets (core.secrets |> watch)
             );
           };
         }
@@ -1155,7 +1176,9 @@ in
               # Kubernetes' default, set explicitly; the grafana chart
               # (10.5.15) sets none.
               terminationGracePeriodSeconds = 30;
-              securityContext = config.securityContext;
+              securityContext = lib.filterAttrsRecursive (_: v: v != null) (
+                lib.recursiveUpdate defaultSecurityContext config.securityContext
+              );
               containers = [
                 {
                   name = "grafana";
@@ -1386,9 +1409,7 @@ in
           mkServiceMonitor {
             name = "${name}-monitor";
             spec = {
-              # ServiceMonitors match SERVICE labels, not pod labels. The
-              # deployment selector never matched the Service and grafana
-              # was silently unscraped (caught live on kind, 2026-08-31).
+              # A ServiceMonitor selects Services, not pods.
               selector.matchLabels = self.service.out.selector;
               endpoints = [
                 (

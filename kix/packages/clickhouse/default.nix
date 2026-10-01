@@ -146,17 +146,14 @@ in
       '';
     };
 
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "500m";
-          memory = "2Gi";
-        };
-        limits = {
-          cpu = "2";
-          memory = "2Gi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "500m";
+        memory = "2Gi";
+      };
+      limits = {
+        cpu = "2";
+        memory = "2Gi";
       };
       description = ''
         ClickHouse sizes itself from the container's limits: its caches and

@@ -7,6 +7,11 @@
   kix,
   bridgeName,
 }:
+let
+  defaultSelector = {
+    k8s-app = "kube-dns";
+  };
+in
 {
   options.monitors.coredns = lib.mkOption {
     type = lib.types.submodule {
@@ -16,10 +21,10 @@
           default = true;
         };
         selector = lib.mkOption {
-          type = lib.types.attrsOf lib.types.str;
-          default = {
-            k8s-app = "kube-dns";
-          };
+          type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
+          default = null;
+          defaultText = lib.literalExpression ''{ k8s-app = "kube-dns"; }'';
+          description = "Pod labels the bridge Service selects. A value replaces the package's selector as a whole. Null uses `{ k8s-app = \"kube-dns\"; }`, the label CoreDNS carries in kubeadm clusters.";
         };
         port = lib.mkOption {
           type = lib.types.int;
@@ -147,7 +152,7 @@
           spec = {
             clusterIP = "None";
             type = "ClusterIP";
-            selector = cfg.selector;
+            selector = if cfg.selector == null then defaultSelector else cfg.selector;
             ports = [
               {
                 name = cfg.portName;

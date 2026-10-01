@@ -18,6 +18,8 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
+
+  defaultSettings = import ./default-settings.nix;
 in
 {
   meta = {
@@ -54,45 +56,21 @@ in
         (v2_discussions/145).
       '';
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "10m";
-          memory = "256Mi";
-        };
-        limits = {
-          cpu = "1";
-          memory = "1Gi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "10m";
+        memory = "256Mi";
+      };
+      limits = {
+        cpu = "1";
+        memory = "1Gi";
       };
     };
-    # Alertmanager config: receivers, routes, etc.
-    # This is cluster-specific and set in the cluster module.
-    config = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        global.resolve_timeout = "5m";
-        route = {
-          group_by = [
-            "namespace"
-            "alertname"
-          ];
-          group_wait = "30s";
-          group_interval = "5m";
-          repeat_interval = "12h";
-          receiver = "null";
-          routes = [
-            {
-              receiver = "null";
-              matchers = [ "alertname = Watchdog" ];
-            }
-          ];
-        };
-        receivers = [
-          { name = "null"; }
-        ];
-      };
+    settings = lib.mkOption {
+      type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
+      default = null;
+      defaultText = lib.literalMD "null: the package's configuration, which routes every alert to the receiver `null`";
+      description = "The Alertmanager configuration file, alertmanager.yaml (`global`, `route`, `receivers`, `inhibit_rules`, `templates`). A value replaces the package's configuration as a whole rather than merging into it, because the package's routing tree names its own `null` receiver. Null uses the package's configuration, which routes every alert to the receiver `null`.";
     };
     priorityClassName = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -324,7 +302,9 @@ in
       # Alertmanager config as a Secret (the operator expects this)
       alertmanagerConfig = scope.mkSecret {
         name = "alertmanager-${name}";
-        stringData."alertmanager.yaml" = builtins.toJSON config.config;
+        stringData."alertmanager.yaml" = builtins.toJSON (
+          if config.settings == null then defaultSettings else config.settings
+        );
       };
 
       # Alertmanager CR: operator reconciles into StatefulSet
@@ -370,9 +350,9 @@ in
       };
 
       # The operator creates `alertmanager-operated` (headless, port web
-      # 9093) over the pods it stamps with svcSelector. A ServiceRef to it
-      # replaces the Service kix used to render over the same pods; see the
-      # prometheus package for the reasoning (v2_discussions/135).
+      # 9093) over the pods it stamps with svcSelector. A ServiceRef
+      # describes it; the prometheus package's `service` part gives the
+      # reasons (v2_discussions/135).
       service = scope.mkServiceRef {
         name = "alertmanager-operated";
         selector = svcSelector;
@@ -394,10 +374,9 @@ in
       # the labels the Prometheus Operator stamps on Alertmanager pods. Those
       # pods are not in the build, so the PDB declares the CR whose pods it
       # selects (kix.run/operand-of), which the cross-resource check accepts.
-      # This is the one PDB a package still writes by hand, and it is not a
-      # duplicate of the derived one: the availability plugin derives a PDB
-      # from a rendered workload's replica count, and there is no rendered
-      # workload here.
+      # The package renders this PDB itself, and it is not a duplicate of
+      # a derived one: the availability plugin derives a PDB from a rendered
+      # workload's replica count, and there is no rendered workload here.
       podDisruptionBudget = lib.optionalAttrs config.podDisruptionBudget.enabled {
         pdb = scope.mkResource {
           apiVersion = "policy/v1";
@@ -513,11 +492,8 @@ in
         serviceMonitor = mkSmon {
           name = "${name}-self";
           spec = {
-            # ServiceMonitors match SERVICE labels, not pod labels. The
-            # pod-shaped svcSelector never matched the Service and the
-            # self-monitor was silently unscraped (caught by
-            # monitorSelectorMatchesService, 2026-08-31).
-            # The ref carries the operated Service's labels and port names.
+            # A ServiceMonitor selects Services, not pods, so this uses the
+            # labels of the operator's Service from its ref.
             selector.matchLabels = self.service.out.labels;
             namespaceSelector.matchNames = [ ns ];
             endpoints = [

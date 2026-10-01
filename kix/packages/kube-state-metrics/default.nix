@@ -1,8 +1,24 @@
-# kube-state-metrics: Kubernetes object state metrics exporter.
+# kube-state-metrics: the exporter that turns the state of Kubernetes
+# objects (pods, deployments, nodes, and more) into metrics.
 #
-# Single Deployment that listens to the K8s API server and exposes
-# metrics about the state of objects (pods, deployments, nodes, etc.).
-# Ships its own ServiceMonitor via optional prometheus DI.
+# Installs a Deployment, its ServiceAccount, a ClusterRole that can list and
+# watch the kinds it reports, and a Service on port 8080 (metrics) and 8081
+# (its own telemetry). With a `prometheus` dependency and `metrics.enabled`,
+# it also renders a ServiceMonitor through `prometheus.out.mkServiceMonitor`.
+#
+# Dependencies:
+#   prometheus (optional)   the scraper whose ServiceMonitor builder it uses
+#
+# Minimal instance:
+#
+#   instances.monitoring.kube-state-metrics.package = packages.kube-state-metrics;
+#
+# `out`: the Service's `name`, `fqdn`, and `port`.
+#
+# Escape hatches: the instance's `partsOverlays`.
+#
+# Limits: one replica at every availability level (`availability.max =
+# "pod"`), because a second unsharded replica duplicates every series.
 
 {
   scope,
@@ -51,17 +67,14 @@ in
         because a second replica would duplicate every series.
       '';
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "10m";
-          memory = "64Mi";
-        };
-        limits = {
-          cpu = "1";
-          memory = "256Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "10m";
+        memory = "64Mi";
+      };
+      limits = {
+        cpu = "1";
+        memory = "256Mi";
       };
     };
     metrics = kix.options.monitor;
@@ -270,9 +283,7 @@ in
           mkServiceMonitor {
             name = "${name}-monitor";
             spec = {
-              # ServiceMonitors match SERVICE labels, not pod labels. The
-              # deployment selector never matched the Service and this job
-              # was silently unscraped (caught live on stage1, 2026-08-31).
+              # A ServiceMonitor selects Services, not pods.
               selector.matchLabels = self.service.out.selector;
               endpoints = [
                 (

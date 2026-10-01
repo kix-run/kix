@@ -28,6 +28,9 @@
 let
   cfg = config.monitoring;
   ns = cfg.namespace;
+  # The module's `kix` argument carries only `mkImport`, so the quantity
+  # type comes from its file rather than `kix.types.quantity`.
+  quantity = import ../vocab/quantity.nix { inherit lib; };
   # Created by the `priority-classes` instance below and named by promtail.
   # A module cannot read another instance's `out`, so both sides use this
   # name; eval fails if promtail names a class that no resource creates.
@@ -64,19 +67,6 @@ in
         type = lib.types.str;
         default = "30s";
       };
-      resources = lib.mkOption {
-        type = lib.types.anything;
-        default = {
-          requests = {
-            cpu = "500m";
-            memory = "2Gi";
-          };
-          limits = {
-            cpu = "2";
-            memory = "4Gi";
-          };
-        };
-      };
       storage = lib.mkOption {
         type = lib.types.anything;
         default = null;
@@ -95,7 +85,7 @@ in
       routing = lib.mkOption {
         type = lib.types.nullOr lib.types.anything;
         default = null;
-        description = "Override alertmanager routing config (receivers, routes).";
+        description = "Alertmanager configuration, passed to the alertmanager instance's `settings`. Null uses that package's configuration, which routes every alert to the receiver `null`.";
       };
     };
 
@@ -124,11 +114,21 @@ in
         default = null;
         description = "Grafana root URL. Derived from cluster.domain if null.";
       };
-      persistence = lib.mkOption {
-        type = lib.types.anything;
-        default = {
-          enabled = true;
-          size = "10Gi";
+      persistence = {
+        enabled = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Keep Grafana's data on a PersistentVolumeClaim (a persistent-volume-claim instance named `storage` in the monitoring namespace). False keeps it in an emptyDir, which a pod restart empties.";
+        };
+        size = lib.mkOption {
+          type = quantity.type;
+          default = "10Gi";
+          description = "Size of Grafana's claim.";
+        };
+        storageClassName = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = "StorageClass of Grafana's claim. Null leaves the choice to the persistent-volume-claim package.";
         };
       };
       extraDatasources = lib.mkOption {
@@ -217,7 +217,6 @@ in
             config = {
               retention = cfg.prometheus.retention;
               scrapeInterval = cfg.prometheus.scrapeInterval;
-              resources = cfg.prometheus.resources;
             }
             // lib.optionalAttrs (cfg.prometheus.retentionSize != null) {
               retentionSize = cfg.prometheus.retentionSize;
@@ -229,10 +228,10 @@ in
               externalUrl = cfg.prometheus.externalUrl;
             }
             // lib.optionalAttrs cfg.alertmanager.enabled {
-              # The alertmanager package no longer renders its own Service; it
-              # refs the operator's `alertmanager-operated` (port `web`). The
-              # operator turns this into Alertmanager service discovery, so
-              # the name must be a Service that exists in the namespace.
+              # The operator's `alertmanager-operated` Service (port `web`),
+              # which the alertmanager package refs. The operator turns this
+              # into Alertmanager service discovery, so the name must be a
+              # Service that exists in the namespace.
               alerting.alertmanagers = [
                 {
                   namespace = ns;
@@ -246,7 +245,7 @@ in
           alertmanager = lib.mkIf cfg.alertmanager.enabled {
             package = packages.alertmanager;
             config = lib.optionalAttrs (cfg.alertmanager.routing != null) {
-              config = cfg.alertmanager.routing;
+              settings = cfg.alertmanager.routing;
             };
           };
 
@@ -279,14 +278,11 @@ in
           storage = lib.mkIf (cfg.grafana.enabled && cfg.grafana.persistence.enabled) {
             package = packages."persistent-volume-claim";
             config = {
-              size = cfg.grafana.persistence.size;
-            }
-            //
-              lib.optionalAttrs
-                (cfg.grafana.persistence ? storageClass && cfg.grafana.persistence.storageClass != null)
-                {
-                  accessModes = [ "ReadWriteOnce" ];
-                };
+              inherit (cfg.grafana.persistence) storageClassName;
+              # The claim's `size` option is a string; the quantity type also
+              # accepts a plain number of bytes.
+              size = toString cfg.grafana.persistence.size;
+            };
           };
 
           grafana = lib.mkIf cfg.grafana.enabled {

@@ -10,8 +10,6 @@
 #   out.mkPrometheus        create Prometheus CRs (used by packages/prometheus)
 #   out.mkAlertmanager      create Alertmanager CRs (used by packages/alertmanager)
 #   out.mkProbe             create Probe CRs
-#
-# This replaces the `partsOverlays` CRDRef hack in cluster monitoring configs.
 
 {
   scope,
@@ -68,17 +66,14 @@ in
         availability level (v2_discussions/145).
       '';
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "100m";
-          memory = "128Mi";
-        };
-        limits = {
-          cpu = "500m";
-          memory = "256Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "100m";
+        memory = "128Mi";
+      };
+      limits = {
+        cpu = "500m";
+        memory = "256Mi";
       };
     };
     controllerGenVersion = lib.mkOption {
@@ -185,7 +180,7 @@ in
     # ── Probe tunables ────────────────────────────────────────────────────
     # Mirrors chart's `prometheusOperator.{liveness,readiness}Probe`.
     # `enabled` toggles the probe entirely; the other fields override the
-    # chart-equivalent defaults that kix used to hardcode.
+    # chart's defaults, which the package ships.
     livenessProbe = lib.mkOption {
       type = lib.types.submodule {
         options = {

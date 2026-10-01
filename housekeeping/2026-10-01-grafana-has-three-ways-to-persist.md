@@ -1,0 +1,3 @@
+# 2026-10-01 · `kix/packages/grafana` · grafana can persist its data three ways, and its own `persistence` option is a transcription of the chart's.
+
+The `storage` dependency, the package's `persistence` option (which builds its own claim), and the monitoring module's `grafana.persistence` (which creates a persistent-volume-claim instance for the dependency) all put Grafana's data on a volume. `persistence` keeps the chart's shapes: `type` is an enum with the one value `"pvc"`, `existingClaim = ""` means unset, `size` is a plain string rather than a quantity, and `annotations` is untyped. A reader has to work out which path wins.

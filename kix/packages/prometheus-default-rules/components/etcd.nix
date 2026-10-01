@@ -19,6 +19,11 @@
   kix,
   bridgeName,
 }:
+let
+  defaultSelector = {
+    component = "etcd";
+  };
+in
 {
   options.monitors.etcd = lib.mkOption {
     type = lib.types.submodule {
@@ -28,10 +33,10 @@
           default = true;
         };
         selector = lib.mkOption {
-          type = lib.types.attrsOf lib.types.str;
-          default = {
-            component = "etcd";
-          };
+          type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
+          default = null;
+          defaultText = lib.literalExpression ''{ component = "etcd"; }'';
+          description = "Pod labels the bridge Service selects when `endpoints` is empty. A value replaces the package's selector as a whole. Null uses `{ component = \"etcd\"; }`, the label kubeadm puts on its static pods.";
         };
         port = lib.mkOption {
           type = lib.types.int;
@@ -127,7 +132,9 @@
           }
         ];
       }
-      // lib.optionalAttrs (cfg.endpoints == [ ]) { selector = cfg.selector; };
+      // lib.optionalAttrs (cfg.endpoints == [ ]) {
+        selector = if cfg.selector == null then defaultSelector else cfg.selector;
+      };
 
       tlsConfig = lib.optionalAttrs (cfg.scheme == "https") {
         tlsConfig = {
