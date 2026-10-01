@@ -13,7 +13,7 @@
 #
 # Resources: EnvoyProxy (optional), GatewayClass, Gateway, plus CRD refs
 # for the two Gateway API kinds.
-# root = Gateway, with out.gatewayRef for kix.expose consumption.
+# root = Gateway, with out.gatewayRef and out.listeners for kix.expose.
 
 {
   scope,
@@ -26,6 +26,68 @@ let
   # and the precondition for emitting an EnvoyProxy, which is an Envoy
   # Gateway extension and means nothing to another implementation.
   envoyGatewayController = "gateway.envoyproxy.io/gatewayclass-controller";
+
+  inherit (lib) mkOption types;
+  optional =
+    type:
+    mkOption {
+      type = types.nullOr type;
+      default = null;
+    };
+
+  # Gateway API v1 Listener. Fields left null are not rendered.
+  listenerType = types.submodule {
+    options = {
+      name = mkOption { type = types.str; };
+      port = mkOption { type = types.port; };
+      protocol = mkOption {
+        type = types.enum [
+          "HTTP"
+          "HTTPS"
+          "TLS"
+          "TCP"
+          "UDP"
+        ];
+      };
+      hostname = optional types.str;
+      tls = optional (
+        types.submodule {
+          options = {
+            mode = optional (
+              types.enum [
+                "Terminate"
+                "Passthrough"
+              ]
+            );
+            certificateRefs = optional (types.listOf (types.attrsOf types.anything));
+            frontendValidation = optional (types.attrsOf types.anything);
+            options = optional (types.attrsOf types.str);
+          };
+        }
+      );
+      allowedRoutes = optional (
+        types.submodule {
+          options = {
+            namespaces = optional (
+              types.submodule {
+                options = {
+                  from = optional (
+                    types.enum [
+                      "All"
+                      "Same"
+                      "Selector"
+                    ]
+                  );
+                  selector = optional (types.attrsOf types.anything);
+                };
+              }
+            );
+            kinds = optional (types.listOf (types.attrsOf types.anything));
+          };
+        }
+      );
+    };
+  };
 in
 
 {
@@ -61,9 +123,8 @@ in
       description = "Gateway name. Defaults to the instance name.";
     };
 
-    # Gateway listeners. Each listener defines a port, protocol, and optional TLS config.
     listeners = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
+      type = lib.types.listOf listenerType;
       default = [
         {
           name = "http";
@@ -83,8 +144,13 @@ in
         }
       ];
       description = ''
-        Gateway listener configuration. Each listener specifies a port,
-        protocol, optional TLS config, and route namespace policy.
+        Gateway API v1 `Listener` entries for the Gateway's `spec.listeners`,
+        with the upstream field names. An HTTPS listener with no
+        `tls.certificateRefs` is a placeholder and is not rendered.
+
+        kix.expose reads the rendered listeners: `protocol`, `hostname`,
+        `port` and `allowedRoutes.namespaces.from` decide whether an
+        HTTPRoute can attach and which URL scheme and port it gets.
       '';
     };
 
@@ -157,10 +223,10 @@ in
         "app.kubernetes.io/component" = "gateway";
       };
 
-      # Filter out HTTPS listeners with empty certificateRefs; these are
-      # placeholders that the cluster operator hasn't configured yet.
+      # An HTTPS listener without certificateRefs is a placeholder the
+      # cluster operator has not configured yet; Envoy Gateway would reject it.
       activeListeners = builtins.filter (
-        l: if l.protocol == "HTTPS" && l ? tls.certificateRefs then l.tls.certificateRefs != [ ] else true
+        l: l.protocol != "HTTPS" || (l.tls != null && l.tls.certificateRefs != null && l.tls.certificateRefs != [ ])
       ) config.listeners;
 
       haveProxy = config.proxySpec != null;
@@ -250,6 +316,9 @@ in
             name = self.gateway.out.name;
             namespace = scope.namespaceName;
           };
+          # kix.expose matches a route's host and namespace against these
+          # to pick the URL scheme and port.
+          listeners = activeListeners;
           # Selector for network policies: matches the envoy proxy pods
           # spawned by the controller for this Gateway.
           selector = selectorLabels;
