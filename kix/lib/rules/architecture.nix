@@ -724,4 +724,89 @@ in
           + "Use the Service or ServiceRef's `out.fqdn` or `out.host` so Kix can derive network policies and deployment order.";
       }) (lib.unique offending);
   };
+
+  # A string naming cluster.local resolves only on a cluster whose
+  # clusterDomain is cluster.local. The rule is inert on such clusters.
+  # CustomResourceDefinitions are skipped: their schema text quotes example
+  # FQDNs. A domain that ends in cluster.local (east.cluster.local) is
+  # removed before matching, and cluster.local counts only as whole labels
+  # (mycluster.local and cluster.localhost do not match).
+  clusterDomainLiteral = {
+    description = "Rendered strings must not name cluster.local when the cluster's clusterDomain is another domain";
+    level = "cluster";
+    severity = "error";
+    tags = [
+      "architecture"
+      "portability"
+    ];
+    appliesTo =
+      { clusterConfig, ... }: (clusterConfig.clusterDomain or "cluster.local") != "cluster.local";
+    check =
+      { allResources, clusterConfig, ... }:
+      let
+        domain = clusterConfig.clusterDomain;
+        isLabelChar = c: builtins.match "[A-Za-z0-9-]" c != null;
+        lastChar = s: if s == "" then "" else builtins.substring (builtins.stringLength s - 1) 1 s;
+        firstChar = s: builtins.substring 0 1 s;
+
+        # Index into `builtins.split` output of the first whole-label
+        # occurrence, or null. Even indices are the text between matches.
+        firstHit =
+          s:
+          let
+            pieces = builtins.split "cluster\\.local" (builtins.replaceStrings [ domain ] [ " " ] s);
+            n = builtins.length pieces;
+            go =
+              i:
+              if i >= n then
+                null
+              else if
+                !(isLabelChar (lastChar (builtins.elemAt pieces (i - 1))))
+                && !(isLabelChar (firstChar (builtins.elemAt pieces (i + 1))))
+              then
+                i
+              else
+                go (i + 2);
+          in
+          if n == 1 then null else go 1;
+
+        # Up to 80 characters either side of the hit.
+        excerpt =
+          s:
+          let
+            pieces = builtins.split "cluster\\.local" (builtins.replaceStrings [ domain ] [ " " ] s);
+            i = firstHit s;
+            before = lib.concatMapStrings (p: if builtins.isString p then p else "cluster.local") (
+              lib.take i pieces
+            );
+            after = lib.concatMapStrings (p: if builtins.isString p then p else "cluster.local") (
+              lib.drop (i + 1) pieces
+            );
+            lb = builtins.stringLength before;
+            la = builtins.stringLength after;
+          in
+          (if lb > 80 then "..." + builtins.substring (lb - 80) 80 before else before)
+          + "cluster.local"
+          + (if la > 80 then builtins.substring 0 80 after + "..." else after);
+
+        findingFor =
+          r:
+          let
+            offending = builtins.filter (s: firstHit s != null) (collectStrings r);
+          in
+          lib.optional (offending != [ ]) {
+            namespace = r.metadata.namespace or null;
+            resource = r.metadata.name or "?";
+            message =
+              "${r.kind or "?"} '${r.metadata.name or "?"}' in namespace '${r.metadata.namespace or "(cluster)"}' contains \"${
+                builtins.unsafeDiscardStringContext (excerpt (builtins.head offending))
+              }\", which names the DNS domain cluster.local, but this cluster's clusterDomain is \"${domain}\", "
+              + "so that address does not resolve. Build in-cluster addresses from a Service's out.fqdn or out.url, "
+              + "or read clusterConfig.clusterDomain; for a Helm chart, pass the domain to the chart's cluster-domain value.";
+          };
+      in
+      builtins.concatMap findingFor (
+        builtins.filter (r: (r.kind or "") != "CustomResourceDefinition") allResources
+      );
+  };
 }
