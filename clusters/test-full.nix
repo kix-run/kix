@@ -1,4 +1,4 @@
-# clusters/test-full.nix — Full cluster: all charts with most features enabled.
+# clusters/test-full.nix: a full cluster, all charts with most features enabled.
 #
 # Stress test for package configs and optional resource gating.
 
@@ -22,7 +22,7 @@ kix.buildCluster {
 
       instances = {
         # velero with every optional part on: the CSI data mover, a snapshot
-        # location, a schedule, global volume policies and maintenance
+        # location, a schedule, global volume policies, and maintenance
         # settings. Both secrets are secret-refs, created outside Kix.
         velero = {
           velero-credentials = {

@@ -1,7 +1,28 @@
-# Velero backup and restore: the server Deployment, the node-agent
-# DaemonSet, the `default` BackupStorageLocation, an optional
-# VolumeSnapshotLocation, and Schedules, with the 13 velero.io CRDs vendored
+# velero: the Velero server Deployment and node-agent DaemonSet, the
+# `default` BackupStorageLocation, an optional VolumeSnapshotLocation,
+# Schedules, and global volume policies, with the 13 velero.io CRDs vendored
 # under ./crds (scripts/vendor-crds.py, `crds/sources.txt`).
+#
+#   instances.velero = {
+#     velero-credentials = {         # an AWS credentials file in key `cloud`
+#       package = packages.secret-ref;
+#       aliases = [ "cloudCredentials" ];
+#       config.keys = [ "cloud" ];
+#     };
+#     velero-repo-credentials = {    # the kopia repository key
+#       package = packages.secret-ref;
+#       aliases = [ "repositoryPassword" ];
+#       config.keys = [ "repository-password" ];
+#     };
+#     velero = {
+#       package = packages.velero;
+#       config.backupStorageLocation = {
+#         objectStorage.bucket = "my-cluster-backups";
+#         config.region = "us-east-1";
+#       };
+#       config.schedules.daily.schedule = "CRON_TZ=UTC 0 2 * * *";
+#     };
+#   };
 #
 # One instance per cluster (`meta.conflictsWith`): the CRDs, the
 # cluster-admin binding, and the node-agent DaemonSet are cluster singletons.
@@ -14,7 +35,7 @@
 # mover in pods it creates in Velero's namespace, and the server runs kopia
 # maintenance as Jobs there. Kix renders none of these pods, so their labels
 # come from the two ConfigMaps below (`podLabels`) and their traffic from the
-# `dataPathEgress` policy.
+# `dataPathEgress` and `externalStoreEgress` policies.
 #
 # DI deps:
 #   cloudCredentials (required)  a secret or secret-ref with key `cloud`, the
@@ -25,18 +46,42 @@
 #                                `repository-password`, the kopia repository
 #                                key. Required while node-agent is on.
 #   objectStorage (optional)     an in-cluster S3 store whose root is its
-#                                Service; the location's `s3Url` defaults to
-#                                it.
+#                                Service. It sets the location's `s3Url`,
+#                                which the instance may then not set.
 #   prometheus (optional)        metrics Services, ServiceMonitors, and the
-#                                backup-failure alert.
+#                                backup alerts.
 #
 # Exposes:
-#   out.crds.<Kind>              the 13 CRDs, for scope.mkCR.
-#   out.backupStorageLocation    the `default` location.
-#   out.mkBackup scope { name; spec; }
-#   out.mkSchedule scope { name; spec; }
-#       Build the CR in Velero's namespace, which is the only one Velero
-#       watches, waiting for an Available location.
+#   out.crds.<Kind>              the 13 CRDs. Velero reads its CRs only in
+#                                its own namespace, so build one there:
+#                                (scope.forService velero).mkCR
+#                                  velero.out.crds.Restore { ... }.
+#   out.mkBackup scope { name; spec; requires ? [ ]; }
+#   out.mkSchedule scope { name; spec; requires ? [ ]; }
+#       Build the CR in Velero's namespace, waiting for an Available location.
+#       A Backup runs once: Velero deletes the CR when its `ttl` expires
+#       (720h unless set), and the next deploy creates it again, which runs a
+#       new backup under the same name. A Backup that ends Failed or
+#       PartiallyFailed never reaches Completed, so the deploy waits until its
+#       timeout. A Schedule is the durable form.
+#
+# Escape hatches: the location, snapshot location, and schedule options pass
+# unknown keys through to their CR spec; `server.extraArgs`,
+# `nodeAgent.extraArgs`, `server.env`, and `nodeAgent.env` reach the
+# containers; `nodeAgent.settings` and `repositoryMaintenance.settings` are
+# Velero's own configuration; `extraPlugins` adds plugin images; instance
+# `partsOverlays` covers the rest.
+#
+# Known limits:
+# - `cloudCredentials` is a credentials file. A cloud identity (EKS IRSA,
+#   Azure workload identity) needs a profile in that file and a
+#   ServiceAccount annotation added with `partsOverlays`.
+# - Without an `objectStorage` dependency, Velero's pods may open
+#   connections to any address outside the cluster on the store's port (from
+#   `s3Url`, else 443), and on 443 when a snapshot location is set. A second
+#   location on another port needs its own network policy.
+# - The namespace gets the `privileged` Pod Security level even with
+#   node-agent off, because `meta` cannot read config.
 #
 # root = the server Deployment, waiting for the location.
 
@@ -54,23 +99,33 @@ let
   ns = scope.namespaceName;
   who = "velero ${ns}/${name}";
 
-  # The S3 endpoint is a URL in the location's config, which can be outside
-  # the cluster. meta cannot read config, so the egress is open to the world
-  # whether or not an `objectStorage` dependency supplies an in-cluster
-  # store. `dataPathEgress` reuses it for the pods node-agent launches.
-  intents.objectStorage.egress = [ { to = "world"; } ];
+  # The port of an http or https URL: the explicit one, else the scheme's.
+  urlPort =
+    url:
+    let
+      m = builtins.match "(https?)://(\\[[^]]*]|[^]/:?#[]*)(:([0-9]+))?([/?#].*)?" url;
+    in
+    if m == null then
+      throw (
+        "${who}: backupStorageLocation.config.s3Url \"${url}\" is not an http or https URL, so the "
+        + "package cannot tell which port the store listens on. Write it as https://<host>[:<port>]."
+      )
+    else if builtins.elemAt m 3 != null then
+      lib.toInt (builtins.elemAt m 3)
+    else if builtins.elemAt m 0 == "https" then
+      443
+    else
+      80;
+
+  # Each workload, and each metrics Service, carries its own component, so
+  # no selector claims another component's pods and a ServiceMonitor built
+  # from one Service's labels selects only that Service.
+  componentLabels = component: { "app.kubernetes.io/component" = component; };
 
   # Labels of the pods Velero creates itself (file-system backup and restore,
   # data mover, repository maintenance). They carry the instance's selector
-  # labels, so the location's operand policy reaches them, and no `name`
-  # key, so neither workload selector claims them.
-  dataPathLabels = scope.selectorLabels // {
-    "app.kubernetes.io/component" = "data-path";
-  };
-
-  # Each metrics Service carries its own component, so a ServiceMonitor
-  # built from one Service's labels selects only that Service.
-  componentLabels = component: { "app.kubernetes.io/component" = component; };
+  # labels, so the location's and the external store's policies reach them.
+  dataPathLabels = scope.selectorLabels // componentLabels "data-path";
 
   metricsPort = 8085;
 
@@ -261,7 +316,6 @@ in
     # node-agent and the pods it launches mount hostPath volumes. meta cannot
     # read config, so this holds with node-agent off too.
     podSecurity = "privileged";
-    network = { inherit intents; };
   };
 
   options = {
@@ -314,7 +368,8 @@ in
       description = ''
         The spec of the `default` BackupStorageLocation. Keys not listed here
         pass through to the spec. `credential` and `default` are set by the
-        package; a second location is a CR built from `out.crds`.
+        package. A second location is a CR built from
+        `out.crds.BackupStorageLocation` in Velero's namespace.
       '';
       type = lib.types.submodule {
         freeformType = lib.types.attrsOf lib.types.anything;
@@ -349,7 +404,7 @@ in
               region = "us-east-1";
               s3ForcePathStyle = "true";
             };
-            description = "The plugin's settings (for the AWS plugin `region`, `s3Url`, `s3ForcePathStyle`, `checksumAlgorithm`). An empty string is passed on. With an `objectStorage` dependency, `s3Url` and `s3ForcePathStyle` default to its Service.";
+            description = "The plugin's settings (for the AWS plugin `region`, `s3Url`, `s3ForcePathStyle`, `checksumAlgorithm`). An empty string is passed on. With an `objectStorage` dependency, the package sets `s3Url` to its Service and refuses one set here, and `s3ForcePathStyle` defaults to `\"true\"`. Without one, the network policy opens the port of `s3Url` (443 when unset) to addresses outside the cluster.";
           };
         };
       };
@@ -433,6 +488,9 @@ in
         example = [ "--default-repo-maintain-frequency=24h" ];
         description = "Flags appended to `velero server`.";
       };
+      env = kix.options.env // {
+        description = "Extra environment variables of the server, such as `HTTPS_PROXY`, `NO_PROXY`, or `GOMAXPROCS`. The repository maintenance Jobs copy them. A value is a string, a `fieldRef` source, or a `secretKeyRef` naming a Secret managed outside Kix with `kix.untrackedRef`. The credentials file, scratch directory, plugin path, and namespace variables are set by the package.";
+      };
     };
 
     nodeAgent = {
@@ -455,6 +513,9 @@ in
         type = lib.types.listOf lib.types.str;
         default = [ ];
         description = "Flags appended to `velero node-agent server`.";
+      };
+      env = kix.options.env // {
+        description = "Extra environment variables of node-agent, such as `HTTPS_PROXY`, `NO_PROXY`, or `GOMAXPROCS`. The backup, restore, and data mover pods node-agent launches copy them. A value is a string, a `fieldRef` source, or a `secretKeyRef` naming a Secret managed outside Kix with `kix.untrackedRef`. The credentials file, scratch directory, node name, and namespace variables are set by the package.";
       };
       settings = lib.mkOption {
         default = { };
@@ -485,7 +546,14 @@ in
       };
     };
 
-    metrics = kix.options.monitor;
+    metrics = kix.options.monitor // {
+      maxBackupAge = lib.mkOption {
+        type = lib.types.strMatching "([0-9]+(ms|s|m|h|d|w|y))+";
+        default = "26h";
+        example = "8d";
+        description = "How long a schedule may go without a successful backup before the VeleroBackupMissing alert fires, as a Prometheus duration. Set it above the longest interval between a schedule's runs plus its run time.";
+      };
+    };
   };
 
   assertions =
@@ -508,7 +576,7 @@ in
     [
       {
         assertion = setByPackage bsl == [ ];
-        message = "backupStorageLocation sets ${lib.concatStringsSep " and " (setByPackage bsl)}, which the package sets: the credential comes from the cloudCredentials dependency and this location is the default. Build another location with scope.mkCR velero.out.crds.BackupStorageLocation.";
+        message = "backupStorageLocation sets ${lib.concatStringsSep " and " (setByPackage bsl)}, which the package sets: the credential comes from the cloudCredentials dependency and this location is the default. Build another location in ${ns}, the only namespace Velero reads, with (scope.forService velero).mkCR velero.out.crds.BackupStorageLocation.";
       }
       {
         assertion = vsl == null || !(vsl ? credential);
@@ -590,14 +658,37 @@ in
 
         bsl = config.backupStorageLocation;
 
-        storeDefaults = lib.optionalAttrs (objectStorage != null) {
-          s3Url =
-            (objectStorage.out.url
-              or (throw "${who}: deps.objectStorage has no out.url. Wire an instance whose root is its S3 Service.")
+        # The dependency's URL is what forms the location's network policy
+        # to the store, so a user `s3Url` may not replace it.
+        locationConfig =
+          if objectStorage == null then
+            bsl.config
+          else if bsl.config ? s3Url then
+            throw (
+              "${who}: backupStorageLocation.config.s3Url is set to \"${bsl.config.s3Url}\", and the "
+              + "objectStorage dependency supplies the store's URL. Velero would dial the address in "
+              + "s3Url, and no network policy would open it. Remove s3Url to use the dependency's "
+              + "Service, or stop wiring an objectStorage dependency to use a store outside the cluster."
             )
-              { };
-          s3ForcePathStyle = "true";
-        };
+          else
+            {
+              s3Url =
+                (objectStorage.out.url
+                  or (throw "${who}: deps.objectStorage has no out.url. Wire an instance whose root is its S3 Service.")
+                )
+                  { };
+              s3ForcePathStyle = "true";
+            }
+            // bsl.config;
+
+        # Ports opened outside the cluster: the store on the port of `s3Url`
+        # (443 when unset, the AWS endpoints), and HTTPS for a snapshot
+        # location's cloud API. An in-cluster store wired as `objectStorage`
+        # is opened by the location's operand policy instead.
+        externalPorts = lib.unique (
+          lib.optional (objectStorage == null) (if bsl.config ? s3Url then urlPort bsl.config.s3Url else 443)
+          ++ lib.optional (config.volumeSnapshotLocation != null) 443
+        );
 
         credential = {
           name = creds.out.name;
@@ -615,11 +706,23 @@ in
         # and cache under $HOME, so HOME points at the /scratch emptyDir;
         # Velero writes temp files to /tmp. The pods Velero launches copy
         # this env and these volumes from the server and node-agent.
-        commonEnv = credentialEnv // {
-          VELERO_NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";
-          VELERO_SCRATCH_DIR = "/scratch";
-          HOME = "/scratch";
-        };
+        ownedEnv = extra: [
+          {
+            vars = credentialEnv;
+            from = "the cloudCredentials dependency, mounted at /credentials/cloud";
+            fix = "Remove it, and put the credentials in that Secret's `cloud` key.";
+          }
+          {
+            vars = {
+              VELERO_NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";
+              VELERO_SCRATCH_DIR = "/scratch";
+              HOME = "/scratch";
+            }
+            // extra;
+            from = "the package (the pod's namespace or node, and the writable directories it mounts)";
+            fix = "Remove it.";
+          }
+        ];
 
         emptyDirs =
           names:
@@ -701,7 +804,9 @@ in
         };
 
         workloadRequires =
-          builtins.attrValues self.crds ++ lib.optional (self.repositoryKey != null) self.repositoryKey;
+          builtins.attrValues self.crds
+          ++ lib.optional (self.repositoryKey != null) self.repositoryKey
+          ++ lib.optional (self.externalStoreEgress != null) self.externalStoreEgress;
 
         metricsOn = config.metrics.enabled && prometheus != null;
 
@@ -763,7 +868,6 @@ in
           apiVersion = "v1";
           kind = "ServiceAccount";
           name = "${name}-server";
-          extra.automountServiceAccountToken = true;
         };
 
         clusterRoleBinding = scope.mkClusterResource {
@@ -794,16 +898,16 @@ in
           spec = {
             replicas = 1;
             strategy.type = "Recreate";
-            # node-agent pods carry the selector labels too; `name` keeps
-            # them out of this selector.
-            selector.matchLabels = scope.selectorLabels // {
-              name = "velero";
-            };
+            # node-agent and data-path pods carry the selector labels too;
+            # the component keeps them out of this selector.
+            selector.matchLabels = scope.selectorLabels // componentLabels "server";
             template.spec = {
               serviceAccount = self.serviceAccount;
-              # The upstream Helm chart's value: an hour for a backup in
-              # progress to finish.
-              terminationGracePeriodSeconds = 3600;
+              # On SIGTERM the server cancels its work and exits, and marks
+              # in-progress backups and restores Failed at its next start
+              # (markInProgressCRsFailed), so a longer grace period lets no
+              # backup finish.
+              terminationGracePeriodSeconds = 30;
               securityContext = {
                 runAsNonRoot = true;
                 # `cnb` in the velero image.
@@ -832,7 +936,12 @@ in
                     option = "server.extraArgs";
                     owned = ownedArgs;
                   } config.server.extraArgs;
-                  env = kix.mkEnvVars (commonEnv // { LD_LIBRARY_PATH = "/plugins"; });
+                  env = kix.mkEnvVars (
+                    kix.mergeEnv {
+                      inherit who;
+                      owned = ownedEnv { LD_LIBRARY_PATH = "/plugins"; };
+                    } config.server.env
+                  );
                   ports = [ metricsContainerPort ];
                   livenessProbe = metricsProbe;
                   readinessProbe = metricsProbe;
@@ -866,21 +975,22 @@ in
             scope.mkDaemonSet {
               name = "node-agent";
               spec = {
-                selector.matchLabels = scope.selectorLabels // {
-                  name = "node-agent";
-                };
+                # Velero finds node-agent pods by `role` (pkg/nodeagent/node_agent.go).
+                selector.matchLabels =
+                  scope.selectorLabels
+                  // componentLabels "node-agent"
+                  // {
+                    role = "node-agent";
+                  };
                 template = {
                   metadata = {
-                    labels = scope.selectorLabels // {
-                      name = "node-agent";
-                      role = "node-agent";
-                    };
                     # node-agent reads its ConfigMap at start.
                     annotations."checksum/node-agent-config" = self.nodeAgentConfig.out.identityHash;
                   };
                   spec = {
                     serviceAccount = self.serviceAccount;
-                    terminationGracePeriodSeconds = 3600;
+                    # node-agent also cancels its work on SIGTERM (see the server).
+                    terminationGracePeriodSeconds = 30;
                     securityContext.runAsUser = 0;
                     containers = [
                       {
@@ -900,7 +1010,12 @@ in
                           option = "nodeAgent.extraArgs";
                           owned = ownedArgs;
                         } config.nodeAgent.extraArgs;
-                        env = kix.mkEnvVars (commonEnv // { NODE_NAME.valueFrom.fieldRef.fieldPath = "spec.nodeName"; });
+                        env = kix.mkEnvVars (
+                          kix.mergeEnv {
+                            inherit who;
+                            owned = ownedEnv { NODE_NAME.valueFrom.fieldRef.fieldPath = "spec.nodeName"; };
+                          } config.nodeAgent.env
+                        );
                         ports = [ metricsContainerPort ];
                         livenessProbe = metricsProbe;
                         readinessProbe = metricsProbe;
@@ -979,10 +1094,10 @@ in
               };
             };
 
-        # Egress for the pods Velero launches (file-system backup and
-        # restore, data mover, repository maintenance): DNS, the API server,
-        # and the store. When the store is an in-cluster Service, the
-        # location's operand policy opens it.
+        # DNS and API server egress for the pods Velero launches (file-system
+        # backup and restore, data mover, repository maintenance). The store
+        # is opened for them by the location's operand policy or by
+        # externalStoreEgress, which both select every pod of the instance.
         dataPathEgress =
           if !config.nodeAgent.enabled then
             null
@@ -999,9 +1114,34 @@ in
                   egress = [
                     netpol.dnsEgressRule
                     netpol.apiServerEgressRule
-                  ]
-                  ++ (netpol.translateIntentRules { inherit intents; }).egressRules;
+                  ];
                 };
+            };
+
+        # Egress outside the cluster for every pod of the instance; see
+        # externalPorts.
+        externalStoreEgress =
+          if externalPorts == [ ] then
+            null
+          else
+            kix.operandPolicy {
+              inherit scope;
+              name = "${name}-external-store";
+              spec = {
+                endpointSelector.matchLabels = scope.selectorLabels;
+                egress =
+                  (scope.networkPolicyEnforcer.netpol.translateIntentRules {
+                    intents.store.egress = [
+                      {
+                        to = "world";
+                        ports = map (port: {
+                          inherit port;
+                          protocol = "TCP";
+                        }) externalPorts;
+                      }
+                    ];
+                  }).egressRules;
+              };
             };
 
         service =
@@ -1049,7 +1189,7 @@ in
             ]
             // {
               objectStorage = lib.filterAttrs (k: v: !(k == "prefix" && v == null)) bsl.objectStorage;
-              config = storeDefaults // bsl.config;
+              config = locationConfig;
               default = true;
               inherit credential;
             };
@@ -1081,18 +1221,30 @@ in
                     schedule.template.storageLocation;
               };
             };
-            requires = [ self.backupStorageLocation ];
+            # A schedule on the default location already depends on it
+            # through storageLocation; one on another location waits for the
+            # default, so the server is running when it is applied.
+            requires = lib.optional (schedule.template.storageLocation != null) self.backupStorageLocation;
           }
         ) config.schedules;
 
         root = {
           resource = self.deployment;
           # Dependents wait for an Available location, and for the data-path
-          # policy before anything they build starts a backup.
+          # policy before anything they build starts a backup. Listing the
+          # monitoring parts keeps them referenced from root.
           requires = [
             self.backupStorageLocation
           ]
-          ++ lib.optional (self.dataPathEgress != null) self.dataPathEgress;
+          ++ builtins.filter (part: part != null) [
+            self.dataPathEgress
+            self.service
+            self.serviceMonitor
+            self.prometheusRules
+            self.nodeAgentService
+            (self.nodeAgentMonitor or null)
+            (self.nodeAgentRules or null)
+          ];
           out =
             let
               # Velero watches only its own namespace, so the CR is built
@@ -1119,7 +1271,6 @@ in
                 ServerStatusRequest = self.crds.serverStatusRequests;
                 VolumeSnapshotLocation = self.crds.volumeSnapshotLocations;
               };
-              backupStorageLocation = self.backupStorageLocation;
               mkBackup = inVeleroNamespace "backups";
               mkSchedule = inVeleroNamespace "schedules";
             };
@@ -1127,16 +1278,55 @@ in
       }
     )
 
-    (kix.monitor {
-      service = "service";
-      port = "http-monitoring";
-      alerts.VeleroBackupFailed = {
-        expr = ''sum by (schedule) (increase(velero_backup_failure_total{namespace="${ns}",service="${name}"}[1h]) + increase(velero_backup_partial_failure_total{namespace="${ns}",service="${name}"}[1h])) > 0'';
-        severity = "warning";
-        summary = "A Velero backup failed or partly failed in the last hour";
-        description = "Velero in ${ns} recorded a failed or partially failed backup for schedule {{ $labels.schedule }}. Run velero backup describe on its latest backup.";
-      };
-    })
+    # The server alerts read the threshold from config, so the wrapper names
+    # every argument kix.monitor reads (see the node-agent monitor below).
+    (
+      {
+        self,
+        config,
+        scope,
+        lib,
+        prometheus ? null,
+        ...
+      }@args:
+      let
+        server = ''namespace="${ns}",service="${name}"'';
+        scheduled = ''${server},schedule!=""'';
+        age = config.metrics.maxBackupAge;
+      in
+      kix.monitor {
+        service = "service";
+        port = "http-monitoring";
+        alerts = {
+          VeleroBackupFailed = {
+            expr = "sum by (schedule) (increase(velero_backup_failure_total{${server}}[1h]) + increase(velero_backup_partial_failure_total{${server}}[1h])) > 0";
+            severity = "warning";
+            summary = "A Velero backup failed or partly failed in the last hour";
+            description = "Velero in ${ns} recorded a failed or partially failed backup for schedule {{ $labels.schedule }}. Run velero backup describe on its latest backup.";
+          };
+          # Velero creates a schedule's counters at 0 when it reconciles the
+          # schedule, so they exist before the first run. A schedule is
+          # reported when the server knew it maxBackupAge ago, still knows
+          # it, and counted no success in between. The last-success
+          # timestamp gauge is not used: a restarted server reports it only
+          # after its next success.
+          VeleroBackupMissing = {
+            expr = "(sum by (schedule) (velero_backup_attempt_total{${scheduled}} offset ${age}) and on (schedule) sum by (schedule) (velero_backup_attempt_total{${scheduled}})) unless on (schedule) (sum by (schedule) (increase(velero_backup_success_total{${scheduled}}[${age}])) > 0)";
+            "for" = "15m";
+            severity = "warning";
+            summary = "A Velero schedule has no successful backup within metrics.maxBackupAge";
+            description = "Schedule {{ $labels.schedule }} of Velero in ${ns} has not completed a backup in ${age}. Check the backup location with velero backup-location get and the schedule's latest backups.";
+          };
+          VeleroServerDown = {
+            expr = "absent(up{${server}} == 1)";
+            "for" = "15m";
+            severity = "warning";
+            summary = "The Velero server is not being scraped";
+            description = "Prometheus has scraped no running Velero server in ${ns} for 15 minutes, so no backup runs. Check deployment/velero.";
+          };
+        };
+      } args
+    )
 
     # The node-agent monitor exists only with node-agent. DI passes a build
     # function only the arguments its formals name (builtins.functionArgs),

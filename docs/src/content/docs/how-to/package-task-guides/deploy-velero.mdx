@@ -74,9 +74,15 @@ private certificate authority, set `objectStorage.caCertRef` to a Secret key in
 the same namespace.
 
 When the object store runs in the same cluster, wire it as the
-`objectStorage` dependency instead of writing its address. The package then
-sets `s3Url` to that Service and `s3ForcePathStyle` to `"true"`, and the
-network policy for Velero's pods follows the dependency.
+`objectStorage` dependency. The package then sets `s3Url` to that Service and
+`s3ForcePathStyle` to `"true"`, and the network policy for Velero's pods
+follows the dependency. With the dependency wired, an `s3Url` in `config`
+fails evaluation, because Velero would dial that address and no policy would
+open it.
+
+To reach the store through a proxy, set `server.env` and `nodeAgent.env`
+(for example `HTTPS_PROXY` and `NO_PROXY`). The pods Velero launches copy
+these variables.
 
 The `daily` schedule backs up the `applications` namespace at 02:00 UTC,
 retains each backup for 30 days, and uses the node agent for volume data.
@@ -163,6 +169,36 @@ If the location is unavailable, inspect it and the server logs:
   ]}
 />
 
+## Declare backups and restores
+
+Velero reads its custom resources only in its own namespace. The package's
+builders create a Backup or a Schedule there from any instance and wait for
+the location to be `Available`:
+
+```nix
+backup = velero.out.mkBackup scope {
+  name = "before-migration";
+  spec.includedNamespaces = [ scope.namespaceName ];
+};
+```
+
+`velero.out.mkSchedule` takes the same arguments. For another kind, such as
+a Restore or a second backup location, build the resource in Velero's
+namespace with `(scope.forService velero).mkCR velero.out.crds.Restore { ... }`.
+A resource built in any other namespace is never processed, and the deploy
+waits for it until it times out.
+
+`kix deploy` waits for each declared Backup and Restore to finish. One that
+ends `Failed` or `PartiallyFailed` never reports `Completed`, so the deploy
+waits until it times out; run `velero backup describe` or
+`velero restore describe` on it.
+
+A Backup runs once. Velero deletes the Backup when its `ttl` expires (30 days
+unless set), and the next `kix deploy` creates it again, which runs a new
+backup under the same name. Use a schedule for recurring backups and a
+declared Backup for a one-off backup you remove from the cluster definition
+afterwards.
+
 ## What the package sets up
 
 - **Permissions.** The server reads every kind for a backup and recreates any
@@ -174,13 +210,19 @@ If the location is unavailable, inspect it and the server logs:
   the namespace gets the `privileged` Pod Security level.
 - **Network policy.** With network policy on, the package writes a policy for
   the pods Velero launches itself (file-system backups and restores, the CSI
-  data mover, and repository maintenance Jobs): DNS, the API server, and the
-  object store. It labels those pods through the node agent and maintenance
+  data mover, and repository maintenance Jobs) that allows DNS and the API
+  server. It labels those pods through the node agent and maintenance
   settings, so `podLabels` there may not override the labels the policy
-  selects on.
+  selects on. For a store outside the cluster, a second policy lets every
+  Velero pod connect to addresses outside the cluster on the port of `s3Url`
+  (443 when it is unset), and on 443 when a snapshot location is set. A
+  backup location you add on another port needs its own policy.
 - **Metrics.** With a `prometheus` dependency, the package adds metrics
   Services for the server and the node agent, a ServiceMonitor for each, and
-  an alert on failed or partially failed backups.
+  three alerts: a failed or partially failed backup, a schedule with no
+  successful backup within `metrics.maxBackupAge` (default `26h`; raise it
+  above your longest schedule interval), and a server Prometheus cannot
+  scrape.
 
 ## Cloud identity instead of keys
 
