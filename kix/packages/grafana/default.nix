@@ -170,8 +170,9 @@ in
                 When true, Grafana loads dashboards and datasources from
                 ConfigMaps. The sidecars watch for ConfigMaps labelled
                 `grafana_dashboard: "1"` or `grafana_datasource: "1"` (set
-                in `sidecar.dashboards` and `sidecar.datasources`) and load each one within
-                seconds, including changes and deletions. By default,
+                in `sidecar.dashboards` and `sidecar.datasources`) and
+                load each one within seconds, including changes and
+                deletions. By default,
                 dashboards come from every namespace and datasources only
                 from Grafana's own; `sidecar.*.searchNamespace` changes that.
                 Grafana gets read access to every ConfigMap in the cluster,
