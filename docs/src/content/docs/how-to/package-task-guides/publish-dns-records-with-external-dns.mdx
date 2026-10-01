@@ -1,0 +1,224 @@
+---
+title: "Publish DNS records with external-dns"
+description: "Run ExternalDNS with Cloudflare credentials from a Secret, choose its sources and ownership id, and try it on kind without a DNS provider."
+---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import externalDnsInstance from '/src/snippets/clusters/test-doc-how-tos/externalDnsInstance.json';
+import externalDnsKindTryout from '/src/snippets/clusters/test-external-dns-tryout/externalDnsKindTryout.json';
+
+Use the `external-dns` package to publish DNS records for the hostnames of
+your Services, Ingresses, and Gateway API routes in an external DNS provider.
+The package runs ExternalDNS as one Deployment and grants it read access to
+the resource kinds it watches.
+
+This guide uses Cloudflare. Every provider ExternalDNS ships is accepted
+except webhook providers; for the others, the credentials change as
+described in [Store credentials for other providers](#store-credentials-for-other-providers),
+and the rest stays the same.
+
+## Create the API token Secret
+
+Create a Cloudflare API token with the **Zone / DNS / Edit** permission,
+limited to the zones this cluster may change. Store it in a Secret in the
+namespace that will run external-dns:
+
+<Command
+  commands={[
+    "kubectl create namespace external-dns",
+    "kubectl create secret generic cloudflare-api-token --namespace external-dns --from-literal=api-token=<token>",
+  ]}
+/>
+
+Keep the token out of version control. If your platform already creates
+Secrets, use it to create the same Secret and key, as described in
+[Use externally managed Secrets](/docs/how-to/platform-capabilities/use-externally-managed-secrets/).
+
+## Configure external-dns
+
+Declare the Secret as a `secret-ref` instance and wire it to external-dns:
+
+<Snippet {...externalDnsInstance} />
+
+Three settings have no default, and evaluation fails until you set them:
+
+- `provider` selects the DNS provider (`--provider`).
+- `policy` decides whether external-dns ever deletes records. `upsert-only`
+  creates and updates records but never deletes them; `sync` also deletes
+  records whose Service, Ingress, or route is gone; `create-only` only
+  creates. ExternalDNS itself has no default.
+- `txtOwnerId` is written into a TXT record next to every record
+  external-dns creates. ExternalDNS changes only records that carry its
+  own id, so the id must be unique among every external-dns instance, in
+  any cluster, that writes the same zone. Kix packages cannot see the
+  cluster name, so there is no safe default.
+
+`deps.providerCredentials` names the Secret. Cloudflare reads its token from
+the `CF_API_TOKEN` environment variable, and `secretEnv` maps that variable to
+the Secret's `api-token` key. Without `secretEnv`, the package injects the
+whole Secret with `envFrom`, so its keys must already be named `CF_API_TOKEN`,
+or `CF_API_KEY` and `CF_API_EMAIL`.
+
+`deps.providerCredentials` must name a Secret in the namespace that runs
+external-dns. To use one token for external-dns and another package in a
+different namespace, such as cert-manager, store it in a Secret in each
+namespace. `secretEnv` maps `CF_API_TOKEN` to whatever key name that Secret
+uses, so each Secret can keep the key its other consumers expect.
+
+Kix checks the credentials while it evaluates the cluster. For Cloudflare it
+fails when no `CF_API_TOKEN`, or `CF_API_KEY` and `CF_API_EMAIL` pair, is
+supplied, and when `secretEnv` names a key the Secret does not declare. It
+also refuses a token set as a literal string in `env`, which would be stored
+in the rendered manifests.
+
+`sources` lists the resource kinds external-dns reads hostnames from. The
+package grants the ClusterRole rules for exactly those kinds. The default is
+`[ "service" "ingress" ]`; `node`, `pod`, `gateway-httproute`, and
+`gateway-grpcroute` are also available.
+
+`extraArgs` passes any other ExternalDNS flag. Restrict the zones with
+`--domain-filter`, as the example does. Flags the package sets from options,
+such as `--policy` or `--source`, are refused there, and so are flags whose
+value is a credential.
+
+## Store credentials for other providers
+
+Providers other than Cloudflare read their credentials from their own
+environment variables, from flags, or from the pod's cloud identity. Store
+each variable in the `providerCredentials` Secret under the name the
+provider reads, or map it with `secretEnv`.
+
+Some providers take their credential only as a flag, such as
+`--pdns-api-key` for PowerDNS or `--rfc2136-tsig-secret` for RFC 2136.
+ExternalDNS reads every flag from an environment variable as well:
+`--pdns-api-key` from `EXTERNAL_DNS_PDNS_API_KEY`. Store the credential in
+the Secret under that name, or map it:
+
+```nix
+config.secretEnv.EXTERNAL_DNS_PDNS_API_KEY = "api-key";
+```
+
+Kix refuses these flags in `extraArgs`, because the value would be stored in
+the rendered manifests and in the pod's arguments. For PowerDNS and GoDaddy,
+evaluation also fails until the credential variables are supplied.
+
+## Read Gateway API routes
+
+The `gateway-httproute` and `gateway-grpcroute` sources need the Gateway API
+CRDs. Kix does not install them; the package declares a reference to each CRD
+it reads, so the deploy waits for them. Install the standard channel before
+you deploy:
+
+<Command
+  commands={[
+    "kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml",
+  ]}
+/>
+
+ExternalDNS publishes a route's hostnames when the route is attached to a
+Gateway that has an address.
+
+## Check and deploy
+
+Evaluate the cluster, then deploy it:
+
+<Command commands={["kix check doc-how-tos", "kix deploy doc-how-tos"]} />
+
+Confirm that external-dns started and reached Cloudflare:
+
+<Command
+  commands={[
+    "kubectl rollout status deployment/external-dns --namespace external-dns",
+    "kubectl logs deployment/external-dns --namespace external-dns --since=10m",
+  ]}
+/>
+
+A healthy controller logs `All records are already up to date` or the
+records it changes, once per interval (`interval`, one minute by default).
+Authentication and permission errors from Cloudflare appear in the same log.
+HTTP 429 means Cloudflare is rate limiting the token; raise `interval` to call
+the API less often.
+
+When the cluster has a `prometheus` instance, the package also creates a
+ServiceMonitor and an `ExternalDNSSyncStale` alert. The alert fires five
+minutes after either condition starts: no synchronization has succeeded for
+three intervals (at least 15 minutes), or Prometheus has no samples from the
+pod. Under generated network policy, Prometheus cannot scrape
+the pod until you allow it, as described in
+[Allow the provider through network policy](#allow-the-provider-through-network-policy).
+
+## Roll the pod when the token changes
+
+ExternalDNS reads its credentials at startup. When `providerCredentials` is a
+Secret built by Kix, such as a `secret` instance, the package puts a checksum
+of it on the pod, so a changed token rolls the pod on the next deploy. A `secret-ref` Secret is managed
+outside Kix, so Kix cannot see a change to it; restart the Deployment, or
+have reloader's `withReloadOn` roll it.
+
+## Use workload identity
+
+On AWS, Google Cloud, or Azure, external-dns can authenticate as the pod's
+ServiceAccount instead of with a stored key. Leave out
+`deps.providerCredentials` and annotate the ServiceAccount:
+
+```nix
+config.serviceAccountAnnotations."eks.amazonaws.com/role-arn" =
+  "arn:aws:iam::111122223333:role/external-dns";
+```
+
+Kix does not run the controller that reads this annotation, so declare its
+domain in `scorecard.knownAnnotationDomains` (for example
+`"eks.amazonaws.com"`) to silence the annotation-ownership warning. Azure
+workload identity also needs the `azure.workload.identity/use: "true"` label
+on the pod; add it with the instance's `partsOverlays`.
+
+## Allow the provider through network policy
+
+With [generated network policy](/docs/how-to/platform-capabilities/enable-generated-network-policy/),
+external-dns may reach the Kubernetes API, cluster DNS, and the world on TCP
+443, which covers the hosted providers' HTTPS APIs. The `rfc2136`, `pdns`,
+`pihole`, `coredns`, and `skydns` providers use other ports. For those,
+evaluation warns, and you add a NetworkPolicy for the port under
+`namespaces.<namespace>.networkPolicies`.
+
+Generated network policy does not admit Prometheus to the metrics port, TCP
+7979, so the ServiceMonitor's scrapes fail and the stale-sync alert fires.
+Add a NetworkPolicy that allows ingress from Prometheus on that port in the
+same way.
+
+## Try it on kind
+
+The `inmemory` provider keeps records in the controller's memory, so you can
+watch external-dns work without a DNS account. kind gives Services no
+external addresses, so this instance publishes one record per node:
+
+<Snippet {...externalDnsKindTryout} />
+
+`--fqdn-template` names each node's record, and `--log-level=debug` logs every
+record external-dns plans to write. The instance needs no Secret and no CRDs.
+Deploy it from the kixpkgs checkout and read the log:
+
+<Command
+  commands={[
+    "kind create cluster --name external-dns",
+    "kix deploy external-dns-tryout --flake ./clusters --context kind-external-dns",
+    "kubectl logs deployment/nodes --namespace external-dns --context kind-external-dns",
+  ]}
+  cwd="kixpkgs/"
+/>
+
+## Change the owner id
+
+Changing `txtOwnerId` on a running install leaves the records written under
+the old id unowned: external-dns stops updating and deleting them. Add
+`--migrate-from-txt-owner=<old id>` to `extraArgs` for one synchronization to
+move them to the new id, then remove the flag.
+
+## Limits
+
+- Webhook providers are not supported. They run as a second container in the
+  pod, which this package does not render.
+- `--registry=crd` and `--gateway-listener-sets` need RBAC the package does
+  not grant. Evaluation warns; add the rules to the ClusterRole with
+  `partsOverlays`.

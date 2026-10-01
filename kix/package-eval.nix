@@ -195,6 +195,19 @@ let
       config.clusterIP = "10.96.0.53";
       instances.prometheus-operator.package = packages.prometheus-operator;
     };
+    external-dns = {
+      config = {
+        provider = "cloudflare";
+        policy = "upsert-only";
+        txtOwnerId = "package-eval";
+        secretEnv.CF_API_TOKEN = "api-token";
+      };
+      instances.provider-credentials = {
+        package = packages.secret;
+        aliases = [ "providerCredentials" ];
+        config.stringData.api-token = "token";
+      };
+    };
     filebrowser.instances = { inherit storage; };
     firezone.config = {
       domain = "firezone.example.com";

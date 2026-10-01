@@ -1,18 +1,60 @@
-# External-DNS kix package.
+# external-dns: publishes DNS records in an external provider for the
+# hostnames of Services, Ingresses, nodes, pods, and Gateway API routes.
 #
-# Manages DNS records in external providers (e.g. Cloudflare) by watching
-# Kubernetes Ingress and Service resources.
+# One Deployment runs the upstream binary with one replica. external-dns has
+# no leader election, so a second pod would write the same records at the
+# same time. The ClusterRole and the Gateway API CRD markers are derived from
+# `sources` (sources.nix); the provider list and the credential variables
+# each provider reads are in providers.nix. Both files follow `release`, so
+# an `image.tag` of another major.minor release fails the build.
 #
-# Supports multi-instance deployment: each instance can manage different
-# DNS zones via domainFilters (e.g. external-dns-cluster-public for lithus.net,
-# external-dns-northwind for shopfront.example).
+# Required config: `provider`, `policy`, and `txtOwnerId` have no default.
 #
-# Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Deployment,
-#            Service (metrics), NetworkPolicy, Secret. Disruption budgets
-#            are derived by the compiler from the availability level, not
-#            written here.
+#   instances.external-dns.external-dns = {
+#     package = packages.external-dns;
+#     deps.providerCredentials = ref.external-dns.cloudflare-api-token;
+#     config = {
+#       provider = "cloudflare";
+#       policy = "upsert-only";
+#       txtOwnerId = "prod/external-dns";      # unique per writer of a zone
+#       secretEnv.CF_API_TOKEN = "api-token";  # variable = key of the Secret
+#       extraArgs = [ "--domain-filter=example.com" ];
+#     };
+#   };
 #
-# root = Deployment
+# DI deps:
+#   providerCredentials (optional)  a secret or secret-ref instance in the
+#                                   same namespace holding the provider's API
+#                                   credentials. With `secretEnv` empty the
+#                                   whole Secret is injected with `envFrom`,
+#                                   so its keys must be the variable names
+#                                   the provider reads; `secretEnv` maps
+#                                   variables to differently named keys and
+#                                   injects only those.
+#   prometheus (optional)           metrics Service, ServiceMonitor, and a
+#                                   stale-sync alert.
+#
+# Credentials belong in the providerCredentials Secret, not in the rendered
+# manifests. external-dns reads every flag from `EXTERNAL_DNS_<FLAG>` as
+# well, so a credential that upstream takes as a flag (`--pdns-api-key`,
+# `--rfc2136-tsig-secret`, and the others in `secretFlags`) goes in that
+# Secret under the variable's name. Those flags in `extraArgs`, and a
+# literal string in `env` for a credential variable, are refused.
+#
+# Egress: `meta.network.intents` cannot read config, so every instance may
+# reach the world on TCP 443, which covers the HTTPS APIs of the hosted
+# providers. A provider on another port warns under an enforcer.
+#
+# Not supported: webhook providers, which run as a sidecar container, and
+# `--once`, after which the Deployment would restart the process forever.
+# `--registry=crd` and `--gateway-listener-sets` need RBAC the package does
+# not grant, and a warning says so.
+#
+# Escape hatches: `extraArgs` for upstream flags the package does not type
+# (domain filters, TXT prefix, provider endpoints), `env`, and the
+# instance's `partsOverlays` for pod labels, placement, and extra RBAC rules.
+#
+# out: root is the Deployment, and `out` adds nothing beyond root's defaults.
 
 {
   scope,
@@ -20,518 +62,605 @@
   kix,
 }:
 
+let
+  release = "0.23.0";
+  metricsPort = 7979;
+
+  providers = import ./providers.nix;
+  sources = import ./sources.nix scope.rbac;
+
+  name = scope.instanceName;
+  ns = scope.namespaceName;
+  who = "external-dns ${ns}/${name}";
+
+  # kingpin's DefaultEnvars (pkg/apis/externaldns/types.go) reads `--<flag>`
+  # from this variable when the flag is not on the command line.
+  flagEnvVar = flag: "EXTERNAL_DNS_" + lib.toUpper (builtins.replaceStrings [ "-" ] [ "_" ] flag);
+
+  # Upstream flags at v0.23.0 whose value is a credential.
+  secretFlags = [
+    "pdns-api-key"
+    "godaddy-api-key"
+    "godaddy-api-secret"
+    "exoscale-apikey"
+    "exoscale-apisecret"
+    "rfc2136-tsig-secret"
+    "rfc2136-kerberos-password"
+    "pihole-password"
+    "txt-encrypt-aes-key"
+  ];
+
+  # Variables whose value is a credential, for any provider.
+  secretVariables =
+    lib.unique (builtins.concatMap (p: p.secretVariables or [ ]) (builtins.attrValues providers))
+    ++ map flagEnvVar secretFlags;
+
+  # The variables of the flags the package sets. kingpin gives the command
+  # line precedence, so the same name from `env` or the Secret is ignored.
+  ownedEnvNames = map flagEnvVar [
+    "provider"
+    "policy"
+    "txt-owner-id"
+    "source"
+    "interval"
+    "metrics-address"
+  ];
+
+  intervalSeconds =
+    interval:
+    let
+      m = builtins.match "([0-9]+)([smh])" interval;
+      unit = {
+        s = 1;
+        m = 60;
+        h = 3600;
+      };
+    in
+    lib.toInt (builtins.elemAt m 0) * unit.${builtins.elemAt m 1};
+
+  # "CF_API_TOKEN, or CF_API_KEY and CF_API_EMAIL"
+  describeKeySets = sets: lib.concatMapStringsSep ", or " (lib.concatStringsSep " and ") sets;
+  listOrNone = names: if names == [ ] then "nothing" else lib.concatStringsSep ", " names;
+
+  # The value of `flag` in `args`, in either the `--flag=value` or the
+  # `--flag value` form, for every occurrence.
+  flagValues =
+    flag: args:
+    let
+      indexed = lib.imap0 (i: arg: { inherit i arg; }) args;
+    in
+    builtins.concatMap (
+      { i, arg }:
+      if lib.hasPrefix "${flag}=" arg then
+        [ (lib.removePrefix "${flag}=" arg) ]
+      else if arg == flag && i + 1 < builtins.length args then
+        [ (builtins.elemAt args (i + 1)) ]
+      else
+        [ ]
+    ) indexed;
+
+  # What the instance supplies for the provider's credential variables:
+  # the mapped variables or, without `secretEnv`, the Secret's keys, plus
+  # the string values in `env`. A `valueFrom` entry in `env` is not counted,
+  # because Kix cannot check the Secret it names.
+  credentialState =
+    { config, deps }:
+    let
+      dep = deps.providerCredentials or null;
+      declared = if dep == null then [ ] else (dep.out.keys or [ ]);
+      envStrings = builtins.attrNames (lib.filterAttrs (_: builtins.isString) config.env);
+      fromSecret =
+        if config.secretEnv != { } then
+          builtins.attrNames config.secretEnv
+        else if dep != null then
+          declared
+        else
+          [ ];
+      supplied = fromSecret ++ envStrings;
+      keySets = providers.${config.provider}.credentialKeySets or null;
+    in
+    {
+      inherit
+        dep
+        declared
+        envStrings
+        keySets
+        ;
+      complete =
+        keySets == null || builtins.any (set: builtins.all (k: builtins.elem k supplied) set) keySets;
+    };
+
+  # Default ports of the providers not reached on TCP 443: DNS UPDATE
+  # (rfc2136), the PowerDNS API, the Pi-hole web server, and etcd (coredns,
+  # skydns).
+  providerPorts = {
+    rfc2136 = 53;
+    pdns = 8081;
+    pihole = 80;
+    coredns = 2379;
+    skydns = 2379;
+  };
+in
 {
   meta = {
-    version = "0.16.1";
-    description = "ExternalDNS, which manages records in an external DNS provider (Cloudflare by default) from Ingresses and Services";
+    version = release;
+    description = "ExternalDNS, which publishes DNS records in an external provider for Services, Ingresses, and Gateway API routes";
     owner = "platform";
+    # external-dns has no leader election: a second replica writes the same
+    # records concurrently.
+    availability.max = "none";
+    network.intents.providerApi.egress = [
+      {
+        to = "world";
+        ports = [
+          {
+            port = 443;
+            protocol = "TCP";
+          }
+        ];
+      }
+    ];
   };
 
   options = {
     image = kix.options.image {
-      repository = "docker.io/bitnamilegacy/external-dns";
-      tag = "0.16.1-debian-12-r1";
+      repository = "registry.k8s.io/external-dns/external-dns";
+      tag = "v${release}";
+      digest = "sha256:1854499e2b08cee47c40a08e356bff20dcb192dbcfde8378fc3f900f12cad5a3";
     };
+
     provider = lib.mkOption {
-      type = lib.types.str;
-      default = "cloudflare";
+      type = lib.types.enum (builtins.attrNames providers);
+      description = "DNS provider the records are written to (`--provider`). Webhook providers are not supported.";
     };
+
+    policy = lib.mkOption {
+      type = lib.types.enum [
+        "sync"
+        "upsert-only"
+        "create-only"
+      ];
+      description = ''
+        How records are synchronized (`--policy`). `sync` also deletes
+        records whose source is gone; `upsert-only` creates and updates but
+        never deletes; `create-only` only creates. external-dns has no
+        default.
+      '';
+    };
+
+    txtOwnerId = lib.mkOption {
+      type = lib.types.nonEmptyStr;
+      example = "prod-eu/external-dns/public";
+      description = ''
+        Owner id written into the TXT registry records (`--txt-owner-id`).
+        external-dns changes only records whose TXT record carries this id,
+        so it must be unique among every external-dns instance, in any
+        cluster, that writes the same zones. Changing it on a running
+        install leaves the records written under the old id unowned, unless
+        `extraArgs` carries `--migrate-from-txt-owner=<old id>` for one
+        synchronization.
+      '';
+    };
+
     sources = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
+      type = lib.types.nonEmptyListOf (lib.types.enum (builtins.attrNames sources));
       default = [
         "service"
         "ingress"
       ];
-    };
-    domainFilters = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ ];
-    };
-    serviceTypeFilters = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ ];
-    };
-    annotationFilter = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-    };
-    policy = lib.mkOption {
-      type = lib.types.str;
-      default = "upsert-only";
-    };
-    txtOwnerId = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
       description = ''
-        Owner id written into the TXT registry records, passed as
-        `--txt-owner-id`. Null omits the flag, so external-dns uses its own
-        default id, `default`, which is the id existing records carry. Every
-        instance writing the same zone needs a distinct id. Changing the id
-        on a running install leaves the TXT records written under the old id
-        unowned: external-dns no longer updates or deletes those records.
+        Resource kinds external-dns reads hostnames from (`--source`, once
+        per entry). The ClusterRole grants read access to these kinds only.
+        The gateway sources need the Gateway API CRDs installed in the
+        cluster.
       '';
     };
-    txtPrefix = lib.mkOption {
-      type = lib.types.str;
-      default = "ext-dns-";
-    };
-    registry = lib.mkOption {
-      type = lib.types.str;
-      default = "txt";
-    };
-    logLevel = lib.mkOption {
-      type = lib.types.str;
-      default = "info";
-    };
-    logFormat = lib.mkOption {
-      type = lib.types.str;
-      default = "text";
-    };
+
     interval = lib.mkOption {
-      type = lib.types.str;
+      type = lib.types.strMatching "[1-9][0-9]*[smh]";
       default = "1m";
-    };
-    metricsPort = lib.mkOption {
-      type = lib.types.int;
-      default = 7979;
-    };
-    cloudflare = lib.mkOption {
-      type = lib.types.attrsOf lib.types.anything;
-      default = {
-        dnsRecordsPerPage = 100;
-      };
-    };
-    triggerLoopOnEvent = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-    };
-    env = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
-      default = [ ];
-    };
-    secretName = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-    };
-    extraLabels = lib.mkOption {
-      type = lib.types.attrsOf lib.types.anything;
-      default = { };
-    };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "100m";
-          memory = "128Mi";
-          ephemeral-storage = "50Mi";
-        };
-        limits = {
-          cpu = "150m";
-          memory = "192Mi";
-          ephemeral-storage = "2Gi";
-        };
-      };
-    };
-    affinity = lib.mkOption {
-      type = lib.types.anything;
-      default = { };
+      example = "5m";
       description = ''
-        Pod affinity, verbatim. Spread across failure domains is derived by
-        the cluster (cluster.spread); set this only for node affinity or a
-        rule stronger than the derived one.
+        Time between two synchronizations (`--interval`), in seconds,
+        minutes, or hours, such as `"90s"` or `"5m"`. The stale-sync alert
+        fires after three intervals without a successful synchronization,
+        and never sooner than 15 minutes. A longer interval lowers the rate
+        of provider API calls.
       '';
     };
-    networkPolicy = lib.mkOption {
-      type = lib.types.attrsOf lib.types.anything;
-      default = {
-        enabled = true;
+
+    secretEnv = lib.mkOption {
+      type = lib.types.attrsOf lib.types.nonEmptyStr;
+      default = { };
+      example = {
+        CF_API_TOKEN = "api-token";
       };
+      description = ''
+        Maps environment variables to keys of the `providerCredentials`
+        Secret. Empty injects the whole Secret with `envFrom`, so its key
+        names must be the variables the provider reads. Non-empty injects
+        only the mapped keys.
+      '';
     };
+
+    env = kix.options.env // {
+      description = ''
+        Extra container environment variables. A value is a string, a
+        `fieldRef` source, or a `secretKeyRef` source naming a Secret
+        managed outside Kix with `kix.untrackedRef`. Provider credentials
+        come from the `providerCredentials` dependency. The
+        `EXTERNAL_DNS_*` variables of the flags this package sets are
+        refused.
+      '';
+    };
+
+    serviceAccountAnnotations = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = {
+        "eks.amazonaws.com/role-arn" = "arn:aws:iam::111122223333:role/external-dns";
+      };
+      description = ''
+        Annotations on the ServiceAccount, for workload identity on a cloud
+        provider (`eks.amazonaws.com/role-arn`,
+        `iam.gke.io/gcp-service-account`, or
+        `azure.workload.identity/client-id`).
+      '';
+    };
+
+    extraArgs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [
+        "--domain-filter=example.com"
+        "--cloudflare-proxied"
+      ];
+      description = ''
+        Flags appended to the package's own, verbatim. The flags the
+        package sets from options (`--provider`, `--policy`,
+        `--txt-owner-id`, `--interval`, `--source`) and
+        `--metrics-address` are refused.
+      '';
+    };
+
+    # No CPU limit: a synchronization is a short burst of API calls, and a
+    # limit would only stretch it.
+    resources = kix.options.resources {
+      requests = {
+        cpu = "50m";
+        memory = "64Mi";
+      };
+      limits.memory = "256Mi";
+    };
+
+    metrics = kix.options.monitor;
   };
 
-  build =
-    {
-      self,
-      config,
-      clusterConfig,
-    }:
+  assertions =
+    { config, deps, ... }:
     let
-      name = scope.instanceName;
-
-      # Selector labels: use static app name (external-dns) not instance name.
-      # This matches the Helm chart convention where all external-dns instances
-      # share the same app.kubernetes.io/name.
-      edSelectorLabels = {
-        "app.kubernetes.io/instance" = name;
-        "app.kubernetes.io/name" = "external-dns";
-      };
-
-      # --- RBAC DSL ---
-      inherit (scope.rbac)
-        core
-        group
-        grant
-        watch
-        allow
-        mkClusterRoleSet
-        ;
-
-      f5 = group "cis.f5.com" [
-        "virtualservers"
-        "transportservers"
-      ];
-      kong = group "configuration.konghq.com" [ "tcpingresses" ];
-      gateway = group "gateway.networking.k8s.io" [
-        "gateways"
-        "httproutes"
-        "tlsroutes"
-        "tcproutes"
-        "udproutes"
-        "grpcroutes"
-      ];
-      istio = group "networking.istio.io" [
-        "gateways"
-        "virtualservices"
-      ];
-      contour = group "projectcontour.io" [ "httpproxies" ];
-      openshift = group "route.openshift.io" [ "routes" ];
-      zalando = group "zalando.org" [ "routegroups" ];
-
-      clusterRoles = mkClusterRoleSet scope {
-        subjects = [
-          {
-            kind = "ServiceAccount";
-            name = self.serviceAccount.out.name;
-            namespace = scope.namespaceName;
-          }
-        ];
-        labels = config.extraLabels;
-        roles = {
-          "${name}-${scope.namespaceName}" = grant [
-            # Core resources: services, pods, nodes, endpoints, namespaces
-            (
-              [
-                core.services
-                core.pods
-                core.nodes
-                core.endpoints
-                core.namespaces
-              ]
-              |> watch
-            )
-            # CIS F5
-            (
-              [
-                f5.virtualservers
-                f5.transportservers
-              ]
-              |> watch
-            )
-            # Kong
-            (kong.tcpingresses |> watch)
-            # Extensions, networking.k8s.io, Ambassador: shared ingresses/hosts
-            [
-              {
-                apiGroups = [
-                  "extensions"
-                  "networking.k8s.io"
-                  "getambassador.io"
-                ];
-                resources = [
-                  "ingresses"
-                  "hosts"
-                ];
-                verbs = [
-                  "get"
-                  "list"
-                  "watch"
-                ];
-              }
-            ]
-            # Gateway API
-            (
-              [
-                gateway.gateways
-                gateway.httproutes
-                gateway.tlsroutes
-                gateway.tcproutes
-                gateway.udproutes
-                gateway.grpcroutes
-              ]
-              |> watch
-            )
-            # Gloo / Gateway Solo
-            [
-              {
-                apiGroups = [
-                  "gloo.solo.io"
-                  "gateway.solo.io"
-                ];
-                resources = [
-                  "proxies"
-                  "virtualservices"
-                ];
-                verbs = [
-                  "get"
-                  "list"
-                  "watch"
-                ];
-              }
-            ]
-            # Istio
-            (
-              [
-                istio.gateways
-                istio.virtualservices
-              ]
-              |> watch
-            )
-            # Contour
-            (contour.httpproxies |> watch)
-            # OpenShift
-            (openshift.routes |> watch)
-            # Zalando routegroups: watch
-            (zalando.routegroups |> watch)
-            # Zalando routegroups/status: patch, update
-            (
-              zalando "routegroups/status"
-              |> allow [
-                "patch"
-                "update"
-              ]
-            )
-          ];
-        };
-      };
-
-      # Merge extra labels into all resource labels.
-      allLabels = edSelectorLabels // config.extraLabels;
-
-      resolvedAffinity = if config.affinity == { } then null else config.affinity;
-
-      # Build CLI args for the external-dns binary, ordered to match bitnami chart.
-      args = [
-        "--metrics-address=:${toString config.metricsPort}"
-        "--log-level=${config.logLevel}"
-        "--log-format=${config.logFormat}"
-      ]
-      ++ map (t: "--service-type-filter=${t}") config.serviceTypeFilters
-      ++ map (d: "--domain-filter=${d}") config.domainFilters
-      ++ [
-        "--policy=${config.policy}"
-        "--provider=${config.provider}"
-        "--registry=${config.registry}"
-        "--interval=${config.interval}"
-        "--txt-prefix=${config.txtPrefix}"
-      ]
-      ++ lib.optional (config.txtOwnerId != null) "--txt-owner-id=${config.txtOwnerId}"
-      ++ lib.optional (config.annotationFilter != null) "--annotation-filter=${config.annotationFilter}"
-      ++ map (s: "--source=${s}") config.sources
-      ++ [ "--cloudflare-dns-records-per-page=${toString config.cloudflare.dnsRecordsPerPage}" ]
-      ++ lib.optional config.triggerLoopOnEvent "--events";
-
-      # Container env: Cloudflare credentials from a secret named after the instance.
-      containerEnv =
-        config.env
-        ++ lib.optionals (self.secret != null) [
-          {
-            name = "CF_API_EMAIL";
-            value = "";
-          }
-          (lib.recursiveUpdate (self.secret.out.keyRef "cloudflare_api_key") {
-            name = "CF_API_KEY";
-            valueFrom.secretKeyRef.optional = true;
-          })
-          (lib.recursiveUpdate (self.secret.out.keyRef "cloudflare_api_token") {
-            name = "CF_API_TOKEN";
-            valueFrom.secretKeyRef.optional = true;
-          })
-        ];
-
-      # --- Mounts ---
-      tmpMount = kix.mount.emptyDir {
-        name = "empty-dir";
-        mountPath = "/tmp";
-        subPath = "tmp-dir";
-      };
-
+      s = credentialState { inherit config deps; };
+      depName = s.dep.out.name or "";
+      keySetText = if s.keySets == null then "" else describeKeySets s.keySets;
+      firstVar = if s.keySets == null then "" else builtins.head (builtins.head s.keySets);
+      wrongKeys = lib.filterAttrs (_: key: !(builtins.elem key s.declared)) config.secretEnv;
+      literalSecrets = builtins.filter (var: builtins.elem var secretVariables) s.envStrings;
+      firstLiteral = builtins.head (literalSecrets ++ [ "" ]);
+      ownedKeys = lib.optionals (s.dep != null && config.secretEnv == { }) (
+        builtins.filter (key: builtins.elem key ownedEnvNames) s.declared
+      );
     in
-    {
+    [
+      {
+        assertion = s.complete || s.dep != null || config.secretEnv != { };
+        message = "provider \"${config.provider}\" reads its API credentials from ${keySetText}, and no complete set is supplied. Add a secret or secret-ref instance in namespace \"${ns}\" holding them, set deps.providerCredentials = ref.${ns}.<instance>, and name the key ${firstVar} or map it with secretEnv.${firstVar} = \"<key>\".";
+      }
+      {
+        assertion = s.complete || s.dep == null;
+        message = "provider \"${config.provider}\" needs ${keySetText}. providerCredentials \"${depName}\" declares ${listOrNone s.declared}; secretEnv maps ${listOrNone (builtins.attrNames config.secretEnv)}; env sets ${listOrNone s.envStrings}. Map the key that holds the credential: secretEnv.${firstVar} = \"<key>\".";
+      }
+      {
+        assertion = s.dep == null || wrongKeys == { };
+        message = lib.concatStringsSep "\n" (
+          lib.mapAttrsToList (
+            var: key:
+            "secretEnv.${var} names key \"${key}\", and providerCredentials \"${depName}\" declares ${listOrNone s.declared}. Map one of those keys, or add \"${key}\" to that instance's keys."
+          ) wrongKeys
+        );
+      }
+      {
+        assertion = config.secretEnv == { } || s.dep != null;
+        message = "secretEnv maps ${lib.concatStringsSep ", " (builtins.attrNames config.secretEnv)} but no providerCredentials dependency is wired. Set deps.providerCredentials = ref.${ns}.<instance>.";
+      }
+      {
+        assertion = literalSecrets == [ ];
+        message = "env sets ${lib.concatStringsSep ", " literalSecrets} to a literal string, which would be stored in the Nix store and the rendered manifests. Put the credential in a Secret wired as deps.providerCredentials, and name the key ${firstLiteral} or map it with secretEnv.${firstLiteral} = \"<key>\".";
+      }
+      {
+        assertion = ownedKeys == [ ];
+        message = "providerCredentials \"${depName}\" declares ${lib.concatStringsSep ", " ownedKeys}, which envFrom injects as variables of flags the package sets, and the flags take precedence. Remove those keys from that Secret, or inject only the credential keys with secretEnv.";
+      }
+    ];
 
-      # --- ServiceAccount ---
-      serviceAccount = scope.mkResource {
-        apiVersion = "v1";
-        kind = "ServiceAccount";
-        inherit name;
-        labels = allLabels;
-        extra = {
-          automountServiceAccountToken = false;
-        };
-      };
+  # The fixes for these need `partsOverlays` or a namespace NetworkPolicy,
+  # which the package cannot see, so they warn instead of failing.
+  warnings =
+    { config, ... }:
+    let
+      crdRegistry = builtins.elem "crd" (flagValues "--registry" config.extraArgs);
+      listenerSets = builtins.any (
+        arg: arg == "--gateway-listener-sets" || arg == "--gateway-listener-sets=true"
+      ) config.extraArgs;
+      port = providerPorts.${config.provider} or null;
+    in
+    lib.optional crdRegistry "extraArgs set --registry=crd, which keeps ownership records in resources of the dnsrecords.externaldns.k8s.io CRD. The package neither installs that CRD nor grants RBAC for dnsrecords and dnsrecords/status. Install the CRD, and add the rules to the ClusterRole with partsOverlays."
+    ++ lib.optional listenerSets "extraArgs make external-dns use listenersets, which the package grants no RBAC for. Add the rules to the ClusterRole with partsOverlays."
+    ++
+      lib.optional (port != null && scope.networkPolicyEnforcer != null)
+        "egress policy allows only TCP 443 to the world; provider ${config.provider} uses port ${toString port}. Add a NetworkPolicy under namespaces.${ns}.networkPolicies.<name>.";
 
-      # --- Secret (Opaque, credentials managed externally) ---
-      secret =
-        if config.secretName != null then
-          scope.mkSecret {
-            name = config.secretName;
-            labels = allLabels;
-            keys = [
-              "cloudflare_api_key"
-              "cloudflare_api_token"
-            ];
-          }
-        else
-          null;
+  build = [
+    (
+      {
+        self,
+        config,
+        providerCredentials ? null,
+        prometheus ? null,
+        ...
+      }:
+      let
+        selected = lib.unique config.sources;
 
-      # --- Service (metrics) ---
-      service = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        inherit name;
-        labels = allLabels // {
-          "k8s-app" = "external-dns";
-        };
-        spec = {
-          type = "ClusterIP";
-          selector = self.deployment.out.selector;
-          ports = [
+        rules = map (r: r // { resources = lib.unique r.resources; }) (
+          scope.rbac.grant (builtins.concatMap (s: sources.${s}.intents) selected)
+        );
+
+        crdRefs = lib.unique (builtins.concatMap (s: sources.${s}.crdRefs) selected);
+        crdRefParts = builtins.listToAttrs (
+          map (
+            ref:
+            lib.nameValuePair "crdRef${ref.kind}" (
+              scope.mkCRDRef {
+                group = "gateway.networking.k8s.io";
+                inherit (ref) kind plural;
+                version = "v1";
+                crdScope = "Namespaced";
+              }
+            )
+          ) crdRefs
+        );
+
+        clusterRoles = scope.rbac.mkClusterRoleSet scope {
+          subjects = [
             {
-              name = "http";
-              port = config.metricsPort;
-              targetPort = config.metricsPort;
-              protocol = "TCP";
+              kind = "ServiceAccount";
+              name = self.serviceAccount.out.name;
+              namespace = ns;
             }
           ];
+          roles."${name}-${ns}" = rules;
         };
-        outputs = {
-          metricsPort = toString config.metricsPort;
-        };
-      };
 
-      # --- NetworkPolicy ---
-      networkPolicy =
-        if config.networkPolicy.enabled then
-          scope.mkResource {
-            apiVersion = "networking.k8s.io/v1";
-            kind = "NetworkPolicy";
-            inherit name;
-            labels = allLabels // {
-              "app.kubernetes.io/component" = "controller";
-            };
-            spec = {
-              podSelector.matchLabels = edSelectorLabels;
-              policyTypes = [
-                "Ingress"
-                "Egress"
-              ];
-              ingress = [
-                {
-                  ports = [
-                    {
-                      port = config.metricsPort;
-                      protocol = "TCP";
-                    }
-                  ];
-                }
-              ];
-              egress = [ { } ];
-            };
+        # Keys outside the Secret's declared keys are left to the
+        # assertions, which name them; `keyRef` would throw first.
+        declaredKeys = if providerCredentials == null then [ ] else (providerCredentials.out.keys or [ ]);
+        secretVars = lib.mapAttrs (_: key: providerCredentials.out.keyRef key) (
+          lib.filterAttrs (_: key: builtins.elem key declaredKeys) config.secretEnv
+        );
+        useEnvFrom = providerCredentials != null && config.secretEnv == { };
+
+        env = kix.mkEnvVars (
+          kix.mergeEnv {
+            inherit who;
+            owned = [
+              {
+                names = ownedEnvNames;
+                from = "a flag the package sets (provider, policy, txtOwnerId, sources, interval, or the metrics address), and the flag overrides the variable";
+                fix = "Set the option instead; the metrics address is fixed at :${toString metricsPort}.";
+              }
+              {
+                vars = secretVars;
+                from = "providerCredentials through secretEnv";
+                fix = "Remove it from env or from secretEnv.";
+              }
+              {
+                # A variable in `env` overrides the same name from `envFrom`
+                # without any error.
+                names = lib.optionals useEnvFrom declaredKeys;
+                from = "providerCredentials, whose keys are injected with envFrom";
+                fix = "Remove it from env, or rename the key in that Secret.";
+              }
+            ];
+          } config.env
+        );
+
+        # kingpin refuses a repeated single-value flag at startup, and
+        # `--source` here would bypass the RBAC derived from `sources`.
+        args = [
+          "--provider=${config.provider}"
+          "--policy=${config.policy}"
+          "--txt-owner-id=${config.txtOwnerId}"
+          "--interval=${config.interval}"
+          "--metrics-address=:${toString metricsPort}"
+        ]
+        ++ map (s: "--source=${s}") selected
+        ++ kix.guardArgs {
+          inherit who;
+          owned = {
+            "--provider" = "set the provider option.";
+            "--policy" = "set the policy option.";
+            "--txt-owner-id" = "set the txtOwnerId option.";
+            "--interval" = "set the interval option.";
+            "--source" = "add it to sources, which also grants its RBAC.";
+            "--metrics-address" =
+              "the probes, the metrics Service, and the ServiceMonitor use :${toString metricsPort}; remove it.";
+            "--once" =
+              "external-dns exits after one synchronization, and the Deployment restarts it every time; remove it.";
           }
-        else
-          null;
+          // lib.genAttrs (map (flag: "--${flag}") secretFlags) (
+            flag:
+            let
+              var = flagEnvVar (lib.removePrefix "--" flag);
+            in
+            "its value is a credential, which would be stored in the Nix store and the pod's arguments. Put it in the providerCredentials Secret under the key ${var}, or map it with secretEnv.${var} = \"<key>\"."
+          );
+        } config.extraArgs;
 
-      # --- Deployment ---
-      deployment =
-        {
+        # sources.nix and providers.nix follow `release`; another release
+        # may need other RBAC rules or accept other providers.
+        imageRef =
+          if
+            lib.versions.majorMinor (lib.removePrefix "v" config.image.tag) == lib.versions.majorMinor release
+          then
+            kix.image.ref config.image
+          else
+            throw "${who}: image.tag \"${config.image.tag}\" is not a ${lib.versions.majorMinor release} release, and the ClusterRole rules (sources.nix) and the provider list (providers.nix) follow external-dns v${release}. To move to another release, change `release` in kix/packages/external-dns/default.nix and update both files from that release's chart clusterrole.yaml and pkg/apis/externaldns/types.go.";
+
+        probe = {
+          httpGet = {
+            path = "/healthz";
+            port = "metrics";
+          };
+          periodSeconds = 10;
+          timeoutSeconds = 5;
+          successThreshold = 1;
+        };
+      in
+      {
+        serviceAccount = scope.mkResource (
+          {
+            apiVersion = "v1";
+            kind = "ServiceAccount";
+            inherit name;
+          }
+          // lib.optionalAttrs (config.serviceAccountAnnotations != { }) {
+            annotations = config.serviceAccountAnnotations;
+          }
+        );
+
+        metricsService =
+          if config.metrics.enabled && prometheus != null then
+            self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource
+          else
+            null;
+
+        deployment = scope.mkDeployment {
           inherit name;
-          labels = allLabels;
-          requires =
-            builtins.attrValues clusterRoles
-            ++ lib.optional (self.secret != null) self.secret
-            ++ lib.optional (self.networkPolicy != null) self.networkPolicy;
+          requires = builtins.attrValues clusterRoles ++ builtins.attrValues crdRefParts;
           spec = {
             replicas = 1;
-            selector.matchLabels = edSelectorLabels;
-            strategy = {
-              type = "RollingUpdate";
-              rollingUpdate = {
-                maxSurge = "25%";
-                maxUnavailable = "25%";
-              };
-            };
-            template.metadata.labels =
-              edSelectorLabels
-              // {
-                "k8s-app" = "external-dns";
+            # A rolling update would run the old and the new pod together.
+            strategy.type = "Recreate";
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata = {
+                labels = scope.selectorLabels;
               }
-              // config.extraLabels;
-            template.spec = {
-              serviceAccountName = self.serviceAccount.out.name;
-              automountServiceAccountToken = true;
-              # Kubernetes' default, set explicitly; the external-dns chart
-              # (1.16.1) leaves `terminationGracePeriodSeconds` unset.
-              terminationGracePeriodSeconds = 30;
-              affinity = resolvedAffinity;
-              securityContext = {
-                fsGroup = 1001;
-                fsGroupChangePolicy = "Always";
+              # Rolls the pod when a Kix-built Secret changes. A secret-ref
+              # names a Secret managed outside Kix, which has no identity
+              # hash; reloader's `withReloadOn` rolls the pod for that one.
+              // lib.optionalAttrs (providerCredentials != null && providerCredentials.out ? identityHash) {
+                annotations."checksum/provider-credentials" = providerCredentials.out.identityHash;
               };
-              containers = [
-                (
-                  {
-                    name = "external-dns";
-                    image = kix.image.ref config.image;
-                    imagePullPolicy = config.image.pullPolicy;
-                    inherit args;
-                    ports = [
-                      (kix.port "http" config.metricsPort)
-                    ];
-                    livenessProbe = {
-                      tcpSocket = {
-                        port = "http";
+              spec = {
+                serviceAccount = self.serviceAccount;
+                # The image declares user 0. 65532 is the upstream chart's user,
+                # and the binary needs no root privileges.
+                securityContext = {
+                  runAsNonRoot = true;
+                  runAsUser = 65532;
+                  runAsGroup = 65532;
+                  seccompProfile.type = "RuntimeDefault";
+                };
+                containers = [
+                  (
+                    {
+                      name = "external-dns";
+                      image = imageRef;
+                      inherit args;
+                      ports = [ (kix.port "metrics" metricsPort) ];
+                      # Timings from the upstream chart's values.yaml.
+                      livenessProbe = probe // {
+                        initialDelaySeconds = 10;
+                        failureThreshold = 2;
                       };
-                      initialDelaySeconds = 10;
-                      periodSeconds = 10;
-                      timeoutSeconds = 5;
-                      failureThreshold = 2;
-                      successThreshold = 1;
-                    };
-                    readinessProbe = {
-                      httpGet = {
-                        path = "/healthz";
-                        port = "http";
+                      readinessProbe = probe // {
+                        initialDelaySeconds = 5;
+                        failureThreshold = 6;
                       };
-                      initialDelaySeconds = 5;
-                      periodSeconds = 10;
-                      timeoutSeconds = 5;
-                      failureThreshold = 6;
-                      successThreshold = 1;
-                    };
-                    resources = config.resources;
-                    securityContext = {
-                      allowPrivilegeEscalation = false;
-                      capabilities.drop = [ "ALL" ];
-                      privileged = false;
-                      readOnlyRootFilesystem = true;
-                      runAsGroup = 1001;
-                      runAsNonRoot = true;
-                      runAsUser = 1001;
-                      seccompProfile.type = "RuntimeDefault";
-                    };
-                  }
-                  // lib.optionalAttrs (containerEnv != [ ]) {
-                    env = containerEnv;
-                  }
-                )
-              ];
+                      inherit (config) resources;
+                      securityContext = {
+                        allowPrivilegeEscalation = false;
+                        readOnlyRootFilesystem = true;
+                        capabilities.drop = [ "ALL" ];
+                        privileged = false;
+                      };
+                    }
+                    // lib.optionalAttrs (config.image.pullPolicy != null) {
+                      imagePullPolicy = config.image.pullPolicy;
+                    }
+                    // lib.optionalAttrs (env != [ ]) { inherit env; }
+                    // lib.optionalAttrs useEnvFrom {
+                      envFrom = [ providerCredentials.out.envFrom ];
+                    }
+                  )
+                ];
+              };
             };
           };
-        }
-        |> kix.withMounts [ tmpMount ]
-        |> scope.mkDeployment;
+        };
 
-      # --- Entry point ---
-      root = self.deployment;
-    }
-    // clusterRoles;
+        # The monitoring parts depend on the Deployment, not the reverse,
+        # so root lists them to keep them in the build.
+        root = {
+          resource = self.deployment;
+          requires = builtins.filter (r: r != null) [
+            self.serviceMonitor
+            self.prometheusRules
+          ];
+        };
+      }
+      // clusterRoles
+      // crdRefParts
+    )
+
+    # The lib passes a build function only the arguments it names, so
+    # `scope` and `lib` are listed for `kix.monitor`, which reads them from
+    # `args`.
+    (
+      {
+        self,
+        config,
+        scope,
+        lib,
+        prometheus ? null,
+        ...
+      }@args:
+      let
+        # Three synchronization intervals, at least 15 minutes, so a long
+        # interval set to stay under a provider's rate limit does not keep
+        # the alert firing.
+        staleAfter = lib.max 900 (3 * intervalSeconds config.interval);
+        forMinutes = 5;
+        # Rounded down: when the alert fires, the last synchronization is at
+        # least `staleAfter` seconds plus `forMinutes` old.
+        staleMinutes = staleAfter / 60 + forMinutes;
+        series = "external_dns_controller_last_sync_timestamp_seconds{namespace=\"${ns}\", service=\"${self.metricsService.out.name}\"}";
+      in
+      kix.monitor {
+        service = "metricsService";
+        port = "metrics";
+        # The gauge is 0 until the first successful synchronization. It has
+        # no samples while the pod is down or unscraped, which `absent`
+        # covers.
+        alerts.ExternalDNSSyncStale = {
+          expr = "time() - ${series} > ${toString staleAfter} or absent(${series})";
+          "for" = "${toString forMinutes}m";
+          severity = "warning";
+          summary = "external-dns ${ns}/${name}: no successful DNS synchronization in the last ${toString staleMinutes} minutes, or no metrics from the pod.";
+          description = "The last successful synchronization is older than three intervals, or Prometheus has no samples from the pod. Check that the pod is running, then look for provider API errors, such as HTTP 429 rate limiting, in its log.";
+        };
+      } args
+    )
+  ];
 }

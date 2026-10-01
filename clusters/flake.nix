@@ -55,6 +55,8 @@
         sealed-jobs = ./test-sealed-jobs.nix;
         ingress-netpol = ./test-ingress-netpol.nix;
         rke2-cilium = ./test-rke2-cilium.nix;
+        external-dns = ./test-external-dns.nix;
+        external-dns-tryout = ./test-external-dns-tryout.nix;
       };
     };
 }

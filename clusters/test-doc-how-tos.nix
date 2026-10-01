@@ -82,7 +82,7 @@ kix.buildCluster {
   modules = [
     kix.flavors.kind
     (
-      { lib, ... }:
+      { lib, ref, ... }:
       {
         # region:shadowPlatformStorage
         instances.storage-system.storage = {
@@ -130,6 +130,34 @@ kix.buildCluster {
           };
         };
         # endregion:acmeClusterIssuer
+
+        # region:externalDnsInstance
+        instances.external-dns = {
+          # A Secret created outside Kix that holds the Cloudflare API
+          # token under the key `api-token`.
+          cloudflare-api-token = {
+            package = packages.secret-ref;
+            config.keys = [ "api-token" ];
+          };
+
+          external-dns = {
+            package = packages.external-dns;
+            deps.providerCredentials = ref.external-dns.cloudflare-api-token;
+            config = {
+              provider = "cloudflare";
+              policy = "upsert-only";
+              txtOwnerId = "production/external-dns";
+              sources = [
+                "service"
+                "ingress"
+                "gateway-httproute"
+              ];
+              secretEnv.CF_API_TOKEN = "api-token";
+              extraArgs = [ "--domain-filter=example.com" ];
+            };
+          };
+        };
+        # endregion:externalDnsInstance
 
         # region:tlsApplicationInstance
         instances.apps.web = {
