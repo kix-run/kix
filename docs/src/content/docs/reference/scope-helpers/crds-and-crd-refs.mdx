@@ -68,14 +68,15 @@ widgetCrd = scope.mkCRDRef {
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `group`, `kind`, `plural` | required | Identity of the custom API. |
-| `version` | required | The API version the CRD serves for this kind, such as `v1` or `v1beta1`. Custom resources use it, and it is the only version they may use. |
+| `version` | required | The API version the CRD serves for this kind, such as `v1` or `v1beta1`. Custom resources use it unless they set their own `version`. |
+| `servedVersions` | `[ version ]` | Every served version a custom resource of this kind may set, such as `[ "v1" "v1beta1" ]`. Must include `version`. A custom resource that sets any other version fails the build. |
 | `crdScope` | `Namespaced` | `Namespaced` or `Cluster`, as the CRD's `spec.scope` says; selects the resource builder. |
 | `installedBy` | `null` | Resource, or list of resources, that installs the CRD. The CRD marker waits for them. |
 | `readiness` | `null` | Default readiness rule for custom resources. |
 | `factBehavior` | `null` | Endpoint fact behavior for this custom kind. |
 
-Kix does not install the CRD, so it cannot read the served version from a
-spec. A missing `version` fails the build. Check the version on a live
+Kix does not install the CRD, so it cannot read the served versions from a
+spec. A missing `version` fails the build. Check the versions on a live
 cluster with
 `kubectl get crd <plural>.<group> -o jsonpath='{.spec.versions[?(@.served==true)].name}'`.
 
@@ -107,8 +108,8 @@ For a cluster-scoped CRD, it has no namespace. The helper supplies
 `apiVersion`, `kind`, and the CRD dependency. Pass `version = "v1beta1"` on
 one custom resource to select another served version. A version the
 declaration does not serve fails the build: for `mkCRD`, one missing from
-`spec.versions` or marked `served = false`; for `mkCRDRef`, any version other
-than its `version`. The same check applies to the builders a Helm chart's
+`spec.versions` or marked `served = false`; for `mkCRDRef`, any version not in
+its `servedVersions`. The same check applies to the builders a Helm chart's
 CRDs provide.
 
 `scope.mkCR crd args` is the convenient form of `crd.out.mkCR scope args`.

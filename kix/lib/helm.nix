@@ -641,6 +641,8 @@ rec {
 
           chartWorkloads = builtins.filter (r: builtins.elem r.kind helmDag.workloadKinds) effectiveResources;
 
+          instanceLabel = "${namespace}/${scope.instanceName or releaseName}";
+
           mkCrdBuilder =
             crdRes:
             let
@@ -666,7 +668,7 @@ rec {
                 extraRequires = chartWorkloads;
                 kind = crKind;
                 servedVersions = map (v: v.name) (builtins.filter (v: v.served or true) versions);
-                unservedFix = "serve it in the chart's CustomResourceDefinition";
+                declaredBy = "the chart's CustomResourceDefinition ${crdRes.name} in ${instanceLabel}";
                 inherit group version crdScope;
               };
 

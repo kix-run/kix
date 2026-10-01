@@ -270,6 +270,120 @@ in
     appns.widgets.package = widgetRefPackage { crArgs.version = "v2"; };
   });
 
+  # servedVersions lists every version a custom resource may set; `version`
+  # stays the default.
+  lib-reference-checks-cr-at-listed-served-version-passes =
+    let
+      refArgs = {
+        version = "v1";
+        servedVersions = [
+          "v1"
+          "v1beta1"
+        ];
+      };
+      apiVersionOf =
+        crArgs:
+        (byName "w" (
+          ofKind "Widget" (
+            manifests (withApp {
+              appns.widgets.package = widgetRefPackage { inherit refArgs crArgs; };
+            })
+          )
+        )).apiVersion;
+    in
+    (
+      apiVersionOf { version = "v1beta1"; } == "example.com/v1beta1"
+      && apiVersionOf { } == "example.com/v1"
+    )
+    || throw "a Widget at a listed served version was not built";
+
+  lib-reference-checks-cr-at-unlisted-version-throws = evalFails (withApp {
+    appns.widgets.package = widgetRefPackage {
+      refArgs = {
+        version = "v1";
+        servedVersions = [
+          "v1"
+          "v1beta1"
+        ];
+      };
+      crArgs.version = "v2";
+    };
+  });
+
+  lib-reference-checks-crdref-served-versions-without-version-throws = evalFails (withApp {
+    appns.widgets.package = widgetRefPackage {
+      refArgs = {
+        version = "v1";
+        servedVersions = [ "v1beta1" ];
+      };
+    };
+  });
+
+  lib-reference-checks-crdref-served-versions-invalid-throws = evalFails (withApp {
+    appns.widgets.package = widgetRefPackage {
+      refArgs = {
+        version = "v1";
+        servedVersions = [
+          "v1"
+          "V2"
+        ];
+      };
+    };
+  });
+
+  # A mkImport crds entry takes servedVersions as mkCRDRef does.
+  lib-reference-checks-import-crds-served-versions =
+    let
+      cluster =
+        crArgs:
+        withApp {
+          platform.widget-api = {
+            package = eval.mkImport {
+              crds = [
+                {
+                  group = "example.com";
+                  kind = "Widget";
+                  plural = "widgets";
+                  version = "v1";
+                  servedVersions = [
+                    "v1"
+                    "v1beta1"
+                  ];
+                }
+              ];
+            };
+            aliases = [ "widgetApi" ];
+          };
+          appns.consumer.package = {
+            meta.version = "test";
+            build =
+              {
+                self,
+                scope,
+                widgetApi,
+                ...
+              }:
+              {
+                widget = scope.mkCR widgetApi.out.crds.Widget ({ name = "w"; } // crArgs);
+                root = self.widget;
+              };
+          };
+        };
+    in
+    (
+      (byName "w" (
+        ofKind "Widget" (
+          manifests (cluster {
+            version = "v1beta1";
+          })
+        )
+      )).apiVersion == "example.com/v1beta1"
+      && evalFails (cluster {
+        version = "v2";
+      })
+    )
+    || throw "mkImport crds servedVersions: v1beta1 not built or v2 accepted";
+
   lib-reference-checks-cr-at-served-crd-version-passes =
     let
       ms = manifests (withApp {

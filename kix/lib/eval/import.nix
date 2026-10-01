@@ -340,6 +340,7 @@ rec {
         "kind"
         "plural"
         "version"
+        "servedVersions"
         "crdScope"
         "factBehavior"
         "readiness"
@@ -378,7 +379,6 @@ rec {
           );
         inherit instanceName namespaceName;
         site = "mkImport crds";
-        unservedFix = "correct version in the mkImport crds entry that declares the kind";
       };
 
       crdEntries =

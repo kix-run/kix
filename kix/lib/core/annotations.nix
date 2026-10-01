@@ -69,8 +69,9 @@ rec {
     importName = key "import-name";
     importFqdn = key "import-fqdn";
     importSecretKeys = key "import-secret-keys";
-    # On CRD ref markers only (scope.mkCRDRef): the kind, the API version and
-    # the scope (`Namespaced` or `Cluster`) the referenced CRD serves.
+    # On CRD ref markers only (scope.mkCRDRef, mkImport crds): the kind, the
+    # default API version (the declaration's `version`) and the scope
+    # (`Namespaced` or `Cluster`) of the referenced CRD.
     crdKind = key "crd-kind";
     crdVersion = key "crd-version";
     crdScope = key "crd-scope";
