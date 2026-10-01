@@ -289,6 +289,9 @@ in
               self.cainjectorServiceAccount
               self.cainjectorService
               self.cainjectorDeployment
+              # The alert rules reference no other part, so nothing else
+              # brings them into the instance.
+              self.controllerAlerts
             ]
           );
           postHooks = [ self.apiCheck ];
