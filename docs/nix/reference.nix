@@ -16,6 +16,8 @@
 { pkgs, lib }:
 
 let
+  compose = import ../../kix/lib/vocab/compose.nix { inherit lib; };
+
   # Evaluate a single package's options.
   #
   # The package function gets `scope` and `kix` thunks that throw if
@@ -37,11 +39,12 @@ let
         # to size replica counts, and nixosOptionsDoc renders every default
         # that has no `defaultText`. The package sees the level a cluster
         # without an availability setting resolves to, so the rendered
-        # default is the single-replica one. Image options come from
-        # `kix.options.image`. Any other `kix` attribute is missing here,
-        # and the error names it.
+        # default is the single-replica one. Option helpers come from
+        # `kix.options` and option types from `kix.types`. Any other `kix`
+        # attribute is missing here, and the error names it.
         kix.availability = import ../../kix/lib/core/availability.nix { inherit lib; };
-        kix.options = (import ../../kix/lib/vocab/compose.nix { inherit lib; }).options;
+        kix.options = compose.options;
+        kix.types = compose.types;
         availability = "none";
       };
       pkg = package (lib.intersectAttrs fnArgs stubs);

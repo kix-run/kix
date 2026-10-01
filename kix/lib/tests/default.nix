@@ -6188,6 +6188,15 @@ let
       evalFails
       ;
     validate = import ../eval/validate.nix { inherit lib; };
+  }
+  // import ./options-typing.nix {
+    inherit
+      lib
+      eval
+      kixlib
+      mkCluster
+      manifests
+      ;
   };
 
   failures = lib.filterAttrs (

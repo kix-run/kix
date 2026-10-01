@@ -41,62 +41,7 @@ let
         desc = "a lowercase DNS-1123 subdomain: letters, digits, '-' or '.', starting and ending alphanumeric";
       };
 
-  _parseQuantity =
-    resource: q:
-    let
-      str = builtins.unsafeDiscardStringContext (toString q);
-      cpuMilli = builtins.match "([0-9]+)m" str;
-      cpuPlainInt = builtins.match "([0-9]+)" str;
-      cpuDecimal = builtins.match "([0-9]+)\\.([0-9]+)" str;
-      memBin = builtins.match "([0-9]+)(Ki|Mi|Gi|Ti|Pi|Ei)" str;
-      memDec = builtins.match "([0-9]+)(K|M|G|T|P|E)" str;
-      memPlain = builtins.match "([0-9]+)" str;
-      binMult =
-        s:
-        {
-          Ki = 1024;
-          Mi = 1024 * 1024;
-          Gi = 1024 * 1024 * 1024;
-          Ti = 1024 * 1024 * 1024 * 1024;
-          Pi = 1024 * 1024 * 1024 * 1024 * 1024;
-          Ei = 1024 * 1024 * 1024 * 1024 * 1024 * 1024;
-        }
-        .${s};
-      decMult =
-        s:
-        {
-          K = 1000;
-          M = 1000000;
-          G = 1000000000;
-          T = 1000000000000;
-          P = 1000000000000000;
-          E = 1000000000000000000;
-        }
-        .${s};
-    in
-    if resource == "cpu" then
-      if cpuMilli != null then
-        builtins.fromJSON (builtins.head cpuMilli)
-      else if cpuDecimal != null then
-        let
-          whole = builtins.fromJSON (builtins.elemAt cpuDecimal 0);
-          frac = builtins.elemAt cpuDecimal 1;
-          fracPadded = builtins.substring 0 3 (frac + "000");
-          fracInt = builtins.fromJSON fracPadded;
-        in
-        whole * 1000 + fracInt
-      else if cpuPlainInt != null then
-        (builtins.fromJSON (builtins.head cpuPlainInt)) * 1000
-      else
-        null
-    else if memBin != null then
-      (builtins.fromJSON (builtins.elemAt memBin 0)) * (binMult (builtins.elemAt memBin 1))
-    else if memDec != null then
-      (builtins.fromJSON (builtins.elemAt memDec 0)) * (decMult (builtins.elemAt memDec 1))
-    else if memPlain != null then
-      builtins.fromJSON (builtins.head memPlain)
-    else
-      null;
+  quantity = import ../vocab/quantity.nix { inherit lib; };
 in
 {
   mkValidators =
@@ -621,8 +566,8 @@ in
                   null
                 else
                   let
-                    l = _parseQuantity res limits.${res};
-                    r = _parseQuantity res requests.${res};
+                    l = quantity.parse res limits.${res};
+                    r = quantity.parse res requests.${res};
                   in
                   if l == null || r == null then
                     null

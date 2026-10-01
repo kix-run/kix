@@ -8,6 +8,47 @@ let
 
   normalize = import ../core/normalize.nix { inherit lib; };
 
+  quantity = import ./quantity.nix { inherit lib; };
+
+  # Resource names a ResourceRequirements map may use besides cpu, memory
+  # and ephemeral-storage.
+  isResourceName =
+    name:
+    builtins.elem name [
+      "cpu"
+      "memory"
+      "ephemeral-storage"
+    ]
+    || builtins.match "hugepages-.+" name != null
+    || lib.hasInfix "/" name;
+
+  # The value of `kix.options.resources` with every unset field removed:
+  # no null leaves, no empty `requests` or `limits`, no null `claims`.
+  # Undeclared resource names are checked here because a freeformType's
+  # own `check` never runs; `apply` has no instance name to report.
+  cleanResources =
+    value:
+    let
+      dropNulls = lib.filterAttrs (_: v: v != null);
+      side =
+        sideName:
+        let
+          kept = dropNulls value.${sideName};
+          bad = builtins.filter (n: !(isResourceName n)) (builtins.attrNames kept);
+        in
+        if bad != [ ] then
+          throw "kix.options.resources: ${
+            lib.concatMapStringsSep ", " (n: "${sideName}.${n}") bad
+          } is not a resource name. Use cpu, memory or ephemeral-storage, hugepages-<size>, or an extended resource whose name contains \"/\" (nvidia.com/gpu)."
+        else
+          kept;
+      requests = side "requests";
+      limits = side "limits";
+    in
+    lib.optionalAttrs (requests != { }) { inherit requests; }
+    // lib.optionalAttrs (limits != { }) { inherit limits; }
+    // lib.optionalAttrs (value.claims != null) { claims = map dropNulls value.claims; };
+
   resourceNamespace =
     resource:
     let
@@ -130,22 +171,138 @@ rec {
     else
       lib.recursiveUpdate base overrides;
 
+  # Option types for values Kubernetes parses. `quantity` is the grammar of
+  # vocab/quantity.nix: "500m", "1.5Gi", 2.
+  types.quantity = quantity.type;
+
+  # The quantity `q` in millicores when `resource` is "cpu", and in bytes
+  # otherwise, rounded down. null when `q` is not a quantity.
+  #
+  #   kix.parseQuantity "memory" "512Mi"   # 536870912
+  parseQuantity = quantity.parse;
+
+  # A size in whole GiB, rounded down ("500Mi" gives 0). null when `s` is
+  # not a quantity.
   parseGi =
     s:
     let
-      str = builtins.unsafeDiscardStringContext (toString s);
-      matchTi = builtins.match "([0-9]+)Ti" str;
-      matchGi = builtins.match "([0-9]+)Gi" str;
-      matchMi = builtins.match "([0-9]+)Mi" str;
+      bytes = quantity.parse "memory" s;
     in
-    if matchTi != null then
-      (builtins.fromJSON (builtins.head matchTi)) * 1024
-    else if matchGi != null then
-      builtins.fromJSON (builtins.head matchGi)
-    else if matchMi != null then
-      (builtins.fromJSON (builtins.head matchMi)) / 1024
+    if bytes == null then
+      null
+    else if builtins.isInt bytes then
+      bytes / 1073741824
     else
-      null;
+      builtins.floor (bytes / 1073741824);
+
+  # The env attrset for `kix.mkEnvVars`: the package's `defaults`, then the
+  # instance's `env` (an `kix.options.env` value), then the variables the
+  # package owns. Each entry of `owned` is
+  #   { vars ? { }; names ? [ ]; from; fix; }
+  # `vars` are added to the result and may not appear in `env`; `names` may
+  # not appear in `env` and are delivered another way (an `envFrom`). A key
+  # in `env` that a group owns throws, also when its value is null, with
+  # one line per group naming `from` and `fix`.
+  #
+  #   env = kix.mkEnvVars (kix.mergeEnv {
+  #     inherit who;
+  #     defaults.LOG_LEVEL = "info";
+  #     owned = [ {
+  #       vars.DB_HOST = database.out.fqdn;
+  #       from = "the database dependency";
+  #       fix = "Wire a different database instance through deps.database instead.";
+  #     } ];
+  #   } config.env);
+  mergeEnv =
+    {
+      who,
+      owned ? [ ],
+      defaults ? { },
+    }:
+    env:
+    let
+      hits = group: builtins.filter (n: env ? ${n}) (builtins.attrNames (group.vars or { }) ++ group.names or [ ]);
+      lines = builtins.concatMap (
+        group:
+        let
+          h = hits group;
+        in
+        lib.optional (h != [ ])
+          "${who}: env sets ${lib.concatStringsSep ", " h}, which ${
+            if builtins.length h == 1 then "comes" else "come"
+          } from ${group.from}. ${group.fix}"
+      ) owned;
+    in
+    if lines != [ ] then
+      throw (lib.concatStringsSep "\n" lines)
+    else
+      defaults // env // lib.foldl' (acc: group: acc // group.vars or { }) { } owned;
+
+  # Returns `args` (an `extraArgs` list) unless it sets a flag the package
+  # owns. `owned` maps each flag to the reason and fix shown in the error.
+  # An argument sets a flag when it equals the flag or starts with the flag
+  # followed by "=", so `--ingress-class-by-name=true` does not set
+  # `--ingress-class`. Every hit is reported, one line each.
+  #
+  #   args = baseArgs ++ kix.guardArgs {
+  #     inherit who;
+  #     owned."--metrics-bind-address" = "the metrics Service uses :8080; remove it.";
+  #   } config.extraArgs;
+  guardArgs =
+    {
+      who,
+      option ? "extraArgs",
+      owned,
+    }:
+    args:
+    let
+      flagOf =
+        arg: lib.findFirst (flag: arg == flag || lib.hasPrefix "${flag}=" arg) null (builtins.attrNames owned);
+      lines = builtins.concatMap (
+        arg:
+        let
+          flag = flagOf arg;
+        in
+        lib.optional (flag != null) "${who}: ${option} sets \"${arg}\", which the package owns: ${owned.${flag}}"
+      ) args;
+    in
+    if lines != [ ] then throw (lib.concatStringsSep "\n" lines) else args;
+
+  # Returns `dep` (a secret dependency, or null for an absent optional one)
+  # after checking that its `out.keys` declares every name in `keys` and,
+  # when `anyOf` is a list of key groups, every name of at least one group.
+  # `arg` is the dependency's argument name, for the error. Read the secret
+  # through the returned value, so the check runs before any `keyRef`.
+  #
+  #   creds = kix.checkSecretKeys {
+  #     inherit who;
+  #     arg = "cloudCredentials";
+  #     dep = cloudCredentials;
+  #     keys = [ "cloud" ];
+  #   };
+  checkSecretKeys =
+    {
+      who,
+      arg,
+      dep,
+      keys ? [ ],
+      anyOf ? null,
+    }:
+    let
+      declared = if dep.out.keys or null == null then [ ] else dep.out.keys;
+      missingOf = names: builtins.filter (k: !(builtins.elem k declared)) names;
+      missingKeys = missingOf keys;
+      groupMet = anyOf == null || builtins.any (group: missingOf group == [ ]) anyOf;
+      showGroup = group: "[${lib.concatStringsSep ", " group}]";
+      wanted =
+        lib.optional (missingKeys != [ ]) (lib.concatStringsSep ", " missingKeys)
+        ++ lib.optional (!groupMet) "one of ${lib.concatMapStringsSep " or " showGroup anyOf}";
+      declaredText = if declared == [ ] then "no keys" else lib.concatStringsSep ", " declared;
+    in
+    if dep == null || wanted == [ ] then
+      dep
+    else
+      throw "${who}: deps.${arg} resolved to secret \"${dep.out.name}\", which declares ${declaredText}; this package reads ${lib.concatStringsSep " and " wanted}. Add them to that instance's keys (a SOPS secret lists them in keys), or wire another secret with deps.${arg} = ref.<ns>.<instance>.";
 
   service = {
     extractPorts =
@@ -707,6 +864,111 @@ rec {
           } shownDefault
         );
       };
+
+    # Container resource requests and limits as typed fields. Each default
+    # sits on its field, so an instance that sets `limits.memory` keeps the
+    # package's `requests`; null removes a default. The value is a
+    # ResourceRequirements with unset fields absent, ready for a container's
+    # `resources`.
+    #
+    #   options.resources = kix.options.resources {
+    #     requests = { cpu = "100m"; memory = "128Mi"; };
+    #     limits.memory = "256Mi";
+    #   };
+    #
+    # Defaults may set cpu, memory and ephemeral-storage. An instance may
+    # also set hugepages-<size> and extended resources (nvidia.com/gpu).
+    resources =
+      {
+        requests ? { },
+        limits ? { },
+        description ? "Container resource requests and limits. Each field keeps its default until set, and null removes a default.",
+      }:
+      let
+        known = [
+          "cpu"
+          "memory"
+          "ephemeral-storage"
+        ];
+        badDefaults = builtins.filter (k: !(builtins.elem k known)) (
+          builtins.attrNames requests ++ builtins.attrNames limits
+        );
+        side =
+          defaults:
+          lib.mkOption {
+            type = lib.types.submodule {
+              freeformType = lib.types.attrsOf types.quantity;
+              options = lib.genAttrs known (
+                name:
+                lib.mkOption {
+                  type = lib.types.nullOr types.quantity;
+                  default = defaults.${name} or null;
+                  description = "The ${name} quantity. Null leaves it unset.";
+                }
+              );
+            };
+            default = { };
+            description = "Resource quantities by name.";
+          };
+        shownDefault = cleanResources {
+          inherit requests limits;
+          claims = null;
+        };
+      in
+      if badDefaults != [ ] then
+        throw "kix.options.resources: defaults may set cpu, memory and ephemeral-storage; ${lib.concatStringsSep ", " badDefaults} is not one of them."
+      else
+        lib.mkOption {
+          inherit description;
+          default = { };
+          defaultText = lib.literalExpression (lib.generators.toPretty { } shownDefault);
+          type = lib.types.submodule {
+            options = {
+              requests = side requests;
+              limits = side limits;
+              claims = lib.mkOption {
+                type = lib.types.nullOr (
+                  lib.types.listOf (
+                    lib.types.submodule {
+                      options = {
+                        name = lib.mkOption {
+                          type = lib.types.str;
+                          description = "Name of an entry in the pod's `resourceClaims`.";
+                        };
+                        request = lib.mkOption {
+                          type = lib.types.nullOr lib.types.str;
+                          default = null;
+                          description = "Request within the claim to use. Null uses the whole claim.";
+                        };
+                      };
+                    }
+                  )
+                );
+                default = null;
+                description = "Dynamic resource claims the container uses. Null leaves it unset.";
+              };
+            };
+          };
+          apply = cleanResources;
+        };
+
+    # Extra environment variables for a container, rendered with
+    # `kix.mergeEnv` so the variables the package owns cannot be replaced.
+    env = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.nullOr (
+          lib.mkOptionType {
+            name = "envValue";
+            description = "string or env var source with `valueFrom`";
+            descriptionClass = "noun";
+            check = v: builtins.isString v || (builtins.isAttrs v && v ? valueFrom);
+            merge = lib.options.mergeEqualOption;
+          }
+        )
+      );
+      default = { };
+      description = "Extra environment variables. A value is a string, a `fieldRef` source such as `{ valueFrom.fieldRef.fieldPath = \"metadata.name\"; }`, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. A credential that comes from a dependency is wired by the package. Null removes a variable the package sets by default.";
+    };
 
     ingress = {
       host = lib.mkOption {
