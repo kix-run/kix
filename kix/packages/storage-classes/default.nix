@@ -1,14 +1,30 @@
 # storage-classes: StorageClasses for CSI drivers already running in the
 # cluster. It installs no provisioner; each class names a driver that some
 # other installation (the environment, a cloud add-on, another package)
-# provides.
+# provides. The classes carry no dependency on that driver: Kix neither
+# checks that it runs nor applies the classes after it.
 #
 # One instance provides the `storageClasses` role with a map of classes,
 # hence the plural name: the role allows one provider per cluster.
-# `out.storageClassName` is the class a consumer gets when it names none:
-# the single class annotated `storageclass.kubernetes.io/is-default-class:
-# "true"`, else the only class. With several classes and no single annotated
-# one, reading it fails the build, so each consumer names its class.
+#
+#   instances.kube-system.storage-classes = {
+#     package = packages.storage-classes;
+#     config.classes.local-path = {
+#       provisioner = "rancher.io/local-path";
+#       volumeBindingMode = "WaitForFirstConsumer";
+#     };
+#   };
+#
+# out.storageClassName: the class a consumer gets when it names none. It is
+#   the single class annotated `storageclass.kubernetes.io/is-default-class:
+#   "true"`, else the only class. With several classes and no single
+#   annotated one, reading it fails the build, so each consumer names its
+#   class.
+# out.name: the root class's name, which can differ from
+#   out.storageClassName.
+#
+# Every StorageClass v1 field has an option; anything else goes through the
+# instance's `partsOverlays` on the `classes` part.
 #
 # root = the first class by name; it requires every class.
 
@@ -61,6 +77,7 @@
         inherit scope clusterConfig who;
         optionPath = "config.classes";
         classes = config.classes;
+        parts = self.classes;
       };
     in
     if config.classes == { } then
@@ -71,10 +88,7 @@
         root = {
           resource = self.classes.${builtins.head (builtins.attrNames config.classes)};
           requires = builtins.attrValues self.classes;
-          out = {
-            storageClasses = self.classes;
-            inherit (sc) storageClassName;
-          };
+          out = { inherit (sc) storageClassName; };
         };
       };
 }
