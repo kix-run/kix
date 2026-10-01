@@ -1,0 +1,3 @@
+# 2026-10-01 · `kix/packages/prometheus-default-rules/components/coredns.nix` · The CoreDNS bridge monitor scrapes a Kix-managed coredns a second time.
+
+The bridge Service selects `k8s-app: kube-dns` in `kube-system` on port 9153. The coredns package labels its pods the same way and, with a `prometheus` dependency, scrapes them through its own ServiceMonitor. A cluster with both gets every CoreDNS series twice, under two `service` labels, so sums over CoreDNS metrics that do not filter by `service` count each request twice. `monitors.coredns.enabled = false` avoids it by hand; nothing turns it off when a managed coredns is the `dns` provider.
