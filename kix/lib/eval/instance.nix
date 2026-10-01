@@ -164,7 +164,7 @@ in
           namespaces = nsResources;
           labelStyle = instCfg.labelStyle;
           selectorLabelsOverride = instCfg.selectorLabels;
-          clusterDomain = clusterConfig.clusterDomain or "cluster.local";
+          inherit (clusterConfig) clusterDomain;
           capabilities = clusterConfig.cluster.capabilities or { };
           inherit factBehaviorOverrides;
           # Lazy: settled by the outer fixpoint before the first mkWorkload forces it.

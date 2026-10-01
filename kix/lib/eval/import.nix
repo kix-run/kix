@@ -50,7 +50,7 @@ rec {
       namespaceName,
       namespaceResource,
       clusterLabels ? { },
-      clusterDomain ? "cluster.local",
+      clusterDomain,
     }:
     let
       selectorLabels = {
@@ -206,7 +206,7 @@ rec {
         if importDef.from != null then
           let
             importScope = mkImportScope {
-              clusterDomain = clusterConfig.clusterDomain or "cluster.local";
+              inherit (clusterConfig) clusterDomain;
               inherit
                 instanceName
                 namespaceName

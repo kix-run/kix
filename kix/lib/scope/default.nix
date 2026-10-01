@@ -39,7 +39,7 @@ rec {
       clusterLabels ? { },
       labelStyle ? "kix",
       selectorLabelsOverride ? null,
-      clusterDomain ? "cluster.local",
+      clusterDomain,
       capabilities ? { },
       networkPolicyEnforcer ? null,
       peekedPackageMeta ? { },
@@ -213,6 +213,7 @@ rec {
               namespaces
               clusterLabels
               labelStyle
+              clusterDomain
               capabilities
               networkPolicyEnforcer
               peekedPackageMeta
