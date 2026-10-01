@@ -8,8 +8,8 @@
 #   zone  the loss of one zone causes no downtime      (needs two or more zones)
 #
 # Pure: no module system, no scope. `resolve` is called once per instance
-# by eval/instance.nix; `pick` and `atLeast` are what packages see as
-# `kix.availability`.
+# by eval/instance.nix; `pick`, `atLeast` and `spreadConstraints` are what
+# packages see as `kix.availability`.
 { lib }:
 
 let
@@ -70,6 +70,51 @@ let
         level = "node";
         certain = multiNode != null && zones != null;
       };
+
+  # Topology spread constraints for pods at `level`, selected by `selector`
+  # (a matchLabels set). `topology` has the shape of
+  # clusterConfig.cluster.topology: { zoneKey, hostKey, failureDomainKeys }.
+  # One constraint per failure-domain key, outermost first; a single-node
+  # cluster has no keys and gets [ ].
+  #
+  # The plugin derives spread for the workloads Kix renders. A package calls
+  # this for operator-placed operands whose custom resource takes a pod-spec
+  # spread list:
+  #
+  #   kix.availability.spreadConstraints {
+  #     level = availability.level;
+  #     selector = operandSelector;
+  #     topology = clusterConfig.cluster.topology;
+  #   }
+  spreadConstraints =
+    {
+      level,
+      selector,
+      topology,
+    }:
+    let
+      # DoNotSchedule on the key the requested level names, ScheduleAnyway
+      # on the others. maxSkew = 1 allows more replicas than domains while
+      # keeping their distribution within one pod.
+      whenUnsatisfiable =
+        key:
+        if level == "zone" && key == topology.zoneKey then
+          "DoNotSchedule"
+        else if level == "node" && key == topology.hostKey then
+          "DoNotSchedule"
+        else
+          "ScheduleAnyway";
+    in
+    # nodeTaintsPolicy = "Honor" leaves nodes the pods cannot tolerate out of
+    # the counts. Otherwise an unschedulable control-plane node can make a
+    # hard hostname constraint block further worker pods.
+    map (key: {
+      topologyKey = key;
+      maxSkew = 1;
+      whenUnsatisfiable = whenUnsatisfiable key;
+      nodeTaintsPolicy = "Honor";
+      labelSelector.matchLabels = selector;
+    }) topology.failureDomainKeys;
 
   # The ladder for one instance: instance override, else cluster default;
   # capped by the package ceiling (meta.availability.max) with a warning;
@@ -135,6 +180,7 @@ in
     atLeast
     pick
     substrate
+    spreadConstraints
     resolve
     ;
 }

@@ -41,18 +41,6 @@ let
     else
       [ hostKey ];
 
-  # Use DoNotSchedule on the key represented by the requested level and
-  # ScheduleAnyway on lower-priority keys. maxSkew=1 permits more replicas
-  # than domains while keeping their distribution within one pod.
-  whenUnsatisfiable =
-    level: key:
-    if level == "zone" && key == zoneKey then
-      "DoNotSchedule"
-    else if level == "node" && key == hostKey then
-      "DoNotSchedule"
-    else
-      "ScheduleAnyway";
-
   isMultiReplica =
     kind: spec:
     builtins.elem kind spreadKinds && builtins.isInt (spec.replicas or null) && spec.replicas > 1;
@@ -61,24 +49,21 @@ let
   # derives neither constraints nor a PDB for it (one signal, one meaning).
   authorPlaced = spec: (spec.template.spec or { }) ? topologySpreadConstraints;
 
-  # Exclude nodes rejected by taints from topology counts. Otherwise an
-  # unschedulable control-plane node can make a hard hostname constraint
-  # prevent additional worker pods.
-  # Count only the current Deployment revision during rolling updates.
-  # StatefulSets replace pods in place and have no pod-template-hash label.
+  # The constraints come from core/availability.nix. For a Deployment,
+  # matchLabelKeys counts only the current revision during a rolling
+  # update; StatefulSets replace pods in place and have no
+  # pod-template-hash label.
   mkConstraints =
     kind: level: selector:
-    map (
-      key:
-      {
-        topologyKey = key;
-        maxSkew = 1;
-        whenUnsatisfiable = whenUnsatisfiable level key;
-        nodeTaintsPolicy = "Honor";
-        labelSelector.matchLabels = selector;
-      }
-      // lib.optionalAttrs (kind == "Deployment") { matchLabelKeys = [ "pod-template-hash" ]; }
-    ) failureDomainKeys;
+    map (c: c // lib.optionalAttrs (kind == "Deployment") { matchLabelKeys = [ "pod-template-hash" ]; })
+      (
+        avail.spreadConstraints {
+          inherit level selector;
+          topology = {
+            inherit zoneKey hostKey failureDomainKeys;
+          };
+        }
+      );
 
   # A PDB written by the author covers a workload when its selector is a
   # subset of the workload's template labels.

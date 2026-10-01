@@ -11,12 +11,15 @@ compose
   # Map availability levels to package replica counts and quorums:
   # kix.availability.pick level { none = 1; pod = 2; node = 2; zone = 3; }
   # kix.availability.atLeast "node" level
+  # Spread for operator-placed operands: kix.availability.spreadConstraints
+  # (core/availability.nix).
   availability = {
     inherit (availability)
       levels
       pick
       atLeast
       rank
+      spreadConstraints
       ;
   };
   # The severity a scorecard rule resolves to for this cluster and
