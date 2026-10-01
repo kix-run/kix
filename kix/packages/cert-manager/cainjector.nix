@@ -1,17 +1,24 @@
-# cert-manager CA injector: injects CA bundles into webhooks, API services, and CRDs.
+# cert-manager CA injector: copies CA bundles into webhook configurations,
+# APIServices, and CRDs that carry a cert-manager.io/inject-ca-from*
+# annotation.
 
 {
   self,
   config,
-  clusterConfig,
   scope,
   lib,
   kix,
+  availability,
+  prometheus ? null,
+  ...
 }:
 let
-  common = import ./common.nix { instanceName = scope.instanceName; };
+  common = import ./common.nix { inherit lib; };
   name = scope.instanceName;
   ns = scope.namespaceName;
+  who = common.who scope;
+  labels = (common.labels name).cainjector;
+  metricsOn = config.metrics.enabled && prometheus != null;
 
   inherit (scope.rbac)
     group
@@ -45,7 +52,7 @@ let
 
   cainjectorClusterRoles = mkClusterRoleSet scope {
     subjects = mkCainjectorSubject;
-    labels = common.cainjectorLabels;
+    inherit labels;
     roles = {
       "${name}-cainjector" = grant [
         (cm.certificates |> watch)
@@ -103,9 +110,10 @@ let
     };
   };
 
+  # The binary fixes these lease names, whatever the instance is called.
   cainjectorLeaderElection = mkRoleSet scope {
     subjects = mkCainjectorSubject;
-    labels = common.cainjectorLabels;
+    inherit labels;
     roles = {
       "${name}-cainjector:leaderelection" = grant [
         (
@@ -127,90 +135,92 @@ let
 
 in
 {
-  # -- ServiceAccount --
-
   cainjectorServiceAccount = scope.mkResource {
     apiVersion = "v1";
     kind = "ServiceAccount";
     name = "${name}-cainjector";
-    labels = common.cainjectorLabels;
+    inherit labels;
     extra.automountServiceAccountToken = true;
   };
 
-  # -- Service --
-
-  cainjectorService = scope.mkResource {
-    apiVersion = "v1";
-    kind = "Service";
-    name = "${name}-cainjector";
-    labels = common.cainjectorLabels;
-    spec = {
-      type = "ClusterIP";
-      selector = self.cainjectorDeployment.out.selector;
-      ports = [
-        {
-          name = "http-metrics";
-          port = 9402;
-          protocol = "TCP";
-        }
-      ];
-    };
-  };
-
-  # -- Deployment --
+  # Exists only for scraping.
+  cainjectorService =
+    if metricsOn then
+      scope.mkResource {
+        apiVersion = "v1";
+        kind = "Service";
+        name = "${name}-cainjector";
+        inherit labels;
+        spec = {
+          type = "ClusterIP";
+          selector = self.cainjectorDeployment.out.selector;
+          ports = [
+            {
+              name = "http-metrics";
+              port = common.ports.metrics;
+              protocol = "TCP";
+              targetPort = common.ports.metrics;
+            }
+          ];
+        };
+      }
+    else
+      null;
 
   cainjectorDeployment =
     {
       name = "${name}-cainjector";
-      labels = common.cainjectorLabels;
+      inherit labels;
       spec = {
-        replicas = config.cainjector.replicaCount;
-        selector.matchLabels = common.cainjectorLabels;
-        template = {
-          metadata.annotations = {
-            "prometheus.io/path" = "/metrics";
-            "prometheus.io/scrape" = "true";
-            "prometheus.io/port" = "9402";
-          };
-          spec = {
-            serviceAccountName = self.cainjectorServiceAccount.out.name;
-            # Kubernetes' default, set explicitly; the chart (v1.17.1) sets none.
-            terminationGracePeriodSeconds = 30;
-            enableServiceLinks = false;
-            securityContext = common.podSecurityContext;
-            containers = [
-              {
-                name = "cert-manager-cainjector";
-                image = kix.image.ref config.cainjector.image;
-                imagePullPolicy = config.cainjector.image.pullPolicy;
-                args = [
-                  "--v=2"
-                  "--leader-election-namespace=${ns}"
-                ];
-                ports = [
-                  {
-                    name = "http-metrics";
-                    containerPort = 9402;
-                    protocol = "TCP";
-                  }
-                ];
-                env = [
-                  {
-                    name = "POD_NAMESPACE";
-                    valueFrom.fieldRef = {
-                      apiVersion = "v1";
-                      fieldPath = "metadata.namespace";
-                    };
-                  }
-                ];
-                inherit (config.cainjector) resources;
-                securityContext = common.containerSecurityContext;
-              }
-            ];
-            nodeSelector = {
-              "kubernetes.io/os" = "linux";
-            };
-          };
+        # Leader-elected: one replica serves; from `node` up a standby keeps
+        # injecting when a node is lost.
+        replicas = kix.availability.pick availability {
+          none = 1;
+          pod = 1;
+          node = 2;
+          zone = 2;
+        };
+        selector.matchLabels = labels;
+        template.spec = {
+          serviceAccount = self.cainjectorServiceAccount;
+          # Kubernetes' default, set because the scorecard asks every
+          # workload to set it.
+          terminationGracePeriodSeconds = 30;
+          enableServiceLinks = false;
+          securityContext = common.podSecurityContext;
+          containers = [
+            {
+              name = "cert-manager-cainjector";
+              image = kix.image.ref config.cainjector.image;
+              imagePullPolicy = config.cainjector.image.pullPolicy;
+              args = [
+                "--v=2"
+                "--leader-election-namespace=${ns}"
+              ]
+              ++ kix.guardArgs {
+                inherit who;
+                option = "cainjector.extraArgs";
+                owned."--leader-election-namespace" =
+                  "the leader-election Role lives in the instance's namespace; remove it.";
+              } config.cainjector.extraArgs;
+              ports = [
+                {
+                  name = "http-metrics";
+                  containerPort = common.ports.metrics;
+                  protocol = "TCP";
+                }
+              ];
+              env = [
+                {
+                  name = "POD_NAMESPACE";
+                  valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                }
+              ];
+              inherit (config.cainjector) resources;
+              securityContext = common.containerSecurityContext;
+            }
+          ];
+          nodeSelector."kubernetes.io/os" = "linux";
         };
       };
     }

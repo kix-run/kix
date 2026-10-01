@@ -70,9 +70,8 @@
       certManager,
     }:
     let
-      # Use CRD builders from cert-manager's crds folder (via DI).
-      mkCert = certManager.crds.certificates.out.mkCR scope;
-      mkIssuerCR = certManager.crds.clusterIssuers.out.mkCR scope;
+      mkCert = certManager.out.mkCertificate scope;
+      mkIssuerCR = certManager.out.mkClusterIssuer scope;
 
       mkAcmeIssuer =
         name: issuerCfg:

@@ -1,17 +1,24 @@
-# cert-manager controller: main reconciliation loop for Certificate/Issuer CRDs.
+# cert-manager controller: reconciles Certificates, Issuers, ACME Orders, and
+# Challenges, and creates Certificates for annotated Ingresses and Gateways
+# (ingress-shim).
 
 {
   self,
   config,
-  clusterConfig,
   scope,
   lib,
   kix,
+  availability,
+  prometheus ? null,
+  ...
 }:
 let
-  common = import ./common.nix { instanceName = scope.instanceName; };
+  common = import ./common.nix { inherit lib; };
+  labels = (common.labels name).controller;
   name = scope.instanceName;
   ns = scope.namespaceName;
+  who = common.who scope;
+  metricsOn = config.metrics.enabled && prometheus != null;
 
   inherit (scope.rbac)
     group
@@ -45,6 +52,7 @@ let
   gw = group "gateway.networking.k8s.io" [
     "gateways"
     "httproutes"
+    "listenersets"
   ];
   net = group "networking.k8s.io" [ "ingresses" ];
   certs = group "certificates.k8s.io" [
@@ -63,11 +71,9 @@ let
     }
   ];
 
-  # ── Controller cluster-scoped RBAC ─────────────────────────────────
-
   controllerClusterRoles = mkClusterRoleSet scope {
     subjects = mkControllerSubject self.controllerServiceAccount;
-    labels = common.controllerLabels;
+    inherit labels;
     roles = {
 
       "${name}-controller-issuers" = grant [
@@ -126,8 +132,9 @@ let
             "delete"
           ]
         )
-        # orders/finalizers: update
         (acme.orders |> finalize)
+        (cm.clusterissuers |> finalize)
+        (cm.issuers |> finalize)
         (cm.clusterissuers |> watch)
         (cm.issuers |> watch)
         (core.secrets |> watch)
@@ -172,6 +179,7 @@ let
         (net.ingresses |> watchAndFinalize)
         (gw.gateways |> watchAndFinalize)
         (gw.httproutes |> watchAndFinalize)
+        (gw.listenersets |> watchAndFinalize)
         (core.events |> emit)
       ];
 
@@ -216,11 +224,9 @@ let
     };
   };
 
-  # ── Controller namespace-scoped RBAC ───────────────────────────────
-
   controllerLeaderElection = mkRoleSet scope {
     subjects = mkControllerSubject self.controllerServiceAccount;
-    labels = common.controllerLabels;
+    inherit labels;
     roles = {
       "${name}:leaderelection" = grant [
         (
@@ -237,42 +243,22 @@ let
     };
   };
 
-  controllerTokenRequest = mkRoleSet scope {
-    subjects = mkControllerSubject self.controllerServiceAccount;
-    labels = common.controllerLabels;
-    roles = {
-      "${name}-tokenrequest" = {
-        bindingName = "cert-manager-${name}-tokenrequest";
-        rules = grant [
-          (
-            core "serviceaccounts/token"
-            |> restrictTo [ self.controllerServiceAccount.out.name ]
-            |> allow [ "create" ]
-          )
-        ];
-      };
-    };
-  };
-
 in
 {
-  # -- ServiceAccount --
-
   controllerServiceAccount = scope.mkResource {
     apiVersion = "v1";
     kind = "ServiceAccount";
-    name = "${name}";
-    labels = common.controllerLabels;
+    inherit name labels;
     extra.automountServiceAccountToken = true;
   };
 
-  # -- Aggregate roles (no binding; RBAC aggregation labels) --
-
+  # Aggregated into the built-in view, edit, admin, and cluster-reader roles
+  # by label; nothing binds them directly.
   clusterViewRole = scope.mkClusterResource {
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
     name = "${name}-cluster-view";
-    labels = common.controllerLabels // {
+    labels = labels // {
       "rbac.authorization.k8s.io/aggregate-to-cluster-reader" = "true";
     };
     extra.rules = grant [ (cm.clusterissuers |> watch) ];
@@ -282,7 +268,7 @@ in
     apiVersion = "rbac.authorization.k8s.io/v1";
     kind = "ClusterRole";
     name = "${name}-view";
-    labels = common.controllerLabels // {
+    labels = labels // {
       "rbac.authorization.k8s.io/aggregate-to-view" = "true";
       "rbac.authorization.k8s.io/aggregate-to-edit" = "true";
       "rbac.authorization.k8s.io/aggregate-to-admin" = "true";
@@ -297,171 +283,159 @@ in
     ];
   };
 
-  editRole = scope.mkClusterResource {
-    apiVersion = "rbac.authorization.k8s.io/v1";
-    kind = "ClusterRole";
-    name = "${name}-edit";
-    labels = common.controllerLabels // {
-      "rbac.authorization.k8s.io/aggregate-to-edit" = "true";
-      "rbac.authorization.k8s.io/aggregate-to-admin" = "true";
-    };
-    extra.rules = grant [
-      (
-        cm.certificates
-        |> allow [
-          "create"
-          "delete"
-          "deletecollection"
-          "patch"
-          "update"
-        ]
-      )
-      (
-        cm.certificaterequests
-        |> allow [
-          "create"
-          "delete"
-          "deletecollection"
-          "patch"
-          "update"
-        ]
-      )
-      (
-        cm.issuers
-        |> allow [
-          "create"
-          "delete"
-          "deletecollection"
-          "patch"
-          "update"
-        ]
-      )
-      (cm "certificates/status" |> allow [ "update" ])
-      (
-        acme.challenges
-        |> allow [
-          "create"
-          "delete"
-          "deletecollection"
-          "patch"
-          "update"
-        ]
-      )
-      (
-        acme.orders
-        |> allow [
-          "create"
-          "delete"
-          "deletecollection"
-          "patch"
-          "update"
-        ]
-      )
-    ];
-  };
-
-  # -- Service --
-
-  controllerService = scope.mkResource {
-    apiVersion = "v1";
-    kind = "Service";
-    name = "${name}";
-    labels = common.controllerLabels;
-    spec = {
-      type = "ClusterIP";
-      selector = self.controllerDeployment.out.selector;
-      ports = [
-        {
-          name = "tcp-prometheus-servicemonitor";
-          port = 9402;
-          protocol = "TCP";
-          targetPort = 9402;
-        }
+  editRole =
+    let
+      edit = allow [
+        "create"
+        "delete"
+        "deletecollection"
+        "patch"
+        "update"
+      ];
+    in
+    scope.mkClusterResource {
+      apiVersion = "rbac.authorization.k8s.io/v1";
+      kind = "ClusterRole";
+      name = "${name}-edit";
+      labels = labels // {
+        "rbac.authorization.k8s.io/aggregate-to-edit" = "true";
+        "rbac.authorization.k8s.io/aggregate-to-admin" = "true";
+      };
+      extra.rules = grant [
+        (cm.certificates |> edit)
+        (cm.certificaterequests |> edit)
+        (cm.issuers |> edit)
+        (cm "certificates/status" |> allow [ "update" ])
+        # The controller creates Challenges and Orders; users may only
+        # clean them up or edit a Challenge.
+        (
+          acme.challenges
+          |> allow [
+            "delete"
+            "deletecollection"
+            "patch"
+            "update"
+          ]
+        )
+        (
+          acme.orders
+          |> allow [
+            "delete"
+            "deletecollection"
+          ]
+        )
       ];
     };
-    outputs = {
-      metricsPort = "9402";
-    };
-  };
 
-  # -- Deployment --
+  # Exists only for scraping.
+  controllerService =
+    if metricsOn then
+      scope.mkResource {
+        apiVersion = "v1";
+        kind = "Service";
+        name = common.controllerServiceName name;
+        inherit labels;
+        spec = {
+          type = "ClusterIP";
+          selector = self.controllerDeployment.out.selector;
+          ports = [
+            {
+              name = "http-metrics";
+              port = common.ports.metrics;
+              protocol = "TCP";
+              targetPort = common.ports.metrics;
+            }
+          ];
+        };
+      }
+    else
+      null;
 
   controllerDeployment =
     {
-      name = "${name}";
-      labels = common.controllerLabels;
+      inherit name labels;
       spec = {
-        replicas = config.replicaCount;
-        selector.matchLabels = common.controllerLabels;
-        template = {
-          metadata.annotations = {
-            "prometheus.io/path" = "/metrics";
-            "prometheus.io/scrape" = "true";
-            "prometheus.io/port" = "9402";
-          };
-          spec = {
-            serviceAccountName = self.controllerServiceAccount.out.name;
-            # Kubernetes' default, set explicitly; the chart (v1.17.1) sets none.
-            terminationGracePeriodSeconds = 30;
-            enableServiceLinks = false;
-            securityContext = common.podSecurityContext;
-            containers = [
-              ({
-                name = "cert-manager-controller";
-                image = kix.image.ref config.image;
-                imagePullPolicy = config.image.pullPolicy;
-                args = [
-                  "--v=2"
-                  "--cluster-resource-namespace=$(POD_NAMESPACE)"
-                  "--acme-http01-solver-image=${kix.image.ref config.acmesolver.image}"
-                  "--leader-election-namespace=${ns}"
-                ]
-                ++ lib.optional config.dns01RecursiveNameserversOnly "--dns01-recursive-nameservers-only"
-                ++ lib.optional (
-                  config.dns01RecursiveNameservers != ""
-                ) "--dns01-recursive-nameservers=${config.dns01RecursiveNameservers}"
-                ++ [ "--max-concurrent-challenges=60" ];
-                ports = [
-                  {
-                    name = "http-metrics";
-                    containerPort = 9402;
-                    protocol = "TCP";
-                  }
-                  {
-                    name = "http-healthz";
-                    containerPort = 9403;
-                    protocol = "TCP";
-                  }
-                ];
-                securityContext = common.containerSecurityContext;
-                env = [
-                  {
-                    name = "POD_NAMESPACE";
-                    valueFrom.fieldRef = {
-                      apiVersion = "v1";
-                      fieldPath = "metadata.namespace";
-                    };
-                  }
-                ];
-                livenessProbe = {
-                  httpGet = {
-                    port = "http-healthz";
-                    path = "/livez";
-                    scheme = "HTTP";
-                  };
-                  initialDelaySeconds = 10;
-                  periodSeconds = 10;
-                  timeoutSeconds = 15;
-                  successThreshold = 1;
-                  failureThreshold = 8;
+        # Leader-elected: one replica serves; from `node` up a standby takes
+        # over when a node is lost.
+        replicas = kix.availability.pick availability {
+          none = 1;
+          pod = 1;
+          node = 2;
+          zone = 2;
+        };
+        selector.matchLabels = labels;
+        template.spec = {
+          serviceAccount = self.controllerServiceAccount;
+          # Kubernetes' default, set because the scorecard asks every
+          # workload to set it.
+          terminationGracePeriodSeconds = 30;
+          enableServiceLinks = false;
+          securityContext = common.podSecurityContext;
+          containers = [
+            {
+              name = "cert-manager-controller";
+              image = builtins.seq (common.checkRelease who config.image.tag) (kix.image.ref config.image);
+              imagePullPolicy = config.image.pullPolicy;
+              args = [
+                "--v=2"
+                "--cluster-resource-namespace=$(POD_NAMESPACE)"
+                "--leader-election-namespace=${ns}"
+                "--acme-http01-solver-image=${kix.image.ref config.operandImages.acmesolver}"
+                "--max-concurrent-challenges=60"
+              ]
+              ++ kix.guardArgs {
+                inherit who;
+                owned = {
+                  "--cluster-resource-namespace" =
+                    "the controller reads ClusterIssuer Secrets from the instance's namespace (out.clusterResourceNamespace); remove it.";
+                  "--leader-election-namespace" =
+                    "the leader-election Role lives in the instance's namespace; remove it.";
+                  "--acme-http01-solver-image" = "set operandImages.acmesolver instead.";
                 };
-                inherit (config) resources;
-              })
-            ];
-            nodeSelector = {
-              "kubernetes.io/os" = "linux";
-            };
-          };
+              } config.extraArgs;
+              ports = [
+                {
+                  name = "http-metrics";
+                  containerPort = common.ports.metrics;
+                  protocol = "TCP";
+                }
+                {
+                  name = "http-healthz";
+                  containerPort = common.ports.controllerHealthz;
+                  protocol = "TCP";
+                }
+              ];
+              securityContext = common.containerSecurityContext;
+              # --cluster-resource-namespace expands $(POD_NAMESPACE), and
+              # Kubernetes leaves an undefined variable unexpanded.
+              env = kix.mkEnvVars (
+                kix.mergeEnv {
+                  inherit who;
+                  owned = [
+                    {
+                      vars.POD_NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                      from = "the pod's namespace";
+                      fix = "Remove it; --cluster-resource-namespace reads it.";
+                    }
+                  ];
+                } config.env
+              );
+              livenessProbe = {
+                httpGet = {
+                  port = "http-healthz";
+                  path = "/livez";
+                  scheme = "HTTP";
+                };
+                initialDelaySeconds = 10;
+                periodSeconds = 10;
+                timeoutSeconds = 15;
+                successThreshold = 1;
+                failureThreshold = 8;
+              };
+              inherit (config) resources;
+            }
+          ];
+          nodeSelector."kubernetes.io/os" = "linux";
         };
       };
     }
@@ -469,4 +443,3 @@ in
 }
 // controllerClusterRoles
 // controllerLeaderElection
-// controllerTokenRequest
