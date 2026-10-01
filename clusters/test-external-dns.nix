@@ -1,15 +1,17 @@
 # clusters/test-external-dns.nix: external-dns on kind with the `inmemory`
-# provider, which needs no credentials and no egress.
+# provider, which needs no credentials and no egress. The how-to's tryout is
+# test-external-dns-tryout.nix; this cluster covers the rest.
 #
 # - `nodes` publishes an A record per node through `--fqdn-template`, since
-#   kind gives Services no LoadBalancer addresses. Its debug log shows the
-#   records it writes.
+#   kind gives Services no LoadBalancer addresses.
 # - `services` runs the default sources.
 # - `public` and `private` read Gateway API routes and share a namespace;
 #   each declares its own CRD reference markers.
 # - The `other` namespace holds a secret-ref aliased `providerCredentials`.
 #   It serves only its own namespace, so the instances above build without
 #   credentials.
+# - prometheus-operator gives every instance a metrics Service, a
+#   ServiceMonitor, and the stale-sync alert.
 #
 # Bring up:  kind create cluster --name external-dns
 #            kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml
@@ -24,7 +26,6 @@ kix.buildCluster {
     kix.flavors.kind
 
     {
-      # region:externalDnsKindTryout
       instances.external-dns.nodes = {
         package = packages.external-dns;
         config = {
@@ -39,7 +40,6 @@ kix.buildCluster {
           ];
         };
       };
-      # endregion:externalDnsKindTryout
 
       instances.external-dns.services = {
         package = packages.external-dns;
@@ -73,6 +73,8 @@ kix.buildCluster {
           };
         };
       };
+
+      instances.monitoring.prometheus-operator.package = packages."prometheus-operator";
 
       instances.other.other-dns-token = {
         package = packages.secret-ref;
