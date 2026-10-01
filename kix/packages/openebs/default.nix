@@ -10,7 +10,8 @@
 # Each subsystem has its own ServiceAccount + RBAC. Mayastor components share
 # a single SA (openebs-service-account) per the upstream chart convention.
 #
-# root = api-rest Service (primary Mayastor interface)
+# root = api-rest Service (primary Mayastor interface), or the controller of
+#        the first enabled engine when Mayastor is off
 # Everything else pulled in via requires chain.
 
 {
@@ -1062,7 +1063,9 @@ in
             ++ snapshots;
         };
     in
-    {
+    # A disabled engine sets its components to null, and kix takes every
+    # attribute here for a resource; the role sets are { } when disabled.
+    lib.filterAttrs (_: v: v != null) {
 
       # ==========================================================================
       #  CustomResourceDefinitions
@@ -4428,7 +4431,15 @@ in
       # ==========================================================================
 
       root = {
-        resource = self.apiRestService;
+        resource =
+          if config.mayastor.enabled then
+            self.apiRestService
+          else if config.zfsLocalPv.enabled then
+            self.zfsController
+          else if config.lvmLocalPv.enabled then
+            self.lvmController
+          else
+            self.localPvDeployment;
         requires =
           # --- CRDs ---
           lib.filter (r: r != null) (lib.attrValues self.crds)
