@@ -815,4 +815,138 @@ rec {
       inherit cr mkCR;
     };
 
+  # A PackageInstance in import mode: a placeholder for an object Kix does
+  # not create, which the deploy waits for. `mkResource` is the caller's
+  # builder; it supplies the namespace and the labels.
+  mkImportMarker =
+    { mkResource, namespaceName }:
+    {
+      markerName,
+      importKind,
+      importApiVersion,
+      importName,
+      extraAnnotations ? { },
+      extraRequires ? [ ],
+    }:
+    mkResource {
+      apiVersion = kixAnnotations.apiVersion;
+      kind = "PackageInstance";
+      name = markerName;
+      annotations = {
+        ${kixKeys.mode} = "import";
+        ${kixKeys.importKind} = importKind;
+        ${kixKeys.importApiVersion} = importApiVersion;
+        ${kixKeys.importName} = importName;
+      }
+      // extraAnnotations;
+      requires = [ kixCRDs.packageInstance ] ++ extraRequires;
+      extra.spec = {
+        instanceName = markerName;
+        namespaceName = namespaceName;
+        mode = "import";
+      };
+    };
+
+  # A handle for a CRD that something other than Kix installs: an import
+  # marker for the CustomResourceDefinition plus the `cr`/`mkCR` builders.
+  # scope.mkCRDRef and `kix.mkImport { crds }` both build it, with their own
+  # `mkResource`, so a CR built from either handle requires the same kind of
+  # marker. `site` names the declaration in error messages.
+  mkCRDRefHandle =
+    {
+      mkResource,
+      instanceName,
+      namespaceName,
+      site ? "mkCRDRef",
+      unservedFix ? "correct version on the scope.mkCRDRef that declares the kind",
+    }:
+    {
+      group,
+      kind,
+      plural,
+      # The API version the CRD serves for this kind. Required: Kix does
+      # not install the CRD, so it cannot read the version from a spec.
+      version ? null,
+      crdScope ? "Namespaced",
+      installedBy ? null,
+      # Endpoint handling for this kind's controller. mkCR passes it to
+      # each custom resource seal.
+      factBehavior ? null,
+      # Readiness condition stamped on each CR as kix.run/readiness and
+      # validated while evaluating the declaring instance.
+      readiness ? null,
+    }:
+    let
+      who = "${site} ${group}/${kind} in ${instanceName}";
+      _validatedVersion =
+        if version == null then
+          throw "${who}: set version to the API version the CustomResourceDefinition serves for this kind (for example \"v1\" or \"v1beta1\"). Kix does not install this CRD, so it cannot read the version, and a wrong one fails every apply of this kind."
+        else if
+          !(builtins.isString version && builtins.match "[a-z]([-a-z0-9]*[a-z0-9])?" version != null)
+        then
+          throw "${who}: version ${builtins.toJSON version} is not an API version. Kubernetes API versions are lowercase RFC 1035 labels, such as \"v1\" or \"v1beta1\"."
+        else
+          version;
+      _validatedScope =
+        if crdScope == "Namespaced" || crdScope == "Cluster" then
+          crdScope
+        else
+          throw "${who}: crdScope is ${builtins.toJSON crdScope}; use \"Namespaced\" or \"Cluster\", as the CustomResourceDefinition's spec.scope says.";
+      _validatedReadiness = validateReadiness "${site} ${instanceName}" "${group}/${kind}" readiness;
+      _validatedBehavior =
+        if factBehavior != null then
+          facts.validateBehavior "${site} ${instanceName}" "${group}/${kind}" factBehavior
+        else
+          null;
+      crdName = "${plural}.${group}";
+      groupSlug = builtins.replaceStrings [ "." ] [ "-" ] group;
+      # Per instance, as secret and service refs are: two instances in one
+      # namespace that reference the same CRD get two markers, and each
+      # marker names the instance that declared it.
+      markerName = "crd-ref-${instanceName}-${plural}-${groupSlug}";
+
+      installedByList =
+        if installedBy == null then
+          [ ]
+        else if builtins.isList installedBy then
+          installedBy
+        else
+          [ installedBy ];
+
+      _validated = builtins.seq _validatedVersion (builtins.seq _validatedScope _validatedReadiness);
+
+      marker = builtins.seq _validated (
+        mkImportMarker { inherit mkResource namespaceName; } {
+          inherit markerName;
+          importKind = "CustomResourceDefinition";
+          importApiVersion = "apiextensions.k8s.io/v1";
+          importName = crdName;
+          extraAnnotations = {
+            ${kixKeys.crdKind} = kind;
+            ${kixKeys.crdVersion} = _validatedVersion;
+            ${kixKeys.crdScope} = _validatedScope;
+          };
+          extraRequires = installedByList;
+        }
+      );
+
+      crdBuilders = mkCRDBuilders {
+        crdOrRef = marker;
+        factBehavior = _validatedBehavior;
+        readiness = _validatedReadiness;
+        version = _validatedVersion;
+        servedVersions = [ _validatedVersion ];
+        crdScope = _validatedScope;
+        inherit
+          group
+          kind
+          unservedFix
+          ;
+      };
+    in
+    marker
+    // {
+      out = marker.out // crdBuilders;
+    };
+
 }
