@@ -2,6 +2,8 @@
 #
 # Inline use:
 #     package = kix.helmChart { repo = "..."; name = "loki"; version = "..."; hash = "..."; };
+#   The root is the chart's only Service, else its only workload. A chart
+#   with several names one: `root = { kind = "Service"; name = "loki"; };`.
 #
 # Package use:
 #     build = { scope, ... }:
@@ -15,6 +17,7 @@
 
 let
   helmDag = import ./helm-dag.nix { inherit lib; };
+  helpers = import ./eval/helpers.nix { inherit lib; };
 
   # Kinds that are always cluster-scoped (no namespace in metadata).
   clusterScopedKinds = [
@@ -769,27 +772,9 @@ rec {
             else
               mkResourceCollection (replacements // { ${key} = newResource; });
 
-          # Select the first Service, Deployment, StatefulSet, DaemonSet, or
-          # other resource, in that order.
-          autoRoot =
-            let
-              services = builtins.filter (r: r.kind == "Service") effectiveResources;
-              deployments = builtins.filter (r: r.kind == "Deployment") effectiveResources;
-              statefulsets = builtins.filter (r: r.kind == "StatefulSet") effectiveResources;
-              daemonsets = builtins.filter (r: r.kind == "DaemonSet") effectiveResources;
-            in
-            if services != [ ] then
-              builtins.head services
-            else if deployments != [ ] then
-              builtins.head deployments
-            else if statefulsets != [ ] then
-              builtins.head statefulsets
-            else if daemonsets != [ ] then
-              builtins.head daemonsets
-            else if effectiveResources != [ ] then
-              builtins.head effectiveResources
-            else
-              throw "importChart: chart ${releaseName} produced no resources";
+          # The only Service, else the only workload; throws otherwise
+          # (helm-dag.nix pickRoot).
+          autoRoot = helmDag.pickRoot releaseName effectiveResources;
 
           # Build a complete parts tree for simple charts.
           #
@@ -866,10 +851,9 @@ rec {
                 };
 
               effectiveOut = autoOut // out;
+              collision = helpers.mergeCollide "importChart (${releaseName}): extraParts names a part the chart already renders (or names root). Rename the extra part";
             in
-            attrs
-            // extraParts
-            // {
+            collision (collision attrs extraParts) {
               root = {
                 resource = root;
                 requires = allRequires;
@@ -885,7 +869,8 @@ rec {
   # Define a chart inline in the cluster definition:
   #   package = kix.helmChart { repo = "..."; name = "loki"; version = "..."; hash = "..."; };
   #
-  # Returns a package function with a `values` option and an automatic root.
+  # Returns a package function with a `values` option. The root is
+  # `root = { kind; name; }` when given, else `autoRoot`.
   helmChart =
     {
       repo,
@@ -893,6 +878,7 @@ rec {
       version,
       hash,
       releaseName ? name,
+      root ? null,
       includeCrds ? true,
       strip ? { },
       patchResources ? lib.id,
@@ -942,7 +928,7 @@ rec {
           };
         in
         resources.mkParts {
-          root = resources.autoRoot;
+          root = if root == null then resources.autoRoot else resources.get root.kind root.name;
         };
     };
 }
