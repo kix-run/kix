@@ -2,7 +2,9 @@
 #
 # The class is cluster-scoped. The instance's namespace holds only its
 # PackageInstance record, so put it in any namespace the cluster deploys, such as
-# the namespace of its main consumer. Requires `value`.
+# the namespace of its main consumer. Instance names must be unique across
+# namespaces: two instances with the same name render the same PriorityClass,
+# and the build fails with a duplicate-resource error. Requires `value`.
 #
 #   instances.platform.batch-low = { package = packages.priority-class; config.value = -10; };
 #
@@ -25,8 +27,9 @@
   meta = {
     description = "One PriorityClass, named after the instance";
     owner = "platform";
-    # No defaultAliases: an alias would bind every package's unwired optional
-    # `priorityClass` dependency to this class. Consumers wire it explicitly.
+    # No defaultAliases: an alias named `priorityClass` would bind every
+    # package's unwired optional `priorityClass` dependency to this class.
+    # Consumers wire it explicitly.
   };
 
   options = {
@@ -41,7 +44,7 @@
       '';
     };
     description = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
+      type = lib.types.nullOr lib.types.nonEmptyStr;
       default = null;
       description = "Text shown by `kubectl describe`. Omitted when null.";
     };
@@ -50,8 +53,8 @@
       default = false;
       description = ''
         Use this class for pods that name none. At most one class in a cluster
-        may set it; the build fails when two do. Pods that already exist keep
-        their priority.
+        may set it; the build fails when two classes in the build set it. Pods
+        that already exist keep their priority.
       '';
     };
     preemptionPolicy = lib.mkOption {

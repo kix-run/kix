@@ -308,7 +308,7 @@ in
             package = packages.priority-class;
             config = {
               value = 1000000;
-              description = "Log shipper DaemonSet of the monitoring stack, so it can schedule on a full node";
+              description = "Log shipper DaemonSet of the monitoring stack, so it can preempt lower-priority pods on a full node";
             };
           };
 
