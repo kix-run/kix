@@ -1,10 +1,15 @@
-# clusters/test-spread.nix — the availability level and derived pod spread
+# clusters/test-spread.nix: the availability level and derived pod spread
 # on a multi-zone kind cluster.
 #
 # kind itself is one node per container, so zones are node labels set by
 # the kind config (scripts/kind-spread.sh); the flavor's multiNode = false
 # and availabilityZones = [ ] are overridden here to say so.
 # Design: v2_discussions/archive/145_availability_level.md (spread mechanism: archive/143).
+#
+# The descheduler instance restores zone spread once a zone returns: the
+# "movable" fixture has no volumes, so the descheduler may evict it. The
+# echo-server instances mount an emptyDir at /tmp, which the descheduler's
+# default protections never evict, so they stay where they are.
 #
 # Build:  nix build .#cluster-spread --extra-experimental-features pipe-operators
 # Deploy: scripts/kind-spread.sh
@@ -24,6 +29,14 @@ kix.buildCluster {
         "c"
       ];
       namespaces.echo = { };
+      namespaces.descheduler = { };
+
+      # Short interval so scripts/kind-spread.sh sees a rebalance within
+      # minutes.
+      instances.descheduler.descheduler = {
+        package = packages.descheduler;
+        config.deschedulingInterval = "30s";
+      };
 
       instances.echo = {
         # cluster default, derived "zone": three replicas from the level,
@@ -42,6 +55,80 @@ kix.buildCluster {
           package = packages.echo-server;
           config.replicaCount = 3;
           availability = "node";
+        };
+        # No volumes, so the descheduler may move it: three replicas from
+        # the level, one per zone.
+        movable.package = {
+          meta.version = "test";
+          build =
+            {
+              self,
+              scope,
+              kix,
+              availability,
+              ...
+            }:
+            {
+              deployment = scope.mkDeployment {
+                name = "movable";
+                spec = {
+                  replicas = kix.availability.pick availability {
+                    none = 1;
+                    pod = 2;
+                    node = 2;
+                    zone = 3;
+                  };
+                  selector.matchLabels = scope.selectorLabels;
+                  template = {
+                    metadata.labels = scope.selectorLabels;
+                    spec = {
+                      terminationGracePeriodSeconds = 5;
+                      securityContext = {
+                        runAsNonRoot = true;
+                        runAsUser = 65534;
+                        seccompProfile.type = "RuntimeDefault";
+                      };
+                      containers = [
+                        {
+                          name = "netexec";
+                          image = "registry.k8s.io/e2e-test-images/agnhost:2.66.1@sha256:6e2eef87d0dc77e070a7549bc5fdfa290c0fefe3359eb33c2ad1eda692fe66a4";
+                          args = [
+                            "netexec"
+                            "--http-port=8080"
+                          ];
+                          ports = [ (kix.port "http" 8080) ];
+                          livenessProbe.httpGet = {
+                            path = "/healthz";
+                            port = "http";
+                          };
+                          readinessProbe.httpGet = {
+                            path = "/healthz";
+                            port = "http";
+                          };
+                          resources = {
+                            requests = {
+                              cpu = "10m";
+                              memory = "16Mi";
+                            };
+                            limits = {
+                              cpu = "100m";
+                              memory = "64Mi";
+                            };
+                          };
+                          securityContext = {
+                            allowPrivilegeEscalation = false;
+                            readOnlyRootFilesystem = true;
+                            capabilities.drop = [ "ALL" ];
+                          };
+                        }
+                      ];
+                    };
+                  };
+                };
+              };
+              service = self.deployment |> kix.service.fromWorkload { name = "movable"; } |> scope.mkResource;
+              root = self.service;
+            };
         };
       };
     }
