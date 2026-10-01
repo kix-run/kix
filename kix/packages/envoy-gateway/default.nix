@@ -224,12 +224,16 @@ in
       };
 
       # An HTTPS listener without certificateRefs is a placeholder the
-      # cluster operator has not configured yet.
-      activeListeners = builtins.filter (
-        l:
-        l.protocol != "HTTPS"
-        || (l.tls != null && l.tls.certificateRefs != null && l.tls.certificateRefs != [ ])
-      ) config.listeners;
+      # cluster operator has not configured yet. Unset fields are dropped
+      # here rather than at rendering, so they stay out of the Gateway's
+      # identity hash.
+      activeListeners = map (lib.filterAttrsRecursive (_: v: v != null)) (
+        builtins.filter (
+          l:
+          l.protocol != "HTTPS"
+          || (l.tls != null && l.tls.certificateRefs != null && l.tls.certificateRefs != [ ])
+        ) config.listeners
+      );
 
       haveProxy = config.proxySpec != null;
 
