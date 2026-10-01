@@ -59,6 +59,18 @@ rec {
         CNI packages, CSI node plugins and node-level agents.
       '';
     };
+    "cluster-admin" = {
+      description = "may bind a ServiceAccount to cluster-admin or to a ClusterRole that grants every verb on every resource";
+      rationale = ''
+        A backup and restore tool reads every object in the cluster and
+        recreates any kind on restore, including custom resources whose
+        CRDs are installed after the package is built, so no rule list
+        derived at build time covers it. `security.noClusterAdmin` refuses
+        every other binding of that reach. Legitimate holders: cluster-wide
+        backup tools such as velero. Anything narrower derives its rules
+        with `scope.rbac`.
+      '';
+    };
   };
 
   grantNames = builtins.attrNames registry;
