@@ -120,7 +120,7 @@ This **replaces the entire `kind-system-netpol` package**. The flavor declares i
 **B. Cluster-level** — baseline policies that apply everywhere:
 
 ```nix
-# Cluster definition or a "network-policies" package's config
+# Cluster definition
 cluster.networkPolicy.baselineIntents = {
   global-dns = {
     scope = "clusterwide";
@@ -137,7 +137,7 @@ cluster.networkPolicy.baselineIntents = {
 };
 ```
 
-This replaces `network-policies`'s `mkCiliumPolicy` helpers. The `network-policies` package becomes a thin config layer over these intents rather than a CR factory.
+Not built. The `network-policies` package this would have replaced has been deleted; see open question 1.
 
 **C. Package-level** — connectivity that a package needs but can't express via DI:
 
@@ -193,7 +193,7 @@ cluster.nix
 | Current | After |
 |---|---|
 | `kind-system-netpol` package (62 lines of hand-rolled Cilium CRs) | ~15 lines of intent declarations in `kind.nix` |
-| `network-policies`'s `mkCiliumPolicy` helper | Intents on `cluster.networkPolicy.baselineIntents` |
+| `network-policies`'s `mkCiliumPolicy` helper | Deleted with the package; no baseline mechanism built (open question 1) |
 | `scope.mkClusterResource { apiVersion = "cilium.io/v2"; kind = "CiliumClusterwideNetworkPolicy"; ... }` in packages | `scope = "clusterwide"` on an intent |
 | Dead `meta.network.{extraEgress, extraIngress, ...}` (doc 85 said delete) | `meta.network.intents` — actually useful this time |
 | `cnpCrdRef` as the only CRD ref | Both `cnpCrdRef` and `ccnpCrdRef` (already added) |
@@ -206,7 +206,7 @@ cluster.nix
 
 ## Open questions
 
-1. **Should `network-policies` become pure intents?** Currently it's a package with options (`clusterwidePolicies.globalDns`, tenant isolation, etc.). Converting to intents means its config surface moves to `cluster.networkPolicy.baselineIntents`. The tenant isolation and per-namespace internal-system-traffic policies are more complex — do they fit the intent model or stay as package logic?
+1. **Cluster-wide baselines.** The `network-policies` package was deleted: nothing consumed it, and its tenant and namespace options rendered policies with no selector. Its only known user runs those policies outside Kix. Kix has no cluster-wide baseline mechanism and no CIDR target or source in the intent vocabulary. Open: is a baseline needed, and if so, is it a new `baselineIntents` option or `platformIntents` with `scope = "clusterwide"`, whose description today limits it to non-Kix pods set by flavors?
 
 2. **Intent validation.** Who validates that intent rules are expressible by the resolved enforcer? If someone uses `to = "apiserver"` and the enforcer is vanilla K8s NetworkPolicy (which can't express entity-based rules), do we warn or error?
 
@@ -220,6 +220,6 @@ cluster.nix
 
 1. **Ship `ccnpCrdRef` on cilium** (already done in this session). Mechanical fix, no design needed.
 2. **Add `platformIntents` to flavor config + materializer.** Proves the intent→CR pipeline on the simplest case (kind). Deletes `kind-system-netpol`.
-3. **Add `baselineIntents` to cluster config.** Migrates `network-policies`'s cluster-wide baselines. The package shrinks to tenant/namespace logic.
+3. **`baselineIntents`: not built.** Its motivating consumer, the `network-policies` package, was deleted. See open question 1.
 4. **Add `meta.network.intents` for packages.** Replaces the dead `meta.network.*` surface with something that has actual consumers.
 5. **Extract `translateToCilium` as a proper enforcer API.** If/when a second enforcer appears, this is where the abstraction pays for itself.
