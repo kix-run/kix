@@ -31,7 +31,8 @@ widgetCrd = scope.mkCRD {
 
 `mkCRD` derives the custom resource's group, kind, plural, scope, and default
 version from the spec. It chooses the version marked `storage = true`, or the
-first version when none is marked. The CRD itself is cluster-scoped.
+first version when none is marked. Every version not marked `served = false`
+is a served version. The CRD itself is cluster-scoped.
 
 Accepted optional fields are:
 
@@ -67,11 +68,22 @@ widgetCrd = scope.mkCRDRef {
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `group`, `kind`, `plural` | required | Identity of the custom API. |
-| `version` | `v1` | API version used for custom resources unless one overrides it. |
-| `crdScope` | `Namespaced` | `Namespaced` or `Cluster`; selects the resource builder. |
+| `version` | required | The API version the CRD serves for this kind, such as `v1` or `v1beta1`. Custom resources use it, and it is the only version they may use. |
+| `crdScope` | `Namespaced` | `Namespaced` or `Cluster`, as the CRD's `spec.scope` says; selects the resource builder. |
 | `installedBy` | `null` | Resource, or list of resources, that installs the CRD. The CRD marker waits for them. |
 | `readiness` | `null` | Default readiness rule for custom resources. |
 | `factBehavior` | `null` | Endpoint fact behavior for this custom kind. |
+
+Kix does not install the CRD, so it cannot read the served version from a
+spec. A missing `version` fails the build. Check the version on a live
+cluster with
+`kubectl get crd <plural>.<group> -o jsonpath='{.spec.versions[?(@.served==true)].name}'`.
+
+The reference renders a PackageInstance marker named
+`crd-ref-<instance>-<plural>-<group with dots as dashes>` in the package's
+namespace, so two instances that reference one CRD get one marker each. The
+marker carries the declared kind, version, and scope as `kix.run/crd-kind`,
+`kix.run/crd-version`, and `kix.run/crd-scope`.
 
 With no `installedBy`, the marker represents a CRD the platform has already
 installed. Kix still verifies through discovery that the API is available
@@ -93,8 +105,11 @@ widget = scope.mkCR self.widgetCrd {
 For a namespaced CRD, the resource lands in the consumer's package namespace.
 For a cluster-scoped CRD, it has no namespace. The helper supplies
 `apiVersion`, `kind`, and the CRD dependency. Pass `version = "v1beta1"` on
-one custom resource to select another served version; the helper does not
-validate that the CRD actually serves the override.
+one custom resource to select another served version. A version the
+declaration does not serve fails the build: for `mkCRD`, one missing from
+`spec.versions` or marked `served = false`; for `mkCRDRef`, any version other
+than its `version`. The same check applies to the builders a Helm chart's
+CRDs provide.
 
 `scope.mkCR crd args` is the convenient form of `crd.out.mkCR scope args`.
 The declaration also exposes `crd.out.cr args`, which enriches the arguments
