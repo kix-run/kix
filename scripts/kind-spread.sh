@@ -25,11 +25,11 @@
 #   sudo nft add rule inet nixos-fw rpfilter-allow \
 #     iifname "br-$(docker network inspect kind -f '{{.Id}}' | cut -c1-12)" accept
 #
-# Usage: scripts/kind-spread.sh [--keep]
+# Usage: [KIND_CLUSTER=<name>] scripts/kind-spread.sh [--keep]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-NAME=spread
+NAME=${KIND_CLUSTER:-spread}
 CTX="kind-$NAME"
 KEEP=${1:-}
 
@@ -71,7 +71,7 @@ nodes_pinned=$(placement pinned | sort -u | wc -l)
 check "pinned: 3 pods on 3 distinct nodes (got $nodes_pinned)" test "$nodes_pinned" -eq 3
 check "zoned has a PDB" kubectl --context "$CTX" -n echo get pdb zoned -o name
 check "pinned has a PDB" kubectl --context "$CTX" -n echo get pdb pinned -o name
-check "exactly two PDBs (unspread has none)" test "$(kubectl --context "$CTX" -n echo get pdb -o name | wc -l)" -eq 2
+check "unspread has no PDB" test -z "$(kubectl --context "$CTX" -n echo get pdb unspread -o name --ignore-not-found)"
 check "unspread: no constraints" test -z "$(kubectl --context "$CTX" -n echo get deploy unspread -o jsonpath='{.spec.template.spec.topologySpreadConstraints}')"
 
 # A rolling update keeps the spread (matchLabelKeys on pod-template-hash):
