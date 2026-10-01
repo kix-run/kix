@@ -3,9 +3,9 @@
 #
 # - `nodes` publishes an A record per node through `--fqdn-template`, since
 #   kind gives Services no LoadBalancer addresses. Its debug log shows the
-#   records it would write.
+#   records it writes.
 # - `services` runs the default sources.
-# - `public` and `private` read Gateway API routes from one namespace, so
+# - `public` and `private` read Gateway API routes and share a namespace;
 #   each declares its own CRD reference markers.
 # - The `other` namespace holds a secret-ref aliased `providerCredentials`.
 #   It serves only its own namespace, so the instances above build without
@@ -13,6 +13,8 @@
 #
 # Bring up:  kind create cluster --name external-dns
 #            kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.2/standard-install.yaml
+#            kubectl create namespace other
+#            kubectl -n other create secret generic other-dns-token --from-literal=x=unused
 # Deploy:    kix deploy external-dns --flake ./clusters --context kind-external-dns -y
 { kix, packages }:
 
@@ -22,29 +24,30 @@ kix.buildCluster {
     kix.flavors.kind
 
     {
-      instances.external-dns = {
-        nodes = {
-          package = packages.external-dns;
-          config = {
-            provider = "inmemory";
-            policy = "sync";
-            txtOwnerId = "test-external-dns-nodes";
-            sources = [ "node" ];
-            extraArgs = [
-              "--inmemory-zone=example.test"
-              "--fqdn-template={{.Name}}.example.test"
-              "--log-level=debug"
-            ];
-          };
+      # region:externalDnsKindTryout
+      instances.external-dns.nodes = {
+        package = packages.external-dns;
+        config = {
+          provider = "inmemory";
+          policy = "sync";
+          txtOwnerId = "test-external-dns-nodes";
+          sources = [ "node" ];
+          extraArgs = [
+            "--inmemory-zone=example.test"
+            "--fqdn-template={{.Name}}.example.test"
+            "--log-level=debug"
+          ];
         };
-        services = {
-          package = packages.external-dns;
-          config = {
-            provider = "inmemory";
-            policy = "sync";
-            txtOwnerId = "test-external-dns-services";
-            extraArgs = [ "--inmemory-zone=example.test" ];
-          };
+      };
+      # endregion:externalDnsKindTryout
+
+      instances.external-dns.services = {
+        package = packages.external-dns;
+        config = {
+          provider = "inmemory";
+          policy = "sync";
+          txtOwnerId = "test-external-dns-services";
+          extraArgs = [ "--inmemory-zone=example.test" ];
         };
       };
 
