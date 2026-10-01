@@ -15,11 +15,24 @@
 # to fail. Its cluster downgrades those rules to warnings so the rest of the
 # package is still checked, and the check fails when a listed rule produces
 # no finding, so an entry is removed once the package is fixed.
+#
+# Each cluster uses a clusterDomain other than cluster.local, so the
+# `architecture.clusterDomainLiteral` rule sees addresses a package wrote by
+# hand. Two static checks cover what never renders: the package's source
+# must not contain `cluster.local` outside comments, and `meta.version`
+# must parse as a version (kix/lib/core/version.nix).
+# `sourceDomainLiteralExceptions` and `versionExceptions` list the packages
+# known to fail them; like `knownFailures`, a listed package that passes
+# fails the check until its entry is removed.
 
 { kix, lib }:
 
 let
   piChecks = import ./pi-checks.nix { inherit lib; };
+  versions = import ./lib/core/version.nix { inherit lib; };
+
+  # The clusterDomain of every synthetic cluster.
+  evalClusterDomain = "eval.kix.test";
 
   packages =
     let
@@ -76,6 +89,15 @@ let
     reason = "housekeeping/2026-09-27-loki-chart-services-share-labels.md";
   };
 
+  # A package renders cluster.local itself, or through the named dependency
+  # that auto-instantiation adds to its cluster.
+  domainLiteral = {
+    rule = "architecture.clusterDomainLiteral";
+    reason = "housekeeping/2026-10-01-packages-render-cluster-local.md";
+  };
+  domainLiteralViaValkey = domainLiteral;
+  domainLiteralViaLoki = domainLiteral;
+
   # Error-severity scorecard rules each package fails, with the file that
   # records why. A housekeeping file may cover several packages.
   knownFailures = {
@@ -86,14 +108,27 @@ let
         reason = "kix/packages/clickhouse-logs/default.nix";
       }
     ];
-    loki = [ lokiLabels ];
-    # The labels finding comes from the auto-instantiated loki.
-    promtail = [ lokiLabels ];
+    coredns = [ domainLiteral ];
+    harbor = [ domainLiteralViaValkey ];
+    immich = [ domainLiteralViaValkey ];
+    infisical-operator = [ domainLiteral ];
+    loki = [
+      lokiLabels
+      domainLiteral
+    ];
+    n8n = [ domainLiteralViaValkey ];
+    openebs = [ domainLiteral ];
+    # The labels and domain findings come from the auto-instantiated loki.
+    promtail = [
+      lokiLabels
+      domainLiteralViaLoki
+    ];
     redis = [
       {
         rule = "architecture.distinctSameKindLabels";
         reason = "housekeeping/2026-09-27-redis-services-share-labels.md";
       }
+      domainLiteral
     ];
     smartctl-exporter = [
       {
@@ -102,6 +137,7 @@ let
       }
     ];
     tailscale = [ nonRoot ];
+    valkey = [ domainLiteral ];
   };
 
   # What a package needs beyond its defaults. `config` is the instance
@@ -213,8 +249,89 @@ let
     };
   };
 
+  # Packages whose source writes cluster.local outside a comment.
+  sourceDomainLiteralExceptions = [
+    "coredns"
+    "infisical-operator"
+    "openebs"
+    "valkey"
+  ];
+
+  # Packages whose meta.version is not a version, with the reason.
+  versionExceptions = {
+    cilium-external = "housekeeping/2026-10-01-platform-providers-carry-placeholder-versions.md";
+    cilium-rke2 = "housekeeping/2026-10-01-platform-providers-carry-placeholder-versions.md";
+  };
+
   # Packages that cannot be evaluated on their own, with the reason.
   skip = { };
+
+  # Every `.nix` file of a package outside `crds/`, scanned line by line. A
+  # line whose first non-space character is `#` is skipped. Two limits: a
+  # trailing comment (`x = 1; # svc.cluster.local`) is a hit, and a `#` line
+  # inside a `''` string is skipped (the clusterDomainLiteral rule covers
+  # strings that render).
+  sourceDomainLiterals =
+    name:
+    let
+      dir = ./packages + "/${name}";
+      nixFiles =
+        rel:
+        lib.concatLists (
+          lib.mapAttrsToList (
+            entry: type:
+            let
+              path = if rel == "" then entry else "${rel}/${entry}";
+            in
+            if type == "directory" && !(rel == "" && entry == "crds") then
+              nixFiles path
+            else if type == "regular" && lib.hasSuffix ".nix" entry then
+              [ path ]
+            else
+              [ ]
+          ) (builtins.readDir (if rel == "" then dir else dir + "/${rel}"))
+        );
+      hitsIn =
+        file:
+        lib.concatLists (
+          lib.imap1 (
+            i: line:
+            lib.optional (
+              !(lib.hasPrefix "#" (lib.trimWith { start = true; } line)) && lib.hasInfix "cluster.local" line
+            ) "kix/packages/${name}/${file}:${toString i}"
+          ) (lib.splitString "\n" (builtins.readFile (dir + "/${file}")))
+        );
+    in
+    builtins.concatMap hitsIn (nixFiles "");
+
+  checkSource =
+    name:
+    let
+      hits = sourceDomainLiterals name;
+      excepted = builtins.elem name sourceDomainLiteralExceptions;
+    in
+    if excepted then
+      lib.assertMsg (hits != [ ])
+        "${name} no longer writes cluster.local in its source; remove it from sourceDomainLiteralExceptions in kix/package-eval.nix and update housekeeping/2026-10-01-packages-render-cluster-local.md"
+    else
+      lib.assertMsg (hits == [ ]) (
+        lib.concatMapStringsSep "\n" (
+          h:
+          "${h} contains \"cluster.local\". Build in-cluster addresses from a Service's out.fqdn or out.url, or read clusterConfig.clusterDomain; in option text write <clusterDomain>."
+        ) hits
+      );
+
+  checkVersion =
+    name: package:
+    let
+      version = (kix.peekPackageMeta { inherit package; inherit (kix) kixlib; }).version or null;
+      ok = version == null || versions.isVersion version;
+    in
+    if versionExceptions ? ${name} then
+      lib.assertMsg (!ok)
+        "kix/packages/${name}: meta.version ${builtins.toJSON version} is a version now; remove it from versionExceptions in kix/package-eval.nix and update ${versionExceptions.${name}}"
+    else
+      lib.assertMsg ok "kix/packages/${name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\" or \"v1.19.6\".";
 
   evaluatePackage =
     name: package:
@@ -226,6 +343,7 @@ let
         modules = [
           kix.flavors.kind
           {
+            clusterDomain = evalClusterDomain;
             scorecard.maxSeverity = "error";
             # By rule rather than by namespace, because a cluster-level rule
             # such as `architecture.monitorSelectorMatchesService` is not
@@ -248,6 +366,8 @@ let
         ];
       };
     in
+    assert checkSource name;
+    assert checkVersion name package;
     builtins.addErrorContext "while evaluating kix/packages/${name} in its synthetic cluster" (
       builtins.deepSeq cluster.rawManifests (
         builtins.seq (piChecks.validatePIWiring "package-${name}" cluster) (
@@ -269,13 +389,23 @@ let
     );
 
   strayKeys = lib.filter (key: !(packages ? ${key})) (
-    builtins.attrNames settings ++ builtins.attrNames knownFailures ++ builtins.attrNames skip
+    builtins.attrNames settings
+    ++ builtins.attrNames knownFailures
+    ++ builtins.attrNames skip
+    ++ sourceDomainLiteralExceptions
+    ++ builtins.attrNames versionExceptions
   );
 
   evaluated = lib.mapAttrsToList evaluatePackage (removeAttrs packages (builtins.attrNames skip));
 in
 {
-  inherit packages knownFailures skip;
+  inherit
+    packages
+    knownFailures
+    skip
+    sourceDomainLiteralExceptions
+    versionExceptions
+    ;
 
   # One package, for finding the failure when `names` throws.
   evaluate = name: evaluatePackage name packages.${name};
@@ -283,6 +413,6 @@ in
   # Forcing this evaluates every package that is not skipped.
   names =
     assert lib.assertMsg (strayKeys == [ ])
-      "kix/package-eval.nix: `settings`, `knownFailures` or `skip` names ${lib.concatStringsSep ", " strayKeys}, which is not a directory under kix/packages/";
+      "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions` or `versionExceptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a directory under kix/packages/";
     builtins.deepSeq evaluated evaluated;
 }
