@@ -163,7 +163,7 @@ in
   # same reach under another name). A namespaced RoleBinding and a wildcard
   # limited to one API group are not checked.
   noClusterAdmin = {
-    description = "No binding may grant cluster-admin or an all-wildcard ClusterRole";
+    description = "No ClusterRoleBinding may grant cluster-admin, and no ClusterRole may grant every verb on every resource";
     level = "manifest";
     severity = "error";
     tags = [
