@@ -1,6 +1,7 @@
 # Tests for kix/packages/infisical-operator: the custom resource builders,
-# readiness, ordering, metrics gating, address handling and refusals. The
-# operator and a consumer both run in namespace `infisical`.
+# readiness, ordering, metrics gating, address handling, the egress check,
+# and refusals. The operator and a consumer both run in namespace
+# `infisical`.
 
 {
   lib,
@@ -16,6 +17,7 @@
 
 let
   operatorPackage = import ../../../packages/infisical-operator;
+  egress = import ../../../packages/infisical-operator/egress.nix { inherit lib; };
 
   # The package header's consumer pattern, plus an InfisicalSecret and an
   # InfisicalPushSecret built from out.crds. `extraParts` adds parts for
@@ -299,14 +301,14 @@ in
     }, warnings ${builtins.toJSON warnings}";
 
   # InfisicalSecret and InfisicalStaticSecret have no handle: a custom
-  # resource built from one would skip the metadata pinning.
+  # resource built from one would skip the metadata pinning. InfisicalAuth
+  # has none because mkInfisicalAuth adds the connection.
   infisical-operator-out-crds =
     let
       names = builtins.attrNames cluster.instances.infisical.infisical-operator.raw.root.out.crds;
     in
     names == [
       "ClusterGenerator"
-      "InfisicalAuth"
       "InfisicalConnection"
       "InfisicalPushSecret"
     ]
@@ -350,27 +352,90 @@ in
     || throw "infisical-operator metrics: service ${builtins.toJSON service}";
 
   # Under egress enforcement an address the package's intent does not cover
-  # fails the build; the default address builds.
+  # fails the build, and the platform intent the message gives makes it
+  # build. An intent in another namespace or for another port does not.
   infisical-operator-egress =
     let
+      selectorLabels = (byName "infisical-operator" (ofKind "Deployment" ms)).spec.selector.matchLabels;
+      intent = to: port: {
+        namespace = "infisical";
+        podSelector = selectorLabels;
+        egress = [
+          {
+            inherit to;
+            ports = [
+              {
+                inherit port;
+                protocol = "TCP";
+              }
+            ];
+          }
+        ];
+      };
       enforced =
-        config:
+        {
+          address ? null,
+          intents ? { },
+        }:
         clusterWith {
-          inherit config;
-          modules = [ netpolOn ];
+          config = lib.optionalAttrs (address != null) { inherit address; };
+          modules = [
+            netpolOn
+            { networkPolicy.platformIntents = intents; }
+          ];
         };
+      external = "http://infisical.example:8080";
+      inCluster = "https://infisical.infisical.svc";
+      message = egress.check {
+        who = "infisical-operator infisical/infisical-operator";
+        clusterConfig = {
+          clusterDomain = "cluster.test";
+          networkPolicy.enable = true;
+        };
+        address = external;
+        namespace = "infisical";
+        inherit selectorLabels;
+        intentName = "infisical-operator-egress";
+      };
+      remedyCnp = byName "infisical-operator-egress" (
+        ofKind "CiliumNetworkPolicy" (
+          manifests (enforced {
+            address = external;
+            intents.infisical-operator-egress = intent "world" 8080;
+          })
+        )
+      );
     in
     (
       evalFails (enforced {
-        address = "http://infisical.example:8080";
+        address = external;
       })
       && evalFails (enforced {
-        address = "https://infisical.infisical.svc";
+        address = inCluster;
       })
       && !(evalFails (enforced { }))
+      && remedyCnp != null
+      && !(evalFails (enforced {
+        address = inCluster;
+        intents.infisical-operator-egress = intent "all-pods" 8080;
+      }))
+      && evalFails (enforced {
+        address = external;
+        intents.elsewhere = intent "world" 8080 // {
+          namespace = "other";
+        };
+      })
+      && evalFails (enforced {
+        address = external;
+        intents.wrong-port = intent "world" 9090;
+      })
+      && lib.hasInfix "infisical-operator-egress = { namespace = \"infisical\"; podSelector = { " message
+      && lib.hasInfix "egress = [ { to = \"world\"; ports = [ { port = 8080; protocol = \"TCP\"; } ]; } ]; };" message
     )
-    || throw "infisical-operator egress: the egress check accepted or refused the wrong address";
+    || throw "infisical-operator egress: remedy CNP ${builtins.toJSON remedyCnp}, message ${builtins.toJSON message}";
 
+  # Each refused case fails and its corrected form builds, so a refusal
+  # cannot pass on an unrelated failure in the fixture.
   infisical-operator-refusals =
     let
       withParts = extraParts: clusterWith { consumer = mkConsumer { inherit extraParts; }; };
@@ -386,55 +451,141 @@ in
           };
         };
       };
-      cases = {
-        managedSecretReference = withParts (
+      legacy =
+        spec:
+        withParts (
           { scope, infisicalOperator, ... }:
           {
-            old = infisicalOperator.out.mkInfisicalSecret scope {
-              name = "old";
-              spec = legacySpec scope // {
-                managedSecretReference.secretName = "old";
-                managedKubeSecretReferences = [ { secretName = "old"; } ];
-              };
+            extra = infisicalOperator.out.mkInfisicalSecret scope {
+              name = "extra";
+              spec = legacySpec scope // spec;
             };
           }
         );
-        noReferences = withParts (
-          { scope, infisicalOperator, ... }:
+      static =
+        targets: refArgs:
+        withParts (
           {
-            empty = infisicalOperator.out.mkInfisicalSecret scope {
-              name = "empty";
-              spec = legacySpec scope;
+            self,
+            scope,
+            infisicalOperator,
+            ...
+          }:
+          {
+            extra = infisicalOperator.out.mkInfisicalStaticSecret scope {
+              name = "extra";
+              spec = {
+                infisicalAuthRef = {
+                  name = self.auth.out.name;
+                  namespace = scope.namespaceName;
+                };
+                sources = [
+                  {
+                    projectId = "project";
+                    environmentSlug = "prod";
+                    secretPath = "/";
+                  }
+                ];
+              }
+              // lib.optionalAttrs (targets != null) { inherit targets; };
             };
           }
+          // lib.optionalAttrs (refArgs != null) { extraRef = self.extra.out.secretRef refArgs; }
         );
-        unknownSecretRef = withParts (
-          { self, ... }:
-          {
-            wrong = self.sync.out.secretRef {
-              name = "missing";
-              keys = [ "API_KEY" ];
-            };
-          }
-        );
-        dynamicSecret = withParts (
-          { scope, infisicalOperator, ... }:
-          {
-            dynamic = infisicalOperator.out.mkInfisicalDynamicSecret scope { name = "lease"; };
-          }
-        );
-        hostEnv = clusterWith { config.env.INFISICAL_HOST_API = "https://y/api"; };
-        leaderElect = clusterWith { config.extraArgs = [ "--leader-elect=false" ]; };
-        otherMinor = clusterWith { config.image.tag = "v0.12.0"; };
-        latest = clusterWith { config.image.tag = "latest"; };
+      secretTarget = {
+        name = "extra";
+        kind = "Secret";
       };
-      accepted = builtins.attrNames (lib.filterAttrs (_: c: !(evalFails c)) cases);
+      configMapTarget = {
+        name = "extra-config";
+        kind = "ConfigMap";
+      };
+      cases = {
+        managedSecretReference = {
+          bad = legacy {
+            managedSecretReference.secretName = "old";
+            managedKubeSecretReferences = [ { secretName = "old"; } ];
+          };
+          good = legacy { managedKubeSecretReferences = [ { secretName = "old"; } ]; };
+        };
+        noReferences = {
+          bad = legacy { };
+          good = legacy { managedKubeConfigMapReferences = [ { configMapName = "old"; } ]; };
+        };
+        noTargets = {
+          bad = static null null;
+          good = static [ configMapTarget ] null;
+        };
+        emptyTargets = {
+          bad = static [ ] null;
+          good = static [ secretTarget ] null;
+        };
+        configMapOnlySecretRef = {
+          bad = static [ configMapTarget ] { keys = [ "K" ]; };
+          good = static [ configMapTarget secretTarget ] { keys = [ "K" ]; };
+        };
+        unknownSecretRef = {
+          bad = static [ secretTarget ] {
+            name = "missing";
+            keys = [ "K" ];
+          };
+          good = static [ secretTarget ] {
+            name = "extra";
+            keys = [ "K" ];
+          };
+        };
+        hostEnv = {
+          bad = clusterWith { config.env.INFISICAL_HOST_API = "https://y/api"; };
+          good = clusterWith { config.env.GODEBUG = "x509ignoreCN=0"; };
+        };
+        leaderElect = {
+          bad = clusterWith { config.extraArgs = [ "--leader-elect=false" ]; };
+          good = clusterWith { config.extraArgs = [ "--zap-log-level=debug" ]; };
+        };
+        otherMinor = {
+          bad = clusterWith { config.image.tag = "v0.12.0"; };
+          good = clusterWith { config.image.tag = "v0.11.3"; };
+        };
+      };
+      wrong = builtins.attrNames (lib.filterAttrs (_: c: !(evalFails c.bad) || evalFails c.good) cases);
+      dynamicSecret = withParts (
+        { scope, infisicalOperator, ... }:
+        {
+          dynamic = infisicalOperator.out.mkInfisicalDynamicSecret scope { name = "lease"; };
+        }
+      );
+    in
+    (wrong == [ ] && evalFails dynamicSecret)
+    || throw "infisical-operator refusals: bad case built or good case failed: ${builtins.toJSON wrong}";
+
+  # The image tag assertion names the tag, the release minor, and the fix
+  # for a cluster author; the sources.txt assertion holds. The package's
+  # assertions read only `config`, and a failed one stops the cluster before
+  # its diagnostics can be read, so the test calls them directly.
+  infisical-operator-image-tag-message =
+    let
+      failed =
+        tag:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion) (assertionsOf {
+            config.image.tag = tag;
+          })
+        );
+      # The assertions use only `lib` from the package arguments.
+      assertionsOf =
+        (operatorPackage {
+          inherit lib;
+          scope = { };
+          kix = { };
+          availability = null;
+        }).assertions;
+      latest = failed "latest";
     in
     (
-      accepted == [ ]
-      && !(evalFails (clusterWith {
-        config.image.tag = "v0.11.3";
-      }))
+      builtins.length latest == 1
+      && lib.hasPrefix "image.tag \"latest\" is not a v0.11 release" (builtins.head latest)
+      && lib.hasInfix "Remove image.tag or set a v0.11 tag." (builtins.head latest)
+      && failed "v0.11.3" == [ ]
     )
-    || throw "infisical-operator refusals: these built: ${builtins.toJSON accepted}";
+    || throw "infisical-operator image tag: ${builtins.toJSON latest}";
 }

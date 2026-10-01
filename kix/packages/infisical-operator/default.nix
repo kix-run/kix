@@ -14,8 +14,21 @@
 # one: `conflictsWith` refuses a second instance by alias, and
 # `annotationDomains` refuses it whatever its aliases.
 #
+# Minimal instance:
+#
+#   instances.infisical.infisical-operator.package = packages.infisical-operator;
+#
 # DI deps:
 #   prometheus (optional)  metrics Service and ServiceMonitor.
+#
+# Network policy: the package's intent opens TCP 443 to destinations outside
+# the cluster. When the cluster enforces egress policy, an `address` inside
+# the cluster or on another port fails the build until a
+# `networkPolicy.platformIntents` entry selects the operator's pods and
+# reaches it; the error gives the entry.
+#
+# Escape hatches: `extraArgs` and `env` for the operator; `partsOverlays` on
+# parts `deployment` and `connection`.
 #
 # Exposes:
 #   out.mkInfisicalSecret scope { name; spec; }        (v1alpha1)
@@ -26,21 +39,23 @@
 #       metadata the operator copies the custom resource's labels and
 #       annotations onto the object it creates, Kix's identity annotation
 #       included, and `kix gc` then deletes that object as Kix-managed
-#       garbage. The custom resource requires the default connection, so it
-#       is applied after the operator is running and Infisical is reachable.
-#       The result carries `out.secretRef { name ? null; keys; type ? null; }`,
-#       a `scope.mkSecretRef` for one of its Secret targets that is ordered
+#       garbage. Both refuse a custom resource with nowhere to write. The
+#       custom resource requires the default connection, so it is applied
+#       after the operator is running and Infisical is reachable. The result
+#       carries `out.secretRef { name ? null; keys; type ? null; }`, a
+#       `scope.mkSecretRef` for one of its Secret targets that is ordered
 #       after the custom resource.
 #   out.mkInfisicalAuth scope { name; spec; }
 #       Sets `spec.infisicalConnectionRef` to the default connection when the
-#       spec has none.
+#       spec has none, which also orders the auth after the connection.
 #   out.mkInfisicalDynamicSecret
 #       Throws. The operator always copies an InfisicalDynamicSecret's
 #       annotations onto the lease Secret it creates.
-#   out.crds.{ClusterGenerator,InfisicalAuth,InfisicalConnection,InfisicalPushSecret}
+#   out.crds.{ClusterGenerator,InfisicalConnection,InfisicalPushSecret}
 #       For `scope.mkCR`. These kinds create no Kubernetes object. There are
 #       no handles for InfisicalSecret and InfisicalStaticSecret, so their
-#       managed objects always go through the builders above.
+#       managed objects always go through the builders above, and none for
+#       InfisicalAuth, which `mkInfisicalAuth` covers.
 #
 # Consumer pattern, in an instance that depends on `infisicalOperator`:
 #
@@ -66,6 +81,18 @@
 #   };
 #   credentials = self.sync.out.secretRef { keys = [ "API_KEY" ]; };
 #
+# Known limit: `kix deploy` writes its bookkeeping annotations in a second
+# request after each apply. The operator writes an InfisicalAuth's status
+# with an update that fails if the object changed since it read it, only
+# logs that failure, and ignores metadata-only changes. An auth applied while
+# the operator runs can therefore stay without IsReady, and the deploy waits
+# on it until its readiness timeout; the InfisicalStaticSecret that names it
+# does not sync meanwhile. Restarting the operator
+# (`kubectl -n <namespace> rollout restart deployment/<instance>`) or
+# updating a Secret the auth references makes the operator reconcile the
+# auth again. See housekeeping/2026-10-01-bookkeeping-patch-races-operator-status-writes.md.
+# A connection built from `out.crds.InfisicalConnection` has the same limit.
+#
 # Self-hosted Infisical behind a private CA: mount the CA through
 # `partsOverlays` on part `deployment` and set `SSL_CERT_FILE` with `env`,
 # which covers every kind; or set `spec.tls.caCertificate` on part
@@ -82,12 +109,21 @@
   availability,
 }:
 let
-  # The upstream release. image.tag and crds/sources.txt follow it.
+  # The upstream release: meta.version, the default image.tag, the CRD tag
+  # in crds/sources.txt (checked below), and the RBAC rules in the build.
   release = "v0.11.10";
+  sourceUrls = builtins.filter (l: l != "" && !lib.hasPrefix "#" l) (
+    lib.splitString "\n" (builtins.readFile ./crds/sources.txt)
+  );
 
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "infisical-operator ${ns}/${name}";
+
+  metricsPort = 8080;
+  healthPort = 8081;
+
+  egress = import ./egress.nix { inherit lib; };
 
   inherit (scope.rbac)
     group
@@ -151,9 +187,10 @@ in
     # Workloads opt in to restarts on secret change with
     # secrets.infisical.com/auto-reload.
     annotationDomains = [ "secrets.infisical.com" ];
-    # Infisical serves its API on TCP 443. meta is static, so this intent
-    # cannot follow `address`; the build refuses an address it does not
-    # cover when the cluster enforces egress policy.
+    # Infisical Cloud serves its API on TCP 443. meta is static, so this
+    # intent cannot follow `address`; under egress enforcement the build
+    # refuses an address it does not cover unless a platform intent does
+    # (egress.nix).
     network.intents.infisicalApi.egress = [
       {
         to = "world";
@@ -173,7 +210,11 @@ in
       {
         assertion =
           versionParts config.image.tag != null && lib.take 2 (versionParts config.image.tag) == releaseMinor;
-        message = "image.tag \"${config.image.tag}\" is not a v${lib.concatStringsSep "." releaseMinor} release, and the CRDs and RBAC in kix/packages/infisical-operator are from ${release}. To move to another release, change release in kix/packages/infisical-operator/default.nix and run uv run scripts/vendor-crds.py infisical-operator.";
+        message = "image.tag \"${config.image.tag}\" is not a v${lib.concatStringsSep "." releaseMinor} release, and the CRDs and RBAC in kix/packages/infisical-operator are from ${release}. Remove image.tag or set a v${lib.concatStringsSep "." releaseMinor} tag. To move the package to another release, change release in default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py infisical-operator, and compare the manager ClusterRole with config/rbac/role.yaml at the new tag.";
+      }
+      {
+        assertion = sourceUrls != [ ] && lib.all (lib.hasInfix "/${release}/") sourceUrls;
+        message = "kix/packages/infisical-operator/crds/sources.txt fetches CRDs from a tag other than ${release}, the package's release. Set the tag in every URL to ${release} and run uv run scripts/vendor-crds.py infisical-operator.";
       }
     ];
 
@@ -193,8 +234,9 @@ in
         `https://eu.infisical.com`. A trailing `/` or `/api` is removed, as
         the operator does. The operator must reach `<address>/api/status`
         for the first deploy to finish. When the cluster enforces egress
-        policy, the address must be an HTTPS host outside the cluster on
-        port 443. For a private CA, see the package header.
+        policy, an address inside the cluster or on a port other than 443
+        also needs a `networkPolicy.platformIntents` entry, which the build
+        error spells out. For a private CA, see the package header.
       '';
     };
 
@@ -248,8 +290,8 @@ in
 
         args = [
           "--leader-elect"
-          "--health-probe-bind-address=:8081"
-          "--metrics-bind-address=:8080"
+          "--health-probe-bind-address=:${toString healthPort}"
+          "--metrics-bind-address=:${toString metricsPort}"
           # The operator serves metrics over TLS with a self-signed
           # certificate and no authentication, so plain HTTP exposes nothing
           # more and the ServiceMonitor needs no TLS settings.
@@ -260,42 +302,21 @@ in
           owned = {
             "--leader-elect" =
               "the package always enables leader election, so instances above availability none run one active controller; remove it.";
-            "--health-probe-bind-address" = "the liveness and readiness probes use :8081; remove it.";
+            "--health-probe-bind-address" =
+              "the liveness and readiness probes use :${toString healthPort}; remove it.";
             "--metrics-bind-address" =
-              "the container's metrics port and the metrics Service use :8080; remove it.";
+              "the container's metrics port and the metrics Service use :${toString metricsPort}; remove it.";
             "--metrics-secure" = "the ServiceMonitor scrapes plain HTTP; remove it.";
           };
         } config.extraArgs;
 
-        # The network intent opens TCP 443 to destinations outside the
-        # cluster. Under egress enforcement any other address leaves the
-        # default connection unreachable, so the build refuses it.
-        egressEnforced =
-          clusterConfig.networkPolicy.enable or false
-          && builtins.elem (clusterConfig.networkPolicy.directions or "both") [
-            "egress"
-            "both"
-          ];
-        domain = clusterConfig.clusterDomain;
-        parsed = builtins.match "(https?)://([^/:]+)(:([0-9]+))?(/.*)?" addr;
-        scheme = builtins.elemAt parsed 0;
-        host = builtins.elemAt parsed 1;
-        port =
-          let
-            explicit = builtins.elemAt parsed 3;
-          in
-          if explicit != null then
-            lib.toInt explicit
-          else if scheme == "https" then
-            443
-          else
-            80;
-        inCluster =
-          !(lib.hasInfix "." host)
-          || lib.hasSuffix ".svc" host
-          || lib.hasSuffix ".svc.${domain}" host
-          || lib.hasSuffix ".${domain}" host;
-        egressOk = !egressEnforced || (parsed != null && scheme == "https" && port == 443 && !inCluster);
+        egressProblem = egress.check {
+          inherit who clusterConfig;
+          address = addr;
+          namespace = ns;
+          intentName = "${name}-egress";
+          inherit (scope) selectorLabels;
+        };
 
         plurals = map (crd: crd.rawManifest.spec.names.plural) (builtins.attrValues self.crds);
         subjects = [
@@ -392,6 +413,8 @@ in
             }
           );
 
+        # Builder errors name this instance (`who`) and the consumer's
+        # custom resource.
         crName =
           consumerScope: kind: args:
           "${kind} ${consumerScope.namespaceName}/${args.name}";
@@ -422,9 +445,9 @@ in
               };
           in
           if spec ? managedSecretReference then
-            throw "infisical-operator: ${what} sets managedSecretReference, which upstream is deprecating and rejects alongside managedKubeSecretReferences. Move it into managedKubeSecretReferences."
+            throw "${who}: ${what} sets managedSecretReference, which upstream is deprecating and rejects alongside managedKubeSecretReferences. Move it into managedKubeSecretReferences."
           else if secretRefs == [ ] && configMapRefs == [ ] then
-            throw "infisical-operator: ${what} sets no managedKubeSecretReferences or managedKubeConfigMapReferences, so the operator has nowhere to write. Add one."
+            throw "${who}: ${what} sets no managedKubeSecretReferences or managedKubeConfigMapReferences, so the operator has nowhere to write. Add one."
           else
             args
             // {
@@ -447,14 +470,19 @@ in
           let
             spec = args.spec or { };
           in
-          args
-          // {
-            spec = spec // {
-              targets = map (target: withMetadata ({ namespace = consumerScope.namespaceName; } // target)) (
-                spec.targets or [ ]
-              );
+          if (spec.targets or [ ]) == [ ] then
+            throw "${who}: ${
+              crName consumerScope "InfisicalStaticSecret" args
+            } sets no targets, so the operator has nowhere to write. Add one."
+          else
+            args
+            // {
+              spec = spec // {
+                targets = map (
+                  target: withMetadata ({ namespace = consumerScope.namespaceName; } // target)
+                ) spec.targets;
+              };
             };
-          };
 
         # Adds out.secretRef to a built custom resource. `targets` are its
         # Secret targets as { name; namespace; type; }.
@@ -471,18 +499,20 @@ in
               }:
               let
                 target =
-                  if name == null then
+                  if targets == [ ] then
+                    throw "${who}: ${what} writes no Secret, so its out.secretRef has nothing to reference. Add a Secret target."
+                  else if name == null then
                     if builtins.length targets == 1 then
                       builtins.head targets
                     else
-                      throw "infisical-operator: ${what}.out.secretRef needs a name when the custom resource does not have exactly one Secret target; pass name = one of: ${listed}."
+                      throw "${who}: out.secretRef of ${what} needs a name, because the custom resource has more than one Secret target; pass name = one of: ${listed}."
                   else
                     lib.findFirst (t: t.name == name)
-                      (throw "infisical-operator: ${what}.out.secretRef names Secret \"${name}\", which is not one of its targets; targets are: ${listed}.")
+                      (throw "${who}: out.secretRef of ${what} names Secret \"${name}\", which is not one of its targets; targets are: ${listed}.")
                       targets;
               in
               if target.namespace != consumerScope.namespaceName then
-                throw "infisical-operator: ${what}.out.secretRef builds a reference in ${consumerScope.namespaceName}; the target ${target.name} is in ${target.namespace}. Build the reference from an instance in ${target.namespace}."
+                throw "${who}: out.secretRef of ${what} builds a reference in ${consumerScope.namespaceName}; the target ${target.name} is in ${target.namespace}. Build the reference from an instance in ${target.namespace}."
               else
                 consumerScope.mkSecretRef {
                   inherit (target) name;
@@ -571,8 +601,8 @@ in
                   command = [ "/manager" ];
                   inherit args env;
                   ports = [
-                    (kix.port "metrics" 8080)
-                    (kix.port "health" 8081)
+                    (kix.port "metrics" metricsPort)
+                    (kix.port "health" healthPort)
                   ];
                   livenessProbe = {
                     httpGet = {
@@ -610,7 +640,7 @@ in
               ports = [
                 {
                   name = "metrics";
-                  port = 8080;
+                  port = metricsPort;
                   targetPort = "metrics";
                   protocol = "TCP";
                 }
@@ -624,16 +654,17 @@ in
         # that the first deploy proves the operator runs and reaches
         # Infisical.
         #
-        # It requires only its CRD, so it exists before the operator starts.
-        # The operator writes the connection's status with an update that
-        # fails when the object changed after its read, ignores
-        # metadata-only changes, and retries a success after five minutes.
-        # Created while the operator runs, the connection would race the
-        # annotation patch kix deploy sends after each apply, and lose
-        # IsReady for longer than the deploy waits.
+        # It requires only its CRD, not the Deployment, so on a first deploy
+        # it is normally applied before the operator's first reconcile. The
+        # operator writes the connection's status with an update that fails
+        # when the object changed after its read, ignores metadata-only
+        # changes, and retries a success after five minutes. A connection the
+        # operator reconciles before the annotation patch kix deploy sends
+        # after each apply can lose IsReady for longer than the deploy waits.
+        # That stays possible when a later deploy changes `address` for a
+        # running operator.
         connection =
-          assert lib.assertMsg egressOk
-            "${who}: address ${addr} is not an HTTPS host outside the cluster on port 443, and this cluster enforces egress policy. The package's network intent opens only TCP 443 to destinations outside the cluster, so the default InfisicalConnection would never become ready. Add a networkPolicy.platformIntents entry with namespace = \"${ns}\", podSelector = ${builtins.toJSON scope.selectorLabels}, and an egress rule that reaches ${addr}.";
+          assert lib.assertMsg (egressProblem == null) egressProblem;
           self.crds.infisicalConnections.out.mkCR scope {
             name = "default";
             spec.address = addr;
@@ -653,7 +684,6 @@ in
           out = {
             crds = {
               ClusterGenerator = self.crds.clusterGenerators;
-              InfisicalAuth = self.crds.infisicalAuths;
               InfisicalConnection = self.crds.infisicalConnections;
               InfisicalPushSecret = self.crds.infisicalPushSecrets;
             };
@@ -700,7 +730,7 @@ in
 
             mkInfisicalDynamicSecret =
               _: _:
-              throw "infisical-operator: there is no InfisicalDynamicSecret builder. The operator copies the custom resource's annotations, Kix's included, onto the lease Secret it creates and has no setting to stop it, so kix gc would delete that Secret. Create InfisicalDynamicSecrets outside Kix.";
+              throw "${who}: there is no InfisicalDynamicSecret builder. The operator copies the custom resource's annotations, Kix's included, onto the lease Secret it creates and has no setting to stop it, so kix gc would delete that Secret. Create InfisicalDynamicSecrets outside Kix.";
           };
         };
       }
