@@ -210,6 +210,10 @@ three kinds of facts the compiler may use:
   ones as `availablePackages` entries that auto-instantiation pulls in when
   the graph demands the role (the resolver already exists — `eval/auto.nix`).
 
+Update 2026-10-01: only a required dependency demands a role. An optional role
+dependency resolves to an existing instance or import and no longer pulls
+stock. The `lithus` flavor was deleted from kix/lib.
+
 So a flavor decomposes into:
 
 - **Target preset** — the axiom set (facts + limits + weak bindings). Pure
