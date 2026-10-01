@@ -119,7 +119,6 @@ let
         reason = "kix/packages/clickhouse-logs/default.nix";
       }
     ];
-    coredns = [ domainLiteral ];
     harbor = [ domainLiteralViaValkey ];
     immich = [ domainLiteralViaValkey ];
     infisical-operator = [ domainLiteral ];
@@ -190,6 +189,12 @@ let
       };
     };
     clickhouse-operator.instances = { inherit credentials; };
+    # A real Prometheus provider, so the ServiceMonitor, the alert rules,
+    # and the Service's metrics port are built against its builders.
+    coredns = {
+      config.clusterIP = "10.96.0.53";
+      instances.prometheus-operator.package = packages.prometheus-operator;
+    };
     firezone.config = {
       domain = "firezone.example.com";
       admin = {
@@ -246,7 +251,6 @@ let
 
   # Packages whose source writes cluster.local outside a comment.
   sourceDomainLiteralExceptions = [
-    "coredns"
     "infisical-operator"
     "openebs"
     "valkey"

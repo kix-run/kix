@@ -518,7 +518,7 @@ in
       dnsUpstream = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [ ];
-        description = "Upstream DNS resolvers (for CoreDNS forwarding, cert-manager DNS01, etc).";
+        description = "Upstream DNS resolvers. The coredns package's forward plugin reads them; empty means /etc/resolv.conf.";
       };
     };
 

@@ -17,7 +17,10 @@ let
   # than one winning.
   platform = {
     namespaces.kube-system.labels."app.kubernetes.io/part-of" = "platform";
-    instances.kube-system.coredns.package = packages.coredns;
+    instances.kube-system.coredns = {
+      package = packages.coredns;
+      config.clusterIP = "10.96.0.10";
+    };
   };
 
   application = {

@@ -36,7 +36,13 @@ kix.buildCluster {
       };
 
       instances = {
-        dns.coredns.package = packages.coredns;
+        # kind's bundled CoreDNS holds 10.96.0.10 and stays the kubelet's
+        # DNS. This second server exercises the derived spread and a managed
+        # dns provider.
+        dns.coredns = {
+          package = packages.coredns;
+          config.clusterIP = "10.96.0.53";
+        };
         velero.velero = {
           package = packages.velero;
           # Test credentials, so the kix-managed Secret is built and mounted.

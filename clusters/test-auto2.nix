@@ -107,6 +107,7 @@ kix.buildCluster {
         coredns = {
           package = packages.coredns;
           optional = true;
+          config.clusterIP = "10.96.0.10";
         };
       };
     }
