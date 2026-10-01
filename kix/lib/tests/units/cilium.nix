@@ -6,7 +6,6 @@
 {
   lib,
   k8s,
-  eval,
   mkCluster,
   manifests,
   ofKind,
