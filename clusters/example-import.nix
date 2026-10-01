@@ -19,9 +19,14 @@ kix.buildCluster {
       instances = {
         # Storage infrastructure — managed by kix even when other deps are imported.
         kube-system = {
+          # rancher.io/local-path exists only where local-path-provisioner is
+          # installed; name your cluster's CSI driver here.
           storage-classes = {
             package = packages.storage-classes;
-            aliases = [ "storageClasses" ];
+            config.classes.local-path = {
+              provisioner = "rancher.io/local-path";
+              volumeBindingMode = "WaitForFirstConsumer";
+            };
           };
         };
 

@@ -266,6 +266,12 @@ let
       bucket = "backups";
       credentialsSecretName = "backup-credentials";
     };
+    # No default annotation: the kind flavour already has a default class.
+    storage-classes.config.classes.local-path-retain = {
+      provisioner = "rancher.io/local-path";
+      reclaimPolicy = "Retain";
+      volumeBindingMode = "WaitForFirstConsumer";
+    };
     vaultwarden.instances = { inherit storage; };
   };
 

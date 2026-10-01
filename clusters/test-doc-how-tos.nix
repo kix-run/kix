@@ -8,8 +8,7 @@ let
     { scope, ... }:
     {
       meta = {
-        version = "1.0.0";
-        description = "Default StorageClass for the documentation example";
+        description = "StorageClass for the documentation example";
         roles = [ "storageClasses" ];
       };
 
@@ -19,9 +18,10 @@ let
           storageClass = scope.mkClusterResource {
             apiVersion = "storage.k8s.io/v1";
             kind = "StorageClass";
-            name = "example-local";
+            name = "local-path-retain";
             extra = {
-              provisioner = "kubernetes.io/no-provisioner";
+              provisioner = "rancher.io/local-path";
+              reclaimPolicy = "Retain";
               volumeBindingMode = "WaitForFirstConsumer";
             };
           };
