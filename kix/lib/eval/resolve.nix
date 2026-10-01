@@ -148,8 +148,8 @@ rec {
         throw "${prefix}dependency '${argName}' was not found for namespace '${requesterNamespace}'.${
           lib.optionalString (skipped != [ ])
             " Instances in other namespaces (${
-              builtins.concatStringsSep ", " (map (c: "${c.namespace}/${c.instName}") skipped)
-            }) declare meta.scope = \"namespace\" and serve only their own namespace."
+               builtins.concatStringsSep ", " (map (c: "${c.namespace}/${c.instName}") skipped)
+             }) declare meta.scope = \"namespace\" and serve only their own namespace."
         } Add an instance with that name or alias, or set deps.${argName} explicitly.";
 
   # The definitions of an instance's `config` (a deferredModule value), as

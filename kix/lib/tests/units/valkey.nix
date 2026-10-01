@@ -139,10 +139,11 @@ in
     (
       evalFails direct
       && evalFails auto
-      && described == [
-        "app/cache"
-        "app/cache (auto-instantiated)"
-      ]
+      &&
+        described == [
+          "app/cache"
+          "app/cache (auto-instantiated)"
+        ]
     )
     || throw "requester in resolution errors: ${builtins.toJSON described}";
 }

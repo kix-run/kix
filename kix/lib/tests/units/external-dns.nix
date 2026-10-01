@@ -132,6 +132,10 @@ in
       ];
       cms = ofKind "ConfigMap" (manifests cluster);
     in
-    (resolvedDep cluster == "shared/creds" && hasName "shared-creds" cms && !(hasName "other-creds" cms))
-    || throw "pickOptional with a namespace-scoped optional elsewhere: dep ${resolvedDep cluster}, ConfigMaps ${builtins.toJSON (map (m: m.metadata.name) cms)}";
+    (
+      resolvedDep cluster == "shared/creds" && hasName "shared-creds" cms && !(hasName "other-creds" cms)
+    )
+    || throw "pickOptional with a namespace-scoped optional elsewhere: dep ${resolvedDep cluster}, ConfigMaps ${
+      builtins.toJSON (map (m: m.metadata.name) cms)
+    }";
 }

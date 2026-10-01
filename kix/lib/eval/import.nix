@@ -282,9 +282,10 @@ rec {
               self:
               builtins.foldl' (
                 acc: fn:
-                helpers.mergeCollide "Import instance '${instanceName}': two build entries define the same part. Duplicated part" acc (
-                  callBuildFn self fn
-                )
+                helpers.mergeCollide
+                  "Import instance '${instanceName}': two build entries define the same part. Duplicated part"
+                  acc
+                  (callBuildFn self fn)
               ) { } (buildEntriesOf raw.build)
             );
 
