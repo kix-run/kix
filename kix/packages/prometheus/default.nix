@@ -20,12 +20,6 @@ let
   name = scope.instanceName;
   ns = scope.namespaceName;
 
-  defaultSecurityContext = {
-    runAsNonRoot = true;
-    runAsUser = 1000;
-    runAsGroup = 2000;
-    fsGroup = 2000;
-  };
 in
 {
   meta = {
@@ -124,12 +118,6 @@ in
       type = lib.types.anything;
       default = { };
     };
-    securityContext = lib.mkOption {
-      type = lib.types.attrsOf lib.types.anything;
-      default = { };
-      defaultText = lib.literalExpression (lib.generators.toPretty { } defaultSecurityContext);
-      description = "Pod securityContext for the Prometheus CR, deep-merged over the package's, which runs Prometheus as user 1000 and group 2000.";
-    };
     alerting = lib.mkOption {
       type = lib.types.anything;
       default = null;
@@ -145,7 +133,9 @@ in
       description = ''
         Extra fields deep-merged into the Prometheus CR spec. Escape hatch
         for fields not exposed as typed options (remoteWrite, thanos sidecar
-        spec, etc.).
+        spec, etc.). The package's pod `securityContext` runs Prometheus as
+        user 1000 and group 2000 with `fsGroup = 2000`; set
+        `extraSpec.securityContext` to change it.
       '';
     };
 
@@ -696,7 +686,12 @@ in
             scrapeInterval = config.scrapeInterval;
             evaluationInterval = config.evaluationInterval;
             resources = config.resources;
-            securityContext = lib.recursiveUpdate defaultSecurityContext config.securityContext;
+            securityContext = {
+              runAsNonRoot = true;
+              runAsUser = 1000;
+              runAsGroup = 2000;
+              fsGroup = 2000;
+            };
 
             # Select all ServiceMonitors/PodMonitors/Rules across all namespaces
             serviceMonitorSelector = config.serviceMonitorSelector;
@@ -923,13 +918,10 @@ in
       );
 
       # The operator creates `prometheus-operated` (headless, port web 9090)
-      # selecting the pods it stamps with the labels below. Kix used to
-      # render its own Service over the same pods for a stable name. That
-      # hand-typed selector could not be verified against any pod template
-      # in the build, so every validation layer carried an exemption for it
-      # (v2_discussions/135). A ServiceRef describes the operator's Service
-      # instead: out.fqdn carries dependency context, the deploy engine
-      # waits for the Service, netpol derives the same edges.
+      # selecting the pods it stamps with the labels below. A ServiceRef
+      # describes that Service, so out.fqdn carries dependency context, the
+      # deploy engine waits for the Service, and netpol derives the same
+      # edges as for a rendered Service (v2_discussions/135).
       service = scope.mkServiceRef {
         name = "prometheus-operated";
         selector = {
