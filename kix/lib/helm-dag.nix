@@ -434,7 +434,9 @@ rec {
         "DaemonSet"
       ];
       names = rs: builtins.concatStringsSep ", " (map (r: "${r.kind}/${r.name}") rs);
-      fix = kind: name: ''Name it: resources.mkParts { root = resources.get "${kind}" "${name}"; }, or kix.helmChart { root = { kind = "${kind}"; name = "${name}"; }; ... }.'';
+      fix =
+        kind: name:
+        ''Name it: resources.mkParts { root = resources.get "${kind}" "${name}"; }, or kix.helmChart { root = { kind = "${kind}"; name = "${name}"; }; ... }.'';
       first = rs: builtins.head rs;
     in
     if builtins.length services == 1 then

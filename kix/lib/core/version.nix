@@ -22,7 +22,7 @@ let
     "preview"
   ];
 
-  # Groups: 1 core, 3 suffix, 5 build.
+  # builtins.match result indices: 0 core, 3 suffix without "-", 5 build.
   grammar = "[vV]?([0-9]+(\\.[0-9]+)*)(-([0-9A-Za-z.-]+))?(\\+([0-9A-Za-z.-]+))?";
 
   # "rc10" splits into [ "rc" "10" ] so that rc2 sorts before rc10.
@@ -67,7 +67,14 @@ let
     else
       throw "${describe v} is not a version Kix can compare: expected numbers separated by dots, optionally with a leading \"v\", a \"-suffix\" and a \"+build\" suffix (for example \"1.19.6\", \"v2.12.2\", \"1.31.2+rke2r1\", \"1.31.2-gke.1209000\").";
 
-  cmp = a: b: if a < b then -1 else if a > b then 1 else 0;
+  cmp =
+    a: b:
+    if a < b then
+      -1
+    else if a > b then
+      1
+    else
+      0;
 
   # Numeric comparison of two cores, the shorter padded with zeros.
   compareCore =

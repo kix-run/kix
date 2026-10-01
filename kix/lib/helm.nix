@@ -2,8 +2,8 @@
 #
 # Inline use:
 #     package = kix.helmChart { repo = "..."; name = "loki"; version = "..."; hash = "..."; };
-#   The root is the chart's only Service, else its only workload. A chart
-#   with several names one: `root = { kind = "Service"; name = "loki"; };`.
+#   The root is the chart's only Service, else its only workload. For a
+#   chart with several, name it: `root = { kind = "Service"; name = "loki"; };`.
 #
 # Package use:
 #     build = { scope, ... }:

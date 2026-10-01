@@ -127,7 +127,18 @@ let
       rawHost = if via != null then candidateHost else null;
       host = if rawHost == null then null else builtins.unsafeDiscardStringContext rawHost;
 
-      listener = if via == "gateway" then gatewayListener { inherit name host scope gateway; } else null;
+      listener =
+        if via == "gateway" then
+          gatewayListener {
+            inherit
+              name
+              host
+              scope
+              gateway
+              ;
+          }
+        else
+          null;
 
       scheme =
         if via == "ingress" then
@@ -181,9 +192,7 @@ let
         let
           h = hostnameOf l;
         in
-        h == null
-        || h == host
-        || (lib.hasPrefix "*." h && lib.hasSuffix (lib.removePrefix "*" h) host);
+        h == null || h == host || (lib.hasPrefix "*." h && lib.hasSuffix (lib.removePrefix "*" h) host);
 
       # "verified", "unverified" (Selector), or a rejection reason.
       verdict =
@@ -191,10 +200,12 @@ let
         let
           from = fromOf l;
         in
-        if !(builtins.elem l.protocol [
-          "HTTP"
-          "HTTPS"
-        ]) then
+        if
+          !(builtins.elem l.protocol [
+            "HTTP"
+            "HTTPS"
+          ])
+        then
           "protocol is ${l.protocol}"
         else if !(hostMatches l) then
           "hostname \"${hostnameOf l}\" does not match"
@@ -217,14 +228,12 @@ let
 
       candidates = builtins.filter (j: j.v == "verified" || j.v == "unverified") judged;
 
-      rank =
-        j:
-        [
-          (if j.v == "verified" then 0 else 1)
-          (if j.scheme == "https" then 0 else 1)
-          (if j.l.port == (if j.scheme == "https" then 443 else 80) then 0 else 1)
-          j.i
-        ];
+      rank = j: [
+        (if j.v == "verified" then 0 else 1)
+        (if j.scheme == "https" then 0 else 1)
+        (if j.l.port == (if j.scheme == "https" then 443 else 80) then 0 else 1)
+        j.i
+      ];
       chosen = builtins.head (builtins.sort (a: b: rank a < rank b) candidates);
 
       checked = builtins.concatStringsSep ", " (map (j: "${j.l.name} (${j.v})") judged);
@@ -1589,77 +1598,77 @@ rec {
         ${partName} =
           if hasExposure && useGateway then
             builtins.seq info.scheme (
-            if paths != null then
-              scope.mkResource (
-                httpRoute.fromPaths (
+              if paths != null then
+                scope.mkResource (
+                  httpRoute.fromPaths (
+                    {
+                      inherit name;
+                      host = effectiveHost;
+                      parentRef = gateway.out.gatewayRef;
+                      paths = map (p: {
+                        inherit (p) path;
+                        pathType = p.pathType or "Prefix";
+                        svc = self.${p.service};
+                        port = p.port or null;
+                      }) paths;
+                    }
+                    // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
+                  )
+                )
+              else
+                svc
+                |> httpRoute.fromService (
                   {
                     inherit name;
                     host = effectiveHost;
                     parentRef = gateway.out.gatewayRef;
-                    paths = map (p: {
-                      inherit (p) path;
-                      pathType = p.pathType or "Prefix";
-                      svc = self.${p.service};
-                      port = p.port or null;
-                    }) paths;
                   }
+                  // lib.optionalAttrs (port != null) { inherit port; }
                   // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
                 )
-              )
-            else
-              svc
-              |> httpRoute.fromService (
-                {
-                  inherit name;
-                  host = effectiveHost;
-                  parentRef = gateway.out.gatewayRef;
-                }
-                // lib.optionalAttrs (port != null) { inherit port; }
-                // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
-              )
-              |> scope.mkResource
+                |> scope.mkResource
             )
 
           else if hasExposure && useIngress then
             (
-                if paths != null then
-                  {
-                    apiVersion = "networking.k8s.io/v1";
-                    kind = "Ingress";
-                    inherit name;
-                    annotations = defaultAnnotations // configAnnotations;
-                    spec = {
-                      ingressClassName = ingressNginx.out.ingressClassName;
-                      rules = multiPathRules;
-                    }
-                    // lib.optionalAttrs hasTls {
-                      tls = [
-                        {
-                          hosts = [ effectiveHost ];
-                          secretName = tlsSecretName;
-                        }
-                      ];
-                    };
+              if paths != null then
+                {
+                  apiVersion = "networking.k8s.io/v1";
+                  kind = "Ingress";
+                  inherit name;
+                  annotations = defaultAnnotations // configAnnotations;
+                  spec = {
+                    ingressClassName = ingressNginx.out.ingressClassName;
+                    rules = multiPathRules;
                   }
-                else
-                  svc
-                  |> ingress.fromService (
-                    {
-                      inherit name;
-                      host = effectiveHost;
-                      className = ingressNginx.out.ingressClassName;
-                      tls = lib.optional hasTls {
+                  // lib.optionalAttrs hasTls {
+                    tls = [
+                      {
                         hosts = [ effectiveHost ];
                         secretName = tlsSecretName;
-                      };
-                      annotations = defaultAnnotations // configAnnotations;
-                    }
-                    // lib.optionalAttrs (port != null) { inherit port; }
-                  )
-              )
-              |> (if hasTls then clusterIssuer.out.withCert else lib.id)
-              |> _controllerEdgeWarn
-              |> scope.mkResource
+                      }
+                    ];
+                  };
+                }
+              else
+                svc
+                |> ingress.fromService (
+                  {
+                    inherit name;
+                    host = effectiveHost;
+                    className = ingressNginx.out.ingressClassName;
+                    tls = lib.optional hasTls {
+                      hosts = [ effectiveHost ];
+                      secretName = tlsSecretName;
+                    };
+                    annotations = defaultAnnotations // configAnnotations;
+                  }
+                  // lib.optionalAttrs (port != null) { inherit port; }
+                )
+            )
+            |> (if hasTls then clusterIssuer.out.withCert else lib.id)
+            |> _controllerEdgeWarn
+            |> scope.mkResource
 
           else
             null;

@@ -59,7 +59,9 @@ let
         warnings = [ ];
         assertions = map (
           b:
-          fail "${field}.${b} ${builtins.toJSON constraint.${b}} is not a version: expected numbers separated by dots, for example \"1.31\" or \"v2.12.2\"."
+          fail "${field}.${b} ${
+            builtins.toJSON constraint.${b}
+          } is not a version: expected numbers separated by dots, for example \"1.31\" or \"v2.12.2\"."
         ) badBounds;
       }
     else if bounds == [ ] then

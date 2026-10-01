@@ -562,10 +562,11 @@ in
         svcA
         deploy
       ] == svcA
-      && helmDag.pickRoot "rel" [
-        cm
-        deploy
-      ] == deploy
+      &&
+        helmDag.pickRoot "rel" [
+          cm
+          deploy
+        ] == deploy
       && pickFails [
         svcA
         svcB

@@ -303,9 +303,10 @@ in
             # partsOverlays below keep `//`: replacing a part is their purpose.
             merged = builtins.foldl' (
               acc: fn:
-              helpers.mergeCollide "${namespaceName}/${instanceName}: two build entries define the same part, and the later one would silently replace the earlier. Rename one of them (kix.expose takes partName and exposurePart; kix.monitor takes monitorPart and rulesPart), or use partsOverlays to replace a part on purpose. Duplicated part" acc (
-                callBuildFn self fn
-              )
+              helpers.mergeCollide
+                "${namespaceName}/${instanceName}: two build entries define the same part, and the later one would silently replace the earlier. Rename one of them (kix.expose takes partName and exposurePart; kix.monitor takes monitorPart and rulesPart), or use partsOverlays to replace a part on purpose. Duplicated part"
+                acc
+                (callBuildFn self fn)
             ) { } rawBuildEntries;
           in
           if boundOverlays != [ ] then

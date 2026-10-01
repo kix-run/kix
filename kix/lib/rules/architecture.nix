@@ -728,9 +728,9 @@ in
   # A string naming cluster.local resolves only on a cluster whose
   # clusterDomain is cluster.local. The rule is inert on such clusters.
   # CustomResourceDefinitions are skipped: their schema text quotes example
-  # FQDNs. A domain that ends in cluster.local (east.cluster.local) is
-  # removed before matching, and cluster.local counts only as whole labels
-  # (mycluster.local and cluster.localhost do not match).
+  # FQDNs. The configured domain is masked before matching, so a domain
+  # such as east.cluster.local is not a hit, and cluster.local counts only
+  # as whole labels (mycluster.local and cluster.localhost do not match).
   clusterDomainLiteral = {
     description = "Rendered strings must not name cluster.local when the cluster's clusterDomain is another domain";
     level = "cluster";
@@ -804,9 +804,9 @@ in
             namespace = r.metadata.namespace or null;
             resource = r.metadata.name or "?";
             message =
-              "${r.kind or "?"} '${r.metadata.name or "?"}' in namespace '${r.metadata.namespace or "(cluster)"}' contains \"${
-                builtins.unsafeDiscardStringContext (excerpt (builtins.head offending))
-              }\", which names the DNS domain cluster.local, but this cluster's clusterDomain is \"${domain}\", "
+              "${r.kind or "?"} '${r.metadata.name or "?"}' in namespace '${
+                r.metadata.namespace or "(cluster)"
+              }' contains \"${builtins.unsafeDiscardStringContext (excerpt (builtins.head offending))}\", which names the DNS domain cluster.local, but this cluster's clusterDomain is \"${domain}\", "
               + "so that address does not resolve. Build in-cluster addresses from a Service's out.fqdn or out.url, "
               + "or read clusterConfig.clusterDomain; for a Helm chart, pass the domain to the chart's cluster-domain value.";
           };

@@ -224,9 +224,11 @@ in
       };
 
       # An HTTPS listener without certificateRefs is a placeholder the
-      # cluster operator has not configured yet; Envoy Gateway would reject it.
+      # cluster operator has not configured yet.
       activeListeners = builtins.filter (
-        l: l.protocol != "HTTPS" || (l.tls != null && l.tls.certificateRefs != null && l.tls.certificateRefs != [ ])
+        l:
+        l.protocol != "HTTPS"
+        || (l.tls != null && l.tls.certificateRefs != null && l.tls.certificateRefs != [ ])
       ) config.listeners;
 
       haveProxy = config.proxySpec != null;

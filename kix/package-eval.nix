@@ -17,8 +17,8 @@
 # no finding, so an entry is removed once the package is fixed.
 #
 # Each cluster uses a clusterDomain other than cluster.local, so the
-# `architecture.clusterDomainLiteral` rule sees addresses a package wrote by
-# hand. Two static checks cover what never renders: the package's source
+# `architecture.clusterDomainLiteral` rule sees addresses a package spells
+# out instead of deriving. Two static checks cover what never renders: the package's source
 # must not contain `cluster.local` outside comments, and `meta.version`
 # must parse as a version (kix/lib/core/version.nix).
 # `sourceDomainLiteralExceptions` and `versionExceptions` list the packages
@@ -324,7 +324,11 @@ let
   checkVersion =
     name: package:
     let
-      version = (kix.peekPackageMeta { inherit package; inherit (kix) kixlib; }).version or null;
+      version =
+        (kix.peekPackageMeta {
+          inherit package;
+          inherit (kix) kixlib;
+        }).version or null;
       ok = version == null || versions.isVersion version;
     in
     if versionExceptions ? ${name} then
