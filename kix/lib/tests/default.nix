@@ -3089,7 +3089,7 @@ let
                   resource = self.frontDeployment;
                   requires = [
                     self.apiDeployment
-                    self.ingress
+                    self.route
                   ];
                 };
               }

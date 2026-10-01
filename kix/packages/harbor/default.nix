@@ -1372,7 +1372,7 @@ in
         # ConfigMap reaches every other component. The exporter and the
         # monitors hang off nothing.
         root = {
-          resource = if self.ingress != null then self.ingress else self.coreService;
+          resource = if self.route != null then self.route else self.coreService;
           requires = builtins.filter (r: r != null) [
             self.coreDeployment
             self.jobserviceDeployment

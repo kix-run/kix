@@ -82,6 +82,170 @@ let
       builtins.fromJSON (builtins.unsafeDiscardStringContext svc.out.port)
     else
       throw "${caller}: service '${svc.name or "unknown"}' has no out.port. Specify port explicitly";
+
+  # The public route kix.expose renders for an instance, as data:
+  # { via; host; scheme; url; }. `via` is "gateway", "ingress" or null (no
+  # route). `scheme` is null when Kix cannot vouch for it (a gateway without
+  # out.listeners, such as a kix.mkImport). It reads config, clusterConfig,
+  # scope and the exposure deps, never `self`, so any part can read it.
+  # `rawHost` keeps the string context of config.ingress.host for rendering.
+  exposureOf =
+    {
+      name,
+      config,
+      clusterConfig,
+      scope,
+      gateway,
+      ingressNginx,
+      clusterIssuer,
+    }:
+    let
+      publicDomain = clusterConfig.cluster.domain or null;
+      configHost = (config.ingress or { }).host or null;
+      candidateHost =
+        if configHost != null then
+          configHost
+        else if publicDomain != null then
+          "${name}.${publicDomain}"
+        else
+          null;
+
+      hasGateway = gateway != null && gateway ? out.gatewayRef;
+      hasIngress = ingressNginx != null;
+      mode =
+        if hasGateway then
+          if hasIngress then
+            throw "kix.expose (${name}): both 'gateway' and 'ingressNginx' are present. Wire exactly one via deps in the cluster definition."
+          else
+            "gateway"
+        else if hasIngress then
+          "ingress"
+        else
+          null;
+
+      via = if mode != null && candidateHost != null then mode else null;
+      rawHost = if via != null then candidateHost else null;
+      host = if rawHost == null then null else builtins.unsafeDiscardStringContext rawHost;
+
+      listener = if via == "gateway" then gatewayListener { inherit name host scope gateway; } else null;
+
+      scheme =
+        if via == "ingress" then
+          if clusterIssuer != null then "https" else "http"
+        else if listener != null then
+          listener.scheme
+        else
+          null;
+
+      defaultPort = if scheme == "https" then 443 else 80;
+      portSuffix = lib.optionalString (
+        listener != null && listener.port != defaultPort
+      ) ":${toString listener.port}";
+    in
+    {
+      inherit
+        via
+        host
+        rawHost
+        scheme
+        ;
+      url = if scheme == null then null else "${scheme}://${host}${portSuffix}";
+    };
+
+  # The Gateway listener an HTTPRoute for `host` from the instance's
+  # namespace attaches to, matched as Gateway API does: protocol HTTP or
+  # HTTPS, `hostname` unset, equal, or a `*.` wildcard covering the host,
+  # and `allowedRoutes.namespaces.from` admitting the namespace (unset means
+  # Same). Kix does not evaluate a `Selector`, so such a listener is
+  # unverified and chosen only after verified ones, with a warning.
+  # Returns { scheme; port; } or null when the gateway publishes no
+  # listeners. Throws when no listener accepts the route.
+  gatewayListener =
+    {
+      name,
+      host,
+      scope,
+      gateway,
+    }:
+    let
+      gwRef = gateway.out.gatewayRef;
+      gwLabel = "Gateway ${gwRef.namespace}/${gwRef.name}";
+      routeNs = scope.namespaceName;
+      listeners = gateway.out.listeners or null;
+
+      hostnameOf = l: l.hostname or null;
+      fromOf = l: l.allowedRoutes.namespaces.from or null;
+
+      hostMatches =
+        l:
+        let
+          h = hostnameOf l;
+        in
+        h == null
+        || h == host
+        || (lib.hasPrefix "*." h && lib.hasSuffix (lib.removePrefix "*" h) host);
+
+      # "verified", "unverified" (Selector), or a rejection reason.
+      verdict =
+        l:
+        let
+          from = fromOf l;
+        in
+        if !(builtins.elem l.protocol [
+          "HTTP"
+          "HTTPS"
+        ]) then
+          "protocol is ${l.protocol}"
+        else if !(hostMatches l) then
+          "hostname \"${hostnameOf l}\" does not match"
+        else if from == "All" then
+          "verified"
+        else if from == "Selector" then
+          "unverified"
+        else if gwRef.namespace == routeNs then
+          "verified"
+        else
+          "allowedRoutes.namespaces.from is ${
+            if from == null then "unset (Same)" else from
+          } and the Gateway is in \"${gwRef.namespace}\"";
+
+      judged = lib.imap0 (i: l: {
+        inherit i l;
+        v = verdict l;
+        scheme = if l.protocol == "HTTPS" then "https" else "http";
+      }) listeners;
+
+      candidates = builtins.filter (j: j.v == "verified" || j.v == "unverified") judged;
+
+      rank =
+        j:
+        [
+          (if j.v == "verified" then 0 else 1)
+          (if j.scheme == "https" then 0 else 1)
+          (if j.l.port == (if j.scheme == "https" then 443 else 80) then 0 else 1)
+          j.i
+        ];
+      chosen = builtins.head (builtins.sort (a: b: rank a < rank b) candidates);
+
+      checked = builtins.concatStringsSep ", " (map (j: "${j.l.name} (${j.v})") judged);
+    in
+    if listeners == null then
+      null
+    else if candidates == [ ] then
+      throw "kix.expose (${name}): ${gwLabel} has no HTTP or HTTPS listener that accepts host \"${host}\" from namespace \"${routeNs}\", so the HTTPRoute would not attach. Checked: ${
+        if judged == [ ] then "no listeners" else checked
+      }. Add a listener for this host with allowedRoutes.namespaces.from = \"All\" to the gateway instance, or set ingress.host to a name one of its listeners accepts."
+    else
+      (
+        if chosen.v == "unverified" then
+          lib.warn "kix.expose (${name}): ${gwLabel} listener \"${chosen.l.name}\" admits routes by namespace selector, which Kix does not check. The URL assumes namespace \"${routeNs}\" matches it."
+        else
+          lib.id
+      )
+        {
+          inherit (chosen) scheme;
+          inherit (chosen.l) port;
+        };
 in
 
 rec {
@@ -1233,12 +1397,13 @@ rec {
     {
       service ? null,
       paths ? null,
-      partName ? "ingress",
+      # The Ingress or HTTPRoute part.
+      partName ? "route",
+      # A plain record part { via; host; scheme; url; } describing that
+      # route (exposureOf). Set both names on a second kix.expose call.
+      exposurePart ? "exposure",
       defaultAnnotations ? { },
       port ? null,
-      tlsSecretName ? null,
-      tlsSecret ? null,
-      tlsSecretPart ? null,
       # Gateway API mode only: per-rule HTTPRoute timeouts, e.g.
       # { request = "0s"; } to disable the default 15s request timeout for
       # long-lived streaming backends. Ignored in Ingress (nginx) mode.
@@ -1268,68 +1433,24 @@ rec {
 
       svc = if service != null then self.${service} else null;
 
-      effectiveTlsSecret = if tlsSecretPart != null then self.${tlsSecretPart} else tlsSecret;
+      info = exposureOf {
+        inherit
+          name
+          config
+          clusterConfig
+          scope
+          gateway
+          ingressNginx
+          clusterIssuer
+          ;
+      };
 
-      _tlsSecretNsCheck =
-        if effectiveTlsSecret != null then
-          let
-            secretNs =
-              if (effectiveTlsSecret.namespace._type or "") == "k8s-cluster-scoped" then
-                null
-              else
-                effectiveTlsSecret.namespace.name or null;
-          in
-          if secretNs != null && secretNs != scope.namespaceName then
-            throw "kix.expose (${name}): tlsSecret '${effectiveTlsSecret.name or "?"}' is in namespace "
-            + "\"${secretNs}\" but the Ingress is in namespace \"${scope.namespaceName}\". "
-            + "Kubernetes ingress controllers only read TLS secrets from the Ingress's own namespace."
-          else
-            null
-        else if tlsSecretName != null then
-          if builtins.getContext tlsSecretName == { } then
-            throw "kix.expose (${name}): tlsSecretName \"${tlsSecretName}\" is a raw string literal. "
-            + "Use `tlsSecret = someSecretResource` (so Kix can check that the secret is in the correct namespace), "
-            + "`tlsSecretName = someSecret.out.name` (tracked string), "
-            + "or `tlsSecretName = kix.untrackedRef \"...\"` to opt out explicitly."
-          else
-            null
-        else
-          null;
-
-      tlsSecretNameEffective =
-        if effectiveTlsSecret != null then
-          effectiveTlsSecret.out.name
-        else if tlsSecretName != null then
-          tlsSecretName
-        else
-          "${name}-tls";
-
-      clusterDomain = clusterConfig.cluster.domain or null;
-      configHost = (config.ingress or { }).host or null;
-      effectiveHost =
-        if configHost != null then
-          configHost
-        else if clusterDomain != null then
-          "${name}.${clusterDomain}"
-        else
-          null;
-
-      hasGateway = gateway != null && gateway ? out.gatewayRef;
-
-      hasIngress = ingressNginx != null;
-
-      useGateway =
-        hasGateway
-        && (
-          if hasIngress then
-            throw "kix.expose (${name}): both 'gateway' and 'ingressNginx' are present. Wire exactly one via deps in the cluster definition."
-          else
-            true
-        );
-      useIngress = hasIngress && !hasGateway;
-
-      hasExposure = (useGateway || useIngress) && effectiveHost != null;
-      hasTls = hasExposure && useIngress && clusterIssuer != null;
+      effectiveHost = info.rawHost;
+      hasExposure = info.via != null;
+      useGateway = info.via == "gateway";
+      useIngress = info.via == "ingress";
+      hasTls = useIngress && clusterIssuer != null;
+      tlsSecretName = "${name}-tls";
 
       configAnnotations = (config.ingress or { }).annotations or { };
 
@@ -1454,8 +1575,20 @@ rec {
     builtins.seq _modeCheck (
       controllerEdgeParts
       // {
+        ${exposurePart} = {
+          inherit (info)
+            via
+            host
+            scheme
+            url
+            ;
+        };
+
+        # Forcing info.scheme runs the listener match, so a route that no
+        # listener accepts fails the build even when nothing reads the URL.
         ${partName} =
           if hasExposure && useGateway then
+            builtins.seq info.scheme (
             if paths != null then
               scope.mkResource (
                 httpRoute.fromPaths (
@@ -1485,10 +1618,10 @@ rec {
                 // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
               )
               |> scope.mkResource
+            )
 
           else if hasExposure && useIngress then
-            builtins.seq _tlsSecretNsCheck (
-              (
+            (
                 if paths != null then
                   {
                     apiVersion = "networking.k8s.io/v1";
@@ -1503,7 +1636,7 @@ rec {
                       tls = [
                         {
                           hosts = [ effectiveHost ];
-                          secretName = tlsSecretNameEffective;
+                          secretName = tlsSecretName;
                         }
                       ];
                     };
@@ -1517,7 +1650,7 @@ rec {
                       className = ingressNginx.out.ingressClassName;
                       tls = lib.optional hasTls {
                         hosts = [ effectiveHost ];
-                        secretName = tlsSecretNameEffective;
+                        secretName = tlsSecretName;
                       };
                       annotations = defaultAnnotations // configAnnotations;
                     }
@@ -1527,7 +1660,6 @@ rec {
               |> (if hasTls then clusterIssuer.out.withCert else lib.id)
               |> _controllerEdgeWarn
               |> scope.mkResource
-            )
 
           else
             null;
