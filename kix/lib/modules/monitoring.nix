@@ -31,10 +31,10 @@ let
   # The module's `kix` argument carries only `mkImport`, so the quantity
   # type comes from its file rather than `kix.types.quantity`.
   quantity = import ../vocab/quantity.nix { inherit lib; };
-  # Created by the `priority-classes` instance below and named by promtail.
-  # A module cannot read another instance's `out`, so both sides use this
-  # name; eval fails if promtail names a class that no resource creates.
-  promtailPriorityClass = "monitoring-loki";
+  # Name of the PriorityClass the log shipper runs at. The instance below
+  # creates it; the log shipper names it, and the build fails if a workload
+  # names a class nothing creates.
+  logShipperPriorityClass = "monitoring-log-shipper";
 in
 {
   options.monitoring = {
@@ -304,19 +304,17 @@ in
             };
           };
 
-          priority-classes = lib.mkIf cfg.promtail.enabled {
-            package = packages.priority-classes;
-            config.classes = {
-              ${promtailPriorityClass} = {
-                value = 1000000;
-                description = "Monitoring and log shipping workloads (Loki, Promtail)";
-              };
+          ${logShipperPriorityClass} = lib.mkIf cfg.promtail.enabled {
+            package = packages.priority-class;
+            config = {
+              value = 1000000;
+              description = "Log shipper DaemonSet of the monitoring stack, so it can schedule on a full node";
             };
           };
 
           promtail = lib.mkIf cfg.promtail.enabled {
             package = packages.promtail;
-            config.priorityClassName = promtailPriorityClass;
+            config.priorityClassName = logShipperPriorityClass;
           };
         };
       in

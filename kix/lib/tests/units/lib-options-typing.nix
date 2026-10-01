@@ -739,7 +739,7 @@ in
         "loki"
         "node-exporter"
         "persistent-volume-claim"
-        "priority-classes"
+        "priority-class"
         "prometheus"
         "prometheus-default-rules"
         "prometheus-operator"
