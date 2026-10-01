@@ -221,6 +221,12 @@ in
         max_wal_size = "4GB";
         min_wal_size = "1GB";
         wal_keep_size = "1536MB";
+        # WAL reaches backup storage only when a 16 MB segment fills, so a quiet
+        # database can hold hours of commits that no backup has. This switches
+        # segments at least once a minute while anything is written; an idle
+        # database switches nothing. A switched segment is zero-padded, and
+        # stored as about 85 KB with lz4 (measured on a test cluster).
+        archive_timeout = "60";
         log_min_duration_statement = "1s";
         log_checkpoints = "on";
         log_connections = "on";
