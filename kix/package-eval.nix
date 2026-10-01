@@ -121,7 +121,6 @@ let
     ];
     harbor = [ domainLiteralViaValkey ];
     immich = [ domainLiteralViaValkey ];
-    infisical-operator = [ domainLiteral ];
     loki = [
       lokiLabels
       domainLiteral
@@ -294,7 +293,6 @@ let
 
   # Packages whose source writes cluster.local outside a comment.
   sourceDomainLiteralExceptions = [
-    "infisical-operator"
     "openebs"
     "valkey"
   ];
