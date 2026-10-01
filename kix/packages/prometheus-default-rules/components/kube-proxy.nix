@@ -5,6 +5,11 @@
   kix,
   bridgeName,
 }:
+let
+  defaultSelector = {
+    k8s-app = "kube-proxy";
+  };
+in
 {
   options.monitors.kubeProxy = lib.mkOption {
     type = lib.types.submodule {
@@ -14,10 +19,10 @@
           default = true;
         };
         selector = lib.mkOption {
-          type = lib.types.attrsOf lib.types.str;
-          default = {
-            k8s-app = "kube-proxy";
-          };
+          type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
+          default = null;
+          defaultText = lib.literalExpression ''{ k8s-app = "kube-proxy"; }'';
+          description = "Pod labels the bridge Service selects when `endpoints` is empty. A value replaces the package's selector as a whole. Null uses `{ k8s-app = \"kube-proxy\"; }`, the label kubeadm puts on its kube-proxy DaemonSet.";
         };
         port = lib.mkOption {
           type = lib.types.int;
@@ -113,7 +118,9 @@
           }
         ];
       }
-      // lib.optionalAttrs (cfg.endpoints == [ ]) { selector = cfg.selector; };
+      // lib.optionalAttrs (cfg.endpoints == [ ]) {
+        selector = if cfg.selector == null then defaultSelector else cfg.selector;
+      };
 
       tlsConfig = lib.optionalAttrs (cfg.scheme == "https") {
         tlsConfig = {

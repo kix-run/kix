@@ -18,6 +18,28 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
+
+  # Routes every alert, Watchdog included, to a receiver that drops it.
+  defaultConfig = {
+    global.resolve_timeout = "5m";
+    route = {
+      group_by = [
+        "namespace"
+        "alertname"
+      ];
+      group_wait = "30s";
+      group_interval = "5m";
+      repeat_interval = "12h";
+      receiver = "null";
+      routes = [
+        {
+          receiver = "null";
+          matchers = [ "alertname = Watchdog" ];
+        }
+      ];
+    };
+    receivers = [ { name = "null"; } ];
+  };
 in
 {
   meta = {
@@ -54,45 +76,21 @@ in
         (v2_discussions/145).
       '';
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "10m";
-          memory = "256Mi";
-        };
-        limits = {
-          cpu = "1";
-          memory = "1Gi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "10m";
+        memory = "256Mi";
+      };
+      limits = {
+        cpu = "1";
+        memory = "1Gi";
       };
     };
-    # Alertmanager config: receivers, routes, etc.
-    # This is cluster-specific and set in the cluster module.
     config = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        global.resolve_timeout = "5m";
-        route = {
-          group_by = [
-            "namespace"
-            "alertname"
-          ];
-          group_wait = "30s";
-          group_interval = "5m";
-          repeat_interval = "12h";
-          receiver = "null";
-          routes = [
-            {
-              receiver = "null";
-              matchers = [ "alertname = Watchdog" ];
-            }
-          ];
-        };
-        receivers = [
-          { name = "null"; }
-        ];
-      };
+      type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
+      default = null;
+      defaultText = lib.literalMD "null: the package's configuration, which routes every alert to the receiver `null`";
+      description = "Alertmanager configuration (route, receivers, inhibit_rules), rendered to alertmanager.yaml. A value replaces the package's configuration as a whole. Null uses the package's configuration, which routes every alert to the receiver `null`.";
     };
     priorityClassName = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -324,7 +322,9 @@ in
       # Alertmanager config as a Secret (the operator expects this)
       alertmanagerConfig = scope.mkSecret {
         name = "alertmanager-${name}";
-        stringData."alertmanager.yaml" = builtins.toJSON config.config;
+        stringData."alertmanager.yaml" = builtins.toJSON (
+          if config.config == null then defaultConfig else config.config
+        );
       };
 
       # Alertmanager CR: operator reconciles into StatefulSet
@@ -513,11 +513,8 @@ in
         serviceMonitor = mkSmon {
           name = "${name}-self";
           spec = {
-            # ServiceMonitors match SERVICE labels, not pod labels. The
-            # pod-shaped svcSelector never matched the Service and the
-            # self-monitor was silently unscraped (caught by
-            # monitorSelectorMatchesService, 2026-08-31).
-            # The ref carries the operated Service's labels and port names.
+            # A ServiceMonitor selects Services, not pods, so this uses the
+            # labels of the operator's Service from its ref.
             selector.matchLabels = self.service.out.labels;
             namespaceSelector.matchNames = [ ns ];
             endpoints = [

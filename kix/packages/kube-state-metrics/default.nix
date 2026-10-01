@@ -51,17 +51,14 @@ in
         because a second replica would duplicate every series.
       '';
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "10m";
-          memory = "64Mi";
-        };
-        limits = {
-          cpu = "1";
-          memory = "256Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "10m";
+        memory = "64Mi";
+      };
+      limits = {
+        cpu = "1";
+        memory = "256Mi";
       };
     };
     metrics = kix.options.monitor;

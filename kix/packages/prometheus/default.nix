@@ -19,6 +19,13 @@
 let
   name = scope.instanceName;
   ns = scope.namespaceName;
+
+  defaultSecurityContext = {
+    runAsNonRoot = true;
+    runAsUser = 1000;
+    runAsGroup = 2000;
+    fsGroup = 2000;
+  };
 in
 {
   meta = {
@@ -72,17 +79,14 @@ in
       type = lib.types.str;
       default = "30s";
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "500m";
-          memory = "2Gi";
-        };
-        limits = {
-          cpu = "2";
-          memory = "4Gi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "500m";
+        memory = "2Gi";
+      };
+      limits = {
+        cpu = "2";
+        memory = "4Gi";
       };
     };
     storage = lib.mkOption {
@@ -121,13 +125,10 @@ in
       default = { };
     };
     securityContext = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        runAsNonRoot = true;
-        runAsUser = 1000;
-        runAsGroup = 2000;
-        fsGroup = 2000;
-      };
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      defaultText = lib.literalExpression (lib.generators.toPretty { } defaultSecurityContext);
+      description = "Pod securityContext for the Prometheus CR, deep-merged over the package's, which runs Prometheus as user 1000 and group 2000.";
     };
     alerting = lib.mkOption {
       type = lib.types.anything;
@@ -277,17 +278,6 @@ in
                 clusterIP = lib.mkOption {
                   type = lib.types.nullOr lib.types.str;
                   default = null;
-                };
-                ipDualStack = lib.mkOption {
-                  type = lib.types.attrs;
-                  default = {
-                    enabled = false;
-                    ipFamilies = [
-                      "IPv6"
-                      "IPv4"
-                    ];
-                    ipFamilyPolicy = "PreferDualStack";
-                  };
                 };
                 portName = lib.mkOption {
                   type = lib.types.str;
@@ -706,7 +696,7 @@ in
             scrapeInterval = config.scrapeInterval;
             evaluationInterval = config.evaluationInterval;
             resources = config.resources;
-            securityContext = config.securityContext;
+            securityContext = lib.recursiveUpdate defaultSecurityContext config.securityContext;
 
             # Select all ServiceMonitors/PodMonitors/Rules across all namespaces
             serviceMonitorSelector = config.serviceMonitorSelector;
@@ -802,10 +792,6 @@ in
           }
           // lib.optionalAttrs (config.thanos.service.clusterIP != null) {
             clusterIP = config.thanos.service.clusterIP;
-          }
-          // lib.optionalAttrs config.thanos.service.ipDualStack.enabled {
-            ipFamilies = config.thanos.service.ipDualStack.ipFamilies;
-            ipFamilyPolicy = config.thanos.service.ipDualStack.ipFamilyPolicy;
           }
           // lib.optionalAttrs (config.thanos.service.type != "ClusterIP") {
             externalTrafficPolicy = config.thanos.service.externalTrafficPolicy;

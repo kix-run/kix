@@ -35,17 +35,14 @@ in
       repository = "quay.io/prometheus/node-exporter";
       tag = "v1.12.1";
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "10m";
-          memory = "32Mi";
-        };
-        limits = {
-          cpu = "1";
-          memory = "128Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "10m";
+        memory = "32Mi";
+      };
+      limits = {
+        cpu = "1";
+        memory = "128Mi";
       };
     };
     extraArgs = lib.mkOption {

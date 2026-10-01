@@ -68,17 +68,14 @@ in
         availability level (v2_discussions/145).
       '';
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "100m";
-          memory = "128Mi";
-        };
-        limits = {
-          cpu = "500m";
-          memory = "256Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "100m";
+        memory = "128Mi";
+      };
+      limits = {
+        cpu = "500m";
+        memory = "256Mi";
       };
     };
     controllerGenVersion = lib.mkOption {

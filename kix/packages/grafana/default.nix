@@ -28,6 +28,18 @@ let
   name = scope.instanceName;
   ns = scope.namespaceName;
 
+  # `fsGroup` is what gives Grafana its data volume: the kubelet makes the
+  # volume group 472, group-writable and setgid. `OnRootMismatch` limits
+  # that to mounts where the top directory is wrong, rather than walking
+  # the whole volume on every start.
+  defaultSecurityContext = {
+    runAsNonRoot = true;
+    runAsUser = 472;
+    runAsGroup = 472;
+    fsGroup = 472;
+    fsGroupChangePolicy = "OnRootMismatch";
+  };
+
   # The display name and uid of one auto-wired datasource.
   autoDatasourceOption =
     kind: dep: defaultName: defaultUid:
@@ -120,56 +132,72 @@ in
         single writer.
       '';
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "100m";
-          memory = "128Mi";
-        };
-        limits = {
-          cpu = "1";
-          memory = "1Gi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "100m";
+        memory = "128Mi";
+      };
+      limits = {
+        cpu = "1";
+        memory = "1Gi";
       };
     };
     # The grafana chart (10.5.15) leaves `sidecar.resources` empty and
     # suggests these values in a comment.
-    sidecarResources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "50m";
-          memory = "50Mi";
-        };
-        limits = {
-          cpu = "100m";
-          memory = "100Mi";
-        };
+    sidecarResources = kix.options.resources {
+      requests = {
+        cpu = "50m";
+        memory = "50Mi";
+      };
+      limits = {
+        cpu = "100m";
+        memory = "100Mi";
       };
       description = "Resources for each k8s-sidecar container.";
     };
-    # Note: persistence (PVC size / storageClass) is now controlled by a
-    # sibling `storage` instance of `persistent-volume-claim`. Leaving this
-    # option out of grafana keeps package config focused on grafana itself.
-    sidecar = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        dashboards = {
-          enabled = true;
-          searchNamespace = "ALL";
-          label = "grafana_dashboard";
-          labelValue = "1";
+    sidecar = {
+      dashboards = {
+        enabled = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Run the k8s-sidecar container that loads dashboards from labelled ConfigMaps or Secrets.";
         };
-        datasources = {
-          enabled = true;
-          # null = inherit k8s-sidecar default ("the pod's namespace"; kix
-          # also grants cluster-wide RBAC so cross-namespace discovery still
-          # works without the env). Set to "ALL" or a specific namespace
-          # to override. Matches chart's `sidecar.datasources.searchNamespace`.
-          searchNamespace = null;
-          label = "grafana_datasource";
-          labelValue = "1";
+        searchNamespace = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = "ALL";
+          description = "Namespace the sidecar searches (k8s-sidecar's NAMESPACE): `ALL` or one namespace name. Null leaves NAMESPACE unset, so the sidecar searches Grafana's own namespace.";
+        };
+        label = lib.mkOption {
+          type = lib.types.str;
+          default = "grafana_dashboard";
+          description = "Label key that marks a ConfigMap or Secret as holding dashboards.";
+        };
+        labelValue = lib.mkOption {
+          type = lib.types.str;
+          default = "1";
+          description = "Value of `label` that the sidecar matches.";
+        };
+      };
+      datasources = {
+        enabled = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Run the k8s-sidecar container that loads datasources from labelled ConfigMaps or Secrets.";
+        };
+        searchNamespace = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = "Namespace the sidecar searches (k8s-sidecar's NAMESPACE): `ALL` or one namespace name. Null leaves NAMESPACE unset, so the sidecar searches Grafana's own namespace.";
+        };
+        label = lib.mkOption {
+          type = lib.types.str;
+          default = "grafana_datasource";
+          description = "Label key that marks a ConfigMap or Secret as holding datasources.";
+        };
+        labelValue = lib.mkOption {
+          type = lib.types.str;
+          default = "1";
+          description = "Value of `label` that the sidecar matches.";
         };
       };
     };
@@ -471,19 +499,11 @@ in
       default = [ ];
       description = "Dashboard providers in addition to the sidecar's. None by default.";
     };
-    # `fsGroup` is what gives Grafana its data volume: the kubelet makes the
-    # volume group 472, group-writable and setgid. `OnRootMismatch` limits
-    # that to mounts where the top directory is wrong, rather than walking
-    # the whole volume on every start.
     securityContext = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        runAsNonRoot = true;
-        runAsUser = 472;
-        runAsGroup = 472;
-        fsGroup = 472;
-        fsGroupChangePolicy = "OnRootMismatch";
-      };
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      defaultText = lib.literalExpression (lib.generators.toPretty { } defaultSecurityContext);
+      description = "Pod securityContext, deep-merged over the package's, which runs Grafana as user and group 472.";
     };
     initChownData.enabled = lib.mkOption {
       type = lib.types.bool;
@@ -972,7 +992,7 @@ in
                 REQ_URL = "http://localhost:3000/api/admin/provisioning/datasources/reload";
                 RESOURCE = sidecarResource;
               }
-              // lib.optionalAttrs ((config.sidecar.datasources.searchNamespace or null) != null) {
+              // lib.optionalAttrs (config.sidecar.datasources.searchNamespace != null) {
                 NAMESPACE = config.sidecar.datasources.searchNamespace;
               }
             )
@@ -1155,7 +1175,7 @@ in
               # Kubernetes' default, set explicitly; the grafana chart
               # (10.5.15) sets none.
               terminationGracePeriodSeconds = 30;
-              securityContext = config.securityContext;
+              securityContext = lib.recursiveUpdate defaultSecurityContext config.securityContext;
               containers = [
                 {
                   name = "grafana";
@@ -1386,9 +1406,7 @@ in
           mkServiceMonitor {
             name = "${name}-monitor";
             spec = {
-              # ServiceMonitors match SERVICE labels, not pod labels. The
-              # deployment selector never matched the Service and grafana
-              # was silently unscraped (caught live on kind, 2026-08-31).
+              # A ServiceMonitor selects Services, not pods.
               selector.matchLabels = self.service.out.selector;
               endpoints = [
                 (

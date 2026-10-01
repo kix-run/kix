@@ -28,6 +28,7 @@
 let
   cfg = config.monitoring;
   ns = cfg.namespace;
+  quantity = import ../vocab/quantity.nix { inherit lib; };
   # Created by the `priority-classes` instance below and named by promtail.
   # A module cannot read another instance's `out`, so both sides use this
   # name; eval fails if promtail names a class that no resource creates.
@@ -63,19 +64,6 @@ in
       scrapeInterval = lib.mkOption {
         type = lib.types.str;
         default = "30s";
-      };
-      resources = lib.mkOption {
-        type = lib.types.anything;
-        default = {
-          requests = {
-            cpu = "500m";
-            memory = "2Gi";
-          };
-          limits = {
-            cpu = "2";
-            memory = "4Gi";
-          };
-        };
       };
       storage = lib.mkOption {
         type = lib.types.anything;
@@ -124,11 +112,21 @@ in
         default = null;
         description = "Grafana root URL. Derived from cluster.domain if null.";
       };
-      persistence = lib.mkOption {
-        type = lib.types.anything;
-        default = {
-          enabled = true;
-          size = "10Gi";
+      persistence = {
+        enabled = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Keep Grafana's data on a PersistentVolumeClaim (a persistent-volume-claim instance named `storage` in the monitoring namespace). False keeps it in an emptyDir, which a pod restart empties.";
+        };
+        size = lib.mkOption {
+          type = quantity.type;
+          default = "10Gi";
+          description = "Size of Grafana's claim.";
+        };
+        storageClassName = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = "StorageClass of Grafana's claim. Null leaves the choice to the persistent-volume-claim package.";
         };
       };
       extraDatasources = lib.mkOption {
@@ -217,7 +215,6 @@ in
             config = {
               retention = cfg.prometheus.retention;
               scrapeInterval = cfg.prometheus.scrapeInterval;
-              resources = cfg.prometheus.resources;
             }
             // lib.optionalAttrs (cfg.prometheus.retentionSize != null) {
               retentionSize = cfg.prometheus.retentionSize;
@@ -279,14 +276,8 @@ in
           storage = lib.mkIf (cfg.grafana.enabled && cfg.grafana.persistence.enabled) {
             package = packages."persistent-volume-claim";
             config = {
-              size = cfg.grafana.persistence.size;
-            }
-            //
-              lib.optionalAttrs
-                (cfg.grafana.persistence ? storageClass && cfg.grafana.persistence.storageClass != null)
-                {
-                  accessModes = [ "ReadWriteOnce" ];
-                };
+              inherit (cfg.grafana.persistence) size storageClassName;
+            };
           };
 
           grafana = lib.mkIf cfg.grafana.enabled {
