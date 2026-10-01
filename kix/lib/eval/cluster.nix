@@ -15,6 +15,7 @@
   callPackagePhase1,
   discoverBuildDeps,
   resolveDepTargets,
+  describeRequester,
   buildConfigInjections,
   evaluateInstanceConfig,
   evaluateInstance,
@@ -334,6 +335,7 @@
                 declaredDeps = discoveredDeps;
                 inherit resolutionIndex;
                 namespace = nsName;
+                requester = describeRequester nsName instName instCfg;
                 explicitOverrides = lib.filterAttrs (_: v: builtins.isAttrs v && (v._type or "") == "kix-ref") (
                   instCfg.deps or { }
                 );

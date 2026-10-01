@@ -35,8 +35,14 @@ let
       k8s
       rbac
       kixlib
+      helpers
       ;
-    inherit (resolve) evaluateInstanceConfig;
+    inherit (resolve)
+      evaluateInstanceConfig
+      buildEntriesOf
+      discoverBuildDeps
+      systemArgNames
+      ;
   };
   namespaceMod = import ./namespace.nix { inherit lib k8s; };
   auto = import ./auto.nix {
@@ -80,6 +86,7 @@ let
       callPackagePhase1
       discoverBuildDeps
       resolveDepTargets
+      describeRequester
       buildConfigInjections
       evaluateInstanceConfig
       ;
@@ -105,10 +112,12 @@ in
   inherit (resolve)
     buildResolutionIndex
     resolveArg
+    describeRequester
     extractDeferredDefs
     evaluateInstanceConfig
     packageDefaultPriority
     callPackagePhase1
+    buildEntriesOf
     discoverBuildDeps
     resolveDeclaredDeps
     resolveDepTargets

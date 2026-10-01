@@ -3,7 +3,11 @@
   k8s,
   rbac,
   kixlib,
+  helpers,
   evaluateInstanceConfig,
+  buildEntriesOf,
+  discoverBuildDeps,
+  systemArgNames,
 }:
 
 let
@@ -217,14 +221,7 @@ rec {
             };
 
             fnArgs = builtins.functionArgs importDef.from;
-            depArgNames = builtins.attrNames (
-              removeAttrs fnArgs [
-                "scope"
-                "lib"
-                "kix"
-                "availability"
-              ]
-            );
+            depArgNames = builtins.attrNames (removeAttrs fnArgs systemArgNames);
             mkDepProxy =
               depName:
               builtins.throw "Import instance '${instanceName}': package accessed dependency '${depName}', but imports run without dependency resolution. Either use a raw 'out' override (mkImport { out = { ... }; }) or use a mixed import (mkImport { from = ...; out = { fieldThatNeedsDep = \"value\"; }; }).";
@@ -259,38 +256,36 @@ rec {
                 ;
             };
 
-            buildEntries =
-              if builtins.isList raw.build then
-                map (entry: if builtins.isPath entry then import entry else entry) raw.build
-              else
-                [ raw.build ];
-            allBuildArgs = builtins.foldl' (acc: fn: acc // builtins.functionArgs fn) { } buildEntries;
-            depArgNames' = builtins.attrNames (
-              removeAttrs allBuildArgs [
-                "self"
-                "config"
-                "clusterConfig"
-                "scope"
-                "lib"
-                "kix"
-                "deps"
-              ]
-            );
-            nullBuildDeps = builtins.listToAttrs (
-              map (name: {
-                inherit name;
-                value = mkDepProxy name;
-              }) depArgNames'
-            );
-            parts = lib.fix (
-              self:
-              raw.build (
+            # Build entries run as they do for a managed instance, with the
+            # import scope, availability "none", no resolved `deps`, and a
+            # throwing proxy for each dependency an entry asks for by name.
+            # Part overlays do not apply.
+            buildDepProxies = lib.mapAttrs (name: _: mkDepProxy name) (discoverBuildDeps raw.build);
+            callBuildFn =
+              self: fn:
+              let
+                args = builtins.functionArgs fn;
+              in
+              fn (
                 {
                   inherit self clusterConfig;
                   config = evaluatedConfig;
                 }
-                // nullBuildDeps
-              )
+                // lib.optionalAttrs (args ? scope) { scope = importScope; }
+                // lib.optionalAttrs (args ? lib) { inherit lib; }
+                // lib.optionalAttrs (args ? kix) { kix = kixlib; }
+                // lib.optionalAttrs (args ? deps) { deps = { }; }
+                // lib.optionalAttrs (args ? availability) { availability = "none"; }
+                // lib.intersectAttrs args buildDepProxies
+              );
+            parts = lib.fix (
+              self:
+              builtins.foldl' (
+                acc: fn:
+                helpers.mergeCollide "Import instance '${instanceName}': two build entries define the same part. Duplicated part" acc (
+                  callBuildFn self fn
+                )
+              ) { } (buildEntriesOf raw.build)
             );
 
             rawRoot =

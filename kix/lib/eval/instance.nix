@@ -21,8 +21,10 @@ let
   inherit (view) mkPackageView;
   inherit (resolve)
     resolveArg
+    describeRequester
     evaluateInstanceConfig
     callPackagePhase1
+    buildEntriesOf
     discoverBuildDeps
     resolveDeclaredDeps
     ;
@@ -74,9 +76,11 @@ in
           where = "${namespaceName}/${instanceName}";
         };
 
+        requester = describeRequester namespaceName instanceName instCfg;
+
         _dnsResolution = resolveArg {
           argName = "dns";
-          inherit resolutionIndex;
+          inherit resolutionIndex requester;
           requesterNamespace = namespaceName;
           hasDefault = true;
           explicitOverride = null;
@@ -201,7 +205,7 @@ in
 
         resolvedDeps = resolveDeclaredDeps {
           declaredDeps = discoveredDeps;
-          inherit resolutionIndex allInstances;
+          inherit resolutionIndex allInstances requester;
           namespace = namespaceName;
           explicitOverrides = deps;
         };
@@ -213,7 +217,12 @@ in
             isOptional = depSpec.optional or false;
             explicitOverride = deps.${argName} or null;
             resolution = resolveArg {
-              inherit argName resolutionIndex explicitOverride;
+              inherit
+                argName
+                resolutionIndex
+                explicitOverride
+                requester
+                ;
               requesterNamespace = namespaceName;
               hasDefault = isOptional;
             };
@@ -272,11 +281,7 @@ in
         allOverlays = globalPartsOverlays ++ (instCfg.partsOverlays or [ ]);
         boundOverlays = map (o: o scope') allOverlays;
 
-        rawBuildEntries =
-          if builtins.isList raw.build then
-            map (entry: if builtins.isPath entry then import entry else entry) raw.build
-          else
-            [ raw.build ];
+        rawBuildEntries = buildEntriesOf raw.build;
 
         callBuildFn =
           self: fn:

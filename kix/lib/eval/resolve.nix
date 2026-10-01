@@ -55,6 +55,17 @@ rec {
       inherit byKey;
     };
 
+  # How resolution errors name the instance whose dependency failed:
+  # "<ns>/<instance>", marked when auto-instantiation created it, since the
+  # cluster file then has no entry for it.
+  describeRequester =
+    namespaceName: instanceName: instCfg:
+    "${namespaceName}/${instanceName}${
+      lib.optionalString (instCfg._autoInstantiated or false) " (auto-instantiated)"
+    }";
+
+  # `requester` (from `describeRequester`) prefixes every error, so a failure
+  # names the instance that asked for the dependency.
   resolveArg =
     {
       argName,
@@ -62,7 +73,11 @@ rec {
       requesterNamespace,
       hasDefault,
       explicitOverride,
+      requester ? null,
     }:
+    let
+      prefix = lib.optionalString (requester != null) "${requester}: ";
+    in
     if explicitOverride != null then
       # `deps.x = ref.a.b` names an instance and resolves like the index
       # would have, so every check an auto-resolved dep gets applies to it.
@@ -110,7 +125,7 @@ rec {
         }
 
       else if builtins.length sameNs > 1 then
-        throw "dependency '${argName}' matches multiple instances in namespace '${requesterNamespace}'. Set deps.${argName} explicitly to the intended instance."
+        throw "${prefix}dependency '${argName}' matches multiple instances in namespace '${requesterNamespace}'. Set deps.${argName} explicitly to the intended instance."
 
       else if sameNs == [ ] && builtins.length otherNs == 1 then
         let
@@ -124,13 +139,13 @@ rec {
         }
 
       else if builtins.length otherNs > 1 then
-        throw "dependency '${argName}' matches instances in multiple namespaces. Set deps.${argName} explicitly to the intended instance."
+        throw "${prefix}dependency '${argName}' matches instances in multiple namespaces. Set deps.${argName} explicitly to the intended instance."
 
       else if hasDefault then
         { found = false; }
 
       else
-        throw "dependency '${argName}' was not found for namespace '${requesterNamespace}'.${
+        throw "${prefix}dependency '${argName}' was not found for namespace '${requesterNamespace}'.${
           lib.optionalString (skipped != [ ])
             " Instances in other namespaces (${
               builtins.concatStringsSep ", " (map (c: "${c.namespace}/${c.instName}") skipped)
@@ -379,14 +394,19 @@ rec {
 
   callPackagePhase1 = normalizePackage;
 
+  # A package's `build` as a list of functions. `build` is one function or a
+  # list whose entries are functions or paths to files that evaluate to one.
+  buildEntriesOf =
+    rawBuild:
+    if builtins.isList rawBuild then
+      map (entry: if builtins.isPath entry then import entry else entry) rawBuild
+    else
+      [ rawBuild ];
+
   discoverBuildDeps =
     rawBuild:
     let
-      buildEntries =
-        if builtins.isList rawBuild then
-          map (entry: if builtins.isPath entry then import entry else entry) rawBuild
-        else
-          [ rawBuild ];
+      buildEntries = buildEntriesOf rawBuild;
       allBuildArgs = builtins.foldl' (
         acc: fn:
         let
@@ -406,6 +426,7 @@ rec {
       namespace,
       explicitOverrides,
       allInstances,
+      requester ? null,
     }:
     builtins.foldl' (
       acc: argName:
@@ -414,7 +435,12 @@ rec {
         isOptional = depSpec.optional or false;
         explicitOverride = explicitOverrides.${argName} or null;
         resolution = resolveArg {
-          inherit argName resolutionIndex explicitOverride;
+          inherit
+            argName
+            resolutionIndex
+            explicitOverride
+            requester
+            ;
           requesterNamespace = namespace;
           hasDefault = isOptional;
         };
@@ -438,6 +464,7 @@ rec {
       resolutionIndex,
       namespace,
       explicitOverrides,
+      requester ? null,
     }:
     lib.mapAttrs (
       argName: depSpec:
@@ -445,7 +472,12 @@ rec {
         isOptional = depSpec.optional or false;
         explicitOverride = explicitOverrides.${argName} or null;
         resolution = resolveArg {
-          inherit argName resolutionIndex explicitOverride;
+          inherit
+            argName
+            resolutionIndex
+            explicitOverride
+            requester
+            ;
           requesterNamespace = namespace;
           hasDefault = isOptional;
         };
