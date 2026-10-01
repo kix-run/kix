@@ -1,13 +1,13 @@
 # StorageClass vocabulary: the option type `kix.types.storageClass` and the
-# renderer `kix.storage.mkClasses`. A generic class author (storage-classes)
-# and CSI driver packages (zfs-localpv) use both, so every StorageClass a
-# package renders has the same fields, checks and `out` shape.
+# renderer `kix.storage.mkClasses`, for any package that renders
+# StorageClasses, whether a generic class author or a CSI driver. Using both
+# gives every such package the same fields, checks and `storageClassName`.
 #
-# A class is the cluster default only through the real annotation
-# `storageclass.kubernetes.io/is-default-class`. Kix has no separate field for
-# the class its consumers get: `storageClassName` is the class annotated
-# default when exactly one is, else the only class, and otherwise consumers
-# name their class.
+# A class becomes the cluster default only through the Kubernetes annotation
+# `storageclass.kubernetes.io/is-default-class`. The same annotation chooses
+# `storageClassName`, the class kix consumers get when they name none: the
+# annotated class when exactly one is, else the only class. With any other
+# set of classes the consumer names its class.
 { lib }:
 
 let
