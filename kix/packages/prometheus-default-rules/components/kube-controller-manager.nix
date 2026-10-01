@@ -1,18 +1,19 @@
 # kube-controller-manager monitor + bridge Service.
 #
-# The ServiceMonitor selects on
-#   { app = "kube-prometheus-stack-kube-controller-manager"; release = "prometheus"; }
-# in kube-system. The bridge Service emitted here carries those labels and a
-# pod selector matching the static control-plane pod (component=kube-controller-manager).
-# Without the bridge Service, the SM has no targets in a clean install.
+# The ServiceMonitor selects, in kube-system, on `app.kubernetes.io/name`
+# set to the bridge Service's own name (`bridgeName` in ../default.nix). The
+# bridge Service emitted here carries that label and a pod selector matching
+# the static control-plane pod (component=kube-controller-manager). Without
+# the bridge Service, the SM has no targets in a clean install.
 #
 # For managed clusters where kube-controller-manager isn't a pod (EKS/GKE/AKS),
 # set `endpoints` to the IP list and an Endpoints object is emitted instead.
 
-{ lib, kix }:
-let
-  serviceName = "kube-prometheus-stack-kube-controller-manager";
-in
+{
+  lib,
+  kix,
+  bridgeName,
+}:
 {
   options.monitors.kubeControllerManager = lib.mkOption {
     type = lib.types.submodule {
@@ -107,11 +108,11 @@ in
     }:
     let
       cfg = config.monitors.kubeControllerManager;
+      serviceName = bridgeName scope "kube-controller-manager";
       mkSmon = prometheusOperator.out.mkServiceMonitor scope;
       kubeSystem = scope.forNamespace "kube-system";
       svcLabels = {
-        app = serviceName;
-        release = "prometheus";
+        "app.kubernetes.io/name" = serviceName;
         jobLabel = "kube-controller-manager";
       };
       svcSpec = {
@@ -155,8 +156,7 @@ in
         jobLabel = "jobLabel";
         namespaceSelector.matchNames = [ "kube-system" ];
         selector.matchLabels = {
-          app = serviceName;
-          release = "prometheus";
+          "app.kubernetes.io/name" = serviceName;
         };
         endpoints = [ endpoint ];
       };

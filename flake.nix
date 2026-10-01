@@ -40,7 +40,6 @@
           clickhouse-swap-bare = ./clusters/test-clickhouse-swap/bare.nix;
           clickhouse-swap-replicated = ./clusters/test-clickhouse-swap/replicated.nix;
           kind = ./clusters/test-kind.nix;
-          monitoring-helm = ./clusters/test-monitoring-helm.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
           victoria-metrics = ./clusters/test-victoria-metrics.nix;
           victoria-metrics-crd-ref = ./clusters/test-victoria-metrics-crd-ref.nix;

@@ -1,9 +1,8 @@
 # etcd monitor + bridge Service.
 #
-# Unlike the other components, the SM spec is constructed in Nix (not loaded
-# from frozen JSON) so TLS knobs are pluggable. Real-world etcd scrapes
-# usually require client-cert auth: secrets mounted via Prometheus's
-# `secrets:` field, then referenced here as caFile/certFile/keyFile.
+# The scheme and TLS fields are options. Real-world etcd scrapes usually
+# require client-cert auth: secrets mounted via Prometheus's `secrets:`
+# field, then referenced here as caFile/certFile/keyFile.
 #
 # Example wiring an etcd-client-cert Secret:
 #   monitors.etcd = {
@@ -15,10 +14,11 @@
 #     serverName = "etcd.local";
 #   };
 
-{ lib, kix }:
-let
-  serviceName = "kube-prometheus-stack-kube-etcd";
-in
+{
+  lib,
+  kix,
+  bridgeName,
+}:
 {
   options.monitors.etcd = lib.mkOption {
     type = lib.types.submodule {
@@ -108,11 +108,11 @@ in
     }:
     let
       cfg = config.monitors.etcd;
+      serviceName = bridgeName scope "kube-etcd";
       mkSmon = prometheusOperator.out.mkServiceMonitor scope;
       kubeSystem = scope.forNamespace "kube-system";
       svcLabels = {
-        app = serviceName;
-        release = "prometheus";
+        "app.kubernetes.io/name" = serviceName;
         jobLabel = "kube-etcd";
       };
       svcSpec = {
@@ -156,8 +156,7 @@ in
         jobLabel = "jobLabel";
         namespaceSelector.matchNames = [ "kube-system" ];
         selector.matchLabels = {
-          app = serviceName;
-          release = "prometheus";
+          "app.kubernetes.io/name" = serviceName;
         };
         endpoints = [ endpoint ];
       };

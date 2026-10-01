@@ -42,19 +42,6 @@ in
       default = "monitoring-system";
     };
 
-    releaseName = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = ''
-        If set, prefix monitoring instance names so resource names match
-        kube-prometheus-stack's helm-release naming. e.g. `releaseName =
-        "prometheus"` yields `prometheus-kube-prometheus-operator`,
-        `prometheus-grafana`, `prometheus-kube-state-metrics`, etc.
-        Use when migrating an existing helm-managed cluster and you need
-        byte-level parity with the rendered manifests.
-      '';
-    };
-
     operator.enabled = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -220,30 +207,6 @@ in
           else
             "http://grafana.localhost";
 
-        # Map internal keys to chart template suffixes when releaseName is set.
-        # The prefixed instance key becomes "${releaseName}-${chartSuffix.<key>}"
-        # which mirrors kube-prometheus-stack's rendered resource names.
-        chartSuffix = {
-          prometheus-operator = "kube-prometheus-operator";
-          prometheus-server = "kube-prometheus-prometheus";
-          alertmanager = "kube-prometheus-alertmanager";
-          node-exporter = "prometheus-node-exporter";
-          kube-state-metrics = "kube-state-metrics";
-          grafana = "grafana";
-          default-rules = "kube-prometheus";
-          # Keep `storage`, the Grafana PVC, unrenamed.
-          # Renaming it to `prometheus-grafana` would shadow the package's
-          # `storage` alias for grafana's DI (the alias resolver matches the
-          # named "storage" instance in the loki namespace before falling
-          # back to alias-keyed candidates). PVC name parity is a small,
-          # separate concern to fix in the package layer.
-        };
-        rename =
-          k:
-          if cfg.releaseName == null || !(chartSuffix ? ${k}) then
-            k
-          else
-            "${cfg.releaseName}-${chartSuffix.${k}}";
         rawInstances = {
           prometheus-operator = lib.mkIf cfg.operator.enabled {
             package = packages.prometheus-operator;
@@ -361,7 +324,7 @@ in
           };
         };
       in
-      lib.mapAttrs' (k: v: lib.nameValuePair (rename k) v) rawInstances;
+      rawInstances;
 
     # Loki uses its own namespace so its sibling PVC can be named `storage`.
     # The flavor's storageClasses import supplies the PVC storageClassName.

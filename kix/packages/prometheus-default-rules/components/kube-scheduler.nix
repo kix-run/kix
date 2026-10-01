@@ -1,9 +1,10 @@
 # kube-scheduler monitor + bridge Service. See kube-controller-manager.nix for rationale.
 
-{ lib, kix }:
-let
-  serviceName = "kube-prometheus-stack-kube-scheduler";
-in
+{
+  lib,
+  kix,
+  bridgeName,
+}:
 {
   options.monitors.kubeScheduler = lib.mkOption {
     type = lib.types.submodule {
@@ -93,11 +94,11 @@ in
     }:
     let
       cfg = config.monitors.kubeScheduler;
+      serviceName = bridgeName scope "kube-scheduler";
       mkSmon = prometheusOperator.out.mkServiceMonitor scope;
       kubeSystem = scope.forNamespace "kube-system";
       svcLabels = {
-        app = serviceName;
-        release = "prometheus";
+        "app.kubernetes.io/name" = serviceName;
         jobLabel = "kube-scheduler";
       };
       svcSpec = {
@@ -141,8 +142,7 @@ in
         jobLabel = "jobLabel";
         namespaceSelector.matchNames = [ "kube-system" ];
         selector.matchLabels = {
-          app = serviceName;
-          release = "prometheus";
+          "app.kubernetes.io/name" = serviceName;
         };
         endpoints = [ endpoint ];
       };

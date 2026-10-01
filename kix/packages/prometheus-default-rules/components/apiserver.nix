@@ -1,7 +1,7 @@
 # kube-apiserver monitor: targets the built-in `kubernetes` Service in
 # the `default` namespace; no bridge Service needed.
 
-{ lib, kix }:
+{ lib, kix, ... }:
 let
   # Default drop list mirrors the kube-prometheus-stack chart: drops the
   # high-cardinality histogram buckets that aren't useful for SLO alerts.

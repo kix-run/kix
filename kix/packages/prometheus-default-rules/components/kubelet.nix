@@ -7,7 +7,7 @@
 # bearerToken settings apply to all three; per-endpoint relabel/interval
 # overrides exist on the cAdvisor / probes sub-options.
 
-{ lib, kix }:
+{ lib, kix, ... }:
 let
   # Default cAdvisor metric drops mirror the kube-prometheus-stack chart;
   # cAdvisor produces a *lot* of metrics that aren't useful for alerting/

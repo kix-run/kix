@@ -5,8 +5,9 @@
 # ServiceMonitors for kubelet, apiserver, etcd, scheduler, etc.
 #
 # Each control-plane ServiceMonitor lives in its own file under `components/`,
-# which also emits the kube-system bridge Service the SM selects on. Add a
-# new component by dropping a file in `components/` and listing it below.
+# which also emits the kube-system bridge Service the SM selects on. The
+# bridge Service name comes from `bridgeName` below. Add a new component by
+# dropping a file in `components/` and listing it below.
 #
 # Source: extracted from kube-prometheus-stack 84.5.0 Helm chart output.
 #
@@ -31,7 +32,18 @@ let
     ./components/kube-scheduler.nix
     ./components/kube-proxy.nix
   ];
-  components = map (f: import f { inherit lib kix; }) componentFiles;
+
+  # kube-system is shared by every instance in every namespace. The
+  # namespace hash keeps same-named instances in different namespaces
+  # apart and adds a fixed 9 characters to the name.
+  bridgeName =
+    scope: component:
+    let
+      namespaceHash = builtins.substring 0 8 (builtins.hashString "sha256" scope.namespaceName);
+    in
+    "${scope.instanceName}-${component}-${namespaceHash}";
+
+  components = map (f: import f { inherit lib kix bridgeName; }) componentFiles;
 
   # Merge each component's `options` attr into a single tree.
   componentOptions = lib.foldl' lib.recursiveUpdate { } (map (c: c.options) components);

@@ -34,13 +34,10 @@ let
     ) dirs;
 
   # Auto-instantiation refuses a key that two shelf packages answer, so the
-  # shelf keeps one implementation per contested required key:
-  # prometheus-operator for `prometheusOperator` (kube-prometheus-stack's
-  # `out` lacks mkAlertmanager and mkPrometheus), and the single-node
-  # clickhouse for `clickhouse`. Both removed packages are still evaluated
-  # as their own instance.
+  # shelf keeps one implementation per contested required key: the
+  # single-node clickhouse for `clickhouse`. clickhouse-cluster is still
+  # evaluated as its own instance.
   availablePackages = removeAttrs packages [
-    "kube-prometheus-stack"
     "clickhouse-cluster"
   ];
 

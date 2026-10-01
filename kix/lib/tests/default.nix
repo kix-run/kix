@@ -6109,6 +6109,74 @@ let
       in
       builtins.all lib.id (builtins.attrValues cases)
       || throw "startupapicheck image does not follow the controller: ${builtins.toJSON cases}";
+
+    # A global overlay and an instance overlay on one instance, read by a
+    # consumer through `out`: the global overlay runs first, the instance
+    # overlay second, and the consumer sees the `out` both produced.
+    parts-overlays-global-then-instance =
+      let
+        consumerPackage = {
+          meta.version = "test";
+          build =
+            {
+              self,
+              scope,
+              base,
+              ...
+            }:
+            {
+              cm = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "consumer-${base.out.greeting}";
+              };
+              root = self.cm;
+            };
+        };
+        ms = manifests (mkCluster [
+          {
+            globalPartsOverlays = [
+              (
+                scope: _self: base:
+                if scope.instanceName == "base" then
+                  {
+                    root = base.root // {
+                      out = (base.root.out or { }) // {
+                        greeting = "hello";
+                      };
+                    };
+                  }
+                else
+                  { }
+              )
+            ];
+            instances.ovl.base = {
+              package = mkCmPackage {
+                name = "base-cm";
+                out = { };
+              };
+              partsOverlays = [
+                (scope: _self: base: {
+                  extraCm = scope.mkResource {
+                    apiVersion = "v1";
+                    kind = "ConfigMap";
+                    name = "overlay-${base.root.out.greeting}";
+                  };
+                  root = base.root // {
+                    out = base.root.out // {
+                      greeting = "${base.root.out.greeting}-again";
+                    };
+                  };
+                })
+              ];
+            };
+            instances.ovl.consumer.package = consumerPackage;
+          }
+        ]);
+        cms = ofKind "ConfigMap" ms;
+      in
+      (hasName "overlay-hello" cms && hasName "consumer-hello-again" cms)
+      || throw "partsOverlays order or out propagation wrong; ConfigMaps: ${builtins.toJSON (namesOf cms)}";
   }
   // import ./validate.nix {
     inherit

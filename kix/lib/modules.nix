@@ -82,7 +82,12 @@
                 '';
               };
               partsOverlays = lib.mkOption {
-                type = lib.types.listOf lib.types.anything;
+                # `raw` stores each function as defined. `anything` would wrap
+                # it and merge its result, which evaluates every nested value:
+                # `root.resource = self.<part>` then forces `self` while the
+                # parts fixed point is still being computed, and an overlay
+                # that reads the previous overlay's `base.root` recurses.
+                type = lib.types.listOf lib.types.raw;
                 default = [ ];
                 description = ''
                   Parts overlay functions (scope: self: base: attrset).
@@ -228,7 +233,8 @@
     };
 
     globalPartsOverlays = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
+      # `raw` for the reason given at `partsOverlays`.
+      type = lib.types.listOf lib.types.raw;
       default = [ ];
       description = ''
         Parts overlay functions applied to ALL instances. Signature:

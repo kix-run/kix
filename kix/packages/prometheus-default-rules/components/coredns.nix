@@ -1,10 +1,12 @@
 # coredns monitor + bridge Service. See kube-controller-manager.nix for rationale.
-# Note: chart's core-dns has no `endpoints.yaml`; coredns is always a Service in kube-system.
+# CoreDNS runs as pods in kube-system, so the bridge Service always selects
+# pods and this component has no `endpoints` option.
 
-{ lib, kix }:
-let
-  serviceName = "kube-prometheus-stack-coredns";
-in
+{
+  lib,
+  kix,
+  bridgeName,
+}:
 {
   options.monitors.coredns = lib.mkOption {
     type = lib.types.submodule {
@@ -90,6 +92,7 @@ in
     }:
     let
       cfg = config.monitors.coredns;
+      serviceName = bridgeName scope "coredns";
       mkSmon = prometheusOperator.out.mkServiceMonitor scope;
       kubeSystem = scope.forNamespace "kube-system";
 
@@ -120,8 +123,7 @@ in
         jobLabel = "jobLabel";
         namespaceSelector.matchNames = [ "kube-system" ];
         selector.matchLabels = {
-          app = serviceName;
-          release = "prometheus";
+          "app.kubernetes.io/name" = serviceName;
         };
         endpoints = [ endpoint ];
       };
@@ -139,8 +141,7 @@ in
           kind = "Service";
           name = serviceName;
           labels = {
-            app = serviceName;
-            release = "prometheus";
+            "app.kubernetes.io/name" = serviceName;
             jobLabel = "coredns";
           };
           spec = {
