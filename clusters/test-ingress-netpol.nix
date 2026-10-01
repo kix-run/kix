@@ -10,8 +10,8 @@
 #
 # Build:  nix build .#cluster-ingress-netpol --extra-experimental-features pipe-operators
 #
-# It is meant to be deployed, against a cluster that already runs cilium
-# (the lithus test targets do). It takes no flavor on purpose: a flavor
+# It is meant to be deployed against a cluster whose environment already
+# runs Cilium. It takes no flavor on purpose: a flavor
 # declares platform instances in `kube-system`, every declared namespace
 # gets a default-deny policy, and denying kube-system by default on a
 # cluster kix did not build takes out that cluster's own DNS. Everything
@@ -40,26 +40,24 @@ kix.buildCluster {
         # reaching one pod, and its claim is ReadWriteOnce.
         cluster.availability.default = "none";
 
-        # cilium is installed by the target, not by kix. The marker
-        # package claims the enforcer role and emits the CRD reference
-        # the generated policies wait on.
+        # Cilium is installed by the target. The `cilium` instance uses
+        # it (no chart, no HelmChartConfig), claims the enforcer role and
+        # emits the CRD references the generated policies wait on.
+        cluster.network.environmentCilium.helmChartConfig = null;
         cluster.roles = {
           cni = {
-            binding = "exclusive";
-            provider = "cilium (rke2-managed)";
+            binding = "shadowable";
+            provider = "cilium (environment)";
           };
           loadBalancer.binding = "absent";
-          # Filled by the import below. Left to itself the graph
-          # auto-instantiates the stock StorageClass catalogue, which
-          # would arrive on this cluster claiming to be its default
-          # class, and neither an "absent" binding nor a claim that
-          # names its class outright stops that.
+          # local-path-provisioner is installed with the target; the
+          # `platform-storage` import below names its class.
           storageClasses.binding = "shadowable";
         };
 
         instances.ingress-system = {
           cilium = {
-            package = packages."cilium-external";
+            package = packages.cilium;
           };
           # No `kind`/`apiVersion`: those make the deploy verify the
           # import against the cluster, and it looks for a namespaced

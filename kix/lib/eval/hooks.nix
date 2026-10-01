@@ -192,13 +192,26 @@ rec {
   # Eager refusal pass, seq-forced by buildCluster: exclusive-binding
   # conflicts and duplicate strong providers throw even when nothing looks
   # the role up this eval (a broken combination must not compile just
-  # because its consumer is absent). Also validates cluster.roles keys.
+  # because its consumer is absent). Also validates cluster.roles keys, and
+  # that cluster.network.environmentCilium sits on a shadowable cni binding.
   checkRoleBindings =
     {
       clusterRoles,
       rolesIndex,
+      environmentCilium ? null,
     }:
     let
+      cniBinding = (clusterRoles.cni or { }).binding or null;
+      _environmentCilium =
+        if environmentCilium != null && cniBinding != "shadowable" then
+          throw (
+            "kix: cluster.network.environmentCilium is set, but cluster.roles.cni.binding is "
+            + builtins.toJSON cniBinding
+            + ". An environment-installed Cilium is a shadowable cni binding: the environment runs the CNI and a `cilium` instance configures or uses it. "
+            + "Set cluster.roles.cni.binding = \"shadowable\", or remove environmentCilium."
+          )
+        else
+          null;
       _keys = map (roles.assertKnownRole "cluster.roles") (builtins.attrNames clusterRoles);
       lookups = map (
         role:
@@ -208,7 +221,7 @@ rec {
       ) roles.roleNames;
     in
     builtins.seq (builtins.deepSeq _keys null) (
-      builtins.foldl' (acc: l: builtins.seq l acc) null lookups
+      builtins.seq _environmentCilium (builtins.foldl' (acc: l: builtins.seq l acc) null lookups)
     );
 
   # Hook execution order is priority ascending, then name, rather than bare

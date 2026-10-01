@@ -315,7 +315,8 @@ in
                   consumer without one gets a link error.
                 - "shadowable": environment provides a default (weak symbol,
                   usually paired with a platform import declaring the role);
-                  a managed instance overrides cleanly.
+                  a managed instance overrides cleanly. For `cni`, see
+                  cluster.network.environmentCilium.
                 - "exclusive": environment owns the role (strong symbol);
                   a managed instance claiming it is an eval error pointing
                   at this axiom (e.g. kindnet on stock kind).
@@ -465,7 +466,49 @@ in
       podCidr = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Pod network CIDR (e.g. '10.244.0.0/16').";
+        description = ''
+          Pod network CIDR (e.g. '10.244.0.0/16'). Read by the cilium
+          package as its IPAM pool when it installs the chart with
+          cluster-pool IPAM. The kind, k3s, and rke2 flavours set their
+          defaults.
+        '';
+      };
+      environmentCilium = lib.mkOption {
+        type = lib.types.nullOr (
+          lib.types.submodule {
+            options.helmChartConfig = lib.mkOption {
+              type = lib.types.nullOr (
+                lib.types.submodule {
+                  options = {
+                    name = lib.mkOption {
+                      type = lib.types.str;
+                      description = "Name of the HelmChartConfig.";
+                    };
+                    namespace = lib.mkOption {
+                      type = lib.types.str;
+                      description = "Namespace the environment's helm-controller reads the HelmChartConfig from.";
+                    };
+                  };
+                }
+              );
+              description = ''
+                The HelmChartConfig, by name and namespace, that the
+                environment's helm-controller merges into its Cilium chart
+                (RKE2: kube-system/rke2-cilium). A `cilium` instance writes
+                its values there. null: Kix leaves the environment's Cilium
+                configuration alone, and the instance provides only the CRD
+                references and network-policy builders.
+              '';
+            };
+          }
+        );
+        default = null;
+        description = ''
+          The environment installed Cilium as the pod network (a flavour
+          sets this). A `cilium` instance then uses that Cilium for network
+          policy instead of installing one. Requires
+          cluster.roles.cni.binding = "shadowable".
+        '';
       };
       serviceCidr = lib.mkOption {
         type = lib.types.nullOr lib.types.str;

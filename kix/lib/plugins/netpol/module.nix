@@ -72,10 +72,10 @@ in
       enforcer instance MUST be declared when `enable = true`. kix throws
       at cluster eval time if no enforcer is resolved: without the
       store-path edge to cilium, CNPs would race the operator at apply
-      time. For externally-managed cilium (k3s with cilium helm-installed,
-      kind with bootstrap-installed cilium, RKE2's bundled cilium, etc.)
-      use `packages."cilium".external`, which emits only the CNP CRD ref
-      marker without deploying cilium itself.
+      time. Where the environment installs Cilium, a flavour sets
+      cluster.roles.cni.binding = "shadowable" and
+      cluster.network.environmentCilium, and the `cilium` instance
+      configures or uses that Cilium instead of installing one.
     '';
   };
 
@@ -158,14 +158,12 @@ in
             if provider == null then
               throw (
                 "kix: `networkPolicy.enable = true` but no instance declares "
-                + "`meta.roles = [\"network-policy-enforcer\"]`. Declare a cilium "
-                + "instance in the cluster. For externally-managed cilium (k3s with "
-                + "--flannel-backend=none, kind with helm-installed cilium, RKE2's "
-                + "bundled cilium, etc.) use the external variant that emits only "
-                + "the CRD ref marker, e.g.:\n\n"
-                + "  instances.kube-system.cilium = {\n"
-                + "    package = packages.\"cilium\".external;\n"
-                + "  };\n"
+                + "`meta.roles = [\"network-policy-enforcer\"]`. Declare a `cilium` "
+                + "instance. Where the environment installs Cilium, a flavour sets "
+                + "cluster.roles.cni.binding = \"shadowable\" and "
+                + "cluster.network.environmentCilium (on RKE2: "
+                + "cluster.flavor.rke2.cni = [ \"cilium\" ]), and the instance "
+                + "configures or uses that Cilium instead of installing one."
               )
             else
               null

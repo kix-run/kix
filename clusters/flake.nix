@@ -54,6 +54,7 @@
         operators = ./test-operators.nix;
         sealed-jobs = ./test-sealed-jobs.nix;
         ingress-netpol = ./test-ingress-netpol.nix;
+        rke2-cilium = ./test-rke2-cilium.nix;
       };
     };
 }

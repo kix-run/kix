@@ -1,6 +1,6 @@
 ---
 title: "Install Cilium / network policy support"
-description: "Install Cilium as a managed CNI and enable generated network policy."
+description: "Install Cilium as a managed CNI, or use the Cilium an environment installed, and enable generated network policy."
 ---
 
 import Command from '/src/components/Command.astro';
@@ -51,8 +51,15 @@ Install Cilium in `kube-system`:
 
 <Snippet {...ciliumInstance} />
 
-`kubeProxyReplacement = false` keeps Kind's kube-proxy. The Cilium IPAM range
-matches `podSubnet` in `kind-cilium.yaml`.
+The instance needs no `values`. It keeps Kind's kube-proxy (the chart default)
+and takes its IPAM pool from `cluster.network.podCidr`, which the kind flavour
+sets to Kind's default `podSubnet`, `10.244.0.0/16`. A Kind configuration with
+another `podSubnet` sets `cluster.network.podCidr` to match. With network
+policy on, the package sets Cilium's `policyEnforcementMode` to `always`, so a
+pod without an allow rule loses all traffic except cluster DNS. The package
+also writes two CiliumClusterwideNetworkPolicies: `cilium-cluster-dns-egress`
+keeps cluster DNS open for every pod, and `cilium-health-probes` lets Cilium's
+health probes reach the other nodes.
 
 ## Check the generated resources
 
@@ -87,5 +94,61 @@ Check the generated policies with:
 <Command commands={["kubectl get ciliumnetworkpolicies --all-namespaces"]} />
 
 If the node remains `NotReady`, compare the pod CIDR in the Kind configuration
-with `clusterPoolIPv4PodCIDRList`, then inspect the Cilium pod logs in
+with `cluster.network.podCidr`, then inspect the Cilium pod logs in
 `kube-system`.
+
+## When RKE2 installs Cilium
+
+RKE2 installs its own Cilium chart when its server config sets `cni: cilium`.
+Tell Kix the same thing with the rke2 flavour, and declare the instance in
+`kube-system`:
+
+```nix
+cluster.flavor.rke2.cni = [ "cilium" ];
+instances.kube-system.cilium.package = packages.cilium;
+```
+
+The instance does not install a second Cilium. It writes its values into the
+HelmChartConfig `kube-system/rke2-cilium`, which RKE2's helm-controller merges
+into the bundled chart: policy enforcement, operator replicas, and rollouts.
+RKE2's chart uses `kubernetes` IPAM, so the package sets no pool. A cluster
+that wants cluster-pool IPAM sets `values.ipam.mode = "cluster-pool"` and the
+pool together.
+
+To replace kube-proxy on RKE2, set `values.kubeProxyReplacement = true` with
+`values.k8sServiceHost` and `values.k8sServicePort`, and configure every RKE2
+server with `cni: cilium` and `disable-kube-proxy: true`. Kix cannot read the
+server config, so it cannot check that the two agree.
+
+With network policy on, the rke2 flavour declares platform intents for the
+pods RKE2's bundled charts run in `kube-system` (CoreDNS, metrics-server, the
+ingress controllers, the snapshot controller, and the chart install Jobs).
+
+Kix then owns `kube-system/rke2-cilium`, which has two consequences:
+
+- RKE2 also applies any `rke2-cilium` HelmChartConfig in the server's
+  manifests directory (`/var/lib/rancher/rke2/server/manifests`). Remove that
+  file, or RKE2 and Kix write the same object.
+- Removing the instance makes the next `kix deploy --prune` delete the
+  HelmChartConfig, and helm-controller then reinstalls RKE2's Cilium with its
+  chart defaults.
+
+## When the environment installed Cilium
+
+Where something outside Kix installed and configures Cilium, declare that
+the environment provides it and leave its configuration alone:
+
+```nix
+cluster.roles.cni.binding = "shadowable";
+cluster.network.environmentCilium.helmChartConfig = null;
+instances.cilium-policy.cilium.package = packages.cilium;
+```
+
+Declare the instance in a namespace of its own, not in `kube-system`. With
+network policy on, every namespace Kix manages gets a default-deny policy.
+Nothing here declares platform intents for the environment's `kube-system`
+pods, so a default deny there would cut off CoreDNS, and with it DNS for every
+pod.
+
+The instance then emits only the CRD references that generated policies wait
+on, and the evaluation fails if it is given `values`.

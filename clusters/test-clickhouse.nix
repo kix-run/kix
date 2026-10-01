@@ -37,11 +37,6 @@ kix.buildCluster {
 
         instances.kube-system.cilium = {
           package = packages.cilium;
-          config.values = {
-            kubeProxyReplacement = false;
-            prometheus.enabled = false;
-            ipam.operator.clusterPoolIPv4PodCIDRList = [ "10.244.0.0/16" ];
-          };
         };
 
         # Every rule set, so the package is held to all of them.
