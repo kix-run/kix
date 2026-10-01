@@ -200,6 +200,7 @@ let
         spec.group = promGroup;
         spec.names.plural = def.plural;
       }
+      |> scope.crd.withVersion def.version
       |> scope.crd.withShortNames def.shortNames
       |> scope.crd.withPrinterColumns ageColumn
     );
@@ -213,7 +214,7 @@ let
     def:
     scope.mkCRDRef {
       group = promGroup;
-      inherit (def) kind plural;
+      inherit (def) kind plural version;
     };
 
   mkPromCompat =

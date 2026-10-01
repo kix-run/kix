@@ -26,6 +26,8 @@
   # The prometheus-operator kinds the operator's built-in converter can
   # turn into VM equivalents. One entry per converter the operator has.
   #
+  # `version` is the API version upstream prometheus-operator serves for
+  # the kind, so a declared CRD and a reference to the real one agree.
   # `env` is the suffix of its VM_ENABLEDPROMETHEUSCONVERTER_* variable,
   # and `builder` says whether the package exposes an out.mk* for the
   # kind. That distinction decides when the CRD is needed:
@@ -50,6 +52,7 @@
     serviceMonitors = {
       kind = "ServiceMonitor";
       plural = "servicemonitors";
+      version = "v1";
       shortNames = [ "smon" ];
       env = "SERVICESCRAPE";
       builder = true;
@@ -58,6 +61,7 @@
     podMonitors = {
       kind = "PodMonitor";
       plural = "podmonitors";
+      version = "v1";
       shortNames = [ "pmon" ];
       env = "PODMONITOR";
       builder = true;
@@ -66,6 +70,7 @@
     prometheusRules = {
       kind = "PrometheusRule";
       plural = "prometheusrules";
+      version = "v1";
       shortNames = [ "promrule" ];
       env = "PROMETHEUSRULE";
       builder = true;
@@ -74,6 +79,7 @@
     probes = {
       kind = "Probe";
       plural = "probes";
+      version = "v1";
       shortNames = [ "prb" ];
       env = "PROBE";
       builder = true;
@@ -82,6 +88,7 @@
     scrapeConfigs = {
       kind = "ScrapeConfig";
       plural = "scrapeconfigs";
+      version = "v1alpha1";
       shortNames = [ "scfg" ];
       env = "SCRAPECONFIG";
       builder = false;
@@ -90,6 +97,7 @@
     alertmanagerConfigs = {
       kind = "AlertmanagerConfig";
       plural = "alertmanagerconfigs";
+      version = "v1alpha1";
       shortNames = [ "amcfg" ];
       env = "ALERTMANAGERCONFIG";
       builder = false;
