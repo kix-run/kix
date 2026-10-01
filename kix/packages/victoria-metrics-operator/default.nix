@@ -69,17 +69,14 @@ in
         availability level (v2_discussions/145).
       '';
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "80m";
-          memory = "120Mi";
-        };
-        limits = {
-          cpu = "500m";
-          memory = "320Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "80m";
+        memory = "120Mi";
+      };
+      limits = {
+        cpu = "500m";
+        memory = "320Mi";
       };
     };
     logLevel = lib.mkOption {

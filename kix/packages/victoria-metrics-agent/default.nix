@@ -101,25 +101,19 @@ in
       default = { };
       description = "Labels attached to every scraped sample (e.g. cluster identity).";
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "250m";
-          memory = "512Mi";
-        };
-        limits = {
-          memory = "1Gi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "250m";
+        memory = "512Mi";
+      };
+      limits = {
+        memory = "1Gi";
       };
     };
     extraArgs = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
-      default = {
-        # Stream-parse scrape responses instead of buffering them whole;
-        # bounds vmagent memory on large targets (k8s-stack chart default).
-        "promscrape.streamParse" = "true";
-      };
+      default = { };
+      description = "vmagent flags for the VMAgent CR's `extraArgs`, keyed by flag name without the leading dash. Merged over the package's flags, so an entry here replaces the package's value for that flag. The package sets `promscrape.streamParse = \"true\"`.";
     };
     extraSpec = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
@@ -153,6 +147,11 @@ in
         ...
       }:
       let
+        # Stream-parse scrape responses instead of buffering them whole;
+        # bounds vmagent memory on large targets (k8s-stack chart default).
+        baseArgs = {
+          "promscrape.streamParse" = "true";
+        };
         baseSpec = {
           replicaCount = config.replicaCount;
           image = crImage config.image;
@@ -184,12 +183,10 @@ in
             }) clusterConfig.cluster.topology.failureDomainKeys;
           };
           resources = config.resources;
+          extraArgs = baseArgs // config.extraArgs;
         }
         // lib.optionalAttrs (config.externalLabels != { }) {
           externalLabels = config.externalLabels;
-        }
-        // lib.optionalAttrs (config.extraArgs != { }) {
-          extraArgs = config.extraArgs;
         };
       in
       {

@@ -42,15 +42,6 @@
 }:
 let
   name = scope.instanceName;
-
-  mkComponentResources =
-    requests: limits:
-    lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        inherit requests limits;
-      };
-    };
 in
 {
   meta = {
@@ -132,11 +123,10 @@ in
         '';
       };
       storage = lib.mkOption {
-        type = lib.types.anything;
-        default = {
-          resources.requests.storage = "20Gi";
-        };
-        description = "PVC spec for the vmstorage volumeClaimTemplate (operator-created claims).";
+        type = lib.types.attrsOf lib.types.anything;
+        default = { };
+        defaultText = lib.literalExpression ''{ resources.requests.storage = "20Gi"; }'';
+        description = "PersistentVolumeClaim spec for the vmstorage volumeClaimTemplate (operator-created claims). Deep-merged over the package's spec, which requests 20Gi.";
       };
       storageClassName = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
@@ -147,13 +137,17 @@ in
           default StorageClass.
         '';
       };
-      resources = mkComponentResources {
-        cpu = "1";
-        memory = "2Gi";
-      } { memory = "4Gi"; };
+      resources = kix.options.resources {
+        requests = {
+          cpu = "1";
+          memory = "2Gi";
+        };
+        limits.memory = "4Gi";
+      };
       extraArgs = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
         default = { };
+        description = "Extra vmstorage flags, keyed by flag name without the leading dash. `dedup.minScrapeInterval` is refused; it follows `scrapeInterval`.";
       };
     };
 
@@ -173,13 +167,17 @@ in
           availability level (v2_discussions/145).
         '';
       };
-      resources = mkComponentResources {
-        cpu = "500m";
-        memory = "512Mi";
-      } { memory = "1Gi"; };
+      resources = kix.options.resources {
+        requests = {
+          cpu = "500m";
+          memory = "512Mi";
+        };
+        limits.memory = "1Gi";
+      };
       extraArgs = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
         default = { };
+        description = "Extra vmselect flags, keyed by flag name without the leading dash. `dedup.minScrapeInterval` is refused; it follows `scrapeInterval`.";
       };
     };
 
@@ -199,13 +197,17 @@ in
           availability level (v2_discussions/145).
         '';
       };
-      resources = mkComponentResources {
-        cpu = "500m";
-        memory = "512Mi";
-      } { memory = "1Gi"; };
+      resources = kix.options.resources {
+        requests = {
+          cpu = "500m";
+          memory = "512Mi";
+        };
+        limits.memory = "1Gi";
+      };
       extraArgs = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
         default = { };
+        description = "Extra vminsert flags, keyed by flag name without the leading dash.";
       };
     };
 
@@ -256,14 +258,21 @@ in
         maxUnavailable = 1;
       };
 
-      # FUTURE (purist note, 2026-08-31): dedup correctness rides in a
-      # string flag merged into extraArgs. `extraSpec` can no longer reach
-      # it (kix.mergeGuarded below), but the `extraArgs` option merges over
-      # it and can still clobber it. Consider a first-class operator spec
-      # field if the VM operator ever grows one.
+      # The VMCluster CR has no dedup field, so the interval travels as a
+      # flag. `extraSpec` cannot reach it (kix.mergeGuarded below) and the
+      # component `extraArgs` options may not set it.
       dedupArgs = {
         "dedup.minScrapeInterval" = config.scrapeInterval;
       };
+      componentArgs =
+        component:
+        let
+          args = config.${component}.extraArgs;
+        in
+        if args ? "dedup.minScrapeInterval" then
+          throw "victoria-metrics-cluster ${scope.namespaceName}/${name}: ${component}.extraArgs sets dedup.minScrapeInterval, which the package derives from scrapeInterval so that vmselect and vmstorage agree. Set scrapeInterval instead."
+        else
+          dedupArgs // args;
 
       # Explicit option > storageClasses dep > cluster default class.
       effectiveStorageClass =
@@ -285,20 +294,20 @@ in
         vmstorage = {
           inherit (config.vmstorage) replicaCount resources;
           storage.volumeClaimTemplate.spec =
-            config.vmstorage.storage
+            lib.recursiveUpdate { resources.requests.storage = "20Gi"; } config.vmstorage.storage
             // lib.optionalAttrs (effectiveStorageClass != null) {
               storageClassName = effectiveStorageClass;
             };
           podDisruptionBudget = pdb;
           affinity = antiAffinity "vmstorage";
-          extraArgs = dedupArgs // config.vmstorage.extraArgs;
+          extraArgs = componentArgs "vmstorage";
         };
 
         vmselect = {
           inherit (config.vmselect) replicaCount resources;
           podDisruptionBudget = pdb;
           affinity = antiAffinity "vmselect";
-          extraArgs = dedupArgs // config.vmselect.extraArgs;
+          extraArgs = componentArgs "vmselect";
         };
 
         vminsert = {

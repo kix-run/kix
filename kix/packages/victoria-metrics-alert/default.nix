@@ -38,6 +38,28 @@ let
     crImage
     crImageVersionTag
     ;
+
+  # Routes every alert, Watchdog included, to a receiver that drops it.
+  defaultAlertmanagerConfig = {
+    global.resolve_timeout = "5m";
+    route = {
+      group_by = [
+        "namespace"
+        "alertname"
+      ];
+      group_wait = "30s";
+      group_interval = "5m";
+      repeat_interval = "12h";
+      receiver = "null";
+      routes = [
+        {
+          receiver = "null";
+          matchers = [ "alertname = Watchdog" ];
+        }
+      ];
+    };
+    receivers = [ { name = "null"; } ];
+  };
 in
 {
   meta = {
@@ -78,16 +100,13 @@ in
       default = true;
       description = "Evaluate all VMRules (and converted PrometheusRules) cluster-wide.";
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "100m";
-          memory = "256Mi";
-        };
-        limits = {
-          memory = "512Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "100m";
+        memory = "256Mi";
+      };
+      limits = {
+        memory = "512Mi";
       };
     };
     extraArgs = lib.mkOption {
@@ -136,30 +155,11 @@ in
           reboot) drops them. Set for anything beyond a trial.
         '';
       };
-      # Routing config: receivers, routes, etc. Cluster-specific; same
-      # shape as the alertmanager package's `config` option.
       config = lib.mkOption {
-        type = lib.types.anything;
-        default = {
-          global.resolve_timeout = "5m";
-          route = {
-            group_by = [
-              "namespace"
-              "alertname"
-            ];
-            group_wait = "30s";
-            group_interval = "5m";
-            repeat_interval = "12h";
-            receiver = "null";
-            routes = [
-              {
-                receiver = "null";
-                matchers = [ "alertname = Watchdog" ];
-              }
-            ];
-          };
-          receivers = [ { name = "null"; } ];
-        };
+        type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
+        default = null;
+        defaultText = lib.literalMD "null: the package's configuration, which routes every alert to the receiver `null`";
+        description = "Alertmanager configuration (route, receivers, inhibit_rules), rendered to alertmanager.yaml. A value replaces the package's configuration as a whole. Null uses the package's configuration, which routes every alert to the receiver `null`.";
       };
       secrets = lib.mkOption {
         type = lib.types.listOf lib.types.str;
@@ -170,16 +170,13 @@ in
         type = lib.types.listOf lib.types.str;
         default = [ ];
       };
-      resources = lib.mkOption {
-        type = lib.types.anything;
-        default = {
-          requests = {
-            cpu = "50m";
-            memory = "128Mi";
-          };
-          limits = {
-            memory = "256Mi";
-          };
+      resources = kix.options.resources {
+        requests = {
+          cpu = "50m";
+          memory = "128Mi";
+        };
+        limits = {
+          memory = "256Mi";
         };
       };
       extraSpec = lib.mkOption {
@@ -277,7 +274,9 @@ in
         # (mounted at /etc/alertmanager/config). JSON is valid YAML.
         alertmanagerConfig = scope.mkSecret {
           name = "${name}-alertmanager-config";
-          stringData."alertmanager.yaml" = builtins.toJSON config.alertmanager.config;
+          stringData."alertmanager.yaml" = builtins.toJSON (
+            if config.alertmanager.config == null then defaultAlertmanagerConfig else config.alertmanager.config
+          );
         };
 
         vmAlertmanager = vmOperator.out.mkVMAlertmanager scope {
