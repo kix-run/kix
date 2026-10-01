@@ -275,6 +275,21 @@ let
       volumeBindingMode = "WaitForFirstConsumer";
     };
     vaultwarden.instances = { inherit storage; };
+    velero = {
+      config.backupStorageLocation.objectStorage.bucket = "backups";
+      instances = {
+        velero-cloud-credentials = {
+          package = packages.secret;
+          aliases = [ "cloudCredentials" ];
+          config.stringData.cloud = "[default]\naws_access_key_id = key\naws_secret_access_key = secret\n";
+        };
+        velero-repo-credentials = {
+          package = packages.secret;
+          aliases = [ "repositoryPassword" ];
+          config.stringData.repository-password = "password";
+        };
+      };
+    };
   };
 
   # Packages whose source writes cluster.local outside a comment.

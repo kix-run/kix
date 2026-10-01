@@ -27,7 +27,6 @@ kix.buildCluster {
 
       namespaces = {
         dns = { };
-        velero = { };
         arc-systems = { };
         cdi = { };
         kubevirt = { };
@@ -42,13 +41,6 @@ kix.buildCluster {
         dns.coredns = {
           package = packages.coredns;
           config.clusterIP = "10.96.0.53";
-        };
-        velero.velero = {
-          package = packages.velero;
-          # Test credentials, so the kix-managed Secret is built and mounted.
-          # The BackupStorageLocation has no bucket behind it and stays
-          # Unavailable; the server itself is what the run judges.
-          config.credentials.secretContents.cloud = "[default]\naws_access_key_id = test\naws_secret_access_key = test\n";
         };
         arc-systems.arc.package = packages.arc;
         cdi.cdi.package = packages.cdi;

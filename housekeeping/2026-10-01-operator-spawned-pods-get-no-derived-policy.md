@@ -1,0 +1,3 @@
+# 2026-10-01 · `kix/lib/plugins/netpol` · Pods an operator creates at runtime get no derived network policy.
+
+Netpol derives egress and ingress only for workloads a package renders and for the operands of a CR that declares `factBehavior`. Pods a controller launches on its own get nothing, so under default-deny they cannot reach DNS, the API server, or their store until the package writes a `kix.operandPolicy` for them. Velero's data-path pods and kopia maintenance Jobs need one (`velero-data-path` in `kix/packages/velero/default.nix`), and so does any operator that runs Jobs. A missing policy shows up only on a cluster with network policy on, as a backup or Job that times out.

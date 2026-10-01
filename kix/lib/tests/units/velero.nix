@@ -1,0 +1,435 @@
+# Tests for the `cluster-admin` unsafe grant and the
+# `security.noClusterAdmin` rule that enforces its absence, for the
+# network policies derived for a terminate-declared CR (the velero
+# BackupStorageLocation), and for the velero package's refusals.
+
+{
+  lib,
+  mkCluster,
+  baseInstances,
+  manifests,
+  evalFails,
+  netpolOn,
+  kixlib,
+  ofKind,
+  byName,
+  kixKeys,
+  ...
+}:
+
+let
+  # A ServiceAccount bound to cluster-admin, a ClusterRole with an
+  # all-wildcard rule, and two shapes the rule leaves alone: a wildcard
+  # limited to one API group and a namespaced RoleBinding to cluster-admin.
+  mkAdminPackage =
+    {
+      unsafe ? [ ],
+    }:
+    {
+      meta = {
+        version = "test";
+        inherit unsafe;
+      };
+      build =
+        { self, scope, ... }:
+        {
+          sa = scope.mkResource {
+            apiVersion = "v1";
+            kind = "ServiceAccount";
+            name = "backup";
+          };
+          binding = scope.mkClusterResource {
+            apiVersion = "rbac.authorization.k8s.io/v1";
+            kind = "ClusterRoleBinding";
+            name = "backup-admin";
+            extra = {
+              roleRef = {
+                apiGroup = "rbac.authorization.k8s.io";
+                kind = "ClusterRole";
+                name = "cluster-admin";
+              };
+              subjects = [
+                {
+                  kind = "ServiceAccount";
+                  name = "backup";
+                  namespace = scope.namespaceName;
+                }
+              ];
+            };
+          };
+          wildcardRole = scope.mkClusterResource {
+            apiVersion = "rbac.authorization.k8s.io/v1";
+            kind = "ClusterRole";
+            name = "backup-everything";
+            extra.rules = [
+              {
+                apiGroups = [ "*" ];
+                resources = [ "*" ];
+                verbs = [ "*" ];
+              }
+            ];
+          };
+          groupRole = scope.mkClusterResource {
+            apiVersion = "rbac.authorization.k8s.io/v1";
+            kind = "ClusterRole";
+            name = "backup-one-group";
+            extra.rules = [
+              {
+                apiGroups = [ "example.com" ];
+                resources = [ "*" ];
+                verbs = [ "*" ];
+              }
+            ];
+          };
+          namespacedBinding = scope.mkResource {
+            apiVersion = "rbac.authorization.k8s.io/v1";
+            kind = "RoleBinding";
+            name = "backup-local-admin";
+            extra = {
+              roleRef = {
+                apiGroup = "rbac.authorization.k8s.io";
+                kind = "ClusterRole";
+                name = "cluster-admin";
+              };
+              subjects = [
+                {
+                  kind = "ServiceAccount";
+                  name = "backup";
+                  namespace = scope.namespaceName;
+                }
+              ];
+            };
+          };
+          root = {
+            resource = self.sa;
+            requires = [
+              self.binding
+              self.wildcardRole
+              self.groupRole
+              self.namespacedBinding
+            ];
+          };
+        };
+    };
+
+  rules = import ../../rules { inherit lib; };
+
+  # Only the rule under test and the audit rule, so the base instances'
+  # other findings do not fail the cluster. Reading `scorecardReport` of a
+  # cluster whose cap lets an error through raises the error, so findings
+  # are read at the `warning` cap and failure is checked at `error`.
+  mkAdminCluster =
+    maxSeverity: unsafe:
+    mkCluster [
+      baseInstances
+      {
+        scorecard = {
+          enable = true;
+          inherit maxSeverity;
+          rules = {
+            security = { inherit (rules.security) noClusterAdmin; };
+            architecture = { inherit (rules.architecture) unsafeGrants; };
+          };
+        };
+        instances.backup.backup.package = mkAdminPackage { inherit unsafe; };
+      }
+    ];
+
+  # The velero package with its store wired to the base instances' db
+  # Service, under network policy.
+  veleroCluster = mkVelero {
+    withStore = true;
+    netpol = true;
+  };
+
+  findingsOf =
+    rule: cluster:
+    builtins.filter (f: f.rule == rule && f.instance == "backup") cluster.scorecardReport.findings;
+
+  # The velero package with a bucket, `config` merged over it, the cloud
+  # credentials, and a repository Secret named `repository` (none when
+  # null). `withStore` wires the base instances' db Service as the store.
+  mkVelero =
+    {
+      config ? { },
+      repository ? "velero-repo-credentials",
+      withStore ? false,
+      netpol ? false,
+    }:
+    mkCluster (
+      [
+        baseInstances
+        (
+          { ref, ... }:
+          {
+            instances.velero = {
+              cloud = {
+                package = import ../../../packages/secret;
+                aliases = [ "cloudCredentials" ];
+                config.stringData.cloud = "[default]";
+              };
+              velero = {
+                package = import ../../../packages/velero;
+                config = lib.recursiveUpdate { backupStorageLocation.objectStorage.bucket = "b"; } config;
+              }
+              // lib.optionalAttrs withStore { deps.objectStorage = ref.dbns.db; };
+            }
+            // lib.optionalAttrs (repository != null) {
+              ${repository} = {
+                package = import ../../../packages/secret;
+                aliases = [ "repositoryPassword" ];
+                config.stringData.repository-password = "key";
+              };
+            };
+          }
+        )
+      ]
+      ++ lib.optional netpol netpolOn
+    );
+
+  # The package's assertions, evaluated against `config` merged over a
+  # bucket. A failed assertion fails the whole cluster before its
+  # diagnostics can be read, so the messages are taken from here.
+  veleroPackage = import ../../../packages/velero {
+    inherit lib;
+    kix = kixlib;
+    scope = {
+      instanceName = "velero";
+      namespaceName = "velero";
+      selectorLabels = {
+        "app.kubernetes.io/name" = "velero";
+        "app.kubernetes.io/instance" = "velero";
+      };
+    };
+  };
+  failedAssertionMessages =
+    config:
+    let
+      evaluated =
+        (lib.evalModules {
+          modules = [
+            { options = veleroPackage.options; }
+            { config = lib.recursiveUpdate { backupStorageLocation.objectStorage.bucket = "b"; } config; }
+          ];
+        }).config;
+    in
+    map (a: a.message) (
+      builtins.filter (a: !a.assertion) (veleroPackage.assertions { config = evaluated; })
+    );
+
+  # The cluster built with `config` fails, and a failed assertion of the
+  # package contains every string in `needles`.
+  refusedWith =
+    needles: config:
+    let
+      messages = failedAssertionMessages config;
+    in
+    evalFails (mkVelero {
+      inherit config;
+    })
+    && builtins.all (n: builtins.any (lib.hasInfix n) messages) needles;
+
+  # tryEval drops the message of a throw from the build, so these cases
+  # check that the cluster fails while the control cluster, which differs
+  # by the one setting, builds. The messages were read in a probe.
+  builds = cluster: !(evalFails cluster);
+in
+{
+  # Without the grant, the binding and the all-wildcard ClusterRole each
+  # produce a finding naming the resource (and, for the binding, its
+  # subject), and the cluster fails at the `error` cap. The one-group
+  # wildcard and the RoleBinding produce none.
+  velero-no-cluster-admin-without-grant =
+    let
+      found = findingsOf "security.noClusterAdmin" (mkAdminCluster "warning" [ ]);
+      messages = map (f: f.message) found;
+      has = needle: builtins.any (lib.hasInfix needle) messages;
+    in
+    (
+      builtins.length found == 2
+      && rules.security.noClusterAdmin.severity == "error"
+      && has "ClusterRoleBinding 'backup-admin' grants cluster-admin to ServiceAccount backup/backup"
+      && has "ClusterRole 'backup-everything' grants every verb"
+      && has "scope.rbac"
+      && has "meta.unsafe"
+      && evalFails (mkAdminCluster "error" [ ])
+    )
+    || throw "noClusterAdmin without the grant: ${builtins.toJSON found}";
+
+  # With the grant, the rule reports nothing, the cluster builds, and the
+  # grant is listed by architecture.unsafeGrants.
+  velero-no-cluster-admin-with-grant =
+    let
+      cluster = mkAdminCluster "error" [ "cluster-admin" ];
+      found = findingsOf "security.noClusterAdmin" cluster;
+      audit = findingsOf "architecture.unsafeGrants" cluster;
+    in
+    (
+      found == [ ]
+      && builtins.any (f: f.severity == "info" && lib.hasInfix "'cluster-admin'" f.message) audit
+      && builtins.length (manifests cluster) > 0
+    )
+    || throw "noClusterAdmin with the grant: findings ${builtins.toJSON found}, audit ${builtins.toJSON audit}";
+
+  # The policies derived for a terminate-declared CR do not require the CR:
+  # the location's readiness (Available) needs the store connection those
+  # policies open, so requiring it would leave the deploy waiting until it
+  # times out.
+  velero-operand-policies-do-not-wait-for-cr =
+    let
+      ms = manifests veleroCluster;
+      bslHash = builtins.unsafeDiscardStringContext veleroCluster.instances.velero.velero.raw.backupStorageLocation.out.identityHash;
+      cnps = ofKind "CiliumNetworkPolicy" ms;
+      egress = byName "velero-backupstoragelocation-default-egress" cnps;
+      ingress = byName "velero-backupstoragelocation-default-to-db-ingress" cnps;
+      dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+    in
+    (
+      egress != null
+      && ingress != null
+      && ingress.metadata.namespace == "dbns"
+      && !(lib.hasInfix bslHash (dependsOn egress))
+      && !(lib.hasInfix bslHash (dependsOn ingress))
+    )
+    || throw "operand policies: egress ${builtins.toJSON (egress.metadata or null)}, ingress ${
+      builtins.toJSON (ingress.metadata or null)
+    }";
+
+  # Each assertion of the package fails the cluster with a message that
+  # names the setting and the fix. A second location is built in Velero's
+  # namespace through scope.forService.
+  velero-refuses-invalid-config =
+    let
+      cases = {
+        location-credential =
+          refusedWith
+            [
+              "backupStorageLocation sets credential"
+              "(scope.forService velero).mkCR velero.out.crds.BackupStorageLocation"
+            ]
+            {
+              backupStorageLocation.credential = {
+                name = "other";
+                key = "cloud";
+              };
+            };
+        snapshot-credential = refusedWith [ "volumeSnapshotLocation sets credential" ] {
+          volumeSnapshotLocation.credential.name = "other";
+        };
+        aws-plugin-off = refusedWith [ "awsPlugin.enabled is false" ] {
+          awsPlugin.enabled = false;
+        };
+        node-agent-off-with-fs-backup = refusedWith [ "nodeAgent.enabled is false" ] {
+          nodeAgent.enabled = false;
+          volumePolicies = [
+            {
+              conditions.storageClass = [ "local" ];
+              action.type = "fs-backup";
+            }
+          ];
+        };
+        csi-attributes-without-driver =
+          refusedWith [ "conditions.csi.volumeAttributes without conditions.csi.driver" ]
+            {
+              volumePolicies = [
+                {
+                  conditions.csi.volumeAttributes.fsType = "ext4";
+                  action.type = "skip";
+                }
+              ];
+            };
+        pod-labels-collision =
+          refusedWith [ "nodeAgent.settings.podLabels sets app.kubernetes.io/component" ]
+            {
+              nodeAgent.settings.podLabels."app.kubernetes.io/component" = "mine";
+            };
+      };
+      failed = lib.attrNames (lib.filterAttrs (_: ok: !ok) cases);
+    in
+    failed == [ ] || throw "velero refusals without the expected message: ${toString failed}";
+
+  # Each case differs from a building cluster by one setting that the build
+  # refuses with a throw: an image of another minor release, a missing or
+  # misnamed repository Secret, a flag or an env var the package owns, and
+  # an s3Url beside an objectStorage dependency.
+  velero-build-refusals =
+    let
+      cases = {
+        control = !(builds (mkVelero { }));
+        control-with-store =
+          !(builds (mkVelero {
+            withStore = true;
+          }));
+        image-of-another-release = builds (mkVelero {
+          config.image.tag = "v1.17.1";
+        });
+        no-repository-secret = builds (mkVelero {
+          repository = null;
+        });
+        misnamed-repository-secret = builds (mkVelero {
+          repository = "other";
+        });
+        owned-flag = builds (mkVelero {
+          config.server.extraArgs = [ "--features=EnableCSI" ];
+        });
+        owned-env = builds (mkVelero {
+          config.nodeAgent.env.NODE_NAME = "node";
+        });
+        s3-url-beside-store = builds (mkVelero {
+          withStore = true;
+          config.backupStorageLocation.config.s3Url = "https://s3.example.com";
+        });
+      };
+      wrong = lib.attrNames (lib.filterAttrs (_: bad: bad) cases);
+    in
+    wrong == [ ] || throw "velero build refusals: these cases did not behave: ${toString wrong}";
+
+  # With node-agent off, no repository Secret is needed; an unowned env var
+  # reaches the container.
+  velero-optional-parts =
+    let
+      cluster = mkVelero {
+        repository = null;
+        config = {
+          nodeAgent.enabled = false;
+          server.env.HTTPS_PROXY = "http://proxy:3128";
+        };
+      };
+      server = byName "velero" (ofKind "Deployment" (manifests cluster));
+      env = (builtins.head server.spec.template.spec.containers).env;
+    in
+    builtins.any (e: e.name == "HTTPS_PROXY" && e.value == "http://proxy:3128") env
+    || throw "velero with node-agent off: env ${builtins.toJSON env}";
+
+  # A schedule on the default location reaches it through storageLocation,
+  # so the package adds no `requires` entry that Kix reports as redundant.
+  velero-schedule-requires-no-warning =
+    let
+      cluster = mkVelero { config.schedules.nightly.schedule = "@daily"; };
+      warnings = cluster.instances.velero.velero._diagnostics.warnings;
+    in
+    (builds cluster && !(builtins.any (lib.hasInfix "already references") warnings))
+    || throw "velero schedule warnings: ${builtins.toJSON warnings}";
+
+  # Under network policy, a store outside the cluster gets the
+  # velero-external-store policy over every pod of the instance; an
+  # objectStorage dependency replaces it with the location's operand
+  # policies.
+  velero-external-store-policy =
+    let
+      names = cluster: map (m: m.metadata.name) (ofKind "CiliumNetworkPolicy" (manifests cluster));
+      external = names (mkVelero {
+        netpol = true;
+      });
+      inCluster = names (mkVelero {
+        netpol = true;
+        withStore = true;
+      });
+    in
+    (
+      builtins.elem "velero-external-store" external
+      && !(builtins.elem "velero-external-store" inCluster)
+      && builtins.elem "velero-backupstoragelocation-default-egress" inCluster
+    )
+    || throw "velero external store policy: without a store ${builtins.toJSON external}, with one ${builtins.toJSON inCluster}";
+}

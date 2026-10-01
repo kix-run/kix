@@ -3,7 +3,7 @@
   "kind": "CustomResourceDefinition",
   "metadata": {
     "annotations": {
-      "controller-gen.kubebuilder.io/version": "v0.14.0"
+      "controller-gen.kubebuilder.io/version": "v0.16.5"
     },
     "name": "backupstoragelocations.velero.io"
   },
@@ -93,7 +93,8 @@
                         "type": "string"
                       },
                       "name": {
-                        "description": "Name of the referent.\nMore info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names\nTODO: Add other useful fields. apiVersion, kind, uid?",
+                        "default": "",
+                        "description": "Name of the referent.\nThis field is effectively required, but due to backwards compatibility is\nallowed to be empty. Instances of this type with an empty value here are\nalmost certainly wrong.\nMore info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names",
                         "type": "string"
                       },
                       "optional": {
@@ -119,9 +120,32 @@
                         "type": "string"
                       },
                       "caCert": {
-                        "description": "CACert defines a CA bundle to use when verifying TLS connections to the provider.",
+                        "description": "CACert defines a CA bundle to use when verifying TLS connections to the provider.\nDeprecated: Use CACertRef instead.",
                         "format": "byte",
                         "type": "string"
+                      },
+                      "caCertRef": {
+                        "description": "CACertRef is a reference to a Secret containing the CA certificate bundle to use\nwhen verifying TLS connections to the provider. The Secret must be in the same\nnamespace as the BackupStorageLocation.",
+                        "properties": {
+                          "key": {
+                            "description": "The key of the secret to select from.  Must be a valid secret key.",
+                            "type": "string"
+                          },
+                          "name": {
+                            "default": "",
+                            "description": "Name of the referent.\nThis field is effectively required, but due to backwards compatibility is\nallowed to be empty. Instances of this type with an empty value here are\nalmost certainly wrong.\nMore info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names",
+                            "type": "string"
+                          },
+                          "optional": {
+                            "description": "Specify whether the Secret or its key must be defined",
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "key"
+                        ],
+                        "type": "object",
+                        "x-kubernetes-map-type": "atomic"
                       },
                       "prefix": {
                         "description": "Prefix is the path inside a bucket to use for Velero storage. Optional.",
@@ -153,7 +177,7 @@
                 "description": "BackupStorageLocationStatus defines the observed state of BackupStorageLocation",
                 "properties": {
                   "accessMode": {
-                    "description": "AccessMode is an unused field.\n\n\nDeprecated: there is now an AccessMode field on the Spec and this field\nwill be removed entirely as of v2.0.",
+                    "description": "AccessMode is an unused field.\n\nDeprecated: there is now an AccessMode field on the Spec and this field\nwill be removed entirely as of v2.0.",
                     "enum": [
                       "ReadOnly",
                       "ReadWrite"
@@ -161,7 +185,7 @@
                     "type": "string"
                   },
                   "lastSyncedRevision": {
-                    "description": "LastSyncedRevision is the value of the `metadata/revision` file in the backup\nstorage location the last time the BSL's contents were synced into the cluster.\n\n\nDeprecated: this field is no longer updated or used for detecting changes to\nthe location's contents and will be removed entirely in v2.0.",
+                    "description": "LastSyncedRevision is the value of the `metadata/revision` file in the backup\nstorage location the last time the BSL's contents were synced into the cluster.\n\nDeprecated: this field is no longer updated or used for detecting changes to\nthe location's contents and will be removed entirely in v2.0.",
                     "type": "string"
                   },
                   "lastSyncedTime": {

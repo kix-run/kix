@@ -21,6 +21,7 @@ when the package does not render a resource that would use the exception.
 | `host-network` | Exempts the package from `security.noHostNetwork`, which checks `hostNetwork`, `hostPID`, and `hostIPC`. |
 | `privileged` | Exempts the package from `security.noPrivileged`. |
 | `run-as-root` | Exempts the package from `security.nonRoot`. |
+| `cluster-admin` | Exempts the package from `security.noClusterAdmin`, which refuses a ClusterRoleBinding to `cluster-admin` and a ClusterRole that grants every verb on every resource in every API group. Velero holds it: a backup tool reads every kind and recreates any kind on restore. |
 
 Every declared grant produces an info-level
 `architecture.unsafeGrants` scorecard finding. This keeps the exception

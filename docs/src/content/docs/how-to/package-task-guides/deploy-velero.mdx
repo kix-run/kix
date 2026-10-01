@@ -12,31 +12,19 @@ import backupConfiguration from '/src/command-output/how-to/package-velero/backu
 Use the `velero` package to deploy the Velero server and node agent, connect
 them to S3-compatible object storage, and schedule recurring backups.
 
-This guide uses Velero 1.15.2 with the AWS object-store plugin. It assumes you
-have an existing bucket and credentials that can read, write, list, and delete
-objects in it.
+The package deploys Velero 1.18.4 with the AWS object-store plugin 1.14.4 and
+installs Velero's custom resource definitions itself. It assumes you have an
+existing bucket and credentials that can read, write, list, and delete objects
+in it.
 
-## Install the Velero CRDs
+A cluster runs one Velero instance. The CRDs, the server's cluster-wide
+permissions, and the node agent are cluster singletons, so a second instance
+fails evaluation.
 
-The Kix package creates Velero resources but does not install their custom
-resource definitions. Install the matching CRDs before the first deployment:
+## Create the Secrets
 
-<Command
-  commands={[
-    "velero install --crds-only --dry-run -o yaml | kubectl apply -f -",
-  ]}
-/>
-
-Use the Velero 1.15.2 CLI for this command. When upgrading Velero, update its
-CRDs before deploying resources built for the new version.
-
-The package can also perform this step inside the cluster. Setting
-`config.upgradeCRDs.enable = true` creates a Job and ServiceAccount that run
-`velero install --crds-only` on every apply. The package does not create the
-cluster-scoped RBAC needed by that ServiceAccount, so provide it before
-enabling this option.
-
-## Create the credentials Secret
+Velero needs two Secrets in its namespace: the object-store credentials and
+the key that encrypts the file-system backup repositories.
 
 Create a local file named `credentials-velero` in the format expected by the
 AWS plugin:
@@ -47,33 +35,93 @@ aws_access_key_id=<access-key-id>
 aws_secret_access_key=<secret-access-key>
 ```
 
-Create the namespace and Secret before deploying Velero:
+Create the namespace and both Secrets before deploying Velero:
 
 <Command
   commands={[
     "kubectl create namespace velero-system",
     "kubectl create secret generic velero-credentials --namespace velero-system --from-file=cloud=./credentials-velero",
+    "kubectl create secret generic velero-repo-credentials --namespace velero-system --from-literal=repository-password=\"$(openssl rand -base64 32)\"",
   ]}
 />
 
-Keep the credentials file out of version control. If your platform already
-creates Kubernetes Secrets, use that system to create the same Secret and
-`cloud` key.
+Keep the credentials file and the repository key out of version control, and
+store the repository key somewhere you can recover it: a restore of a
+file-system backup needs the key the backup was written with. If your platform
+already creates Kubernetes Secrets, use it to create the same Secrets and
+keys.
+
+Velero reads the repository key only from a Secret named
+`velero-repo-credentials` with the key `repository-password`. When that Secret
+is missing, Velero creates one with a key compiled into every Velero binary,
+so the package refuses to build without it while the node agent is on.
 
 ## Configure Velero
 
-Add a Velero instance to the cluster:
+Add the two Secret references and the Velero instance to the cluster:
 
 <Snippet {...veleroInstance} />
 
+The `cloudCredentials` and `repositoryPassword` aliases are how the package
+finds the two Secrets. Kix checks at evaluation that each reference declares
+the key the package reads.
+
 Replace `example-cluster-backups` and the region with values for your bucket.
-For an S3-compatible service with a custom endpoint, also set `s3Url` and set
-`s3ForcePathStyle` according to the service's requirements.
+The location's `config` is the plugin's settings map. For an S3-compatible
+service with a custom endpoint, set `s3Url` and `s3ForcePathStyle`. For one
+that rejects the AWS SDK's checksums, set `checksumAlgorithm = ""`. To trust a
+private certificate authority, set `objectStorage.caCertRef` to a Secret key in
+the same namespace.
+
+When the object store runs in the same cluster, wire it as the
+`objectStorage` dependency. The package then sets `s3Url` to that Service and
+`s3ForcePathStyle` to `"true"`, and the network policy for Velero's pods
+follows the dependency. With the dependency wired, an `s3Url` in `config`
+fails evaluation, because Velero would dial that address and no policy would
+open it.
+
+To reach the store through a proxy, set `server.env` and `nodeAgent.env`
+(for example `HTTPS_PROXY` and `NO_PROXY`). The pods Velero launches copy
+these variables.
 
 The `daily` schedule backs up the `applications` namespace at 02:00 UTC,
 retains each backup for 30 days, and uses the node agent for volume data.
 Change the namespace selection, schedule, and retention period to match your
-recovery policy.
+recovery policy. A schedule accepts five cron fields, a descriptor such as
+`@every 6h`, and an optional `CRON_TZ=<zone>` prefix; anything else fails
+evaluation.
+
+### Volume policies
+
+`volumePolicies` decides per volume whether a backup skips it, snapshots it,
+or copies its files through the node agent. The package writes the list to a
+ConfigMap that Velero applies to every backup, scheduled or not:
+
+```nix
+volumePolicies = [
+  {
+    conditions.storageClass = [ "local-path" ];
+    action.type = "fs-backup";
+  }
+];
+```
+
+The condition names are Velero's (`capacity`, `storageClass`, `nfs`, `csi`,
+`volumeTypes`, `pvcLabels`, `pvcPhase`, `pvcVolumeMode`, `pvcAccessModes`).
+Velero refuses a policy file with an unknown key, which would fail every
+backup, so Kix rejects one at evaluation.
+
+To choose volumes per workload instead, annotate the pod with
+`backup.velero.io/backup-volumes` (or `backup.velero.io/backup-volumes-excludes`).
+To leave a resource out of every backup, label it
+`velero.io/exclude-from-backup=true`.
+
+### CSI snapshots
+
+Add `features = [ "EnableCSI" ]` to snapshot CSI volumes. Velero picks the
+VolumeSnapshotClass for a driver by the label
+`velero.io/csi-volumesnapshot-class: "true"`, so label the class you want it
+to use.
 
 ## Check the generated configuration
 
@@ -85,8 +133,8 @@ Inspect the backup location and schedule that Kix will apply:
 
 <Command expandable {...backupConfiguration} />
 
-The backup location refers to the existing `velero-credentials` Secret. Its
-contents are not part of the rendered manifests.
+The backup location names the `velero-credentials` Secret. Its contents are
+not part of the rendered manifests.
 
 ## Deploy and verify
 
@@ -95,20 +143,20 @@ Deploy Velero, then check the server, backup location, and schedule:
 <Command
   commands={[
     "kix deploy how-to-package-velero",
-    "kubectl rollout status deployment/velero --namespace velero-system",
-    "velero backup-location get",
-    "velero schedule get",
+    "velero backup-location get --namespace velero-system",
+    "velero schedule get --namespace velero-system",
   ]}
   cwd="kix-examples/"
 />
 
-The backup location should report `Available`. Confirm the complete path by
-starting a backup and waiting for it to finish:
+`kix deploy` waits for the backup location to report `Available`, so a bucket
+Velero cannot reach fails the deploy. Confirm the complete path by starting a
+backup and waiting for it to finish:
 
 <Command
   commands={[
-    "velero backup create initial-applications-backup --include-namespaces applications --wait",
-    "velero backup describe initial-applications-backup --details",
+    "velero backup create initial-applications-backup --include-namespaces applications --wait --namespace velero-system",
+    "velero backup describe initial-applications-backup --details --namespace velero-system",
   ]}
 />
 
@@ -120,3 +168,77 @@ If the location is unavailable, inspect it and the server logs:
     "kubectl logs deployment/velero --namespace velero-system --since=10m",
   ]}
 />
+
+## Declare backups and restores
+
+Velero reads its custom resources only in its own namespace. The package's
+builders create a Backup or a Schedule there from any instance and wait for
+the location to be `Available`:
+
+```nix
+backup = velero.out.mkBackup scope {
+  name = "before-migration";
+  spec.includedNamespaces = [ scope.namespaceName ];
+};
+```
+
+`velero.out.mkSchedule` takes the same arguments. For another kind, such as
+a Restore or a second backup location, build the resource in Velero's
+namespace with `(scope.forService velero).mkCR velero.out.crds.Restore { ... }`.
+A resource built in any other namespace is never processed, and the deploy
+waits for it until it times out.
+
+`kix deploy` waits for each declared Backup and Restore to finish. One that
+ends `Failed` or `PartiallyFailed` never reports `Completed`, so the deploy
+waits until it times out; run `velero backup describe` or
+`velero restore describe` on it.
+
+A Backup runs once. Velero deletes the Backup when its `ttl` expires (30 days
+unless set), and the next `kix deploy` creates it again, which runs a new
+backup under the same name. Use a schedule for recurring backups and a
+declared Backup for a one-off backup you remove from the cluster definition
+afterwards.
+
+## What the package sets up
+
+- **Permissions.** The server reads every kind for a backup and recreates any
+  kind on a restore, including custom resources installed later, so its
+  ServiceAccount is bound to `cluster-admin`. The package declares the
+  [`cluster-admin`](/docs/reference/meta/unsafe/) grant, which the scorecard
+  lists.
+- **Pod security.** The node agent reads pod volumes from the host as root, so
+  the namespace gets the `privileged` Pod Security level.
+- **Network policy.** With network policy on, the package writes a policy for
+  the pods Velero launches itself (file-system backups and restores, the CSI
+  data mover, and repository maintenance Jobs) that allows DNS and the API
+  server. It labels those pods through the node agent and maintenance
+  settings, so `podLabels` there may not override the labels the policy
+  selects on. For a store outside the cluster, a second policy lets every
+  Velero pod connect to addresses outside the cluster on the port of `s3Url`
+  (443 when it is unset), and on 443 when a snapshot location is set. A
+  backup location you add on another port needs its own policy.
+- **Metrics.** With a `prometheus` dependency, the package adds metrics
+  Services for the server and the node agent, a ServiceMonitor for each, and
+  three alerts: a failed or partially failed backup, a schedule with no
+  successful backup within `metrics.maxBackupAge` (default `26h`; raise it
+  above your longest schedule interval), and a server Prometheus cannot
+  scrape.
+
+## Cloud identity instead of keys
+
+The package always mounts the `cloudCredentials` Secret and names it in the
+backup location. The AWS plugin reads that file as an AWS config file too, so
+on EKS it can hold a profile with `role_arn` and `web_identity_token_file`
+instead of keys. Add the role annotation to the `serviceAccount` part with a
+[parts overlay](/docs/how-to/adopt-existing-resources/patch-package-output-with-overlays/).
+Velero copies its own pods' `azure.workload.identity/use` label to the pods it
+launches only when no `podLabels` are set, and the package sets them. Add the
+label to `nodeAgent.settings.podLabels` and
+`repositoryMaintenance.settings.podLabels` for those pods, and to the server
+and node agent pods with a parts overlay.
+
+## Upgrades
+
+Velero supports upgrading to 1.18 only from 1.17 and supports no downgrade.
+The vendored CRDs match Velero 1.18, so the package refuses an `image.tag` from
+another minor release.

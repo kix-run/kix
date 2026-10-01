@@ -3,7 +3,7 @@
   "kind": "CustomResourceDefinition",
   "metadata": {
     "annotations": {
-      "controller-gen.kubebuilder.io/version": "v0.14.0"
+      "controller-gen.kubebuilder.io/version": "v0.16.5"
     },
     "name": "restores.velero.io"
   },
@@ -123,7 +123,8 @@
                                         "items": {
                                           "type": "string"
                                         },
-                                        "type": "array"
+                                        "type": "array",
+                                        "x-kubernetes-list-type": "atomic"
                                       }
                                     },
                                     "required": [
@@ -132,7 +133,8 @@
                                     ],
                                     "type": "object"
                                   },
-                                  "type": "array"
+                                  "type": "array",
+                                  "x-kubernetes-list-type": "atomic"
                                 },
                                 "matchLabels": {
                                   "additionalProperties": {
@@ -278,7 +280,8 @@
                               "items": {
                                 "type": "string"
                               },
-                              "type": "array"
+                              "type": "array",
+                              "x-kubernetes-list-type": "atomic"
                             }
                           },
                           "required": [
@@ -287,7 +290,8 @@
                           ],
                           "type": "object"
                         },
-                        "type": "array"
+                        "type": "array",
+                        "x-kubernetes-list-type": "atomic"
                       },
                       "matchLabels": {
                         "additionalProperties": {
@@ -330,7 +334,8 @@
                                 "items": {
                                   "type": "string"
                                 },
-                                "type": "array"
+                                "type": "array",
+                                "x-kubernetes-list-type": "atomic"
                               }
                             },
                             "required": [
@@ -339,7 +344,8 @@
                             ],
                             "type": "object"
                           },
-                          "type": "array"
+                          "type": "array",
+                          "x-kubernetes-list-type": "atomic"
                         },
                         "matchLabels": {
                           "additionalProperties": {
@@ -362,6 +368,30 @@
                   },
                   "resourceModifier": {
                     "description": "ResourceModifier specifies the reference to JSON resource patches that should be applied to resources before restoration.",
+                    "nullable": true,
+                    "properties": {
+                      "apiGroup": {
+                        "description": "APIGroup is the group for the resource being referenced.\nIf APIGroup is not specified, the specified Kind must be in the core API group.\nFor any other third-party types, APIGroup is required.",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "description": "Kind is the type of resource being referenced",
+                        "type": "string"
+                      },
+                      "name": {
+                        "description": "Name is the name of resource being referenced",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "name"
+                    ],
+                    "type": "object",
+                    "x-kubernetes-map-type": "atomic"
+                  },
+                  "resourcePolicy": {
+                    "description": "ResourcePolicy specifies the reference to a ConfigMap containing resource\nfilter policies for this restore. The ConfigMap can contain a\nnamespacedFilterPolicies section that specifies per-namespace resource type\nfilters, label selectors, and resource name patterns, and a\nclusterScopedFilterPolicy section for per-kind filtering of cluster-scoped\nresources. The ConfigMap format is the same as for BackupSpec.ResourcePolicy.",
                     "nullable": true,
                     "properties": {
                       "apiGroup": {

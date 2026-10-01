@@ -1,4 +1,4 @@
-# clusters/test-full.nix — Full cluster: all charts with most features enabled.
+# clusters/test-full.nix: a full cluster, all charts with most features enabled.
 #
 # Stress test for package configs and optional resource gating.
 
@@ -21,9 +21,53 @@ kix.buildCluster {
       };
 
       instances = {
-        # velero with no credentials at all: no Secret and no secret-ref
-        # marker. clusters/test-operators.nix builds the managed-Secret path.
-        velero.velero.package = packages.velero;
+        # velero with every optional part on: the CSI data mover, a snapshot
+        # location, a schedule, global volume policies, and maintenance
+        # settings. Both secrets are secret-refs, created outside Kix.
+        velero = {
+          velero-credentials = {
+            package = packages.secret-ref;
+            aliases = [ "cloudCredentials" ];
+            config.keys = [ "cloud" ];
+          };
+          velero-repo-credentials = {
+            package = packages.secret-ref;
+            aliases = [ "repositoryPassword" ];
+            config.keys = [ "repository-password" ];
+          };
+          velero = {
+            package = packages.velero;
+            config = {
+              features = [ "EnableCSI" ];
+              backupStorageLocation = {
+                objectStorage.bucket = "full-test";
+                config.region = "us-east-1";
+              };
+              volumeSnapshotLocation.config.region = "us-east-1";
+              schedules.nightly = {
+                schedule = "CRON_TZ=UTC 0 3 * * *";
+                template = {
+                  ttl = "720h0m0s";
+                  snapshotMoveData = true;
+                };
+              };
+              volumePolicies = [
+                {
+                  conditions.csi = { };
+                  action.type = "snapshot";
+                }
+                {
+                  conditions.volumeTypes = [
+                    "emptyDir"
+                    "hostPath"
+                  ];
+                  action.type = "skip";
+                }
+              ];
+              repositoryMaintenance.settings.keepLatestMaintenanceJobs = 3;
+            };
+          };
+        };
         kube-system = {
           coredns = {
             package = packages.coredns;
