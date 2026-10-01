@@ -23,8 +23,10 @@ dependency. Packages that must create claims, such as the canonical
 need an explicit `meta.unsafe = [ "raw-pvc" ]` grant. The scorecard reports
 every such grant for review.
 
-This guide assumes your target cluster flavor provides a default StorageClass,
-or that you know the StorageClass name to request.
+This guide assumes your target cluster flavor provides a default StorageClass
+(kind, k3s, GKE, GKE Autopilot, AKS, OVH, and Scaleway do; rke2, kubeadm,
+talos, openshift, and EKS do not), or that you know the StorageClass name to
+request.
 
 ## Add the PVC and application instances
 
@@ -35,10 +37,23 @@ Create the PVC in the same namespace as the application:
 The PVC package advertises the `storage` alias. The application's `storage`
 build argument therefore resolves to the claim in the same namespace.
 
-Set `size` to a Kubernetes storage quantity and choose access modes supported
-by the storage provider. If the cluster does not provide a default through its
-flavor, or the application needs another class, set
-`config.storageClassName = "<class-name>"` on the PVC instance.
+Set `size` to a Kubernetes storage quantity such as `"5Gi"`. It is required:
+a generic claim cannot know how much its consumer stores. A package that owns
+its own claim template, such as a StatefulSet's volume, may default the size
+because it knows what it stores.
+
+Choose access modes supported by the storage provider. If the cluster does not
+provide a default through its flavor, or the application needs another class,
+set `config.storageClassName = "<class-name>"` on the PVC instance. Other PVC
+spec fields, such as `volumeMode`, `dataSource`, `selector`, and `volumeName`,
+go in `config.extraSpec`.
+
+When a cluster sets `availablePackages` and declares no claim, Kix
+auto-instantiates `persistent-volume-claim` for a package's required `storage`
+dependency. That claim has no size, so the build fails with
+``The option `instances.<namespace>.persistent-volume-claim.config.size' was accessed but has no value defined``
+after a `[kix] auto-instantiated: persistent-volume-claim (<namespace>)` trace.
+Declare the claim as a full instance with its `size`, as in the snippet above.
 
 ## Create the package mount
 
