@@ -69,6 +69,11 @@ rec {
     importName = key "import-name";
     importFqdn = key "import-fqdn";
     importSecretKeys = key "import-secret-keys";
+    # On CRD ref markers only (scope.mkCRDRef): the kind, the API version and
+    # the scope (`Namespaced` or `Cluster`) the referenced CRD serves.
+    crdKind = key "crd-kind";
+    crdVersion = key "crd-version";
+    crdScope = key "crd-scope";
     serviceSelector = key "service-selector";
     servicePorts = key "service-ports";
     serviceLabels = key "service-labels";

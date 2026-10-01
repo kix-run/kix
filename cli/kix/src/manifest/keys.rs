@@ -159,6 +159,16 @@ pub const IMPORT_FQDN: &str = key!("import-fqdn");
 /// Comma-separated keys an imported Secret must carry.
 pub const IMPORT_SECRET_KEYS: &str = key!("import-secret-keys");
 
+/// Kind a CRD ref marker declares (`scope.mkCRDRef`).
+pub const CRD_KIND: &str = key!("crd-kind");
+
+/// API version a CRD ref marker declares for its kind. The deploy can check
+/// that the live CustomResourceDefinition serves it.
+pub const CRD_VERSION: &str = key!("crd-version");
+
+/// Scope a CRD ref marker declares for its kind: `Namespaced` or `Cluster`.
+pub const CRD_SCOPE: &str = key!("crd-scope");
+
 /// Selector of an imported Service, as JSON.
 pub const SERVICE_SELECTOR: &str = key!("service-selector");
 
