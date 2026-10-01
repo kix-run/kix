@@ -1,0 +1,3 @@
+# 2026-10-01 · `kix/packages/reloader` `out.withReloadOn` · The watched-namespace check uses the Secret's source namespace, which is wrong for a `reflect = true` ref.
+
+`withReloadOn` compares the ref's namespace against `--namespaces` and `--namespaces-to-ignore`. For a `scope.mkSecretRef { reflect = true; }` ref, the pod reads a mirror that reflector writes into the consumer's namespace, so reloader must watch the consumer's namespace, not the source's. The check then refuses a ref that would work, or accepts one whose mirror sits in an ignored namespace. `withReloadOn` receives builder args, which do not name the consumer's namespace, so it cannot check the mirror.

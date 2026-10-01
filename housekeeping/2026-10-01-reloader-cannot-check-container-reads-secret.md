@@ -1,0 +1,3 @@
+# 2026-10-01 · `kix/packages/reloader` `out.withReloadOn` · withReloadOn does not check that a container reads the Secrets it names.
+
+`withReloadOn [ ref ]` writes `secret.reloader.stakater.com/reload` from the refs it is given and never looks at the pod spec. When no container reads the Secret through `env`, `envFrom`, or a volume, reloader still restarts the workload on a change and stores its hash env var on `containers[0]`, so a stale or mistyped ref causes restarts that change nothing. The builder args carry the pod spec, so a check is possible once there is a helper that lists the Secret names a pod spec references.
