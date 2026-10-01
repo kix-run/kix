@@ -3,7 +3,7 @@
   "kind": "CustomResourceDefinition",
   "metadata": {
     "annotations": {
-      "controller-gen.kubebuilder.io/version": "v0.14.0"
+      "controller-gen.kubebuilder.io/version": "v0.16.5"
     },
     "name": "podvolumebackups.velero.io"
   },
@@ -20,40 +20,38 @@
       {
         "additionalPrinterColumns": [
           {
-            "description": "Pod Volume Backup status such as New/InProgress",
+            "description": "PodVolumeBackup status such as New/InProgress",
             "jsonPath": ".status.phase",
             "name": "Status",
             "type": "string"
           },
           {
-            "description": "Time when this backup was started",
+            "description": "Time duration since this PodVolumeBackup was started",
             "jsonPath": ".status.startTimestamp",
-            "name": "Created",
+            "name": "Started",
             "type": "date"
           },
           {
-            "description": "Namespace of the pod containing the volume to be backed up",
-            "jsonPath": ".spec.pod.namespace",
-            "name": "Namespace",
-            "type": "string"
+            "description": "Completed bytes",
+            "format": "int64",
+            "jsonPath": ".status.progress.bytesDone",
+            "name": "Bytes Done",
+            "type": "integer"
           },
           {
-            "description": "Name of the pod containing the volume to be backed up",
-            "jsonPath": ".spec.pod.name",
-            "name": "Pod",
-            "type": "string"
+            "description": "Total bytes",
+            "format": "int64",
+            "jsonPath": ".status.progress.totalBytes",
+            "name": "Total Bytes",
+            "type": "integer"
           },
           {
-            "description": "Name of the volume to be backed up",
-            "jsonPath": ".spec.volume",
-            "name": "Volume",
-            "type": "string"
-          },
-          {
-            "description": "The type of the uploader to handle data transfer",
-            "jsonPath": ".spec.uploaderType",
-            "name": "Uploader Type",
-            "type": "string"
+            "description": "Incremental bytes",
+            "format": "int64",
+            "jsonPath": ".status.incrementalBytes",
+            "name": "Incremental Bytes",
+            "priority": 10,
+            "type": "integer"
           },
           {
             "description": "Name of the Backup Storage Location where this backup should be stored",
@@ -62,9 +60,22 @@
             "type": "string"
           },
           {
+            "description": "Time duration since this PodVolumeBackup was created",
             "jsonPath": ".metadata.creationTimestamp",
             "name": "Age",
             "type": "date"
+          },
+          {
+            "description": "Name of the node where the PodVolumeBackup is processed",
+            "jsonPath": ".status.node",
+            "name": "Node",
+            "type": "string"
+          },
+          {
+            "description": "The type of the uploader to handle data transfer",
+            "jsonPath": ".spec.uploaderType",
+            "name": "Uploader",
+            "type": "string"
           }
         ],
         "name": "v1",
@@ -89,6 +100,10 @@
                     "description": "BackupStorageLocation is the name of the backup storage location\nwhere the backup repository is stored.",
                     "type": "string"
                   },
+                  "cancel": {
+                    "description": "Cancel indicates request to cancel the ongoing PodVolumeBackup. It can be set\nwhen the PodVolumeBackup is in InProgress phase",
+                    "type": "boolean"
+                  },
                   "node": {
                     "description": "Node is the name of the node that the Pod is running on.",
                     "type": "string"
@@ -101,7 +116,7 @@
                         "type": "string"
                       },
                       "fieldPath": {
-                        "description": "If referring to a piece of an object instead of an entire object, this string\nshould contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].\nFor example, if the object reference is to a container within a pod, this would take on a value like:\n\"spec.containers{name}\" (where \"name\" refers to the name of the container that triggered\nthe event) or if no container name is specified \"spec.containers[2]\" (container with\nindex 2 in this pod). This syntax is chosen only to have some well-defined way of\nreferencing a part of an object.\nTODO: this design is not final and this field is subject to change in the future.",
+                        "description": "If referring to a piece of an object instead of an entire object, this string\nshould contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].\nFor example, if the object reference is to a container within a pod, this would take on a value like:\n\"spec.containers{name}\" (where \"name\" refers to the name of the container that triggered\nthe event) or if no container name is specified \"spec.containers[2]\" (container with\nindex 2 in this pod). This syntax is chosen only to have some well-defined way of\nreferencing a part of an object.",
                         "type": "string"
                       },
                       "kind": {
@@ -173,11 +188,22 @@
               "status": {
                 "description": "PodVolumeBackupStatus is the current status of a PodVolumeBackup.",
                 "properties": {
+                  "acceptedTimestamp": {
+                    "description": "AcceptedTimestamp records the time the pod volume backup is to be prepared.\nThe server's time is used for AcceptedTimestamp",
+                    "format": "date-time",
+                    "nullable": true,
+                    "type": "string"
+                  },
                   "completionTimestamp": {
                     "description": "CompletionTimestamp records the time a backup was completed.\nCompletion time is recorded even on failed backups.\nCompletion time is recorded before uploading the backup object.\nThe server's time is used for CompletionTimestamps",
                     "format": "date-time",
                     "nullable": true,
                     "type": "string"
+                  },
+                  "incrementalBytes": {
+                    "description": "IncrementalBytes holds the number of bytes new or changed since the last backup",
+                    "format": "int64",
+                    "type": "integer"
                   },
                   "message": {
                     "description": "Message is a message about the pod volume backup's status.",
@@ -191,7 +217,11 @@
                     "description": "Phase is the current state of the PodVolumeBackup.",
                     "enum": [
                       "New",
+                      "Accepted",
+                      "Prepared",
                       "InProgress",
+                      "Canceling",
+                      "Canceled",
                       "Completed",
                       "Failed"
                     ],

@@ -3,7 +3,7 @@
   "kind": "CustomResourceDefinition",
   "metadata": {
     "annotations": {
-      "controller-gen.kubebuilder.io/version": "v0.14.0"
+      "controller-gen.kubebuilder.io/version": "v0.16.5"
     },
     "name": "backups.velero.io"
   },
@@ -51,7 +51,7 @@
                     "type": "boolean"
                   },
                   "defaultVolumesToRestic": {
-                    "description": "DefaultVolumesToRestic specifies whether restic should be used to take a\nbackup of all pod volumes by default.\n\n\nDeprecated: this field is no longer used and will be removed entirely in future. Use DefaultVolumesToFsBackup instead.",
+                    "description": "DefaultVolumesToRestic specifies whether restic should be used to take a\nbackup of all pod volumes by default.\n\nDeprecated: this field is no longer used and will be removed entirely in future. Use DefaultVolumesToFsBackup instead.",
                     "nullable": true,
                     "type": "boolean"
                   },
@@ -149,7 +149,8 @@
                                         "items": {
                                           "type": "string"
                                         },
-                                        "type": "array"
+                                        "type": "array",
+                                        "x-kubernetes-list-type": "atomic"
                                       }
                                     },
                                     "required": [
@@ -158,7 +159,8 @@
                                     ],
                                     "type": "object"
                                   },
-                                  "type": "array"
+                                  "type": "array",
+                                  "x-kubernetes-list-type": "atomic"
                                 },
                                 "matchLabels": {
                                   "additionalProperties": {
@@ -342,7 +344,8 @@
                               "items": {
                                 "type": "string"
                               },
-                              "type": "array"
+                              "type": "array",
+                              "x-kubernetes-list-type": "atomic"
                             }
                           },
                           "required": [
@@ -351,7 +354,8 @@
                           ],
                           "type": "object"
                         },
-                        "type": "array"
+                        "type": "array",
+                        "x-kubernetes-list-type": "atomic"
                       },
                       "matchLabels": {
                         "additionalProperties": {
@@ -398,7 +402,8 @@
                                 "items": {
                                   "type": "string"
                                 },
-                                "type": "array"
+                                "type": "array",
+                                "x-kubernetes-list-type": "atomic"
                               }
                             },
                             "required": [
@@ -407,7 +412,8 @@
                             ],
                             "type": "object"
                           },
-                          "type": "array"
+                          "type": "array",
+                          "x-kubernetes-list-type": "atomic"
                         },
                         "matchLabels": {
                           "additionalProperties": {
@@ -482,6 +488,10 @@
                       }
                     },
                     "type": "object"
+                  },
+                  "volumeGroupSnapshotLabelKey": {
+                    "description": "VolumeGroupSnapshotLabelKey specifies the label key to group PVCs under a VGS.",
+                    "type": "string"
                   },
                   "volumeSnapshotLocations": {
                     "description": "VolumeSnapshotLocations is a list containing names of VolumeSnapshotLocations associated with this backup.",
@@ -559,6 +569,8 @@
                     "description": "Phase is the current state of the Backup.",
                     "enum": [
                       "New",
+                      "Queued",
+                      "ReadyToStart",
                       "FailedValidation",
                       "InProgress",
                       "WaitingForPluginOperations",
@@ -586,6 +598,10 @@
                       }
                     },
                     "type": "object"
+                  },
+                  "queuePosition": {
+                    "description": "QueuePosition is the position of the backup in the queue.\nOnly relevant when Phase is \"Queued\"",
+                    "type": "integer"
                   },
                   "startTimestamp": {
                     "description": "StartTimestamp records the time a backup was started.\nSeparate from CreationTimestamp, since that value changes\non restores.\nThe server's time is used for StartTimestamps",
