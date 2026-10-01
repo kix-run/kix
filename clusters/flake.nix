@@ -54,6 +54,7 @@
         operators = ./test-operators.nix;
         sealed-jobs = ./test-sealed-jobs.nix;
         ingress-netpol = ./test-ingress-netpol.nix;
+        velero = ./test-velero.nix;
       };
     };
 }
