@@ -2,7 +2,7 @@
 #
 # Packages map ctx.availability to replica counts. Cluster capabilities define
 # available failure domains. The workload interceptor adds placement before
-# sealing; the instance processor adds PDBs, warns about replica shortfalls
+# sealing; the instance processor adds PDBs, warns about replica shortfalls,
 # and refuses more than one replica under a `none` ceiling; the cluster
 # processor reports uncertain substrate capabilities once per cluster.
 {

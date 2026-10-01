@@ -7,36 +7,70 @@ description: "Declare the highest availability level a package or one of its wor
 package can provide.
 
 ```nix
-meta.availability.max = "pod";
+# One writer: the program keeps its state in a local SQLite file.
+meta.availability.max = "none";
 ```
 
-The value is one of `none`, `pod`, `node`, or `zone`. When an instance requests
-a higher level, Kix passes the ceiling to the package and warns that the
-instance does not meet the requested level.
+The value is one of these levels:
 
-Use a package ceiling only for a package-wide limitation. Do not use it merely
-because one replica option has not been mapped from the availability argument.
+| Ceiling | Meaning | Replicas |
+|---|---|---|
+| `none` | One pod at a time: a single writer, no coordination between pods. | 0 or 1 |
+| `pod` | Survives a pod crash or a rolling update, not a node loss. | any |
+| `node` | Survives a node loss, not a zone loss. | any |
+
+Any other value is an evaluation error. A `zone` ceiling limits nothing, so
+packages omit it.
+
+When an instance requests a higher level, Kix passes the ceiling to the
+package and warns that the instance does not meet the requested level.
+
+Use a package ceiling for a limit of the program itself that holds for every
+workload and that no configuration lifts. Do not use it merely because one
+replica option has not been mapped from the availability argument.
 
 ## Per-workload ceiling
 
-Workload builders also accept `availability.max`:
+Workload builders (`mkDeployment`, `mkStatefulSet`, `mkJob`, `mkCronJob`)
+also accept `availability.max`:
 
 ```nix
-controller = scope.mkDeployment {
-  name = "${scope.instanceName}-controller";
-  availability.max = "pod";
+worker = scope.mkDeployment {
+  name = "${scope.instanceName}-worker";
+  availability.max = "none";
   spec.replicas = 1;
   # ...
 };
 ```
 
 This ceiling applies only to that workload's derived placement, disruption
-budget, and replica-shortfall checks. It does not change the package's
-`availability` argument or the level used by sibling workloads.
+budget, and replica checks. It does not change the package's `availability`
+argument or the level used by sibling workloads. Kix warns when it caps the
+instance's level, naming the workload and what it cannot survive.
 
-Per-workload ceilings are useful for a package with replicated data services
-and a controller that must remain single-replica. Kix emits a warning naming
-the lowered workload.
+`max` is the only key. `mkDaemonSet` refuses `availability`, because a
+DaemonSet runs one pod per node and the ceiling has no effect on it.
+
+Put the ceiling on the builder call when the limit belongs to one workload,
+depends on the package's configuration (the builder call can compute it from
+`config`), or comes from what the package wires rather than from the program.
+
+## Effective ceiling
+
+A workload's effective ceiling is the lower of its builder `availability.max`
+and the package's `meta.availability.max`.
+
+A Deployment or StatefulSet with more than one replica under an effective
+ceiling of `none` is an evaluation error. The message names the workload and
+says whether the ceiling comes from its builder call or from the package. Kix
+checks the final manifests, so the error also covers chart workloads under a
+package ceiling and replica counts that an instance or a `partsOverlays` entry
+sets.
+
+A `partsOverlays` entry that rebuilds a workload without `availability.max`
+drops its builder ceiling, which lets a cluster operator run more pods once
+the workload can coordinate them. An overlay that keeps the builder ceiling
+and raises the replica count fails. A package ceiling has no such escape.
 
 :::note[Reference]
 See [`kix.availability`](/docs/reference/kix-helpers/availability/) for mapping

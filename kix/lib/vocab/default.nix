@@ -20,6 +20,9 @@ compose
   # Map availability levels to package replica counts and quorums:
   # kix.availability.pick level { none = 1; pod = 2; node = 2; zone = 3; }
   # kix.availability.atLeast "node" level
+  # A workload that runs one pod at a time sets one replica and the ceiling
+  # "none" (availability.max on its builder call, or meta.availability.max
+  # for a limit of the program); more than one replica under it is an error.
   # Spread for operator-placed operands: kix.availability.spreadConstraints
   # (core/availability.nix).
   availability = {

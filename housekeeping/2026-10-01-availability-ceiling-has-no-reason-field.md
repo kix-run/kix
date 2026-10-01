@@ -1,0 +1,3 @@
+# 2026-10-01 · `kix/lib/core/availability.nix` · An availability ceiling cannot carry the reason for its limit, so the replica-guard error is generic.
+
+`meta.availability.max` and `availability.max` on a builder call take only a level. When a Deployment or StatefulSet runs more than one replica under the ceiling `none`, the error in `kix/lib/plugins/availability/module.nix` can name the workload and where the ceiling comes from, but not why it holds (one SQLite writer, no leader election, a shared RWO claim). The user then has to read the package source to learn whether raising the count is ever safe. Each package keeps the reason in a comment beside the ceiling instead.

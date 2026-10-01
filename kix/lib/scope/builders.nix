@@ -240,7 +240,7 @@ in
             };
           cappedConsequence =
             {
-              none = "is a single point of failure: a pod crash, a rolling update or a node loss causes downtime";
+              none = "is a single point of failure: a pod crash, a rolling update, or a node loss causes downtime";
               pod = "does not survive the loss of its node";
               node = "does not survive the loss of a zone";
             }
