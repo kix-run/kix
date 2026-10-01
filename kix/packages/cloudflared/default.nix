@@ -58,17 +58,14 @@ in
         the cluster's availability level (v2_discussions/145).
       '';
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "10m";
-          memory = "32Mi";
-        };
-        limits = {
-          cpu = "200m";
-          memory = "128Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "10m";
+        memory = "32Mi";
+      };
+      limits = {
+        cpu = "200m";
+        memory = "128Mi";
       };
     };
   };

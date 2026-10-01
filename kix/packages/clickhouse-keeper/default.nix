@@ -73,17 +73,14 @@ in
       };
     };
 
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "100m";
-          memory = "256Mi";
-        };
-        limits = {
-          cpu = "1";
-          memory = "512Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "100m";
+        memory = "256Mi";
+      };
+      limits = {
+        cpu = "1";
+        memory = "512Mi";
       };
     };
 

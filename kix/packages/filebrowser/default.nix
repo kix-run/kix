@@ -33,17 +33,14 @@ in
     };
     # Upstream publishes no chart or resource guidance. An idle instance
     # holds about 15 MiB; the limits leave room for archive downloads.
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "10m";
-          memory = "64Mi";
-        };
-        limits = {
-          cpu = "500m";
-          memory = "256Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "10m";
+        memory = "64Mi";
+      };
+      limits = {
+        cpu = "500m";
+        memory = "256Mi";
       };
     };
     ingress = kix.options.ingress;

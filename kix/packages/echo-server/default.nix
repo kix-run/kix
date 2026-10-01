@@ -40,16 +40,21 @@ in
         from the cluster's availability level (v2_discussions/145).
       '';
     };
-    service = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        type = "ClusterIP";
-        port = 80;
+    service = {
+      type = lib.mkOption {
+        type = lib.types.enum [
+          "ClusterIP"
+          "NodePort"
+          "LoadBalancer"
+        ];
+        default = "ClusterIP";
+        description = "Type of the echo-server's Service.";
       };
-      description = ''
-        `Service` exposure for the echo-server. Attrset with `type` (e.g.
-        `ClusterIP`, `NodePort`) and `port` keys.
-      '';
+      port = lib.mkOption {
+        type = lib.types.port;
+        default = 80;
+        description = "Port the Service listens on. It forwards to the container's port 8080.";
+      };
     };
     message = lib.mkOption {
       type = lib.types.str;

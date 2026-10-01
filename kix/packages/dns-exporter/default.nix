@@ -43,17 +43,14 @@ in
     };
     # Upstream publishes no chart or resource guidance. An idle exporter
     # holds about 45 MiB.
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "10m";
-          memory = "64Mi";
-        };
-        limits = {
-          cpu = "200m";
-          memory = "128Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "10m";
+        memory = "64Mi";
+      };
+      limits = {
+        cpu = "200m";
+        memory = "128Mi";
       };
     };
   };

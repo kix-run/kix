@@ -77,17 +77,14 @@ in
     };
     # The guerzon/vaultwarden chart sets no resources; these are the values
     # its values.yaml suggests.
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "50m";
-          memory = "256Mi";
-        };
-        limits = {
-          cpu = "300m";
-          memory = "1Gi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "50m";
+        memory = "256Mi";
+      };
+      limits = {
+        cpu = "300m";
+        memory = "1Gi";
       };
     };
     ingress = kix.options.ingress;

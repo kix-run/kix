@@ -110,17 +110,14 @@ in
       };
     };
 
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "500m";
-          memory = "2Gi";
-        };
-        limits = {
-          cpu = "2";
-          memory = "2Gi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "500m";
+        memory = "2Gi";
+      };
+      limits = {
+        cpu = "2";
+        memory = "2Gi";
       };
       description = "Per replica. ClickHouse sizes itself from these limits; 2Gi of memory is a floor (see the clickhouse package).";
     };
