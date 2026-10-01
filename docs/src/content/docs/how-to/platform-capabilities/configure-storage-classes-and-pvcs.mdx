@@ -7,6 +7,7 @@ import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import storageClassesInstance from '/src/snippets/clusters/example/storageClassesInstance.json';
 import configuredPersistentVolumeClaim from '/src/snippets/clusters/test-doc-how-tos/configuredPersistentVolumeClaim.json';
+import importedStorageClass from '/src/snippets/clusters/example-import/importedStorageClass.json';
 
 Kix models storage in two layers. A cluster-level `storageClasses` provider
 exports `out.storageClassName`, the class a claim gets when it names none, and
@@ -72,19 +73,11 @@ the cluster's provider, or wire one consumer with
 When the environment has a class and the flavor does not import it, declare
 the import yourself so claims can use it:
 
-```nix
-instances.kube-system.platform-storage.package = kix.mkImport {
-  kind = "StorageClass";
-  apiVersion = "storage.k8s.io/v1";
-  roles = [ "storageClasses" ];
-  out = {
-    name = "<class>";
-    storageClassName = "<class>";
-  };
-};
-```
+<Snippet {...importedStorageClass} />
 
 `kind`, `apiVersion`, and `out.name` identify the imported StorageClass.
+`out.storageClassName` is the class claims that name none get; set both to
+the class's name.
 
 ## Configure a PVC
 

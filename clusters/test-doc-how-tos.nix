@@ -9,6 +9,7 @@ let
     {
       meta = {
         description = "StorageClass for the documentation example";
+        owner = "platform";
         roles = [ "storageClasses" ];
       };
 

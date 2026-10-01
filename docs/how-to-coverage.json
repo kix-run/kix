@@ -674,9 +674,9 @@
       "status": "implemented",
       "snippets": [
         "storageClassesInstance",
+        "importedStorageClass",
         "configuredPersistentVolumeClaim"
-      ],
-      "unverifiedNixBlocks": 1
+      ]
     },
     {
       "page": "platform-capabilities/declare-platform-intents-for-non-kix-managed-pods",

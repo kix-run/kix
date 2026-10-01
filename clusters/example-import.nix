@@ -17,18 +17,19 @@ kix.buildCluster {
       };
 
       instances = {
-        # Storage infrastructure — managed by kix even when other deps are imported.
-        kube-system = {
-          # rancher.io/local-path exists only where local-path-provisioner is
-          # installed; name your cluster's CSI driver here.
-          storage-classes = {
-            package = packages.storage-classes;
-            config.classes.local-path = {
-              provisioner = "rancher.io/local-path";
-              volumeBindingMode = "WaitForFirstConsumer";
-            };
+        # The cluster's existing StorageClass, imported as the storageClasses
+        # provider. The immich claim below names no class and gets this one.
+        # region:importedStorageClass
+        kube-system.platform-storage.package = kix.mkImport {
+          kind = "StorageClass";
+          apiVersion = "storage.k8s.io/v1";
+          roles = [ "storageClasses" ];
+          out = {
+            name = "local-path";
+            storageClassName = "local-path";
           };
         };
+        # endregion:importedStorageClass
 
         # Valkey exists in the cluster but is managed externally.
         # mkImport with `from` runs the valkey package build in import mode
