@@ -643,6 +643,16 @@
       ]
     },
     {
+      "page": "package-task-guides/publish-dns-records-with-external-dns",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "snippets": [
+        "externalDnsInstance",
+        "externalDnsKindTryout"
+      ],
+      "unverifiedNixBlocks": 1
+    },
+    {
       "page": "platform-capabilities/add-tls-through-cluster-issuers",
       "scenario": "platform",
       "status": "implemented",
