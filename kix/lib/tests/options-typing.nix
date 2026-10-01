@@ -1,6 +1,6 @@
 # Tests for the typed option helpers (vocab/quantity.nix, the option and
-# guard helpers in vocab/compose.nix). Imported by ./default.nix into the
-# same test matrix.
+# guard helpers in vocab/compose.nix) and the option contract walker
+# (eval/options.nix). Imported by ./default.nix into the same test matrix.
 
 {
   lib,
@@ -72,6 +72,11 @@ let
       inherit keys;
     };
   };
+
+  violations = options: eval.optionContractViolations { inherit options; };
+
+  messagesMention =
+    needle: vs: vs != [ ] && builtins.all (v: lib.hasInfix needle v.message) vs;
 
   t = lib.types;
 in
@@ -352,5 +357,141 @@ in
       } == null
     )
     || throw "checkSecretKeys passed or refused the wrong secrets";
+
+  lib-options-typing-contract-rule1 =
+    let
+      vs = violations {
+        hpa = lib.mkOption {
+          type = t.anything;
+          default.maxReplicas = 3;
+        };
+        a.b = lib.mkOption {
+          type = t.attrsOf t.anything;
+          default.x = 1;
+        };
+      };
+    in
+    (
+      map (v: lib.concatStringsSep "." v.path) vs == [
+        "a.b"
+        "hpa"
+      ]
+      && map (v: v.head) vs == [
+        "a"
+        "hpa"
+      ]
+      && messagesMention "kix.options.resources" vs
+      && lib.hasInfix "option `a.b` has type" (builtins.head vs).message
+    )
+    || throw "rule 1: ${builtins.toJSON vs}";
+
+  lib-options-typing-contract-rule2 =
+    let
+      vs = violations {
+        selector = lib.mkOption {
+          type = t.attrsOf t.str;
+          default.app = "x";
+        };
+        sub = lib.mkOption {
+          type = t.submodule {
+            options.labels = lib.mkOption {
+              type = t.attrsOf t.str;
+              default.team = "y";
+            };
+          };
+          default = { };
+        };
+      };
+    in
+    (
+      map (v: lib.concatStringsSep "." v.path) vs == [
+        "selector"
+        "sub.labels"
+      ]
+      && messagesMention "lib.mkDefault" vs
+    )
+    || throw "rule 2: ${builtins.toJSON vs}";
+
+  lib-options-typing-contract-rule3 =
+    let
+      sizeField = {
+        options.size = lib.mkOption {
+          type = t.nullOr t.str;
+          default = null;
+        };
+      };
+      vs = violations {
+        persistence = lib.mkOption {
+          type = t.submodule sizeField;
+          default.size = "1Gi";
+        };
+        maybe = lib.mkOption {
+          type = t.nullOr (t.submodule sizeField);
+          default.size = "1Gi";
+        };
+        noDefault = lib.mkOption {
+          type = t.submodule { options.x = lib.mkOption { type = t.str; }; };
+          default.x = "a";
+        };
+        free = lib.mkOption {
+          type = t.submodule { freeformType = t.attrsOf t.str; };
+          default.provider = "aws";
+        };
+      };
+      byPath = lib.listToAttrs (
+        map (v: {
+          name = lib.concatStringsSep "." v.path;
+          value = v.message;
+        }) vs
+      );
+    in
+    (
+      builtins.length vs == 4
+      && lib.hasInfix "has the default null" byPath.persistence
+      && lib.hasInfix "has the default null" byPath.maybe
+      && lib.hasInfix "has no default" byPath.noDefault
+      && lib.hasInfix "is not a declared field" byPath.free
+    )
+    || throw "rule 3: ${builtins.toJSON vs}";
+
+  lib-options-typing-contract-passes =
+    let
+      vs = violations {
+        image = kixlib.options.image {
+          repository = "docker.io/library/nginx";
+          tag = "1.27";
+        };
+        resources = kixlib.options.resources { requests.cpu = "1"; };
+        env = kixlib.options.env;
+        empty = lib.mkOption {
+          type = t.anything;
+          default = { };
+        };
+        none = lib.mkOption {
+          type = t.nullOr t.anything;
+          default = null;
+        };
+        list = lib.mkOption {
+          type = t.listOf t.anything;
+          default = [ { a = 1; } ];
+        };
+      };
+    in
+    vs == [ ] || throw "expected no violations: ${builtins.toJSON vs}";
+
+  lib-options-typing-check-throws =
+    throws (
+      eval.checkOptionContract {
+        who = "ns/inst";
+        options.x = lib.mkOption {
+          type = t.anything;
+          default.a = 1;
+        };
+      }
+    )
+    && eval.checkOptionContract {
+      who = "ns/inst";
+      options = { };
+    } == null;
 
 }
