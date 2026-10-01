@@ -122,7 +122,6 @@ let
     coredns = [ domainLiteral ];
     harbor = [ domainLiteralViaValkey ];
     immich = [ domainLiteralViaValkey ];
-    infisical-operator = [ domainLiteral ];
     loki = [
       lokiLabels
       domainLiteral
@@ -263,7 +262,6 @@ let
   # Packages whose source writes cluster.local outside a comment.
   sourceDomainLiteralExceptions = [
     "coredns"
-    "infisical-operator"
     "openebs"
     "valkey"
   ];

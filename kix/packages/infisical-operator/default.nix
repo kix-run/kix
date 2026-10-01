@@ -1,12 +1,79 @@
-# Infisical Secrets Operator package.
+# infisical-operator: the Infisical Kubernetes operator, which syncs secrets
+# between Infisical and Kubernetes Secrets and ConfigMaps.
 #
-# Syncs InfisicalSecret CRDs to Kubernetes Secrets. The operator
-# watches for InfisicalSecret, InfisicalDynamicSecret, InfisicalPushSecret,
-# and ClusterGenerator custom resources.
+# The package renders the controller, its RBAC, the seven custom resource
+# definitions it watches, and an InfisicalConnection named `default` that
+# points at `address`. An InfisicalAuth without `infisicalConnectionRef` uses
+# that connection. The connection's IsReady condition means the operator
+# reached `<address>/api/status`, so the first deploy finishes only once
+# Infisical is reachable from the operator's pods.
 #
-# Resources: ServiceAccount, ClusterRole (manager + proxy + metrics-reader),
-#            ClusterRoleBinding (manager + proxy), Role (leader election),
-#            RoleBinding (leader election), Service (metrics), Deployment.
+# The controller reads and writes Secrets and ConfigMaps in every namespace
+# and mints ServiceAccount tokens (for the Kubernetes auth method). Upstream
+# requires both. Every instance watches every namespace, so a cluster runs
+# one: `conflictsWith` refuses a second instance by alias, and
+# `annotationDomains` refuses it whatever its aliases.
+#
+# DI deps:
+#   prometheus (optional)  metrics Service and ServiceMonitor.
+#
+# Exposes:
+#   out.mkInfisicalSecret scope { name; spec; }        (v1alpha1)
+#   out.mkInfisicalStaticSecret scope { name; spec; }  (v1beta1)
+#       Build the two kinds that write Secrets and ConfigMaps. Each target's
+#       metadata is set explicitly (empty unless the caller sets it), and a
+#       missing target namespace defaults to the caller's. Without explicit
+#       metadata the operator copies the custom resource's labels and
+#       annotations onto the object it creates, Kix's identity annotation
+#       included, and `kix gc` then deletes that object as Kix-managed
+#       garbage. The custom resource requires the default connection, so it
+#       is applied after the operator is running and Infisical is reachable.
+#       The result carries `out.secretRef { name ? null; keys; type ? null; }`,
+#       a `scope.mkSecretRef` for one of its Secret targets that is ordered
+#       after the custom resource.
+#   out.mkInfisicalAuth scope { name; spec; }
+#       Sets `spec.infisicalConnectionRef` to the default connection when the
+#       spec has none.
+#   out.mkInfisicalDynamicSecret
+#       Throws. The operator always copies an InfisicalDynamicSecret's
+#       annotations onto the lease Secret it creates.
+#   out.crds.{ClusterGenerator,InfisicalAuth,InfisicalConnection,InfisicalPushSecret}
+#       For `scope.mkCR`. These kinds create no Kubernetes object. There are
+#       no handles for InfisicalSecret and InfisicalStaticSecret, so their
+#       managed objects always go through the builders above.
+#
+# Consumer pattern, in an instance that depends on `infisicalOperator`:
+#
+#   identity = scope.mkSecretRef { name = "infisical-identity"; keys = [ "clientId" "clientSecret" ]; };
+#   auth = infisicalOperator.out.mkInfisicalAuth scope {
+#     name = "billing";
+#     spec = {
+#       method = "universal";
+#       universal = {
+#         clientIdRef = { inherit ((self.identity.out.keyRef "clientId").valueFrom.secretKeyRef) name key; namespace = scope.namespaceName; };
+#         clientSecretRef = { inherit ((self.identity.out.keyRef "clientSecret").valueFrom.secretKeyRef) name key; namespace = scope.namespaceName; };
+#       };
+#     };
+#   };
+#   sync = infisicalOperator.out.mkInfisicalStaticSecret scope {
+#     name = "billing";
+#     spec = {
+#       infisicalAuthRef = { name = self.auth.out.name; namespace = scope.namespaceName; };
+#       syncOptions.refreshInterval = "1m";
+#       sources = [ { projectId = "<project id>"; environmentSlug = "prod"; secretPath = "/"; } ];
+#       targets = [ { name = "billing"; kind = "Secret"; creationPolicy = "Owner"; } ];
+#     };
+#   };
+#   credentials = self.sync.out.secretRef { keys = [ "API_KEY" ]; };
+#
+# Self-hosted Infisical behind a private CA: mount the CA through
+# `partsOverlays` on part `deployment` and set `SSL_CERT_FILE` with `env`,
+# which covers every kind; or set `spec.tls.caCertificate` on part
+# `connection` through `partsOverlays`, and `spec.tls` on each v1alpha1
+# custom resource. Without either, the deploy waits on the connection's
+# IsReady until it times out.
+#
+# root = the operator Deployment.
 
 {
   scope,
@@ -14,32 +81,14 @@
   kix,
   availability,
 }:
-
 let
+  # The upstream release. image.tag and crds/sources.txt follow it.
+  release = "v0.11.10";
+
   name = scope.instanceName;
   ns = scope.namespaceName;
+  who = "infisical-operator ${ns}/${name}";
 
-  # Labels applied to the deployment, service, and pod selector.
-  selectorLabels = {
-    "app.kubernetes.io/name" = "secrets-operator";
-    "app.kubernetes.io/instance" = name;
-    "control-plane" = "controller-manager";
-  };
-
-  # Labels for RBAC and ServiceAccount resources (no control-plane label).
-  rbacLabels = {
-    "app.kubernetes.io/name" = "secrets-operator";
-    "app.kubernetes.io/instance" = name;
-  };
-
-  # Base CRD resources always managed by the operator.
-  baseManagedCrds = [
-    "infisicaldynamicsecrets"
-    "infisicalpushsecrets"
-    "infisicalsecrets"
-  ];
-
-  # --- RBAC DSL ---
   inherit (scope.rbac)
     group
     core
@@ -48,6 +97,9 @@ let
     readWrite
     watch
     allow
+    emit
+    restrictTo
+    finalize
     mkClusterRoleSet
     mkRoleSet
     ;
@@ -57,251 +109,195 @@ let
     "statefulsets"
   ];
   authn = group "authentication.k8s.io" [ "tokenreviews" ];
-  authz = group "authorization.k8s.io" [ "subjectaccessreviews" ];
   coord = group "coordination.k8s.io" [ "leases" ];
-  emit = scope.rbac.emit;
+  infisical = group "secrets.infisical.com" [ ];
 
+  vendored =
+    plural: (builtins.fromJSON (builtins.readFile ./crds/${plural}.secrets.infisical.com.json)).spec;
+  condition = type: status: {
+    condition = {
+      type = "secrets.infisical.com/${type}";
+      inherit status;
+    };
+  };
+
+  # "v0.11.3" -> [ "0" "11" ".3" ]; null when the tag is not a version.
+  versionParts = tag: builtins.match "v?([0-9]+)\\.([0-9]+)(\\..*)?" tag;
+  releaseMinor = lib.take 2 (versionParts release);
+
+  # The operator trims a trailing "/" and then "/api" from the address and
+  # appends "/api" for API calls. The package does the same, so the default
+  # connection and INFISICAL_HOST_API agree.
+  stripTrailingSlashes = s: builtins.head (builtins.match "(.*[^/])/*" s);
+  normaliseAddress = address: lib.removeSuffix "/api" (stripTrailingSlashes address);
+
+  # Labels and annotations are the operator's own fields, so empty maps here
+  # keep Kix's labels and annotations off the object the operator creates.
+  # Without them the operator copies the custom resource's metadata, the
+  # kix.run identity annotation included, and `kix gc` deletes that object.
+  emptyMetadata = {
+    annotations = { };
+    labels = { };
+  };
 in
 {
   meta = {
-    version = "v0.9.1";
-    description = "Infisical Secrets Operator, which syncs secrets from Infisical into Kubernetes Secrets through InfisicalSecret resources";
+    version = release;
+    description = "Infisical Kubernetes operator, which syncs secrets between Infisical and Kubernetes Secrets";
     owner = "platform";
-  };
-
-  options = {
-    image = kix.options.image {
-      repository = "infisical/kubernetes-operator";
-      tag = "v0.9.1";
-    };
-    replicaCount = lib.mkOption {
-      type = lib.types.int;
-      # The manager runs with --leader-elect, so a restart is invisible and
-      # "pod" stays at 1; from "node" up a standby survives a lost node.
-      default = kix.availability.pick availability {
-        none = 1;
-        pod = 1;
-        node = 2;
-        zone = 2;
-      };
-      description = ''
-        Number of operator replicas. Defaults from the cluster's
-        availability level (v2_discussions/145).
-      '';
-    };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "10m";
-          memory = "64Mi";
-        };
-        limits = {
-          cpu = "500m";
-          memory = "128Mi";
-        };
-      };
-    };
-    # Override the resource name prefix (e.g. for Helm-truncated names).
-    # Defaults to the instance name.
-    namePrefix = lib.mkOption {
-      type = lib.types.str;
-      default = scope.instanceName;
-    };
-    # kube-rbac-proxy sidecar for securing the metrics endpoint.
-    kubeRbacProxy = {
-      enabled = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = "Serve the metrics endpoint through a kube-rbac-proxy sidecar over HTTPS.";
-      };
-      image = kix.options.image {
-        repository = "gcr.io/kubebuilder/kube-rbac-proxy";
-        tag = "v0.15.0";
-        description = "Image for the kube-rbac-proxy sidecar.";
-      };
-      resources = lib.mkOption {
-        type = lib.types.anything;
-        default = {
-          requests = {
-            cpu = "5m";
-            memory = "64Mi";
-          };
-          limits = {
-            cpu = "500m";
-            memory = "128Mi";
-          };
-        };
-      };
-    };
-    # Extra CRD resources managed by the manager ClusterRole beyond the
-    # base set (infisicalsecrets, infisicaldynamicsecrets, infisicalpushsecrets).
-    # Set to a list of resource names, e.g. [ "clustergenerators" ].
-    extraManagedCrds = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ ];
-    };
-    # Extra env vars merged onto the manager container. Use for site-specific
-    # configuration like INFISICAL_HOST_API.
-    managerEnv = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
-      default = [ ];
-    };
-  };
-
-  build =
-    {
-      self,
-      config,
-      clusterConfig,
-    }:
-    let
-      prefix = config.namePrefix;
-
-      # Manager container args differ depending on whether kube-rbac-proxy is used.
-      managerArgs =
-        if config.kubeRbacProxy.enabled then
-          [
-            "--health-probe-bind-address=:8081"
-            "--metrics-bind-address=127.0.0.1:8080"
-            "--leader-elect"
-          ]
-        else
-          [
-            "--metrics-bind-address=:8443"
-            "--leader-elect"
-            "--health-probe-bind-address=:8081"
-          ];
-
-      # Manager container definition (shared between proxy and non-proxy modes).
-      managerContainer = {
-        name = "manager";
-        image = kix.image.ref config.image;
-        imagePullPolicy = config.image.pullPolicy;
-        command = [ "/manager" ];
-        args = managerArgs;
-        env = [
-          {
-            name = "KUBERNETES_CLUSTER_DOMAIN";
-            value = "cluster.local";
-          }
-        ]
-        ++ config.managerEnv;
-        livenessProbe = {
-          httpGet = {
-            path = "/healthz";
-            port = 8081;
-          };
-          initialDelaySeconds = 15;
-          periodSeconds = 20;
-          failureThreshold = 3;
-          timeoutSeconds = 1;
-        };
-        readinessProbe = {
-          httpGet = {
-            path = "/readyz";
-            port = 8081;
-          };
-          initialDelaySeconds = 5;
-          periodSeconds = 10;
-          failureThreshold = 3;
-          timeoutSeconds = 1;
-        };
-        resources = config.resources;
-        securityContext = {
-          allowPrivilegeEscalation = false;
-          capabilities.drop = [ "ALL" ];
-          readOnlyRootFilesystem = true;
-        };
-      }
-      // lib.optionalAttrs (!config.kubeRbacProxy.enabled) {
+    defaultAliases = [ "infisicalOperator" ];
+    # One instance per cluster; see the header.
+    conflictsWith = [ "cluster:infisicalOperator" ];
+    # Workloads opt in to restarts on secret change with
+    # secrets.infisical.com/auto-reload.
+    annotationDomains = [ "secrets.infisical.com" ];
+    # Infisical serves its API on TCP 443. meta is static, so this intent
+    # cannot follow `address`; the build refuses an address it does not
+    # cover when the cluster enforces egress policy.
+    network.intents.infisicalApi.egress = [
+      {
+        to = "world";
         ports = [
           {
-            name = "metrics";
-            containerPort = 8443;
-          }
-          {
-            name = "health";
-            containerPort = 8081;
-          }
-        ];
-      };
-
-      # kube-rbac-proxy sidecar container.
-      proxyContainer = {
-        name = "kube-rbac-proxy";
-        image = kix.image.ref config.kubeRbacProxy.image;
-        imagePullPolicy = config.kubeRbacProxy.image.pullPolicy;
-        args = [
-          "--secure-listen-address=0.0.0.0:8443"
-          "--upstream=http://127.0.0.1:8080/"
-          "--logtostderr=true"
-          "--v=0"
-        ];
-        env = [
-          {
-            name = "KUBERNETES_CLUSTER_DOMAIN";
-            value = "cluster.local";
-          }
-        ];
-        ports = [
-          {
-            containerPort = 8443;
-            name = "https";
+            port = 443;
             protocol = "TCP";
           }
         ];
-        resources = config.kubeRbacProxy.resources;
-        securityContext = {
-          allowPrivilegeEscalation = false;
-          capabilities.drop = [ "ALL" ];
-        };
+      }
+    ];
+  };
+
+  assertions =
+    { config, ... }:
+    [
+      {
+        assertion =
+          versionParts config.image.tag != null && lib.take 2 (versionParts config.image.tag) == releaseMinor;
+        message = "image.tag \"${config.image.tag}\" is not a v${lib.concatStringsSep "." releaseMinor} release, and the CRDs and RBAC in kix/packages/infisical-operator are from ${release}. To move to another release, change release in kix/packages/infisical-operator/default.nix and run uv run scripts/vendor-crds.py infisical-operator.";
+      }
+    ];
+
+  options = {
+    image = kix.options.image {
+      repository = "docker.io/infisical/kubernetes-operator";
+      tag = release;
+      digest = "sha256:c4ad1d6e389653598de3138e7f60f8f34a002af3d3ca736c8716c498b3172035";
+    };
+
+    address = lib.mkOption {
+      type = lib.types.strMatching "https?://[^/]+.*";
+      default = "https://app.infisical.com";
+      description = ''
+        Infisical URL, for the default InfisicalConnection and the
+        operator's INFISICAL_HOST_API. Infisical Cloud EU is
+        `https://eu.infisical.com`. A trailing `/` or `/api` is removed, as
+        the operator does. The operator must reach `<address>/api/status`
+        for the first deploy to finish. When the cluster enforces egress
+        policy, the address must be an HTTPS host outside the cluster on
+        port 443. For a private CA, see the package header.
+      '';
+    };
+
+    resources = kix.options.resources {
+      requests = {
+        cpu = "10m";
+        memory = "64Mi";
       };
-
-      containers =
-        if config.kubeRbacProxy.enabled then
-          [
-            proxyContainer
-            managerContainer
-          ]
-        else
-          [ managerContainer ];
-
-      allManagedCrds = config.extraManagedCrds ++ baseManagedCrds;
-
-      podSecurityContext = {
-        runAsNonRoot = true;
-        seccompProfile.type = "RuntimeDefault";
+      limits = {
+        cpu = "500m";
+        memory = "128Mi";
       };
+    };
 
-      # Node affinity for the deployment (matches Helm chart defaults).
-      nodeAffinity = lib.optionalAttrs config.kubeRbacProxy.enabled {
-        affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms = [
-          {
-            matchExpressions = [
+    extraArgs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Arguments appended to the operator's own. The package owns --leader-elect, --health-probe-bind-address, --metrics-bind-address, and --metrics-secure.";
+    };
+
+    env = kix.options.env;
+
+    metrics = kix.options.monitor;
+  };
+
+  build = [
+    (
+      {
+        self,
+        config,
+        clusterConfig,
+        prometheus ? null,
+        ...
+      }:
+      let
+        addr = normaliseAddress config.address;
+        hasMetrics = config.metrics.enabled && prometheus != null;
+
+        env = kix.mkEnvVars (
+          kix.mergeEnv {
+            inherit who;
+            owned = [
               {
-                key = "kubernetes.io/arch";
-                operator = "In";
-                values = [
-                  "amd64"
-                  "arm64"
-                  "ppc64le"
-                  "s390x"
-                ];
-              }
-              {
-                key = "kubernetes.io/os";
-                operator = "In";
-                values = [ "linux" ];
+                vars.INFISICAL_HOST_API = "${addr}/api";
+                from = "the address option";
+                fix = "Set address instead, so the default InfisicalConnection and the network intent agree with it.";
               }
             ];
-          }
-        ];
-      };
+          } config.env
+        );
 
-      infisical = group "secrets.infisical.com" allManagedCrds;
+        args = [
+          "--leader-elect"
+          "--health-probe-bind-address=:8081"
+          "--metrics-bind-address=:8080"
+          # The operator serves metrics over TLS with a self-signed
+          # certificate and no authentication, so plain HTTP exposes nothing
+          # more and the ServiceMonitor needs no TLS settings.
+          "--metrics-secure=false"
+        ]
+        ++ kix.guardArgs {
+          inherit who;
+          owned = {
+            "--leader-elect" =
+              "the package always enables leader election, so instances above availability none run one active controller; remove it.";
+            "--health-probe-bind-address" = "the liveness and readiness probes use :8081; remove it.";
+            "--metrics-bind-address" =
+              "the container's metrics port and the metrics Service use :8080; remove it.";
+            "--metrics-secure" = "the ServiceMonitor scrapes plain HTTP; remove it.";
+          };
+        } config.extraArgs;
 
-      clusterRoles = mkClusterRoleSet scope {
+        # The network intent opens TCP 443 to destinations outside the
+        # cluster. Under egress enforcement any other address leaves the
+        # default connection unreachable, so the build refuses it.
+        egressEnforced =
+          clusterConfig.networkPolicy.enable or false
+          && builtins.elem (clusterConfig.networkPolicy.directions or "both") [
+            "egress"
+            "both"
+          ];
+        domain = clusterConfig.clusterDomain;
+        parsed = builtins.match "(https?)://([^/:]+)(:([0-9]+))?(/.*)?" addr;
+        scheme = builtins.elemAt parsed 0;
+        host = builtins.elemAt parsed 1;
+        port =
+          let
+            explicit = builtins.elemAt parsed 3;
+          in
+          if explicit != null then
+            lib.toInt explicit
+          else if scheme == "https" then
+            443
+          else
+            80;
+        inCluster =
+          !(lib.hasInfix "." host)
+          || lib.hasSuffix ".svc" host
+          || lib.hasSuffix ".svc.${domain}" host
+          || lib.hasSuffix ".${domain}" host;
+        egressOk = !egressEnforced || (parsed != null && scheme == "https" && port == 443 && !inCluster);
+
+        plurals = map (crd: crd.rawManifest.spec.names.plural) (builtins.attrValues self.crds);
         subjects = [
           {
             kind = "ServiceAccount";
@@ -309,217 +305,403 @@ in
             namespace = ns;
           }
         ];
-        labels = rbacLabels;
-        roles = {
-          "${prefix}-manager-role" = {
-            bindingName = "${prefix}-manager-rolebinding";
-            rules = grant (
-              [
-                (core.configmaps |> readWrite)
-                (
-                  core.pods
-                  |> allow [
-                    "get"
-                    "list"
-                  ]
-                )
-                (core.secrets |> readWrite)
-                (core.serviceaccounts |> watch)
-                (core "serviceaccounts/token" |> allow [ "create" ])
-                (
-                  apps.daemonsets
-                  |> allow [
-                    "get"
-                    "list"
-                    "update"
-                    "watch"
-                  ]
-                )
-                (
-                  apps.deployments
-                  |> allow [
-                    "get"
-                    "list"
-                    "update"
-                    "watch"
-                  ]
-                )
-                (
-                  apps.statefulsets
-                  |> allow [
-                    "get"
-                    "list"
-                    "update"
-                    "watch"
-                  ]
-                )
-                (authn.tokenreviews |> allow [ "create" ])
+
+        managerRbac = mkClusterRoleSet scope {
+          inherit subjects;
+          # From config/rbac/role.yaml at the release tag.
+          roles.${name} = grant [
+            (core.configmaps |> readWrite)
+            (core.secrets |> readWrite)
+            (
+              core.pods
+              |> allow [
+                "get"
+                "list"
               ]
-              ++ lib.concatMap (crd: [
-                (infisical crd |> full)
-              ]) allManagedCrds
-              # Helm chart only emits /finalizers and /status rules for
-              # the base CRD set; extras (e.g. clustergenerators) appear
-              # only in the main rule.
-              ++ lib.concatMap (crd: [
-                (infisical crd |> scope.rbac.finalize)
-                (
-                  infisical "${crd}/status"
-                  |> allow [
-                    "get"
-                    "patch"
-                    "update"
-                  ]
-                )
-              ]) baseManagedCrds
-            );
-          };
-
-          "${prefix}-proxy-role" = {
-            bindingName = "${prefix}-proxy-rolebinding";
-            rules = grant [
-              (authn.tokenreviews |> allow [ "create" ])
-              (authz.subjectaccessreviews |> allow [ "create" ])
-            ];
-          };
-        };
-      };
-
-      nsRoles = mkRoleSet scope {
-        subjects = [
-          {
-            kind = "ServiceAccount";
-            name = self.serviceAccount.out.name;
-            namespace = ns;
-          }
-        ];
-        labels = rbacLabels;
-        roles = {
-          "${prefix}-leader-election-role" = {
-            bindingName = "${prefix}-leader-election-rolebinding";
-            rules = grant [
-              (core.configmaps |> full)
-              (coord.leases |> full)
-              (core.events |> emit)
-            ];
-          };
-        };
-      };
-
-    in
-    {
-
-      serviceAccount = scope.mkResource {
-        apiVersion = "v1";
-        kind = "ServiceAccount";
-        name = "${prefix}-controller-manager";
-        labels = rbacLabels;
-      };
-
-      # --- Standalone ClusterRole (no binding; uses nonResourceURLs) ---
-
-      metricsReaderRole = scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRole";
-        name = "${prefix}-metrics-reader";
-        labels = rbacLabels;
-        extra.rules = [
-          {
-            nonResourceURLs = [ "/metrics" ];
-            verbs = [ "get" ];
-          }
-        ];
-      };
-
-      # --- Service (metrics) ---
-
-      service = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        name = "${prefix}-controller-manager-metrics-service";
-        labels = selectorLabels;
-        spec = {
-          type = "ClusterIP";
-          selector = self.deployment.out.selector;
-          ports = [
-            {
-              name = "https";
-              port = 8443;
-              protocol = "TCP";
-              # 8443 is the proxy sidecar's "https" port when the sidecar
-              # runs, and the manager's own "metrics" port when it does not.
-              targetPort = if config.kubeRbacProxy.enabled then "https" else "metrics";
-            }
+            )
+            (core.serviceaccounts |> watch)
+            (core "serviceaccounts/token" |> allow [ "create" ])
+            (
+              [
+                apps.daemonsets
+                apps.deployments
+                apps.statefulsets
+              ]
+              |> allow [
+                "get"
+                "list"
+                "update"
+                "watch"
+              ]
+            )
+            (authn.tokenreviews |> allow [ "create" ])
+            (map infisical plurals |> full)
+            (
+              map (p: infisical "${p}/status") (builtins.filter (p: p != "clustergenerators") plurals)
+              |> allow [
+                "get"
+                "patch"
+                "update"
+              ]
+            )
+            (
+              map infisical [
+                "infisicaldynamicsecrets"
+                "infisicalpushsecrets"
+                "infisicalsecrets"
+                "infisicalstaticsecrets"
+              ]
+              |> finalize
+            )
           ];
         };
-        outputs = {
-          metricsPort = "8443";
+
+        leaderElectionName = "${name}-leader-election";
+        leaderElectionRbac = mkRoleSet scope {
+          inherit subjects;
+          roles.${leaderElectionName} = grant [
+            (coord.leases |> allow [ "create" ])
+            # The lease name is the operator's compiled-in LeaderElectionID.
+            (
+              coord.leases
+              |> restrictTo [ "cf2b8c44.infisical.com" ]
+              |> allow [
+                "get"
+                "update"
+                "patch"
+              ]
+            )
+            (core.events |> emit)
+          ];
         };
-      };
 
-      # --- Deployment ---
+        connectionRef = {
+          name = self.connection.out.name;
+          namespace = ns;
+        };
 
-      deployment = scope.mkDeployment {
-        name = "${prefix}-controller-manager";
-        labels = selectorLabels;
-        spec = {
-          replicas = config.replicaCount;
-          selector.matchLabels = selectorLabels;
-          strategy = {
-            type = "RollingUpdate";
-            rollingUpdate = {
-              maxSurge = "25%";
-              maxUnavailable = "25%";
-            };
-          };
-          template = {
-            metadata = {
-              labels = selectorLabels;
-              annotations = {
-                "kubectl.kubernetes.io/default-container" = "manager";
-              };
-            };
-            spec = {
-              serviceAccount = self.serviceAccount;
-              terminationGracePeriodSeconds = 10;
-              securityContext = podSecurityContext;
-              inherit containers;
+        # The custom resource also requires the default connection: it is
+        # applied once the controller runs and Infisical is reachable.
+        # Neither kind names the connection, so the requirement is explicit.
+        operand =
+          part: consumerScope: args:
+          self.crds.${part}.out.mkCR consumerScope (
+            args
+            // {
+              requires = (args.requires or [ ]) ++ [ self.connection ];
             }
-            // nodeAffinity;
-          };
-        };
-        requires = builtins.attrValues self.crds;
-      };
+          );
 
-      # --- CRDs ---
-      # Vendored from Infisical/infisical at tag infisical-k8-operator/v0.9.1,
-      # k8-operator/config/crd/bases/. The controller's informers list these
-      # kinds at start; without them the caches never sync and the manager
-      # exits every two minutes.
-      crds =
-        let
-          vendored = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
-        in
-        {
-          infisicalSecrets = scope.mkCRD { spec = vendored "infisicalsecrets.secrets.infisical.com.json"; };
-          infisicalPushSecrets = scope.mkCRD {
-            spec = vendored "infisicalpushsecrets.secrets.infisical.com.json";
+        crName =
+          consumerScope: kind: args:
+          "${kind} ${consumerScope.namespaceName}/${args.name}";
+
+        withMetadata = attrs: attrs // { metadata = emptyMetadata // (attrs.metadata or { }); };
+
+        pinTemplateMetadata =
+          consumerScope: args:
+          let
+            spec = args.spec or { };
+            what = crName consumerScope "InfisicalSecret" args;
+            secretRefs = spec.managedKubeSecretReferences or [ ];
+            configMapRefs = spec.managedKubeConfigMapReferences or [ ];
+            # A reference without a template gets every synced key, which is
+            # the operator's behaviour for a missing template.
+            pinTemplate =
+              ref:
+              ref
+              // {
+                template =
+                  if ref ? template then
+                    { metadata = { }; } // ref.template
+                  else
+                    {
+                      includeAllSecrets = true;
+                      metadata = { };
+                    };
+              };
+          in
+          if spec ? managedSecretReference then
+            throw "infisical-operator: ${what} sets managedSecretReference, which upstream is deprecating and rejects alongside managedKubeSecretReferences. Move it into managedKubeSecretReferences."
+          else if secretRefs == [ ] && configMapRefs == [ ] then
+            throw "infisical-operator: ${what} sets no managedKubeSecretReferences or managedKubeConfigMapReferences, so the operator has nowhere to write. Add one."
+          else
+            args
+            // {
+              spec =
+                spec
+                // lib.optionalAttrs (secretRefs != [ ]) {
+                  managedKubeSecretReferences = map (
+                    ref: pinTemplate ({ secretNamespace = consumerScope.namespaceName; } // ref)
+                  ) secretRefs;
+                }
+                // lib.optionalAttrs (configMapRefs != [ ]) {
+                  managedKubeConfigMapReferences = map (
+                    ref: pinTemplate ({ configMapNamespace = consumerScope.namespaceName; } // ref)
+                  ) configMapRefs;
+                };
+            };
+
+        pinTargets =
+          consumerScope: args:
+          let
+            spec = args.spec or { };
+          in
+          args
+          // {
+            spec = spec // {
+              targets = map (target: withMetadata ({ namespace = consumerScope.namespaceName; } // target)) (
+                spec.targets or [ ]
+              );
+            };
+          };
+
+        # Adds out.secretRef to a built custom resource. `targets` are its
+        # Secret targets as { name; namespace; type; }.
+        withSecretRefs =
+          consumerScope: what: targets: cr:
+          let
+            names = map (t: t.name) targets;
+            listed = lib.concatStringsSep ", " names;
+            secretRef =
+              {
+                name ? null,
+                keys,
+                type ? null,
+              }:
+              let
+                target =
+                  if name == null then
+                    if builtins.length targets == 1 then
+                      builtins.head targets
+                    else
+                      throw "infisical-operator: ${what}.out.secretRef needs a name when the custom resource does not have exactly one Secret target; pass name = one of: ${listed}."
+                  else
+                    lib.findFirst (t: t.name == name)
+                      (throw "infisical-operator: ${what}.out.secretRef names Secret \"${name}\", which is not one of its targets; targets are: ${listed}.")
+                      targets;
+              in
+              if target.namespace != consumerScope.namespaceName then
+                throw "infisical-operator: ${what}.out.secretRef builds a reference in ${consumerScope.namespaceName}; the target ${target.name} is in ${target.namespace}. Build the reference from an instance in ${target.namespace}."
+              else
+                consumerScope.mkSecretRef {
+                  inherit (target) name;
+                  inherit keys;
+                  type = if type != null then type else target.type;
+                  requires = [ cr ];
+                };
+          in
+          cr
+          // {
+            out = cr.out // {
+              inherit secretRef;
+            };
+          };
+      in
+      {
+        serviceAccount = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ServiceAccount";
+          inherit name;
+        };
+
+        clusterRole = managerRbac.${name};
+        clusterRoleBinding = managerRbac."${name}-binding";
+        leaderElectionRole = leaderElectionRbac.${leaderElectionName};
+        leaderElectionRoleBinding = leaderElectionRbac."${leaderElectionName}-binding";
+
+        # The controller lists every kind at start. Without a CRD its caches
+        # never sync and the manager exits.
+        crds = {
+          clusterGenerators = scope.mkCRD { spec = vendored "clustergenerators"; };
+          infisicalAuths = scope.mkCRD {
+            spec = vendored "infisicalauths";
+            readiness = condition "IsReady" "True";
+          };
+          infisicalConnections = scope.mkCRD {
+            spec = vendored "infisicalconnections";
+            readiness = condition "IsReady" "True";
           };
           infisicalDynamicSecrets = scope.mkCRD {
-            spec = vendored "infisicaldynamicsecrets.secrets.infisical.com.json";
+            spec = vendored "infisicaldynamicsecrets";
+            readiness = condition "Reconcile" "True";
+          };
+          # The operator sets Reconcile to True on an error and to False on
+          # success.
+          infisicalPushSecrets = scope.mkCRD {
+            spec = vendored "infisicalpushsecrets";
+            readiness = condition "Reconcile" "False";
+          };
+          infisicalSecrets = scope.mkCRD {
+            spec = vendored "infisicalsecrets";
+            readiness = condition "ReadyToSyncSecrets" "True";
+          };
+          # The operator sets no IsReady condition on this kind.
+          infisicalStaticSecrets = scope.mkCRD {
+            spec = vendored "infisicalstaticsecrets";
+            readiness = condition "LastReconcileStatus" "True";
           };
         };
 
-      root = {
-        resource = self.deployment;
-        requires = [
-          self.serviceAccount
-          self.metricsReaderRole
-          self.service
-        ]
-        ++ builtins.attrValues self.crds;
-      };
-    }
-    // clusterRoles
-    // nsRoles;
+        deployment = scope.mkDeployment {
+          inherit name;
+          requires = builtins.attrValues self.crds;
+          spec = {
+            # Leader election keeps one controller active, so a replacement
+            # pod covers "pod" and a standby on another node covers "node".
+            replicas = kix.availability.pick availability {
+              none = 1;
+              pod = 1;
+              node = 2;
+              zone = 2;
+            };
+            selector.matchLabels = scope.selectorLabels;
+            template.spec = {
+              serviceAccount = self.serviceAccount;
+              terminationGracePeriodSeconds = 10;
+              securityContext = {
+                runAsNonRoot = true;
+                seccompProfile.type = "RuntimeDefault";
+              };
+              containers = [
+                {
+                  name = "manager";
+                  image = kix.image.ref config.image;
+                  imagePullPolicy = config.image.pullPolicy;
+                  command = [ "/manager" ];
+                  inherit args env;
+                  ports = [
+                    (kix.port "metrics" 8080)
+                    (kix.port "health" 8081)
+                  ];
+                  livenessProbe = {
+                    httpGet = {
+                      path = "/healthz";
+                      port = "health";
+                    };
+                    initialDelaySeconds = 15;
+                    periodSeconds = 20;
+                  };
+                  readinessProbe = {
+                    httpGet = {
+                      path = "/readyz";
+                      port = "health";
+                    };
+                    initialDelaySeconds = 5;
+                    periodSeconds = 10;
+                  };
+                  resources = config.resources;
+                  securityContext = {
+                    allowPrivilegeEscalation = false;
+                    capabilities.drop = [ "ALL" ];
+                    readOnlyRootFilesystem = true;
+                  };
+                }
+              ];
+            };
+          };
+        };
+
+        metricsService =
+          if hasMetrics then
+            self.deployment
+            |> kix.service.fromWorkload {
+              name = "${name}-metrics";
+              ports = [
+                {
+                  name = "metrics";
+                  port = 8080;
+                  targetPort = "metrics";
+                  protocol = "TCP";
+                }
+              ];
+            }
+            |> scope.mkResource
+          else
+            null;
+
+        # Upstream's chart ships this connection disabled. Kix renders it so
+        # that the first deploy proves the operator runs and reaches
+        # Infisical.
+        connection =
+          assert lib.assertMsg egressOk
+            "${who}: address ${addr} is not an HTTPS host outside the cluster on port 443, and this cluster enforces egress policy. The package's network intent opens only TCP 443 to destinations outside the cluster, so the default InfisicalConnection would never become ready. Add a networkPolicy.platformIntents entry with namespace = \"${ns}\", podSelector = ${builtins.toJSON scope.selectorLabels}, and an egress rule that reaches ${addr}.";
+          self.crds.infisicalConnections.out.mkCR scope {
+            name = "default";
+            spec.address = addr;
+            requires = [ self.deployment ];
+          };
+
+        root = {
+          resource = self.deployment;
+          requires = [
+            self.serviceAccount
+          ]
+          ++ lib.optional hasMetrics self.metricsService
+          ++ builtins.attrValues self.crds;
+          # The PackageInstance completes once the default connection is
+          # ready. Dependents wait through the builders' requirements.
+          postHooks = [ self.connection ];
+
+          out = {
+            crds = {
+              ClusterGenerator = self.crds.clusterGenerators;
+              InfisicalAuth = self.crds.infisicalAuths;
+              InfisicalConnection = self.crds.infisicalConnections;
+              InfisicalPushSecret = self.crds.infisicalPushSecrets;
+            };
+
+            mkInfisicalSecret =
+              consumerScope: args:
+              let
+                pinned = pinTemplateMetadata consumerScope args;
+                targets = map (ref: {
+                  name = ref.secretName;
+                  namespace = ref.secretNamespace;
+                  type = ref.secretType or "Opaque";
+                }) (pinned.spec.managedKubeSecretReferences or [ ]);
+              in
+              withSecretRefs consumerScope (crName consumerScope "InfisicalSecret" args) targets (
+                operand "infisicalSecrets" consumerScope pinned
+              );
+
+            mkInfisicalStaticSecret =
+              consumerScope: args:
+              let
+                pinned = pinTargets consumerScope args;
+                targets = map (t: {
+                  inherit (t) name namespace;
+                  type = t.secretType or "Opaque";
+                }) (builtins.filter (t: (t.kind or null) == "Secret") pinned.spec.targets);
+              in
+              withSecretRefs consumerScope (crName consumerScope "InfisicalStaticSecret" args) targets (
+                operand "infisicalStaticSecrets" consumerScope pinned
+              );
+
+            # The connection name carries the dependency on the connection.
+            mkInfisicalAuth =
+              consumerScope: args:
+              self.crds.infisicalAuths.out.mkCR consumerScope (
+                args
+                // {
+                  spec = {
+                    infisicalConnectionRef = connectionRef;
+                  }
+                  // (args.spec or { });
+                }
+              );
+
+            mkInfisicalDynamicSecret =
+              _: _:
+              throw "infisical-operator: there is no InfisicalDynamicSecret builder. The operator copies the custom resource's annotations, Kix's included, onto the lease Secret it creates and has no setting to stop it, so kix gc would delete that Secret. Create InfisicalDynamicSecrets outside Kix.";
+          };
+        };
+      }
+    )
+
+    (kix.monitor {
+      service = "metricsService";
+      port = "metrics";
+    })
+  ];
 }
