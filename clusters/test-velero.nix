@@ -1,4 +1,4 @@
-# clusters/test-velero.nix — Velero end to end on kind, under Cilium
+# clusters/test-velero.nix: Velero end to end on kind, under Cilium
 # default-deny.
 #
 # An in-cluster S3 store (versitygw on emptyDirs) is the `objectStorage`

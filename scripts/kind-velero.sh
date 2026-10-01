@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# kind-velero.sh — back up and restore a workload with Velero on kind, under
+# kind-velero.sh: back up and restore a workload with Velero on kind, under
 # Cilium default-deny.
 #
 # Deploys clusters/test-velero.nix with `kix deploy`, which waits for the
-# backup location to be Available, both Schedules to be Enabled and the
+# backup location to be Available, both Schedules to be Enabled, and the
 # `smoke` Backup to be Completed. Then checks:
 #   - the smoke backup ran a file-system backup (one PodVolumeBackup)
 #   - a repository maintenance Job, launched with the data-path labels,

@@ -1,16 +1,16 @@
 # Velero backup and restore: the server Deployment, the node-agent
 # DaemonSet, the `default` BackupStorageLocation, an optional
-# VolumeSnapshotLocation and Schedules, with the 13 velero.io CRDs vendored
+# VolumeSnapshotLocation, and Schedules, with the 13 velero.io CRDs vendored
 # under ./crds (scripts/vendor-crds.py, `crds/sources.txt`).
 #
 # One instance per cluster (`meta.conflictsWith`): the CRDs, the
-# cluster-admin binding and the node-agent DaemonSet are cluster singletons.
+# cluster-admin binding, and the node-agent DaemonSet are cluster singletons.
 # Velero finds its own workloads by fixed names in its namespace, so they
 # keep them whatever the instance is called: repository maintenance copies
 # the Deployment named `velero`, and the data path reads the DaemonSet named
 # `node-agent`.
 #
-# Since 1.17, node-agent runs file-system backups, restores and the CSI data
+# Since 1.17, node-agent runs file-system backups, restores, and the CSI data
 # mover in pods it creates in Velero's namespace, and the server runs kopia
 # maintenance as Jobs there. Kix renders none of these pods, so their labels
 # come from the two ConfigMaps below (`podLabels`) and their traffic from the
@@ -27,7 +27,7 @@
 #   objectStorage (optional)     an in-cluster S3 store whose root is its
 #                                Service; the location's `s3Url` defaults to
 #                                it.
-#   prometheus (optional)        metrics Services, ServiceMonitors and the
+#   prometheus (optional)        metrics Services, ServiceMonitors, and the
 #                                backup-failure alert.
 #
 # Exposes:
@@ -246,7 +246,7 @@ in
 {
   meta = {
     version = release;
-    description = "Velero backup and restore: server, node-agent, a default backup location and scheduled backups";
+    description = "Velero backup and restore: server, node-agent, a default backup location, and scheduled backups";
     owner = "platform";
     defaultAliases = [ "velero" ];
     conflictsWith = [ "cluster:velero" ];
@@ -980,7 +980,7 @@ in
             };
 
         # Egress for the pods Velero launches (file-system backup and
-        # restore, data mover, repository maintenance): DNS, the API server
+        # restore, data mover, repository maintenance): DNS, the API server,
         # and the store. When the store is an in-cluster Service, the
         # location's operand policy opens it.
         dataPathEgress =

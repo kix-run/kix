@@ -159,7 +159,7 @@ in
   };
 
   # A ClusterRoleBinding to the built-in `cluster-admin`, or a ClusterRole
-  # with a rule whose apiGroups, resources and verbs all contain "*" (the
+  # with a rule whose apiGroups, resources, and verbs all contain "*" (the
   # same reach under another name). A namespaced RoleBinding and a wildcard
   # limited to one API group are not checked.
   noClusterAdmin = {
