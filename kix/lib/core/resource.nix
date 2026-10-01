@@ -753,6 +753,9 @@ rec {
       # Versions the CRD serves. `cr` refuses any other, so a wrong version
       # fails the build instead of every apply of the custom resource.
       servedVersions,
+      # The end of the unserved-version message: what to change in the
+      # declaration if the version is right.
+      unservedFix ? "correct version on the scope.mkCRDRef that declares the kind",
       crdScope,
       # Appended to every CR's `requires` after the CRD (a chart's workloads,
       # any of which can be the CRD's webhook).
@@ -781,7 +784,7 @@ rec {
         if builtins.elem v servedVersions then
           v
         else
-          throw "${group}/${kind}: version \"${v}\" is not served (${builtins.concatStringsSep ", " servedVersions}). Use a served version, or correct version on the scope.mkCRDRef that declares the kind.";
+          throw "${group}/${kind}: version \"${v}\" is not served (${builtins.concatStringsSep ", " servedVersions}). Use a served version, or ${unservedFix}.";
 
       cr =
         args:

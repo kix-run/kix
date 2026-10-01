@@ -666,6 +666,7 @@ rec {
                 extraRequires = chartWorkloads;
                 kind = crKind;
                 servedVersions = map (v: v.name) (builtins.filter (v: v.served or true) versions);
+                unservedFix = "serve it in the chart's CustomResourceDefinition";
                 inherit group version crdScope;
               };
 

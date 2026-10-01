@@ -707,6 +707,7 @@ in
             crdOrRef = crdResource;
             group = group;
             kind = crKind;
+            unservedFix = "serve it in the CustomResourceDefinition's spec.versions";
             inherit
               version
               servedVersions

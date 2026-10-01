@@ -2059,6 +2059,27 @@ mod tests {
     }
 
     #[test]
+    fn import_marker_without_kind_has_no_target() {
+        // A kind-less import (`kix.mkImport` with no `kind`) names nothing
+        // the deploy can look up, so the marker is not waited on.
+        let manifest = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "PackageInstance",
+            "metadata": {
+                "name": "platform-storage",
+                "namespace": "kube-system",
+                "annotations": {
+                    keys::MODE: "import",
+                    keys::IMPORT_NAME: "standard",
+                }
+            }
+        });
+        assert!(import_target_from_manifest(&manifest).is_none());
+        // The marker itself is ready as soon as it exists.
+        assert!(is_immediate_kind("PackageInstance"));
+    }
+
+    #[test]
     fn import_marker_non_import_mode_ignored() {
         let manifest = json!({
             "kind": "PackageInstance",
