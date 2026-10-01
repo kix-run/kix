@@ -154,7 +154,7 @@ let
     }
     // extra;
 
-  # One message that contains every fragment, among `messages`.
+  # True when one of `messages` contains every fragment.
   someMessageHas =
     fragments: messages: builtins.any (m: builtins.all (f: lib.hasInfix f m) fragments) messages;
 
@@ -234,7 +234,8 @@ in
       builtins.toJSON (map (m: m.metadata.name) cms)
     }";
 
-  # Each credential assertion fires alone for its case and names the fix.
+  # Each credential assertion fires for its case and names the fix; valid
+  # configurations fail none.
   external-dns-credential-assertions =
     let
       cases = {
