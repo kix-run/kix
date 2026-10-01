@@ -9,7 +9,12 @@
 #
 # Platform imports: DNS (coredns, bundled). No default storage.
 
-{ lib, kix, ... }:
+{
+  config,
+  lib,
+  kix,
+  ...
+}:
 {
   cluster.provider = lib.mkDefault "rke2";
 
@@ -39,7 +44,7 @@
         roles = [ "dns" ];
         out = {
           name = "coredns";
-          fqdn = "kube-dns.kube-system.svc.cluster.local";
+          fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
         };
       };
       optional = true;

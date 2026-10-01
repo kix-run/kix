@@ -14,7 +14,12 @@
 # (e.g. hostPath volumes + NodePort + a Cloudflare tunnel) expresses those as
 # per-cluster overrides on top of this flavor, not here.
 
-{ lib, kix, ... }:
+{
+  config,
+  lib,
+  kix,
+  ...
+}:
 {
   cluster.provider = lib.mkDefault "ovh";
 
@@ -48,7 +53,7 @@
         roles = [ "dns" ];
         out = {
           name = "coredns";
-          fqdn = "kube-dns.kube-system.svc.cluster.local";
+          fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
         };
       };
       optional = true;

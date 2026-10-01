@@ -7,7 +7,8 @@
 #   postgres         required, database (expects stackgres-style credentials
 #                    secret exposed via `out.superuserSecret`)
 #
-# Exposure handled by kix.expose (ingress via DI).
+# Exposure handled by kix.expose (ingress or gateway via DI). DOMAIN
+# defaults to the URL of that route.
 #
 # root = Service (port 8080).
 
@@ -55,7 +56,7 @@ in
     domain = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Public URL (e.g. https://vault.example.com). Required for clients to connect.";
+      description = "Public URL (e.g. https://vault.example.com). Default: the URL kix.expose routes (exposure.url). Set it when TLS terminates outside Kix, for example behind cloudflared.";
     };
     signupsAllowed = lib.mkOption {
       type = lib.types.bool;
@@ -124,15 +125,6 @@ in
         ...
       }:
       let
-        clusterDomain = clusterConfig.cluster.domain or null;
-        effectiveHost =
-          if config.ingress.host != null then
-            config.ingress.host
-          else if clusterDomain != null then
-            "${name}.${clusterDomain}"
-          else
-            null;
-
         healthCheck = {
           httpGet = {
             path = "/alive";
@@ -217,13 +209,7 @@ in
                           {
                             DATA_FOLDER = "/data";
                             DATABASE_URL = databaseUrl;
-                            DOMAIN =
-                              if config.domain != null then
-                                config.domain
-                              else if effectiveHost != null then
-                                "https://${effectiveHost}"
-                              else
-                                null;
+                            DOMAIN = if config.domain != null then config.domain else self.exposure.url;
                             SIGNUPS_ALLOWED = lib.boolToString config.signupsAllowed;
                             INVITATIONS_ALLOWED = lib.boolToString config.invitationsAllowed;
                             SHOW_PASSWORD_HINT = lib.boolToString config.showPasswordHint;

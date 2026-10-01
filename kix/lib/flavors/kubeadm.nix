@@ -7,7 +7,12 @@
 #
 # Platform imports: DNS (coredns, bundled by kubeadm). No default storage.
 
-{ lib, kix, ... }:
+{
+  config,
+  lib,
+  kix,
+  ...
+}:
 {
   cluster.provider = lib.mkDefault "kubeadm";
 
@@ -34,7 +39,7 @@
         roles = [ "dns" ];
         out = {
           name = "coredns";
-          fqdn = "kube-dns.kube-system.svc.cluster.local";
+          fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
         };
       };
       optional = true;

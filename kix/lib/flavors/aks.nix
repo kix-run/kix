@@ -8,7 +8,12 @@
 #
 # Platform imports: DNS (coredns, managed by AKS), storage (managed-csi).
 
-{ lib, kix, ... }:
+{
+  config,
+  lib,
+  kix,
+  ...
+}:
 {
   cluster.provider = lib.mkDefault "aks";
 
@@ -41,7 +46,7 @@
         roles = [ "dns" ];
         out = {
           name = "coredns";
-          fqdn = "kube-dns.kube-system.svc.cluster.local";
+          fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
         };
       };
       optional = true;

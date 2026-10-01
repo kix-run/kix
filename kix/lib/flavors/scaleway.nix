@@ -25,7 +25,12 @@
 # can be provisioned separately with tools such as Terranix. This flavor is
 # the KiX-side description that workloads deploy against.
 
-{ lib, kix, ... }:
+{
+  config,
+  lib,
+  kix,
+  ...
+}:
 {
   cluster.provider = lib.mkDefault "scaleway";
 
@@ -59,7 +64,7 @@
         roles = [ "dns" ];
         out = {
           name = "coredns";
-          fqdn = "kube-dns.kube-system.svc.cluster.local";
+          fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
         };
       };
       optional = true;

@@ -25,6 +25,7 @@ kix.buildCluster {
   modules = [
     (
       {
+        config,
         lib,
         kix,
         packages,
@@ -78,7 +79,7 @@ kix.buildCluster {
               roles = [ "dns" ];
               out = {
                 name = "coredns";
-                fqdn = "kube-dns.kube-system.svc.cluster.local";
+                fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
               };
             };
           };

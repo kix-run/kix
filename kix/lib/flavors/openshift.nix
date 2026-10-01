@@ -14,7 +14,12 @@
 #
 # Platform imports: DNS (coredns, managed by OpenShift).
 
-{ lib, kix, ... }:
+{
+  config,
+  lib,
+  kix,
+  ...
+}:
 {
   cluster.provider = lib.mkDefault "openshift";
 
@@ -47,7 +52,7 @@
         roles = [ "dns" ];
         out = {
           name = "coredns";
-          fqdn = "dns-default.openshift-dns.svc.cluster.local";
+          fqdn = "dns-default.openshift-dns.svc.${config.clusterDomain}";
         };
       };
       optional = true;

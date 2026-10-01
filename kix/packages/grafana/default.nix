@@ -17,9 +17,6 @@
 # Each auto-wired datasource has a fixed uid, set by `prometheusDatasource`,
 # `alertmanagerDatasource` and `lokiDatasource`. Dashboards find their
 # datasource by uid, so a fixed one lets a dashboard move between clusters.
-#
-# Exposes:
-#   out.serviceUrl: "http://<name>.<ns>.svc.cluster.local:80"
 
 {
   scope,
@@ -1422,9 +1419,6 @@ in
         ++ lib.optional (self.scDashboardProvider != null) self.scDashboardProvider
         ++ lib.optional (self.serviceMonitor != null) self.serviceMonitor
         ++ lib.optional (self.ingress != null) self.ingress;
-        out = {
-          serviceUrl = "http://${name}.${ns}.svc.cluster.local:80";
-        };
       };
     }
     // clusterRoles;

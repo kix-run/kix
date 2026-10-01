@@ -10,7 +10,12 @@
 # cluster installs its own storage-classes or DNS package, it takes
 # priority automatically (managed shadows import in DI resolution).
 
-{ lib, kix, ... }:
+{
+  config,
+  lib,
+  kix,
+  ...
+}:
 {
   cluster.provider = lib.mkDefault "gke";
 
@@ -53,7 +58,7 @@
         roles = [ "dns" ];
         out = {
           name = "kube-dns";
-          fqdn = "kube-dns.kube-system.svc.cluster.local";
+          fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
         };
       };
       optional = true;

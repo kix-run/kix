@@ -15,7 +15,12 @@
 # Note: kube-system imports use gke-managed namespace since Autopilot
 # blocks user deployments to kube-system.
 
-{ lib, kix, ... }:
+{
+  config,
+  lib,
+  kix,
+  ...
+}:
 {
   cluster.provider = lib.mkDefault "gke-autopilot";
 
@@ -52,7 +57,7 @@
         roles = [ "dns" ];
         out = {
           name = "kube-dns";
-          fqdn = "kube-dns.kube-system.svc.cluster.local";
+          fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
         };
       };
       optional = true;
