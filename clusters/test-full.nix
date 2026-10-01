@@ -29,38 +29,8 @@ kix.buildCluster {
             package = packages.coredns;
 
             config = {
-              replicaCount = 3;
-              serviceAccount.create = true;
-              prometheus = {
-                service = {
-                  enabled = true;
-                  annotations = {
-                    "prometheus.io/scrape" = "true";
-                    "prometheus.io/port" = "9153";
-                  };
-                };
-                monitor = {
-                  enabled = true;
-                  interval = null;
-                };
-              };
-              hpa = {
-                enabled = true;
-                minReplicas = 2;
-                maxReplicas = 10;
-                metrics = [
-                  {
-                    type = "Resource";
-                    resource = {
-                      name = "cpu";
-                      target = {
-                        type = "Utilization";
-                        averageUtilization = 80;
-                      };
-                    };
-                  }
-                ];
-              };
+              replicas = 3;
+              clusterIP = "10.96.0.10";
             };
           };
         };

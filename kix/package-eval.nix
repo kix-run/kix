@@ -119,7 +119,6 @@ let
         reason = "kix/packages/clickhouse-logs/default.nix";
       }
     ];
-    coredns = [ domainLiteral ];
     harbor = [ domainLiteralViaValkey ];
     immich = [ domainLiteralViaValkey ];
     infisical-operator = [ domainLiteral ];
@@ -206,6 +205,7 @@ let
       };
     };
     clickhouse-operator.instances = { inherit credentials; };
+    coredns.config.clusterIP = "10.96.0.53";
     firezone.config = {
       domain = "firezone.example.com";
       admin = {
@@ -262,7 +262,6 @@ let
 
   # Packages whose source writes cluster.local outside a comment.
   sourceDomainLiteralExceptions = [
-    "coredns"
     "infisical-operator"
     "openebs"
     "valkey"

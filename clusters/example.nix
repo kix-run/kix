@@ -33,20 +33,8 @@ kix.buildCluster {
             package = packages.coredns;
 
             config = {
-              replicaCount = 2;
-              prometheus = {
-                service = {
-                  enabled = true;
-                  annotations = {
-                    "prometheus.io/scrape" = "true";
-                    "prometheus.io/port" = "9153";
-                  };
-                };
-                monitor = {
-                  enabled = true;
-                  interval = null;
-                };
-              };
+              replicas = 2;
+              clusterIP = "10.96.0.10";
             };
           };
         };
