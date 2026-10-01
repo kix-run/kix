@@ -43,6 +43,23 @@ Add `kix.monitor` to the package's `build` list:
 Set `service` to the returned Service part and `port` to one of that Service's
 named ports. The default metrics path is `/metrics`.
 
+If the program serves metrics only over HTTPS, set `scheme` and the endpoint's
+`tlsConfig`. A program that serves metrics with a self-signed certificate and
+no client authentication needs:
+
+```nix
+(kix.monitor {
+  service = "metricsService";
+  port = "metrics";
+  scheme = "https";
+  tlsConfig.insecureSkipVerify = true;
+})
+```
+
+`scheme` and `tlsConfig` set only the endpoint for `port`. Each entry in
+`extraEndpoints` is a ServiceMonitor endpoint of its own, which defaults to
+`scheme = "http"`, `path = "/metrics"`, and the instance's scrape interval.
+
 ## Provide the ServiceMonitor API
 
 The `prometheus` dependency must expose the ServiceMonitor builder used by

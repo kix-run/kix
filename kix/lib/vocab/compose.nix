@@ -1706,11 +1706,18 @@ rec {
   # metrics Services (harbor: core, registry, jobservice, exporter) call
   # this once per Service without the parts or the resource names
   # colliding. The defaults are the single-Service case.
+  #
+  # `scheme` and `tlsConfig` (a ServiceMonitor endpoint `tlsConfig`) apply
+  # to the primary endpoint only. Each of `extraEndpoints` is a ServiceMonitor
+  # endpoint over the defaults `scheme = "http"`, `path = "/metrics"` and the
+  # instance's `metrics.interval` when that is set.
   monitor =
     {
       service,
       port ? "metrics",
       path ? "/metrics",
+      scheme ? "http",
+      tlsConfig ? null,
       alerts ? { },
       extraEndpoints ? [ ],
       extraLabels ? { },
@@ -1734,16 +1741,27 @@ rec {
       metricsEnabled = (metricsConfig.enabled or true) && prometheus != null;
       scrapeInterval = (metricsConfig.interval or null);
 
+      intervalAttrs = lib.optionalAttrs (scrapeInterval != null) {
+        interval = scrapeInterval;
+      };
       primaryEndpoint = {
         port = if builtins.isInt port then null else port;
         targetPort = if builtins.isInt port then port else null;
-        scheme = "http";
-        inherit path;
+        inherit scheme path tlsConfig;
       }
-      // lib.optionalAttrs (scrapeInterval != null) {
-        interval = scrapeInterval;
-      };
-      endpoints = [ (lib.filterAttrs (_: v: v != null) primaryEndpoint) ] ++ extraEndpoints;
+      // intervalAttrs;
+      extraEndpoint =
+        e:
+        {
+          scheme = "http";
+          path = "/metrics";
+        }
+        // intervalAttrs
+        // e;
+      endpoints = [
+        (lib.filterAttrs (_: v: v != null) primaryEndpoint)
+      ]
+      ++ map extraEndpoint extraEndpoints;
 
       alertRules = lib.mapAttrsToList (
         alertName: alertDef:
