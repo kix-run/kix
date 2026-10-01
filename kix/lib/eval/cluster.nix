@@ -375,6 +375,8 @@
               evaluateInstanceConfig {
                 inherit (phase1Instances.${nsName}.${instName}) packageOptions packageConfig;
                 packageConfigFile = "package config of ${nsName}/${instName}";
+                namespaceName = nsName;
+                instanceName = instName;
                 inherit instCfg;
                 clusterConfig = cfg;
                 configInjections = resolveInjectionsAgainst selfCfg nsName instName;

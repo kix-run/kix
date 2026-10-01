@@ -124,22 +124,28 @@ rec {
       else
         throw "dependency '${argName}' was not found for namespace '${requesterNamespace}'. Add an instance with that name or alias, or set deps.${argName} explicitly.";
 
-  extractDeferredValues =
+  # The definitions of an instance's `config` (a deferredModule value), as
+  # `{ file; value; }`. deferredModule wraps each definition in
+  # `{ _file; imports; }`; `file` is the innermost `_file`, or null.
+  extractDeferredDefs =
     deferredConfig:
     let
       modules = deferredConfig.imports or [ ];
       extractOne =
-        m:
+        file: m:
         if builtins.isAttrs m && m ? _file && m ? imports then
-          builtins.concatMap extractOne m.imports
-        else if builtins.isAttrs m then
-          [ m ]
-        else if builtins.isFunction m then
-          [ m ]
+          builtins.concatMap (extractOne m._file) m.imports
+        else if builtins.isAttrs m || builtins.isFunction m then
+          [
+            {
+              inherit file;
+              value = m;
+            }
+          ]
         else
           [ ];
     in
-    builtins.concatMap extractOne modules;
+    builtins.concatMap (extractOne null) modules;
 
   # Priority of a `lib.mkDefault` in a package's own `config`. It sits
   # between `lib.mkDefault` (1000) and an option's declared default (1500),
@@ -182,7 +188,9 @@ rec {
   # module function such as `{ config, lib, ... }: { ... }`. It is one more
   # module beside `packageOptions`, so a package can default one option
   # from another with `lib.mkDefault` (see `packageDefaultPriority`).
-  # `packageConfigFile` names that module in module-system errors.
+  # `packageConfigFile` names that module in module-system errors. With
+  # `namespaceName` and `instanceName`, option errors name the option as
+  # `instances.<ns>.<instance>.config.<option>`.
   evaluateInstanceConfig =
     {
       packageOptions,
@@ -191,10 +199,15 @@ rec {
       instCfg,
       clusterConfig ? { },
       configInjections ? [ ],
+      namespaceName ? null,
+      instanceName ? null,
     }:
     let
       deferredConfig = instCfg.config;
-      configValues = extractDeferredValues deferredConfig;
+      configDefs = extractDeferredDefs deferredConfig;
+      configValues = map (d: d.value) configDefs;
+      named = namespaceName != null && instanceName != null;
+      instanceText = if named then "${namespaceName}/${instanceName}" else "this instance";
 
       findLockedInAttrs =
         attrs:
@@ -233,11 +246,35 @@ rec {
       unwrapLockedAttrs =
         attrs: if builtins.isAttrs attrs then lib.mapAttrs (_: unwrapLocked) attrs else attrs;
 
+      # Each module carries the file that defined it, so a module-system
+      # error names that file rather than `<unknown-file>`.
       wrappedModules = map (
-        v: if builtins.isFunction v then v else { config = unwrapLockedAttrs v; }
-      ) configValues;
+        d:
+        let
+          file =
+            if d.file != null then
+              toString d.file
+            else if named then
+              "instances.${namespaceName}.${instanceName}.config"
+            else
+              "instance config";
+        in
+        if builtins.isFunction d.value then
+          {
+            _file = file;
+            imports = [ d.value ];
+          }
+        else
+          {
+            _file = file;
+            config = unwrapLockedAttrs d.value;
+          }
+      ) configDefs;
 
-      injectionModules = map (injection: { config = injection.config; }) configInjections;
+      injectionModules = map (injection: {
+        _file = "config injected into ${instanceText} by ${injection.source or "a dependency"}";
+        config = injection.config;
+      }) configInjections;
 
       # The package's `config` is always wrapped as a module's `config`, so
       # a package option named `config`, `options` or `imports` is set
@@ -257,6 +294,12 @@ rec {
       evaluated =
         removeAttrs
           (lib.evalModules {
+            prefix = lib.optionals named [
+              "instances"
+              namespaceName
+              instanceName
+              "config"
+            ];
             modules = [
               { options = packageOptions; }
               packageConfigModule

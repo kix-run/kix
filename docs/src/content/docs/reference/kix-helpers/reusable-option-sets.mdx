@@ -1,4 +1,187 @@
 ---
 title: "Reusable option sets"
-description: TODO
+description: "The option declarations, option types, and guard helpers that packages share: kix.options, kix.types.quantity, kix.mergeEnv, kix.guardArgs, and kix.checkSecretKeys."
 ---
+
+These helpers give every package the same option shapes for images,
+resources, environment variables, monitoring, and probes, and the same
+checks for the values a package owns. Each default sits on its own field,
+so an instance that sets one field keeps the package's other defaults.
+
+This page is maintained by hand. Check `kix/lib/vocab/compose.nix` and
+`kix/lib/vocab/quantity.nix` when in doubt.
+
+## Option declarations
+
+| Helper | Declares | Fields |
+|---|---|---|
+| `kix.options.image { repository; tag; ... }` | one option | `repository`, `tag`, `digest`, `pullPolicy`. See [`image`](/docs/reference/kix-helpers/image-and-pin-helpers/). |
+| `kix.options.resources { requests ? { }; limits ? { }; }` | one option | `requests`, `limits`, `claims` |
+| `kix.options.env` | one option | attribute set of variables |
+| `kix.options.ingress` | an option set | `host`, `annotations` |
+| `kix.options.monitor` | an option set | `enabled`, `interval`. See [`monitor`](/docs/reference/kix-helpers/monitor/). |
+| `kix.options.healthCheck` | an option set | `enable`, `retryFor`. See [`healthCheck`](/docs/reference/kix-helpers/healthcheck/). |
+
+A helper that takes arguments returns an option. An option set is an
+attribute set of options, used as `options.metrics = kix.options.monitor;`.
+A toggle that turns a feature on is named `enabled`.
+
+### `kix.options.resources`
+
+```nix
+options.resources = kix.options.resources {
+  requests = { cpu = "100m"; memory = "128Mi"; };
+  limits.memory = "256Mi";
+};
+```
+
+The arguments are the package's defaults. They may set `cpu`, `memory`, and
+`ephemeral-storage`. Each one becomes the default of its field, so an
+instance that sets `limits.cpu` keeps the requests and the memory limit:
+
+```nix
+instances.apps.web.config.resources.limits.cpu = "1";
+# requests = { cpu = "100m"; memory = "128Mi"; }; limits = { cpu = "1"; memory = "256Mi"; };
+```
+
+Setting a field to `null` removes its default. The value is a Kubernetes
+`ResourceRequirements` with unset fields absent, so it can go straight into
+a container's `resources`:
+
+| Field | Type |
+|---|---|
+| `requests`, `limits` | `cpu`, `memory`, and `ephemeral-storage` as null or a quantity, plus any other resource name as a quantity |
+| `claims` | null, or a list of `{ name; request ? null; }` |
+
+Other resource names are `hugepages-<size>` and extended resources whose
+name contains `/`, such as `nvidia.com/gpu`. Any other name, such as a
+misspelled `limits.memroy`, fails evaluation.
+
+### `kix.options.env`
+
+An attribute set whose values are a string, a `fieldRef` source such as
+`{ valueFrom.fieldRef.fieldPath = "metadata.name"; }`, or a `secretKeyRef`
+source naming a Secret managed outside Kix with
+[`kix.untrackedRef`](/docs/reference/kix-helpers/facts-and-untrackedref/).
+A credential that comes from a dependency is wired by the package. `null`
+removes a variable the package sets by default. An integer, such as
+`PORT = 8080`, fails evaluation; write `"8080"`.
+
+Render it with `kix.mergeEnv`, so the instance cannot replace a variable the
+package owns.
+
+## `kix.types.quantity`
+
+An option type for a Kubernetes quantity, such as `"500m"`, `"1.5Gi"`, or
+`2`. It accepts a non-negative decimal or integer with an optional suffix:
+`m`, `k`, `M`, `G`, `T`, `P`, `E`, `Ki`, `Mi`, `Gi`, `Ti`, `Pi`, or `Ei`.
+Kubernetes also accepts signs and exponents (`1e3`); this type does not.
+
+```nix
+options.size = lib.mkOption {
+  type = kix.types.quantity;
+  default = "10Gi";
+  description = "Size of the data volume.";
+};
+```
+
+### `kix.parseQuantity` and `kix.parseGi`
+
+`kix.parseQuantity resource q` returns `q` in millicores when `resource` is
+`"cpu"`, and in bytes otherwise, rounded down. It returns null when `q` is
+not a quantity. Every value `kix.types.quantity` accepts parses.
+
+```nix
+kix.parseQuantity "cpu" "250m"      # 250
+kix.parseQuantity "memory" "512Mi"  # 536870912
+kix.parseGi "50Gi"                  # 50
+kix.parseGi "500Mi"                 # 0
+```
+
+`kix.parseGi` returns whole GiB, rounded down.
+
+## Guards for values the package owns
+
+Each guard takes `who`, the text that starts its error. Use the instance's
+`<package> <namespace>/<instance>`.
+
+### `kix.mergeEnv`
+
+```nix
+env = kix.mkEnvVars (kix.mergeEnv {
+  inherit who;
+  defaults.LOG_LEVEL = "info";
+  owned = [
+    {
+      vars.DB_HOST = database.out.fqdn;
+      from = "the database dependency";
+      fix = "Wire a different database instance through deps.database instead.";
+    }
+  ];
+} config.env);
+```
+
+Returns `defaults`, then the instance's `env`, then every group's `vars`.
+An instance may override or remove (`null`) a default. A variable in an
+`owned` group may not appear in `env`, even as `null`:
+
+```text
+web apps/web: env sets DB_HOST, which comes from the database dependency. Wire a different database instance through deps.database instead.
+```
+
+A group may list `names` instead of `vars` for variables the package
+delivers another way, such as `envFrom`. They are refused the same way and
+not added.
+
+### `kix.guardArgs`
+
+```nix
+args = baseArgs ++ kix.guardArgs {
+  inherit who;
+  owned."--metrics-bind-address" = "the probes and the metrics Service use :8080; remove it.";
+} config.extraArgs;
+```
+
+Returns the list unchanged unless an argument sets an owned flag. An
+argument sets a flag when it equals the flag or starts with the flag and
+`=`, so `--ingress-class-by-name=true` does not set `--ingress-class`.
+`option` (default `"extraArgs"`) names the option in the error. Each hit is
+one line:
+
+```text
+web apps/web: extraArgs sets "--metrics-bind-address=:9090", which the package owns: the probes and the metrics Service use :8080; remove it.
+```
+
+### `kix.checkSecretKeys`
+
+```nix
+creds = kix.checkSecretKeys {
+  inherit who;
+  arg = "cloudCredentials";
+  dep = cloudCredentials;
+  keys = [ "cloud" ];
+};
+```
+
+Returns `dep` once its `out.keys` declares every name in `keys`. With
+`anyOf`, a list of key groups, every name of at least one group must be
+declared. A null `dep` (an absent optional dependency) is returned as is.
+Read the secret through the returned value, so the check runs before any
+`keyRef`:
+
+```text
+velero backup/velero: deps.cloudCredentials resolved to secret "aws", which declares no keys; this package reads cloud. Add them to that instance's keys (a SOPS secret lists them in keys), or wire another secret with deps.cloudCredentials = ref.<ns>.<instance>.
+```
+
+## Escape hatches
+
+Every package keeps a way to set what it does not model. The option name
+says what it changes and how it merges:
+
+| Shape the package builds | Option | Merge |
+|---|---|---|
+| A Helm chart | `values` | `lib.recursiveUpdate` over the package's values |
+| A resource or custom resource `spec` | `extraSpec` | `kix.mergeGuarded` over the package's spec; the option description lists the paths the package owns |
+| The program's own configuration file | `settings` | `kix.mergeGuarded` over the built-in configuration |
+| A program's command-line flags | `extraArgs` | appended after the package's flags, through `kix.guardArgs` |
+| Anything else | instance `partsOverlays`, resource `extra` | see [`partsOverlays`](/docs/reference/instance-schema/partsoverlays/) |

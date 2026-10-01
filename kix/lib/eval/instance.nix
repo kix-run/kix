@@ -260,7 +260,13 @@ in
           packageOptions = raw.options or { };
           packageConfig = raw.config or { };
           packageConfigFile = "package config of ${namespaceName}/${instanceName}";
-          inherit instCfg clusterConfig configInjections;
+          inherit
+            instCfg
+            clusterConfig
+            configInjections
+            namespaceName
+            instanceName
+            ;
         };
 
         allOverlays = globalPartsOverlays ++ (instCfg.partsOverlays or [ ]);

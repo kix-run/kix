@@ -1,6 +1,7 @@
 # Tests for the typed option helpers (vocab/quantity.nix, the option and
-# guard helpers in vocab/compose.nix) and the option contract walker
-# (eval/options.nix). Imported by ./default.nix into the same test matrix.
+# guard helpers in vocab/compose.nix), the option contract walker
+# (eval/options.nix) and instance-config error locations (eval/resolve.nix).
+# Imported by ./default.nix into the same test matrix.
 
 {
   lib,
@@ -494,4 +495,41 @@ in
       options = { };
     } == null;
 
+  # With the instance's names, an option's location is
+  # `instances.<ns>.<instance>.config.<option>`, and each definition names
+  # the file that set it or the dependency that injected it. The probe
+  # type's merge returns what the module system passes it.
+  lib-options-typing-instance-option-location =
+    let
+      probeType = lib.mkOptionType {
+        name = "probe";
+        merge = loc: defs: {
+          loc = lib.showOption loc;
+          files = map (d: d.file) defs;
+        };
+      };
+      cfg = eval.evaluateInstanceConfig {
+        namespaceName = "echo";
+        instanceName = "echo-server";
+        packageOptions.probe = lib.mkOption { type = probeType; };
+        instCfg.config.imports = [
+          {
+            _file = "cluster.nix";
+            imports = [ { probe = "x"; } ];
+          }
+        ];
+        configInjections = [
+          {
+            source = "web/app";
+            config.probe = "y";
+          }
+        ];
+      };
+    in
+    (
+      cfg.probe.loc == "instances.echo.echo-server.config.probe"
+      && builtins.elem "cluster.nix" cfg.probe.files
+      && builtins.elem "config injected into echo/echo-server by web/app" cfg.probe.files
+    )
+    || throw "instance option location: ${builtins.toJSON cfg.probe}";
 }

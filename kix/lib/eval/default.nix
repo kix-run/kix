@@ -105,7 +105,7 @@ in
   inherit (resolve)
     buildResolutionIndex
     resolveArg
-    extractDeferredValues
+    extractDeferredDefs
     evaluateInstanceConfig
     packageDefaultPriority
     callPackagePhase1
