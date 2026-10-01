@@ -745,6 +745,10 @@ in
       { allResources, clusterConfig, ... }:
       let
         domain = clusterConfig.clusterDomain;
+        # Stands in for the configured domain while matching: it is not a
+        # label character, so "x.svc.<domain>" never reads as cluster.local.
+        sentinel = builtins.fromJSON ''"\u0001"'';
+        masked = builtins.replaceStrings [ domain ] [ sentinel ];
         isLabelChar = c: builtins.match "[A-Za-z0-9-]" c != null;
         lastChar = s: if s == "" then "" else builtins.substring (builtins.stringLength s - 1) 1 s;
         firstChar = s: builtins.substring 0 1 s;
@@ -754,7 +758,7 @@ in
         firstHit =
           s:
           let
-            pieces = builtins.split "cluster\\.local" (builtins.replaceStrings [ domain ] [ " " ] s);
+            pieces = builtins.split "cluster\\.local" (masked s);
             n = builtins.length pieces;
             go =
               i:
@@ -770,11 +774,11 @@ in
           in
           if n == 1 then null else go 1;
 
-        # Up to 80 characters either side of the hit.
+        # Up to 80 characters either side of the hit, on one line.
         excerpt =
           s:
           let
-            pieces = builtins.split "cluster\\.local" (builtins.replaceStrings [ domain ] [ " " ] s);
+            pieces = builtins.split "cluster\\.local" (masked s);
             i = firstHit s;
             before = lib.concatMapStrings (p: if builtins.isString p then p else "cluster.local") (
               lib.take i pieces
@@ -785,9 +789,11 @@ in
             lb = builtins.stringLength before;
             la = builtins.stringLength after;
           in
-          (if lb > 80 then "..." + builtins.substring (lb - 80) 80 before else before)
-          + "cluster.local"
-          + (if la > 80 then builtins.substring 0 80 after + "..." else after);
+          builtins.replaceStrings [ sentinel "\n" ] [ domain "\\n" ] (
+            (if lb > 80 then "..." + builtins.substring (lb - 80) 80 before else before)
+            + "cluster.local"
+            + (if la > 80 then builtins.substring 0 80 after + "..." else after)
+          );
 
         findingFor =
           r:
