@@ -3,9 +3,21 @@
 # stateful lifecycle protection of kix diff. Packages that need a volume take
 # it through their `storage` dependency.
 #
-# The claim's class is `config.storageClassName` when set, else the class the
-# optional `storageClasses` provider gives consumers that name none
-# (`out.storageClassName`). With neither, the build fails.
+#   instances.apps.storage = {
+#     package = packages.persistent-volume-claim;
+#     config.size = "20Gi";
+#   };
+#
+# `size` is required: a generic claim cannot know how much its consumer
+# stores. The claim's class is `config.storageClassName` when set, else the
+# class the optional `storageClasses` provider gives consumers that name
+# none (`out.storageClassName`). With neither, the build fails. Spec fields
+# without an option go in `extraSpec`.
+#
+# out.name: the claim's name. out.size: `config.size`, as a string.
+#
+# Kix does not check a ReadWriteMany or ReadOnlyMany claim against what the
+# class supports; such a claim on a block-only driver stays Pending.
 #
 # root = the PVC.
 
@@ -38,16 +50,15 @@ in
 
   options = {
     size = lib.mkOption {
-      # A string so that consumers can parse `out.size` as a quantity with a
-      # unit; immich reads it with kix.parseGi.
-      type = lib.types.addCheck kix.types.quantity builtins.isString;
+      type = kix.types.quantity;
       example = "20Gi";
       description = ''
-        Requested capacity, as a Kubernetes quantity string such as "20Gi".
+        Requested capacity, as a Kubernetes quantity such as "20Gi"; an
+        integer is a number of bytes. Must be at least one byte.
         Required: a generic claim cannot know how much its consumer stores.
         Rendered as `spec.resources.requests.storage` and published as
-        `out.size`. The apiserver accepts an increase only when the class
-        allows volume expansion, and refuses a decrease.
+        `out.size`, both as strings. The apiserver accepts an increase only
+        when the class allows volume expansion, and refuses a decrease.
       '';
     };
     storageClassName = lib.mkOption {
@@ -58,7 +69,7 @@ in
         StorageClass of the claim. Null takes `out.storageClassName` from the
         `storageClasses` dependency. `""` requests no class, for binding to a
         pre-provisioned PersistentVolume named in `extraSpec.volumeName`. The
-        apiserver refuses a change on a bound claim.
+        apiserver refuses a change once the claim exists.
       '';
     };
     accessModes = lib.mkOption {
@@ -77,8 +88,8 @@ in
       description = ''
         Merged into the claim's `spec`, for fields without an option of their
         own: `volumeMode`, `dataSource`, `dataSourceRef`, `selector`,
-        `volumeName` and `volumeAttributesClassName`. `storageClassName`,
-        `accessModes` and `resources.requests.storage` are set by their
+        `volumeName`, and `volumeAttributesClassName`. `storageClassName`,
+        `accessModes`, and `resources.requests.storage` are set by their
         options and refused here.
       '';
     };
@@ -92,6 +103,7 @@ in
     }:
     let
       who = "persistent-volume-claim ${scope.namespaceName}/${scope.instanceName}";
+      size = toString config.size;
       modes = config.accessModes;
       modesText = "[ ${lib.concatMapStringsSep " " (m: "\"${m}\"") modes} ]";
       repeated = lib.filter (m: lib.count (x: x == m) modes > 1) (lib.unique modes);
@@ -105,12 +117,12 @@ in
           throw "${who}: no StorageClass for this claim. Set config.storageClassName, or give the cluster a storageClasses provider: a flavor whose environment has a default class, a storage-classes instance, a CSI driver instance with aliases = [ \"storageClasses\" ], or an import of the environment's class: instances.kube-system.platform-storage.package = kix.mkImport { kind = \"StorageClass\"; apiVersion = \"storage.k8s.io/v1\"; roles = [ \"storageClasses\" ]; out = { name = \"<class>\"; storageClassName = \"<class>\"; }; }.";
 
       checks =
-        if builtins.elem "ReadWriteOncePod" modes && builtins.length modes > 1 then
-          throw "${who}: accessModes ${modesText} combines ReadWriteOncePod with other modes; the apiserver refuses that. Use [ \"ReadWriteOncePod\" ] alone."
-        else if repeated != [ ] then
+        if repeated != [ ] then
           throw "${who}: accessModes lists ${builtins.head repeated} more than once. List each mode once."
-        else if builtins.match "0*(\\.0*)?(m|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei)?" config.size != null then
-          throw "${who}: size = \"${config.size}\" must be greater than zero."
+        else if builtins.elem "ReadWriteOncePod" modes && builtins.length modes > 1 then
+          throw "${who}: accessModes ${modesText} combines ReadWriteOncePod with other modes; the apiserver refuses that. Use [ \"ReadWriteOncePod\" ] alone."
+        else if kix.parseQuantity "storage" config.size == 0 then
+          throw "${who}: size = \"${size}\" is less than one byte. Request a positive size, such as \"1Gi\"."
         else
           null;
 
@@ -136,10 +148,10 @@ in
               {
                 inherit storageClassName;
                 accessModes = modes;
-                resources.requests.storage = config.size;
+                resources.requests.storage = size;
               }
               config.extraSpec;
-          outputs.size = config.size;
+          outputs = { inherit size; };
         }
       );
     in
