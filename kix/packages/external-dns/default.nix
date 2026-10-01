@@ -5,7 +5,22 @@
 # no leader election, so a second pod would write the same records at the
 # same time. The ClusterRole and the Gateway API CRD markers are derived from
 # `sources` (sources.nix); the provider list and the credential variables
-# each provider reads are in providers.nix.
+# each provider reads are in providers.nix. Both files follow `release`, so
+# an `image.tag` of another major.minor release fails the build.
+#
+# Required config: `provider`, `policy`, and `txtOwnerId` have no default.
+#
+#   instances.external-dns.external-dns = {
+#     package = packages.external-dns;
+#     deps.providerCredentials = ref.external-dns.cloudflare-api-token;
+#     config = {
+#       provider = "cloudflare";
+#       policy = "upsert-only";
+#       txtOwnerId = "prod/external-dns";      # unique per writer of a zone
+#       secretEnv.CF_API_TOKEN = "api-token";  # variable = key of the Secret
+#       extraArgs = [ "--domain-filter=example.com" ];
+#     };
+#   };
 #
 # DI deps:
 #   providerCredentials (optional)  a secret or secret-ref instance in the
@@ -19,15 +34,27 @@
 #   prometheus (optional)           metrics Service, ServiceMonitor, and a
 #                                   stale-sync alert.
 #
+# Credentials belong in the providerCredentials Secret, not in the rendered
+# manifests. external-dns reads every flag from `EXTERNAL_DNS_<FLAG>` as
+# well, so a credential that upstream takes as a flag (`--pdns-api-key`,
+# `--rfc2136-tsig-secret`, and the others in `secretFlags`) goes in that
+# Secret under the variable's name. Those flags in `extraArgs`, and a
+# literal string in `env` for a credential variable, are refused.
+#
 # Egress: `meta.network.intents` cannot read config, so every instance may
 # reach the world on TCP 443, which covers the HTTPS APIs of the hosted
 # providers. A provider on another port warns under an enforcer.
 #
-# Escape hatches: `extraArgs` for upstream flags the package does not type
-# (domain filters, TXT prefix, provider settings), `env`, and the instance's
-# `partsOverlays` for pod labels, placement, and extra RBAC rules.
+# Not supported: webhook providers, which run as a sidecar container, and
+# `--once`, after which the Deployment would restart the process forever.
+# `--registry=crd` and `--gateway-listener-sets` need RBAC the package does
+# not grant, and a warning says so.
 #
-# root = the Deployment.
+# Escape hatches: `extraArgs` for upstream flags the package does not type
+# (domain filters, TXT prefix, provider endpoints), `env`, and the
+# instance's `partsOverlays` for pod labels, placement, and extra RBAC rules.
+#
+# out: root is the Deployment, and `out` adds nothing beyond root's defaults.
 
 {
   scope,
@@ -45,6 +72,39 @@ let
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "external-dns ${ns}/${name}";
+
+  # kingpin's DefaultEnvars (pkg/apis/externaldns/types.go) reads `--<flag>`
+  # from this variable when the flag is not on the command line.
+  flagEnvVar = flag: "EXTERNAL_DNS_" + lib.toUpper (builtins.replaceStrings [ "-" ] [ "_" ] flag);
+
+  # Upstream flags at v0.23.0 whose value is a credential.
+  secretFlags = [
+    "pdns-api-key"
+    "godaddy-api-key"
+    "godaddy-api-secret"
+    "exoscale-apikey"
+    "exoscale-apisecret"
+    "rfc2136-tsig-secret"
+    "rfc2136-kerberos-password"
+    "pihole-password"
+    "txt-encrypt-aes-key"
+  ];
+
+  # Variables whose value is a credential, for any provider.
+  secretVariables =
+    lib.unique (builtins.concatMap (p: p.secretVariables or [ ]) (builtins.attrValues providers))
+    ++ map flagEnvVar secretFlags;
+
+  # The variables of the flags the package sets. kingpin gives the command
+  # line precedence, so the same name from `env` or the Secret is ignored.
+  ownedEnvNames = map flagEnvVar [
+    "provider"
+    "policy"
+    "txt-owner-id"
+    "source"
+    "interval"
+    "metrics-address"
+  ];
 
   intervalSeconds =
     interval:
@@ -284,6 +344,11 @@ in
       keySetText = if s.keySets == null then "" else describeKeySets s.keySets;
       firstVar = if s.keySets == null then "" else builtins.head (builtins.head s.keySets);
       wrongKeys = lib.filterAttrs (_: key: !(builtins.elem key s.declared)) config.secretEnv;
+      literalSecrets = builtins.filter (var: builtins.elem var secretVariables) s.envStrings;
+      firstLiteral = builtins.head (literalSecrets ++ [ "" ]);
+      ownedKeys = lib.optionals (s.dep != null && config.secretEnv == { }) (
+        builtins.filter (key: builtins.elem key ownedEnvNames) s.declared
+      );
     in
     [
       {
@@ -299,13 +364,21 @@ in
         message = lib.concatStringsSep "\n" (
           lib.mapAttrsToList (
             var: key:
-            "secretEnv.${var} names key \"${key}\", and providerCredentials \"${depName}\" declares ${listOrNone s.declared}."
+            "secretEnv.${var} names key \"${key}\", and providerCredentials \"${depName}\" declares ${listOrNone s.declared}. Map one of those keys, or add \"${key}\" to that instance's keys."
           ) wrongKeys
         );
       }
       {
         assertion = config.secretEnv == { } || s.dep != null;
         message = "secretEnv maps ${lib.concatStringsSep ", " (builtins.attrNames config.secretEnv)} but no providerCredentials dependency is wired. Set deps.providerCredentials = ref.${ns}.<instance>.";
+      }
+      {
+        assertion = literalSecrets == [ ];
+        message = "env sets ${lib.concatStringsSep ", " literalSecrets} to a literal string, which would be stored in the Nix store and the rendered manifests. Put the credential in a Secret wired as deps.providerCredentials, and name the key ${firstLiteral} or map it with secretEnv.${firstLiteral} = \"<key>\".";
+      }
+      {
+        assertion = ownedKeys == [ ];
+        message = "providerCredentials \"${depName}\" declares ${lib.concatStringsSep ", " ownedKeys}, which envFrom injects as variables of flags the package sets, and the flags take precedence. Remove those keys from that Secret, or inject only the credential keys with secretEnv.";
       }
     ];
 
@@ -314,17 +387,14 @@ in
   warnings =
     { config, ... }:
     let
-      rbacNeeds =
-        lib.optional (builtins.elem "crd" (flagValues "--registry" config.extraArgs)) "dnsrecords and dnsrecords/status"
-        ++ lib.optional (builtins.any (
-          arg: arg == "--gateway-listener-sets" || arg == "--gateway-listener-sets=true"
-        ) config.extraArgs) "listenersets";
+      crdRegistry = builtins.elem "crd" (flagValues "--registry" config.extraArgs);
+      listenerSets = builtins.any (
+        arg: arg == "--gateway-listener-sets" || arg == "--gateway-listener-sets=true"
+      ) config.extraArgs;
       port = providerPorts.${config.provider} or null;
     in
-    map (
-      resources:
-      "extraArgs make external-dns use ${resources}, which the package grants no RBAC for. Add the rules to the ClusterRole with partsOverlays."
-    ) rbacNeeds
+    lib.optional crdRegistry "extraArgs set --registry=crd, which keeps ownership records in resources of the dnsrecords.externaldns.k8s.io CRD. The package neither installs that CRD nor grants RBAC for dnsrecords and dnsrecords/status. Install the CRD, and add the rules to the ClusterRole with partsOverlays."
+    ++ lib.optional listenerSets "extraArgs make external-dns use listenersets, which the package grants no RBAC for. Add the rules to the ClusterRole with partsOverlays."
     ++
       lib.optional (port != null && scope.networkPolicyEnforcer != null)
         "egress policy allows only TCP 443 to the world; provider ${config.provider} uses port ${toString port}. Add a NetworkPolicy under namespaces.${ns}.networkPolicies.<name>.";
@@ -384,14 +454,7 @@ in
             inherit who;
             owned = [
               {
-                names = [
-                  "EXTERNAL_DNS_PROVIDER"
-                  "EXTERNAL_DNS_POLICY"
-                  "EXTERNAL_DNS_TXT_OWNER_ID"
-                  "EXTERNAL_DNS_SOURCE"
-                  "EXTERNAL_DNS_INTERVAL"
-                  "EXTERNAL_DNS_METRICS_ADDRESS"
-                ];
+                names = ownedEnvNames;
                 from = "a flag the package sets (provider, policy, txtOwnerId, sources, interval, or the metrics address), and the flag overrides the variable";
                 fix = "Set the option instead; the metrics address is fixed at :${toString metricsPort}.";
               }
@@ -431,8 +494,27 @@ in
             "--source" = "add it to sources, which also grants its RBAC.";
             "--metrics-address" =
               "the probes, the metrics Service, and the ServiceMonitor use :${toString metricsPort}; remove it.";
-          };
+            "--once" =
+              "external-dns exits after one synchronization, and the Deployment restarts it every time; remove it.";
+          }
+          // lib.genAttrs (map (flag: "--${flag}") secretFlags) (
+            flag:
+            let
+              var = flagEnvVar (lib.removePrefix "--" flag);
+            in
+            "its value is a credential, which would be stored in the Nix store and the pod's arguments. Put it in the providerCredentials Secret under the key ${var}, or map it with secretEnv.${var} = \"<key>\"."
+          );
         } config.extraArgs;
+
+        # sources.nix and providers.nix follow `release`; another release
+        # may need other RBAC rules or accept other providers.
+        imageRef =
+          if
+            lib.versions.majorMinor (lib.removePrefix "v" config.image.tag) == lib.versions.majorMinor release
+          then
+            kix.image.ref config.image
+          else
+            throw "${who}: image.tag \"${config.image.tag}\" is not a ${lib.versions.majorMinor release} release, and the ClusterRole rules (sources.nix) and the provider list (providers.nix) follow external-dns v${release}. To move to another release, change `release` in kix/packages/external-dns/default.nix and update both files from that release's chart clusterrole.yaml and pkg/apis/externaldns/types.go.";
 
         probe = {
           httpGet = {
@@ -494,7 +576,7 @@ in
                   (
                     {
                       name = "external-dns";
-                      image = kix.image.ref config.image;
+                      image = imageRef;
                       inherit args;
                       ports = [ (kix.port "metrics" metricsPort) ];
                       # Timings from the upstream chart's values.yaml.
@@ -542,6 +624,9 @@ in
       // crdRefParts
     )
 
+    # The lib passes a build function only the arguments it names, so
+    # `scope` and `lib` are listed for `kix.monitor`, which reads them from
+    # `args`.
     (
       {
         self,
@@ -556,16 +641,24 @@ in
         # interval set to stay under a provider's rate limit does not keep
         # the alert firing.
         staleAfter = lib.max 900 (3 * intervalSeconds config.interval);
+        forMinutes = 5;
+        # Rounded down: when the alert fires, the last synchronization is at
+        # least `staleAfter` seconds plus `forMinutes` old.
+        staleMinutes = staleAfter / 60 + forMinutes;
+        series = "external_dns_controller_last_sync_timestamp_seconds{namespace=\"${ns}\", service=\"${self.metricsService.out.name}\"}";
       in
       kix.monitor {
         service = "metricsService";
         port = "metrics";
+        # The gauge is 0 until the first successful synchronization. It has
+        # no samples while the pod is down or unscraped, which `absent`
+        # covers.
         alerts.ExternalDNSSyncStale = {
-          expr = "time() - external_dns_controller_last_sync_timestamp_seconds{namespace=\"${ns}\", service=\"${self.metricsService.out.name}\"} > ${toString staleAfter}";
-          "for" = "5m";
+          expr = "time() - ${series} > ${toString staleAfter} or absent(${series})";
+          "for" = "${toString forMinutes}m";
           severity = "warning";
-          summary = "external-dns ${ns}/${name} has not synchronized DNS records for ${toString (staleAfter / 60)} minutes.";
-          description = "The last successful synchronization is older than three intervals. Look for provider API errors, such as HTTP 429 rate limiting, in the pod log.";
+          summary = "external-dns ${ns}/${name}: no successful DNS synchronization in the last ${toString staleMinutes} minutes, or no metrics from the pod.";
+          description = "The last successful synchronization is older than three intervals, or Prometheus has no samples from the pod. Check that the pod is running, then look for provider API errors, such as HTTP 429 rate limiting, in its log.";
         };
       } args
     )
