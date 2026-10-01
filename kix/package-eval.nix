@@ -205,7 +205,12 @@ let
       };
     };
     clickhouse-operator.instances = { inherit credentials; };
-    coredns.config.clusterIP = "10.96.0.53";
+    # A real Prometheus provider, so the ServiceMonitor, the alert rules,
+    # and the Service's metrics port are built against its builders.
+    coredns = {
+      config.clusterIP = "10.96.0.53";
+      instances.prometheus-operator.package = packages.prometheus-operator;
+    };
     firezone.config = {
       domain = "firezone.example.com";
       admin = {

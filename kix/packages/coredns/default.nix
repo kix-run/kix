@@ -1,33 +1,53 @@
-# CoreDNS as the cluster DNS server.
+# coredns: runs CoreDNS as the cluster DNS server, answering Service and pod
+# names under the cluster domain and forwarding other names upstream.
 #
-# Builds the Corefile from typed server blocks (corefile.nix), a Deployment,
-# a ServiceAccount with read-only cluster RBAC, and the root Service at
-# `clusterIP`. The instance claims the `dns` role, so workloads that dial an
-# in-cluster Service order after it. The PodDisruptionBudget and the spread
-# come from the availability level.
+# Installs a ConfigMap holding the Corefile, built from typed server blocks
+# (corefile.nix); a ServiceAccount with a read-only ClusterRole and binding;
+# the Deployment; and the root Service at `clusterIP`. The instance claims
+# the `dns` role, so workloads that dial an in-cluster Service order after
+# it. The PodDisruptionBudget and the spread come from the availability
+# level. Evaluation refuses a Corefile that CoreDNS would reject, that would
+# not resolve Service names for pods, or that leaves a probe without a
+# listener.
 #
 # Install it where nothing else serves cluster DNS: a kubeadm cluster with
 # the CoreDNS addon skipped, k3s with `--disable coredns`, RKE2 without
-# rke2-coredns, Talos with its CoreDNS off. Where the platform runs its own
-# DNS (stock kind, EKS, GKE, AKS), pods keep querying that server, so this
-# one would answer nobody.
+# rke2-coredns, or Talos with its CoreDNS off. Where the platform runs its
+# own DNS (stock kind, EKS, GKE, AKS), pods keep querying that server, so
+# this one would answer nobody.
 #
-# Run it in `kube-system`. `clusterIP` must equal the kubelet's `clusterDNS`,
-# the address every pod's resolv.conf names. The Service takes the instance
-# name; tooling that addresses `kube-dns.kube-system` by name (an nginx
-# `resolver`, NodeLocal DNSCache) needs the instance named `kube-dns`.
+# Required config: `clusterIP`, which must equal the kubelet's `clusterDNS`,
+# the address every pod's resolv.conf names. Run the instance in
+# `kube-system`. The Service takes the instance name, so name the instance
+# `kube-dns` where tooling addresses `kube-dns.kube-system` (an nginx
+# `resolver`, NodeLocal DNSCache).
 #
-# Taking over a bundled CoreDNS: name the instance `kube-dns` (the bundled
-# Service on kubeadm and k3s), so `kix deploy` takes that Service and its
-# address over in place (`--force-conflicts` if another manager owns it) and
-# the new Deployment does not collide with the addon's `coredns`. Then delete
-# the addon's Deployment and stop its reinstall: kubeadm `dns.disabled`
-# (v1beta4) or `--skip-phases addon/coredns`, k3s `--disable coredns`.
+#   instances.kube-system.kube-dns = {
+#     package = packages.coredns;
+#     config.clusterIP = "10.96.0.10"; # the kubelet's clusterDNS
+#   };
 #
-# Dependencies:
-#   prometheus (optional)  ServiceMonitor and alerts, with `metrics.enabled`.
+# DI deps:
+#   prometheus (optional)  the Service's metrics port, a ServiceMonitor, and
+#                          three alerts scoped to the instance, with
+#                          `metrics.enabled`.
 #
-# root = the Service.
+# out: root is the Service, so `out.name`, `out.fqdn`, `out.selector`, and
+# `out.port` (53) are the Service's.
+#
+# Escape hatches: `servers` takes any plugin with its arguments and block
+# lines; `env` sets Go runtime variables such as GOMEMLIMIT; the instance's
+# `partsOverlays` add files to `configmap` for the `file` and `hosts`
+# plugins, change `service`, or place `deployment`.
+#
+# Known limits: the network intents allow DNS on port 53 only, in from every
+# pod and out to resolvers outside the cluster; the `servers` description
+# names the route for other traffic. Under `networkPolicy.enable` the
+# instance must run in `kube-system`, because the DNS egress rule every
+# workload gets selects kube-system pods labelled `k8s-app: kube-dns`;
+# evaluation refuses another namespace. Zones with a scheme (tls://,
+# https://, grpc://, or quic://) are refused, so `servers` builds plain DNS
+# servers only.
 
 {
   scope,
@@ -58,11 +78,20 @@ let
   inherit (scope.rbac) grant allow core;
   discovery = scope.rbac.group "discovery.k8s.io" [ "endpointslices" ];
 
-  zoneName = lib.types.addCheck lib.types.str (z: !lib.hasInfix "://" z) // {
-    description = "DNS zone name without a scheme";
-  };
+  # renderServer appends `:<port>` to every zone, so a zone that carries its
+  # own port renders `example.org:53:53`, which CoreDNS fails to parse. A
+  # colon elsewhere stays legal for IPv6 reverse zones such as `fd00::/8`.
+  zoneName =
+    lib.types.addCheck lib.types.str (
+      z: z != "" && !lib.hasInfix "://" z && builtins.match ".*:[0-9]+" z == null
+    )
+    // {
+      description = "DNS zone name without a scheme or a :port suffix";
+    };
 
-  # A dotted quad, or an IPv6 literal (two or more colons).
+  # The shape of a dotted quad (octets 0-255) or of an IPv6 literal (two to
+  # seven colons). It catches typos and "None", not every malformed IPv6
+  # address.
   ipLiteral =
     lib.types.strMatching (
       "((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
@@ -111,7 +140,14 @@ let
       zones = lib.mkOption {
         type = lib.types.nonEmptyListOf zoneName;
         default = [ "." ];
-        description = "Zones the block serves. Plain DNS only: tls://, https://, grpc:// and quic:// servers need certificate files, mounted through partsOverlays.";
+        description = ''
+          Zones the block serves, such as `.` or `example.org`. The port goes
+          in `port`, not in the zone. A zone with a scheme (`dns://`,
+          `tls://`, `https://`, `grpc://`, or `quic://`) is refused: write a
+          plain DNS zone without one. A TLS server needs a certificate in the
+          pod and a Corefile block that `servers` does not build; add both
+          with partsOverlays on `configmap` and `deployment`.
+        '';
       };
       port = lib.mkOption {
         type = lib.types.port;
@@ -122,10 +158,10 @@ let
         type = lib.types.attrsOf pluginType;
         default = { };
         description = ''
-          Directives of the block, keyed by a name of your choice that
-          defaults the plugin name. CoreDNS runs plugins in its compiled-in
-          order whatever the Corefile says; repeats of one plugin run in
-          attribute-name order.
+          Directives of the block, keyed by a name of your choice, which is
+          also the default plugin name. CoreDNS runs plugins in its
+          compiled-in order whatever the Corefile says; repeats of one
+          plugin run in attribute-name order.
         '';
       };
     };
@@ -146,7 +182,9 @@ in
           ports = dns53;
         }
       ];
-      # Public resolvers, and resolvers on this or a peer node.
+      # Public resolvers, and resolvers on this or a peer node. `entities`
+      # are Cilium entity names, read by the Cilium enforcer's external
+      # egress rule.
       upstream.egress = [
         {
           to = "world";
@@ -170,6 +208,7 @@ in
 
     clusterIP = lib.mkOption {
       type = ipLiteral;
+      example = "10.96.0.10";
       description = ''
         Address of the Service. It must equal the kubelet's `clusterDNS`,
         which every pod's resolv.conf names: `clusterDNS` in the kubelet
@@ -263,11 +302,15 @@ in
         `/etc/coredns/<key>`.
 
         The package allows DNS (53) in from every pod and out to resolvers
-        outside the cluster. A block on another port, an upstream that is a
-        pod, or a DoT or DoH upstream needs a network intent on the
-        instance.
+        outside the cluster. Under network policy, a block on another port,
+        an upstream that is a pod, or a DoT or DoH upstream needs a policy
+        of its own: an entry in the cluster's `networkPolicy.platformIntents`
+        that selects these pods (`k8s-app: kube-dns`), or a policy resource
+        added with partsOverlays.
       '';
     };
+
+    env = kix.options.env;
 
     metrics = kix.options.monitor;
   };
@@ -370,6 +413,8 @@ in
         ) facts.serverPorts;
 
         metricsPorts = lib.optional (facts.metricsPort != null) (kix.port "metrics" facts.metricsPort);
+
+        envVars = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);
       in
       {
         serviceAccount = scope.mkResource {
@@ -432,10 +477,6 @@ in
                 spec = {
                   serviceAccount = self.serviceAccount;
                   priorityClassName = "system-cluster-critical";
-                  # Room for the health plugin's 5 s lameduck, during which
-                  # a stopping pod keeps answering while it leaves the
-                  # Service's endpoints.
-                  terminationGracePeriodSeconds = 30;
                   # CoreDNS resolves upstream names through the node's
                   # resolv.conf, not through itself.
                   dnsPolicy = "Default";
@@ -453,56 +494,59 @@ in
                   ];
                   securityContext.seccompProfile.type = "RuntimeDefault";
                   containers = [
-                    {
-                      name = "coredns";
-                      image = kix.image.ref config.image;
-                      imagePullPolicy = config.image.pullPolicy;
-                      args = [
-                        "-conf"
-                        "/etc/coredns/Corefile"
-                      ];
-                      inherit (config) resources;
-                      ports = dnsPorts ++ metricsPorts;
-                      livenessProbe = {
-                        httpGet = {
-                          path = "/health";
-                          port = facts.healthPort;
+                    (
+                      {
+                        name = "coredns";
+                        image = kix.image.ref config.image;
+                        imagePullPolicy = config.image.pullPolicy;
+                        args = [
+                          "-conf"
+                          "/etc/coredns/Corefile"
+                        ];
+                        inherit (config) resources;
+                        ports = dnsPorts ++ metricsPorts;
+                        livenessProbe = {
+                          httpGet = {
+                            path = "/health";
+                            port = facts.healthPort;
+                          };
+                          initialDelaySeconds = 60;
+                          periodSeconds = 10;
+                          timeoutSeconds = 5;
+                          failureThreshold = 5;
                         };
-                        initialDelaySeconds = 60;
-                        periodSeconds = 10;
-                        timeoutSeconds = 5;
-                        failureThreshold = 5;
-                      };
-                      readinessProbe = {
-                        httpGet = {
-                          path = "/ready";
-                          port = facts.readyPort;
+                        readinessProbe = {
+                          httpGet = {
+                            path = "/ready";
+                            port = facts.readyPort;
+                          };
+                          periodSeconds = 10;
                         };
-                        periodSeconds = 10;
-                      };
-                      securityContext = {
-                        allowPrivilegeEscalation = false;
-                        # The image's user is `nonroot:nonroot`, a name. The
-                        # kubelet refuses runAsNonRoot unless it can see a
-                        # numeric user, so the image's uid and gid are
-                        # stated here.
-                        runAsNonRoot = true;
-                        runAsUser = 65532;
-                        runAsGroup = 65532;
-                        capabilities = {
-                          add = [ "NET_BIND_SERVICE" ];
-                          drop = [ "ALL" ];
+                        securityContext = {
+                          allowPrivilegeEscalation = false;
+                          # The image's user is `nonroot:nonroot`, a name. The
+                          # kubelet refuses runAsNonRoot unless it can see a
+                          # numeric user, so the image's uid and gid are
+                          # stated here.
+                          runAsNonRoot = true;
+                          runAsUser = 65532;
+                          runAsGroup = 65532;
+                          capabilities = {
+                            add = [ "NET_BIND_SERVICE" ];
+                            drop = [ "ALL" ];
+                          };
+                          readOnlyRootFilesystem = true;
                         };
-                        readOnlyRootFilesystem = true;
-                      };
-                    }
+                      }
+                      // lib.optionalAttrs (envVars != [ ]) { env = envVars; }
+                    )
                   ];
                 };
               };
             };
           }
-          # The whole ConfigMap, not a subPath, so `reload` sees updates and
-          # a file-reading plugin finds the keys added beside the Corefile.
+          # The whole ConfigMap, not a subPath, so a file-reading plugin finds
+          # the keys an overlay adds beside the Corefile.
           |> kix.withMounts [
             (kix.mount.configMap self.configmap {
               mountPath = "/etc/coredns";
@@ -518,6 +562,9 @@ in
             ports = builtins.filter (p: (p.name or "") != "metrics" || scrape) (
               kix.service.extractPorts self.deployment
             );
+            # The labels kubeadm puts on its DNS Service. `kubectl
+            # cluster-info` lists Services labelled
+            # kubernetes.io/cluster-service=true, by kubernetes.io/name.
             labels = {
               "k8s-app" = "kube-dns";
               "kubernetes.io/cluster-service" = "true";
@@ -527,7 +574,15 @@ in
           }
           |> scope.mkResource;
 
-        root = self.service;
+        root = {
+          resource = self.service;
+          # The alert rules reference no other part of the instance, so the
+          # PackageInstance reaches them only through this list.
+          requires = builtins.filter (r: r != null) [
+            self.serviceMonitor
+            self.prometheusRules
+          ];
+        };
       }
     )
 

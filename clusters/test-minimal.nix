@@ -1,4 +1,4 @@
-# clusters/test-minimal.nix — Minimal cluster: only coredns with defaults.
+# clusters/test-minimal.nix: minimal cluster, only coredns with its required clusterIP.
 #
 # Tests that a minimal configuration produces the expected resources.
 # Used for negative assertions (disabled features absent).

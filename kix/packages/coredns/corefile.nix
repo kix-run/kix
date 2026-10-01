@@ -1,7 +1,8 @@
 # The Corefile as data: rendering the typed `servers` option, the ports the
 # rendered config listens on, and the checks that refuse a Corefile CoreDNS
-# would reject or that would leave the pod unprobed. Pure functions of the
-# option value; default.nix adds the checks that need the build context.
+# would reject, that would not resolve Service names for pods, or that
+# would leave the pod unprobed. Pure functions of the option value;
+# default.nix adds the checks that need the build context.
 { lib }:
 
 let
@@ -22,6 +23,9 @@ let
   # Zone names compare without their trailing dot: `cluster.local.` and
   # `cluster.local` are the same zone to CoreDNS.
   normalizeZone = z: if z != "." && lib.hasSuffix "." z then lib.removeSuffix "." z else z;
+
+  # Whether zone `zone` contains the name `name`, both normalized.
+  zoneContains = zone: name: zone == "." || name == zone || lib.hasSuffix ".${zone}" name;
 
   enabledServers = servers: lib.filterAttrs (_: s: s.enabled) servers;
 
@@ -133,19 +137,21 @@ let
         enabled == { }
       ) "no server block is enabled. Set servers.default.enabled = true or add a block.";
 
+      # Pods send every query to the Service on port 53, and a block with a
+      # view answers only the clients its view matches. The kubernetes
+      # plugin's zones are its args, or the block's zones when it has none.
       servesDomain =
         server:
-        builtins.any (
-          p:
-          let
-            zones = if p.args == [ ] then server.zones else p.args;
-          in
-          builtins.elem domain (map normalizeZone zones)
+        server.port == 53
+        && !hasView server
+        && builtins.any (z: zoneContains (normalizeZone z) domain) server.zones
+        && builtins.any (
+          p: builtins.elem domain (map normalizeZone (if p.args == [ ] then server.zones else p.args))
         ) (directivesOf "kubernetes" server);
 
       noClusterDomain =
         lib.optional (enabled != { } && !builtins.any servesDomain (builtins.attrValues enabled))
-          "no server block runs the kubernetes plugin for the cluster domain '${domain}', so Service names would not resolve. Set servers.${firstServer}.plugins.kubernetes.enabled = true with '${domain}' in its args.";
+          "no server block on port 53 without a view serves the cluster domain '${domain}' with the kubernetes plugin, and pods query port 53, so Service names would not resolve. Keep servers.default on port 53 with the zone \".\" and its kubernetes plugin enabled with '${domain}' in its args, or give another block the same.";
 
       probeTargets = [
         {
@@ -229,13 +235,5 @@ let
     ++ repeatedViews;
 in
 {
-  inherit
-    render
-    listenPort
-    isLoopback
-    facts
-    checks
-    directivesOf
-    enabledServers
-    ;
+  inherit render facts checks;
 }

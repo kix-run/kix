@@ -14,11 +14,14 @@
   ofKind,
   byName,
   evalFails,
+  eval,
+  kixlib,
   ...
 }:
 
 let
   corednsPackage = import ../../../packages/coredns;
+  corefile = import ../../../packages/coredns/corefile.nix { inherit lib; };
 
   # A cluster with one coredns instance. `module` adds cluster settings.
   corednsCluster =
@@ -177,8 +180,135 @@ in
     in
     lib.hasInfix "view office" firstBlock || throw "view block is not first:\n${corefile}";
 
-  # Corefiles CoreDNS rejects or that leave a probe or the scrape without a
-  # listener fail evaluation, as do values the option types refuse.
+  # Each Corefile check returns its message for the servers an instance
+  # config evaluates to. The instance config is evaluated on its own, so a
+  # build that throws for another reason cannot hide which check fired.
+  coredns-check-messages =
+    let
+      domain = "corp.internal";
+      package = corednsPackage {
+        scope = { };
+        inherit lib;
+        kix = kixlib;
+        availability = "node";
+      };
+      checksOf =
+        config:
+        corefile.checks {
+          servers =
+            (eval.evaluateInstanceConfig {
+              packageOptions = package.options;
+              packageConfig = package.config;
+              instCfg.config.imports = [
+                { clusterIP = "10.96.0.10"; }
+                config
+              ];
+              clusterConfig = {
+                clusterDomain = domain;
+                cluster.network.dnsUpstream = [ ];
+              };
+            }).servers;
+          clusterDomain = domain;
+        };
+      noDomain = "no server block on port 53 without a view serves the cluster domain '${domain}' with the kubernetes plugin, and pods query port 53, so Service names would not resolve. Keep servers.default on port 53 with the zone \".\" and its kubernetes plugin enabled with '${domain}' in its args, or give another block the same.";
+      forwardOnly = {
+        zones = [ "example.org" ];
+        plugins.forward.args = [
+          "."
+          "192.0.2.1"
+        ];
+      };
+      cases = {
+        "default" = {
+          config = { };
+          expect = [ ];
+        };
+        "cluster domain in a block of its own" = {
+          config.servers = {
+            default.plugins.kubernetes.enabled = false;
+            cluster = {
+              zones = [ domain ];
+              plugins.kubernetes = { };
+            };
+          };
+          expect = [ ];
+        };
+        "no block enabled" = {
+          config.servers.default.enabled = false;
+          expect = [ "no server block is enabled. Set servers.default.enabled = true or add a block." ];
+        };
+        "kubernetes disabled" = {
+          config.servers.default.plugins.kubernetes.enabled = false;
+          expect = [ noDomain ];
+        };
+        "default block on port 5353" = {
+          config.servers.default.port = 5353;
+          expect = [ noDomain ];
+        };
+        "cluster domain outside the block's zones" = {
+          config.servers.default.zones = [ "example.org" ];
+          expect = [ noDomain ];
+        };
+        "ready disabled" = {
+          config.servers.default.plugins.ready.enabled = false;
+          expect = [
+            "no server block enables the ready plugin; the readiness probe calls it. Set servers.default.plugins.ready.enabled = true."
+          ];
+        };
+        "prometheus on localhost" = {
+          config.servers.default.plugins.prometheus.args = [ ];
+          expect = [
+            "the prometheus plugin listens on localhost:9153, which the kubelet (or Prometheus) cannot reach from outside the pod. Set servers.default.plugins.prometheus.args = [ \":9153\" ]."
+          ];
+        };
+        "health on two ports" = {
+          config.servers.b-other = forwardOnly // {
+            plugins = forwardOnly.plugins // {
+              health.args = [ ":8081" ];
+            };
+          };
+          expect = [
+            "the health plugin listens on different ports in servers.default (:8080) and servers.b-other (:8081); the pod exposes one. Give every block the same address."
+          ];
+        };
+        "health address without a port" = {
+          config.servers.default.plugins.health.args = [ "0.0.0.0" ];
+          expect = [
+            "the health plugin's address '0.0.0.0' in servers.default has no port. Write it as \":<port>\"."
+          ];
+        };
+        "two view-less blocks on .:53" = {
+          config.servers.second.plugins.errors = { };
+          expect = [
+            "servers default and second both serve .:53 without a view plugin; CoreDNS refuses to start (duplicate zone). To replace the default block, set servers.default.enabled = false; otherwise give every block but one a view, or merge them."
+          ];
+        };
+        "two views in one block" = {
+          config.servers.a-office = forwardOnly // {
+            zones = [ "." ];
+            plugins = forwardOnly.plugins // {
+              view.args = [ "office" ];
+              view-lab = {
+                name = "view";
+                args = [ "lab" ];
+              };
+            };
+          };
+          expect = [
+            "servers.a-office has more than one enabled view plugin; CoreDNS accepts one per block."
+          ];
+        };
+      };
+      wrong = lib.filterAttrs (_: c: checksOf c.config != c.expect) cases;
+    in
+    wrong == { }
+    || throw "Corefile check messages differ: ${
+      builtins.toJSON (lib.mapAttrs (_: c: checksOf c.config) wrong)
+    }";
+
+  # Values the option types refuse, a Corefile check reached through the
+  # build, and metrics enabled with no prometheus plugin fail evaluation.
+  # The namespace check is in coredns-namespace-under-netpol.
   coredns-refusals =
     let
       fails =
@@ -189,11 +319,18 @@ in
         || throw "${name} evaluated";
     in
     fails "kubernetes disabled" { servers.default.plugins.kubernetes.enabled = false; }
-    && fails "prometheus on localhost" { servers.default.plugins.prometheus.args = [ ]; }
-    && fails "ready disabled" { servers.default.plugins.ready.enabled = false; }
     && fails "clusterIP None" { clusterIP = "None"; }
     && fails "tls zone" { servers.default.zones = [ "tls://." ]; }
-    && fails "two blocks on .:53" { servers.second.plugins.errors = { }; }
+    && fails "zone with a port" {
+      servers.ex = {
+        zones = [ "example.org:53" ];
+        plugins.forward.args = [
+          "."
+          "192.0.2.1"
+        ];
+      };
+    }
+    && fails "empty zone" { servers.default.zones = [ "" ]; }
     && (
       evalFails (mkCluster [
         withPrometheus
@@ -209,6 +346,21 @@ in
       ])
       || throw "metrics enabled with a Prometheus and no prometheus plugin evaluated"
     );
+
+  # An IPv6 reverse zone keeps its colons.
+  coredns-ipv6-reverse-zone =
+    let
+      cfg = corefileOf (corednsCluster {
+        config.servers.v6 = {
+          zones = [ "fd00::/8" ];
+          plugins.forward.args = [
+            "."
+            "192.0.2.1"
+          ];
+        };
+      });
+    in
+    lib.hasInfix "fd00::/8:53 {" cfg || throw "Corefile with an IPv6 reverse zone:\n${cfg}";
 
   # Under network policy the enforcer's DNS egress rule allows only
   # kube-system, so coredns elsewhere fails evaluation; in kube-system it
