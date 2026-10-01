@@ -623,13 +623,20 @@ in
         # Upstream's chart ships this connection disabled. Kix renders it so
         # that the first deploy proves the operator runs and reaches
         # Infisical.
+        #
+        # It requires only its CRD, so it exists before the operator starts.
+        # The operator writes the connection's status with an update that
+        # fails when the object changed after its read, ignores
+        # metadata-only changes, and retries a success after five minutes.
+        # Created while the operator runs, the connection would race the
+        # annotation patch kix deploy sends after each apply, and lose
+        # IsReady for longer than the deploy waits.
         connection =
           assert lib.assertMsg egressOk
             "${who}: address ${addr} is not an HTTPS host outside the cluster on port 443, and this cluster enforces egress policy. The package's network intent opens only TCP 443 to destinations outside the cluster, so the default InfisicalConnection would never become ready. Add a networkPolicy.platformIntents entry with namespace = \"${ns}\", podSelector = ${builtins.toJSON scope.selectorLabels}, and an egress rule that reaches ${addr}.";
           self.crds.infisicalConnections.out.mkCR scope {
             name = "default";
             spec.address = addr;
-            requires = [ self.deployment ];
           };
 
         root = {
