@@ -488,10 +488,10 @@ in
       operandOf = cr: "${lib.head (lib.splitString "/" cr.apiVersion)}/${cr.kind}/${cr.name}";
       mkSmon = prometheusOperator.out.mkServiceMonitor scope;
 
-      # Selector matching the operator-managed Thanos sidecar pods. The
-      # Prometheus Operator labels reconciled pods with both keys; the
-      # Thanos sidecar runs in those same pods.
-      thanosPodSelector = {
+      # The server pods the operator creates. It labels them with both
+      # keys, and the Thanos sidecar runs in the same pods. The Prometheus
+      # CRD's factBehavior podSelector names the same labels.
+      serverPodSelector = {
         "app.kubernetes.io/name" = "prometheus";
         "operator.prometheus.io/name" = name;
       };
@@ -726,6 +726,23 @@ in
         ) config.extraSpec;
       };
 
+      # The operator creates the server pods, so no workload policy is
+      # derived for them. Kubernetes service discovery needs the API server
+      # (the ServiceAccount's ClusterRoleBinding above); the netpol plugin
+      # adds the scrape and Alertmanager egress from the monitors this
+      # Prometheus selects.
+      serverEgress = kix.operandPolicy {
+        inherit scope;
+        name = "${name}-server-egress";
+        spec = {
+          endpointSelector.matchLabels = serverPodSelector;
+          egress = [
+            scope.networkPolicyEnforcer.netpol.dnsEgressRule
+            scope.networkPolicyEnforcer.netpol.apiServerEgressRule
+          ];
+        };
+      };
+
       # ── Additional scrape / AM / alert-relabel Secrets (inline mode) ─────
       # Chart-equivalent: writes the user-provided list/string to a Secret
       # and references it from the CR. Stored under stringData (server-side
@@ -783,7 +800,7 @@ in
           spec = {
             type = config.thanos.service.type;
             ports = mkServicePorts config.thanos.service;
-            selector = thanosPodSelector;
+            selector = serverPodSelector;
           }
           // lib.optionalAttrs (config.thanos.service.clusterIP != null) {
             clusterIP = config.thanos.service.clusterIP;
@@ -808,7 +825,7 @@ in
           spec = {
             type = config.thanos.serviceExternal.type;
             ports = mkServicePorts config.thanos.serviceExternal;
-            selector = thanosPodSelector;
+            selector = serverPodSelector;
           }
           // lib.optionalAttrs (config.thanos.serviceExternal.loadBalancerIP != "") {
             loadBalancerIP = config.thanos.serviceExternal.loadBalancerIP;
@@ -954,7 +971,8 @@ in
         ++ lib.optional config.thanos.ingress.enabled self.thanosIngress.gateway
         ++ lib.optional scrapeIsSet self.scrapeConfigsSecret
         ++ lib.optional amIsSet self.alertManagerConfigsSecret
-        ++ lib.optional amRelabelIsSet self.alertRelabelConfigsSecret;
+        ++ lib.optional amRelabelIsSet self.alertRelabelConfigsSecret
+        ++ lib.optional (self.serverEgress != null) self.serverEgress;
         out = {
           # Built on the ref's fqdn: the URL carries the marker's context.
           serviceUrl = "http://${self.service.out.fqdn}:9090";

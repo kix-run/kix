@@ -487,9 +487,12 @@
         ++ (if inst ? _packageInstance then [ inst._packageInstance ] else [ ])
         ++ (inst._hookResources or [ ]);
 
+      # `resources` holds the sealed resources of every active instance,
+      # including the policies instance hooks derived.
       clusterHookCtx = {
         cluster = clusterCtx;
         inherit nsResources realNsNames;
+        resources = builtins.concatMap collectResources allInstancesList;
       };
       clusterHookResults = map (p: p clusterHookCtx) clusterProcessors;
       # Preserve hook execution order (priority, then name) in both Activation
