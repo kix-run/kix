@@ -214,10 +214,10 @@ let
         config.password = "password";
       };
     };
+    loki.instances = { inherit storage; };
     # A class, a pool, and a Prometheus provider, so the StorageClass, the
     # DiskPool and its CRD reference, and the io-engine metrics Service,
     # ServiceMonitor, and alerts are built.
-    loki.instances = { inherit storage; };
     mayastor = {
       config = {
         storageClasses.mayastor-1.parameters.repl = "1";

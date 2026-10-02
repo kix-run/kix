@@ -10,7 +10,8 @@ store and needs no tenant or label of its own.
 
 Environment, set by the package from out.* values, and RETRY_FOR by
 kix.healthCheck:
-  LOKI_URL   base of Loki's HTTP API, "http://<service>:3100"
+  LOKI_URL   base of Loki's HTTP API, out.serviceUrl:
+             "http://<name>.<namespace>.svc.<clusterDomain>:3100"
   RETRY_FOR  seconds to keep re-checking before giving up. Loki answers 503
              on /ready while it replays its write-ahead log.
 

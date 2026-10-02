@@ -1,26 +1,22 @@
-# Grafana Loki as a single binary on one volume.
+# loki: Grafana Loki as one single-binary pod on one volume.
 #
 # One StatefulSet pod runs every Loki component in one process. It keeps its
-# write-ahead log, TSDB index and chunks on the filesystem of the claim it
-# gets through the `storage` dependency. It has no gateway, no memberlist and
-# no object store, so it stays at one replica.
+# write-ahead log, TSDB index, and chunks on the filesystem of the claim it
+# gets through the `storage` dependency. root = the client Service.
 #
 #   instances.logs = {
 #     storage = { package = packages.persistent-volume-claim; config.size = "20Gi"; };
 #     loki.package = packages.loki;
 #   };
 #
+# Limits: one replica (`availability.max = "none"`), filesystem storage only
+# (no object store), and a single tenant.
+#
 # Beside a workload whose own `storage` dependency is optional (Grafana),
 # give Loki's claim another instance name and `aliases`, and wire
 # `deps.storage = ref.<ns>.<claim>` as kix.modules.monitoring does.
 # Otherwise both pods mount the one ReadWriteOnce claim
 # (housekeeping/2026-10-02-two-workloads-share-one-rwo-claim.md).
-#
-# Configuration is Loki's own `config.yaml` vocabulary. `settings` is merged
-# over `builtinConfig` below: a null removes an unlocked key, a list replaces
-# the package's list whole, and the paths in `lockedPaths` fail evaluation.
-# Size the claim for the ingest rate times the retention period
-# (`settings.limits_config.retention_period`, 7 days by default).
 #
 # DI deps:
 #   storage (required)     a persistent-volume-claim instance, mounted at
@@ -32,10 +28,21 @@
 #   out.url { }     the same address, from the root Service
 #
 # Both are the base of Loki's HTTP API; a consumer appends the path
-# (`/loki/api/v1/push`, `/ready`). Loki runs single-tenant: `auth_enabled`
-# is locked to false, so consumers send no `X-Scope-OrgID` header.
+# (`/loki/api/v1/push`, `/ready`). `auth_enabled` is locked to false, so
+# consumers send no `X-Scope-OrgID` header.
 #
-# root = Service.
+# Escape hatches:
+#   settings       Loki's `config.yaml` keys, merged over `builtinConfig`
+#                  below. A null removes an unlocked key, a list replaces
+#                  the package's list whole, and the paths in `lockedPaths`
+#                  fail evaluation. Size the claim for the ingest rate times
+#                  `settings.limits_config.retention_period` (7 days by
+#                  default).
+#   extraArgs      flags after the package's own. The flags in `ownedFlags`
+#                  fail evaluation: Loki applies flags after the file, so
+#                  each one would override a locked path.
+#   env            container env, for `${NAME}` expansion in `settings`.
+#   resources, partsOverlays, and each resource's `extra` for the rest.
 
 {
   scope,
@@ -50,7 +57,6 @@ let
   httpPort = 3100;
   dataPath = "/var/loki";
   configDir = "/etc/loki";
-  headlessName = "${name}-headless";
 
   builtinConfig = {
     auth_enabled = false;
@@ -124,21 +130,41 @@ let
       "common"
       "instance_addr"
     ]
-    # No memberlist Service exists for a ring to gossip over.
+    # The ring defaults for every component: no memberlist Service exists
+    # to gossip over, and the one pod holds every stream. A component's own
+    # ring keys (`ingester.lifecycler.ring`) take precedence over `common`
+    # in Loki and are not locked.
     [
       "common"
       "ring"
       "kvstore"
     ]
-    # One replica.
     [
       "common"
       "replication_factor"
     ]
   ];
 
-  configFlag = "the package renders it from settings; change settings instead.";
-  expandFlag = "settings and env rely on variable expansion; remove it.";
+  # Loki applies flags after the config file, so a flag that sets a locked
+  # path overrides it. Go's flag package reads the `-` and `--` spellings.
+  ownedFlags =
+    let
+      locks = path: "it sets ${path}, which the package locks; remove it.";
+      flags = {
+        "-config.file" = "the package renders the file from settings; change settings instead.";
+        "-config.expand-env" = "settings and env rely on variable expansion; remove it.";
+        "-target" = "the package runs every Loki component in its one pod; remove it.";
+        "-auth.enabled" = locks "auth_enabled";
+        "-server.http-listen-port" = locks "server.http_listen_port";
+        "-common.path-prefix" = locks "common.path_prefix";
+        "-common.storage.filesystem.chunk-directory" = locks "common.storage.filesystem";
+        "-common.storage.filesystem.rules-directory" = locks "common.storage.filesystem";
+        "-common.storage.ring.instance-addr" = locks "common.instance_addr";
+        "-common.storage.ring.store" = locks "common.ring.kvstore";
+        "-common.storage.ring.replication-factor" = locks "common.replication_factor";
+      };
+    in
+    flags // lib.mapAttrs' (flag: lib.nameValuePair "-${flag}") flags;
 in
 {
   meta = {
@@ -171,8 +197,10 @@ in
         restates the earlier ones. The package locks `auth_enabled`,
         `server.http_listen_port`, `common.path_prefix`,
         `common.storage.filesystem`, `common.instance_addr`,
-        `common.ring.kvstore` and `common.replication_factor`; setting
-        one, or replacing a key above it, fails evaluation.
+        `common.ring.kvstore`, and `common.replication_factor`; setting
+        one, or replacing a key above it, fails evaluation. A component's
+        own key (for example `ingester.lifecycler.ring`) takes precedence
+        over its `common` default in Loki and is not locked.
 
         Loki runs with `-config.expand-env=true`, so `''${NAME}` in a value
         reads the container's env var NAME (set it through `env`); an unset
@@ -184,11 +212,24 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       example = [ "-log.format=json" ];
-      description = "Flags appended after the package's own. `-config.file` and `-config.expand-env` belong to the package.";
+      description = ''
+        Flags appended after the package's own. Loki applies flags after
+        its config file, so the flags that would override a locked
+        `settings` path (`-auth.enabled`, `-server.http-listen-port`,
+        `-common.path-prefix`, `-common.storage.filesystem.*`,
+        `-common.storage.ring.{instance-addr,store,replication-factor}`),
+        `-config.file`, `-config.expand-env`, and `-target` fail
+        evaluation.
+      '';
     };
 
     env = kix.options.env;
 
+    # Loki 3.7.8 with this config, run outside Kubernetes: about 140 MB
+    # resident when idle, and a 484 MB peak over 21 minutes of 100 KB/s
+    # ingest across 150 streams with 24-hour queries. Unflushed chunks stay
+    # in memory for up to two hours, so heavier ingest needs a higher limit;
+    # an OOM kill replays the write-ahead log on restart.
     resources = kix.options.resources {
       requests = {
         cpu = "100m";
@@ -229,13 +270,7 @@ in
         ]
         ++ kix.guardArgs {
           inherit who;
-          # Go's flag package reads both spellings.
-          owned = {
-            "-config.file" = configFlag;
-            "--config.file" = configFlag;
-            "-config.expand-env" = expandFlag;
-            "--config.expand-env" = expandFlag;
-          };
+          owned = ownedFlags;
         } config.extraArgs;
       in
       {
@@ -273,9 +308,7 @@ in
             inherit name;
             labels."app.kubernetes.io/name" = "loki";
             spec = {
-              # By name: the headless Service is derived from this
-              # workload, so the dependency runs from it to here.
-              serviceName = headlessName;
+              headlessService = self.headlessService;
               replicas = 1;
               selector.matchLabels = scope.selectorLabels;
               template = {
@@ -344,18 +377,10 @@ in
         headlessService =
           self.statefulSet
           |> kix.service.fromWorkload {
-            name = headlessName;
+            name = "${name}-headless";
             labels."app.kubernetes.io/component" = "headless";
+            spec.clusterIP = "None";
           }
-          |> (
-            svc:
-            svc
-            // {
-              spec = svc.spec // {
-                clusterIP = "None";
-              };
-            }
-          )
           |> scope.mkResource;
 
         service =
@@ -368,7 +393,6 @@ in
 
         root = {
           resource = self.service;
-          requires = [ self.headlessService ];
           out.serviceUrl = self.service.out.url { };
         };
       }
