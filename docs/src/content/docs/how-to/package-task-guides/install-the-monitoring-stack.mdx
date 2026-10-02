@@ -6,6 +6,7 @@ description: "Install Prometheus, Alertmanager, Grafana, and cluster exporters w
 import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import monitoringStack from '/src/snippets/how-to/package-stacks/monitoring-cluster/monitoringStack.json';
+import lokiStack from '/src/snippets/how-to/package-stacks/monitoring-loki-cluster/lokiStack.json';
 import check from '/src/command-output/how-to/package-monitoring/check.json';
 import packages from '/src/command-output/how-to/package-monitoring/packages.json';
 
@@ -26,7 +27,7 @@ Import the module and enable the stack in a cluster module:
 <Snippet {...monitoringStack} />
 
 The example keeps Grafana storage ephemeral so it can run on a fresh local
-cluster. For a long-lived cluster, set the whole `persistence` attrset:
+cluster. For a long-lived cluster, turn persistence on and size the claim:
 
 ```nix title="cluster.nix"
 monitoring.grafana.persistence = {
@@ -35,17 +36,10 @@ monitoring.grafana.persistence = {
 };
 ```
 
-`persistence` is a single unstructured option, not a submodule. Defining one
-field replaces the complete default value rather than merging with it. Setting
-only `monitoring.grafana.persistence.size = "20Gi"` therefore removes
-`enabled`, and evaluation fails with `attribute 'enabled' missing`. The example
-can set only `enabled = false` because the module does not read `size` when
-persistence is disabled.
-
-Package `config` options behave differently: Kix merges their defaults into
-the evaluated result, so partial values retain the remaining defaults. This
-cluster module option uses the standard module system and must be defined in
-full.
+Each `persistence` field has its own default (`enabled = true`,
+`size = "10Gi"`, `storageClassName = null`), so setting one field keeps the
+others. `storageClassName` sets the class of Grafana's claim; null leaves the
+choice to the persistent-volume-claim package.
 
 `defaultRules.enabled` adds the standard Kubernetes alert rules, recording
 rules, and ServiceMonitors. Disable it when you want to install the core stack
@@ -54,12 +48,52 @@ first and add cluster-specific rules separately.
 Before deploying, adjust these settings for the cluster:
 
 - `monitoring.prometheus.retention` and `retentionSize` bound stored metrics.
-- `monitoring.prometheus.resources` sets Prometheus CPU and memory requests and
-  limits.
+- `instances.monitoring-system.prometheus-server.config.resources` sets
+  Prometheus CPU and memory requests and limits. Each field keeps its
+  default until set, and null removes a default.
 - `monitoring.prometheus.storage` configures persistent Prometheus storage.
-- `monitoring.grafana.replicas` controls Grafana replicas. Keep one replica
-  when its volume only supports `ReadWriteOnce`.
 - `monitoring.nodeExporter.enabled` controls the node-exporter DaemonSet.
+
+## Add Loki
+
+Set `monitoring.loki.enabled` to add Grafana Loki to the stack:
+
+<Snippet {...lokiStack} />
+
+The module runs Loki as one pod in the monitoring namespace, on a
+PersistentVolumeClaim instance named `loki-storage` of
+`monitoring.loki.storageSize` (10Gi by default). Size it for the log volume
+you keep: Loki holds every line for the retention period, 7 days unless
+`settings.limits_config.retention_period` says otherwise. To pick a
+StorageClass, set
+`instances.<monitoring namespace>.loki-storage.config.storageClassName`.
+
+Loki's own configuration goes in
+`instances.<monitoring namespace>.loki.config.settings`, in Loki's
+`config.yaml` keys. A few keys the package needs (the listen port, the data
+paths, and single tenancy) are locked, and setting them fails evaluation
+with the name of the key. The same goes for the `extraArgs` flags that would
+override those keys. Grafana gets a Loki datasource from the Loki instance,
+with a derived network policy that lets it query Loki, and
+`monitoring.lokiLogs.enabled` (on with Loki) runs the `loki-logs` agent on
+every node, at the module's log-shipper PriorityClass, to send every pod's
+logs to it.
+
+The agent reads the node's log files as root through host paths, and
+node-exporter mounts host paths too, so the monitoring namespace runs at the
+`privileged` Pod Security level. For a restricted monitoring namespace,
+turn off `monitoring.nodeExporter.enabled` and `monitoring.lokiLogs.enabled`
+and declare those agents in a namespace of their own.
+
+### Without the module
+
+The loki package takes its volume through a `storage` dependency. Declare a
+`persistent-volume-claim` instance with a `size` beside it; the header of
+`kix/packages/loki/default.nix` shows the form. When another package in the
+same namespace has an optional `storage` dependency (Grafana does), give
+Loki's claim its own instance name and `aliases`, and wire it with
+`deps.storage = ref.<namespace>.<claim>`. Otherwise both pods mount the one
+ReadWriteOnce claim.
 
 ## Check the stack
 

@@ -85,6 +85,10 @@ resolution and readiness checks.
 | `kix.run/service-selector` | Imported Service selector encoded as JSON. |
 | `kix.run/service-ports` | Imported Service ports encoded as JSON. |
 | `kix.run/service-labels` | Imported Service labels encoded as JSON. |
+| `kix.run/crd-kind` | Kind a CRD ref marker (`scope.mkCRDRef`) declares. |
+| `kix.run/crd-version` | API version a CRD ref marker declares for its kind. |
+| `kix.run/crd-served-versions` | API versions a CRD ref marker declares as served, comma separated; only when more than `crd-version`. |
+| `kix.run/crd-scope` | `Namespaced` or `Cluster`, as a CRD ref marker declares. |
 
 ## Secrets
 

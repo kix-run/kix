@@ -48,7 +48,8 @@ configuration. Dependencies of the created package are resolved in the same
 way, so creation is transitive.
 
 An optional build argument creates no demand. It resolves to an existing
-instance or import, or is null.
+instance or import, or is null. An optional import it resolves to becomes
+active.
 
 The new instance uses the catalog entry's name, even when an alias or role
 caused its creation. Its namespace is chosen in this order:

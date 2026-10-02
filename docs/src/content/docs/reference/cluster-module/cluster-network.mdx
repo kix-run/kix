@@ -1,4 +1,40 @@
 ---
 title: "`cluster.network`"
-description: TODO
+description: "Network facts of the cluster that packages read: pod and Service CIDRs, upstream DNS resolvers, and an environment-installed Cilium."
 ---
+
+`cluster.network` records network facts of the cluster. Kix does not
+configure the network from them; packages read them to derive their
+own settings.
+
+| Field | Type | Default | Set by | Read by |
+|---|---|---|---|---|
+| `podCidr` | string or null | `null` | kind flavour `10.244.0.0/16`; k3s and rke2 flavours `10.42.0.0/16` | The `cilium` package, as its IPAM pool when it installs the chart with cluster-pool IPAM. The build requires it there. |
+| `serviceCidr` | string or null | `null` | | No package reads it. |
+| `dnsUpstream` | list of strings | `[ ]` | | The coredns package's `forward` plugin: `forward . <dnsUpstream>`. Empty forwards to the node's `/etc/resolv.conf`. |
+| `environmentCilium` | `{ helmChartConfig = null or { name; namespace; }; }` or null | `null` | rke2 flavour with `cluster.flavor.rke2.cni = [ "cilium" ]` (`kube-system/rke2-cilium`) | The `cilium` package, to choose its delivery. Requires `cluster.roles.cni.binding = "shadowable"`. |
+
+```nix
+cluster.network.dnsUpstream = [ "192.0.2.53" "192.0.2.54" ];
+```
+
+An instance overrides the forward target for one CoreDNS with
+`servers.default.plugins.forward.args`.
+
+## `environmentCilium`
+
+`environmentCilium` says the environment installed Cilium as the pod
+network. A `cilium` instance then uses that Cilium for network policy
+instead of installing one:
+
+- With `helmChartConfig = { name; namespace; }`, the instance writes its
+  values to that HelmChartConfig, which the environment's helm-controller
+  merges into its own Cilium chart.
+- With `helmChartConfig = null`, Kix leaves the environment's Cilium
+  configuration alone, and the instance provides only the CRD references
+  and network-policy builders. Its `values` option is refused.
+
+## Related
+
+- [`cluster.roles`](/docs/reference/cluster-module/cluster-roles/)
+- [Install Cilium network policy support](/docs/how-to/package-task-guides/install-cilium-network-policy-support/)

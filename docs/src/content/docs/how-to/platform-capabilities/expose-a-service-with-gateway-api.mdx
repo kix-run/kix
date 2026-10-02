@@ -52,6 +52,11 @@ The Gateway is in `gateway-system`, while the application in the next step is
 in another namespace. `allowedRoutes.namespaces.from = "All"` permits that
 HTTPRoute to attach to this listener.
 
+The listener's `protocol`, `hostname`, and `allowedRoutes` also decide the
+application's public URL (`self.exposure.url`): an HTTP listener on port
+80 gives `http://<host>`. If no listener accepts the host from the
+application's namespace, evaluation fails and names each listener.
+
 If your controller uses a different controller name, set
 `config.controllerName` on this instance to the value advertised by that
 controller.

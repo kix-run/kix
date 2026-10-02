@@ -1,4 +1,29 @@
 ---
 title: "`conflictsWith`"
-description: TODO
+description: "Names whose instances may not run beside an instance of this package, in its namespace or anywhere in the cluster."
 ---
+
+```nix
+meta.conflictsWith = [ "alt-pkg" "cluster:certManager" ];
+```
+
+`meta.conflictsWith` is a list of names. Each name is matched against the
+instance names and aliases of the cluster's other instances. When another
+instance matches, evaluation fails with an assertion that names the
+conflicting instances.
+
+| Entry | Matches |
+|---|---|
+| `"<name>"` | Other instances in the same namespace |
+| `"cluster:<name>"` | Other instances in any namespace |
+
+The instance never conflicts with itself, so a package that may run only
+once per cluster lists its own default alias with the `cluster:` prefix.
+cert-manager does this with `conflictsWith = [ "cluster:certManager" ];`,
+because a second install would fight over the same cluster-scoped objects.
+
+The attribute is optional. Its default is `[ ]`.
+
+## Related
+
+- [`defaultAliases`](/docs/reference/meta/defaultaliases/)

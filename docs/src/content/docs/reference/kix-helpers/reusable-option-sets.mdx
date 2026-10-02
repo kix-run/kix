@@ -20,7 +20,7 @@ This page is maintained by hand. Check `kix/lib/vocab/compose.nix` and
 | `kix.options.env` | one option | attribute set of variables |
 | `kix.options.ingress` | an option set | `host`, `annotations` |
 | `kix.options.monitor` | an option set | `enabled`, `interval`. See [`monitor`](/docs/reference/kix-helpers/monitor/). |
-| `kix.options.healthCheck` | an option set | `enable`, `retryFor`. See [`healthCheck`](/docs/reference/kix-helpers/healthcheck/). |
+| `kix.options.healthCheck` | an option set | `enabled`, `retryFor`. See [`healthCheck`](/docs/reference/kix-helpers/healthcheck/). |
 
 A helper that takes arguments returns an option. An option set is an
 attribute set of options, used as `options.metrics = kix.options.monitor;`.
@@ -145,6 +145,10 @@ args = baseArgs ++ kix.guardArgs {
 Returns the list unchanged unless an argument sets an owned flag. An
 argument sets a flag when it equals the flag or starts with the flag and
 `=`, so `--ingress-class-by-name=true` does not set `--ingress-class`.
+A one-letter flag such as `-c` also matches an argument that starts with it,
+such as `-c/etc/x`, the attached-value form getopt and clap accept. For a Go
+program, whose single-dash flags can be whole words, an owned `-v` would
+therefore also refuse `-vmodule=x`.
 `option` (default `"extraArgs"`) names the option in the error. Each hit is
 one line:
 

@@ -20,11 +20,17 @@ The helper has optional `gateway`, `ingressNginx`, and `clusterIssuer` build
 arguments. It emits an HTTPRoute when a Gateway provider is resolved, or an
 Ingress when an ingress-nginx provider is resolved. Resolving both exposure
 providers is an evaluation error; wire exactly one with the instance's
-`deps` when both are available.
+`deps` when both are available. The HTTPRoute depends on a CRD reference
+marker for `httproutes.gateway.networking.k8s.io`, so `kix deploy` waits for
+the Gateway API CRDs before applying it.
 
 No route is emitted when neither provider is available or when no host can be
 resolved. The host comes from `config.ingress.host`, then falls back to
 `<instance>.<cluster.domain>`.
+
+The helper adds two parts to the package: the Ingress or HTTPRoute, named
+`route` by default, and `exposure`, a record that describes it. A
+Deployment in the same package can read `self.exposure.url`.
 
 ## Backend modes
 
@@ -61,22 +67,53 @@ the Service's `out.port`, and evaluation fails when neither is available.
 |---|---|---|
 | `service` | `null` | Name of the single backend Service part. Mutually exclusive with `paths`. |
 | `paths` | `null` | Path records for one Ingress or HTTPRoute. Mutually exclusive with `service`. |
-| `partName` | `"ingress"` | Part name for the generated Ingress or HTTPRoute. Derived network-policy part names also start with this value. |
+| `partName` | `"route"` | Part name for the generated Ingress or HTTPRoute. Derived network-policy part names also start with this value. In Gateway mode a second part, `<partName>Crd`, holds the `scope.mkCRDRef` for HTTPRoute that the route is built from (`routeCrd` by default). |
+| `exposurePart` | `"exposure"` | Part name for the exposure record. A package that calls `kix.expose` twice sets `partName` and `exposurePart` on the second call; two build entries that define the same part are an evaluation error. |
 | `defaultAnnotations` | `{ }` | Base Ingress annotations. `config.ingress.annotations` takes precedence on duplicate keys. Ignored in Gateway mode. |
 | `port` | `null` | Single-backend Service port. `null` reads `out.port`. |
 | `timeouts` | `null` | Gateway API rule timeouts. Copied to every rule and ignored in Ingress mode. |
-| `tlsSecret`, `tlsSecretPart`, `tlsSecretName` | `null` | Ways to name the Ingress TLS Secret. `tlsSecretPart` selects a package part; `tlsSecret` takes a resource; `tlsSecretName` takes a tracked string. |
 
 ## TLS
 
 Ingress mode enables TLS when a `clusterIssuer` dependency is resolved. The
-issuer helper annotates the Ingress, and Kix adds a TLS entry for the host. If
-no Secret is supplied, its name is `<instance>-tls`.
+issuer helper annotates the Ingress, and Kix adds a TLS entry for the host
+with the Secret `<instance>-tls`. Gateway mode leaves TLS to the Gateway
+listener.
 
-A Secret resource must be in the package namespace. A `tlsSecretName` string
-must carry Kix dependency context, either from a resource's `out.name` or from
-`kix.untrackedRef`. Raw string literals are rejected. Gateway mode leaves TLS
-to the Gateway listener and ignores these Ingress TLS settings.
+## Public URL
+
+The `exposure` part is a record of the route this call renders:
+
+| Field | Value |
+|---|---|
+| `via` | `"gateway"`, `"ingress"`, or `null` when no route is rendered |
+| `host` | The route's host, or `null` |
+| `scheme` | `"https"` or `"http"`, or `null` when Kix cannot tell |
+| `url` | `<scheme>://<host>`, with `:<port>` when the port is not the scheme's default; `null` when `scheme` is null |
+
+In Ingress mode the scheme is `https` when a `clusterIssuer` is wired and
+`http` otherwise.
+
+In Gateway mode Kix finds the listener the HTTPRoute attaches to, as
+Gateway API does. A listener qualifies when its `protocol` is `HTTP` or
+`HTTPS`, its `hostname` is unset, equal to the host, or a wildcard such as
+`*.example.com` that covers it, and its `allowedRoutes.namespaces.from` is
+`All`, or `Same` (the default) with the application in the Gateway's
+namespace. Among qualifying listeners Kix prefers HTTPS, then the scheme's
+default port, then list order. When no listener qualifies, evaluation
+fails and the message lists each listener with the reason it was skipped.
+
+Kix does not evaluate a `Selector` namespace policy. Such a listener is
+chosen only when no other qualifies, and Kix warns that it assumed the
+application's namespace matches.
+
+A Gateway that does not publish its listeners, such as one declared with
+`kix.mkImport`, gives `scheme = null` and `url = null`.
+
+TLS that terminates outside Kix, for example at cloudflared or at a load
+balancer in front of ingress-nginx, is not visible to Kix, so the record
+says `http`. Packages that read the URL take an override for that case
+(vaultwarden's `domain`, for one).
 
 ## Generated network policy
 
@@ -89,5 +126,5 @@ reference does not describe its data-plane pods.
 :::tip[Use it in a task]
 See [Expose a Service with Ingress](/docs/how-to/platform-capabilities/expose-a-service-with-ingress/),
 [Expose a Service with Gateway API](/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/),
-and [Add TLS through cluster issuers](/docs/how-to/platform-capabilities/add-tls-through-cluster-issuers/).
+and [Add TLS through a cluster issuer](/docs/how-to/platform-capabilities/add-tls-through-a-cluster-issuer/).
 :::

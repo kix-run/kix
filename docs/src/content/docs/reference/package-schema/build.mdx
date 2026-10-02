@@ -74,9 +74,11 @@ build = [
 ```
 
 Kix imports path entries, discovers dependencies from every function's
-arguments, and shallow-merges their returned attribute sets in list order.
-Part names should therefore be unique unless a later entry intentionally
-replaces an earlier value.
+arguments, and merges their returned attribute sets. Two entries that
+return the same part name are an evaluation error that names the part.
+Rename one of them, or use `partsOverlays` to replace a part on purpose.
+A set of parts keyed by user input belongs under a folder part, such as
+`proxyClasses.<name>`, so that its keys cannot collide with other parts.
 
 Cluster-wide and instance `partsOverlays` run after the build entries.
 

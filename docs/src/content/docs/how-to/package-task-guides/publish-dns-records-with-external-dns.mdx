@@ -152,9 +152,11 @@ the pod until you allow it, as described in
 
 ExternalDNS reads its credentials at startup. When `providerCredentials` is a
 Secret built by Kix, such as a `secret` instance, the package puts a checksum
-of it on the pod, so a changed token rolls the pod on the next deploy. A `secret-ref` Secret is managed
-outside Kix, so Kix cannot see a change to it; restart the Deployment, or
-have reloader's `withReloadOn` roll it.
+of it on the pod, so a changed token rolls the pod on the next deploy. A
+`secret-ref` Secret is managed outside Kix, so Kix cannot see a change to
+it; restart the Deployment after a rotation:
+
+<Command commands={["kubectl -n <namespace> rollout restart deployment/<instance>"]} />
 
 ## Use workload identity
 

@@ -57,7 +57,10 @@ Deploy and inspect the package instance:
 When you update the chart, change `version` and `hash` together, run `kix check`,
 and review `kix diff` before deploying.
 
-If evaluation reports a missing root resource or an invalid Kubernetes
-relationship, inspect the chart's rendered resources. Charts that need custom
-root selection, output builders, or cross-chart dependencies should use a
-dedicated Kix package built with `scope.helm.importChart`.
+Kix picks the chart's root resource: the only Service, or, with no
+Service, the only Deployment, StatefulSet, or DaemonSet. When the chart
+renders several, evaluation fails and lists them; name the one consumers
+connect to with `root = { kind = "Service"; name = "<name>"; };` in the
+`kix.helmChart` arguments. Charts that need output builders or
+cross-chart dependencies should use a dedicated Kix package built with
+`scope.helm.importChart`.

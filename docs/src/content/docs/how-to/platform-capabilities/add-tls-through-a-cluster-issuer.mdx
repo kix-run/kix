@@ -1,5 +1,5 @@
 ---
-title: "Add TLS through cluster issuers"
+title: "Add TLS through a cluster issuer"
 description: "Have Kix annotate an Ingress for cert-manager and create its TLS configuration from the cluster's selected issuer."
 ---
 
@@ -32,9 +32,8 @@ Add `kix.expose` to the package build and point it at the Service part:
 ClusterIssuer is also available, it adds:
 
 - `cert-manager.io/cluster-issuer` with the selected issuer name.
-- An Ingress TLS entry for the configured host.
-- A Secret name of `<instance>-tls` unless the package supplies another
-  tracked TLS Secret.
+- An Ingress TLS entry for the configured host, with the Secret
+  `<instance>-tls`.
 
 ## Add the issuer to the cluster
 
@@ -80,5 +79,5 @@ After deployment, verify the Certificate and Secret created by cert-manager:
   ]}
 />
 
-The Ingress and its TLS Secret must be in the same namespace. Kix validates
-that constraint when a package passes a Secret resource to `kix.expose`.
+cert-manager creates the `<instance>-tls` Secret in the Ingress's namespace,
+which is where the Ingress reads it.
