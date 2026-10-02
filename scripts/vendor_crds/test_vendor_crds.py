@@ -123,6 +123,63 @@ class FetchCrds(unittest.TestCase):
             v.fetch_crds("https://x", {"a.g", "b.g"})
 
 
+def role(kind: str, name: str) -> dict:
+    return {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": kind,
+        "metadata": {"name": name},
+        "rules": [{"apiGroups": [""], "resources": ["pods"], "verbs": ["get"]}],
+    }
+
+
+BUNDLE = "\n---\n".join(
+    json.dumps(d)
+    for d in [
+        role("ClusterRole", "op"),
+        role("Role", "op"),
+        role("ClusterRole", "x.io:admin"),
+        {"kind": "ServiceAccount", "metadata": {"name": "op"}},
+    ]
+)
+
+
+class RolesIn(unittest.TestCase):
+    def test_selects_by_kind_and_name(self):
+        found = v.roles_in(BUNDLE, {"Role/op", "ClusterRole/x.io:admin"})
+        self.assertEqual(
+            [(r["kind"], r["metadata"]["name"]) for r in found],
+            [("ClusterRole", "x.io:admin"), ("Role", "op")],
+        )
+
+    def test_missing_selector(self):
+        with self.assertRaisesRegex(v.VendorError, "does not contain Role/other"):
+            v.roles_in(BUNDLE, {"Role/op", "Role/other"})
+
+    def test_refuses_other_kinds(self):
+        with self.assertRaisesRegex(v.VendorError, "only ClusterRole and Role"):
+            v.roles_in(BUNDLE, {"ServiceAccount/op"})
+
+    def test_selector_without_name(self):
+        with self.assertRaisesRegex(v.VendorError, "is not Kind/name"):
+            v.roles_in(BUNDLE, {"ClusterRole"})
+
+    def test_bare_url_is_refused(self):
+        with (
+            mock.patch.object(v, "fetch", return_value=BUNDLE.encode()),
+            self.assertRaisesRegex(v.VendorError, "as Kind/name"),
+        ):
+            v.fetch_roles("https://x/bundle.yaml", set())
+
+    def test_file_names(self):
+        self.assertEqual(
+            v.rbac_file_name(role("ClusterRole", "x.io:admin")),
+            "clusterrole-x.io_admin.json",
+        )
+        self.assertEqual(v.rbac_file_name(role("Role", "op")), "role-op.json")
+        with self.assertRaisesRegex(v.VendorError, "no file name mapping"):
+            v.rbac_file_name(role("Role", "Op/1"))
+
+
 class Render(unittest.TestCase):
     def test_sorted_and_newline_terminated(self):
         out = v.render(
@@ -170,6 +227,21 @@ class Reconcile(unittest.TestCase):
         _package, lines, ok = self.driver.process(self.dir, check=True)
         self.assertFalse(ok)
         self.assertTrue(lines[0].lstrip().startswith("ERROR"))
+
+    def test_rbac_directory(self):
+        rbac = pathlib.Path(self.tmp.name) / "rbac"
+        rbac.mkdir()
+        (rbac / "sources.txt").write_text(
+            "https://x/bundle.yaml ClusterRole/x.io:admin Role/op\n"
+        )
+        with mock.patch.object(v, "fetch", return_value=BUNDLE.encode()):
+            package, _lines, ok = self.driver.process(rbac, check=False)
+        self.assertTrue(ok)
+        self.assertEqual(package.split("/")[-1], "rbac")
+        self.assertEqual(
+            sorted(p.name for p in rbac.glob("*.json")),
+            ["clusterrole-x.io_admin.json", "role-op.json"],
+        )
 
     def test_update_py_escape_hatch(self):
         (self.dir / "update.py").write_text(

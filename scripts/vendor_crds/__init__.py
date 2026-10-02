@@ -1,4 +1,5 @@
-"""Shared routines for vendoring upstream CRDs into kix packages.
+"""Shared routines for vendoring upstream CRDs and operator RBAC into kix
+packages.
 
 `scripts/vendor-crds.py` is the driver. A package's `crds/update.py` (the
 escape hatch for an upstream that is not a public URL) imports from here so
@@ -10,6 +11,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import time
 import urllib.error
 import urllib.request
@@ -18,6 +20,7 @@ import yaml
 
 USER_AGENT = "kixpkgs-vendor-crds (+https://github.com/kix-run/kixpkgs)"
 CRD_KIND = "CustomResourceDefinition"
+RBAC_KINDS = ("ClusterRole", "Role")
 
 
 class VendorError(Exception):
@@ -42,19 +45,24 @@ def fetch(url: str, *, timeout: float = 30.0, attempts: int = 3) -> bytes:
     raise VendorError(f"{url}: {last}")
 
 
-def crds_in(text: bytes | str, *, source: str = "<input>") -> list[dict]:
-    """Every CustomResourceDefinition document in a YAML stream.
-
-    Other kinds (an operator bundle carries Deployments and RBAC alongside
-    its CRDs) are ignored, so a whole upstream manifest is a valid source.
-    """
+def documents_in(text: bytes | str, source: str) -> list[dict]:
+    """The mapping documents of a YAML stream; empty documents are dropped."""
     if isinstance(text, bytes):
         text = text.decode("utf-8")
     try:
         documents = list(yaml.safe_load_all(text))
     except yaml.YAMLError as error:
         raise VendorError(f"{source}: not YAML: {error}") from error
-    found = [d for d in documents if isinstance(d, dict) and d.get("kind") == CRD_KIND]
+    return [d for d in documents if isinstance(d, dict)]
+
+
+def crds_in(text: bytes | str, *, source: str = "<input>") -> list[dict]:
+    """Every CustomResourceDefinition document in a YAML stream.
+
+    Other kinds (an operator bundle carries Deployments and RBAC alongside
+    its CRDs) are ignored, so a whole upstream manifest is a valid source.
+    """
+    found = [d for d in documents_in(text, source) if d.get("kind") == CRD_KIND]
     for crd in found:
         name = crd.get("metadata", {}).get("name")
         if not name:
@@ -84,6 +92,44 @@ def fetch_crds(url: str, only: set[str] | None = None) -> list[dict]:
     return [by_name[name] for name in sorted(only)]
 
 
+def roles_in(
+    text: bytes | str, selectors: set[str], *, source: str = "<input>"
+) -> list[dict]:
+    """The ClusterRoles and Roles in a YAML stream that `selectors` name,
+    each as `Kind/name`, sorted by selector. Every selector must match a
+    document; selecting any other kind is refused, because a package builds
+    its own bindings and service accounts."""
+    for selector in sorted(selectors):
+        kind, _, name = selector.partition("/")
+        if not name:
+            raise VendorError(f"{source}: {selector} is not Kind/name")
+        if kind not in RBAC_KINDS:
+            raise VendorError(
+                f"{source}: {selector}: only {' and '.join(RBAC_KINDS)} are vendored"
+            )
+
+    def selector_of(doc: dict) -> str:
+        return f"{doc.get('kind')}/{doc.get('metadata', {}).get('name')}"
+
+    by_selector = {
+        selector_of(d): d
+        for d in documents_in(text, source)
+        if selector_of(d) in selectors
+    }
+    missing = sorted(selectors - by_selector.keys())
+    if missing:
+        raise VendorError(f"{source}: does not contain {', '.join(missing)}")
+    return [by_selector[s] for s in sorted(selectors)]
+
+
+def fetch_roles(url: str, selectors: set[str]) -> list[dict]:
+    """The roles a `rbac/sources.txt` line names. A URL without selectors is
+    refused: an operator bundle holds roles for several service accounts."""
+    if not selectors:
+        raise VendorError(f"{url}: name the roles to take from it, as Kind/name")
+    return roles_in(fetch(url), selectors, source=url)
+
+
 def render(crd: dict) -> str:
     """What gets committed: the whole upstream object, sorted, so a refresh
     diff reads as what moved upstream."""
@@ -94,10 +140,24 @@ def file_name(crd: dict) -> str:
     return f"{crd['metadata']['name']}.json"
 
 
+def rbac_file_name(role: dict) -> str:
+    """`<kind>-<name>.json`, with `:` in the name written as `_`
+    (`kubevirt.io:operator` gives `clusterrole-kubevirt.io_operator.json`).
+    Any other character outside `[a-z0-9.-]` is refused."""
+    name = role["metadata"]["name"]
+    if not re.fullmatch(r"[a-z0-9.:-]+", name):
+        raise VendorError(
+            f"{role['kind']}/{name}: the name has a character outside [a-z0-9.:-], "
+            "which no file name mapping covers"
+        )
+    return f"{role['kind'].lower()}-{name.replace(':', '_')}.json"
+
+
 def parse_sources(path: pathlib.Path) -> list[tuple[str, set[str]]]:
     """`sources.txt`: one public URL per line, optionally followed by the
-    names of the CRDs to take from it. Blank lines and `#` comments are
-    ignored. A URL with no names contributes every CRD it holds."""
+    names of the objects to take from it (CRD names under `crds/`,
+    `Kind/name` under `rbac/`). Blank lines and `#` comments are ignored. A
+    URL with no names contributes every CRD it holds."""
     entries: list[tuple[str, set[str]]] = []
     for line_number, raw in enumerate(path.read_text().splitlines(), start=1):
         line = raw.split("#", 1)[0].strip()

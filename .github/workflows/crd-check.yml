@@ -1,10 +1,12 @@
 name: CRD vendoring check
 
 # Every package that ships CRDs keeps them under kix/packages/<pkg>/crds/,
-# vendored from the public URLs in that directory's sources.txt by
-# scripts/vendor-crds.py. This job fails when a committed file no longer
-# matches its source, which is what a version bump that moved the image
-# and forgot the CRDs looks like. Design: v2_discussions/146.
+# and a package that grants an operator upstream's roles keeps them under
+# kix/packages/<pkg>/rbac/, each vendored from the public URLs in that
+# directory's sources.txt by scripts/vendor-crds.py. This job fails when a
+# committed file no longer matches its source, which is what a version bump
+# that moved the image and forgot the CRDs or roles looks like. Design:
+# v2_discussions/146.
 
 on:
   pull_request:

@@ -186,8 +186,10 @@ Constraints, checked by the skill's review step (§5.4):
 
 - No package or project name in the script. Anything project-specific lives
   in that package's `sources.txt`, or failing that its `update.py`.
-- No network outside the one fetch function. No writes outside `crds/`.
-- Driver and module together under roughly 300 lines (274 at landing).
+- No network outside the one fetch function. No writes outside `crds/` and
+  `rbac/`.
+- Driver and module together under roughly 375 lines (274 at landing, 363
+  once `rbac/` vendoring was added).
   Past that, the special case belongs in a package or the design is wrong.
 
 ### 5.4 The skill

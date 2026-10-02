@@ -1,0 +1,4 @@
+# cdi-operator's roles from the containerized-data-importer release operator
+# bundle at the release in default.nix (also the tag in crds/sources.txt).
+# default.nix binds both to the operator's ServiceAccount.
+https://github.com/kubevirt/containerized-data-importer/releases/download/v1.62.0/cdi-operator.yaml ClusterRole/cdi-operator-cluster Role/cdi-operator
