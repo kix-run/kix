@@ -1,13 +1,45 @@
-# alertmanager: Alertmanager managed by the Prometheus Operator.
+# alertmanager: an Alertmanager, run by the Prometheus Operator from an
+# Alertmanager resource.
 #
-# Creates an Alertmanager CR that the operator reconciles into a StatefulSet.
-# Routing config (receivers, routes) is cluster-specific.
+# Installs the Alertmanager resource, its ServiceAccount, the configuration
+# Secret (alertmanager.yaml from `settings`), the egress policy of the
+# Alertmanager pods, and, while `metrics.enabled`, a ServiceMonitor through
+# which Prometheus scrapes it. The operator turns the resource into a
+# StatefulSet and a headless Service `alertmanager-operated` (port `web`,
+# 9093), which `service` describes.
 #
-# DI deps:
-#   prometheus-operator (required): provides the Alertmanager CRD
+# Dependencies:
+#   prometheusOperator (required)  the operator, whose `out.crds.Alertmanager`
+#                                  builds the resource.
+#   storageClasses (optional)      the class of the data volumes when
+#                                  `storage.size` is set and
+#                                  `storage.storageClassName` is null.
+#   priorityClass (optional)       the Alertmanager pods' PriorityClass.
 #
-# Exposes:
-#   out.serviceUrl: for Prometheus alerting config
+# Minimal instance, with a prometheus-operator in the same cluster:
+#
+#   instances.monitoring-system.alertmanager.package = packages.alertmanager;
+#
+# Without `settings` every alert goes to the receiver `null`, which drops it.
+#
+# `out`: the `alertmanager-operated` Service's `name`, `fqdn`, and `port`,
+# plus `namespace` and `portName`, which a Prometheus resource's
+# `spec.alerting` names (the prometheus package reads them), and
+# `serviceUrl`, the base URL of the API (Grafana's datasource).
+#
+# Replicas follow the instance's availability: one up to `pod`, three from
+# `node`, gossiping silences and the notification log, spread across the
+# level's failure domain, with a PodDisruptionBudget that keeps two up.
+#
+# Network policy: the egress policy opens DNS, the gossip port between the
+# replicas, and the world on the ports of the receivers in `settings`: the
+# port in each receiver URL (443 or 80 by scheme when the URL has none, 443
+# for a receiver whose URL comes from a file or Alertmanager's default), and
+# the port of each email smarthost. A receiver inside the cluster, or one
+# reached through `http_config.proxy_url`, needs a policy of its own.
+#
+# Escape hatches: `settings` for alertmanager.yaml, `extraSpec` for the
+# Alertmanager resource's spec, and the instance's `partsOverlays`.
 
 {
   scope,
@@ -16,14 +48,26 @@
   availability,
 }:
 let
+  release = "v0.33.1";
   name = scope.instanceName;
   ns = scope.namespaceName;
+  who = "alertmanager ${ns}/${name}";
 
   defaultSettings = import ./default-settings.nix;
+
+  replicas = kix.availability.pick availability {
+    none = 1;
+    pod = 1;
+    node = 3;
+    zone = 3;
+  };
+
+  # The ports Alertmanager dials to deliver notifications (see the header).
+  receiverPorts = import ./receiver-ports.nix { inherit lib who; };
 in
 {
   meta = {
-    version = "v0.33.1";
+    version = release;
     description = "Alertmanager: alert routing and deduplication";
     owner = "platform";
     defaultAliases = [ "alertmanager" ];
@@ -33,28 +77,21 @@ in
     lifecycle = "ephemeral";
   };
 
+  assertions =
+    { config, ... }:
+    [
+      {
+        assertion = config.storage.size != null || config.storage.storageClassName == null;
+        message = "storage.storageClassName is set but storage.size is null, so Alertmanager keeps its data in an emptyDir and the class is unused. Set storage.size, or remove storage.storageClassName.";
+      }
+    ];
+
   options = {
     image = kix.options.image {
       repository = "quay.io/prometheus/alertmanager";
-      tag = "v0.33.1";
+      tag = release;
+      digest = "sha256:9e082985f56f4c8c9f724e18f2288c6708f472e56a5286b8863d080434ea065d";
       pullPolicy = null;
-    };
-    replicas = lib.mkOption {
-      type = lib.types.int;
-      # Replicas gossip silences and the notification log, and the
-      # package's NetworkPolicy opens that gossip port by default, so
-      # from "node" up this runs the usual three-way mesh.
-      default = kix.availability.pick availability {
-        none = 1;
-        pod = 1;
-        node = 3;
-        zone = 3;
-      };
-      description = ''
-        Number of Alertmanager replicas the operator stamps out.
-        Defaults from the cluster's availability level
-        (v2_discussions/145).
-      '';
     };
     resources = kix.options.resources {
       requests = {
@@ -70,292 +107,206 @@ in
       type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
       default = null;
       defaultText = lib.literalMD "null: the package's configuration, which routes every alert to the receiver `null`";
-      description = "The Alertmanager configuration file, alertmanager.yaml (`global`, `route`, `receivers`, `inhibit_rules`, `templates`). A value replaces the package's configuration as a whole rather than merging into it, because the package's routing tree names its own `null` receiver. Null uses the package's configuration, which routes every alert to the receiver `null`.";
+      description = "The Alertmanager configuration file, alertmanager.yaml (`global`, `route`, `receivers`, `inhibit_rules`, `templates`). A value replaces the package's configuration as a whole rather than merging into it, because the package's routing tree names its own `null` receiver. Null uses the package's configuration, which routes every alert to the receiver `null`. The receivers' URLs and smarthosts decide the egress policy (see the package header). The configuration lands in a Secret that Kix renders, so take a credential from a file (`api_url_file`, `password_file`, `credentials_file`) mounted through `extraSpec.secrets` rather than writing it here.";
     };
-    priorityClassName = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-    };
-    storage = lib.mkOption {
-      type = lib.types.anything;
-      default = null;
-    };
-    serviceMonitor = lib.mkOption {
-      type = lib.types.submodule {
-        options = {
-          selfMonitor = lib.mkOption {
-            type = lib.types.bool;
-            default = true;
-            description = "Emit a ServiceMonitor that scrapes Alertmanager itself.";
-          };
-          interval = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-          };
-          path = lib.mkOption {
-            type = lib.types.str;
-            default = "/metrics";
-          };
-        };
+    storage = {
+      size = lib.mkOption {
+        type = lib.types.nullOr kix.types.quantity;
+        default = null;
+        example = "1Gi";
+        description = "Size of each pod's data volume, holding silences and the notification log, a claim the operator creates from the resource's volume claim template. Null keeps them in an emptyDir, which a pod restart empties.";
       };
-      default = { };
-    };
-    alertmanagerConfigSelector = lib.mkOption {
-      type = lib.types.nullOr lib.types.attrs;
-      default = null;
-      description = ''
-        Selector for AlertmanagerConfig CRs the operator should aggregate into
-        the alertmanager config. Set to `{}` to match all in the namespace, or
-        `{ matchLabels = { team = "infra"; }; }`. Without this, AlertmanagerConfig
-        CRs are silently ignored.
-      '';
-    };
-    alertmanagerConfigNamespaceSelector = lib.mkOption {
-      type = lib.types.nullOr lib.types.attrs;
-      default = null;
-      description = "Namespace selector for AlertmanagerConfig CRs (default: same namespace).";
-    };
-    externalUrl = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "External URL where Alertmanager is reachable (used in notification links).";
-    };
-    routePrefix = lib.mkOption {
-      type = lib.types.str;
-      default = "/";
-    };
-    secrets = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ ];
-      description = "Secrets mounted into Alertmanager pods at /etc/alertmanager/secrets/<name>.";
-    };
-    configMaps = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ ];
-      description = "ConfigMaps mounted into Alertmanager pods at /etc/alertmanager/configmaps/<name>.";
+      storageClassName = lib.mkOption {
+        type = lib.types.nullOr lib.types.nonEmptyStr;
+        default = null;
+        description = "StorageClass of the data volumes. Null takes the `storageClasses` dependency's class, or the cluster's default class without one.";
+      };
     };
     extraSpec = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
+      example = {
+        externalUrl = "https://alertmanager.example.com";
+        secrets = [ "alertmanager-slack" ];
+        alertmanagerConfigSelector = { };
+      };
       description = ''
-        Extra fields deep-merged into the Alertmanager CR spec. Escape hatch
-        for fields not exposed as typed options (tolerations, nodeSelector,
-        affinity, additionalPeers, podMetadata, etc.).
+        Fields deep-merged into the Alertmanager resource's spec, such as
+        `externalUrl`, `routePrefix`, `secrets` and `configMaps` (mounted
+        at /etc/alertmanager/{secrets,configmaps}/<name>), `web`, or
+        `alertmanagerConfigSelector` and its namespace selector. The package
+        refuses `image`, `version`, and `imagePullPolicy`, which image sets,
+        `replicas`, which follows the instance's availability, `resources`,
+        `serviceAccountName`, `storage`, `configSecret`, which holds
+        `settings`, and, when the instance has the dependency,
+        `priorityClassName`.
       '';
     };
-
-    # ── Web (TLS / HTTP-2 / headers) ──────────────────────────────────────
-    # Mirrors chart's `alertmanagerSpec.web`. Free-form because the
-    # Alertmanager CR spec.web has many nested fields (tlsConfig, httpConfig,
-    # getConcurrency, timeout) and copying every one costs more than it
-    # earns. Set to e.g. `{ tlsConfig = { keySecret = ...; cert = ...; }; }`.
-    web = lib.mkOption {
-      type = lib.types.nullOr lib.types.anything;
-      default = null;
-      description = ''
-        Free-form value injected as `spec.web` on the Alertmanager CR. Use
-        for TLS server certs, HTTP-2 toggles, header settings.
-      '';
-    };
-
-    # ── PodDisruptionBudget ───────────────────────────────────────────────
-    # Mirrors templates/alertmanager/podDisruptionBudget.yaml. The chart
-    # passes everything except `enabled` straight through to spec, so kix
-    # exposes only the common knobs and pipes the rest through extraPdbSpec.
-    podDisruptionBudget = lib.mkOption {
-      type = lib.types.submodule {
-        options = {
-          enabled = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-          };
-          minAvailable = lib.mkOption {
-            type = lib.types.nullOr (lib.types.either lib.types.int lib.types.str);
-            default = 1;
-          };
-          maxUnavailable = lib.mkOption {
-            type = lib.types.nullOr (lib.types.either lib.types.int lib.types.str);
-            default = null;
-          };
-          unhealthyPodEvictionPolicy = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = "AlwaysAllow";
-          };
-          extraSpec = lib.mkOption {
-            type = lib.types.attrsOf lib.types.anything;
-            default = { };
-            description = "Extra fields deep-merged into the PDB spec.";
-          };
-        };
-      };
-      default = { };
-    };
-
-    # ── NetworkPolicy ─────────────────────────────────────────────────────
-    # Mirrors templates/alertmanager/networkpolicy.yaml. Cilium flavor lives
-    # in a separate chart template and is skipped here. Kix clusters that
-    # need cilium-flavored policy can drop a CiliumNetworkPolicy through the
-    # raw-resources package or extend this generator later.
-    networkPolicy = lib.mkOption {
-      type = lib.types.submodule {
-        options = {
-          enabled = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-          };
-          policyTypes = lib.mkOption {
-            type = lib.types.listOf lib.types.str;
-            default = [ "Ingress" ];
-          };
-          gateway = lib.mkOption {
-            type = lib.types.submodule {
-              options = {
-                namespace = lib.mkOption {
-                  type = lib.types.str;
-                  default = "";
-                };
-                podLabels = lib.mkOption {
-                  type = lib.types.attrs;
-                  default = { };
-                };
-              };
-            };
-            default = { };
-          };
-          additionalIngress = lib.mkOption {
-            type = lib.types.listOf lib.types.attrs;
-            default = [ ];
-          };
-          egress = lib.mkOption {
-            type = lib.types.submodule {
-              options = {
-                enabled = lib.mkOption {
-                  type = lib.types.bool;
-                  default = false;
-                };
-                rules = lib.mkOption {
-                  type = lib.types.listOf lib.types.attrs;
-                  default = [ ];
-                };
-              };
-            };
-            default = { };
-          };
-          enableClusterRules = lib.mkOption {
-            type = lib.types.bool;
-            default = true;
-          };
-          monitoringRules = lib.mkOption {
-            type = lib.types.submodule {
-              options = {
-                prometheus = lib.mkOption {
-                  type = lib.types.bool;
-                  default = true;
-                };
-                configReloader = lib.mkOption {
-                  type = lib.types.bool;
-                  default = true;
-                };
-              };
-            };
-            default = { };
-          };
-          # Service ports referenced by the NP rules. Default = AM listen
-          # port (9093) and operator-managed gossip port (9094).
-          servicePort = lib.mkOption {
-            type = lib.types.int;
-            default = 9093;
-          };
-          clusterPort = lib.mkOption {
-            type = lib.types.nullOr lib.types.int;
-            default = 9094;
-          };
-        };
-      };
-      default = { };
-    };
+    metrics = kix.options.monitor;
   };
 
   build =
     {
       self,
       config,
+      clusterConfig,
       prometheusOperator,
+      storageClasses ? null,
+      priorityClass ? null,
       ...
     }:
     let
-      mkAlertmanager = prometheusOperator.out.mkAlertmanager;
-      mkSmon = prometheusOperator.out.mkServiceMonitor scope;
-      svcSelector = {
-        "app.kubernetes.io/name" = "alertmanager";
-        "app.kubernetes.io/instance" = name;
+      settings = if config.settings == null then defaultSettings else config.settings;
+      ports = receiverPorts settings;
+
+      # The labels the operator puts on this resource's pods.
+      podSelector = prometheusOperator.out.operandSelectors.alertmanager name;
+
+      storageClassName =
+        if config.storage.storageClassName != null then
+          config.storage.storageClassName
+        else if storageClasses != null then
+          storageClasses.out.storageClassName
+        else
+          null;
+
+      baseSpec = {
+        inherit replicas;
+        image = kix.image.ref config.image;
+        version = config.image.tag;
+        serviceAccountName = self.serviceAccount.out.name;
+        resources = config.resources;
+        configSecret = self.configSecret.out.name;
+      }
+      // lib.optionalAttrs (config.image.pullPolicy != null) {
+        imagePullPolicy = config.image.pullPolicy;
+      }
+      // lib.optionalAttrs (config.storage.size != null) {
+        storage.volumeClaimTemplate.spec = {
+          accessModes = [ "ReadWriteOnce" ];
+          resources.requests.storage = toString config.storage.size;
+        }
+        // lib.optionalAttrs (storageClassName != null) { inherit storageClassName; };
+      }
+      // lib.optionalAttrs (priorityClass != null) {
+        priorityClassName = priorityClass.out.name;
+      }
+      // lib.optionalAttrs (replicas > 1) {
+        topologySpreadConstraints = kix.availability.spreadConstraints {
+          level = availability;
+          selector = podSelector;
+          topology = clusterConfig.cluster.topology;
+        };
       };
+
+      spec = kix.mergeGuarded {
+        inherit who;
+        locked = [
+          [ "image" ]
+          [ "version" ]
+          [ "imagePullPolicy" ]
+          [ "replicas" ]
+          [ "resources" ]
+          [ "serviceAccountName" ]
+          [ "storage" ]
+          [ "configSecret" ]
+        ]
+        ++ lib.optional (priorityClass != null) [ "priorityClassName" ];
+      } baseSpec config.extraSpec;
+
+      # Read only when the scope has an enforcer (kix.operandPolicy).
+      netpol = scope.networkPolicyEnforcer.netpol;
+      peers = netpol.mkSelfRules { selector = podSelector; };
     in
     {
       serviceAccount = scope.mkResource {
         apiVersion = "v1";
         kind = "ServiceAccount";
         inherit name;
-        extra.automountServiceAccountToken = true;
+        # Alertmanager makes no Kubernetes API calls.
+        extra.automountServiceAccountToken = false;
       };
 
-      # Alertmanager config as a Secret (the operator expects this)
-      alertmanagerConfig = scope.mkSecret {
-        name = "alertmanager-${name}";
-        stringData."alertmanager.yaml" = builtins.toJSON (
-          if config.settings == null then defaultSettings else config.settings
-        );
+      configSecret = scope.mkSecret {
+        name = "${name}-config";
+        stringData."alertmanager.yaml" = builtins.toJSON settings;
       };
 
-      # Alertmanager CR: operator reconciles into StatefulSet
-      alertmanager = mkAlertmanager scope {
-        inherit name;
-        spec = lib.recursiveUpdate (
-          {
-            replicas = config.replicas;
-            image = kix.image.ref config.image;
-            version = config.image.tag;
-            serviceAccountName = self.serviceAccount.out.name;
-            resources = config.resources;
-            routePrefix = config.routePrefix;
-          }
-          // lib.optionalAttrs (config.image.pullPolicy != null) {
-            imagePullPolicy = config.image.pullPolicy;
-          }
-          // lib.optionalAttrs (config.priorityClassName != null) {
-            priorityClassName = config.priorityClassName;
-          }
-          // lib.optionalAttrs (config.storage != null) {
-            storage.volumeClaimTemplate = config.storage;
-          }
-          // lib.optionalAttrs (config.externalUrl != null) {
-            externalUrl = config.externalUrl;
-          }
-          // lib.optionalAttrs (config.alertmanagerConfigSelector != null) {
-            alertmanagerConfigSelector = config.alertmanagerConfigSelector;
-          }
-          // lib.optionalAttrs (config.alertmanagerConfigNamespaceSelector != null) {
-            alertmanagerConfigNamespaceSelector = config.alertmanagerConfigNamespaceSelector;
-          }
-          // lib.optionalAttrs (config.secrets != [ ]) {
-            secrets = config.secrets;
-          }
-          // lib.optionalAttrs (config.configMaps != [ ]) {
-            configMaps = config.configMaps;
-          }
-          // lib.optionalAttrs (config.web != null) {
-            web = config.web;
-          }
-        ) config.extraSpec;
+      alertmanager = scope.mkCR prometheusOperator.out.crds.Alertmanager {
+        inherit name spec;
       };
+
+      # The operator creates the pods, so no workload policy is derived for
+      # them. Prometheus and Grafana reach them through the scrape policies
+      # and their own derived egress.
+      egress =
+        if ports == [ ] && replicas == 1 then
+          null
+        else
+          kix.operandPolicy {
+            inherit scope;
+            name = "${name}-egress";
+            spec = {
+              endpointSelector.matchLabels = podSelector;
+              egress = [
+                netpol.dnsEgressRule
+              ]
+              ++ lib.optionals (replicas > 1) peers.egress
+              ++
+                lib.optionals (ports != [ ])
+                  (netpol.translateIntentRules {
+                    intents.receivers.egress = [
+                      {
+                        to = "world";
+                        ports = map (port: {
+                          inherit port;
+                          protocol = "TCP";
+                        }) ports;
+                      }
+                    ];
+                  }).egressRules;
+            };
+          };
+
+      # Gossip between the replicas.
+      peerIngress =
+        if replicas > 1 then
+          kix.operandPolicy {
+            inherit scope;
+            name = "${name}-peers";
+            spec = {
+              endpointSelector.matchLabels = podSelector;
+              ingress = peers.ingress;
+            };
+          }
+        else
+          null;
+
+      # The operator renders no PodDisruptionBudget, and the availability
+      # plugin derives one only for workloads Kix renders.
+      podDisruptionBudget =
+        if replicas > 1 then
+          scope.mkResource {
+            apiVersion = "policy/v1";
+            kind = "PodDisruptionBudget";
+            inherit name;
+            annotations.${kix.keys.operandOf} = "monitoring.coreos.com/Alertmanager/${self.alertmanager.name}";
+            requires = [ self.alertmanager ];
+            spec = {
+              maxUnavailable = 1;
+              selector.matchLabels = podSelector;
+            };
+          }
+        else
+          null;
 
       # The operator creates `alertmanager-operated` (headless, port web
-      # 9093) over the pods it stamps with svcSelector. A ServiceRef
-      # describes it; the prometheus package's `service` part gives the
-      # reasons (v2_discussions/135).
+      # 9093) over the pods of every Alertmanager in the namespace. A
+      # ServiceRef describes it; the prometheus package's `service` part
+      # gives the reasons (v2_discussions/135).
       service = scope.mkServiceRef {
         name = "alertmanager-operated";
-        selector = svcSelector;
+        selector = podSelector;
         # The label the operator puts on alertmanager-operated.
         labels."operated-alertmanager" = "true";
         ports = [
@@ -368,166 +319,48 @@ in
         requires = [ self.alertmanager ];
       };
 
-      # ── PodDisruptionBudget ─────────────────────────────────────────────
-      # Mirrors templates/alertmanager/podDisruptionBudget.yaml. Selector
-      # uses `app.kubernetes.io/name=alertmanager` + `alertmanager=<crname>`,
-      # the labels the Prometheus Operator stamps on Alertmanager pods. Those
-      # pods are not in the build, so the PDB declares the CR whose pods it
-      # selects (kix.run/operand-of), which the cross-resource check accepts.
-      # The package renders this PDB itself, and it is not a duplicate of
-      # a derived one: the availability plugin derives a PDB from a rendered
-      # workload's replica count, and there is no rendered workload here.
-      podDisruptionBudget = lib.optionalAttrs config.podDisruptionBudget.enabled {
-        pdb = scope.mkResource {
-          apiVersion = "policy/v1";
-          kind = "PodDisruptionBudget";
-          name = "${name}-alertmanager";
-          annotations.${kix.keys.operandOf} =
-            "${lib.head (lib.splitString "/" self.alertmanager.apiVersion)}/${self.alertmanager.kind}/${self.alertmanager.name}";
-          requires = [ self.alertmanager ];
-          spec = lib.recursiveUpdate (
-            {
-              selector.matchLabels = {
-                "app.kubernetes.io/name" = "alertmanager";
-                alertmanager = name;
-              };
-            }
-            // lib.optionalAttrs (config.podDisruptionBudget.minAvailable != null) {
-              inherit (config.podDisruptionBudget) minAvailable;
-            }
-            // lib.optionalAttrs (config.podDisruptionBudget.maxUnavailable != null) {
-              inherit (config.podDisruptionBudget) maxUnavailable;
-            }
-            // lib.optionalAttrs (config.podDisruptionBudget.unhealthyPodEvictionPolicy != null) {
-              inherit (config.podDisruptionBudget) unhealthyPodEvictionPolicy;
-            }
-          ) config.podDisruptionBudget.extraSpec;
-        };
-      };
-
-      # ── NetworkPolicy ───────────────────────────────────────────────────
-      # Mirrors templates/alertmanager/networkpolicy.yaml. Each conditional
-      # ingress block matches the chart's gating logic byte-for-byte.
-      networkPolicy = lib.optionalAttrs config.networkPolicy.enabled (
-        let
-          npc = config.networkPolicy;
-          gatewaySet = npc.gateway.namespace != "" && npc.gateway.podLabels != { };
-          gatewayIngress = lib.optional gatewaySet {
-            from = [
-              {
-                namespaceSelector.matchLabels."kubernetes.io/metadata.name" = npc.gateway.namespace;
-                podSelector.matchLabels = npc.gateway.podLabels;
-              }
-            ];
-            ports = [
-              {
-                port = npc.servicePort;
-                protocol = "TCP";
-              }
-            ];
-          };
-          promIngress = lib.optional npc.monitoringRules.prometheus {
-            from = [
-              { podSelector.matchLabels."app.kubernetes.io/name" = "prometheus"; }
-            ];
-            ports = [
-              {
-                port = npc.servicePort;
-                protocol = "TCP";
-              }
-            ]
-            ++ lib.optional npc.monitoringRules.configReloader {
-              port = 8080;
-              protocol = "TCP";
-            };
-          };
-          clusterIngress = lib.optional (npc.enableClusterRules && npc.clusterPort != null) {
-            from = [
-              { podSelector.matchLabels."app.kubernetes.io/name" = "alertmanager"; }
-            ];
-            ports = [
-              {
-                port = npc.clusterPort;
-                protocol = "TCP";
-              }
-            ];
-          };
-          configReloaderIngress = lib.optional npc.monitoringRules.configReloader {
-            from = [
-              {
-                podSelector.matchLabels = {
-                  "app.kubernetes.io/name" = "alertmanager";
-                  component = "config-reloader";
-                };
-              }
-            ];
-            ports = [
-              {
-                port = 8080;
-                protocol = "TCP";
-              }
-            ];
-          };
-          ingressRules =
-            gatewayIngress ++ promIngress ++ clusterIngress ++ configReloaderIngress ++ npc.additionalIngress;
-        in
-        {
-          np = scope.mkResource {
-            apiVersion = "networking.k8s.io/v1";
-            kind = "NetworkPolicy";
-            name = "${name}-alertmanager";
+      selfMonitor =
+        if config.metrics.enabled then
+          prometheusOperator.out.mkServiceMonitor scope {
+            inherit name;
             spec = {
-              podSelector.matchLabels."app.kubernetes.io/name" = "alertmanager";
-              policyTypes = npc.policyTypes;
-              ingress = ingressRules;
-            }
-            // lib.optionalAttrs npc.egress.enabled {
-              egress = npc.egress.rules;
+              # A ServiceMonitor selects Services, not pods, so this uses the
+              # labels of the operator's Service from its ref.
+              selector.matchLabels = self.service.out.labels;
+              namespaceSelector.matchNames = [ ns ];
+              endpoints = [
+                (
+                  {
+                    port = "web";
+                  }
+                  // lib.optionalAttrs (config.metrics.interval != null) { inherit (config.metrics) interval; }
+                )
+              ];
             };
-          };
-        }
-      );
-
-      selfMonitor = lib.optionalAttrs config.serviceMonitor.selfMonitor {
-        serviceMonitor = mkSmon {
-          name = "${name}-self";
-          spec = {
-            # A ServiceMonitor selects Services, not pods, so this uses the
-            # labels of the operator's Service from its ref.
-            selector.matchLabels = self.service.out.labels;
-            namespaceSelector.matchNames = [ ns ];
-            endpoints = [
-              (
-                {
-                  port = "web";
-                  path = config.serviceMonitor.path;
-                }
-                // lib.optionalAttrs (config.serviceMonitor.interval != null) {
-                  inherit (config.serviceMonitor) interval;
-                }
-              )
-            ];
-          };
-        };
-      };
+          }
+        else
+          null;
 
       root = {
         resource = self.service;
         requires = [
           self.serviceAccount
-          self.alertmanagerConfig
+          self.configSecret
           self.alertmanager
         ]
-        ++ lib.optional config.serviceMonitor.selfMonitor self.selfMonitor.serviceMonitor
-        ++ lib.optional config.podDisruptionBudget.enabled self.podDisruptionBudget.pdb
-        ++ lib.optional config.networkPolicy.enabled self.networkPolicy.np;
+        ++ builtins.filter (p: p != null) [
+          self.egress
+          self.peerIngress
+          self.podDisruptionBudget
+          self.selfMonitor
+        ];
         out = {
-          serviceUrl = "http://${self.service.out.fqdn}:9093";
-          # The Alertmanager CR's image is reconciled by the operator into a
-          # StatefulSet, not directly in a kix-generated pod spec.
-          extraImages = [
-            (kix.image.ref config.image)
-          ];
+          namespace = ns;
+          portName = "web";
+          serviceUrl = "http://${self.service.out.fqdn}:${self.service.out.port}";
+          # The operator runs this image in a StatefulSet that Kix does not
+          # render.
+          extraImages = [ (kix.image.ref config.image) ];
         };
       };
     };
