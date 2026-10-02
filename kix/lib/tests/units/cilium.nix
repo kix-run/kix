@@ -533,7 +533,7 @@ in
 
   # The rke2 default (canal, exclusive) refuses a cilium instance, because
   # it would install a second CNI. Control: cni = [ "cilium" ] builds.
-  cilium-rke2-canal-refuses-instance =
+  cilium-refused-beside-rke2-canal =
     let
       withCni =
         cni:
