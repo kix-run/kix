@@ -140,7 +140,7 @@ in
     };
 
     healthCheck = kix.options.healthCheck // {
-      enable = lib.mkOption {
+      enabled = lib.mkOption {
         type = lib.types.bool;
         default = true;
         description = "Run the post-deploy probe, the same one as the clickhouse package plus a replica count.";

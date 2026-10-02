@@ -4153,7 +4153,7 @@ let
                     ];
                   };
                   instances.appns.app.config.healthCheck = {
-                    enable = true;
+                    enabled = true;
                     retryFor = 40;
                   };
                 }
