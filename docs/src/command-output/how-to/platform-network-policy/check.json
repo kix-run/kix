@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-platform-network-policy",
-      "stdout": " TOOL       RESULT  DETAILS                       \n eval       pass    49 manifests evaluated        \n scorecard  pass    0 errors, 44 warnings, 5 info \n",
+      "stdout": " TOOL       RESULT  DETAILS                       \n eval       pass    50 manifests evaluated        \n scorecard  pass    0 errors, 44 warnings, 5 info \n",
       "stderr": "",
-      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 49 manifests evaluated\nscorecard pass 0 errors, 44 warnings, 5 info\n",
+      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 50 manifests evaluated\nscorecard pass 0 errors, 44 warnings, 5 info\n",
       "stderrDrift": "",
       "exitCode": 0
     }

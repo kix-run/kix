@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-composition",
-      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    15 manifests evaluated       \n scorecard  pass    0 errors, 0 warnings, 0 info \n",
+      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    16 manifests evaluated       \n scorecard  pass    0 errors, 0 warnings, 0 info \n",
       "stderr": "",
-      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 15 manifests evaluated\nscorecard pass 0 errors, 0 warnings, 0 info\n",
+      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 16 manifests evaluated\nscorecard pass 0 errors, 0 warnings, 0 info\n",
       "stderrDrift": "",
       "exitCode": 0
     }
