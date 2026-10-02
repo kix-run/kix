@@ -1,6 +1,6 @@
 # 92: Declarative Network Policy Intents
 
-**Status:** RFC
+**Status:** Implemented (archived 2026-10). Sequencing steps 1, 2, and 4 shipped: `ccnpCrdRef` on cilium (now on its `out.crds`), `networkPolicy.platformIntents` with its materialiser (`kix/lib/plugins/netpol/`) and the kind flavour's intents, and `meta.network.intents` (HANDBOOK §16.5). Step 3 (`baselineIntents`) was not built. Open questions 1 to 3 are in `ROADMAP.md § Open design questions` ("Cluster-wide network policy baselines"); 4 and 5 are answered below. The shipped intent vocabulary is egress `to = apiserver | world | dns | all-pods` and ingress `from = all-pods | world | apiserver`; there is no `raw` passthrough and no CIDR target.
 **Related:** `archive/37_di_derived_network_policies.md`, `archive/82_cilium_package_and_netpol_di_wiring.md`, `archive/83_netpol_via_crdref_and_scope_interception.md`, `archive/85_netpol_simplification.md`
 
 ## Problem
@@ -213,8 +213,10 @@ cluster.nix
 3. **`raw` passthrough scope.** How much of the enforcer's native API should be passthrough-able? If we allow arbitrary Cilium spec fragments in `raw`, we've reintroduced enforcer coupling at the declaration site. Maybe `raw` should be on the cluster/enforcer config, not on intents.
 
 4. **Package intents and the workload selector.** When a package declares `meta.network.intents`, the `podSelector` should default to the package's own workload selector. How do we wire that — does the materializer read `self.out.selector`?
+   *Answered:* a package intent applies to every workload in the package (HANDBOOK §16.5); the netpol plugin adds its rules to each workload's derived policy.
 
 5. **Ordering.** Platform intents (flavor) need to be applied before user workloads come up. Are they injected as dependencies of the namespace resource, or of the enforcer itself?
+   *Answered:* the enforcer materialises flavour intents (`networkPolicy.platformIntents`) through its CRD handles. An import's own `platformIntents` (`kix/lib/modules.nix`) become dependencies of the import's marker (`kix/lib/eval/import.nix`), so everything that depends on the import waits for its policies.
 
 ## Recommended sequencing
 

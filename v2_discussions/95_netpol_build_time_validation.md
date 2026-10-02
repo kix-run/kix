@@ -1,7 +1,7 @@
 # 95: Network Policy Build-Time Validation
 
 **Status:** Draft
-**Related:** `92_declarative_network_policy_intents.md` (intent vocabulary), `94_dns_dependency_chain_step2.md` (DNS deps), `archive/83_netpol_via_crdref_and_scope_interception.md` (scope-level CNP emission)
+**Related:** `archive/92_declarative_network_policy_intents.md` (intent vocabulary), `94_dns_dependency_chain_step2.md` (DNS deps), `archive/83_netpol_via_crdref_and_scope_interception.md` (scope-level CNP emission)
 
 ## Problem
 

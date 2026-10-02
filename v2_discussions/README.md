@@ -121,7 +121,6 @@ The first SOPS flow is being implemented against a minimum viable design. **All 
 | 88 | [Kustomize integration](88_kustomize_integration.md) | Design | Near-term | `importKustomization` as build-time resource import for kustomize bases. Same resource-collection API as Helm. Overlays replaced by kix options. |
 | 88b | [Flux comparison & migration](88b_flux_comparison_and_migration.md) | Design | Active | Why Flux has runtime reconciliation, feature-by-feature mapping to kix, concrete migration walkthrough from Flux Kustomization CRDs to kix packages. |
 | 116 | [Migration playbook](116_migration_playbook.md) | Draft | **Reference** | Procedural counterpart to 68. Live-K8s migration, kix-side SBOM first (not dump-driven), staged 1→2→3 source-vs-kix stance, 5 phases (SBOM → flavor+globals → flavor capabilities → diff resolution hierarchy → adoption-readiness diff → cutover). Tier 2 `importChart` is the default for helm-sourced components, not a shallow escape hatch. Anti-patterns from nw1 called out explicitly. TF appendix. |
-| 117 | [kube-prometheus-stack wrapping validation](117_kube_prometheus_stack_wrapping_validation.md) | Brainstorm (paused) | **Active** | Does Tier 2 helm cover the just-shipped from-scratch rebuild's guarantees? Validates Phase 1a/1b/2/3 against `kix/packages/{prometheus-operator,prometheus,alertmanager,...}` (commit `d79478f`). Merkle DAG: structurally equivalent if `helm-dag.nix` gains 2 patterns (CR-level `spec.serviceAccountName`, `{name,key}` Secret refs). DI lossy pipeline: categories A–G; Phase 2 substring scan covers most; **silent edge loss on sprig transforms (B) + cross-ns `_kix.namespace` policy (D) + implicit-feature deps (G)**. What dies in wrap: RBAC DSL, typed CR builder, per-key Secret validation, cross-ns validator, granular per-component meta. What wrap gains: chart-shipped admission webhooks/PDB/NetworkPolicy/full ClusterRole verbs that the rebuild silently dropped. Paused mid-discussion at strategic Q1: keep rebuild canonical or wrap-replace? Concrete next steps (sprig-transform audit, declared-but-unscanned `deps` diagnostic, helm-dag extensions, side-by-side DAG diff). |
 
 > Helm v2 integration is **shipped** — see archived `87_helm_integration_v2.md` and `86_helm_dag_reconstruction.md` for the design record.
 
@@ -129,7 +128,6 @@ The first SOPS flow is being implemented against a minimum viable design. **All 
 
 | # | Document | Status | Relevance | Summary |
 |---|----------|--------|-----------|---------|
-| 92 | [Declarative network policy intents](92_declarative_network_policy_intents.md) | RFC | Near-term | Enforcer-agnostic policy intents declared by flavors/packages/cluster config, materialized by the enforcer through CRD refs. Replaces hand-rolled Cilium CRs in `kind-system-netpol` and `network-policies`. |
 | 94 | [DNS dependency chain — step 2](94_dns_dependency_chain_step2.md) | Partial | **Active** | Step 1 rework landed: DNS deps derived from per-workload service-edge detection (shared with netpol), not blanket injection. Step 2 pending: instance-level `extraDeps` for platform-dns → kind-system-netpol link. |
 | 95 | [Netpol build-time validation](95_netpol_build_time_validation.md) | Draft | Near-term | Catch missing/misconfigured network policies at eval time: intent schema validation, webhook ingress detection, uncovered port warnings. |
 | 131 | [Fact kinds — remainders & operand attribution](131_fact_kinds_and_operand_attribution.md) | Draft | **Active** | Successor to archived 96/130 after the typed-facts channel shipped (PR #31: endpoint facts on `out.fqdn`/`url`, conduct/terminate at seals, ConfigMap indirection by default, `factBehavior` on mkCRD/mkCRDRef → operand CNPs, `cluster.factBehavior` override). Carries the un-shipped 130 remainders recast as fact kinds (`api-surface`/S2 + the missing `fromEntities` ingress envelope, S3 probes/NodePort, S4 `connect` descriptors, Phase-2 service DSL, role-fact locking test, baseline operand fabric) and one live design tension: **operand attribution** — facts flow along value edges but dialing responsibility follows controller semantics, which runs counter-directionally for watch/select kinds (AlertmanagerConfig, ServiceMonitor). Proposed three-tier answer: co-directional done (conduction+terminate, stackgres proof); counter-directional-static = small extension (static podSelector + `podNamespace`); dynamic = refuse/warn/cluster-override. Rejects a speculative `podSet` fact. |
@@ -137,7 +135,7 @@ The first SOPS flow is being implemented against a minimum viable design. **All 
 | 109 | [Service CIDR capacity check](109_service_cidr_capacity_check.md) | RFC/Draft | Near-term | Promote the existing `cluster.network.serviceCidr` option into an enforced budget. New scorecard rule counts ClusterIP-consuming Services against CIDR host count; fatal error at 100%, warning at 80% (configurable). Rides doc 80 diagnostics. Network-side sibling of doc 106's capacity-fit check. |
 | 121 | [Netpol as a plugin](121_netpol_as_plugin.md) | Design | **Active** | Answers doc 119's "does netpol ship in the OSS core" with the extraction mechanics. Three binding constraints (pre-seal splice — post-pass impossible under content addressing; fixpoint safety of hook inputs; four-channel CNP wiring incl. `forNamespace` parenting + sideband drain). Mechanism: three module-option hooks (`workloadInterceptors`/`instanceProcessors`/`clusterProcessors`), netpol plugin as an ordinary module, doc 115 as the second hook consumer. Edge detection stays core (DNS shares it). Prerequisite: enforcer envelope repair (spec assembly behind `mkPolicy`, `portsToCilium` rename). Generalizes enforcer lookup to `findCapabilityProvider`/`validateProviderInterface` (reusable for docs 108/101). |
 
-> Netpol auto-derivation (37, 82, 83, 85) is **shipped** — see `archive/` for the design record.
+> Netpol auto-derivation (37, 82, 83, 85) and declarative intents (92) are **shipped**; see `archive/` for the design record.
 
 ## MVP, Init, Roadmap
 
@@ -194,6 +192,12 @@ These are archived because they are implemented or deprecated, but they remain t
 - **`28_gitops_deploy.md`** — GitOps deploy reconciliation / drift / health design. Superseded operationally by `62` + `88b` but still the best single-file explanation of the deploy philosophy.
 - **`60_scorecard_rules_design.md`** — Multi-level policy framework with configurable severity and structured reporting. Built. Read when changing scorecard rules.
 - **`61_compliance_exports.md`** — Export formats (SARIF, SBOM, SLSA, OSCAL). Built. Read when adding a new compliance output.
+
+### Recently archived (October 2026)
+
+- **92** Declarative network policy intents → implemented. `ccnpCrdRef` on cilium, `networkPolicy.platformIntents` with its materialiser (it replaced the Cilium CRs `kind-system-netpol` built), and `meta.network.intents` shipped; `baselineIntents` was not built after the `network-policies` package was deleted. Open questions (cluster-wide baselines, validating intents against the enforcer, a `raw` passthrough) are in `ROADMAP.md § Open design questions`.
+- **117** Wrapping kube-prometheus-stack → superseded: the native stack is canonical and the chart wrapper was deleted; open questions in `ROADMAP.md § Open design questions`.
+- **118** NW1 monitoring migration replan → abandoned: its migration target and `monitoring.releaseName` are gone.
 
 ### Recently archived (September 2026)
 

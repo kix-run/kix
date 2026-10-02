@@ -1,7 +1,7 @@
 # 94: DNS Dependency Chain — Step 2
 
 **Status:** Partial (step 1 rework landed, step 2 pending)
-**Related:** `93_flavor_barrier_resource.md`, `92_declarative_network_policy_intents.md`, `archive/83_netpol*`
+**Related:** `93_flavor_barrier_resource.md`, `archive/92_declarative_network_policy_intents.md`, `archive/83_netpol*`
 
 ## Context
 

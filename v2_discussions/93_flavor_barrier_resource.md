@@ -1,7 +1,7 @@
 # 93: Flavor Barrier Resource
 
 **Status:** Design
-**Related:** `81_deploy_as_lifecycle_engine.md`, `92_declarative_network_policy_intents.md`
+**Related:** `81_deploy_as_lifecycle_engine.md`, `archive/92_declarative_network_policy_intents.md`
 
 ## Problem
 

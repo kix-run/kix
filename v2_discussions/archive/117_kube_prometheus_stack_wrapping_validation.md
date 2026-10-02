@@ -1,6 +1,6 @@
 # 117: Wrapping kube-prometheus-stack — does Tier 2 helm cover the native rebuild's guarantees?
 
-**Status:** Brainstorm (paused mid-conversation; resume from Q1 below)
+**Status:** Superseded (archived 2026-10). Q1 answered: the native stack is canonical and `kix/packages/kube-prometheus-stack` was deleted. Q2, Q3, and Q5 are in `ROADMAP.md § Open design questions` ("Prometheus stack: Helm bridge edges and native operator gaps"); Q4 is dropped, since the native operator's RBAC verbs are fixed in `prometheus-operator/operator.nix` and its single replica needs no PDB.
 **Related:**
 - `40_composite_packages.md` — the *decomposition* direction (predates Tier 2)
 - `archive/68_prometheus_stack_kix_native.md` — just-shipped from-scratch rebuild (commit `d79478f`)
