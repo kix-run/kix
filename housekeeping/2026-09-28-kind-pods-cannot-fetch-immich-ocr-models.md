@@ -8,3 +8,7 @@ After two failed loads the worker answers "Failed to load model
 OCR on kind, copy the two `.onnx` files into
 `/cache/ocr/PP-OCRv5_mobile/{detection,recognition}/model.onnx` and kill
 PID 1 in the container, which keeps the emptyDir.
+
+immich-machine-learning now declares a world:443 `model-download` intent.
+Nobody has run OCR on kind since, so it is open whether that intent or the
+handshake timeout above was the cause.
