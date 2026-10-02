@@ -1,17 +1,69 @@
-# CDI (Containerized Data Importer) package.
+# cdi: the Containerized Data Importer operator, which imports, uploads, and
+# clones disk images into PersistentVolumeClaims.
 #
-# Deploys the cdi-operator which manages CDI components (cdi-apiserver,
-# cdi-controller/uploadcontroller, cdi-uploadproxy) via the CDI custom resource.
+# The package renders cdi-operator, its roles (rbac/*.json, vendored from
+# upstream's operator bundle), the CDI custom resource definition, and a CDI
+# resource. cdi-operator then runs cdi-apiserver, cdi-deployment (the
+# controller), and cdi-uploadproxy in this namespace and installs the CRDs of
+# its own kinds (DataVolume, DataImportCron, StorageProfile, and the rest).
+# The deploy waits for the CDI resource to reach phase Deployed.
 #
-# Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Role,
-#            RoleBinding, Deployment (cdi-operator), CDI CR, the cdis CRD.
+# A cluster runs one instance: the CDI resource, its CRD, and the CRDs and
+# webhooks cdi-operator installs are cluster-wide, so `conflictsWith`
+# refuses a second instance.
 #
-# Only the cdis.cdi.kubevirt.io CRD is shipped here, as upstream does. The
-# operator installs the CRDs for its own kinds (DataVolume, DataImportCron,
-# StorageProfile and the rest) with full schemas once it runs; a stub here
-# would fight the operator's version on every server-side apply.
+# Minimal instance:
 #
-# root = Deployment (cdi-operator)
+#   instances.cdi.cdi.package = packages.cdi;
+#
+# A consumer takes `cdi` as a dependency and builds DataVolumes with
+# out.mkDataVolume. A disk a virtual machine boots from belongs in the
+# VirtualMachine's `dataVolumeTemplates` (kubevirt's out.mkVirtualMachine);
+# clusters/test-virtualization.nix shows both.
+#
+#   blank = cdi.out.mkDataVolume scope {
+#     name = "scratch";
+#     spec = {
+#       source.blank = { };
+#       storage.resources.requests.storage = "64Mi";
+#     };
+#   };
+#
+# Network policy: with an enforcer, the API server reaches cdi-apiserver (an
+# aggregated API and the admission webhooks) and the operands reach DNS and
+# the API server. cdi-deployment polls importer pods for progress on 8443,
+# and cdi-uploadproxy forwards uploads to upload server pods on 8443. Those
+# pods run in the DataVolume's namespace and are the consumer's to allow: an
+# HTTP or registry import that pulls in a pod needs DNS, egress to its
+# source, and ingress from cdi-deployment, which out.mkImporterPolicy builds.
+# Imports with `pullMethod = "node"` and blank DataVolumes need neither.
+#
+# Monitoring: cdi-operator creates its own ServiceMonitor and PrometheusRule
+# in this namespace when the prometheus-operator CRDs exist.
+#
+# Escape hatches: `extraSpec`, deep-merged into the CDI resource's spec;
+# `partsOverlays`; `scope.mkCR cdi.out.crds.DataVolume` for a DataVolume the
+# deploy should not wait for.
+#
+# Exposes:
+#   out.crds.DataVolume
+#   out.mkDataVolume scope { name; spec; annotations ? { }; ... }
+#       A DataVolume that binds its claim at once, so it completes on a
+#       WaitForFirstConsumer StorageClass without a consumer pod, and that
+#       the deploy waits on until its phase is Succeeded.
+#   out.mkImporterPolicy scope { name ? "cdi-importer"; egress; }
+#       A policy in the caller's namespace for the importer pods CDI starts
+#       there: DNS, the `egress` intent rules (for example
+#       `[ { to = "world"; ports = [ { port = 443; protocol = "TCP"; } ]; } ]`
+#       for a public registry), and ingress from cdi-deployment on 8443. Null
+#       when the namespace has no enforcer.
+#   out.operandSelectors.{importer, deployment, uploadProxy}
+#       Pod labels of the importer pods and of the cdi-deployment and
+#       cdi-uploadproxy pods.
+#   out.extraImages
+#       Every image cdi-operator runs, digest-pinned.
+#
+# root = the cdi-operator Deployment.
 
 {
   scope,
@@ -21,869 +73,318 @@
 }:
 
 let
+  # The upstream release: meta.version, the default image.tag, and the tag
+  # in crds/sources.txt and rbac/sources.txt (checked below).
+  release = "v1.62.0";
+  sourceUrls =
+    file:
+    builtins.filter (l: l != "" && !lib.hasPrefix "#" l) (
+      lib.splitString "\n" (builtins.readFile file)
+    );
+  vendoredUrls = sourceUrls ./crds/sources.txt ++ sourceUrls ./rbac/sources.txt;
+
+  # "v1.62.0" -> [ "1" "62" ".0" ]; null when the tag is not a version.
+  versionParts = tag: builtins.match "v?([0-9]+)\\.([0-9]+)(\\..*)?" tag;
+  releaseMinor = lib.take 2 (versionParts release);
+  releaseMinorText = "v${lib.concatStringsSep "." releaseMinor}";
+
   name = scope.instanceName;
+  ns = scope.namespaceName;
+  who = "cdi ${ns}/${name}";
 
-  # Labels matching the upstream CDI operator manifest
-  operatorLabels = {
-    "name" = "cdi-operator";
-    "operator.cdi.kubevirt.io" = "";
-    "cdi.kubevirt.io" = "cdi-operator";
-    "prometheus.cdi.kubevirt.io" = "true";
+  rulesOf = file: (builtins.fromJSON (builtins.readFile file)).rules;
+
+  # Index digests of the release's images. A digest applies while the image
+  # keeps the release tag.
+  operandDigests = {
+    cdi-apiserver = "sha256:aa5c2e16c67545f449086b4e49a25f9b304a17174985b841d82e8ff618fb809e";
+    cdi-cloner = "sha256:ece16cb37976eb1a075b9b276b9d42d9a5c349dc9f29d1b7d08f0b985e119f07";
+    cdi-controller = "sha256:c4c35dce67ecbca97d3eb854d5468b6e60b06cd90e140fec83bb58ec566abb43";
+    cdi-importer = "sha256:df76770eef8bfc218a6423dea41a0d597b80821cd0434528aaa84951d2242abc";
+    cdi-uploadproxy = "sha256:28d70e20ca6b1435470a7c7dd2bc28d394705b730c7d760ef827addb768ab5b1";
+    cdi-uploadserver = "sha256:de0e6e49f7086c1fc526e339d435dc92c51d51e416e90ae4b988271bf5fafe42";
   };
 
-  selectorLabels = {
-    "name" = "cdi-operator";
-    "operator.cdi.kubevirt.io" = "";
+  # The cdi-operator variable each operand image is passed in. The oVirt
+  # populator runs the importer image, as upstream's bundle sets it.
+  operandEnv = {
+    cdi-apiserver = [ "APISERVER_IMAGE" ];
+    cdi-cloner = [ "CLONER_IMAGE" ];
+    cdi-controller = [ "CONTROLLER_IMAGE" ];
+    cdi-importer = [
+      "IMPORTER_IMAGE"
+      "OVIRT_POPULATOR_IMAGE"
+    ];
+    cdi-uploadproxy = [ "UPLOAD_PROXY_IMAGE" ];
+    cdi-uploadserver = [ "UPLOAD_SERVER_IMAGE" ];
   };
 
-  metricsProbe = {
-    httpGet = {
-      path = "/metrics";
-      port = "metrics";
+  # Labels cdi-operator and cdi-deployment put on the pods they create
+  # (pkg/operator/resources/namespaced and pkg/controller/import-controller.go
+  # at the release). cdi-deployment's pods carry `cdi.kubevirt.io` with an
+  # empty value.
+  operandSelectors = {
+    importer = {
+      app = "containerized-data-importer";
+      "cdi.kubevirt.io" = "importer";
     };
-    initialDelaySeconds = 5;
-    periodSeconds = 10;
-    timeoutSeconds = 10;
+    deployment = {
+      app = "containerized-data-importer";
+      "cdi.kubevirt.io" = "";
+    };
+    uploadProxy."cdi.kubevirt.io" = "cdi-uploadproxy";
+    apiServer."cdi.kubevirt.io" = "cdi-apiserver";
+  };
+
+  tcp = port: {
+    inherit port;
+    protocol = "TCP";
   };
 in
 {
   meta = {
-    version = "v1.62.0";
+    version = release;
     description = "KubeVirt Containerized Data Importer: the cdi-operator and a CDI resource; CDI imports disk images into PVCs";
     owner = "platform";
-    # The cdi-operator has no leader election, so one replica is the
-    # ceiling it can honour. The components it deploys are unaffected.
-    availability.max = "pod";
+    defaultAliases = [ "cdi" ];
+    # One instance per cluster; see the header.
+    conflictsWith = [ "cluster:cdi" ];
   };
+
+  assertions =
+    { config, ... }:
+    [
+      {
+        assertion =
+          versionParts config.image.tag != null && lib.take 2 (versionParts config.image.tag) == releaseMinor;
+        message = "image.tag \"${config.image.tag}\" is not a ${releaseMinorText} release, and the CRD and roles under kix/packages/cdi/{crds,rbac} are vendored from ${release}. Remove image.tag or set a ${releaseMinorText} tag. To move to another release, change release in kix/packages/cdi/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py cdi.";
+      }
+      {
+        assertion = vendoredUrls != [ ] && lib.all (lib.hasInfix "/${release}/") vendoredUrls;
+        message = "kix/packages/cdi/crds/sources.txt or rbac/sources.txt fetches from a tag other than ${release}, the package's release. Set the tag in every URL to ${release} and run uv run scripts/vendor-crds.py cdi.";
+      }
+    ]
+    ++ map (n: {
+      assertion = config.operandImages.${n}.pullPolicy == null;
+      message = "operandImages.${n}.pullPolicy = \"${
+        toString config.operandImages.${n}.pullPolicy
+      }\" has no effect: cdi-operator gives every operand the CDI resource's imagePullPolicy, which is image.pullPolicy. Remove it.";
+    }) (builtins.attrNames operandDigests);
 
   options = {
     image = kix.options.image {
       repository = "quay.io/kubevirt/cdi-operator";
-      tag = "v1.62.0";
+      tag = release;
+      digest = "sha256:21fe82706f57bc5378ba17be79d6831b223605ecf1ea6f43f533b1bccae68c50";
+      description = "Image of cdi-operator. Its major.minor must match the vendored CRD and roles. Each operand image defaults to this repository's registry and path with its own name (quay.io/kubevirt/<name>) and to this tag, and every operand uses this image's pullPolicy.";
     };
-    replicaCount = lib.mkOption {
-      type = lib.types.int;
-      # Fixed at 1: a second cdi-operator would fight the first over the
-      # CDI custom resource. See meta.availability.max.
-      default = 1;
-    };
-    # Requests from cdi-operator.yaml (v1.62.0), which sets no limits. An
-    # idle cdi-operator held up to 70 MiB on kind with CDI deployed.
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "100m";
-          memory = "150Mi";
-        };
-        limits = {
-          cpu = "500m";
-          memory = "512Mi";
-        };
+
+    operandImages = lib.mapAttrs (
+      n: digest:
+      kix.options.image {
+        repository = "quay.io/kubevirt/${n}";
+        tag = release;
+        inherit digest;
+        tagText = "config.image.tag";
+        pullPolicy = null;
+        description = "Image cdi-operator runs as ${n} (${
+          lib.concatStringsSep ", " operandEnv.${n}
+        }). Listed in out.extraImages. Its repository follows image.repository and its tag image.tag; the CDI resource's imagePullPolicy applies, so pullPolicy must stay null.";
+      }
+    ) operandDigests;
+
+    # Requests from cdi-operator.yaml at the release, which sets no limits.
+    # An idle cdi-operator held up to 70 MiB on kind with CDI deployed.
+    resources = kix.options.resources {
+      requests = {
+        cpu = "100m";
+        memory = "150Mi";
+      };
+      limits = {
+        cpu = "500m";
+        memory = "512Mi";
       };
     };
-    # CDI CR configuration
-    cloneStrategyOverride = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-    };
-    featureGates = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
-      default = [ ];
-    };
-    infra = lib.mkOption {
+
+    extraSpec = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
-    };
-    workload = lib.mkOption {
-      type = lib.types.attrsOf lib.types.anything;
-      default = { };
+      description = "Fields deep-merged into the CDI resource's spec, such as `config.featureGates`, `cloneStrategyOverride`, `workload`, or `infra.nodeSelector`. The package refuses `infra.apiServerReplicas`, `infra.deploymentReplicas`, and `infra.uploadProxyReplicas`, which follow the instance's availability, and `imagePullPolicy`, which is image.pullPolicy.";
     };
   };
-  build =
-    {
-      self,
-      config,
-      clusterConfig,
-    }:
-    {
 
-      # --- ServiceAccount ---
+  config =
+    { config, ... }:
+    {
+      operandImages = lib.genAttrs (builtins.attrNames operandDigests) (n: {
+        repository = lib.mkDefault "${dirOf config.image.repository}/${n}";
+        tag = lib.mkDefault config.image.tag;
+      });
+    };
+
+  build =
+    { self, config, ... }:
+    let
+      pick = kix.availability.pick availability;
+      operandRefs = lib.mapAttrs (_: kix.image.ref) config.operandImages;
+
+      # cdi-operator runs one replica of each operand unless the CDI
+      # resource asks for more.
+      operandReplicas = pick {
+        none = 1;
+        pod = 2;
+        node = 2;
+        zone = 3;
+      };
+
+      baseSpec = {
+        infra = {
+          apiServerReplicas = operandReplicas;
+          deploymentReplicas = operandReplicas;
+          uploadProxyReplicas = operandReplicas;
+        };
+      }
+      // lib.optionalAttrs (config.image.pullPolicy != null) {
+        imagePullPolicy = config.image.pullPolicy;
+      };
+
+      operandEnvVars = lib.concatLists (
+        lib.mapAttrsToList (
+          n: vars:
+          map (v: {
+            name = v;
+            value = operandRefs.${n};
+          }) vars
+        ) operandEnv
+      );
+
+      # Policies for the pods cdi-operator runs in this namespace. The spec
+      # is read only when an enforcer exists.
+      operandPolicy =
+        suffix: selector: intents:
+        kix.operandPolicy {
+          inherit scope;
+          name = "${name}-${suffix}";
+          spec =
+            let
+              netpol = scope.networkPolicyEnforcer.netpol;
+              translated = netpol.translateIntentRules { intents.operand = intents; };
+            in
+            netpol.mkEndpointSelector selector
+            // lib.optionalAttrs (translated.egressRules != [ ]) { egress = translated.egressRules; }
+            // lib.optionalAttrs (translated.ingressRules != [ ]) { ingress = translated.ingressRules; };
+        };
+
+      mkImporterPolicy =
+        consumerScope:
+        {
+          name ? "cdi-importer",
+          egress,
+        }:
+        kix.operandPolicy {
+          scope = consumerScope;
+          inherit name;
+          spec =
+            let
+              netpol = consumerScope.networkPolicyEnforcer.netpol;
+              translated = netpol.translateIntentRules {
+                intents.importer.egress = [ { to = "dns"; } ] ++ egress;
+              };
+            in
+            netpol.mkEndpointSelector operandSelectors.importer
+            // {
+              egress = translated.egressRules;
+              ingress = [
+                (netpol.mkCallerIngressRule {
+                  callerSelector = operandSelectors.deployment;
+                  callerNamespace = ns;
+                  ports = [ (tcp 8443) ];
+                })
+              ];
+            };
+        };
+
+      # A DataVolume binds its claim once a pod consumes it when the
+      # StorageClass is WaitForFirstConsumer. CDI binds at once when the
+      # annotation is present, whatever its value
+      # (pkg/controller/common/util.go ImmediateBindingRequested).
+      mkDataVolume =
+        consumerScope: args:
+        self.crds.dataVolumes.out.mkCR consumerScope (
+          args
+          // {
+            annotations = (args.annotations or { }) // {
+              "cdi.kubevirt.io/storage.bind.immediate.requested" = "true";
+              ${kix.keys.readiness} = builtins.toJSON {
+                path = "/status/phase";
+                equals = "Succeeded";
+              };
+            };
+          }
+        );
+    in
+    {
       serviceAccount = scope.mkResource {
         apiVersion = "v1";
         kind = "ServiceAccount";
         name = "${name}-operator";
-        labels = {
-          "operator.cdi.kubevirt.io" = "";
-        };
       };
 
-      # --- ClusterRole ---
-      clusterRole = scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRole";
-        name = "${name}-operator-cluster";
-        labels = {
-          "operator.cdi.kubevirt.io" = "";
-        };
-        extra.rules = [
-          # Core resources - configmaps (read)
+      clusterRbac = scope.rbac.mkClusterRoleSet scope {
+        subjects = [
           {
-            apiGroups = [ "" ];
-            resources = [ "configmaps" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Core resources - PVCs (read)
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumeclaims" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Core resources - PVs (read)
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumes" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Core resources - namespaces (read)
-          {
-            apiGroups = [ "" ];
-            resources = [ "namespaces" ];
-            verbs = [ "get" ];
-          }
-          # Core resources - events
-          {
-            apiGroups = [ "" ];
-            resources = [ "events" ];
-            verbs = [
-              "create"
-              "patch"
-            ];
-          }
-          # Core resources - PVCs (full)
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumeclaims" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "delete"
-              "deletecollection"
-              "patch"
-            ];
-          }
-          # Core resources - PVs (update)
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumes" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-            ];
-          }
-          # Core resources - finalizers
-          {
-            apiGroups = [ "" ];
-            resources = [
-              "persistentvolumeclaims/finalizers"
-              "pods/finalizers"
-            ];
-            verbs = [ "update" ];
-          }
-          # Core resources - pods, services
-          {
-            apiGroups = [ "" ];
-            resources = [
-              "pods"
-              "services"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "delete"
-            ];
-          }
-          # Core resources - configmaps (get/create)
-          {
-            apiGroups = [ "" ];
-            resources = [ "configmaps" ];
-            verbs = [
-              "get"
-              "create"
-            ];
-          }
-          # Core resources - secrets (create)
-          {
-            apiGroups = [ "" ];
-            resources = [ "secrets" ];
-            verbs = [ "create" ];
-          }
-          # Core resources - PVCs (get only)
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumeclaims" ];
-            verbs = [ "get" ];
-          }
-          # Admission webhooks - create/list/watch
-          {
-            apiGroups = [ "admissionregistration.k8s.io" ];
-            resources = [
-              "validatingwebhookconfigurations"
-              "mutatingwebhookconfigurations"
-            ];
-            verbs = [
-              "create"
-              "list"
-              "watch"
-            ];
-          }
-          # Admission webhooks - named validating
-          {
-            apiGroups = [ "admissionregistration.k8s.io" ];
-            resourceNames = [
-              "cdi-api-dataimportcron-validate"
-              "cdi-api-populator-validate"
-              "cdi-api-datavolume-validate"
-              "cdi-api-validate"
-              "objecttransfer-api-validate"
-            ];
-            resources = [ "validatingwebhookconfigurations" ];
-            verbs = [
-              "get"
-              "update"
-              "delete"
-            ];
-          }
-          # Admission webhooks - named mutating
-          {
-            apiGroups = [ "admissionregistration.k8s.io" ];
-            resourceNames = [
-              "cdi-api-datavolume-mutate"
-              "cdi-api-pvc-mutate"
-            ];
-            resources = [ "mutatingwebhookconfigurations" ];
-            verbs = [
-              "get"
-              "update"
-              "delete"
-            ];
-          }
-          # CRDs
-          {
-            apiGroups = [ "apiextensions.k8s.io" ];
-            resources = [
-              "customresourcedefinitions"
-              "customresourcedefinitions/status"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "delete"
-            ];
-          }
-          # CRDs (read)
-          {
-            apiGroups = [ "apiextensions.k8s.io" ];
-            resources = [ "customresourcedefinitions" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # API services
-          {
-            apiGroups = [ "apiregistration.k8s.io" ];
-            resources = [ "apiservices" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "delete"
-            ];
-          }
-          # Authorization
-          {
-            apiGroups = [ "authorization.k8s.io" ];
-            resources = [ "subjectaccessreviews" ];
-            verbs = [ "create" ];
-          }
-          # CDI + upload resources (full)
-          {
-            apiGroups = [
-              "cdi.kubevirt.io"
-              "upload.cdi.kubevirt.io"
-            ];
-            resources = [ "*" ];
-            verbs = [ "*" ];
-          }
-          # CDI datavolumes (read)
-          {
-            apiGroups = [ "cdi.kubevirt.io" ];
-            resources = [ "datavolumes" ];
-            verbs = [
-              "list"
-              "get"
-            ];
-          }
-          # CDI datasources (read)
-          {
-            apiGroups = [ "cdi.kubevirt.io" ];
-            resources = [ "datasources" ];
-            verbs = [ "get" ];
-          }
-          # CDI volumeclonesources (read)
-          {
-            apiGroups = [ "cdi.kubevirt.io" ];
-            resources = [ "volumeclonesources" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # CDI storageprofiles (read)
-          {
-            apiGroups = [ "cdi.kubevirt.io" ];
-            resources = [ "storageprofiles" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # CDI cdis (read)
-          {
-            apiGroups = [ "cdi.kubevirt.io" ];
-            resources = [ "cdis" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # CDI cdiconfigs (read)
-          {
-            apiGroups = [ "cdi.kubevirt.io" ];
-            resources = [ "cdiconfigs" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # CDI cdis/finalizers
-          {
-            apiGroups = [ "cdi.kubevirt.io" ];
-            resources = [ "cdis/finalizers" ];
-            verbs = [ "update" ];
-          }
-          # CDI all (full)
-          {
-            apiGroups = [ "cdi.kubevirt.io" ];
-            resources = [ "*" ];
-            verbs = [ "*" ];
-          }
-          # CDI dataimportcrons
-          {
-            apiGroups = [ "cdi.kubevirt.io" ];
-            resources = [ "dataimportcrons" ];
-            verbs = [
-              "get"
-              "list"
-              "update"
-            ];
-          }
-          # OpenShift config - proxies/infrastructures
-          {
-            apiGroups = [ "config.openshift.io" ];
-            resources = [
-              "proxies"
-              "infrastructures"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # OpenShift config - clusterversions
-          {
-            apiGroups = [ "config.openshift.io" ];
-            resources = [ "clusterversions" ];
-            verbs = [ "get" ];
-          }
-          # Forklift CDI populators
-          {
-            apiGroups = [ "forklift.cdi.kubevirt.io" ];
-            resources = [
-              "ovirtvolumepopulators"
-              "openstackvolumepopulators"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # OpenShift imagestreams
-          {
-            apiGroups = [ "image.openshift.io" ];
-            resources = [ "imagestreams" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # KubeVirt VM finalizers
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "virtualmachines/finalizers" ];
-            verbs = [ "update" ];
-          }
-          # RBAC
-          {
-            apiGroups = [ "rbac.authorization.k8s.io" ];
-            resources = [
-              "clusterrolebindings"
-              "clusterroles"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "delete"
-            ];
-          }
-          # Scheduling
-          {
-            apiGroups = [ "scheduling.k8s.io" ];
-            resources = [ "priorityclasses" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # OpenShift security
-          {
-            apiGroups = [ "security.openshift.io" ];
-            resources = [ "securitycontextconstraints" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-              "create"
-            ];
-          }
-          # Snapshot support (read)
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshots" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Snapshot support (full)
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [
-              "volumesnapshots"
-              "volumesnapshotclasses"
-              "volumesnapshotcontents"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "delete"
-            ];
-          }
-          # Snapshot support (update/deletecollection)
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshots" ];
-            verbs = [
-              "update"
-              "deletecollection"
-            ];
-          }
-          # Storage classes (read)
-          {
-            apiGroups = [ "storage.k8s.io" ];
-            resources = [ "storageclasses" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Storage classes + CSI drivers (read)
-          {
-            apiGroups = [ "storage.k8s.io" ];
-            resources = [
-              "storageclasses"
-              "csidrivers"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
+            kind = "ServiceAccount";
+            name = self.serviceAccount.out.name;
+            namespace = ns;
           }
         ];
+        roles."${name}-operator-cluster" = rulesOf ./rbac/clusterrole-cdi-operator-cluster.json;
       };
 
-      # --- ClusterRoleBinding ---
-      clusterRoleBinding = scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRoleBinding";
-        name = "${name}-operator";
-        labels = {
-          "operator.cdi.kubevirt.io" = "";
-        };
-        extra = {
-          roleRef = {
-            apiGroup = "rbac.authorization.k8s.io";
-            kind = "ClusterRole";
-            name = self.clusterRole.out.name;
-          };
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = self.serviceAccount.out.name;
-              namespace = scope.namespaceName;
-            }
-          ];
-        };
-      };
-
-      # --- Role (namespaced) ---
-      # The operator manages its operands' namespaced resources and takes a
-      # lease for its leader-election helper. Mirrors the upstream namespace
-      # Role; upstream's duplicate leases rule is folded into one.
-      role = scope.mkResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "Role";
-        name = "${name}-operator";
-        labels = {
-          "operator.cdi.kubevirt.io" = "";
-        };
-        extra.rules = [
-          # RBAC for the operands
+      operatorRbac = scope.rbac.mkRoleSet scope {
+        subjects = [
           {
-            apiGroups = [ "rbac.authorization.k8s.io" ];
-            resources = [
-              "rolebindings"
-              "roles"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "delete"
-            ];
-          }
-          # Core resources the operands are built from
-          {
-            apiGroups = [ "" ];
-            resources = [
-              "serviceaccounts"
-              "configmaps"
-              "events"
-              "secrets"
-              "services"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "patch"
-              "delete"
-            ];
-          }
-          # Operand deployments
-          {
-            apiGroups = [ "apps" ];
-            resources = [
-              "deployments"
-              "deployments/finalizers"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "delete"
-            ];
-          }
-          # OpenShift routes
-          {
-            apiGroups = [ "route.openshift.io" ];
-            resources = [
-              "routes"
-              "routes/custom-host"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-            ];
-          }
-          # OpenShift proxies
-          {
-            apiGroups = [ "config.openshift.io" ];
-            resources = [ "proxies" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Prometheus operator objects
-          {
-            apiGroups = [ "monitoring.coreos.com" ];
-            resources = [
-              "servicemonitors"
-              "prometheusrules"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "delete"
-              "update"
-              "patch"
-            ];
-          }
-          # Leader-election helper lease
-          {
-            apiGroups = [ "coordination.k8s.io" ];
-            resources = [ "leases" ];
-            verbs = [
-              "get"
-              "create"
-              "update"
-            ];
-          }
-          # Secrets + configmaps (read/create)
-          {
-            apiGroups = [ "" ];
-            resources = [
-              "secrets"
-              "configmaps"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-            ];
-          }
-          # Configmaps (full)
-          {
-            apiGroups = [ "" ];
-            resources = [ "configmaps" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "delete"
-            ];
-          }
-          # Secrets (read)
-          {
-            apiGroups = [ "" ];
-            resources = [ "secrets" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Cronjobs
-          {
-            apiGroups = [ "batch" ];
-            resources = [ "cronjobs" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "deletecollection"
-            ];
-          }
-          # Jobs
-          {
-            apiGroups = [ "batch" ];
-            resources = [ "jobs" ];
-            verbs = [
-              "create"
-              "deletecollection"
-              "list"
-              "watch"
-            ];
-          }
-          # Ingresses (read)
-          {
-            apiGroups = [ "networking.k8s.io" ];
-            resources = [ "ingresses" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # OpenShift routes (read)
-          {
-            apiGroups = [ "route.openshift.io" ];
-            resources = [ "routes" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Configmaps (get)
-          {
-            apiGroups = [ "" ];
-            resources = [ "configmaps" ];
-            verbs = [ "get" ];
-          }
-          # Services, endpoints, pods (read)
-          {
-            apiGroups = [ "" ];
-            resources = [
-              "services"
-              "endpoints"
-              "pods"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
+            kind = "ServiceAccount";
+            name = self.serviceAccount.out.name;
+            namespace = ns;
           }
         ];
+        roles."${name}-operator" = rulesOf ./rbac/role-cdi-operator.json;
       };
 
-      # --- RoleBinding ---
-      roleBinding = scope.mkResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "RoleBinding";
-        name = "${name}-operator";
-        labels = {
-          "operator.cdi.kubevirt.io" = "";
-        };
-        extra = {
-          roleRef = {
-            apiGroup = "rbac.authorization.k8s.io";
-            kind = "Role";
-            name = self.role.out.name;
-          };
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = self.serviceAccount.out.name;
-              namespace = scope.namespaceName;
-            }
-          ];
-        };
-      };
-
-      # --- Deployment (cdi-operator) ---
       deployment = scope.mkDeployment {
         name = "${name}-operator";
-        labels = operatorLabels;
+        requires = builtins.attrValues self.clusterRbac ++ builtins.attrValues self.operatorRbac;
         spec = {
-          replicas = config.replicaCount;
-          selector.matchLabels = selectorLabels;
-          # strategy omitted; K8s defaults to RollingUpdate
+          # cdi-operator holds a leader election lease, so a replacement pod
+          # covers "pod" and a standby on another node covers "node".
+          replicas = pick {
+            none = 1;
+            pod = 1;
+            node = 2;
+            zone = 2;
+          };
+          selector.matchLabels = scope.selectorLabels;
           template = {
-            metadata = {
-              labels = operatorLabels;
-              annotations = {
-                "openshift.io/required-scc" = "restricted-v2";
-              };
+            # Upstream's pod labels. The metrics Service cdi-operator creates
+            # selects prometheus.cdi.kubevirt.io.
+            metadata.labels = scope.selectorLabels // {
+              name = "cdi-operator";
+              "operator.cdi.kubevirt.io" = "";
+              "cdi.kubevirt.io" = "cdi-operator";
+              "prometheus.cdi.kubevirt.io" = "true";
             };
             spec = {
               serviceAccount = self.serviceAccount;
               terminationGracePeriodSeconds = 30;
-              securityContext = {
-                runAsNonRoot = true;
-              };
-              nodeSelector = {
-                "kubernetes.io/os" = "linux";
-              };
+              securityContext.runAsNonRoot = true;
+              nodeSelector."kubernetes.io/os" = "linux";
               tolerations = [
                 {
                   key = "CriticalAddonsOnly";
                   operator = "Exists";
                 }
               ];
-              affinity = {
-                podAffinity = {
-                  preferredDuringSchedulingIgnoredDuringExecution = [
-                    {
-                      podAffinityTerm = {
-                        labelSelector = {
-                          matchExpressions = [
-                            {
-                              key = "cdi.kubevirt.io";
-                              operator = "In";
-                              values = [ "cdi-operator" ];
-                            }
-                          ];
-                        };
-                        topologyKey = "kubernetes.io/hostname";
-                      };
-                      weight = 1;
-                    }
-                  ];
-                };
-              };
               containers = [
                 {
                   name = "cdi-operator";
@@ -891,66 +392,43 @@ in
                   imagePullPolicy = config.image.pullPolicy;
                   env = [
                     {
-                      name = "APISERVER_IMAGE";
-                      value = "quay.io/kubevirt/cdi-apiserver:${config.image.tag}";
-                    }
-                    {
-                      name = "CLONER_IMAGE";
-                      value = "quay.io/kubevirt/cdi-cloner:${config.image.tag}";
-                    }
-                    {
-                      name = "CONTROLLER_IMAGE";
-                      value = "quay.io/kubevirt/cdi-controller:${config.image.tag}";
-                    }
-                    {
                       name = "DEPLOY_CLUSTER_RESOURCES";
                       value = "true";
-                    }
-                    {
-                      name = "IMPORTER_IMAGE";
-                      value = "quay.io/kubevirt/cdi-importer:${config.image.tag}";
-                    }
-                    {
-                      name = "MONITORING_NAMESPACE";
                     }
                     {
                       name = "OPERATOR_VERSION";
                       value = config.image.tag;
                     }
                     {
-                      name = "OVIRT_POPULATOR_IMAGE";
-                      value = "quay.io/kubevirt/cdi-importer:${config.image.tag}";
-                    }
-                    {
-                      name = "PULL_POLICY";
-                      value = config.image.pullPolicy;
-                    }
-                    {
-                      name = "UPLOAD_PROXY_IMAGE";
-                      value = "quay.io/kubevirt/cdi-uploadproxy:${config.image.tag}";
-                    }
-                    {
-                      name = "UPLOAD_SERVER_IMAGE";
-                      value = "quay.io/kubevirt/cdi-uploadserver:${config.image.tag}";
-                    }
-                    {
                       name = "VERBOSITY";
                       value = "1";
                     }
-                  ];
-                  ports = [
-                    {
-                      name = "metrics";
-                      containerPort = 8080;
-                      protocol = "TCP";
-                    }
-                  ];
-                  # cdi-operator.yaml (v1.62.0) sets no probes and the
-                  # operator serves no health endpoint. These follow
-                  # virt-operator's upstream probe on its metrics endpoint.
-                  readinessProbe = metricsProbe;
-                  livenessProbe = metricsProbe // {
+                  ]
+                  ++ operandEnvVars
+                  ++ lib.optional (config.image.pullPolicy != null) {
+                    name = "PULL_POLICY";
+                    value = config.image.pullPolicy;
+                  };
+                  ports = [ (kix.port "metrics" 8080) ];
+                  # cdi-operator.yaml sets no probes and the operator serves
+                  # no health endpoint, so both probes read its metrics.
+                  readinessProbe = {
+                    httpGet = {
+                      path = "/metrics";
+                      port = "metrics";
+                    };
+                    initialDelaySeconds = 5;
+                    periodSeconds = 10;
+                    timeoutSeconds = 10;
+                  };
+                  livenessProbe = {
+                    httpGet = {
+                      path = "/metrics";
+                      port = "metrics";
+                    };
                     initialDelaySeconds = 15;
+                    periodSeconds = 10;
+                    timeoutSeconds = 10;
                   };
                   resources = config.resources;
                   securityContext = {
@@ -967,64 +445,115 @@ in
         };
       };
 
-      # --- CDI CR ---
-      # This custom resource tells the cdi-operator to deploy cdi-apiserver,
-      # cdi-controller (uploadcontroller), and cdi-uploadproxy.
-      cdiCR = scope.mkClusterResource {
-        apiVersion = "cdi.kubevirt.io/v1beta1";
-        kind = "CDI";
-        name = name;
-        spec = {
-          imagePullPolicy = config.image.pullPolicy;
-          config =
-            { } // (if config.featureGates != [ ] then { featureGates = config.featureGates; } else { });
-        }
-        // (
-          if config.cloneStrategyOverride != null then
-            { cloneStrategyOverride = config.cloneStrategyOverride; }
-          else
-            { }
-        )
-        // (if config.infra != { } then { infra = config.infra; } else { })
-        // (if config.workload != { } then { workload = config.workload; } else { });
-        requires = [
-          self.deployment
-          self.crds.cdi
-        ];
+      cdiCR = scope.mkCR self.crds.cdis {
+        inherit name;
+        spec = kix.mergeGuarded {
+          inherit who;
+          locked = [
+            [
+              "infra"
+              "apiServerReplicas"
+            ]
+            [
+              "infra"
+              "deploymentReplicas"
+            ]
+            [
+              "infra"
+              "uploadProxyReplicas"
+            ]
+            [ "imagePullPolicy" ]
+          ];
+        } baseSpec config.extraSpec;
+        requires = [ self.deployment ];
       };
 
-      # --- CRDs ---
-      # Only the CDI CR's own definition, vendored from upstream v1.62.0.
-      # The operator installs the CRDs for the kinds it serves.
-      #
-      # The operator rewrites this CRD once it runs: it drops the deprecated
-      # v1alpha1 version. That makes `spec.versions` its field, so the
-      # package cedes it: kix ships upstream's list at creation, and when
-      # the next deploy meets the operator's ownership it applies without
-      # the field rather than failing the deploy.
-      crds =
-        let
-          upstream = builtins.fromJSON (builtins.readFile ./crds/cdis.cdi.kubevirt.io.json);
-        in
-        {
-          cdi = scope.mkCRD {
-            spec = upstream.spec;
-            ownership.cede = [ "spec.versions" ];
+      crds = {
+        # cdi-operator rewrites this CRD once it runs and drops the
+        # deprecated v1alpha1 version. The package cedes `spec.versions`, so
+        # Kix ships upstream's list at creation and later deploys apply
+        # without the field.
+        cdis = scope.mkCRD {
+          spec = (builtins.fromJSON (builtins.readFile ./crds/cdis.cdi.kubevirt.io.json)).spec;
+          ownership.cede = [ "spec.versions" ];
+          readiness = {
+            path = "/status/phase";
+            equals = "Deployed";
           };
         };
 
-      # --- Entry point ---
+        # cdi-operator installs the DataVolume CRD once the CDI resource
+        # exists. Readiness is stamped per DataVolume by out.mkDataVolume.
+        dataVolumes = scope.mkCRDRef {
+          group = "cdi.kubevirt.io";
+          kind = "DataVolume";
+          plural = "datavolumes";
+          version = "v1beta1";
+          installedBy = self.cdiCR;
+        };
+      };
+
+      # Null without an enforcer. The API server reaches cdi-apiserver as an
+      # aggregated API and an admission webhook; cdi-deployment polls
+      # importer pods and cdi-uploadproxy forwards to upload server pods, in
+      # other namespaces, on 8443.
+      operandPolicies = {
+        apiServer = operandPolicy "cdi-apiserver" operandSelectors.apiServer {
+          ingress = [
+            {
+              from = "apiserver";
+              ports = [ (tcp 8443) ];
+            }
+          ];
+          egress = [
+            { to = "dns"; }
+            { to = "apiserver"; }
+          ];
+        };
+        deployment = operandPolicy "cdi-deployment" operandSelectors.deployment {
+          egress = [
+            { to = "dns"; }
+            { to = "apiserver"; }
+            {
+              to = "all-pods";
+              ports = [ (tcp 8443) ];
+            }
+          ];
+        };
+        uploadProxy = operandPolicy "cdi-uploadproxy" operandSelectors.uploadProxy {
+          ingress = [
+            {
+              from = "all-pods";
+              ports = [ (tcp 8443) ];
+            }
+          ];
+          egress = [
+            { to = "dns"; }
+            { to = "apiserver"; }
+            {
+              to = "all-pods";
+              ports = [ (tcp 8443) ];
+            }
+          ];
+        };
+      };
+
       root = {
         resource = self.deployment;
         requires = [
-          self.serviceAccount
-          self.clusterRole
-          self.clusterRoleBinding
-          self.role
-          self.roleBinding
           self.cdiCR
-          self.crds.cdi
-        ];
+          self.crds.dataVolumes
+        ]
+        ++ builtins.filter (p: p != null) (builtins.attrValues self.operandPolicies);
+
+        out = {
+          crds.DataVolume = self.crds.dataVolumes;
+          inherit mkDataVolume mkImporterPolicy;
+          operandSelectors = {
+            inherit (operandSelectors) importer deployment uploadProxy;
+          };
+          extraImages = builtins.attrValues operandRefs;
+        };
       };
     };
 }
