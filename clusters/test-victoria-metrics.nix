@@ -120,11 +120,11 @@ kix.buildCluster {
         vm-agent = {
           package = packages.victoria-metrics-agent;
           # The post-deploy probe Job (kix.healthCheck).
-          config.healthCheck.enable = true;
+          config.healthCheck.enabled = true;
         };
         vm-alert = {
           package = packages.victoria-metrics-alert;
-          config.healthCheck.enable = true;
+          config.healthCheck.enabled = true;
         };
         grafana = {
           package = packages.grafana;

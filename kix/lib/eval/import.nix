@@ -252,6 +252,7 @@ rec {
 
             evaluatedConfig = evaluateInstanceConfig {
               packageOptions = raw.options or { };
+              unsafeGrants = raw.meta.unsafe or [ ];
               packageConfig = raw.config or { };
               packageConfigFile = "package config of ${namespaceName}/${instanceName}";
               inherit

@@ -110,7 +110,7 @@ kix.buildCluster {
           logs = {
             package = packages.clickhouse-logs;
             config = {
-              healthCheck.enable = true;
+              healthCheck.enabled = true;
               retentionDays = 3;
             };
           };

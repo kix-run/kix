@@ -35,6 +35,9 @@ in
     unsafe = [
       "run-as-root"
       "privileged"
+      # Its options are not retyped yet
+      # (housekeeping/2026-10-01-firezone-exempted-from-option-contract.md).
+      "lossy-option-defaults"
     ];
   };
 

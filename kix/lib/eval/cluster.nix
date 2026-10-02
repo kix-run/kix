@@ -323,6 +323,7 @@
               resolvedTargets = { };
               packageOptions = { };
               packageConfig = { };
+              unsafeGrants = [ ];
             }
           else
             let
@@ -349,6 +350,7 @@
               inherit discoveredDeps depsEnrichment resolvedTargets;
               packageOptions = raw.options or { };
               packageConfig = raw.config or { };
+              unsafeGrants = raw.meta.unsafe or [ ];
             }
         ) nsInsts
       ) mergedInstances;
@@ -380,7 +382,7 @@
               { }
             else
               evaluateInstanceConfig {
-                inherit (phase1Instances.${nsName}.${instName}) packageOptions packageConfig;
+                inherit (phase1Instances.${nsName}.${instName}) packageOptions packageConfig unsafeGrants;
                 packageConfigFile = "package config of ${nsName}/${instName}";
                 namespaceName = nsName;
                 instanceName = instName;

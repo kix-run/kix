@@ -1,4 +1,4 @@
-# clusters/example-multi-env/base.nix — Shared package configuration for all environments.
+# clusters/example-multi-env/base.nix: shared package configuration for all environments.
 #
 # This module defines the service catalog and common settings. Environment-specific
 # cluster definitions (dev.nix, prod.nix) import this and override what differs.
@@ -25,7 +25,7 @@
   # --- Service definitions (shared across dev and prod) ---
 
   instances.app = {
-    # The main application — same package, config varies per env.
+    # The main application: the same package, with config that varies per env.
     # A placeholder: use your app package.
     my-app = {
       package = packages.echo-server;

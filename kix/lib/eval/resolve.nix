@@ -1,6 +1,8 @@
 { lib, kixlib }:
 
 let
+  optionContract = import ./options.nix { inherit lib; };
+
   systemArgNames = [
     "scope"
     "lib"
@@ -221,6 +223,11 @@ rec {
   # `instances.<ns>.<instance>.config.<option>`. Every module, the package's
   # and the instance's, can take `clusterConfig` as a module argument, so a
   # default can derive from a cluster fact such as `clusterDomain`.
+  # `packageOptions` must satisfy the option contract (eval/options.nix),
+  # and a violation throws before the options are evaluated. A package whose
+  # `meta.unsafe` (passed as `unsafeGrants`) holds `lossy-option-defaults`
+  # skips the check; an instance that sets part of one of its attrset
+  # options then replaces that option's whole default.
   evaluateInstanceConfig =
     {
       packageOptions,
@@ -231,6 +238,7 @@ rec {
       configInjections ? [ ],
       namespaceName ? null,
       instanceName ? null,
+      unsafeGrants ? [ ],
     }:
     let
       deferredConfig = instCfg.config;
@@ -340,32 +348,16 @@ rec {
           }).config
           [ "_module" ];
 
-      optionDefaults = lib.filterAttrs (_: v: v != null) (
-        lib.mapAttrs (_: opt: if opt ? default then opt.default else null) packageOptions
-      );
-
-      # The post-eval recursive merge preserves nested defaults for
-      # types.anything options. Do not reintroduce those defaults when the
-      # instance explicitly used mkForce on the whole option.
-      forcedOptionNames = lib.unique (
-        builtins.concatMap (
-          value:
-          if builtins.isAttrs value then
-            builtins.attrNames (
-              lib.filterAttrs (
-                _: optionValue:
-                builtins.isAttrs optionValue
-                && (optionValue._type or "") == "override"
-                && (optionValue.priority or null) == (lib.mkForce null).priority
-              ) value
-            )
-          else
-            [ ]
-        ) configValues
-      );
-      mergeableDefaults = removeAttrs optionDefaults forcedOptionNames;
+      _contractCheck =
+        if builtins.elem "lossy-option-defaults" unsafeGrants then
+          null
+        else
+          optionContract.checkOptionContract {
+            who = instanceText;
+            options = packageOptions;
+          };
     in
-    builtins.seq _lockedCheck (lib.recursiveUpdate mergeableDefaults evaluated);
+    builtins.seq _contractCheck (builtins.seq _lockedCheck evaluated);
 
   # `availability` is the instance's resolved level (core/availability.nix),
   # a plain string a package may take as an argument so its option defaults

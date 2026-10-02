@@ -172,7 +172,7 @@ in
     # from_env substitution that did not happen), and that failure looks
     # healthy from every other angle.
     healthCheck = kix.options.healthCheck // {
-      enable = lib.mkOption {
+      enabled = lib.mkOption {
         type = lib.types.bool;
         default = true;
         description = "Run the post-deploy probe. It checks login, that a login with no password is refused, and that replicated DDL can work.";

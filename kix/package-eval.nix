@@ -25,9 +25,12 @@
 # known to fail them; like `knownFailures`, a listed package that passes
 # fails the check until its entry is removed.
 #
-# `optionContractExemptions` lists the packages kept although their options
-# break the option contract (kix/lib/eval/options.nix). A listed package
-# whose options pass fails the check until its entry is removed.
+# Instance evaluation refuses a package whose options break the option
+# contract (kix/lib/eval/options.nix) unless its `meta.unsafe` holds
+# `lossy-option-defaults`. `optionContractExemptions` lists the packages
+# here that hold that grant. A package that holds it without an entry, or
+# whose options pass, fails the check until the grant and the entry are
+# removed.
 #
 # Every package is evaluated twice: on the kind flavour alone (availability
 # "none") and with three availability zones declared ("zone"). Replica
@@ -161,11 +164,21 @@ let
     filebrowser.instances = { inherit storage; };
     firezone.config = {
       domain = "firezone.example.com";
+      # firezone holds the `lossy-option-defaults` grant, so `admin` and
+      # `wireguard` are set in full: a partial value replaces the default.
       admin = {
         email = "admin@example.com";
         password = "password";
+        resetOnBoot = true;
       };
-      wireguard.privateKey = "key";
+      wireguard = {
+        port = 51820;
+        privateKey = "key";
+        ipv4Network = "100.64.0.0/10";
+        ipv4Address = "100.64.0.1";
+        ipv6Network = "fd00::/106";
+        ipv6Address = "fd00::1";
+      };
       secrets = {
         guardianSecretKey = "guardian";
         secretKeyBase = "base";
@@ -460,27 +473,32 @@ let
     else
       lib.assertMsg ok "kix/packages/${name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\" or \"v1.19.6\".";
 
-  # The contract violations of a package's options, read the way the
-  # cluster evaluation reads them (phase 1, availability "none").
-  optionContractViolations =
+  # The package read the way the cluster evaluation reads it (phase 1,
+  # availability "none").
+  phase1Package =
     name: package:
-    optionContract.optionContractViolations {
-      options =
-        (kix.callPackagePhase1 {
-          inherit package;
-          scope = {
-            instanceName = name;
-            namespaceName = name;
-          };
-        }).options or { };
+    kix.callPackagePhase1 {
+      inherit package;
+      scope = {
+        instanceName = name;
+        namespaceName = name;
+      };
     };
 
   checkOptionContractExemption =
     name: package:
-    lib.assertMsg (optionContractViolations name package != [ ])
-      "kix/packages/${name}: its options satisfy the option contract now; remove it from optionContractExemptions in kix/package-eval.nix and delete ${
-        optionContractExemptions.${name}
-      }";
+    let
+      raw = phase1Package name package;
+      granted = builtins.elem "lossy-option-defaults" (raw.meta.unsafe or [ ]);
+    in
+    if optionContractExemptions ? ${name} then
+      lib.assertMsg (optionContract.optionContractViolations { options = raw.options or { }; } != [ ])
+        "kix/packages/${name}: its options satisfy the option contract now; remove \"lossy-option-defaults\" from its meta.unsafe and its entry from optionContractExemptions in kix/package-eval.nix, and delete ${
+          optionContractExemptions.${name}
+        }"
+    else
+      lib.assertMsg (!granted)
+        "kix/packages/${name}: meta.unsafe holds \"lossy-option-defaults\", which kixpkgs packages may hold only with an entry in optionContractExemptions (kix/package-eval.nix) naming a housekeeping entry. Retype its options and remove the grant.";
 
   # The availability levels every package is evaluated at, as cluster
   # modules added after the kind flavour.
@@ -534,7 +552,7 @@ let
     in
     assert checkSource name;
     assert checkVersion name package;
-    assert optionContractExemptions ? ${name} -> checkOptionContractExemption name package;
+    assert checkOptionContractExemption name package;
     builtins.addErrorContext
       "while evaluating kix/packages/${name} in its synthetic cluster at availability \"${level}\""
       (

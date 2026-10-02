@@ -1290,7 +1290,7 @@ rec {
 
     # For packages with a kix.healthCheck probe; the helper reads both.
     healthCheck = {
-      enable = lib.mkOption {
+      enabled = lib.mkOption {
         type = lib.types.bool;
         default = false;
         description = "Run the package's post-deploy probe (kix.healthCheck) once its resources are ready. A failing probe fails the deploy before the activation switches.";
@@ -1308,7 +1308,7 @@ rec {
   # context, so the Job runs after its targets and receives matching egress.
   # Job success completes the probe; exhausting backoffLimit fails the deploy.
   #
-  #   options.healthCheck = kix.options.healthCheck;   # enable, retryFor
+  #   options.healthCheck = kix.options.healthCheck;   # enabled, retryFor
   #   build = [
   #     ({ self, vmCluster, ... }: { ... })
   #     (kix.healthCheck {
@@ -1392,7 +1392,7 @@ rec {
           # -> bool. False renders nothing. The default reads the option
           # set `kix.options.healthCheck` when the package declares it, and
           # is true when it does not.
-          when ? ({ config, ... }: config.healthCheck.enable or true),
+          when ? ({ config, ... }: config.healthCheck.enabled or true),
           # -> seconds the script keeps re-checking before it gives up.
           # Same default rule as `when`; 90 when the package has no option.
           retryFor ? ({ config, ... }: config.healthCheck.retryFor or 90),

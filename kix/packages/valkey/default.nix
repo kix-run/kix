@@ -501,9 +501,8 @@ in
                 metadata.annotations = {
                   "checksum/configMap" = self.configMap.out.identityHash;
                 }
-                # A secret-ref has no identityHash. To restart the pods when
-                # that Secret changes, the cluster applies reloader's
-                # withReloadOn to this instance.
+                # A secret-ref has no identityHash, so a rotation of that
+                # Secret does not roll the pods.
                 // lib.optionalAttrs (password.out ? identityHash) {
                   "checksum/valkeyPassword" = password.out.identityHash;
                 };

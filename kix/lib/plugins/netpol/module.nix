@@ -58,6 +58,9 @@ in
             CoreDNS, local-path-provisioner in kind). Each intent declares
             enforcer-agnostic connectivity requirements; the enforcer
             materializes them into native policy CRs. Set by flavors.
+            Also used for a Kix workload whose egress depends on its
+            configuration, when the package's error or description asks
+            for one (infisical-operator `address`, coredns `servers`).
             See v2_discussions/92_declarative_network_policy_intents.md.
           '';
         };

@@ -1,8 +1,8 @@
-# Test clusters — exercise various kix features.
+# Test clusters that exercise Kix features.
 #
 # Build:  nix build .#cluster-minimal --extra-experimental-features pipe-operators
 #
-# Note: test-helm is excluded — it references ../tests/helm-test-chart which is
+# Note: test-helm is excluded because it references ../tests/helm-test-chart, which is
 # outside this flake tree. Build it from the root flake instead.
 
 {

@@ -16,7 +16,7 @@
 # give Loki's claim another instance name and `aliases`, and wire
 # `deps.storage = ref.<ns>.<claim>` as kix.modules.monitoring does.
 # Otherwise both pods mount the one ReadWriteOnce claim
-# (housekeeping/2026-10-02-two-workloads-share-one-rwo-claim.md).
+# (housekeeping/2026-10-02-shared-dependency-state-collides-between-consumers.md).
 #
 # DI deps:
 #   storage (required)     a persistent-volume-claim instance, mounted at
