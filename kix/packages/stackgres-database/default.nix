@@ -6,11 +6,9 @@
 # Why this exists:
 #   K8s Secrets are namespace-scoped. The credentials Secret that StackGres
 #   auto-creates lives next to the SGCluster, so an app in another namespace
-#   can't read it via secretKeyRef. The (existing) reflector-based
-#   replication of the *superuser* secret is brittle and gives apps far too
-#   much privilege anyway. This package solves the real problem: each app
-#   gets its own role + database, with credentials sitting in its own
-#   namespace, no superuser exposure.
+#   can't read it via secretKeyRef, and it holds the superuser. Each app gets
+#   its own role and database instead, with credentials in its own
+#   namespace.
 #
 # How it works:
 #   1. A kix-managed `credentials` Secret is created in this package's
@@ -22,11 +20,12 @@
 #   3. A `bootstrapJob` runs in the postgres namespace using a postgres
 #      image, waits for the cluster to accept connections, and idempotently
 #      creates the role, the database, optional ownership, GRANTs, and
-#      requested extensions. Superuser credentials come from the SGCluster's
-#      auto-created secret (also in the postgres namespace), referenced via
-#      a local mkSecretRef. The Job's name carries a hash of its inputs, so
-#      a change (e.g. password rotation) is a new Job, not a patch of the
-#      old one; the old one is reaped by its TTL.
+#      requested extensions. Superuser credentials come from the Secret
+#      StackGres creates next to the SGCluster: `postgres.out.superuserSecret`
+#      on a stackgres-cluster, or the Secret named after the cluster on an
+#      import. The Job's name carries a hash of its inputs, so a change
+#      (e.g. password rotation) is a new Job, not a patch of the old one;
+#      the old one is reaped by its TTL.
 #
 # Same-namespace works too: if the consumer puts both the SGCluster and
 # this database instance in one namespace, `scope.forService` returns a
@@ -45,6 +44,9 @@
 #       DB_PASSWORD = "password";
 #     });
 #   };
+#
+# `out.tls` is the postgres dependency's `out.tls` (whether PostgreSQL
+# serves TLS), or null when it publishes none, such as an import.
 
 {
   scope,
@@ -54,16 +56,27 @@
 
 let
   name = scope.instanceName;
+  who = "stackgres-database ${scope.namespaceName}/${name}";
+
+  # A plain name or `{ name; version; }`, as stackgres-cluster takes it.
+  normalizeExtension =
+    e:
+    if builtins.isString e then
+      { name = e; }
+    else
+      { inherit (e) name; } // lib.optionalAttrs (e.version != null) { inherit (e) version; };
+
+  # PostgreSQL identifiers the bootstrap script quotes: double quotes in SQL,
+  # single quotes in the shell. The pattern admits neither quote nor `$`.
+  identifier = lib.types.strMatching "[A-Za-z_][A-Za-z0-9_-]{0,62}";
 in
 {
   meta = {
-    version = "0.1.0";
     description = "Logical database + role provisioned on a StackGres cluster";
     owner = "platform";
     lifecycle = "stateful"; # other packages depend on this database existing
     scope = "namespace";
     defaultAliases = [ "database" ];
-    maintainer = "platform";
   };
 
   # Forward this database's `extensions` (which a consumer like immich
@@ -74,20 +87,22 @@ in
   # Entries can be plain strings or `{ name, version? }` attrsets; both
   # shapes are normalized to the attrset form expected by SGCluster.
   deps.postgres.config = consumerConfig: {
-    extensions = map (e: if builtins.isString e then { name = e; } else e) consumerConfig.extensions;
+    extensions = map normalizeExtension consumerConfig.extensions;
   };
 
   options = {
     database = lib.mkOption {
-      type = lib.types.str;
+      type = identifier;
       default = name;
-      description = "PostgreSQL database name to create. Defaults to the instance name.";
+      defaultText = lib.literalMD "the instance name";
+      description = "PostgreSQL database name to create: a letter or underscore, then up to 62 letters, digits, underscores, or hyphens.";
     };
 
     user = lib.mkOption {
-      type = lib.types.str;
+      type = identifier;
       default = name;
-      description = "PostgreSQL role name to create. Defaults to the instance name.";
+      defaultText = lib.literalMD "the instance name";
+      description = "PostgreSQL role name to create: a letter or underscore, then up to 62 letters, digits, underscores, or hyphens.";
     };
 
     owner = lib.mkOption {
@@ -97,15 +112,30 @@ in
     };
 
     extensions = lib.mkOption {
-      type = lib.types.listOf (lib.types.either lib.types.str lib.types.attrs);
+      type = lib.types.listOf (
+        lib.types.either lib.types.str (
+          lib.types.submodule {
+            options = {
+              name = lib.mkOption {
+                type = lib.types.nonEmptyStr;
+                description = "Extension name.";
+              };
+              version = lib.mkOption {
+                type = lib.types.nullOr lib.types.nonEmptyStr;
+                default = null;
+                description = "Extension version the cluster installs. Null takes the repository's default.";
+              };
+            };
+          }
+        )
+      );
       default = [ ];
       description = ''
-        Extensions to CREATE EXTENSION IF NOT EXISTS on the new database.
-        Each entry is either a plain extension name (string) or an
-        attrset `{ name, version? }` to pin a specific extension version.
-        Note: the extension must already be available in the cluster. Declare
-        it on the stackgres-cluster instance's `extensions` option so the
-        operator installs it on the underlying postgres image.
+        Extensions to CREATE EXTENSION IF NOT EXISTS on the new database, as
+        a name or `{ name; version; }`. They are added to the postgres
+        dependency's `extensions`, so a stackgres-cluster installs them. An
+        imported cluster must already have them and list them in its
+        `out.extensions`.
       '';
     };
 
@@ -140,11 +170,12 @@ in
       '';
     };
 
-    psqlImage = kix.options.image {
-      repository = "postgres";
-      tag = "16-alpine";
+    bootstrap.image = kix.options.image {
+      repository = "docker.io/library/postgres";
+      tag = "18.6-alpine";
+      digest = "sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873";
       pullPolicy = null;
-      description = "Image used by the bootstrap Job. Must contain `psql` and `pg_isready`.";
+      description = "Image of the bootstrap Job. It must contain `psql` and `pg_isready`, and run as uid 70, the `postgres` user of the official Alpine images.";
     };
   };
 
@@ -161,6 +192,17 @@ in
     let
       dbName = config.database;
       userName = config.user;
+      extensionNames = map (e: (normalizeExtension e).name) config.extensions;
+
+      _extensionsCheck =
+        let
+          published = postgres.out.extensions or [ ];
+          missing = builtins.filter (n: !(builtins.elem n published)) extensionNames;
+        in
+        if missing != [ ] then
+          throw "${who}: needs extensions ${lib.concatStringsSep ", " missing} on its postgres dependency, which publishes out.extensions = [ ${lib.concatStringsSep " " published} ]. On a stackgres-cluster they are forwarded automatically; on an import, install them and list them in its out.extensions."
+        else
+          null;
 
       # --- Validate password configuration ---------------------------------
       # Exactly one of `password` or `passwordSource` must be set. The hash
@@ -265,33 +307,30 @@ in
         };
       };
 
-      # --- 3. Superuser secret reference (postgres namespace) --------------
-      # The StackGres operator auto-creates a Secret named after the cluster
-      # holding `superuser-username` / `superuser-password`. mkSecretRef in
-      # the backend scope pulls those into the Job's env without any
-      # cross-namespace shenanigans, and gives us deploy-time validation
-      # that the secret actually exists before the Job runs.
-      #
-      # `clusterName` carries the SGCluster's store-path context; k8s
-      # strips it internally only for the toFile filename, while the
-      # content-side context flows through to the marker's outPath and
-      # `kix.run/depends-on` annotation, so the wave graph correctly
-      # orders this ref after the SGCluster, no manual `requires` needed.
-      superuserRef = backendScope.mkSecretRef {
-        name = clusterName;
-        keys = [
-          "superuser-username"
-          "superuser-password"
-        ];
-      };
+      # --- 3. Superuser Secret (postgres namespace) ------------------------
+      # A stackgres-cluster publishes the Secret StackGres creates for it.
+      # An import does not, so this references the Secret StackGres names
+      # after the cluster, in the cluster's namespace.
+      importedSuperuser =
+        if postgres.out ? superuserSecret then
+          null
+        else
+          backendScope.mkSecretRef {
+            name = clusterName;
+            keys = [
+              "superuser-username"
+              "superuser-password"
+            ];
+          };
+      superuser = if importedSuperuser == null then postgres.out.superuserSecret else importedSuperuser;
 
       # --- 4. Bootstrap Job (postgres namespace) ---------------------------
       # Idempotent psql script: waits for the cluster, creates/updates the
       # role, creates the database, sets ownership + grants, and creates
-      # extensions. Username and database name are kix-controlled strings
-      # (no user-supplied content), so shell interpolation is safe; the
-      # password goes through psql's `:'name'` literal substitution which
-      # quotes correctly regardless of contents.
+      # extensions. The `database` and `user` option types admit no quote
+      # and no `$`, so interpolating them into the script is safe; the
+      # password goes through psql's `:'name'` literal substitution, which
+      # quotes any content.
       bootstrapScript = ''
         set -eu
 
@@ -336,12 +375,8 @@ in
             echo "ensuring extensions on \"${dbName}\"..."
             psql -v ON_ERROR_STOP=1 -d "${dbName}" <<'SQL'
           ${lib.concatMapStringsSep "\n" (
-            ext:
-            let
-              e = if builtins.isString ext then { name = ext; } else ext;
-            in
-            "CREATE EXTENSION IF NOT EXISTS \"${e.name}\" CASCADE;"
-          ) config.extensions}
+            n: "CREATE EXTENSION IF NOT EXISTS \"${n}\" CASCADE;"
+          ) extensionNames}
           SQL
         ''}
 
@@ -358,19 +393,18 @@ in
             metadata.labels = labels;
             spec = {
               restartPolicy = "OnFailure";
-              # The Job runs psql, a client, which needs no root. 999 is
-              # the `postgres` user in the official postgres image that
-              # `psqlImage` defaults to.
+              # The Job runs psql, a client, which needs no root. 70 is the
+              # `postgres` user of the official Alpine postgres images.
               securityContext = {
                 runAsNonRoot = true;
-                runAsUser = 999;
-                runAsGroup = 999;
+                runAsUser = 70;
+                runAsGroup = 70;
               };
               containers = [
                 (
                   {
                     name = "bootstrap";
-                    image = kix.image.ref config.psqlImage;
+                    image = kix.image.ref config.bootstrap.image;
                     command = [
                       "/bin/sh"
                       "-c"
@@ -398,7 +432,7 @@ in
                         value = "postgres";
                       }
                     ]
-                    ++ (superuserRef.out.mkEnv {
+                    ++ (superuser.out.mkEnv {
                       PGUSER = "superuser-username";
                       PGPASSWORD = "superuser-password";
                     })
@@ -406,8 +440,8 @@ in
                       NEW_PASSWORD = "password";
                     });
                   }
-                  // lib.optionalAttrs (config.psqlImage.pullPolicy != null) {
-                    imagePullPolicy = config.psqlImage.pullPolicy;
+                  // lib.optionalAttrs (config.bootstrap.image.pullPolicy != null) {
+                    imagePullPolicy = config.bootstrap.image.pullPolicy;
                   }
                 )
               ];
@@ -421,83 +455,68 @@ in
           };
         };
       };
-
-      # --- 5. Consumer-facing env helper ----------------------------------
-      # Returns a list of K8s env entries with the connection info under a
-      # given prefix. Saves consumers from wiring 5 fields by hand. Reads
-      # `self.pg.*` so the forwarded markers (see `pg` below) flow through
-      # the consumer's forward closure and DI netpol registry.
-      mkConnectionEnv =
-        prefix:
-        (kix.mkEnvVars {
-          "${prefix}HOSTNAME" = self.pg.fqdn;
-          "${prefix}PORT" = self.pg.port;
-          "${prefix}DATABASENAME" = dbName;
-        })
-        ++ (credentials.out.mkEnv {
-          "${prefix}USERNAME" = "username";
-          "${prefix}PASSWORD" = "password";
-        });
     in
-    builtins.seq _passwordCheck {
-      inherit
-        credentials
-        bootstrapPassword
-        bootstrapJob
-        superuserRef
-        ;
+    builtins.seq _passwordCheck (
+      builtins.seq _extensionsCheck {
+        inherit
+          credentials
+          bootstrapPassword
+          bootstrapJob
+          importedSuperuser
+          ;
 
-      # --- Forwarded postgres service ------------------------------------
-      # `scope.forwardEdges` bundles two concerns into one intent:
-      #
-      #   a) Stamp the bootstrap Job onto the postgres service edge.
-      #      `postgres.out.{fqdn,port,name}` already carry the
-      #      postgresService ServiceRef marker context (selector, ports,
-      #      readiness poll); forwardEdges packs `bootstrapJob`'s
-      #      store-path into each string value's context so consumers
-      #      traversing `database.out.host` / `.port` automatically pick
-      #      up the Job in their forward closure: no chain hop through
-      #      the Job, no duplicate selector/ports declaration, no new
-      #      marker. Wave ordering follows: the consumer's Deployment
-      #      hash includes the Job's hash → deploy gates on Job-Complete.
-      #
-      #   b) Re-expose the upstream postgres ServiceRef marker as a
-      #      folder-shaped typed child so `collectTypedAttrs` picks it
-      #      up when building the consumer's DI-direct netpol registry.
-      #      Without this re-exposure, the marker's outPath would be
-      #      present in `database.out.host`'s string context but
-      #      invisible to `buildWorkloadCnps` (which only indexes
-      #      resources from the consumer's direct deps), and the
-      #      consumer's egress CNP would never emit a rule targeting
-      #      postgres, producing a CONNECT_TIMEOUT under default-deny.
-      #
-      # `pg` lives in `parts` as a plain attrset (no `_type`), so
-      # mkPackageView treats it as a folder and collectTypedAttrs
-      # descends one level into it to find the re-exposed marker.
-      # Consumers read `self.pg.fqdn` / `self.pg.port`.
-      pg = scope.forwardEdges postgres [ bootstrapJob ];
+        # --- Forwarded postgres service ------------------------------------
+        # `scope.forwardEdges` bundles two concerns into one intent:
+        #
+        #   a) Stamp the bootstrap Job onto the postgres service edge.
+        #      `postgres.out.{fqdn,port,name}` already carry the
+        #      postgresService ServiceRef marker context (selector, ports,
+        #      readiness poll); forwardEdges packs `bootstrapJob`'s
+        #      store-path into each string value's context so consumers
+        #      traversing `database.out.host` / `.port` automatically pick
+        #      up the Job in their forward closure: no chain hop through
+        #      the Job, no duplicate selector/ports declaration, no new
+        #      marker. Wave ordering follows: the consumer's Deployment
+        #      hash includes the Job's hash → deploy gates on Job-Complete.
+        #
+        #   b) Re-expose the upstream postgres ServiceRef marker as a
+        #      folder-shaped typed child so `collectTypedAttrs` picks it
+        #      up when building the consumer's DI-direct netpol registry.
+        #      Without this re-exposure, the marker's outPath would be
+        #      present in `database.out.host`'s string context but
+        #      invisible to `buildWorkloadCnps` (which only indexes
+        #      resources from the consumer's direct deps), and the
+        #      consumer's egress CNP would never emit a rule targeting
+        #      postgres, producing a CONNECT_TIMEOUT under default-deny.
+        #
+        # `pg` lives in `parts` as a plain attrset (no `_type`), so
+        # mkPackageView treats it as a folder and collectTypedAttrs
+        # descends one level into it to find the re-exposed marker.
+        # Consumers read `self.pg.fqdn` / `self.pg.port`.
+        pg = scope.forwardEdges postgres [ bootstrapJob ];
 
-      root = {
-        resource = credentials;
-        # The Job reaches this instance by two routes, and each covers a
-        # case the other does not. `pg` above carries it to consumers, so a
-        # consumer's workload waits for the Job and gets egress to postgres.
-        # `postHooks` puts the Job, and what it references (bootstrapPassword,
-        # superuserRef, its network policies), in this instance's own forward
-        # closure, so the PackageInstance depends on the Job even when no
-        # consumer reads `out.host`. `credentials` does not reference the Job
-        # and can be applied before the Job runs.
-        postHooks = [ bootstrapJob ];
+        root = {
+          resource = credentials;
+          # The Job reaches this instance by two routes, and each covers a
+          # case the other does not. `pg` above carries it to consumers, so a
+          # consumer's workload waits for the Job and gets egress to postgres.
+          # `postHooks` puts the Job, and what it references (bootstrapPassword,
+          # the superuser Secret, its network policies), in this instance's own forward
+          # closure, so the PackageInstance depends on the Job even when no
+          # consumer reads `out.host`. `credentials` does not reference the Job
+          # and can be applied before the Job runs.
+          postHooks = [ bootstrapJob ];
 
-        out = {
-          host = self.pg.fqdn;
-          port = self.pg.port;
-          database = dbName;
-          username = userName;
-          extensions = config.extensions;
-          credentials = credentials;
-          connectionEnv = mkConnectionEnv;
+          out = {
+            host = self.pg.fqdn;
+            port = self.pg.port;
+            database = dbName;
+            username = userName;
+            extensions = config.extensions;
+            credentials = credentials;
+            tls = postgres.out.tls or null;
+          };
         };
-      };
-    };
+      }
+    );
 }

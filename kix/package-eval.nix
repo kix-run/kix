@@ -266,10 +266,42 @@ let
     # A Prometheus provider, so the metrics Service and the ServiceMonitor
     # are built.
     snapshot-controller.instances.prometheus-operator.package = packages.prometheus-operator;
+    # Backups to an object storage, so the SGObjectStorage reference, the
+    # backups entries, and archive_timeout are built.
+    stackgres-cluster = {
+      config.backups = [ { cronSchedule = "0 1 * * *"; } ];
+      instances = {
+        s3-credentials = {
+          package = packages.secret;
+          aliases = [ "storageCredentials" ];
+          config.stringData = {
+            accessKeyId = "id";
+            secretAccessKey = "key";
+          };
+        };
+        stackgres-object-storage = {
+          package = packages.stackgres-object-storage;
+          config = {
+            type = "s3Compatible";
+            bucket = "backups";
+          };
+        };
+      };
+    };
     stackgres-database.config.password = "password";
-    stackgres-object-storage.config = {
-      bucket = "backups";
-      credentialsSecretName = "backup-credentials";
+    stackgres-object-storage = {
+      config = {
+        type = "s3Compatible";
+        bucket = "backups";
+      };
+      instances.s3-credentials = {
+        package = packages.secret;
+        aliases = [ "storageCredentials" ];
+        config.stringData = {
+          accessKeyId = "id";
+          secretAccessKey = "key";
+        };
+      };
     };
     # No default annotation: the kind flavour already has a default class.
     storage-classes.config.classes.local-path-retain = {
@@ -286,7 +318,13 @@ let
       };
     };
     valkey.instances.valkey-password = valkeyPassword;
-    vaultwarden.instances = { inherit storage; };
+    vaultwarden.instances = {
+      inherit storage;
+      database = {
+        package = packages.stackgres-database;
+        config.password = "password";
+      };
+    };
     velero = {
       config.backupStorageLocation.objectStorage.bucket = "backups";
       instances = {

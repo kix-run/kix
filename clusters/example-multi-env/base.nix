@@ -26,14 +26,9 @@
 
   instances.app = {
     # The main application — same package, config varies per env.
+    # A placeholder: use your app package.
     my-app = {
-      package = packages.vaultwarden; # placeholder — use your app package
-    };
-
-    # my-app's `storage` dependency. A claim has no default size.
-    storage = {
-      package = packages.persistent-volume-claim;
-      config.size = "1Gi";
+      package = packages.echo-server;
     };
   };
 
