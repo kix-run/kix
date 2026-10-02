@@ -9,3 +9,5 @@ Sentinel on (the start scripts resolve it before any pod is Ready). Each carries
 explaining why, yet the rule fires on the literal and on `rawSelector`
 alike, so these warnings stay in every package-eval run and a new,
 accidental literal selector is lost among them.
+
+- Hit again 2026-10-02 by `kix/packages/mayastor`: the etcd headless Service selects with the StatefulSet's `rawSelector` because the members' env reads its `out.fqdn`, and `architecture.selectorCoherence` warns on it in every build.
