@@ -27,11 +27,11 @@
 # script probes cross-node traffic before judging the run and exits 2 when
 # it is blocked.
 #
-# Usage: scripts/kind-virtualization.sh [--keep]
+# Usage: [KIND_CLUSTER=<name>] scripts/kind-virtualization.sh [--keep]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-NAME=kix-virtualization
+NAME=${KIND_CLUSTER:-kix-virtualization}
 CTX="kind-$NAME"
 KEEP=${1:-}
 OUT=${OUT:-$(mktemp -d -t kix-virtualization.XXXXXX)}
