@@ -128,21 +128,23 @@ crd.fromKind "SGCluster" { spec.group = "stackgres.io"; }
 CRD added to each CR's `requires` -> wave graph places CRD (or import marker) before any CR using it (forward-closure walker). No string context on `apiVersion`/`kind`.
 
 ```nix
-mkIssuerCR = certManager.crds.clusterIssuers.out.mkCR scope;
+mkIssuerCR = scope.mkCR certManager.out.crds.ClusterIssuer;
 issuer = mkIssuerCR {
   name = "letsencrypt";
   spec.acme = { server = ...; email = ...; };
 };
 ```
 
+cert-manager's handles also make each ClusterIssuer require its API-check Job, because the webhook refuses cert-manager objects until its CA is injected.
+
 `scope.mkCR crd args` = sugar for `crd.out.mkCR scope args` using package's own scope.
 
 #### scope.mkCRDRef
 
-CRD installed by something other than kix (operator `INSTALL_CRDS`, Helm chart, pre-existing). Emits a `PackageInstance` import marker (same machinery as `mkSecretRef`), attaches same `out.{cr, mkCR}`. CLI polls for the CRD, waits until `Established=True`, gating the wave with any CR built through the ref.
+CRD installed by something other than kix (operator `INSTALL_CRDS`, Helm chart, pre-existing). Emits a `PackageInstance` import marker (same machinery as `mkSecretRef`), attaches same `out.{cr, mkCR}`. `version` is required and is the version a CR built from the ref uses unless it sets its own; other versions the CRD serves go in `servedVersions` (default `[ version ]`), and a CR at any other version fails the build. The marker is `crd-ref-<instance>-<plural>-<group-with-dashes>`. CLI polls for the CRD, waits until `Established=True`, gating the wave with any CR built through the ref.
 
 ```nix
-cnpCrdRef = scope.mkCRDRef {
+crds.ciliumNetworkPolicies = scope.mkCRDRef {
   group = "cilium.io";
   kind = "CiliumNetworkPolicy";
   plural = "ciliumnetworkpolicies";
@@ -154,6 +156,7 @@ cnpCrdRef = scope.mkCRDRef {
 
 - `installedBy` gates the marker. Single resource or list. Each entry -> hard `requires` edge -> CR's wave waits on all being Ready (not merely applied). For Helm-bundled operators (CRD + DaemonSet + operator Deployment), pass the whole workload list so the CRD waits for every webhook-serving component.
 - `mkCRDBuilders` auto-adds the marker to every CR's `requires`; no `root.requires` plumbing.
+- The part name is the package's own; consumers read the handle from `out` (`out.crds.CiliumNetworkPolicy`) and build with `scope.mkCR dep.out.crds.<Kind>`. Every custom resource must depend on a declaration of its kind (cross-resource check 21); `scope.mkCR` adds it, a raw `scope.mkResource` with a custom `apiVersion` fails.
 
 ### RBAC
 
@@ -263,7 +266,7 @@ webhook = scope.mkWebhookService {
 
 Network policy is derived from the dependency graph; packages author zero CNPs. `meta.network.intents` is the escape hatch for edges the store-path graph cannot see. Plus the full `meta` field reference.
 
-Sources: `kix/lib/netpol.nix` (derivation), `kix/lib/meta.nix` (validation), `kix/lib/modules.nix` (`networkPolicy` / `cluster.network` options), `kix/lib/rules/architecture.nix` (`capabilityOwnership`), `kix/packages/cilium-external/netpol-rules.nix` (enforcer rule builder).
+Sources: `kix/lib/plugins/netpol/` (derivation), `kix/lib/meta.nix` (validation), `kix/lib/modules.nix` (`networkPolicy` / `cluster.network` options), `kix/lib/rules/architecture.nix` (`annotationDomainOwnership`), `kix/packages/cilium/netpol-rules.nix` (enforcer rule builder).
 
 ### Network policy is derived, not declared
 
@@ -288,41 +291,22 @@ Plus a per-namespace **default-deny** CNP when `networkPolicy.defaultDeny = true
 
 ### meta.network.intents: declarative connectivity
 
-Two edge kinds the store-path graph misses: outside-world traffic (no store path for the internet), intra-package traffic in an opaque Helm chart (internal Services not wired through `out.*`). Declare under `meta.network.intents`. Each named intent has `egress` and/or `ingress` lists. `translateIntentRules` (`kix/packages/cilium-external/netpol-rules.nix`) converts to enforcer-native rules.
+Two edge kinds the store-path graph misses: outside-world traffic (no store path for the internet), intra-package traffic in an opaque Helm chart (internal Services not wired through `out.*`). Declare under `meta.network.intents`. Each named intent has `egress` and/or `ingress` lists. `translateIntentRules` (`kix/packages/cilium/netpol-rules.nix`) converts to enforcer-native rules. A package's intents apply to every workload it renders.
 
-- Egress `to`: `"world"` (optional `entities`, default `[ "world" ]`), `"apiserver"`, `"dns"`.
-- Ingress `from`: `"world"` (optional `entities`), `"all-pods"` (Cilium entity `cluster`).
+- Egress `to`: `"world"` (optional `entities`, default `[ "world" ]`), `"all-pods"`, `"apiserver"`, `"dns"`.
+- Ingress `from`: `"world"` (optional `entities`), `"all-pods"` (Cilium entity `cluster`, which includes `host` and `remote-node`), `"apiserver"` (the API server, for an admission webhook or aggregated API).
 - Both accept optional `ports` (`{ port; protocol; }`).
 - Unknown target/source throws at eval time.
 
-World egress - `kix/packages/stackgres-operator/default.nix` (fetches extensions at runtime):
+World egress and API server ingress - `kix/packages/stackgres-operator/default.nix` (extension metadata on 443; the admission webhooks on 8443):
 
 ```nix
 meta = {
-  version = "1.18.6";
+  version = release;   # "1.19.2"
   defaultAliases = [ "stackgresOperator" ];
   network.intents = {
-    external = {
-      egress = [ { to = "world"; } ];
-    };
-  };
-};
-```
-
-Opaque-Helm intra-package ingress - `kix/packages/loki/default.nix` (gateway -> backend invisible through the chart):
-
-```nix
-network.intents = {
-  intra-package = {
-    ingress = [
-      {
-        from = "all-pods";
-        ports = [
-          { port = 3100; protocol = "TCP"; }  # Loki HTTP API
-          { port = 9095; protocol = "TCP"; }  # gRPC
-        ];
-      }
-    ];
+    extensions.egress = [ { to = "world"; ports = [ { port = 443; protocol = "TCP"; } ]; } ];
+    webhooks.ingress = [ { from = "apiserver"; ports = [ { port = 8443; protocol = "TCP"; } ]; } ];
   };
 };
 ```
@@ -338,40 +322,21 @@ network = {
 };
 ```
 
-### meta.provides and capability ownership
+### meta.roles and capability ownership
 
-`meta.provides` - list of capability names the package owns. Two effects.
+`meta.roles` - the registry roles the package claims (`kix/lib/eval/roles.nix`: `network-policy-enforcer`, `dns`, `storageClasses`, `snapshotController`, `cni`, `loadBalancer`). The registry is closed: an unknown role is an eval error. A role name doubles as a DI alias.
 
-**1. Enforcer lookup.** Cluster finds the package whose `meta.provides` contains `"network-policy-enforcer"` and routes every CNP through its `out.netpol.mkPolicy` (binds the right CRD ref). Cilium declares it:
+**Enforcer lookup.** The cluster finds the package whose `meta.roles` contains `"network-policy-enforcer"` and routes every CNP through its `out.netpol.mkPolicy` (binds the right CRD ref). Cilium declares it:
 
 ```nix
 # kix/packages/cilium/default.nix
-meta.provides = [ "cni" "network-policy" "network-policy-enforcer" "cilium" ];
+meta.roles = [ "cni" "network-policy-enforcer" ];
 ```
 
 - `networkPolicy.enable = true` requires a declared enforcer instance, else kix throws at cluster eval (missing CNP->CRD->enforcer store-path edge would race the operator at apply time).
-- Externally-managed Cilium: `packages."cilium".external` - emits only the CNP CRD-ref marker, deploys no Cilium.
+- Environment-installed Cilium: the same `cilium` package. A flavour sets `cluster.roles.cni.binding = "shadowable"` and `cluster.network.environmentCilium`; the instance then writes a HelmChartConfig (RKE2) or only the CRD references.
 
-**2. `capabilityOwnership` scorecard rule** (`kix/lib/rules/architecture.nix`; see 03-advanced.md#scorecard--rules). Principle: resources owned by the capability that provides them (storage provider owns PVCs; reflector owns cross-ns reflection; prometheus-operator owns ServiceMonitors). Consumers request via DI dep arg + owner's `out.mk*` builder (see 02-authoring.md#dependency-injection); they do not hand-roll.
-
-Fingerprint-driven. A resource matches a fingerprint by kind, annotation domain, or label domain. Package OWNS the capability iff:
-
-- `meta.provides` contains the capability name, OR
-- an emitted resource carries annotation `kix.run/capability: <name>`.
-
-The annotation is the key mechanism. Owner builder (e.g. `reflector.out.reflectSecret`) stamps `kix.run/capability` on returned resources, so the rule distinguishes "built inline" (fires) from "built via owner's DI builder" (passes) with no provenance machinery:
-
-```nix
-# kix/packages/reflector/default.nix
-meta = {
-  version = "10.0.28";
-  provides = [ "reflection" ];
-  defaultAliases = [ "reflector" ];
-};
-# ... and its builder stamps:  "kix.run/capability" = "reflection";
-```
-
-Built-in fingerprints: `storage` (any `PersistentVolumeClaim`), `reflection` (`reflector.v1.k8s.emberstack.com` domain). Emit a fingerprinted resource without owning the capability -> rule fires, suggests DI.
+**Capability ownership is two declared invariants** (v2_discussions/128), not fingerprints: a raw PVC is an eval error unless the package holds `meta.unsafe = [ "raw-pvc" ]`, and an annotation under an operator's `meta.annotationDomains` needs a dependency on the declaring package, direct or transitive (`architecture.annotationDomainOwnership`). Consumers get a capability's resources through the owner's `out` (`prometheus.out.mkServiceMonitor`, `storage` through DI).
 
 ### Full meta field reference
 
@@ -384,8 +349,8 @@ Descriptive (informational, not validated):
 | `version` | Version string, semver-ish `major.minor[.patch]`. Used by dependents' `compatibleWith`; surfaced as `out.version`. |
 | `description` | One-line human summary. |
 | `lifecycle` | Workload nature. `kix/lib/k8s.nix` documents `"stateful"`, `"durable"`, `"ephemeral"`, `null` (= `ephemeral`); used for migration-pair detection. Not enum-validated, so packages also set e.g. `"stateless"`. Surfaced on PackageInstance marker. |
-| `maintainer` | Owning team/person, e.g. `"platform"`. |
-| `provides` | Capability names owned (see above). |
+| `owner` | Owning team, `"platform"` or `"app-team"`. |
+| `roles` | Registry roles claimed (see above). |
 | `defaultAliases` | DI resolution keys, used unless instance overrides `aliases` (see 02-authoring.md#dependency-injection, 03-advanced.md#overrides). |
 | `network` | `{ intents; externalIngressEntities; }` (see above). |
 
@@ -397,14 +362,13 @@ Enforced at eval time (failed assertions throw via `collectClusterDiagnostics`).
 | `compatibleWith.<depName>` | `{ minVersion?; maxVersion?; reason?; }` checked against each resolved dependency's `version`. Mismatch fails build with optional `reason` appended. |
 | `conflictsWith` | List of instance/alias names. Bare name conflicts within same namespace; `"cluster:"`-prefixed conflicts cluster-wide. Matching other instance -> build fails listing offenders. |
 | `deprecated` | `{ message?; replacement?; }`. Build-time warning (not error); "use '<replacement>' instead" appended when set. |
-| `scope` | `"namespace"` or `"cluster"` (default `"cluster"`). Enforced in `kix/lib/eval/instance.nix` (`_crossNsCheck`): a dep with `meta.scope = "namespace"` resolved in a different namespace than the consumer throws ("cross-namespace reference not allowed"). `"cluster"` consumable from any namespace. Examples: `secret`, `persistent-volume-claim`, `secret-ref`. |
+| `scope` | `"namespace"` or `"cluster"` (default `"cluster"`). Resolution skips a `"namespace"` instance for consumers in other namespaces; an explicit ref to one from another namespace throws in `kix/lib/eval/instance.nix` (`_crossNsCheck`). `"cluster"` consumable from any namespace. Examples: `secret`, `persistent-volume-claim`, `secret-ref`. |
 
 Package-declared `warnings` / `assertions` functions (called with `{ config; self; deps; }`) are evaluated separately by `evaluatePackageDiagnostics`; see 01-fundamentals.md#package-anatomy.
 
 ### Gotchas
 
 - **Literal selector / hand-rolled FQDN produces no edge.** A literal `{ app = "..."; }` selector or hand-typed `"name.ns.svc"` FQDN carries no store-path context -> no egress rule -> workload silently fails under default-deny. `selectorCoherence` / `fqdnWithoutContext` (see 03-advanced.md#scorecard--rules) catch both; use `kix.service.fromWorkload` and `out.fqdn` (see 02-authoring.md#composition-helpers-kix).
-- **`provides` does not stamp resources.** `meta.provides = [ "x" ]` makes the package OWN capability `x`; it does NOT put `kix.run/capability` on a consumer's resources. Consumers must go through the owner's `out.mk*` builder, not just resolve the dep.
 - **Opaque Helm packages warn.** `meta.isHelm` -> `processInstance` warns intra-package edges may be missing; patch with `meta.network.intents`.
 - **hostNetwork bypasses CNPs.** `buildWorkloadCnps` skips emission and `processInstance` warns; hostNetwork is not an external-ingress trigger.
 
@@ -443,7 +407,7 @@ chart = scope.helm.fetchHelmChart {
 
 ### Tier 1: kix.helmChart inline
 
-Returns a complete package function; drop into an instance's `package` field, no separate package file. Single `values` option. Uses `autoRoot` (first Service, else Deployment, else StatefulSet, else DaemonSet, else first resource) as entry point.
+Returns a complete package function; drop into an instance's `package` field, no separate package file. Single `values` option. Uses `autoRoot` (the only Service, else the only Deployment/StatefulSet/DaemonSet; anything else fails evaluation) as entry point, or `root = { kind; name; }` when given.
 
 ```nix
 homeassistant.homeassistant = {
@@ -465,13 +429,13 @@ homeassistant.homeassistant = {
 };
 ```
 
-Args: `repo`, `name`, `version`, `hash`, optional `releaseName` (default `name`), `includeCrds` (default `true`), `strip`, `patchResources` (raw-JSON transform applied before wrapping; above sets `clusterIP: None` on one Service). Instance sets `config.values = { ... }`. Use for quick one-offs; move to Tier 2 when you need explicit root, cross-package wiring, or resource replacement.
+Args: `repo`, `name`, `version`, `hash`, optional `releaseName` (default `name`), `root`, `includeCrds` (default `true`), `strip`, `patchResources` (raw-JSON transform applied before wrapping; above sets `clusterIP: None` on one Service). Instance sets `config.values = { ... }`. Use for quick one-offs; move to Tier 2 when you need explicit root, cross-package wiring, or resource replacement.
 
 ### Tier 2: scope.helm.importChart inside a package
 
 Not a package, not a factory; a tool called inside `build`. Runs `helm template` via IFD, parses JSON, reconstructs intra-chart DAG, wraps every resource through scope, returns a structured collection. Pick a root, call `resources.mkParts`.
 
-Minimal shape (`kix/packages/redis/default.nix`):
+Minimal shape (`kix/packages/smartctl-exporter/default.nix`):
 
 ```nix
 build =
@@ -480,11 +444,11 @@ build =
     resources = scope.helm.importChart {
       inherit chart scope;
       values = lib.recursiveUpdate defaultValues (config.values or { });
-      releaseName = scope.instanceName;
+      releaseName = "smartctl-exporter";
     };
   in
   resources.mkParts {
-    root = builtins.head (resources.byKind "StatefulSet");
+    root = builtins.head (resources.byKind "DaemonSet");
   };
 ```
 
@@ -503,7 +467,7 @@ build =
 | `depsOf resource` | resource's inferred intra-chart deps |
 | `orphans` | diagnostics for selectors/refs matching nothing |
 | `crds` | auto-derived `{ cr, mkCR }` per shipped CRD (see below) |
-| `autoRoot` | heuristic root (Tier 1 uses this) |
+| `autoRoot` | the only Service, else the only workload; throws when that is ambiguous (Tier 1 uses this) |
 | `replaceResource kind name newResource` | substitution, returns new collection (see below) |
 | `mkParts { root; ... }` | assemble final parts tree |
 
@@ -530,7 +494,7 @@ Auto: Helm test hooks (`helm.sh/hook` containing `"test"`) dropped; `List` resou
 
 #### mkParts and auto-derived out
 
-`mkParts { root, extraParts ? {}, extraRequires ? [], out ? {} }` assembles the `self` attrset. DAG-aware: `root` directly requires only resources NOT targets of intra-chart edges (DAG entry points); everything else reachable transitively since each wrapped resource carries its own `requires` (see 02-authoring.md#resources-and-the-out-surface on `requires`/`identityHash`). Same forward-closure deploy ordering as a native package.
+`mkParts { root, extraParts ? {}, extraRequires ? [], out ? {} }` assembles the `self` attrset; `extraParts` may not reuse a chart part key or `root`. DAG-aware: `root` directly requires only resources NOT targets of intra-chart edges (DAG entry points); everything else reachable transitively since each wrapped resource carries its own `requires` (see 02-authoring.md#resources-and-the-out-surface on `requires`/`identityHash`). Same forward-closure deploy ordering as a native package.
 
 Auto-derived public `out` for `root` (see 01-fundamentals.md#package-anatomy, 02-authoring.md#resources-and-the-out-surface):
 
@@ -553,14 +517,15 @@ Reconstructs edges from raw JSON before wrapping; inferred deps become real `req
 - PodDisruptionBudget -> Workload (selector match).
 - Ingress -> Service and HTTPRoute -> Service (backend refs).
 - ServiceMonitor -> Service (selector match).
+- Custom resource -> the chart's own CRD of its group and kind (`instance-of`). A chart resource of another package's kind (a ServiceMonitor behind a values toggle) fails cross-resource check 21: turn the toggle off and build it with the owner's builder in a package.
 
-What the DAG can't see from a manifest reference needs `extraEdges`. Example (`kix/packages/loki/default.nix`): loki-gateway (nginx) proxies to loki backend with no K8s reference, so edge declared by hand:
+What the DAG can't see from a manifest reference needs `extraEdges`. Example: a chart's nginx gateway proxies to a backend StatefulSet with no Kubernetes reference between them, so the edge is declared by hand:
 
 ```nix
 extraEdges = [
   {
-    from = { kind = "Deployment"; name = "loki-gateway"; };
-    to   = { kind = "StatefulSet"; name = "loki"; };
+    from = { kind = "Deployment"; name = "gateway"; };
+    to = { kind = "StatefulSet"; name = "backend"; };
   }
 ];
 ```
@@ -574,14 +539,13 @@ For network-policy generation, not deploy ordering. Workload kinds wrapped throu
 - `deps = [ dep, ... ]` - DI dep instances the chart's manifests reference. Phase 2: every context-carrying string at `dep.out.*` (top level only) auto-collected and merged into `networkDeps`, so egress edge to dep is discovered. Dep must also be a `build` arg so its Services land in the netpol service registry (see 02-authoring.md#dependency-injection, 03-advanced.md#networking--package-meta).
 - `networkDeps = [ value, ... ]` - explicit context-carrying values that `deps` auto-discovery misses: values nested under `dep.out.byKind.*` or hand-built strings not at a top-level `dep.out.*` attr.
 
-`kix/packages/promtail/default.nix` (modern `deps` form): interpolates `loki.out.fqdn` into config, passes `deps = [ loki ]` so promtail -> loki-gateway egress edge generated automatically (replaces older explicit `networkDeps = [ loki.out.fqdn ]`):
+Example: a chart whose values carry a dependency's address. Passing the dependency in `deps` collects the context of every top-level `dep.out.*` value, so the chart's workloads get the egress edge to it without listing the address again in `networkDeps`:
 
 ```nix
 resources = scope.helm.importChart {
   inherit chart scope;
-  values = lib.recursiveUpdate (lib.recursiveUpdate defaultValues lokiValues) (config.values or { });
-  releaseName = "promtail";
-  deps = [ loki ];
+  values = lib.recursiveUpdate defaultValues { server = dep.out.fqdn; };
+  deps = [ dep ];
 };
 ```
 
@@ -634,21 +598,21 @@ Per CustomResourceDefinition a chart ships, collection exposes `crds.<Kind> = { 
 - Consumer CR waits for CRD Establishment and every controller workload's readiness (any could be the admission/conversion webhook).
 - Only works for CRDs in `helm template --include-crds` output.
 
-Charts installing CRDs at runtime (not `--include-crds`) need explicit CRD refs. Cilium: CRDs installed by agent at startup (`INSTALL_CRDS`), so package hand-builds `scope.mkCRDRef` markers wired to `installedBy = resources.workloads`, gating CNP/CCNP application on the whole stack Ready. See `kix/packages/cilium/default.nix`.
+Charts installing CRDs at runtime (not `--include-crds`) need explicit CRD refs. Cilium: CRDs installed by agent at startup (`INSTALL_CRDS`), so the package builds `scope.mkCRDRef` markers as parts under `crds.*`, wired to `installedBy = resources.workloads` in chart delivery, gating CNP/CCNP application on the whole stack Ready; consumers read the handles as `out.crds.<Kind>`. See `kix/packages/cilium/default.nix`.
 
 ### Tier 3: native package borrowing chart CRDs
 
-kix authors workloads itself (full control over Deployments, RBAC, config) but ships upstream chart CRDs verbatim. `scope.helm.importChartCrds { chart; scope; releaseName ? "release"; values ? {}; }` renders only `kind: CustomResourceDefinition` docs, returns a list of wrapped cluster-scoped resources. Add to root's `extraParts` or `requires`. (To fully hand-author CRDs instead, use `scope.crd.fromKind` pipe builders; see `kix/packages/cert-manager/crds.nix` and 03-advanced.md#secrets-crds-rbac.)
+kix authors workloads itself (full control over Deployments, RBAC, config) but ships upstream chart CRDs verbatim. `scope.helm.importChartCrds { chart; scope; releaseName ? "release"; values ? {}; }` renders only `kind: CustomResourceDefinition` docs, returns a list of wrapped cluster-scoped resources. Add to root's `extraParts` or `requires`. (For a kind Kix defines itself, use the `scope.crd.fromKind` pipe builders; upstream kinds are vendored under `<pkg>/crds/`, as `kix/packages/velero` does; see HANDBOOK §22.)
 
 ### Real example: cilium (Tier 2 end to end)
 
-`kix/packages/cilium/default.nix` - wraps the upstream chart: explicit DaemonSet root via `resources.get`, hand-built `scope.mkCRDRef` markers (chart installs CRDs at runtime via `INSTALL_CRDS`) threaded through `extraParts` (deploy) and `out` (consumer reach, shallow-merged over auto-derived `byKind`), netpol builder API on `out`. Read it for the full runtime-CRD Tier-2 shape.
+`kix/packages/cilium/default.nix` - in chart delivery wraps the upstream chart: explicit DaemonSet root via `resources.get`, `scope.mkCRDRef` markers as parts under `crds.*` (chart installs CRDs at runtime via `INSTALL_CRDS`; `installedBy = resources.workloads` applies in chart delivery only), the handles on `out.crds.<Kind>` (consumer reach, shallow-merged over auto-derived `byKind`), netpol builder API on `out`. In HelmChartConfig or environment delivery it renders no chart. Read it for the full runtime-CRD Tier-2 shape.
 
 ### Gotchas
 
 - **IFD cost.** `importChart` runs `helm template` at eval time; any `values` change re-renders.
 - **`values` only, no CLI flags.** Anything that would be a `helm` CLI flag must be a value (or `extraFlags`).
-- Real consequences detailed in their sections above: autoRoot is a heuristic; Service promotion skips silently on 0 or >1 matches; stripping is lossy; `replaceResource` drops inbound edges; `extraEdges` endpoints are validated (rename on chart upgrade breaks the build).
+- Real consequences detailed in their sections above: autoRoot refuses to guess between several Services or workloads; Service promotion skips silently on 0 or >1 matches; stripping is lossy; `replaceResource` drops inbound edges; `extraEdges` endpoints are validated (rename on chart upgrade breaks the build).
 
 ## Scorecard & rules
 
@@ -728,7 +692,7 @@ Rules nested as `{ category.ruleName = rule; }`; `flattenRules` -> dotted names.
 
 | rule | level | checks |
 |------|-------|--------|
-| `capabilityOwnership` | package | capability-owned resource requested via DI, not hand-rolled. Ownership model: 03-advanced.md#networking--package-meta. Fingerprint-driven; adding a fingerprint is data-only (append `{ capability; detect; describe; rationale; suggest; }` to `fingerprints` in `architecture.nix`). |
+| `annotationDomainOwnership` | package | an annotation under an operator-declared domain (`meta.annotationDomains`) needs a dependency on the declarer, direct or transitive; a domain no package declares warns as a dead annotation. Ownership model: 03-advanced.md#networking--package-meta. |
 | `selectorCoherence` | manifest | `Service` selector value carries store-path context (from `kix.service.fromWorkload`), not a literal `{ app = "..."; }`. |
 | `fqdnWithoutContext` | manifest | `*.svc` FQDN string carries store-path context (from a Service/ServiceRef `out.*`), not a literal. |
 
@@ -823,7 +787,6 @@ Don't disable unless downgrading to `info` is insufficient: `info` still prints 
 - **`error` findings block the build.** Fix the workload or override severity before enabling an error-defaulting category broadly.
 - **Precedence is first-match, not merge.** Only the first matching tier in `byRule -> byOwner -> byNamespace -> rule -> ruleDefaults` applies; tiers don't combine.
 - **Glob matching takes the first match** (`builtins.head`), not the most specific. Avoid overlapping patterns at one tier.
-- **`capabilityOwnership` checks emitted resources, not the resolved dep graph.** The resource must carry `kix.run/capability` (owner's builder) or the package must list the capability in `meta.provides`.
 
 ## Overrides
 
@@ -839,7 +802,7 @@ Sources: instance submodule + `globalPartsOverlays` in `kix/lib/modules.nix`; `m
 instances.media.immich = {
   package = packages.immich;          # required: the package function/attrset
   aliases = [ "photos" ];             # DI resolution keys (replaces meta.defaultAliases)
-  config = { /* deep-merged options */ };
+  config = { /* option values, merged by the module system */ };
   deps = { storageClasses = ref.kube-system.platform-storage; };  # explicit DI overrides
   partsOverlays = [ /* post-build transforms */ ];
   labelStyle = "kix";                 # or "helm"
@@ -854,7 +817,7 @@ instances.media.immich = {
 |-------|--------|----------------------|
 | `package` | Required. Package function/attrset. | - |
 | `aliases` | DI resolution keys. Non-empty **replaces** `meta.defaultAliases`; `[ ]` keeps defaults. | - |
-| `config` | Deep-merge option overrides (`deferredModule`). | merges (use `mkDefault`/`mkForce`) |
+| `config` | Option values (`deferredModule`), merged by the module system. | merges (use `mkDefault`/`mkForce`) |
 | `deps` | Explicit DI overrides. | collision = hard error |
 | `partsOverlays` | Post-build resource transforms. | list concatenates |
 | `labelStyle` | `"kix"` (`app.kubernetes.io/*`) or `"helm"` (`app`/`release`). | - |
@@ -863,16 +826,13 @@ instances.media.immich = {
 | `extraDeps` | Extra ordering edges on PackageInstance marker. | - |
 | `version` | Overrides `packageMeta.version` on the marker. | - |
 
-### config: deep-merge option overrides
+### config: option values
 
-Primary lever. Fed through `evaluateInstanceConfig` (`kix/lib/eval/resolve.nix`): `lib.evalModules` over `{ options = packageOptions; }` + cluster `global` + dep injections + instance config, then `lib.recursiveUpdate optionDefaults evaluated` (evaluated wins, defaults fill gaps). Setting one nested field does not drop sibling defaults.
+Primary lever. Fed through `evaluateInstanceConfig` (`kix/lib/eval/resolve.nix`): one `lib.evalModules` over the package's options, its own `config` module, dep injections, and the instance config, with `clusterConfig` in `specialArgs`. An instance value merges under the module system's rules: setting one field of a submodule keeps its siblings' defaults, and every package passes the option contract (01-fundamentals.md#the-option-contract), so no default is silently dropped.
 
 ```nix
 instances.immich.storage.config.size = lib.mkForce "200Gi";
-instances.immich.valkey.config.auth = {
-  secretSource = null;
-  password = "dev-password";
-};
+instances.immich.valkey.config.storage.size = "1Gi";
 ```
 
 - `config` is a `deferredModule`; use `lib.mkDefault`/`lib.mkForce` for priority across modules (see 01-fundamentals.md#options--config).
@@ -883,7 +843,7 @@ Resolution index (`buildResolutionIndex`, `kix/lib/eval/resolve.nix`) unions `[ 
 
 ```nix
 instances.kube-system.platform-storage = {
-  package = kix.mkImport { out = { storageClassName = "kind-fast"; }; };
+  package = kix.mkImport { kind = "StorageClass"; apiVersion = "storage.k8s.io/v1"; out = { name = "kind-fast"; storageClassName = "kind-fast"; }; };
   aliases = [ "storageClasses" ];   # consumers requesting `storageClasses` resolve here
 };
 ```
@@ -899,7 +859,7 @@ Passed to `mkScope` as `labelStyle`. Controls selector/instance label keys.
 - `"helm"`: `app`/`release` keys (both = instance name). Use when adopting resources a Helm release already owns, so `kubectl apply` matches selectors instead of duplicating.
 
 ```nix
-# cluster-wide helper, from nw1-luca/cluster.nix:
+# cluster-wide helper:
 helmInstance = cfg: { labelStyle = "helm"; } // cfg;
 ```
 
@@ -923,7 +883,7 @@ instances.data.postgres.selectorLabels = {
 ```nix
 # platform storage import that ships only if a PVC consumes it.
 instances.kube-system.platform-storage = lib.mkForce {
-  package = kix.mkImport { out = { storageClassName = "kind-fast"; }; };
+  package = kix.mkImport { kind = "StorageClass"; apiVersion = "storage.k8s.io/v1"; out = { name = "kind-fast"; storageClassName = "kind-fast"; }; };
   aliases = [ "storageClasses" ];
   optional = true;
 };
@@ -946,23 +906,20 @@ Each overlay gets `scope` (already applied), fixpoint `self`, `base` (accumulate
 - **Add**: return a new key not in `base`.
 - **Remove**: return key set to `null`. Parts collector filters to `(v._type or "") == "k8s-resource"`, so `null` drops out. `root` must stay a resource.
 
-Example, exposing CRD builders on a Helm package's `out` (`clusters/test-monitoring-helm.nix`):
+Example, exposing CRD builders on a Helm chart's `out`:
 
 ```nix
 partsOverlays = [
-  (scope: self: base:
-    let smRef = scope.mkCRDRef {
-          group = "monitoring.coreos.com";
-          kind = "ServiceMonitor";
-          plural = "servicemonitors";
-        };
-    in {
-      root = base.root // {
-        out = (base.root.out or { }) // {
-          mkServiceMonitor = smRef.out.mkCR;
-        };
+  (scope: self: base: {
+    root = base.root // {
+      out = (base.root.out or { }) // {
+        mkValidatingPolicy = (scope.mkCRDRef {
+          group = "policies.kyverno.io"; kind = "ValidatingPolicy";
+          plural = "validatingpolicies"; version = "v1"; crdScope = "Cluster";
+        }).out.mkCR;
       };
-    })
+    };
+  })
 ];
 ```
 
@@ -1003,10 +960,11 @@ Lever lives in the *package*, not the instance. Package declares `deps.<argName>
 
 ```nix
 deps.postgres.config = consumerConfig: {
-  extensions = map (e: if builtins.isString e then { name = e; } else e)
-                   consumerConfig.extensions;
+  extensions = map normalizeExtension consumerConfig.extensions;
 };
 ```
+
+`normalizeExtension` turns a name into `{ name; }` and keeps `version` when set.
 
 - `buildConfigInjections` inverts into per-target injection lists; `evaluateInstanceConfig` merges at same priority as instance config (lists concatenate, scalars error on conflict).
 - Operator overrides by setting the target field explicitly (`lib.mkForce`) or `mkLocked`-ing it. See 02-authoring.md#dependency-injection.
@@ -1033,14 +991,14 @@ instances = kix.mkEnv "dev" {
 - Isolation is the namespace prefix and nothing else. A plain auto-instantiated dep follows the requesting namespace, so each env gets its own; role-named deps are keyed by the role and shared, as are packages pinned by `namespace` or `autoNamespace`.
 - Call once per env (`"prod"`, `"stage"`, `"demo"`); merge results into `instances`. DI graph independent per env (namespaces differ, resolution is namespace-scoped; see 02-authoring.md#dependency-injection).
 
-Gotcha: override merge is shallow `//`, unlike instance `config` deep-merge. `overrides.app.api.config.resources = { cpu = ...; }` replaces the whole `resources` block, dropping sibling defaults. For deep semantics prefer plain `instances."dev-app"` defs with `lib.mkDefault`, or explicitly declared prefixed instances (`ludo/variants/cluster-kind-env-stamped.nix`).
+Gotcha: override merge is shallow `//`, unlike the module merge of instance `config`. `overrides.app.api.config.resources = { cpu = ...; }` replaces the whole `resources` block, dropping sibling defaults. For deep semantics prefer plain `instances."dev-app"` defs with `lib.mkDefault`, or explicitly declared prefixed instances (`ludo/variants/cluster-kind-env-stamped.nix`).
 
 ### Gotchas
 
 - **`aliases` replaces, not extends, `meta.defaultAliases`.** Re-list everything still needed.
 - **mkLocked is top-level only.** Locking `config.foo` does not protect `config.foo.bar` against an injection targeting `foo` wholesale.
 - **`deps` collisions error.** Two modules setting `deps.<arg>` for one instance = hard error.
-- **Cross-namespace + `meta.scope = "namespace"` throws** (`_crossNsCheck`, `kix/lib/eval/instance.nix`). mkEnv per-env namespaces keep deps in-env.
+- **`meta.scope = "namespace"`**: resolution skips such an instance for consumers in other namespaces, and an explicit cross-namespace ref throws (`_crossNsCheck`). mkEnv per-env namespaces keep deps in-env.
 - **partsOverlay removes a key via `= null`, never via `//`** (the fold can't drop keys); `root` cannot be removed. **`selectorLabels` must match live pods exactly.**
 
 ### Decision guide: I want to change X, use lever Y
