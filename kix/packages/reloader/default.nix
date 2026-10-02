@@ -507,6 +507,12 @@ in
 
         root = {
           resource = self.deployment;
+          # Nothing else in the instance names the monitor or its alert
+          # rules, so the PackageInstance reaches them only through this list.
+          requires = builtins.filter (r: r != null) [
+            self.serviceMonitor
+            self.prometheusRules
+          ];
           out = { inherit withReloadOn; };
         };
       }

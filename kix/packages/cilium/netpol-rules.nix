@@ -135,6 +135,21 @@ let
       }
       // lib.optionalAttrs (cp != [ ]) { toPorts = [ { ports = cp; } ]; };
 
+    # Egress to host-network pods on any node. Cilium gives a node's
+    # address the `host` identity on that node and `remote-node` elsewhere.
+    mkHostNetworkEgressRule =
+      { ports }:
+      let
+        cp = portsToCilium ports;
+      in
+      {
+        toEntities = [
+          "host"
+          "remote-node"
+        ];
+      }
+      // lib.optionalAttrs (cp != [ ]) { toPorts = [ { ports = cp; } ]; };
+
     # Self-communication rules for StatefulSet peer traffic.
     mkSelfRules =
       { selector }:
@@ -148,6 +163,8 @@ let
       };
 
     # Ingress from a specific caller workload (inverted cross-namespace ingress).
+    # Cilium resolves a named port on the receiving pod, so names pass
+    # through here without the warning portsToCilium gives.
     mkCallerIngressRule =
       {
         callerSelector,
@@ -160,7 +177,7 @@ let
             "k8s:io.kubernetes.pod.namespace" = callerNamespace;
           };
         };
-        cp = portsToCilium ports;
+        cp = ingressPortsToCilium ports;
       in
       {
         fromEndpoints = [ fromEndpoint ];
@@ -191,6 +208,25 @@ let
                 port = tp;
                 protocol = p.protocol or "TCP";
               }
+          else
+            {
+              port = toString tp;
+              protocol = p.protocol or "TCP";
+            }
+        ) ports
+      );
+
+    # portsToCilium for an ingress rule, where a named port is valid.
+    ingressPortsToCilium =
+      ports:
+      builtins.filter (p: p != null) (
+        map (
+          p:
+          let
+            tp = p.targetPort or p.port or null;
+          in
+          if tp == null then
+            null
           else
             {
               port = toString tp;

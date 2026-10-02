@@ -63,6 +63,16 @@ rec {
       };
       inherit (scopeLabels) selectorLabels instanceLabels labels;
 
+      # The policy directions the cluster enforces (`networkPolicy.directions`:
+      # "both", "ingress", or "egress"), or null without an enforcer. A
+      # policy section for a direction outside it isolates the selected pods
+      # in a direction default deny leaves open.
+      networkPolicyDirections =
+        if networkPolicyEnforcer == null then
+          null
+        else
+          (((clusterCtx.config or { }).networkPolicy or { }).directions or "both");
+
       # Role satisfaction for validator gates: "provided" (managed provider
       # or environment binding), "absent" (declared vacant), "unknown"
       # (axiom never declared). This is lazy because findRoleProvider only peeks meta.
@@ -142,6 +152,7 @@ rec {
           namespaces
           mkOptional
           networkPolicyEnforcer
+          networkPolicyDirections
           ;
         namespace = namespaceResource;
 

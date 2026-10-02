@@ -799,6 +799,7 @@ let
               ports,
             }:
             rule "service-egress" { inherit selector namespace ports; };
+          mkHostNetworkEgressRule = { ports }: rule "host-network-egress" { inherit ports; };
           mkSelfRules =
             { selector }:
             {

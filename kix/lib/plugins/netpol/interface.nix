@@ -18,6 +18,8 @@ let
 
     mkServiceEgressRule = "{ selector, namespace, sourceNamespace, ports } -> rule. egress to a Service's pods";
 
+    mkHostNetworkEgressRule = "{ ports } -> rule. egress to pods on the host network of any node, on these pod ports";
+
     mkSelfRules = "{ selector } -> { egress, ingress }. peer-to-peer for StatefulSets";
 
     mkCallerIngressRule = "{ callerSelector, callerNamespace, ports } -> rule. ingress from a specific caller";

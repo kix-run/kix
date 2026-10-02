@@ -6,3 +6,5 @@ start that pulls a large image, waits for a StackGres bootstrap Job, and runs
 schema migrations (`kix/packages/metabase`, `kix/packages/n8n`) can pass five
 minutes and is reported as `TimedOut`. The package states a 30-minute startup
 budget in its probes and `progressDeadlineSeconds`, and the CLI does not read it.
+
+- Hit again 2026-10-02 on kind (`clusters/test-monitoring-netpol.nix` with a one-instance stackgres-cluster): `SGCluster/pg` failed with "hard ceiling 300s exceeded" on a node with no images cached, though `--timeout 35m` was set.

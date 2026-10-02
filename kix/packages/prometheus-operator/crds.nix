@@ -91,46 +91,61 @@ in
 
     # ── Operator-managed instance CRDs ─────────────────────────────────
 
+    # The server pods the operator creates for a Prometheus CR dial its
+    # endpoints (remote write) and every target of the monitors it selects.
+    # The podSelector names those pods: the netpol plugin's operand egress and
+    # its scrape policies (kix/lib/plugins/netpol/scrape.nix) both read it.
     prometheuses = mkMonitoringCRD (
-      scope.crd.fromKind "Prometheus" {
-        spec = {
-          group = "monitoring.coreos.com";
-          names.plural = "prometheuses";
+      (
+        scope.crd.fromKind "Prometheus" {
+          spec = {
+            group = "monitoring.coreos.com";
+            names.plural = "prometheuses";
+          };
+        }
+        |> scope.crd.withShortNames [ "prom" ]
+        |> scope.crd.withPrinterColumns [
+          {
+            jsonPath = ".spec.version";
+            name = "Version";
+            type = "string";
+          }
+          {
+            jsonPath = ".spec.replicas";
+            name = "Desired";
+            type = "integer";
+          }
+          {
+            jsonPath = ".status.availableReplicas";
+            name = "Ready";
+            type = "integer";
+          }
+          {
+            jsonPath = ".status.conditions[?(@.type==\"Reconciled\")].status";
+            name = "Reconciled";
+            type = "string";
+          }
+          {
+            jsonPath = ".status.conditions[?(@.type==\"Available\")].status";
+            name = "Available";
+            type = "string";
+          }
+          {
+            jsonPath = ".metadata.creationTimestamp";
+            name = "Age";
+            type = "date";
+          }
+        ]
+      )
+      // {
+        factBehavior = {
+          endpoint = "terminate";
+          podSelector = cr: {
+            "app.kubernetes.io/name" = "prometheus";
+            "operator.prometheus.io/name" = cr.metadata.name;
+          };
         };
       }
-      |> scope.crd.withShortNames [ "prom" ]
-      |> scope.crd.withPrinterColumns [
-        {
-          jsonPath = ".spec.version";
-          name = "Version";
-          type = "string";
-        }
-        {
-          jsonPath = ".spec.replicas";
-          name = "Desired";
-          type = "integer";
-        }
-        {
-          jsonPath = ".status.availableReplicas";
-          name = "Ready";
-          type = "integer";
-        }
-        {
-          jsonPath = ".status.conditions[?(@.type==\"Reconciled\")].status";
-          name = "Reconciled";
-          type = "string";
-        }
-        {
-          jsonPath = ".status.conditions[?(@.type==\"Available\")].status";
-          name = "Available";
-          type = "string";
-        }
-        {
-          jsonPath = ".metadata.creationTimestamp";
-          name = "Age";
-          type = "date";
-        }
-      ]
     );
 
     alertmanagers = mkMonitoringCRD (

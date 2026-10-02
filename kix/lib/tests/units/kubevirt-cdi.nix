@@ -254,6 +254,60 @@ in
     )
     || throw "kix.operandPolicy: without enforcer ${builtins.toJSON off}, with enforcer ${builtins.toJSON on}";
 
+  # A section for a direction the cluster does not enforce is dropped, and a
+  # spec left with no section gives null.
+  kubevirt-cdi-operand-policy-directions =
+    let
+      bothSpec = operandSpec // {
+        egress = [ { toEndpoints = [ { matchLabels.app = "operand"; } ]; } ];
+      };
+      withSpec = spec: {
+        instances.app.operand.package = lib.mkForce (
+          { kix, ... }:
+          {
+            meta.version = "test";
+            build =
+              { self, scope, ... }:
+              {
+                cr = scope.mkResource {
+                  apiVersion = "v1";
+                  kind = "ConfigMap";
+                  name = "operand-cr";
+                };
+                peers = kix.operandPolicy {
+                  inherit scope;
+                  name = "operand-peers";
+                  inherit spec;
+                };
+                root = {
+                  resource = self.cr;
+                  requires = lib.optional (self.peers != null) self.peers;
+                };
+              };
+          }
+        );
+      };
+      policyWith =
+        directions: spec:
+        policyIn (mkCluster [
+          instance
+          netpolOn
+          { networkPolicy.directions = directions; }
+          (withSpec spec)
+        ]);
+      ingressOnly = policyWith "ingress" bothSpec;
+      egressOnly = policyWith "egress" bothSpec;
+      both = policyWith "both" bothSpec;
+      dropped = policyWith "egress" operandSpec;
+    in
+    (
+      ingressOnly.spec == operandSpec
+      && egressOnly.spec == removeAttrs bothSpec [ "ingress" ]
+      && both.spec == bothSpec
+      && dropped == null
+    )
+    || throw "kix.operandPolicy directions: ingress ${builtins.toJSON ingressOnly}, egress ${builtins.toJSON egressOnly}, dropped ${builtins.toJSON dropped}";
+
   # runStrategy Always and running = true wait for Running; Halted and
   # running = false for Stopped. The caller's annotations stay.
   kubevirt-cdi-vm-readiness =

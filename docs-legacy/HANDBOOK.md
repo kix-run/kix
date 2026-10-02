@@ -471,6 +471,8 @@ Use this only for fixtures and inline cluster definitions. Files in `kix/package
 | `scope.labels.clusterScoped` | attrset | Defaults for cluster-scoped resources |
 | `scope.labelStyle` | enum | `"kix"` (default) or `"helm"` (Helm-compatible labels) |
 | `scope.namespaces` | attrset | All cluster namespaces (rarely needed) |
+| `scope.networkPolicyEnforcer` | attrset or null | The network-policy enforcer's `out`, with its rule builders under `netpol`; null when network policy is off, no enforcer exists, or this is the enforcer's own instance |
+| `scope.networkPolicyDirections` | string or null | `networkPolicy.directions` (`"both"`, `"ingress"`, or `"egress"`) when `scope.networkPolicyEnforcer` is set, else null. A policy section for a direction outside it isolates pods that default deny leaves open in that direction; `kix.operandPolicy` drops such sections |
 
 ### 6.2 Resource builders
 
@@ -587,7 +589,7 @@ The `kix` arg to packages comes from `kix/lib/vocab/compose.nix` (`kixlib`).
 | `kix.isUntrackedRef s` | True when the string carries a `kix.untrackedRef` marker, so it names an object Kix does not build. A builder that needs a reference in a fixed namespace uses it to accept an untracked name and refuse a Kix resource built elsewhere (tailscale's `out.mkRecorder`) |
 | `kix.keep container` | Marks an attrset "never collapse to absent": it renders as `{}` even when every member is null, and the protection survives later merges that introduce fresh nulls (additive `_kixKeep` marker, resolved at `mkResource`, never rendered). Lists are normalized eagerly instead, since merges replace lists whole. Use in constructors of presence-meaningful fields (`emptyDir`, selectors) built from optional arguments; a hand-written empty needs no keep, a literal `{ }` renders as-is (§7) |
 | `kix.keys.<name>`, `kix.keyValues.<name>` | Kix's own annotation keys and the values Kix compares them against, from `core/annotations.nix`. A package Job that should be deleted and created again on change sets `annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;` |
-| `kix.operandPolicy { scope; name; spec; }` | A network policy over pods an operator creates from a custom resource, labelled derived and `operator-managed-workload`; null when the scope has no enforcer (§16.6) |
+| `kix.operandPolicy { scope; name; spec; }` | A network policy over pods an operator creates from a custom resource, labelled derived and `operator-managed-workload`. Drops the sections of a direction the cluster does not enforce; null when the scope has no enforcer or no section is left (§16.6) |
 
 ### 9.2 Mounts
 
@@ -1146,12 +1148,14 @@ An optional import becomes active when a dependency of an active managed instanc
 | Package's pod hits DNS | DNS egress (per-workload, emitted inside `mkDeployment` etc., spliced into `extraDeps`) |
 | StatefulSet | Self-egress + self-ingress (peer pods) |
 | LoadBalancer Service or hostNetwork pod | External ingress allowance, except for a LoadBalancer Service whose `loadBalancerClass` comes from a provider's `out` (see §16.7) |
+| A Prometheus CR and the ServiceMonitors, PodMonitors, and Alertmanagers it selects | The server pods' egress to every target, plus an ingress CNP at each target admitting them (see §16.8) |
 
 ### 16.2 What's NOT discovered
 
 - Cross-package edges hidden inside Helm templates that don't appear in JSON string context (warned via "Helm opacity" message).
 - hostNetwork pods bypass CNI policy (warning emitted).
 - Pods an operator creates at runtime (proxies, nameservers, data-path pods). The package writes their policies with `kix.operandPolicy`; see §16.6.
+- A scraper's connections to its targets, which no workload names. The netpol plugin derives them for Prometheus from the monitors it selects; see §16.8.
 
 A host-network pod gets no derived edge. Its traffic reaches other pods as from the host or a remote node, so the rules derived from the addresses it dials admit nothing. A package whose host-network pods talk to its own pods declares the ports once as an intent (§16.5), as mayastor's `hostNetworkPeers` does: `meta.network.intents.hostNetworkPeers = { ingress = [ { from = "all-pods"; ports = [ { port = 2379; protocol = "TCP"; } ]; } ]; egress = [ ... ]; };`. `all-pods` is Cilium's `cluster` entity, which includes `host` and `remote-node`.
 
@@ -1198,7 +1202,7 @@ Pods an operator launches outside Kix get no derived policy. cert-manager's ACME
 
 ### 16.6 Operand policies
 
-Derived policy covers the workloads a package renders. Pods an operator creates from a custom resource (ClickHouse replicas, Keeper, a StackGres cluster) are invisible to it, so the package that writes the CR writes their policy with `kix.operandPolicy { scope; name; spec; }`. `spec` is in the enforcer's format and carries the pod selector (`endpointSelector` for Cilium); the operator's `out.operandSelectors` give the labels. The helper returns null when network policy is off or no enforcer exists, so add only non-null results to `root.requires`. For the other end of an edge in a dependency's namespace, pass `scope = scope.forService dep`. tailscale's `proxyPolicies` are another example: the operator creates proxies, egress proxies, ProxyGroups, the DNSConfig nameserver, and Recorders in the package's own namespace, and the package selects them by the labels the operator puts on them, with rules from the enforcer's `netpol.translateIntentRules`.
+Derived policy covers the workloads a package renders. Pods an operator creates from a custom resource (ClickHouse replicas, Keeper, a StackGres cluster) are invisible to it, so the package that writes the CR writes their policy with `kix.operandPolicy { scope; name; spec; }`. `spec` is in the enforcer's format and carries the pod selector (`endpointSelector` for Cilium); the operator's `out.operandSelectors` give the labels. Under `networkPolicy.directions = "ingress"` the helper drops `egress` and `egressDeny` from the spec, and under `"egress"` it drops `ingress` and `ingressDeny`: default deny leaves that direction open, and a section for it would isolate the pods to what the section lists. The helper returns null when network policy is off, no enforcer exists, or no section is left, so add only non-null results to `root.requires`. For the other end of an edge in a dependency's namespace, pass `scope = scope.forService dep`. tailscale's `proxyPolicies` are another example: the operator creates proxies, egress proxies, ProxyGroups, the DNSConfig nameserver, and Recorders in the package's own namespace, and the package selects them by the labels the operator puts on them, with rules from the enforcer's `netpol.translateIntentRules`.
 
 Pods an operator creates in a consumer's namespace are the consumer's to allow; the operator package publishes their labels as `out.operandSelectors` and, where the rule needs the operator's namespace, a builder (cdi `out.mkImporterPolicy`).
 
@@ -1207,6 +1211,25 @@ Pods an operator creates in a consumer's namespace are the consumer's to allow; 
 When a provider's pods call a consumer's backend (tailscale proxies, an ingress controller), the policy belongs on the backend, in the consumer's namespace. `kix.expose` writes it for an ingress controller. A provider that the consumer wires directly exposes a builder for it: `tailscale.out.mkBackendPolicy scope { service; port ? null; name ? service.name; }` returns a policy `<name>-from-tailscale` that admits `out.podSelector` from `out.podNamespace` on the pod port behind `port` (a Service port number or name; every port when null), with `extraDeps = [ service ]` so the policy is reachable. It refuses a Service without a selector, whose policy would select every pod in the namespace. `tailscale.out.mkIngress` returns `{ ingress; policy; }` so the policy cannot be forgotten; its policy, `<ingress name>-ingress-from-tailscale`, covers the default backend and every path to the same Service.
 
 A LoadBalancer Service whose `spec.loadBalancerClass` carries string context other than a `kix.untrackedRef` marker (read from a provider's `out`, such as `tailscale.out.loadBalancerClass`) is served by that provider: `checkLoadBalancer` skips the cluster's `loadBalancer` role for it, and derived policy gives its pods no ingress from outside the cluster (`hasProviderClass` in `kix/lib/scope/validators.nix`). The provider opens the backend with its own builder. A raw class string, or one wrapped in `kix.untrackedRef`, gets the role check and the external-ingress allowance. The check cannot tell a provider's class from a string interpolated from another resource's `out`. An external balancer that publishes a class with context must open the backend to its own callers.
+
+### 16.8 Scrape policies
+
+The netpol cluster processor derives the path from each Prometheus server to what it scrapes (`kix/lib/plugins/netpol/scrape.nix`). It reads every built resource after the instances are evaluated, because the edge is a label join no single instance sees: a Prometheus CR selects monitors with `serviceMonitorSelector`, `podMonitorSelector`, and their namespace selectors (a null monitor selector selects nothing, `{}` everything; a null namespace selector means the Prometheus's own namespace), a ServiceMonitor selects Services by their labels, and a PodMonitor selects pods. `spec.alerting.alertmanagers` entries are looked up by namespace and name.
+
+For each Prometheus CR it emits `<name>-scrape-egress` in the server's namespace, selecting the server pods, with one rule per target, and `<ns>-<name>-scrape-<target>-<hash>` in each target's namespace, admitting the server pods on the target's pod ports. The hash covers the server's namespace and name and the target, so names stay distinct where the readable parts join ambiguously (Prometheus `c` in `a-b` and `b-c` in `a`) and for same-named PodMonitors in different namespaces. The server pods are named by the Prometheus CRD's `factBehavior.podSelector`, which the prometheus-operator package declares; the prometheus package opens DNS and the API server for them with `kix.operandPolicy`. Targets resolve against what Kix built:
+
+- A Service port's `targetPort` gives the pod port; a named port is resolved through the container ports of the Kix workloads behind the Service selector.
+- A named port that no Kix workload declares (pods an operator creates) stays a name. The target's ingress rule keeps it, and the egress rule to those pods has no port list, because Cilium drops egress on a named port.
+- A target whose Kix workloads run on the host network (node-exporter) gets an egress rule to the `host` and `remote-node` entities on its port (`netpol.mkHostNetworkEgressRule`) and no ingress policy.
+- A host-network target whose port is a name no Kix container declares gets no egress rule and a warning, because a host rule without ports would admit every port on every node.
+- A target Kix did not build gets an egress rule for the selector its Service names. That covers pod-network platform pods such as kube-dns. Kix derives nothing for the kubelet, the API server, or control-plane static pods on the host network; the server reaches them only through its API server rule, which admits every port on `host` and `remote-node` (housekeeping/2026-10-01-apiserver-egress-rule-allows-every-host-port.md).
+- `namespaceSelector.any` covers every Kix namespace, including one that holds only custom resources whose operator creates the pods.
+- A PodMonitor whose selector uses `matchExpressions` gets no policy and a warning; Kix builds policy selectors from `matchLabels`.
+- A Prometheus CR whose CRD declares no `factBehavior.podSelector` gets no policy and a warning naming the `cluster.factBehavior` override.
+
+`networkPolicy.directions` limits the output: under `"egress"` no target ingress is emitted, and under `"ingress"` no server egress is emitted, and `kix.operandPolicy` drops the egress section of the prometheus package's server policy, so the server pods keep open egress. With `networkPolicy.defaultDeny = false` a target ingress policy would be the first ingress policy on its pods and close them to every other client, so it is emitted only for pods another Kix policy (derived, operand, or platform intent) already isolates for ingress.
+
+Not covered: monitors outside Kix, `additionalScrapeConfigs`, ScrapeConfig and Probe objects, remote write to a URL that is not a dependency's output, and VictoriaMetrics' VMAgent with its own scrape kinds.
 
 ## 17. Scorecard
 

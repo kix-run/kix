@@ -9,6 +9,7 @@ let
 
   interface = import ./interface.nix { inherit lib; };
   derive = import ./derive.nix { inherit lib; };
+  scrape = import ./scrape.nix { inherit lib; };
 
   enforcerRole = "network-policy-enforcer";
 
@@ -151,11 +152,31 @@ in
           networkPolicyEnforcer = enforcerOut;
           inherit (ctx) nsResources;
         };
+
+        scrapePolicies =
+          if enforcerOut == null then
+            {
+              egressPolicies = [ ];
+              ingressPolicies = [ ];
+              warnings = [ ];
+            }
+          else
+            scrape.derive {
+              inherit (ctx) resources nsResources realNsNames;
+              enforcerApi = enforcerOut.netpol;
+              inherit (cfg) directions defaultDeny;
+              extraPolicies = platformIntentPolicies;
+            };
       in
       {
-        # default-deny before platform intents: this order flows into the
-        # Activation extraDeps and is content-addressed into the output.
-        resources = defaultDenyPolicies ++ platformIntentPolicies;
+        # This order flows into the Activation extraDeps and is
+        # content-addressed into the output.
+        resources =
+          defaultDenyPolicies
+          ++ platformIntentPolicies
+          ++ scrapePolicies.egressPolicies
+          ++ scrapePolicies.ingressPolicies;
+        inherit (scrapePolicies) warnings;
         checks = [
           (
             if provider == null then
