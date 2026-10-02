@@ -9,31 +9,93 @@ import valkeyInstance from '/src/snippets/how-to/package-stacks/valkey-cluster/v
 import check from '/src/command-output/how-to/package-valkey/check.json';
 import resources from '/src/command-output/how-to/package-valkey/resources.json';
 
-Use the `valkey` package to deploy a Redis-compatible data store with a
-StatefulSet, Services, health checks, authentication, and persistent storage.
+Use the `valkey` package to deploy a Redis-compatible data store on the
+official Valkey image: a StatefulSet with a volume per pod, a Service for
+clients, password authentication, and, on clusters that span several nodes,
+Sentinel failover.
 
-This guide uses one Valkey node for a small cluster. The target cluster must
-provide a default StorageClass, or you must supply one in the instance
-configuration.
+## Add the Valkey instance and its password
 
-## Add the Valkey instance
-
-Add the package in the namespace where applications will resolve it:
+Add the package, and a secret holding its password, in the namespace where
+the applications that use it run:
 
 <Snippet {...valkeyInstance} />
 
-Disabling Sentinel and using one replica gives this example a single Valkey
-process. Keep Sentinel enabled and use at least three replicas when the
-cluster spans enough nodes to make automatic failover useful.
+The `valkeyPassword` dependency is required and auth is always on. It
+resolves to a `secret` or `secret-ref` instance in Valkey's namespace that
+declares the key `password`. The inline password in the example is for local
+development. For a deployed environment, give the secret a SOPS `source` with
+`keys = [ "password" ]`, or point a `secret-ref` instance at a Secret managed
+outside Kix. When the password of a `secret-ref` changes, the pods do not
+restart on their own; use reloader's `withReloadOn` to roll them.
 
-The package creates a 2 GiB claim for the node. Set
-`persistence.storageClass` when the cluster's default class is not the one you
-want.
+Each pod gets a claim of `storage.size` (8 GiB unless set). The claim's class
+is `storage.storageClassName` when set, else the class of the cluster's
+`storageClasses` provider, else the cluster default.
 
-The password in the example is only for local development. For a deployed
-environment, set `auth.existingSecret` to a Secret managed outside Kix, or set
-`auth.secretSource` to a SOPS-encrypted file. The password key defaults to
-`valkey-password` and can be changed with `auth.existingSecretPasswordKey`.
+## Choose the topology
+
+The availability level decides the topology. Below `node`, Valkey runs one
+standalone pod. From `node` up, `sentinel.enabled` defaults on and the
+instance runs three pods: one primary, two replicas, and a Sentinel sidecar
+in each pod that promotes a replica when the primary is lost. Set
+`sentinel.enabled` and `replicas` on the instance to choose explicitly.
+Evaluation refuses more than one pod without Sentinel, fewer than three with
+it, and a `sentinel.quorum` that the remaining Sentinels could not reach once
+the primary's pod is gone.
+
+Change Valkey's configuration through `settings`, which renders `valkey.conf`
+directives, and Sentinel's through `sentinel.primarySettings`:
+
+```nix title="cluster.nix"
+instances.cache.valkey.config = {
+  settings.maxmemory-policy = "allkeys-lru";
+  sentinel.primarySettings.down-after-milliseconds = 5000;
+};
+```
+
+`maxmemory` defaults to 70% of `resources.limits.memory`, leaving room for
+replication buffers and the copy-on-write pages of an AOF rewrite. With the
+default `noeviction` policy, writes fail once the dataset is full. Directives
+the package sets itself, such as `port`, the password, and replication, are
+refused.
+
+## Connect an application
+
+Applications read the connection from the instance's `out`:
+
+| Key | Value |
+|---|---|
+| `out.fqdn`, `out.port` | The Service that selects every Valkey pod, port 6379 |
+| `out.authSecret`, `out.authPasswordKey` | The password secret and its key: `valkey.out.authSecret.out.keyRef valkey.out.authPasswordKey` |
+| `out.sentinelPort`, `out.primarySet` | With Sentinel only: port 26379 on the same Service, and the name Sentinel monitors the primary under |
+
+A consumer must run in Valkey's namespace, because Kubernetes resolves a
+`secretKeyRef` only in the pod's own namespace. Dependency injection does not
+offer a Valkey instance to a consumer in another namespace, and an explicit
+`ref` to one fails evaluation.
+
+With Sentinel on, the Service also routes to replicas, which refuse writes. A
+client that writes asks Sentinel at `out.fqdn` and `out.sentinelPort` for the
+primary of `out.primarySet`. It sends Sentinel no password: Sentinel's default
+user takes none and may only discover the primary, and an AUTH with a
+password is an error. Only the `sentinel-admin` user, with the instance
+password, can reconfigure Sentinel.
+
+A package whose client cannot use Sentinel asks for a standalone Valkey and
+refuses one that runs Sentinel anyway, such as an import:
+
+```nix title="package default.nix"
+deps.valkey = {
+  config.sentinel.enabled = false;
+  assertions =
+    dep:
+    lib.optional (dep.out ? sentinelPort) {
+      assertion = false;
+      message = "this package has no Sentinel client; set sentinel.enabled = false on the valkey instance.";
+    };
+};
+```
 
 ## Check the generated resources
 
@@ -46,8 +108,8 @@ Inspect the StatefulSet and client Service:
 <Command {...resources} />
 
 The StatefulSet requests the configured 2 GiB volume and uses the headless
-Service for stable pod identity. Applications connect to the `valkey` Service
-on port 6379.
+Service for stable pod names. Applications connect to the `valkey` Service on
+port 6379.
 
 ## Deploy and connect
 
@@ -71,7 +133,7 @@ To test it locally, forward the service port:
 While the forward is running, use a Redis-compatible client from another
 terminal:
 
-<Command commands={["REDISCLI_AUTH=development-only-password redis-cli ping"]} />
+<Command commands={["REDISCLI_AUTH=development-only-password valkey-cli ping"]} />
 
 A successful connection returns `PONG`. Stop the port-forward with `Ctrl-C`.
 
