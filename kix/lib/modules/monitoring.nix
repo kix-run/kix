@@ -16,12 +16,18 @@
 #
 # For advanced per-instance overrides, use the instances option directly:
 #   instances.monitoring-system.prometheus-server.config.storage = { ... };
+#
+# `monitoring.loki.enabled` adds Loki (the loki package) and its claim
+# `loki-storage` to the same namespace, and Grafana gets a Loki datasource
+# from it. Tune Loki through its own options:
+#   instances.monitoring-system.loki.config.settings.limits_config.retention_period = "720h";
 
 {
   config,
   lib,
   kix,
   packages,
+  ref,
   ...
 }:
 
@@ -166,24 +172,10 @@ in
         type = lib.types.bool;
         default = false;
       };
-      namespace = lib.mkOption {
-        type = lib.types.str;
-        default = "monitoring-loki";
-        description = ''
-          Namespace where Loki + its PVC live. Loki gets its own namespace so
-          the sibling PVC can be named `storage` (matching the immich-style
-          DI convention) without colliding with other monitoring PVCs.
-        '';
-      };
       storageSize = lib.mkOption {
-        type = lib.types.str;
+        type = quantity.type;
         default = "10Gi";
-        description = "Size of the persistent volume claim backing single-binary Loki.";
-      };
-      extraValues = lib.mkOption {
-        type = lib.types.attrsOf lib.types.anything;
-        default = { };
-        description = "Extra Helm values forwarded to the loki package's `extraValues`.";
+        description = "Size of the claim behind Loki, which holds every log line for the retention period. For a StorageClass, set `instances.<monitoring.namespace>.loki-storage.config.storageClassName`.";
       };
     };
 
@@ -290,17 +282,7 @@ in
             config = {
               rootUrl = grafanaRootUrl;
               replicas = cfg.grafana.replicas;
-              # The Helm-wrapped Loki package does not expose out.serviceUrl.
-              datasources =
-                lib.optional cfg.loki.enabled {
-                  name = "Loki";
-                  type = "loki";
-                  # Loki lives in its own namespace so the sibling PVC can be
-                  # called `storage` (immich pattern).
-                  url = "http://loki-gateway.${cfg.loki.namespace}.svc.cluster.local";
-                  access = "proxy";
-                }
-                ++ cfg.grafana.extraDatasources;
+              datasources = cfg.grafana.extraDatasources;
             };
           };
 
@@ -312,6 +294,23 @@ in
             };
           };
 
+          # Grafana's optional `storage` dependency would otherwise bind
+          # Loki's claim in this namespace. A non-empty `aliases` replaces
+          # the package's `storage` alias, and nothing resolves `lokiStorage`
+          # (housekeeping/2026-10-01-no-way-to-drop-default-aliases.md).
+          # clusters/test-monitoring-loki.nix asserts that Grafana then
+          # mounts no claim.
+          loki-storage = lib.mkIf cfg.loki.enabled {
+            package = packages."persistent-volume-claim";
+            aliases = [ "lokiStorage" ];
+            config.size = cfg.loki.storageSize;
+          };
+
+          loki = lib.mkIf cfg.loki.enabled {
+            package = packages.loki;
+            deps.storage = ref.${ns}.loki-storage;
+          };
+
           promtail = lib.mkIf cfg.promtail.enabled {
             package = packages.promtail;
             config.priorityClassName = logShipperPriorityClass;
@@ -319,25 +318,5 @@ in
         };
       in
       rawInstances;
-
-    # Loki uses its own namespace so its sibling PVC can be named `storage`.
-    # The flavor's storageClasses import supplies the PVC storageClassName.
-    # Helm rendering runs at module level because package build functions do
-    # not receive the Helm bridge.
-    instances.${cfg.loki.namespace} = lib.mkIf cfg.loki.enabled {
-      # The PVC instance is named "storage", which matches the
-      # extraVolumes claimName baked into the package's default values.
-      # The same-namespace StatefulSet resolves the PVC by name.
-      storage = {
-        package = packages."persistent-volume-claim";
-        config.size = cfg.loki.storageSize;
-      };
-      loki = {
-        package = packages.loki;
-        config.values = cfg.loki.extraValues;
-      };
-    };
-
-    namespaces.${cfg.loki.namespace} = lib.mkIf cfg.loki.enabled { };
   };
 }

@@ -41,6 +41,7 @@
           clickhouse-swap-replicated = ./clusters/test-clickhouse-swap/replicated.nix;
           kind = ./clusters/test-kind.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
+          monitoring-loki = ./clusters/test-monitoring-loki.nix;
           victoria-metrics = ./clusters/test-victoria-metrics.nix;
           victoria-metrics-crd-ref = ./clusters/test-victoria-metrics-crd-ref.nix;
           doc-how-tos = ./clusters/test-doc-how-tos.nix;

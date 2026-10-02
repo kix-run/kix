@@ -140,7 +140,7 @@ in
       lokiValues = {
         config.clients = [
           {
-            url = "http://${loki.out.fqdn}/loki/api/v1/push";
+            url = "${loki.out.serviceUrl}/loki/api/v1/push";
             tenant_id = "system";
           }
         ];

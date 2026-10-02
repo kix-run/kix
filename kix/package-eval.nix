@@ -91,19 +91,6 @@ let
     config.stringData.password = "password";
   };
 
-  lokiLabels = {
-    rule = "architecture.distinctSameKindLabels";
-    reason = "housekeeping/2026-09-27-loki-chart-services-share-labels.md";
-  };
-
-  # A package renders cluster.local itself, or through the named dependency
-  # that auto-instantiation adds to its cluster.
-  domainLiteral = {
-    rule = "architecture.clusterDomainLiteral";
-    reason = "housekeeping/2026-10-01-packages-render-cluster-local.md";
-  };
-  domainLiteralViaLoki = domainLiteral;
-
   # Error-severity scorecard rules each package fails, with the file that
   # records why. A housekeeping file may cover several packages.
   knownFailures = {
@@ -113,15 +100,6 @@ let
         # The Vector agent runs as root to read pod logs.
         reason = "kix/packages/clickhouse-logs/default.nix";
       }
-    ];
-    loki = [
-      lokiLabels
-      domainLiteral
-    ];
-    # The labels and domain findings come from the auto-instantiated loki.
-    promtail = [
-      lokiLabels
-      domainLiteralViaLoki
     ];
     smartctl-exporter = [
       {
@@ -240,6 +218,7 @@ let
         config.password = "password";
       };
     };
+    loki.instances = { inherit storage; };
     # A class, a pool, and a Prometheus provider, so the StorageClass, the
     # DiskPool and its CRD reference, and the io-engine metrics Service,
     # ServiceMonitor, and alerts are built.
@@ -256,6 +235,8 @@ let
     n8n.instances.valkey-password = valkeyPassword;
     persistent-volume-claim.config.size = "1Gi";
     priority-class.config.value = 1000;
+    # promtail auto-instantiates loki, which needs a claim.
+    promtail.instances = { inherit storage; };
     python-app = {
       config.backend.image = {
         repository = "ghcr.io/example/python-app";
@@ -440,7 +421,7 @@ let
     in
     if excepted then
       lib.assertMsg (hits != [ ])
-        "${name} no longer writes cluster.local in its source; remove it from sourceDomainLiteralExceptions in kix/package-eval.nix and update housekeeping/2026-10-01-packages-render-cluster-local.md"
+        "${name} no longer writes cluster.local in its source; remove it from sourceDomainLiteralExceptions in kix/package-eval.nix"
     else
       lib.assertMsg (hits == [ ]) (
         lib.concatMapStringsSep "\n" (
