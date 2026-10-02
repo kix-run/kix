@@ -152,6 +152,11 @@ in
               replicas = 1;
               strategy.type = "Recreate";
               selector.matchLabels = scope.selectorLabels;
+              # A changed database password restarts the pods, which read it
+              # once at start. A Secret Kix does not build has no hash.
+              template.metadata.annotations = lib.optionalAttrs (database.out.credentials.out ? identityHash) {
+                "checksum/database" = database.out.credentials.out.identityHash;
+              };
               template.spec = {
                 # Kubernetes default: Rocket's own shutdown grace is a few
                 # seconds.
