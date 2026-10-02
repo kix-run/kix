@@ -1048,7 +1048,7 @@ impl StreamCliObserver {
                         output::yellow("✔"),
                         label,
                         output::yellow(&format!(
-                            "ready, {stale} pods pending manual restart (OnDelete)"
+                            "ready, {stale} pods pending manual restart (OnDelete):"
                         )),
                         output::dim(message),
                     );

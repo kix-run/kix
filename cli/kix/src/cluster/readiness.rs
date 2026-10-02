@@ -1181,9 +1181,7 @@ pub async fn wait_for_ready(
             {
                 return Ok(ReadinessResult::ReadyPendingRestart {
                     stale,
-                    message: format!(
-                        "{stale} pods run the previous template; delete them one node at a time after volume rebuilds finish"
-                    ),
+                    message: "the DaemonSet replaces a pod with the current template only when the pod is deleted".into(),
                 });
             }
             // A CRD that reports Established=True can still be invisible to
@@ -1369,7 +1367,10 @@ fn check_deployment_ready(generation: Option<i64>, data: &Value) -> bool {
 }
 
 /// DaemonSet: numberReady == desiredNumberScheduled && updatedNumberScheduled == desiredNumberScheduled
-/// && observedGeneration >= generation
+/// && observedGeneration >= generation. An `OnDelete` DaemonSet drops the
+/// updatedNumberScheduled condition: the controller replaces its pods only
+/// when they are deleted, and `daemonset_pending_restart` counts the pods
+/// still on the previous template.
 ///
 /// A DaemonSet whose node selector matches no node has
 /// `desiredNumberScheduled: 0` once the controller has observed it, and

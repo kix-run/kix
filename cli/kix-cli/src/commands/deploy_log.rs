@@ -446,14 +446,14 @@ mod tests {
     fn pending_restart_detail_json() {
         let detail = NodeDetail::PendingRestart {
             stale: 2,
-            message: "2 pods run the previous template".into(),
+            message: "the DaemonSet replaces a pod with the current template only when the pod is deleted".into(),
         };
         assert_eq!(
             json_detail(&detail),
             json!({
                 "pending_restart": {
                     "stale": 2,
-                    "message": "2 pods run the previous template",
+                    "message": "the DaemonSet replaces a pod with the current template only when the pod is deleted",
                 },
             })
         );
