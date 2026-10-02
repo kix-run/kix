@@ -108,7 +108,7 @@ pub fn run(args: &InspectArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     let response = InspectResponse {
-        cluster_name: args.cluster.clone(),
+        cluster_name: cluster.cluster_name().unwrap_or(&args.cluster).to_string(),
         total_resources: manifests.len(),
         by_namespace,
         kind_counts,

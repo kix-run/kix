@@ -309,7 +309,8 @@ impl NixBackend for CliNixBackend {
 }
 
 /// The `name` of the cluster that flake attribute `attr` defines, or `None`
-/// when the flake's `kixClusters` has no such attribute.
+/// when the flake's `kixClusters` has no such attribute or the flake has no
+/// `kixClusters` at all.
 ///
 /// The name is what the cluster definition passes to `buildCluster`. The
 /// build writes it into the Activation record's `kix.run/cluster` label, so
@@ -353,10 +354,16 @@ pub fn eval_cluster_name(
                 message: format!("failed to run nix eval: {e}"),
             })?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Nix's wording when the flake has no `legacyPackages.<sys>.kixClusters`
+        // output: a flake that is not a kix flake defines no clusters.
+        if stderr.contains("does not provide attribute") {
+            return Ok(None);
+        }
         return Err(KixEvalError::StoreGraphError {
             message: format!(
                 "nix eval of the name of cluster '{attr}' failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
+                stderr.trim()
             ),
         });
     }

@@ -182,6 +182,20 @@ mod tests {
         );
     }
 
+    /// A flake that defines no `kixClusters` has no name to give, and the
+    /// argument is kept without an error. Runs `nix eval`.
+    #[test]
+    fn a_flake_without_kix_clusters_keeps_the_argument() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("flake.nix"), "{ outputs = _: { }; }").unwrap();
+        let flake = dir.path().display().to_string();
+        assert_eq!(
+            kix::eval::eval_cluster_name(dir.path(), "harbor", &[]).unwrap(),
+            None
+        );
+        assert_eq!(context(&flake).cluster_identity("harbor"), "harbor");
+    }
+
     /// Without a flake there is nothing to resolve, and no `nix` runs.
     #[test]
     fn without_a_flake_the_argument_is_the_name() {

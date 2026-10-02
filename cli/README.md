@@ -40,12 +40,15 @@ writes into `kix-packages.json` (`StoreGraph::cluster_name`) and the
 Activation record's `kix.run/cluster` label. Every lookup of cluster state
 uses that name: the Activation records, the `SweepScope::Cluster` sweep, and
 the local cache files `~/.cache/kix/activations/<name>.{path,root,kept-*}`.
-`kix deploy` and `kix gc --hard` take it from the build. Commands that read
-state without building, or before building (health, rollback, status, soft gc,
-gc `--operator`, compliance attest `--from-cluster`), call
-`CommandContext::cluster_identity()`, which evaluates
+`kix deploy` and `kix gc --hard` take it from the build, and `kix status`
+and `kix inspect` from the evaluated `ClusterOutput::cluster_name()` (the
+build's record label; `ClusterOutput::name` is the attribute). Commands that
+read state without building, or before building (health, rollback,
+`status --operator`, soft gc, gc `--operator`, compliance attest
+`--from-cluster`), call `CommandContext::cluster_identity()`, which evaluates
 `kixClusters.<attr>.name` with `kix::eval::eval_cluster_name()` and uses the
-argument unchanged when the flake does not define it or there is no flake.
+argument unchanged when the flake does not define it, defines no
+`kixClusters`, or there is no flake.
 `kix snapshot save` and `kix drift --cluster` need no flake and take the name
 itself.
 

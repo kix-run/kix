@@ -214,8 +214,11 @@ pub fn run(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     // Legacy: flat resource view
-    let _cluster = ctx.eval_cluster_or_suggest(&args.cluster)?;
-    let cluster = ctx.cluster_identity(&args.cluster);
+    let built = ctx.eval_cluster_or_suggest(&args.cluster)?;
+    let cluster = match built.cluster_name() {
+        Some(name) => name.to_string(),
+        None => ctx.cluster_identity(&args.cluster),
+    };
     let global = ctx.global.clone();
     ctx.runtime.block_on(run_flat_async(&cluster, &global))
 }
