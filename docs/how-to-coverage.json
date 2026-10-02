@@ -985,7 +985,7 @@
       "offlineCaptures": [
         "how-to/application-list/list-clusters"
       ],
-      "unverifiedNixBlocks": 3
+      "unverifiedNixBlocks": 4
     }
   ]
 }
