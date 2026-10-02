@@ -1,0 +1,3 @@
+# 2026-10-02 · `kix/lib/vocab/compose.nix` `kix.options.ingress` · A package that uses `kix.expose` cannot be kept off the public route.
+
+`kix.options.ingress` has `host` and `annotations` and nothing that turns the route off. `kix.expose` renders an Ingress or HTTPRoute whenever the cluster has an ingress controller or a gateway and a `cluster.domain`, so an instance that should stay internal gets `<instance>.<cluster.domain>` anyway. Grafana shows the cost: it serves `/metrics` without a login on the routed port, so its metrics are public on every such cluster (kix/packages/grafana/default.nix header).
