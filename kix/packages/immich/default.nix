@@ -147,9 +147,9 @@ in
     storage.warnings =
       dep:
       let
-        storageSizeGi = kix.parseGi (dep.out.size or "0");
+        bytes = kix.parseQuantity "memory" (dep.out.size or "0");
       in
-      lib.optional (storageSizeGi != null && storageSizeGi < 50)
+      lib.optional (bytes != null && bytes < 50 * 1024 * 1024 * 1024)
         "library storage is ${dep.out.size or "unknown"}; recommended minimum is 50Gi for photo libraries";
   };
 

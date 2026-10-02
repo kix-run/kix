@@ -344,8 +344,7 @@ service =
 | `port name containerPort` | `{ name; containerPort; protocol = "TCP"; }`. Override protocol by merging. |
 | `mkEnvVars attrs` | `{ KEY = "value"; }` -> `[{ name; value; }]`. Null values filtered (works with `lib.optionalAttrs` / conditional `null`). |
 | `mkEnv attrs raw` | Same as `mkEnvVars`, then appends list of raw K8s env entries (e.g. `valueFrom.secretKeyRef`). Canonical way to mix named values + secret refs. |
-| `parseQuantity resource q` | Kubernetes quantity -> millicores when `resource` is `"cpu"`, bytes otherwise, rounded down; `null` when `q` is not a quantity. Same grammar as `kix.types.quantity`. Strips Nix string context first (works on `out.*` DAG-context values). |
-| `parseGi s` | `parseQuantity "memory"` in whole GiB, rounded down (`"500Mi"` -> 0); `null` when not a quantity. |
+| `parseQuantity resource q` | Kubernetes quantity -> millicores when `resource` is `"cpu"`, bytes otherwise, rounded down, as an integer; `null` when `q` is not a quantity; throws above the signed 64-bit range. Same grammar as `kix.types.quantity`. Strips Nix string context first (works on `out.*` DAG-context values). |
 | `mergeEnv { who; owned ? [ ]; defaults ? { }; } env` | `defaults // env // <every owned group's vars>`, for `mkEnvVars`. `owned` is a list of `{ vars ? { }; names ? [ ]; from; fix; }`; a key in `env` that a group owns throws, also when its value is null. `defaults` may be overridden or removed with null. |
 | `guardArgs { who; option ? "extraArgs"; owned; } args` | Returns `args` unless one sets an owned flag (`owned` maps flag -> reason and fix); `--flag` and `--flag=value` both match, and a one-letter flag also matches `-c<value>`. |
 | `checkSecretKeys { who; arg; dep; keys ? [ ]; anyOf ? null; }` | Returns `dep` once it declares every key the package reads; read the secret through the result so the check runs before any `keyRef`. |
@@ -381,8 +380,8 @@ A key in `env` that a group owns throws, also when its value is null; `defaults`
 ```nix
 storage.warnings =
   dep:
-  let storageSizeGi = kix.parseGi (dep.out.size or "0");
-  in lib.optional (storageSizeGi != null && storageSizeGi < 50)
+  let bytes = kix.parseQuantity "memory" (dep.out.size or "0");
+  in lib.optional (bytes != null && bytes < 50 * 1024 * 1024 * 1024)
     "library storage is ${dep.out.size or "unknown"} - recommended minimum is 50Gi";
 ```
 
@@ -734,7 +733,7 @@ deps = {
       message = "the database needs the postgres extensions ...; missing: ....";
     };
   storage.warnings = dep:
-    lib.optional (kix.parseGi (dep.out.size or "0") < 50)
+    lib.optional (kix.parseQuantity "memory" (dep.out.size or "0") < 50 * 1024 * 1024 * 1024)
       "library storage is ${dep.out.size or "unknown"}, recommended minimum is 50Gi ...";
 };
 ```

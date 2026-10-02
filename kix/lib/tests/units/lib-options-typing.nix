@@ -155,24 +155,30 @@ in
         "1e3"
         "-1"
         "1."
+        "8Ei"
+        "1234567890123456789"
       ]
     )
     || throw "quantity: unparsed=${builtins.toJSON unparsed} results=${builtins.toJSON results}";
 
-  lib-options-typing-parse-gi =
+  # Results stay integers: a value past the signed 64-bit range, or with
+  # more than 18 digits, throws instead of becoming a float.
+  lib-options-typing-quantity-exact-range =
     let
-      got = map kixlib.parseGi [
-        "50Gi"
-        "500Mi"
-        "x"
-      ];
+      throws = v: !(builtins.tryEval (builtins.deepSeq v true)).success;
+      ei = kixlib.parseQuantity "memory" "7Ei";
     in
-    got == [
-      50
-      0
-      null
-    ]
-    || throw "parseGi: ${builtins.toJSON got}";
+    (
+      ei == 7 * 1024 * 1024 * 1024 * 1024 * 1024 * 1024
+      && builtins.isInt ei
+      && kixlib.parseQuantity "cpu" "9223372036854775m" == 9223372036854775
+      && throws (kixlib.parseQuantity "memory" "8Ei")
+      && throws (kixlib.parseQuantity "cpu" "2Ei")
+      && throws (kixlib.parseQuantity "cpu" "9223372036854776")
+      && throws (kixlib.parseQuantity "memory" "0.0000000000000000001")
+      && throws (kixlib.parseQuantity "memory" "1234567890123456789")
+    )
+    || throw "quantity range: 7Ei = ${builtins.toJSON ei}";
 
   # Setting one leaf keeps the other defaults; null removes a default and
   # leaves no empty `limits` and no null `claims`.

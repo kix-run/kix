@@ -476,7 +476,7 @@ The script gives up once `RETRY_FOR` seconds have passed and keeps one round of 
 | `kix.guardArgs { who; option ? "extraArgs"; owned; } config.extraArgs` | Returns the list unless an argument sets an owned flag (`--flag`, `--flag=...`, or a one-letter flag with an attached value). `owned."--flag"` is the reason and fix shown in the error. |
 | `kix.checkSecretKeys { who; arg; dep; keys ? [ ]; anyOf ? null; }` | Returns the secret dep after checking its declared keys; read the secret through the returned value so the check runs before any `keyRef` throws. |
 | `kix.operandPolicy { scope; name; spec; }` | A network policy over pods an operator creates (`spec` in the enforcer's format). Drops the `ingress`/`egress` sections of a direction `networkPolicy.directions` does not enforce; null when no enforcer runs or no section is left, so filter nulls before `root.requires`. |
-| `kix.parseQuantity "memory" "512Mi"` | `→ 536870912` (bytes; millicores for `"cpu"`); null when not a quantity. `kix.parseGi` gives whole GiB. |
+| `kix.parseQuantity "memory" "512Mi"` | `→ 536870912` (bytes; millicores for `"cpu"`); null when not a quantity; an integer, and a value above the signed 64-bit range throws. |
 
 A port name is unique per pod in Kubernetes, but `architecture.consistentPortNames` asks for one meaning per instance: if a package's main workload calls 5678 `http`, its worker's own port needs a different name (`health`, `metrics`), not the same one on another number. Resolvers that are handed a name without a workload cannot tell the two apart.
 

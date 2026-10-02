@@ -1,6 +1,6 @@
 # Kubernetes resource quantities: the option type `kix.types.quantity` and
 # the parser `kix.parseQuantity`. Both accept one grammar, so every value
-# the type accepts parses to a number.
+# the type accepts parses to an integer number of bytes.
 #
 # The grammar is a non-negative decimal (`1`, `1.5`, `.5`) with an optional
 # suffix (`m`, `k`, `M`, `G`, `T`, `P`, `E`, `Ki`, `Mi`, `Gi`, `Ti`, `Pi`,
@@ -74,12 +74,9 @@ let
     };
   };
 
-  # The decimal digits of a multiplier, to tell whether a product still fits
-  # in a 64-bit integer.
+  # The decimal digits of a divisor, to tell whether it fits in a 64-bit
+  # integer.
   digits = n: builtins.stringLength (toString n);
-
-  # A digit string as a float, for mantissas too long for an integer.
-  floatOf = s: lib.foldl' (acc: c: acc * 10.0 + lib.toIntBase10 c) 0.0 (lib.stringToCharacters s);
 
   # The string form of a value, or null when the value cannot be a quantity
   # (a negative integer, a float, an attrset). String context is discarded.
@@ -114,34 +111,52 @@ let
           if x == null then "" else x;
       };
 
-  valid = q: split q != null;
+  # Whether `parse` can compute the split quantity `p` exactly in signed
+  # 64-bit integers: the digit string has at most 18 digits, the fraction's
+  # divisor at most 18, and the product with the suffix and `scale`
+  # multipliers is at most `maxInt`. Dividing `maxInt` first keeps the
+  # check itself from overflowing.
+  maxInt = 9223372036854775807;
+  exact =
+    scale: p:
+    let
+      mult = suffixes.${p.suffix};
+      mantissa = p.whole + p.frac;
+    in
+    builtins.stringLength mantissa <= 18
+    && builtins.stringLength p.frac + digits mult.den <= 18
+    && lib.toIntBase10 mantissa <= maxInt / mult.num / scale;
+
+  # The type accepts what `parse "memory"` computes; a "cpu" value close to
+  # the limit can still fail `parse`, which then throws.
+  valid =
+    q:
+    let
+      p = split q;
+    in
+    p != null && exact 1 p;
 
   # The quantity in millicores when `resource` is "cpu", and in bytes (or
   # the base unit) otherwise, rounded down. null outside the grammar.
+  # Throws when the value cannot be computed exactly (`exact`).
   #
   #   parse "cpu" "250m"     => 250
   #   parse "memory" "1.5Gi" => 1610612736
-  #
-  # The result is an integer below about 10^18 and a float above that, so a
-  # value too large for a 64-bit integer still compares correctly.
   parse =
     resource: q:
     let
       p = split q;
       scale = if resource == "cpu" then 1000 else 1;
+      unit = if resource == "cpu" then "millicores" else "bytes";
       mult = suffixes.${p.suffix};
-      mantissa = p.whole + p.frac;
       fracLength = builtins.stringLength p.frac;
-      fitsInt =
-        builtins.stringLength mantissa + digits mult.num + digits scale <= 18
-        && fracLength + digits mult.den <= 18;
     in
     if p == null then
       null
-    else if fitsInt then
-      lib.toIntBase10 mantissa * mult.num * scale / (mult.den * pow 10 fracLength)
+    else if !(exact scale p) then
+      throw "quantity \"${asString q}\" cannot be computed exactly in ${unit}: Kix computes quantities in 64-bit integers, so a value can be at most ${toString maxInt} ${unit} and have at most 18 digits. Write it with fewer digits."
     else
-      floatOf mantissa * mult.num * scale / (mult.den * pow 10.0 fracLength);
+      lib.toIntBase10 (p.whole + p.frac) * mult.num * scale / (mult.den * pow 10 fracLength);
 in
 {
   inherit parse;

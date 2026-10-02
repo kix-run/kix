@@ -85,20 +85,20 @@ options.size = lib.mkOption {
 };
 ```
 
-### `kix.parseQuantity` and `kix.parseGi`
+### `kix.parseQuantity`
 
 `kix.parseQuantity resource q` returns `q` in millicores when `resource` is
-`"cpu"`, and in bytes otherwise, rounded down. It returns null when `q` is
-not a quantity. Every value `kix.types.quantity` accepts parses.
+`"cpu"`, and in bytes otherwise, rounded down to an integer. It returns null
+when `q` is not a quantity. Every value `kix.types.quantity` accepts parses.
 
 ```nix
 kix.parseQuantity "cpu" "250m"      # 250
 kix.parseQuantity "memory" "512Mi"  # 536870912
-kix.parseGi "50Gi"                  # 50
-kix.parseGi "500Mi"                 # 0
 ```
 
-`kix.parseGi` returns whole GiB, rounded down.
+Kix computes quantities in signed 64-bit integers. A value above that range,
+such as `"8Ei"`, or one written with more than 18 digits, is an evaluation
+error, and `kix.types.quantity` refuses it.
 
 ## Guards for values the package owns
 

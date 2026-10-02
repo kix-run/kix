@@ -385,20 +385,6 @@ rec {
   #   kix.parseQuantity "memory" "512Mi"   # 536870912
   parseQuantity = quantity.parse;
 
-  # A size in whole GiB, rounded down ("500Mi" gives 0). null when `s` is
-  # not a quantity.
-  parseGi =
-    s:
-    let
-      bytes = quantity.parse "memory" s;
-    in
-    if bytes == null then
-      null
-    else if builtins.isInt bytes then
-      bytes / 1073741824
-    else
-      builtins.floor (bytes / 1073741824);
-
   # The env attrset for `kix.mkEnvVars`: the package's `defaults`, then the
   # instance's `env` (a `kix.options.env` value), then the variables the
   # package owns. Each entry of `owned` is
