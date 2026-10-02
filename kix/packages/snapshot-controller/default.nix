@@ -110,7 +110,7 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       example = [ "--worker-threads=20" ];
-      description = "Flags appended after the package's own, which include `--v=2` (a later `--v` wins). The leader election and HTTP endpoint flags are refused.";
+      description = "Flags appended after the package's own, which include `--v=2` (a later `--v` wins). `--leader-election`, `--leader-election-namespace`, `--http-endpoint`, and `--metrics-path` are refused.";
     };
 
     env = kix.options.env;
@@ -155,8 +155,6 @@ in
           }
         ];
 
-        endpoint = "the liveness probe and the metrics Service use :${toString httpPort}; remove it.";
-        leaderElection = "leader election keeps one active controller while the instance's availability level runs several; remove it.";
         args = [
           "--v=2"
           "--leader-election=true"
@@ -165,10 +163,12 @@ in
         ++ kix.guardArgs {
           inherit who;
           owned = {
-            "--leader-election" = leaderElection;
-            "--leader-election-namespace" = leaderElection;
-            "--http-endpoint" = endpoint;
-            "--metrics-path" = endpoint;
+            "--leader-election" =
+              "leader election keeps one active controller while the instance's availability level runs several; remove it.";
+            "--leader-election-namespace" =
+              "the Role that lets the controller manage its Lease exists only in the instance's namespace; remove it.";
+            "--http-endpoint" = "the probes and the metrics Service use :${toString httpPort}; remove it.";
+            "--metrics-path" = "the ServiceMonitor scrapes /metrics; remove it.";
           };
         } config.extraArgs;
 
@@ -203,7 +203,10 @@ in
               zone = 2;
             };
             selector.matchLabels = scope.selectorLabels;
-            # Upstream's setup-snapshot-controller.yaml sets 35.
+            # The controller exits when the snapshot CRDs are not served
+            # within --retry-crd-interval-max (30s by default). Waiting 35s
+            # keeps a new pod that is about to exit from counting as
+            # available during a rollout.
             minReadySeconds = 35;
             template.spec = {
               serviceAccount = self.serviceAccount;
@@ -260,7 +263,9 @@ in
 
         root = {
           resource = self.deployment;
-          requires = crds;
+          # No other part references the ServiceMonitor, so the
+          # PackageInstance reaches it only through this list.
+          requires = crds ++ builtins.filter (r: r != null) [ self.serviceMonitor ];
           out.crds = {
             VolumeSnapshotClass = self.crds.volumeSnapshotClasses;
             VolumeSnapshotContent = self.crds.volumeSnapshotContents;
