@@ -18,12 +18,18 @@ should get the other's Kix source:
 Both cases get equal weight. Lithus has the stronger secrecy need. The
 internal case has more consumers and more agents.
 
+Trust is often one-way. A platform team can usually read its internal
+consumers' repos, and many Lithus clients will give Lithus read access too. The
+consumer still must not see platform code. This case gets most of the joint
+checks without a third party (§6.1).
+
 Settled in discussion (2026-10-02):
 
 - "Each side cannot see the other's code" means **source**. Whoever runs the
   cluster can read every applied manifest, so hiding output from the platform
   is impossible and is not a goal.
-- The consumer receives a **generated, data-only interface flake** (§3).
+- The consumer receives a **generated, data-only interface flake** (§3). It
+  carries no secret values (§3.1).
 - The checks we want across the boundary: contract and type checks, ownership
   collisions, cross-boundary network policy, and platform policy and budgets.
   We want to know which of these can be done without much new machinery. If one
@@ -31,19 +37,23 @@ Settled in discussion (2026-10-02):
 
 ## 2. The rule that draws the line
 
-> **The open core never evaluates code from two trust domains in one
-> evaluation. It exchanges data across the boundary.**
+> **Code from two parties is evaluated together only by a party allowed to
+> read both, and the results go only to that party.**
 
-This rule is technical, not commercial. Nix evaluation is not a security
-boundary (117 §3.7): any package can read anything else in the evaluation, and
-the evaluated store paths are world-readable. If both sides' code is evaluated
-together, whoever runs that evaluation sees everything. A joint evaluation
-therefore needs a host both parties trust, running a sandboxed worker per
-pairing, and that host is operational infrastructure. Infrastructure is a
-product, so the commercial line falls where the technical line does (§6).
+Nix evaluation is not a security boundary (117 §3.7): any code in an
+evaluation can read everything else in it, and the evaluated store paths are
+world-readable. Whoever runs a joint evaluation therefore sees both sources.
+That leaves three cases:
 
-Everything below sorts each wanted capability by one question: can it be
-answered from one side's graph plus a data file from the other side?
+| Who can read both sources | What runs | Where it lives |
+|---|---|---|
+| Nobody | Each side builds alone and they exchange data (§3 to §5) | Open core |
+| The platform | The platform's integration build evaluates everything (§6.1) | Open core |
+| Only a neutral third party | A trusted evaluator in an isolated worker per pairing (§6.2) | Separate product |
+
+The third row needs a host both parties trust, and running that host is
+operational infrastructure. So the technical line and the commercial line fall
+in the same place.
 
 ## 3. The interface flake
 
@@ -100,6 +110,43 @@ and generated schemas and docs. An agent working there can learn the full
 contract from `schema/` and cannot reach platform code, because it is not on
 disk. This is the main thing the internal case wants, and it needs nothing
 beyond the export.
+
+### 3.1 Secrets
+
+**The interface carries secret names, never secret values.** A Secret's `out`
+holds its name, keys, namespace, and type (`mkSecretHelpers`), not its data.
+Values live in SOPS files, which `kix deploy` decrypts. Evaluation never
+decrypts them, so evaluation output contains ciphertext at most.
+
+**The export must refuse anything that could carry a value.** A package can
+put anything in `out`, including a store path to a SOPS file or a rendered
+config file. The exporter refuses any `out` value that refers to a store path
+(Nix string context) and names the field. It cannot spot a password written
+into `out` as a plain string. The diff of the interface repo is the review
+point for that.
+
+**The credential has to arrive in the consumer's namespace.** A Pod can only
+mount Secrets from its own namespace, so the platform delivers a credential
+there as part of the grant: "acme may use `postgres-shared`, as Secret
+`postgres-shared-acme` in `acme-app` with keys `user` and `password`". The
+interface lists that name. The consumer references it with `mkSecretRef`, and
+`kix deploy` waits until it exists. Prefer a credential minted per consumer
+(its own database user) over a copy of a shared one, because it can be revoked
+and audited per consumer. Shared ones can be copied by the existing
+`reflector` package. Today the consumer calls `reflector.out.reflectSecret`
+from its own scope. Across organisations the platform's build must do it,
+because the consumer has no rights in the platform's namespace.
+
+**Each side encrypts to its own keys.** The interface flake contains no SOPS
+files, and neither side holds the other's decryption keys. This holds in the
+platform's integration build (§6.1) too: the consumer's SOPS files enter the
+evaluation as ciphertext, and only whoever deploys the consumer's part needs
+the consumer's key.
+
+**Admins can still read Secrets.** If both sides are cluster admins, each can
+read the other's Secrets in the cluster. The data-only interface keeps secrets
+out of repos, CI caches, and agent context. It does not hide them from an
+admin. Only scoped RBAC does that.
 
 ## 4. Pinning and change flow
 
@@ -215,44 +262,88 @@ If rule source must stay secret, only the admission form is exported and the
 consumer finds out at server-side dry-run (51 axis 2, rung 2).
 
 Cluster-wide capacity (do all consumers together fit on the nodes) is not
-answerable from one side and is not attempted. Quotas bound it.
+answerable from one side. Quotas bound it, and the integration build (§6.1)
+answers it when the platform can read consumer source.
 
-## 6. What needs joint evaluation
+## 6. Joint evaluation
 
-What remains after §5 is what genuinely needs both graphs in one evaluation:
+What remains after §5 genuinely needs both graphs in one evaluation:
 
 | Capability | Why it needs both graphs |
 |---|---|
 | Workload-level network policy across the boundary | Platform ingress must name consumer workloads |
 | Whole-cluster preview | One `kix diff` over platform and all consumers |
-| Redacted cross-boundary diagnostics | "Your change fails because of platform resource X", rewritten so X's details stay hidden (51 axis 1, rung 3) |
 | Platform-change impact beyond `out` fields | "Your Postgres upgrade changes connection behaviour that acme's migration Job depends on" |
-| Cross-organisation rollout ordering | Deploy platform change, then consumer changes, as one plan |
+| Cross-boundary rollout ordering | Deploy platform change, then consumer changes, as one plan |
 | Whole-cluster capacity planning | Real requests from every side against real nodes |
+| Redacted cross-boundary diagnostics | "Your change fails because of platform resource X", with X's details hidden (51 axis 1, rung 3) |
 
-All of these need a trusted evaluator: a host both parties trust, holding
-both sources, evaluating in an isolated worker, and returning to each side only
-what that side may see. The pieces it would reuse are already designed: the
+Who can run it depends on who can read whose source (§2).
+
+### 6.1 The platform can read consumer source
+
+The platform's integration build pins every consumer repo as a flake input and
+evaluates one whole cluster: the platform's modules plus each consumer's
+modules, with consumers wired to the real platform instances rather than the
+interface. The graph is then cut into one activation per party, as in 129 §6's
+sliced compilation, and cross-party edges become import markers. Consumers
+expose their modules from their flake (for example `kixModules.acme`)
+separately from their own `buildCluster`.
+
+This gives the platform the first five rows of the table above with no third
+party. The consumer keeps developing against the interface flake on its own
+machine and never sees platform code. For an internal platform team this is
+129 §6 with consumer repos as inputs instead of directories in a monorepo.
+
+Two constraints follow from §2:
+
+- **Consumer code runs inside the platform's evaluation and can read platform
+  source there.** A consumer commit could copy platform source into one of
+  its own manifests. So the integration build's output for a consumer's slice
+  never goes to that consumer. Either the consumer deploys its own build and
+  the integration build is a check, or the platform deploys everything.
+- **The integration build checks the interface.** When consumers deploy their
+  own builds, the consumer's slice from the integration build should equal the
+  consumer's own build, compared by activation hash (to verify: whether the
+  hashes match exactly across mkImport instances and lowered import markers).
+  A mismatch means the interface is stale, or that consumer code read
+  something it was not given. The same comparison serves both purposes.
+
+Results go to the platform. Passing them back to an internal team as they are
+is fine. For a Lithus client, the platform can return pass or fail, plus
+diagnostics about the client's own resources. A diagnostic that names a
+platform resource needs redaction (the last row of the table), which is the
+§6.2 product.
+
+### 6.2 Nobody can read both: a trusted evaluator
+
+When the consumer will not share its source with the platform, every row needs
+a host both trust. That host holds both sources, evaluates in an isolated
+worker, and returns to each side only what that side may see. It reuses the
 per-tenant worker (117 §3.7), the Airlock's redaction and exposure dial (51),
 and the operator reporting cluster state back. Operationally it is Kix Cloud
-plus the operator.
+plus the operator. It also sells to the §6.1 case for its redacted feedback,
+hosted interface distribution, and the UI.
 
-**Technical recommendation:** §3 to §5 belong in the open core. Each is a
-small extension of something that exists, and none adds a new trust
-assumption. §6 is a separate product. Each of its rows is a convenience or a
-finer grain over something §5 already guarantees coarsely, so a team that
-never buys it still has a safe boundary.
+**Technical recommendation:** §3 to §5 and §6.1 belong in the open core. Each
+is a small extension of something that exists or is already designed, and none
+adds a host that both parties must trust. §6.2 is a separate product. Each of
+its capabilities is a finer grain or a convenience over something the open
+core already guarantees more coarsely, so a team that never buys it still has
+a safe boundary.
 
 The business answer may move the line further in (for example, keeping
-`kix export-interface` for paid tiers). The technical constraint only says the
-line cannot move further out: the open core cannot offer joint evaluation
-without someone running the trusted host.
+`kix export-interface` or the integration build for paid tiers). The technical
+constraint only says the line cannot move further out: the open core cannot
+offer joint evaluation between parties that cannot read each other without
+someone running the trusted host.
 
 ## 7. Examples: what works and what does not
 
 The examples use Lithus as the platform and Acme as a client. Both are cluster
-admins unless stated. "Open core" means the design in §3 to §5. "Joint
-evaluation" means the paid trusted evaluator in §6.
+admins unless stated. "Open core" means §3 to §5. "Integration build" means
+§6.1, where Lithus can read Acme's source. "Trusted evaluator" means the paid
+product in §6.2.
 
 ### Works in the open core
 
@@ -283,28 +374,41 @@ evaluation" means the paid trusted evaluator in §6.
 - **Lithus upgrades the cluster and changes a fact.** Lithus publishes a new
   interface version with the new Kubernetes version. Acme moves the pin in a
   PR, and Acme's build tells Acme what no longer fits before Acme merges.
+- **Acme's app needs the Postgres password.** Lithus's build creates
+  `postgres-shared-acme` in Acme's namespace with Acme's own database user.
+  Acme's interface lists only that Secret's name and keys. Acme's deploy waits
+  until it exists.
+- **A Lithus package puts a SOPS file path in its `out` by mistake.**
+  `kix export-interface` fails and names the field. The interface is not
+  published.
 - **An AI agent works in Acme's repo.** It can read the schemas and docs for
   every service Acme may use. It cannot read Lithus's packages, because they
   are not in the repo.
 
-### Does not work in the open core
+### Works when Lithus can read Acme's source (integration build)
 
-- **Lithus wants to see why Acme's build failed.** Lithus cannot see Acme's
-  source, only what Acme deploys. Acme has to share the error.
-- **Lithus wants to let only Acme's `billing` app reach Postgres, not all of
-  Acme.** The open core allows Acme's namespaces as a whole. Per-workload
-  rules need both graphs: joint evaluation.
-- **Acme wants one diff showing its change and Lithus's pending change
-  together.** Each side previews only its own Kix cluster. Joint evaluation.
+- **Lithus lets only Acme's `billing` app reach Postgres, not all of Acme.**
+  The integration build sees Acme's workloads, so Postgres's ingress rule can
+  name `billing`.
+- **Lithus sees one diff of its pending change and every client's current
+  state.** The integration build evaluates the whole cluster.
+- **Lithus checks that all clients together fit on the nodes.** The
+  integration build has every client's real requests.
+- **Lithus rolls out a Postgres change, then Acme's matching change, as one
+  plan.** Both slices come from one evaluation.
+- **Lithus sees why Acme's build failed.** Lithus can read Acme's source and
+  reproduce it.
+- **Acme's interface is out of date.** Acme's own build and Acme's slice of the
+  integration build differ. Lithus's CI reports it before Acme deploys.
+
+### Needs the trusted evaluator
+
+- **Any row in the previous list, when Acme will not let Lithus read its
+  source.** Only a host both trust can evaluate both.
 - **Acme's deploy fails because of a Lithus resource, and Acme wants to know
   which one.** The open core can say "refused: owned by Kix cluster lithus".
-  It cannot explain the internals of Lithus's resource. A redacted
-  explanation is joint evaluation.
-- **Lithus wants to know whether all clients together fit on the nodes.**
-  Quotas bound each client. A whole-cluster answer needs every client's real
-  requests in one place: joint evaluation.
-- **Lithus wants to roll out a Postgres change, then Acme's matching change,
-  as one plan.** Each side deploys on its own schedule. Joint evaluation.
+  An explanation that names Lithus's resource but hides its details needs
+  redaction.
 
 ### Does not work at all
 
@@ -313,6 +417,12 @@ evaluation" means the paid trusted evaluator in §6.
   it openly or compiles Acme's request itself (§9, question 2).
 - **Lithus hides Acme's deployed manifests from Lithus.** Lithus runs the
   cluster and can read everything in it. Only Acme's source stays private.
+- **Acme, as an admin, cannot read Lithus's Secrets.** An admin can read
+  every Secret in the cluster. The interface keeps them out of Acme's repo,
+  not out of Acme's reach.
+- **Lithus's integration build hands Acme its slice to deploy.** Acme's code
+  could have copied Lithus source into that slice (§6.1). Acme deploys its
+  own build, or Lithus deploys.
 - **Acme, as an admin, is prevented from changing Lithus's resources at
   all.** The ownership check stops Kix deploys. It does not stop `kubectl
   edit`. Only scoped RBAC does that, and Acme then has to give up admin
@@ -321,7 +431,8 @@ evaluation" means the paid trusted evaluator in §6.
 ## 8. Work, roughly in order
 
 1. `kix export-interface`: facts, granted imports, namespaces, schemas. Data
-   only, filtered per consumer.
+   only, filtered per consumer, refusing `out` values that refer to store
+   paths (§3.1).
 2. Interface loader in `kix/lib`: JSON to mkImport instances, flavor, reserved
    names and roles.
 3. Deploy-time ownership refusal across Kix clusters, with a per-pair sharing
@@ -332,6 +443,11 @@ evaluation" means the paid trusted evaluator in §6.
 5. `usage.json` emission on the consumer side and a platform CI check against
    it.
 6. Policy export: scorecard rules plus generated admission policy.
+7. Credential delivery as part of a grant: per-consumer credentials where the
+   package can mint them, reflection otherwise, both from the platform side.
+8. The integration build: consumer flakes expose modules, sliced compilation
+   (blocked on 129 §6), and the hash comparison between a consumer's own build
+   and its slice.
 
 1 and 2 alone are useful to the internal case (agents and source separation)
 and to a first Lithus client.
@@ -344,7 +460,8 @@ and to a first Lithus client.
    one home.
 2. **Golden paths across the boundary.** 117's golden paths are partially
    applied platform packages. A consumer that wants a platform-provided "web
-   app" shape needs the package code, which breaks §2. Either golden paths are
+   app" shape needs the package code, which hands platform code to the
+   consumer. Either golden paths are
    published openly as a separate public package set, or the consumer submits
    instance files and the platform compiles them (117's request model, which
    gives up the consumer's own `kix deploy`).
@@ -353,11 +470,17 @@ and to a first Lithus client.
    consumer must not gain the platform operator's rights through it.
 4. **Are policy rules secret?** If a Lithus client must not see Lithus's
    rules, §5.4 loses its local half. Rules are probably fine to publish.
-5. **Same-organisation teams.** Does a platform team with internal consumers
-   want the full split, or the sliced compilation of 129 §6 with CODEOWNERS?
-   The split costs the cross-team eval-time checks. A plausible answer is that
-   internal teams start sliced and move to the split when they want agent
-   isolation.
-6. **Interface distribution.** A git repo per consumer is simple, but at many
+5. **Same-organisation teams.** With §6.1 an internal platform team gets the
+   cross-team checks back without a monorepo. Is there still a reason to offer
+   the monorepo-plus-CODEOWNERS layout of 129 §5, or does every multi-team
+   setup become interface flake plus integration build?
+6. **Minting per-consumer credentials.** Which platform packages can create a
+   user per consumer (`stackgres-database` is the obvious first), and what is
+   the common `out` shape for "a credential delivered to namespace X"?
+7. **Who deploys in the integration case.** Consumers deploying their own
+   builds keeps their cadence and needs the hash check. The platform deploying
+   everything is simpler and makes the platform a bottleneck. Internal teams
+   and Lithus clients may choose differently.
+8. **Interface distribution.** A git repo per consumer is simple, but at many
    consumers a registry (or the Lithus portal) serving versioned tarballs may
    fit better.
