@@ -196,19 +196,22 @@ let
           package = packages.stackgres-database;
           config.password = "password";
         };
+        harbor-secrets = {
+          package = packages.secret;
+          aliases = [ "harborSecrets" ];
+          config.stringData = {
+            adminPassword = "admin";
+            secretKey = "0123456789abcdef";
+            coreSecret = "core";
+            jobserviceSecret = "jobservice";
+            csrfKey = "0123456789abcdef0123456789abcdef";
+            registryHttpSecret = "registry-http";
+            registryPassword = "registry";
+            tokenPrivateKey = "key";
+          };
+        };
       };
       config.externalURL = "https://harbor.example.com";
-      config.secrets.values = {
-        adminPassword = "admin";
-        secretKey = "0123456789abcdef";
-        coreSecret = "core";
-        jobserviceSecret = "jobservice";
-        csrfKey = "0123456789abcdef0123456789abcdef";
-        registryHttpSecret = "registry-http";
-        registryPassword = "registry";
-        registryHtpasswd = "harbor_registry_user:hash";
-        tokenPrivateKey = "key";
-      };
     };
     immich.instances = {
       inherit storage;
