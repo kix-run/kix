@@ -232,7 +232,18 @@ let
       };
       instances.prometheus-operator.package = packages.prometheus-operator;
     };
-    n8n.instances.valkey-password = valkeyPassword;
+    n8n.instances = {
+      valkey-password = valkeyPassword;
+      database = {
+        package = packages.stackgres-database;
+        config.password = "password";
+      };
+      n8n-encryption-key = {
+        package = packages.secret;
+        aliases = [ "encryptionKey" ];
+        config.stringData.key = "0123456789abcdef0123456789abcdef";
+      };
+    };
     persistent-volume-claim.config.size = "1Gi";
     priority-class.config.value = 1000;
     # promtail auto-instantiates loki, which needs a claim.

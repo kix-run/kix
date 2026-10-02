@@ -36,6 +36,7 @@
         auto = ./test-auto.nix;
         auto2 = ./test-auto2.nix;
         immich = ./test-immich.nix;
+        n8n = ./test-n8n.nix;
         clickhouse = ./test-clickhouse.nix;
         clickhouse-operator = ./test-clickhouse-operator.nix;
         clickhouse-swap-bare = ./test-clickhouse-swap/bare.nix;

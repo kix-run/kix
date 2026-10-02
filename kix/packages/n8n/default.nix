@@ -1,22 +1,84 @@
-# n8n workflow automation platform: kix package.
+# n8n: workflow automation in queue mode. The main Deployment serves the
+# editor, the API, and webhooks and runs triggers; the worker Deployment
+# runs executions it takes from a Valkey queue. Both use one PostgreSQL
+# database.
 #
-# Deploys the n8n main instance (UI/API) and queue workers backed by
-# PostgreSQL (via StackGres) and Valkey (Redis-compatible) for Bull
-# queue processing.
+# Code nodes run in an `n8nio/runners` sidecar on each worker pod (n8n's
+# external task-runner mode), outside the n8n process. The main instance
+# hands manual executions to the workers as well, so it runs no code and
+# has no sidecar. An init container writes a random token per pod that the
+# worker and its sidecar share; the worker's task broker listens on
+# 127.0.0.1 only.
 #
 # Dependencies:
-#   postgres              required, database
-#   valkey                required, Redis-compatible queue backend
-#   ingressNginx          optional, auto-creates ingress when present (+ host is set)
-#   clusterIssuer         optional, auto-enables TLS when present
+#   database (required)       a `stackgres-database` instance (alias
+#                             `database`); n8n reads its host, port,
+#                             database name, and credentials.
+#   valkey (required)         a standalone `valkey` in this namespace. The
+#                             package turns Sentinel off on it: n8n has no
+#                             Sentinel client. valkey itself needs a
+#                             `valkeyPassword` secret (key `password`).
+#   encryptionKey (required)  a `secret` or `secret-ref` with key `key`.
+#                             n8n encrypts saved credentials with it, so
+#                             the main instance and the workers must share
+#                             it and it must outlive every pod. Generate it
+#                             once with `openssl rand -hex 32`.
+#   prometheus (optional)     a ServiceMonitor for the main instance when
+#                             `metrics.enabled` is true.
+#   ingressNginx or gateway, clusterIssuer (optional)
+#                             the route from `kix.expose`. n8n's public URLs
+#                             (N8N_HOST, N8N_PROTOCOL, N8N_EDITOR_BASE_URL,
+#                             N8N_WEBHOOK_URL) follow it; set them in `env`
+#                             when TLS terminates outside Kix.
 #
-# Resources: ServiceAccount, ConfigMap (env), Deployment (main),
-# Deployment (worker), Service (web UI), Ingress (optional).
+# Minimal instances, with SOPS files that hold the secret values:
 #
-# root = Service (port 80 by default, proxied to container port 5678).
-# External secrets (DB password, encryption key, Redis password)
-# are expected to be managed externally (e.g. via Infisical) and
-# injected via existingSecret as a secretRef on envFrom.
+#   instances.n8n = {
+#     n8n = {
+#       package = packages.n8n;
+#       config.ingress.host = "n8n.example.com";
+#     };
+#     n8n-db = {
+#       package = packages.stackgres-database;
+#       config.passwordSource = ./secrets/n8n-db.yaml;
+#       config.passwordHash = "...";
+#     };
+#     n8n-encryption-key = {
+#       package = packages.secret;
+#       aliases = [ "encryptionKey" ];
+#       config = {
+#         source = ./secrets/n8n-encryption-key.yaml;
+#         keys = [ "key" ];
+#       };
+#     };
+#     valkey-password = {
+#       package = packages.secret;
+#       aliases = [ "valkeyPassword" ];
+#       config = {
+#         source = ./secrets/valkey-password.yaml;
+#         keys = [ "password" ];
+#       };
+#     };
+#   };
+#
+# With `availablePackages` set, valkey, the stackgres-cluster, and the
+# stackgres-operator are instantiated automatically. valkey must run in
+# n8n's namespace, because the pods read its password Secret.
+#
+# Workflows reach `world` on any port (`meta.network.intents`). Under an
+# enforcer's default deny, a workflow that calls a Service inside the
+# cluster is blocked until that Service admits n8n's pods: add a
+# CiliumNetworkPolicy pair through `partsOverlays`, or open the namespaces
+# with `namespaces.<ns>.networkPolicies.directions` plus an ingress intent
+# on the target.
+#
+# Exposes: `out.name`, `out.fqdn`, `out.port` (the main instance's Service).
+# root = that Service; it requires the worker Deployment.
+#
+# Escape hatches: `env` (both n8n containers), `runners.env` (the sidecar),
+# `worker.extraArgs` (for example `--concurrency=20`), and `partsOverlays`.
+# Module allowlists for Code nodes are in the runners image's
+# `/etc/n8n-task-runners.json`.
 
 {
   scope,
@@ -26,108 +88,131 @@
 }:
 
 let
+  release = "2.41.5";
+
   name = scope.instanceName;
+  who = "n8n ${scope.namespaceName}/${name}";
 
-  mainSelectorLabels = scope.selectorLabels // {
-    "app.kubernetes.io/type" = "master";
+  httpPort = 5678;
+  # n8n's default broker port on a worker in external task-runner mode.
+  brokerPort = 5679;
+  launcherHealthPort = 5680;
+
+  tokenDir = "/run/n8n-runners";
+  tokenFile = "${tokenDir}/auth-token";
+
+  # Settings a worker and its runners must agree on. `env` sets them on
+  # both, and `runners.env` overrides them on the sidecar. The launcher
+  # passes them on to the runners it starts (its `allowed-env`).
+  runnerSharedVars = [
+    "GENERIC_TIMEZONE"
+    "N8N_RUNNERS_TASK_TIMEOUT"
+    "N8N_RUNNERS_MAX_CONCURRENCY"
+  ];
+
+  # n8n and the task-runner launcher also read a setting from the file
+  # named by `<VAR>_FILE`. n8n prefers `<VAR>` and the launcher prefers
+  # `<VAR>_FILE`, so the package refuses the `_FILE` twin of each variable
+  # it sets.
+  twins = vars: map (n: "${n}_FILE") (lib.filter (n: !lib.hasSuffix "_FILE" n) (lib.attrNames vars));
+
+  # The ingress-nginx body limit: the larger of n8n's two request limits
+  # (`N8N_PAYLOAD_SIZE_MAX`, default 16, and `N8N_FORMDATA_FILE_SIZE_MAX`,
+  # default 200, both in MiB), so the proxy never rejects a request n8n
+  # would accept. A variable from `valueFrom` or null counts as n8n's
+  # default.
+  bodyMaxMiB =
+    env:
+    let
+      sizeMiB =
+        var: default:
+        let
+          v = env.${var} or null;
+        in
+        if !builtins.isString v then
+          default
+        else if builtins.match "[0-9]+" v != null then
+          lib.toIntBase10 v
+        else
+          throw "${who}: env.${var} is \"${v}\"; n8n reads it as a whole number of MiB (for example \"64\").";
+    in
+    lib.max (sizeMiB "N8N_PAYLOAD_SIZE_MAX" 16) (sizeMiB "N8N_FORMDATA_FILE_SIZE_MAX" 200);
+
+  hardening = {
+    allowPrivilegeEscalation = false;
+    readOnlyRootFilesystem = true;
+    capabilities.drop = [ "ALL" ];
   };
 
-  workerSelectorLabels = scope.selectorLabels // {
-    "app.kubernetes.io/type" = "worker";
+  httpProbe = port: path: {
+    httpGet = { inherit path port; };
+    periodSeconds = 10;
+    timeoutSeconds = 1;
+    failureThreshold = 3;
   };
-
 in
 {
   meta = {
-    version = "1.74.2";
-    description = "n8n workflow automation, a main instance and queue workers backed by PostgreSQL and Valkey";
+    version = release;
+    description = "n8n workflow automation: a main instance and queue workers with Code-node task-runner sidecars, on PostgreSQL and Valkey";
     owner = "app-team";
-    # The main process owns the scheduler and active webhooks, and n8n's
-    # multi-main setup is an enterprise feature this package does not wire
-    # up, so the main instance can never be made redundant: even a rolling
-    # update is downtime.
-    availability.max = "none";
+    # Workflows call services the workflow author chooses, on any port.
+    # `world` does not include endpoints inside the cluster.
+    network.intents.workflows.egress = [ { to = "world"; } ];
   };
 
-  # n8n 1.74 reaches Redis through QUEUE_BULL_REDIS_HOST (or cluster
-  # nodes) and has no Sentinel client. With Sentinel on, the valkey Service
-  # also routes to replicas, where Bull's writes fail with READONLY, and a
-  # standalone valkey with several pods runs that many unrelated primaries.
-  # So n8n asks its valkey for one standalone pod. That costs no redundancy
-  # n8n has, since its main instance is already a single pod.
+  # n8n has no Sentinel client, and with Sentinel the valkey Service also
+  # routes to read-only replicas, so n8n asks its valkey for a standalone
+  # pod.
   deps.valkey = {
-    # Without Sentinel, valkey's replicas default to 1.
     config.sentinel.enabled = false;
-    # Catches a valkey the injection above does not reach, such as an import.
+    # An import is not reached by the injection above.
     assertions =
       dep:
       lib.optional (dep.out ? sentinelPort) {
         assertion = false;
-        message = "n8n '${name}' needs a standalone valkey with one pod: n8n 1.74 has no Sentinel client, so its queue writes would reach read-only replicas through the valkey Service. Set sentinel.enabled = false on the valkey instance.";
+        message = "n8n needs a standalone valkey with one pod: it has no Sentinel client, so its queue writes would reach read-only replicas through the valkey Service. Wire a valkey with sentinel.enabled = false.";
       };
   };
 
   options = {
     image = kix.options.image {
-      repository = "n8nio/n8n";
-      tag = "1.74.2";
+      repository = "docker.io/n8nio/n8n";
+      tag = release;
+      digest = "sha256:6f532d3b819cfe66c6a13c5375228f312c53df1abaa11a377eb8c3d3f105c363";
+      description = "The n8n image, for the main instance, the workers, and the init container that writes the task-runner token.";
     };
-    replicaCount = lib.mkOption {
-      type = lib.types.int;
-      # Single-writer at every level: the n8n main process owns the
-      # scheduler, so a second one would double-run every trigger.
-      default = kix.availability.pick availability {
-        none = 1;
-        pod = 1;
-        node = 1;
-        zone = 1;
+
+    resources = kix.options.resources {
+      requests = {
+        cpu = "100m";
+        memory = "256Mi";
       };
-      description = ''
-        Number of n8n main (UI/API) replicas. Pinned to one at every
-        availability level (v2_discussions/145); see meta.availability.max.
-      '';
+      limits = {
+        cpu = "1";
+        memory = "1Gi";
+      };
+      description = "Requests and limits of the main instance's n8n container. Each field keeps its default until set, and null removes a default.";
     };
-    worker = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        enabled = true;
-        # Workers are stateless queue consumers: one is enough when
-        # downtime is fine, more once a pod or node loss must not stall
-        # the queue. Defaults from the cluster's availability level
-        # (v2_discussions/145).
-        replicaCount = kix.availability.pick availability {
+
+    env = kix.options.env // {
+      description = "Extra environment variables for the n8n container of the main instance and of every worker. A value is a string, a `fieldRef` source such as `{ valueFrom.fieldRef.fieldPath = \"metadata.name\"; }`, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. Credentials from the dependencies are wired by the package. Null removes a variable the package sets by default. ${lib.concatStringsSep ", " runnerSharedVars} also reach the task-runner sidecar; set other runner settings in `runners.env`.";
+    };
+
+    worker = {
+      replicas = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = kix.availability.pick availability {
           none = 1;
           pod = 2;
           node = 3;
           zone = 3;
         };
-        port = 5679;
-        concurrency = 10;
-        # The 8gears/n8n chart sets no resources. Workers run the same
-        # workflow code as the main instance, so they get its defaults.
-        resources = {
-          requests = {
-            cpu = "100m";
-            memory = "256Mi";
-          };
-          limits = {
-            cpu = "1";
-            memory = "1Gi";
-          };
-        };
+        defaultText = lib.literalMD "1 at availability `none`, 2 at `pod`, 3 at `node` and `zone`";
+        description = "Number of worker pods. Each takes executions from the queue.";
       };
-    };
-    port = lib.mkOption {
-      type = lib.types.int;
-      default = 5678;
-    };
-    servicePort = lib.mkOption {
-      type = lib.types.int;
-      default = 80;
-    };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
+
+      resources = kix.options.resources {
         requests = {
           cpu = "100m";
           memory = "256Mi";
@@ -136,347 +221,479 @@ in
           cpu = "1";
           memory = "1Gi";
         };
+        description = "Requests and limits of each worker's n8n container. Each field keeps its default until set, and null removes a default.";
+      };
+
+      extraArgs = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "--concurrency=20" ];
+        description = "Arguments appended to `n8n worker`.";
       };
     };
+
+    runners = {
+      image = kix.options.image {
+        repository = "docker.io/n8nio/runners";
+        tag = release;
+        digest = "sha256:32619142405e7f4a02eedffe8584214c7e0b9b09d3753094e4212aee5f4d0045";
+        tagText = "config.image.tag";
+        description = "The task-runner sidecar image. Its version must match the n8n image's, so its tag follows `image.tag`.";
+      };
+
+      resources = kix.options.resources {
+        requests = {
+          cpu = "50m";
+          memory = "128Mi";
+        };
+        limits = {
+          cpu = "1";
+          memory = "512Mi";
+        };
+        description = "Requests and limits of each worker's task-runner sidecar, shared by the JavaScript and Python runners it starts. Each field keeps its default until set, and null removes a default.";
+      };
+
+      env = kix.options.env // {
+        description = "Extra environment variables for the task-runner sidecar. The launcher passes the names in its `allowed-env` list on to the runners. A value is a string, a `fieldRef` source, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. A value here wins over the same name in `env`.";
+      };
+    };
+
     ingress = kix.options.ingress;
-    env = lib.mkOption {
-      type = lib.types.attrsOf lib.types.anything;
-      default = { };
-      description = ''
-        Extra n8n environment variables, applied over the package's own.
-        n8n runs with a read-only root filesystem, and
-        N8N_RESTRICT_FILE_ACCESS_TO defaults to "/tmp", an emptyDir that
-        does not survive a restart, so file nodes can read and write only
-        there. The package mounts no other writable volume. Setting
-        N8N_RESTRICT_FILE_ACCESS_TO here (";"-separated directories)
-        widens what file nodes may read.
-      '';
-    };
-    existingSecret = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-    };
-    database = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        type = "postgresdb";
-        name = "n8n";
-        user = "n8n";
+
+    metrics = kix.options.monitor // {
+      enabled = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = "Turn on n8n's /metrics endpoint, with queue metrics, and a ServiceMonitor when a prometheus dependency is present. The endpoint is served on the editor's port, so a route publishes it too.";
       };
     };
   };
+
+  config =
+    { config, ... }:
+    {
+      runners.image.tag = lib.mkDefault config.image.tag;
+      # The editor's push channel is a websocket that n8n pings every 60
+      # seconds, which equals ingress-nginx's default read timeout.
+      ingress.annotations = lib.mapAttrs (_: lib.mkDefault) {
+        "nginx.ingress.kubernetes.io/proxy-body-size" = "${toString (bodyMaxMiB config.env)}m";
+        "nginx.ingress.kubernetes.io/proxy-read-timeout" = "3600";
+        "nginx.ingress.kubernetes.io/proxy-send-timeout" = "3600";
+      };
+    };
 
   build = [
     (
       {
         self,
         config,
-        clusterConfig,
-        postgres,
-        valkey,
         scope,
         kix,
+        database,
+        valkey,
+        encryptionKey,
+        prometheus ? null,
         ...
       }:
       let
-        # envFrom for main deployment: app configmap + secret.
-        mainEnvFrom = [
-          { configMapRef.name = self.configmap.out.name; }
-          self.appSecret.out.envFrom
-        ];
+        exposure = self.exposure;
 
-        # envFrom for worker deployment: app configmap + worker configmap + secret.
-        workerEnvFrom = [
-          { configMapRef.name = self.configmap.out.name; }
-          { configMapRef.name = self.workerConfigmap.out.name; }
-          self.appSecret.out.envFrom
-        ];
-      in
-      {
-        # --- Secret reference (dependency-tracked) ---
-        appSecret = scope.mkSecretRef {
-          name = if config.existingSecret != null then config.existingSecret else "${name}-app-secret";
-          keys = [ ]; # keys unknown: external secret, used via envFrom
+        ek = kix.checkSecretKeys {
+          inherit who;
+          arg = "encryptionKey";
+          dep = encryptionKey;
+          keys = [ "key" ];
         };
 
-        # --- ServiceAccount ---
-        serviceAccount = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ServiceAccount";
-          name = "${name}";
+        # A valkey from `kix.mkImport` may publish no password.
+        valkeyAuth = valkey.out ? authSecret;
+
+        # A `kix.mergeEnv` owned group that also refuses the `_FILE` twins.
+        group = vars: extra: { inherit vars; } // extra // { names = twins vars ++ extra.names or [ ]; };
+
+        databaseGroup =
+          group
+            {
+              DB_TYPE = "postgresdb";
+              DB_POSTGRESDB_HOST = database.out.host;
+              DB_POSTGRESDB_PORT = database.out.port;
+              DB_POSTGRESDB_DATABASE = database.out.database;
+              DB_POSTGRESDB_USER = database.out.credentials.out.keyRef "username";
+              DB_POSTGRESDB_PASSWORD = database.out.credentials.out.keyRef "password";
+            }
+            {
+              from = "the database dependency";
+              fix = "Wire a different database instance through deps.database instead.";
+            };
+
+        valkeyGroup =
+          group
+            (
+              {
+                QUEUE_BULL_REDIS_HOST = valkey.out.fqdn;
+                QUEUE_BULL_REDIS_PORT = valkey.out.port;
+              }
+              // lib.optionalAttrs valkeyAuth {
+                QUEUE_BULL_REDIS_PASSWORD = valkey.out.authSecret.out.keyRef valkey.out.authPasswordKey;
+              }
+            )
+            {
+              # An import's password comes from `kix.mkImport { out.authSecret; }`.
+              names = lib.optionals (!valkeyAuth) [
+                "QUEUE_BULL_REDIS_PASSWORD"
+                "QUEUE_BULL_REDIS_PASSWORD_FILE"
+              ];
+              from = "the valkey dependency";
+              fix = "Wire a different valkey through deps.valkey instead.";
+            };
+
+        encryptionKeyGroup = group { N8N_ENCRYPTION_KEY = ek.out.keyRef "key"; } {
+          from = "the encryptionKey dependency";
+          fix = "Wire a different secret through deps.encryptionKey instead.";
         };
 
-        # --- ConfigMap (environment variables) ---
-        configmap = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "${name}-app-config";
-          data = {
-            # Database: derived from postgres DI dep
-            DB_TYPE = config.database.type;
-            DB_POSTGRESDB_HOST = postgres.out.fqdn;
-            DB_POSTGRESDB_DATABASE = config.database.name;
-            DB_POSTGRESDB_USER = config.database.user;
-            # Redis / Queue: derived from valkey DI dep
-            QUEUE_BULL_REDIS_HOST = valkey.out.fqdn;
-            QUEUE_BULL_REDIS_PORT = valkey.out.port;
-            # Execution mode: queue mode for workers
-            EXECUTIONS_MODE = "queue";
-            # The root filesystem is read-only, /tmp is an emptyDir and
-            # N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES (default true) blocks
-            # ~/.n8n, so /tmp is the only place the Read/Write Files from
-            # Disk node can write. Limiting file nodes to it makes a path
-            # elsewhere fail with n8n's "not allowed" error, not EROFS.
-            N8N_RESTRICT_FILE_ACCESS_TO = "/tmp";
+        sharedStructure = {
+          EXECUTIONS_MODE = "queue";
+          N8N_PORT = toString httpPort;
+        };
+        # The worker's health server answers the probes on the Service's
+        # port, and its broker serves the sidecar on 127.0.0.1.
+        workerStructure = {
+          N8N_RUNNERS_MODE = "external";
+          N8N_RUNNERS_AUTH_TOKEN_FILE = tokenFile;
+          N8N_RUNNERS_BROKER_PORT = toString brokerPort;
+          QUEUE_HEALTH_CHECK_ACTIVE = "true";
+          QUEUE_HEALTH_CHECK_PORT = toString httpPort;
+        };
+        # `env` reaches both roles, so each role refuses the other role's
+        # names as well as its own.
+        structureGroup =
+          role:
+          let
+            vars = sharedStructure // lib.optionalAttrs (role == "worker") workerStructure;
+            all = sharedStructure // workerStructure;
+          in
+          {
+            inherit vars;
+            # A token set by hand would win over the `_FILE` value and no
+            # longer match the sidecar's.
+            names =
+              lib.subtractLists (lib.attrNames vars) (lib.attrNames all)
+              ++ twins all
+              ++ [ "N8N_RUNNERS_AUTH_TOKEN" ];
+            from = "the package's queue-mode and task-runner wiring";
+            fix = "Remove it: the package sets it so queue mode, the task-runner sidecar, the Service, and the probes agree.";
+          };
+
+        # n8n 2.x replaced WEBHOOK_URL with N8N_WEBHOOK_URL and ignores the
+        # old name while the new one is set, which the package does when
+        # the instance has a route.
+        legacyWebhookGroup = {
+          names = [ "WEBHOOK_URL" ];
+          from = "n8n 1.x; n8n 2.x reads N8N_WEBHOOK_URL first";
+          fix = "Set N8N_WEBHOOK_URL instead.";
+        };
+
+        # Workers need the public URL too: a Wait node's resume URL is built
+        # where the execution runs.
+        exposureDefaults = lib.optionalAttrs (exposure.url != null) {
+          N8N_HOST = exposure.host;
+          N8N_PROTOCOL = exposure.scheme;
+          N8N_EDITOR_BASE_URL = "${exposure.url}/";
+          N8N_WEBHOOK_URL = "${exposure.url}/";
+          N8N_PROXY_HOPS = "1";
+        };
+
+        metricsOn = config.metrics.enabled && prometheus != null;
+
+        defaultsFor =
+          role:
+          exposureDefaults
+          // lib.optionalAttrs (role == "main") (
+            {
+              # Main then runs no executions and starts no task broker.
+              OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS = "true";
+            }
+            // lib.optionalAttrs metricsOn {
+              N8N_METRICS = "true";
+              N8N_METRICS_INCLUDE_QUEUE_METRICS = "true";
+            }
+          );
+
+        n8nEnv =
+          role:
+          kix.mkEnvVars (
+            kix.mergeEnv {
+              inherit who;
+              defaults = defaultsFor role;
+              owned = [
+                databaseGroup
+                valkeyGroup
+                encryptionKeyGroup
+                (structureGroup role)
+                legacyWebhookGroup
+              ];
+            } config.env
+          );
+
+        runnerEnv = kix.mkEnvVars (
+          kix.mergeEnv {
+            who = "${who} runners.env";
+            defaults = lib.getAttrs (lib.intersectLists runnerSharedVars (lib.attrNames config.env)) config.env;
+            owned = [
+              (group
+                {
+                  N8N_RUNNERS_TASK_BROKER_URI = "http://127.0.0.1:${toString brokerPort}";
+                  N8N_RUNNERS_AUTH_TOKEN_FILE = tokenFile;
+                  N8N_RUNNERS_LAUNCHER_HEALTH_CHECK_PORT = toString launcherHealthPort;
+                }
+                {
+                  names = [ "N8N_RUNNERS_AUTH_TOKEN" ];
+                  from = "the task-runner wiring";
+                  fix = "Remove it: the package connects the sidecar to its worker's broker and probes.";
+                }
+              )
+            ];
+          } config.runners.env
+        );
+
+        # The containers read these Secrets as env, which a running pod never
+        # re-reads. A `secret-ref` has no hash, because its data lives
+        # outside Kix; it rolls through reloader's `withReloadOn`.
+        depHash =
+          n: d:
+          lib.optionalAttrs (d.out ? identityHash) {
+            "checksum/${n}" = d.out.identityHash;
+          };
+        podAnnotations =
+          depHash "database" database.out.credentials
+          // depHash "encryption-key" ek
+          // lib.optionalAttrs valkeyAuth (depHash "valkey-password" valkey.out.authSecret);
+
+        tokenMount =
+          readOnly:
+          {
+            name = "runners-token";
+            mountPath = tokenDir;
           }
-          // config.env;
-        };
+          // lib.optionalAttrs readOnly { readOnly = true; };
 
-        # --- Worker ConfigMap (worker-specific overrides) ---
-        workerConfigmap = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "${name}-worker-config";
-          # A worker starts its /healthz server only when
-          # QUEUE_HEALTH_CHECK_ACTIVE is true, and PORT does not apply to it.
-          data = {
-            QUEUE_HEALTH_CHECK_ACTIVE = "true";
-            QUEUE_HEALTH_CHECK_PORT = toString config.worker.port;
+        imagePull =
+          image: lib.optionalAttrs (image.pullPolicy != null) { imagePullPolicy = image.pullPolicy; };
+
+        n8nContainer =
+          role:
+          {
+            name = "n8n";
+            image = kix.image.ref config.image;
+            ports = [ (kix.port "http" httpPort) ];
+            env = n8nEnv role;
+            # n8n listens only after the main instance has run the database
+            # migrations, so startup allows five minutes. The readiness
+            # endpoint also checks the database and Valkey connections.
+            startupProbe = httpProbe "http" "/healthz" // {
+              failureThreshold = 30;
+            };
+            livenessProbe = httpProbe "http" "/healthz";
+            readinessProbe = httpProbe "http" "/healthz/readiness";
+            resources = if role == "main" then config.resources else config.worker.resources;
+            securityContext = hardening;
+          }
+          // lib.optionalAttrs (role == "worker") {
+            args = [ "worker" ] ++ config.worker.extraArgs;
+            volumeMounts = [ (tokenMount true) ];
+          }
+          // imagePull config.image;
+
+        # The broker accepts connections from 127.0.0.1 only, so a random
+        # token per pod authenticates the sidecar without a Secret.
+        tokenInit = {
+          name = "runners-token";
+          image = kix.image.ref config.image;
+          command = [
+            "node"
+            "-e"
+            "require('fs').writeFileSync('${tokenFile}', require('crypto').randomBytes(32).toString('hex'), { mode: 0o600 })"
+          ];
+          resources = {
+            requests = {
+              cpu = "10m";
+              memory = "32Mi";
+            };
+            limits = {
+              cpu = "100m";
+              memory = "128Mi";
+            };
+          };
+          securityContext = hardening;
+          volumeMounts = [ (tokenMount false) ];
+        }
+        // imagePull config.image;
+
+        # The image's entrypoint starts the launcher for the JavaScript and
+        # Python runners.
+        runnersContainer = {
+          name = "task-runners";
+          image = kix.image.ref config.runners.image;
+          ports = [ (kix.port "health" launcherHealthPort) ];
+          env = runnerEnv;
+          livenessProbe = httpProbe "health" "/healthz";
+          readinessProbe = httpProbe "health" "/healthz";
+          resources = config.runners.resources;
+          securityContext = hardening;
+          volumeMounts = [ (tokenMount true) ];
+        }
+        // imagePull config.runners.image;
+
+        selectorFor = role: scope.selectorLabels // { "app.kubernetes.io/component" = role; };
+
+        # n8n writes its instance settings, files that file nodes may touch
+        # (`~/.n8n-files`, n8n's default limit), compiled assets, and
+        # temporary files. With the encryption key supplied and queue mode
+        # keeping binary data in the database, none of them must survive a
+        # restart; durable files belong in object storage. The size limits
+        # evict a pod whose workflow fills them.
+        n8nMounts = kix.withMountsOn "n8n" [
+          (kix.mount.emptyDir {
+            name = "data";
+            mountPath = "/home/node/.n8n";
+            sizeLimit = "1Gi";
+          })
+          (kix.mount.emptyDir {
+            name = "files";
+            mountPath = "/home/node/.n8n-files";
+            sizeLimit = "1Gi";
+          })
+          (kix.mount.emptyDir {
+            name = "cache";
+            mountPath = "/home/node/.cache";
+            sizeLimit = "256Mi";
+          })
+          (kix.mount.emptyDir {
+            name = "tmp";
+            mountPath = "/tmp";
+            sizeLimit = "1Gi";
+          })
+        ];
+
+        # `/home/runner` is the runners' working directory.
+        runnerMounts = kix.withMountsOn "task-runners" [
+          (kix.mount.emptyDir {
+            name = "runner-tmp";
+            mountPath = "/tmp";
+            sizeLimit = "512Mi";
+          })
+          (kix.mount.emptyDir {
+            name = "runner-home";
+            mountPath = "/home/runner";
+            sizeLimit = "256Mi";
+          })
+        ];
+
+        podSpec = {
+          automountServiceAccountToken = false;
+          # n8n waits up to 30 s for running executions, and the launcher up
+          # to 50 s for its runners.
+          terminationGracePeriodSeconds = 60;
+          securityContext = {
+            runAsNonRoot = true;
+            runAsUser = 1000;
+            runAsGroup = 1000;
+            fsGroup = 1000;
+            seccompProfile.type = "RuntimeDefault";
           };
         };
-
-        # --- Deployment (main: UI + API) ---
+      in
+      builtins.seq (bodyMaxMiB config.env) {
+        # The main instance owns triggers and schedules, and multi-main is an
+        # n8n Enterprise feature, so a second main pod, even during a
+        # rolling update, runs every trigger twice.
         deployment =
           {
-            name = "${name}";
+            inherit name;
+            availability.max = "none";
             spec = {
-              replicas = config.replicaCount;
-              revisionHistoryLimit = 3;
-              selector.matchLabels = mainSelectorLabels;
+              replicas = 1;
               strategy.type = "Recreate";
+              selector.matchLabels = selectorFor "main";
               template = {
-                metadata.annotations = {
-                  "checksum/configmap" = self.configmap.out.identityHash;
+                metadata.annotations = podAnnotations;
+                spec = podSpec // {
+                  containers = [ (n8nContainer "main") ];
                 };
-                spec = {
-                  serviceAccountName = self.serviceAccount.out.name;
-                  # The 8gears/n8n chart's value; n8n's own
-                  # N8N_GRACEFUL_SHUTDOWN_TIMEOUT also defaults to 30s.
-                  terminationGracePeriodSeconds = 30;
-                  securityContext = {
-                    fsGroup = 1000;
-                    runAsNonRoot = true;
-                    runAsUser = 1000;
-                    runAsGroup = 1000;
-                  };
+              };
+            };
+          }
+          |> n8nMounts
+          |> scope.mkDeployment;
+
+        worker =
+          {
+            name = "${name}-worker";
+            spec = {
+              replicas = config.worker.replicas;
+              selector.matchLabels = selectorFor "worker";
+              template = {
+                metadata.annotations = podAnnotations;
+                spec = podSpec // {
+                  initContainers = [ tokenInit ];
                   containers = [
-                    {
-                      name = "n8n";
-                      image = kix.image.ref config.image;
-                      imagePullPolicy = config.image.pullPolicy;
-                      envFrom = mainEnvFrom;
-                      ports = [
-                        (kix.port "http" config.port)
-                      ];
-                      # Probes follow the 8gears/n8n chart: n8n listens only
-                      # after migrations, so the startup probe allows five
-                      # minutes, and /healthz/readiness also reports the
-                      # database connection.
-                      startupProbe = {
-                        httpGet = {
-                          path = "/healthz";
-                          port = "http";
-                        };
-                        periodSeconds = 10;
-                        failureThreshold = 30;
-                      };
-                      livenessProbe = {
-                        httpGet = {
-                          path = "/healthz";
-                          port = "http";
-                        };
-                        periodSeconds = 10;
-                        timeoutSeconds = 1;
-                        failureThreshold = 3;
-                      };
-                      readinessProbe = {
-                        httpGet = {
-                          path = "/healthz/readiness";
-                          port = "http";
-                        };
-                        periodSeconds = 10;
-                        timeoutSeconds = 1;
-                        failureThreshold = 3;
-                      };
-                      resources = config.resources;
-                      securityContext = {
-                        allowPrivilegeEscalation = false;
-                        readOnlyRootFilesystem = true;
-                      };
-                      volumeMounts = [
-                        {
-                          name = "data";
-                          mountPath = "/home/node/.n8n";
-                        }
-                        {
-                          name = "tmp";
-                          mountPath = "/tmp";
-                        }
-                        # n8n compiles its static assets into ~/.cache on start.
-                        {
-                          name = "cache";
-                          mountPath = "/home/node/.cache";
-                        }
-                      ];
-                    }
+                    (n8nContainer "worker")
+                    runnersContainer
                   ];
+                  # kix.withMountsOn mounts a volume into one container, and
+                  # this one is shared by the init container and both
+                  # containers.
                   volumes = [
                     {
-                      name = "data";
-                      emptyDir = { };
-                    }
-                    {
-                      name = "tmp";
-                      emptyDir = { };
-                    }
-                    {
-                      name = "cache";
-                      emptyDir = { };
+                      name = "runners-token";
+                      emptyDir = {
+                        medium = "Memory";
+                        sizeLimit = "1Mi";
+                      };
                     }
                   ];
                 };
               };
             };
           }
+          |> n8nMounts
+          |> runnerMounts
           |> scope.mkDeployment;
 
-        # --- Deployment (worker: queue workers) ---
-        worker =
-          if config.worker.enabled then
-            {
-              name = "${name}-worker";
-              spec = {
-                replicas = config.worker.replicaCount;
-                revisionHistoryLimit = 3;
-                selector.matchLabels = workerSelectorLabels;
-                strategy.type = "Recreate";
-                template = {
-                  metadata.annotations = {
-                    "checksum/configmap" = self.configmap.out.identityHash;
-                  };
-                  spec = {
-                    serviceAccountName = self.serviceAccount.out.name;
-                    terminationGracePeriodSeconds = 30;
-                    securityContext = {
-                      fsGroup = 1000;
-                      runAsNonRoot = true;
-                      runAsUser = 1000;
-                      runAsGroup = 1000;
-                    };
-                    containers = [
-                      {
-                        name = "n8n-worker";
-                        image = kix.image.ref config.image;
-                        imagePullPolicy = config.image.pullPolicy;
-                        command = [ "n8n" ];
-                        args = [
-                          "worker"
-                          "--concurrency=${toString config.worker.concurrency}"
-                        ];
-                        envFrom = workerEnvFrom;
-                        # Named "health" rather than "http": the worker
-                        # serves only /healthz on it, and the main
-                        # Deployment in this same instance already calls
-                        # its port "http" with a different number.
-                        ports = [
-                          (kix.port "health" config.worker.port)
-                        ];
-                        livenessProbe = {
-                          httpGet = {
-                            path = "/healthz";
-                            port = "health";
-                          };
-                          periodSeconds = 10;
-                          timeoutSeconds = 1;
-                          failureThreshold = 3;
-                        };
-                        readinessProbe = {
-                          httpGet = {
-                            path = "/healthz/readiness";
-                            port = "health";
-                          };
-                          periodSeconds = 10;
-                          timeoutSeconds = 1;
-                          failureThreshold = 3;
-                        };
-                        resources = config.worker.resources;
-                        securityContext = {
-                          allowPrivilegeEscalation = false;
-                          readOnlyRootFilesystem = true;
-                        };
-                        volumeMounts = [
-                          {
-                            name = "data";
-                            mountPath = "/home/node/.n8n";
-                          }
-                          {
-                            name = "tmp";
-                            mountPath = "/tmp";
-                          }
-                          # n8n compiles its static assets into ~/.cache on start.
-                          {
-                            name = "cache";
-                            mountPath = "/home/node/.cache";
-                          }
-                        ];
-                      }
-                    ];
-                    volumes = [
-                      {
-                        name = "data";
-                        emptyDir = { };
-                      }
-                      {
-                        name = "tmp";
-                        emptyDir = { };
-                      }
-                      {
-                        name = "cache";
-                        emptyDir = { };
-                      }
-                    ];
-                  };
-                };
-              };
-            }
-            |> scope.mkDeployment
-          else
-            null;
-
-        # --- Service ---
         service =
           self.deployment
           |> kix.service.fromWorkload {
-            name = "${name}";
+            inherit name;
             ports = [
               {
                 name = "http";
-                port = config.servicePort;
-                targetPort = config.port;
+                port = httpPort;
+                targetPort = "http";
                 protocol = "TCP";
               }
             ];
-            outputs = {
-              port = toString config.servicePort;
-            };
-            requires = lib.optional (self.worker != null) self.worker;
           }
           |> scope.mkResource;
 
-        # --- Entry point ---
-        root = self.service;
+        # Nothing else references the workers.
+        root = {
+          resource = self.service;
+          requires = [ self.worker ];
+        };
       }
     )
-    (kix.expose { service = "service"; })
+
+    # The Gateway API route's default 15 s request timeout would cut the
+    # editor's push websocket.
+    (kix.expose {
+      service = "service";
+      timeouts.request = "0s";
+    })
+
+    (kix.monitor {
+      service = "service";
+      port = "http";
+    })
   ];
 }
