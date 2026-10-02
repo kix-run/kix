@@ -110,7 +110,6 @@ in
   inherit (auto)
     normalizeAvailablePackages
     getRequiredDeps
-    planAutoInstances
     computeAutoInstances
     ;
 

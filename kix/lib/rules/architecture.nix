@@ -2,8 +2,7 @@
 #
 # These rules find operator annotations without matching dependencies, Service
 # selectors detached from workloads, internal Service names without dependency
-# context, CRD owners not declared one per cluster, and uses of declared unsafe
-# grants.
+# context, and uses of declared unsafe grants.
 
 { lib }:
 
@@ -11,7 +10,6 @@ let
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   unsafe = import ../unsafe.nix { inherit lib; };
-  kixMeta = import ../meta.nix { inherit lib; };
 
   workloadKinds = [
     "Deployment"
@@ -197,40 +195,6 @@ in
             + "an operator that mints it at runtime, or a step outside Kix.";
         }
       ) (builtins.attrNames (lib.filterAttrs (_: v: !(v.creatorNamed or false)) externalNames));
-  };
-
-  # A CustomResourceDefinition's name is fixed by its group and plural, so a
-  # second instance of the package would ship the same objects.
-  # Auto-instantiation keeps a package to one instance only when its meta
-  # marks it a cluster singleton (meta.clusterSingletonMarkers,
-  # eval/auto.nix), so every CRD owner needs the marker.
-  crdOwnerIsClusterSingleton = {
-    description = "A package that ships CustomResourceDefinitions declares itself one per cluster";
-    level = "package";
-    severity = "error";
-    tags = [ "architecture" ];
-    check =
-      {
-        resources,
-        meta,
-        instanceName,
-        ...
-      }:
-      let
-        crds = builtins.filter (r: (r.kind or "") == "CustomResourceDefinition") resources;
-        markers = kixMeta.clusterSingletonMarkers {
-          packageMeta = meta;
-          keys = [ instanceName ] ++ (meta.defaultAliases or [ ]) ++ (meta.roles or [ ]);
-        };
-      in
-      lib.optional (crds != [ ] && markers == [ ]) {
-        message =
-          "'${instanceName}' ships CustomResourceDefinition ${(builtins.head crds).metadata.name or "?"}"
-          + lib.optionalString (builtins.length crds > 1) " (+${toString (builtins.length crds - 1)} more)"
-          + ", which a second instance would ship again, but its package does not declare itself one per cluster. "
-          + "Add meta.conflictsWith = [ \"cluster:<one of its meta.defaultAliases>\" ] to the package, "
-          + "so a second instance is refused at evaluation and auto-instantiation never places two.";
-      };
   };
 
   # Report each meta.unsafe grant at info severity so exceptions remain visible

@@ -658,6 +658,49 @@
       outPathKey =
         r: if r ? outPath then builtins.unsafeDiscardStringContext (toString r.outPath) else "";
 
+      # A cluster-scoped object, by API group, kind and name, that more than
+      # one active instance renders. Kubernetes holds one object under that
+      # identity, so the instances would apply it over each other. Identical
+      # copies would otherwise leave allResources as one entry through
+      # dedupeByOutPath, and differing ones fail check 7 without naming the
+      # instances.
+      sharedClusterObjectAssertions =
+        let
+          plain = v: builtins.unsafeDiscardStringContext (toString v);
+          owned = builtins.concatMap (
+            inst:
+            map
+              (r: {
+                owner = "${inst._meta.namespaceName or "?"}/${inst._meta.instanceName or "?"}";
+                m = r.rawManifest;
+              })
+              (
+                builtins.filter (r: r ? rawManifest && (r.rawManifest.metadata.namespace or null) == null) (
+                  collectResources inst
+                )
+              )
+          ) allInstancesList;
+          # "ClusterRole reader (rbac.authorization.k8s.io)"; a core kind has
+          # no group.
+          identity =
+            m:
+            let
+              parts = lib.splitString "/" (plain (m.apiVersion or ""));
+              group = if builtins.length parts > 1 then builtins.head parts else "";
+            in
+            "${plain (m.kind or "?")} ${plain (m.metadata.name or "?")}${
+              lib.optionalString (group != "") " (${group})"
+            }";
+          owners = builtins.mapAttrs (_: es: lib.unique (map (e: e.owner) es)) (
+            builtins.groupBy (e: identity e.m) owned
+          );
+          shared = lib.filterAttrs (_: os: builtins.length os > 1) owners;
+        in
+        lib.mapAttrsToList (id: os: {
+          assertion = false;
+          message = "kix: cluster-scoped ${id} is rendered by ${toString (builtins.length os)} instances: ${builtins.concatStringsSep ", " os}. Kubernetes holds one object under that name, so they would apply it over each other. Keep one of these instances, or give the object a name that differs per instance.";
+        }) shared;
+
       # Store path -> "<ns>/<instance>" of the active instance whose parts
       # produced it. Namespace objects, cluster hooks and the Activation have
       # no owner.
@@ -762,7 +805,8 @@
         clusterName = name;
         inherit allInstancesList;
         extraWarnings = crossScorecardDiag.warnings;
-        extraAssertions = crossScorecardDiag.assertions ++ crossResourceAssertions;
+        extraAssertions =
+          crossScorecardDiag.assertions ++ sharedClusterObjectAssertions ++ crossResourceAssertions;
       };
 
       isInlinePackage = v: builtins.isAttrs v && v ? build && (v._type or "") != "kix-import";
