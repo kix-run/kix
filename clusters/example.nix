@@ -1,4 +1,4 @@
-# clusters/example.nix — Example cluster: coredns + valkey + cert-manager.
+# clusters/example.nix: an example cluster with coredns, valkey, cert-manager, and immich.
 #
 # Namespace-scoped instances with DI resolution.
 #
@@ -62,27 +62,17 @@ kix.buildCluster {
         immich = {
           postgres = {
             package = packages."stackgres-cluster";
-
-            config = {
-              extensions = [
-                {
-                  name = "vector";
-                  publisher = "tensorchord";
-                  version = "0.3.0";
-                }
-              ];
-            };
           };
 
-          # Per-app database + role on the postgres cluster above.
-          # Resolved via the `database` alias by the immich package.
+          # Per-app database + role on the postgres cluster above, resolved
+          # through the `database` alias. immich adds the extensions it needs
+          # to this instance, which forwards them to the postgres cluster.
           immich-db = {
             package = packages."stackgres-database";
             aliases = [ "database" ];
             config = {
               database = "immich";
               user = "immich";
-              extensions = [ "vector" ];
               password = "immich-dev-password";
             };
           };
@@ -150,6 +140,14 @@ kix.buildCluster {
 
           machine-learning = {
             package = packages."immich-machine-learning";
+          };
+
+          # Keeps the downloaded models across restarts; the worker then runs
+          # one pod.
+          ml-cache = {
+            package = packages."persistent-volume-claim";
+            aliases = [ "modelCache" ];
+            config.size = "10Gi";
           };
         };
       };

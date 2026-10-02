@@ -1,4 +1,4 @@
-# clusters/example-import.nix — Example: immich with imported (external) valkey.
+# clusters/example-import.nix: example of immich with imported (external) valkey.
 #
 # Demonstrates mkImport: valkey is not managed by kix but exists in the cluster.
 # The import derives out (name, fqdn, port) from the real valkey package via
@@ -50,10 +50,10 @@ kix.buildCluster {
           postgres = {
             package = kix.mkImport {
               from = packages."stackgres-cluster";
-              # The extensions the external cluster has installed; the
-              # stackgres-database below checks its own against them.
+              # The extensions the external cluster has installed. The
+              # stackgres-database below checks the ones immich asks for
+              # against this list.
               out.extensions = [
-                "vector"
                 "vchord"
                 "uuid-ossp"
                 "cube"
@@ -71,7 +71,7 @@ kix.buildCluster {
         # cluster-scoped, while a managed valkey serves only its own
         # namespace.
         # The stackgres-database instance below lives in *this* namespace
-        # but talks to the imported postgres in the `database` namespace —
+        # but talks to the imported postgres in the `database` namespace,
         # demonstrating the cross-namespace flow without cross-namespace
         # secret reads (the credentials Secret is materialized locally).
         immich = {
@@ -82,13 +82,14 @@ kix.buildCluster {
             };
           };
 
+          # immich adds the extensions it needs to this instance, which
+          # checks them against the imported cluster's out.extensions.
           immich-db = {
             package = packages."stackgres-database";
             aliases = [ "database" ];
             config = {
               database = "immich";
               user = "immich";
-              extensions = [ "vector" ];
               password = "immich-dev-password";
             };
           };
