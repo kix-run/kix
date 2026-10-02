@@ -1,6 +1,8 @@
-# clusters/test-sealed-jobs.nix: a package whose Job goes through
-# scope.mkJob: cert-manager (startupapicheck). Build this cluster to see a
-# change to mkJob in a full package.
+# clusters/test-sealed-jobs.nix: cert-manager on a multi-node cluster with
+# three zones, so its availability derives as "zone". No other cluster builds
+# cert-manager at that level: its controller, cainjector, and webhook run two
+# replicas with the derived zone spread and PodDisruptionBudgets. Its
+# startupapicheck Job goes through scope.mkJob.
 #
 # Build:  nix build .#cluster-sealed-jobs --extra-experimental-features pipe-operators
 

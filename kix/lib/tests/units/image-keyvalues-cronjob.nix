@@ -85,7 +85,7 @@ in
 {
   # With repository and tag the option keeps its default, and the package's
   # digest is dropped when an instance changes the tag.
-  image-default-form =
+  image-keyvalues-cronjob-image-default-form =
     let
       args = {
         repository = "docker.io/library/nginx";
@@ -116,7 +116,7 @@ in
   # field has one: an instance that sets nothing, or only the repository,
   # fails; one that sets both gets them. With only repository declared, an
   # instance supplies the tag. A digest without a tag is refused.
-  image-required-form =
+  image-keyvalues-cronjob-image-required-form =
     let
       required = imageWith { };
       given = fieldsOf (required [
@@ -147,7 +147,7 @@ in
 
   # A package stamps the rerun annotation with kix.keyValues, and the
   # cross-resource check for kix.run/rerun accepts the value.
-  keyvalues-rerun =
+  image-keyvalues-cronjob-keyvalues-rerun =
     let
       cluster = clusterWith "Job" "migrate";
       job = byName "migrate" (ofKind "Job" (manifests cluster));
@@ -163,7 +163,7 @@ in
 
   # A CronJob name may be 52 characters, not 53: the CronJob controller
   # appends an 11-character suffix to the Jobs it creates.
-  cronjob-name-max-52 =
+  image-keyvalues-cronjob-cronjob-name-max-52 =
     let
       nameOf = n: lib.fixedWidthString n "a" "";
     in
