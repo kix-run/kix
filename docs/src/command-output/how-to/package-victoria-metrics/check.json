@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-package-victoria-metrics",
-      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    65 manifests evaluated       \n scorecard  pass    0 errors, 1 warnings, 2 info \n",
+      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    66 manifests evaluated       \n scorecard  pass    0 errors, 1 warnings, 2 info \n",
       "stderr": "",
-      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 65 manifests evaluated\nscorecard pass 0 errors, 1 warnings, 2 info\n",
+      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 66 manifests evaluated\nscorecard pass 0 errors, 1 warnings, 2 info\n",
       "stderrDrift": "",
       "exitCode": 0
     }
