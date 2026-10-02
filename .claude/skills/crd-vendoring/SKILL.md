@@ -1,6 +1,6 @@
 ---
 name: crd-vendoring
-description: Maintain the CRDs that kix packages vendor from upstream. Use this skill when adding a package that ships CustomResourceDefinitions, bumping an operator's version, when the CRD vendoring check fails in CI, or when scripts/vendor-crds.py itself breaks. Owns the judgement the script cannot make and keeps the script small.
+description: Maintain the CRDs and operator roles that kix packages vendor from upstream. Use this skill when adding a package that ships CustomResourceDefinitions, bumping an operator's version, when the CRD vendoring check fails in CI, or when scripts/vendor-crds.py itself breaks. Owns the judgement the script cannot make and keeps the script small.
 ---
 
 # CRD vendoring
@@ -10,19 +10,27 @@ The rules live in `v2_discussions/146_crd_vendoring_and_upgrades.md`. Read
 
 - A package whose operator installs and rewrites its own CRDs (stackgres,
   cilium, virt-operator for the kubevirt.io kinds) ships `scope.mkCRDRef`
-  markers only. Never a competing copy.
+  markers only, each with the `version` the operator's CRD serves
+  (required). Never a competing copy.
 - Every other operator package vendors the full upstream objects under
   `kix/packages/<pkg>/crds/`, one `<metadata.name>.json` per CRD, from the
   public URLs in `crds/sources.txt`.
 - `scope.crd.fromKind` stubs are for kinds Kix invents. A stub for an
   upstream kind is a defect; the migration table in doc 146 §6 lists the
   ones that remain.
+- An operator whose upstream bundle ships its RBAC vendors those roles
+  under `kix/packages/<pkg>/rbac/`, one `<kind>-<name>.json` per ClusterRole
+  or Role (`:` in a name becomes `_`), from `rbac/sources.txt`. Every URL
+  there names the roles to take as `Kind/name`; other kinds are refused,
+  because the package builds its own ServiceAccount and bindings. The
+  package feeds each file's `rules` to `scope.rbac.mkClusterRoleSet` or
+  `mkRoleSet` (kubevirt, cdi).
 
 The script is `scripts/vendor-crds.py`, run as
 `uv run scripts/vendor-crds.py [pkg ...] [--check]` (in a plain shell:
 `nix shell nixpkgs#uv -c uv run --frozen scripts/vendor-crds.py`). It is
-deliberately dumb: fetch, keep the CustomResourceDefinition documents, sort,
-write. CI runs `--check` on every pull request that touches a package.
+deliberately dumb: fetch, keep the CustomResourceDefinition documents (or,
+under `rbac/`, the named roles), sort, write. CI runs `--check` on every pull request that touches a package.
 
 ## 1. A new package that ships CRDs
 
@@ -45,19 +53,26 @@ write. CI runs `--check` on every pull request that touches a package.
    ```
    Give the CRDs to the controller's `requires`. A CRD in a `*.k8s.io` group
    needs its `api-approved.kubernetes.io` annotation carried over (see
-   openebs) or the apiserver refuses it.
+   snapshot-controller) or the apiserver refuses it.
 5. If a CRD only matters while an optional component runs, gate it on that
-   component's enable option the way openebs does. Upstream umbrella charts
-   condition each driver's subchart the same way. A shared cluster-wide
-   group (`snapshot.storage.k8s.io`) gets an ownership toggle instead,
-   because another package may install it.
-6. Add the new kinds to the package's RBAC tables. Run the package's kind
+   component's `enabled` option. Upstream umbrella charts condition each
+   driver's subchart the same way. A shared cluster-wide group
+   (`snapshot.storage.k8s.io`) gets its own package claiming a registry
+   role, and environments that ship it provide the role with an import
+   (`kix.mkImport { crds }`).
+6. Add the new kinds to the package's RBAC tables, or, for a package with
+   `rbac/sources.txt`, take the operator's roles from the same bundle. Run the package's kind
    smoke (`scripts/kind-operators.sh` for the operator set).
 
 ## 2. A version bump
 
-1. Move the tag in `crds/sources.txt` and the image pin in `default.nix`
-   in the same change.
+1. Move the tag in `crds/sources.txt` (and `rbac/sources.txt`), `release`
+   and the image digests in `default.nix` in the same change. Operator
+   packages refuse an `image.tag` of another major.minor than `release`,
+   and for kubevirt and cdi the kix-lib test
+   `kubevirt-cdi-sources-match-release` fails when a sources.txt URL is not
+   at `release`, so a half-done bump fails the checks. Operand image
+   digests are per-release (`crane digest <ref>`).
 2. Run the script for the package and read the diff before committing:
    - A **version that vanished** from `spec.versions`: a live cluster that
      still stores objects at that version rejects the apply. Say so in the
@@ -68,8 +83,9 @@ write. CI runs `--check` on every pull request that touches a package.
      stamp the version the operator serves.
    - A **conversion webhook** that appeared: the script refuses it. Doc 146
      §8 says why; design the Service naming before vendoring.
-   - **New kinds**: add them to RBAC and, when a consumer will write them,
-     to the package's `out.crds`.
+   - **New kinds and rules**: add kinds to RBAC (a vendored `rbac/` changes
+     with the bundle; read its diff like the CRDs') and, when a consumer
+     will write them, to the package's `out.crds.<Kind>`.
 3. Run the kind smoke.
 
 ## 3. The check fails in CI
@@ -99,7 +115,7 @@ After any change to `scripts/vendor-crds.py` or `scripts/vendor_crds/`:
   from `scripts/`) and `--check` across every package;
 - confirm the constraints from doc 146 §5.3 still hold: no package or
   project name in the script, no network outside `fetch`, no writes outside
-  `crds/`, driver and module together under roughly 300 lines;
+  `crds/` and `rbac/`, driver and module together under roughly 300 lines;
 - list every package on the `update.py` path and ask whether it could
   return to `sources.txt`.
 
