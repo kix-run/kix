@@ -135,12 +135,15 @@ let
   # config, `instances` are added to the package's namespace, and `module`
   # is a cluster module that takes the namespace name.
   settings = {
-    arc-runner-set.config.values = {
-      githubConfigUrl = "https://github.com/example/example";
-      githubConfigSecret = "arc-github";
-      controllerServiceAccount = {
-        name = "arc-gha-rs-controller";
-        namespace = "arc-systems";
+    arc-runner-set = {
+      config = {
+        githubConfigUrl = "https://github.com/example/example";
+        maxRunners = 2;
+      };
+      instances.github-config = {
+        package = packages.secret-ref;
+        aliases = [ "githubConfigSecret" ];
+        config.keys = [ "github_token" ];
       };
     };
     caddy.module = _: {
