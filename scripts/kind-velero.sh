@@ -14,11 +14,11 @@
 # Needs a kind cluster without its default CNI, because the cluster's own
 # cilium instance takes the CNI role.
 #
-# Usage: scripts/kind-velero.sh [--keep]
+# Usage: [KIND_CLUSTER=<name>] scripts/kind-velero.sh [--keep]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-NAME=kix-velero
+NAME=${KIND_CLUSTER:-kix-velero}
 CTX="kind-$NAME"
 KEEP=${1:-}
 NIX="nix --extra-experimental-features nix-command --extra-experimental-features flakes --extra-experimental-features pipe-operators"
