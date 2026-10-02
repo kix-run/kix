@@ -166,6 +166,11 @@ pub const CRD_KIND: &str = key!("crd-kind");
 /// custom resources built from the ref use unless they set their own.
 pub const CRD_VERSION: &str = key!("crd-version");
 
+/// Comma-separated API versions a CRD ref marker declares as served. Stamped
+/// only when the declaration lists more than `CRD_VERSION`; without it the
+/// served list is `CRD_VERSION` alone.
+pub const CRD_SERVED_VERSIONS: &str = key!("crd-served-versions");
+
 /// Scope a CRD ref marker declares for its kind: `Namespaced` or `Cluster`.
 pub const CRD_SCOPE: &str = key!("crd-scope");
 
