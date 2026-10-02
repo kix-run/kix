@@ -1,11 +1,10 @@
 # Tests for instance-level extraDeps. On a kix.mkImport instance a
 # `ref.<namespace>.<instance>` entry becomes an edge to that instance's
-# PackageInstance marker and activates the target when it is optional
-# (eval/import.nix resolveExtraDep, eval/auto.nix demandsOf). An entry that
-# is neither a resource nor a ref, a ref to the import itself, a cycle of
-# refs between imports, and extraDeps on a managed instance fail
-# evaluation, whether or not the instance is active
-# (eval/import.nix checkInstanceExtraDeps).
+# PackageInstance marker (eval/import.nix resolveExtraDep). A ref to an
+# optional instance that is not active fails evaluation. An entry that is
+# neither a resource nor a ref, a ref to the import itself, and extraDeps on
+# a managed instance fail whether or not the instance is active
+# (eval/import.nix checkExtraDeps).
 
 {
   lib,
@@ -77,28 +76,6 @@ let
     cluster: res:
     lib.hasInfix "extra:${k8s.extractStoreHash res.outPath}" (dependsOn (importMarker cluster));
 
-  # A managed package whose optional build argument `legacy-api` resolves to
-  # an import of that name. Such a resolution activates an optional import
-  # (activatedImports in eval/cluster.nix) without placing a demand.
-  optionalArgConsumer = {
-    meta.version = "test";
-    build =
-      {
-        self,
-        scope,
-        legacy-api ? null,
-        ...
-      }:
-      {
-        cm = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "optional-arg-consumer";
-          data.target = if legacy-api == null then "none" else "resolved";
-        };
-        root = self.cm;
-      };
-  };
 in
 {
   # The control for the failure tests below that use withImportExtraDeps.
@@ -150,19 +127,13 @@ in
     ordersAfter cluster res
     || throw "import marker does not depend on the resource entry; annotation: ${dependsOn (importMarker cluster)}";
 
-  # A ref activates an optional target, as `deps.x = ref.a.b` does.
-  lib-import-extra-deps-ref-activates-optional-managed =
-    let
-      cluster = withImportExtraDeps' { optional = true; } (ref: [ ref.apps.contract ]);
-    in
-    (
-      markerOf "apps" "contract" cluster != null
-      && hasName "contract" (manifests cluster)
-      && ordersAfter cluster cluster.instances.apps.contract.root
-    )
-    || throw "an extraDeps ref did not activate the optional managed instance";
+  # A ref does not activate an optional target. Nothing else activates
+  # apps/contract here, so the ref fails evaluation.
+  lib-import-extra-deps-ref-to-inactive-optional-managed-fails =
+    evalFails (withImportExtraDeps' { optional = true; } (ref: [ ref.apps.contract ]))
+    || throw "an extraDeps ref to an inactive optional managed instance evaluated";
 
-  lib-import-extra-deps-ref-activates-optional-import =
+  lib-import-extra-deps-ref-to-inactive-optional-import-fails =
     let
       cluster = mkCluster [
         baseInstances
@@ -181,11 +152,7 @@ in
         )
       ];
     in
-    (
-      markerOf "legacy" "upstream" cluster != null
-      && ordersAfter cluster cluster.instances.legacy.upstream.root
-    )
-    || throw "an extraDeps ref did not activate the optional import";
+    evalFails cluster || throw "an extraDeps ref to an inactive optional import evaluated";
 
   # A ref to an optional target that another instance's `deps` activates.
   lib-import-extra-deps-ref-to-optional-activated-by-deps =
@@ -259,35 +226,6 @@ in
     (markerOf "legacy" "legacy-api" cluster == null && !(hasName "contract" (manifests cluster)))
     || throw "an inactive import's extraDeps activated its target";
 
-  # An import that only an optional build argument activates does not
-  # activate its refs' targets, so a ref to an optional target fails.
-  lib-import-extra-deps-optional-arg-activated-import-refusal =
-    let
-      cluster =
-        withOptionalTarget:
-        mkCluster [
-          baseInstances
-          (
-            { ref, ... }:
-            {
-              instances.apps.contract = {
-                package = mkCmPackage { name = "contract"; };
-                optional = withOptionalTarget;
-              };
-              instances.apps.consumer.package = optionalArgConsumer;
-              instances.legacy.legacy-api = {
-                package = legacyImport;
-                optional = true;
-                extraDeps = [ ref.apps.contract ];
-              };
-            }
-          )
-        ];
-    in
-    (evaluates (cluster false) && markerOf "legacy" "legacy-api" (cluster false) != null)
-    && evalFails (cluster true)
-    || throw "an import activated by an optional build argument evaluated with a ref to an inactive instance";
-
   # mkResource ignores an extraDeps value without an outPath, so a string
   # would add no edge. It fails evaluation instead.
   lib-import-extra-deps-string-fails =
@@ -321,27 +259,6 @@ in
     in
     (evaluates (cluster [ ]) && evalFails (cluster [ "oops" ]))
     || throw "a malformed extraDeps entry on an inactive import evaluated";
-
-  # Two imports whose refs name each other fail with a Kix message instead
-  # of Nix's infinite recursion; one direction alone is covered by ref-to-import.
-  lib-import-extra-deps-cycle-fails =
-    evalFails (mkCluster [
-      baseInstances
-      (
-        { ref, ... }:
-        {
-          instances.legacy.a = {
-            package = eval.mkImport { out.name = "a"; };
-            extraDeps = [ ref.legacy.b ];
-          };
-          instances.legacy.b = {
-            package = eval.mkImport { out.name = "b"; };
-            extraDeps = [ ref.legacy.a ];
-          };
-        }
-      )
-    ])
-    || throw "a cycle of extraDeps refs between imports evaluated";
 
   # A managed instance's marker already follows its resources; the option
   # would be ignored there, so it fails, whether the instance is active or

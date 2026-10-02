@@ -320,22 +320,39 @@ in
       builtins.toJSON (map (m: "${m.metadata.namespace or ""}/${m.metadata.name}") (markersOf ms))
     }, VolumeSnapshotClass ${builtins.toJSON snapshotClass}";
 
-  # An optional import with crds, answered by a consumer whose dependency is
-  # optional, becomes active and emits its markers. Without the consumer it
-  # stays inactive and emits none.
+  # A required dependency activates an optional import with crds, which
+  # then emits its markers; without the consumer it stays inactive and emits
+  # none. An optional dependency places no demand, and the inactive import
+  # does not answer it, so the consumer gets null and builds no custom
+  # resources.
   snapshot-api-optional-import-activates =
     let
-      withConsumer = manifests (clusterWith [
-        (snapshotEnvironment { optional = true; })
-        { instances.appns.consumer.package = snapshotConsumer { optional = true; }; }
-      ]);
-      withoutConsumer = manifests (clusterWith [ (snapshotEnvironment { optional = true; }) ]);
+      clusterOf =
+        consumer:
+        clusterWith (
+          [ (snapshotEnvironment { optional = true; }) ]
+          ++ lib.optional (consumer != null) { instances.appns.consumer.package = consumer; }
+        );
+      withConsumer = manifests (
+        clusterOf (snapshotConsumer {
+          optional = false;
+        })
+      );
+      withoutConsumer = manifests (clusterOf null);
+      optionalConsumer = manifests (
+        clusterOf (snapshotConsumer {
+          optional = true;
+        })
+      );
     in
     (
       hasMarker classMarkerName withConsumer
       && hasMarker snapshotMarkerName withConsumer
       && byName "fast" (ofKind "VolumeSnapshotClass" withConsumer) != null
       && !(hasMarker classMarkerName withoutConsumer)
+      && !(hasMarker classMarkerName optionalConsumer)
+      && byName "snapshot-consumer" (ofKind "ConfigMap" optionalConsumer) != null
+      && ofKind "VolumeSnapshotClass" optionalConsumer == [ ]
     )
     || throw "optional import activation: markers with consumer ${
       builtins.toJSON (map (m: m.metadata.name) (markersOf withConsumer))

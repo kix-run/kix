@@ -76,7 +76,6 @@
           name = "standard-rwo";
         };
       };
-      optional = true;
     };
   };
 }

@@ -975,7 +975,7 @@ rec {
           [ ]
         else
           [
-            "${who} requests StorageClass '${sc}', which nothing in this cluster creates or imports, so the claim would stay Pending. Take the class from a storageClasses provider, add the StorageClass, declare one the environment provides with kix.mkImport { kind = \"StorageClass\"; apiVersion = \"storage.k8s.io/v1\"; out.name = \"${sc}\"; } (not optional, or resolved by a dependency), or wrap the name in kix.untrackedRef."
+            "${who} requests StorageClass '${sc}', which nothing in this cluster creates or imports, so the claim would stay Pending. Take the class from a storageClasses provider, add the StorageClass, declare one the environment provides with kix.mkImport { kind = \"StorageClass\"; apiVersion = \"storage.k8s.io/v1\"; out.name = \"${sc}\"; } (not optional, or demanded by a required dependency), or wrap the name in kix.untrackedRef."
           ];
 
       storageClassFailures =

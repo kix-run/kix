@@ -22,6 +22,13 @@ once per cluster lists its own default alias with the `cluster:` prefix.
 cert-manager does this with `conflictsWith = [ "cluster:certManager" ];`,
 because a second install would fight over the same cluster-scoped objects.
 
+The assertion names the instance that declares the entry. A conflicting
+instance that auto-instantiation created is marked with the consumers it was
+created for. Auto-instantiation reads a `cluster:` entry naming one of the
+package's own names too: when consumers in more than one namespace require
+the package from `availablePackages`, evaluation fails and asks for one
+declared instance.
+
 The attribute is optional. Its default is `[ ]`.
 
 ## Related

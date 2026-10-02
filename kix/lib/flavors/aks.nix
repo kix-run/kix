@@ -64,7 +64,6 @@
           name = "managed-csi";
         };
       };
-      optional = true;
     };
   };
 }

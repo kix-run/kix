@@ -96,7 +96,7 @@ let
       evaluateInstanceConfig
       ;
     inherit (instance) evaluateInstance;
-    inherit (import_) mkImport checkInstanceExtraDeps;
+    inherit (import_) mkImport checkExtraDeps;
   };
 
 in
@@ -115,7 +115,6 @@ in
   inherit (auto)
     normalizeAvailablePackages
     getRequiredDeps
-    planAutoInstances
     computeAutoInstances
     ;
 

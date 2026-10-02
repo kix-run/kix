@@ -20,7 +20,7 @@
   evaluateInstanceConfig,
   evaluateInstance,
   mkImport,
-  checkInstanceExtraDeps,
+  checkExtraDeps,
 }:
 
 {
@@ -96,9 +96,9 @@
         ) acc nsInsts
       ) null cfg.instances;
 
-      # Runs over inactive instances too, and before anything renders an
-      # import marker, so a cycle of extraDeps refs gets a Kix message.
-      _extraDepsCheck = checkInstanceExtraDeps {
+      # Runs over inactive instances too, so a misplaced or malformed entry
+      # fails before anything activates the instance.
+      _extraDepsCheck = checkExtraDeps {
         instances = cfg.instances;
         inherit mergedInstances;
       };
@@ -186,20 +186,14 @@
         ) nsInsts
       ) mergedInstances;
 
-      isImport =
-        nsName: instName:
-        (((mergedInstances.${nsName} or { }).${instName} or { }).package._type or "") == "kix-import";
-
       # Resolve dependencies, roles, and annotation domains against active
-      # managed instances and all platform imports. Inactive optional managed
-      # instances emit no resources and must not satisfy a dependency. An
-      # optional import answers one and becomes active by doing so
-      # (activatedImports). isImport is tested first: isActive on an import
-      # reads the resolutions, which read this index.
-      isResolvable = nsName: instName: isImport nsName instName || isActive nsName instName;
-
+      # instances only. An inactive optional instance emits nothing, and an
+      # inactive optional import emits no marker, so the deploy would never
+      # check the resource a consumer read from it. Only a demand in
+      # computeAutoInstances activates an optional instance or import, and
+      # isActive reads that result, not these resolutions.
       resolvableInstances = lib.mapAttrs (
-        nsName: nsInsts: lib.filterAttrs (instName: _: isResolvable nsName instName) nsInsts
+        nsName: nsInsts: lib.filterAttrs (instName: _: isActive nsName instName) nsInsts
       ) mergedInstances;
 
       staticMeta = lib.mapAttrs (
@@ -220,6 +214,9 @@
               };
               isImport = (instCfg.package._type or "") == "kix-import";
               scope = packageMeta.scope or "cluster";
+              # Null for a declared instance; the requesters that pulled an
+              # auto-instantiated one in, for refusal messages.
+              autoInstantiatedFor = instCfg._autoInstantiatedFor or null;
             };
           }
         ) nsInsts
@@ -236,7 +233,7 @@
       _rolesValidation = builtins.deepSeq rolesIndexAll null;
 
       rolesIndex = lib.mapAttrs (
-        nsName: nsInsts: lib.filterAttrs (instName: _: isResolvable nsName instName) nsInsts
+        nsName: nsInsts: lib.filterAttrs (instName: _: isActive nsName instName) nsInsts
       ) rolesIndexAll;
 
       # Map annotation domains to declarers. Force the index below so duplicate
@@ -307,9 +304,31 @@
         inherit rolesIndex;
       };
 
+      # Every key (instance name or alias) of an inactive optional instance.
+      # evaluateInstance reads it for the implicit `dns` edge: an optional
+      # platform-dns import says the environment runs DNS, so a workload
+      # that finds no active DNS provider gets no edge and no warning.
+      inactiveOptionalKeys = builtins.listToAttrs (
+        builtins.concatMap (
+          nsName:
+          builtins.concatMap (
+            instName:
+            lib.optionals (!(isActive nsName instName)) (
+              map (k: lib.nameValuePair k true) (
+                [ instName ]
+                ++ meta.effectiveAliases {
+                  instanceAliases = mergedInstances.${nsName}.${instName}.aliases or [ ];
+                  packageMeta = peekedMetas.${nsName}.${instName};
+                }
+              )
+            )
+          ) (builtins.attrNames mergedInstances.${nsName})
+        ) (builtins.attrNames mergedInstances)
+      );
+
       clusterCtx = {
         config = cfg;
-        inherit findRoleProvider;
+        inherit findRoleProvider inactiveOptionalKeys;
       };
 
       workloadInterceptors = hooks.collectHooks cfg "workloadInterceptors";
@@ -427,56 +446,13 @@
         ) mergedInstances
       );
 
-      # Optional imports that a dependency of an active managed instance
-      # resolved to, keyed "<ns>/<instance>" as activatedOptionals is. The
-      # import's marker is then emitted, and the deploy checks the resource
-      # it names when the import gives a kind. A dependency wired with a
-      # value other than a `ref` is
-      # skipped: phase 1 resolves it through the index, but the build binds
-      # the value instead.
-      activatedImports = builtins.listToAttrs (
-        builtins.concatMap (
-          nsName:
-          builtins.concatMap (
-            instName:
-            let
-              instCfg = mergedInstances.${nsName}.${instName};
-              boundDirectly =
-                argName:
-                let
-                  v = (instCfg.deps or { }).${argName} or null;
-                in
-                v != null && !(builtins.isAttrs v && (v._type or "") == "kix-ref");
-              targets = lib.filterAttrs (
-                argName: t:
-                t.found
-                && !(t.direct or false)
-                && !(boundDirectly argName)
-                && isImport t.namespace t.instanceName
-                && (mergedInstances.${t.namespace}.${t.instanceName}.optional or false)
-              ) phase1Instances.${nsName}.${instName}.resolvedTargets;
-            in
-            if isImport nsName instName || !(isActive nsName instName) then
-              [ ]
-            else
-              lib.mapAttrsToList (_: t: {
-                name = "${t.namespace}/${t.instanceName}";
-                value = true;
-              }) targets
-          ) (builtins.attrNames mergedInstances.${nsName})
-        ) (builtins.attrNames mergedInstances)
-      );
-
       isActive =
         nsName: instName:
         let
           instCfg = mergedInstances.${nsName}.${instName};
           isOptional = instCfg.optional or false;
-          key = "${nsName}/${instName}";
-          isActivated =
-            autoResult.activatedOptionals ? ${key} || (isImport nsName instName && activatedImports ? ${key});
         in
-        !isOptional || isActivated;
+        !isOptional || autoResult.activatedOptionals ? "${nsName}/${instName}";
 
       allInstancesList = builtins.concatMap (
         nsName:
@@ -707,6 +683,74 @@
       outPathKey =
         r: if r ? outPath then builtins.unsafeDiscardStringContext (toString r.outPath) else "";
 
+      # A cluster-scoped object, by API group, kind and name, that more than
+      # one active instance renders. Kubernetes holds one object under that
+      # identity, so the instances would apply it over each other. Identical
+      # copies would otherwise leave allResources as one entry through
+      # dedupeByOutPath, and differing ones fail check 7 without naming the
+      # instances.
+      sharedClusterObjectAssertions =
+        let
+          plain = v: builtins.unsafeDiscardStringContext (toString v);
+          owned = builtins.concatMap (
+            inst:
+            map
+              (r: {
+                owner = "${inst._meta.namespaceName or "?"}/${inst._meta.instanceName or "?"}";
+                m = r.rawManifest;
+              })
+              (
+                builtins.filter (r: r ? rawManifest && (r.rawManifest.metadata.namespace or null) == null) (
+                  collectResources inst
+                )
+              )
+          ) allInstancesList;
+          # "ClusterRole reader (rbac.authorization.k8s.io)"; a core kind has
+          # no group.
+          identity =
+            m:
+            let
+              parts = lib.splitString "/" (plain (m.apiVersion or ""));
+              group = if builtins.length parts > 1 then builtins.head parts else "";
+            in
+            "${plain (m.kind or "?")} ${plain (m.metadata.name or "?")}${
+              lib.optionalString (group != "") " (${group})"
+            }";
+          owners = builtins.mapAttrs (_: es: lib.unique (map (e: e.owner) es)) (
+            builtins.groupBy (e: identity e.m) owned
+          );
+          shared = lib.filterAttrs (_: os: builtins.length os > 1) owners;
+        in
+        lib.mapAttrsToList (
+          id: os:
+          let
+            requestersOf =
+              o:
+              let
+                parts = lib.splitString "/" o;
+              in
+              mergedInstances.${builtins.head parts}.${builtins.elemAt parts 1}._autoInstantiatedFor or null;
+            label =
+              o:
+              let
+                rs = requestersOf o;
+              in
+              if rs == null then o else "${o} (auto-instantiated for ${builtins.concatStringsSep ", " rs})";
+            anyAuto = builtins.any (o: requestersOf o != null) os;
+          in
+          {
+            assertion = false;
+            message =
+              "kix: cluster-scoped ${id} is rendered by ${toString (builtins.length os)} instances: ${builtins.concatStringsSep ", " (map label os)}. Kubernetes holds one object under that name, so they would apply it over each other. "
+              + (
+                if anyAuto then
+                  "Auto-instantiation places a package in each namespace that requires it. Declare the package once, under instances.<namespace>.<name>, and every consumer resolves to it."
+                else
+                  "Keep one of these instances, or give the object a name that differs per instance."
+              );
+          }
+        ) shared;
+
       # Store path -> "<ns>/<instance>" of the active instance whose parts
       # produced it. Namespace objects, cluster hooks and the Activation have
       # no owner.
@@ -811,7 +855,8 @@
         clusterName = name;
         inherit allInstancesList;
         extraWarnings = crossScorecardDiag.warnings;
-        extraAssertions = crossScorecardDiag.assertions ++ crossResourceAssertions;
+        extraAssertions =
+          crossScorecardDiag.assertions ++ sharedClusterObjectAssertions ++ crossResourceAssertions;
       };
 
       isInlinePackage = v: builtins.isAttrs v && v ? build && (v._type or "") != "kix-import";

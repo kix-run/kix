@@ -12,8 +12,7 @@
 #   out.mkProbe             create Probe CRs
 #
 # Limits: one replica (`meta.availability.max = "none"`); the operator has no
-# leader election. One instance per cluster (`meta.conflictsWith`), because
-# the CRDs are cluster-scoped.
+# leader election.
 
 {
   scope,
@@ -44,9 +43,6 @@ in
     # stamps its CRDs with it); declared for the
     # architecture.annotationDomainOwnership lint (v2_discussions/128).
     annotationDomains = [ "operator.prometheus.io" ];
-    # The CRDs are cluster-scoped. Not `cluster:prometheus`, which
-    # victoria-metrics-operator also answers.
-    conflictsWith = [ "cluster:prometheusOperator" ];
   };
 
   options = {

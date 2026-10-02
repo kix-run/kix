@@ -1,10 +1,12 @@
-# Tests for auto-instantiating a cluster singleton: a shelf package whose
-# meta limits it to one instance per cluster (meta.clusterSingletonClaims).
-# One consumer, or several in one namespace, still pulls it in. Consumers in
-# two namespaces would place it twice, and a declared instance that claims
-# the same slot without answering the consumer's key would get a second
-# copy beside it. eval.planAutoInstances reports both as singletonConflicts,
-# and computeAutoInstances refuses them.
+# Tests for auto-instantiating a shelf package that runs once per cluster
+# (a `cluster:<own key>` meta.conflictsWith entry, or a meta.roles claim).
+# Auto-instantiation places it in the requesting namespace and refuses a
+# cluster that would place it in more than one (eval/auto.nix
+# spreadRefusals). A declared instance that answers the dependency serves
+# every namespace. A declared instance that claims the same key without
+# answering the consumer is refused by conflictsWith. Two instances that
+# render the same cluster-scoped object, such as a CRD, fail evaluation
+# (eval/cluster.nix sharedClusterObjectAssertions).
 
 {
   lib,
@@ -18,8 +20,6 @@
 }:
 
 let
-  meta = import ../../meta.nix { inherit lib; };
-
   singleton = mkCmPackage {
     name = "op";
     metaExtra = {
@@ -104,36 +104,7 @@ let
       };
   };
 
-  # eval.planAutoInstances over raw instance attrsets, without a cluster.
-  plan =
-    {
-      instances,
-      shelf ? {
-        op.package = singleton;
-      },
-    }:
-    eval.planAutoInstances {
-      explicitInstances = instances;
-      availablePackages = shelf;
-      autoNamespace = null;
-    };
-
-  conflictsOf = args: (plan args).singletonConflicts;
-
-  # tryEval in the test runner catches a throw but not an empty `head`.
-  firstConflict = cs: if cs == [ ] then throw "no singleton conflict reported" else builtins.head cs;
-
-  computeFails =
-    instances:
-    !(builtins.tryEval (
-      eval.computeAutoInstances {
-        explicitInstances = instances;
-        availablePackages.op.package = singleton;
-        autoNamespace = null;
-      }
-    )).success;
-
-  hasLine = line: c: builtins.elem line (lib.splitString "\n" c.message);
+  fails = cluster: !(builtins.tryEval (builtins.deepSeq (manifests cluster) true)).success;
 
   opNamespaces =
     ms:
@@ -149,9 +120,8 @@ let
 
   shelfWith = package: { availablePackages.op.package = package; };
 
-  rules = import ../../rules { inherit lib; };
-
-  # A package that ships one CRD, with `metaExtra` merged into its meta.
+  # A package that ships one CRD, with `metaExtra` merged into its meta. It
+  # answers `op`, so `consumer` can depend on it.
   mkCrdOwner = metaExtra: {
     meta = {
       version = "test";
@@ -179,41 +149,15 @@ let
             ];
           };
         };
-        root = self.widgets;
+        root = {
+          resource = self.widgets;
+          out.who = "op";
+        };
       };
   };
 
-  crdRuleFindings =
-    metaExtra:
-    builtins.filter (f: f.rule == "architecture.crdOwnerIsClusterSingleton")
-      (mkCluster [
-        {
-          scorecard.rules.architecture = { inherit (rules.architecture) crdOwnerIsClusterSingleton; };
-          instances.ops.op.package = mkCrdOwner metaExtra;
-        }
-      ]).scorecardReport.findings;
 in
 {
-  singleton-auto-markers =
-    let
-      markers =
-        packageMeta:
-        meta.clusterSingletonMarkers {
-          inherit packageMeta;
-          keys = [ "op" ];
-        };
-      cases = {
-        selfConflict =
-          markers { conflictsWith = [ "cluster:op" ]; } == [ "meta.conflictsWith = [ \"cluster:op\" ]" ];
-        roleClaim = markers { roles = [ "dns" ]; } == [ "meta.roles = [ \"dns\" ]" ];
-        otherPackage = markers { conflictsWith = [ "cluster:other" ]; } == [ ];
-        namespaceConflict = markers { conflictsWith = [ "op" ]; } == [ ];
-        none = markers { } == [ ];
-      };
-    in
-    builtins.all lib.id (builtins.attrValues cases)
-    || throw "clusterSingletonMarkers: ${builtins.toJSON cases}";
-
   # With no instance anywhere, the first consumer pulls the singleton into
   # its own namespace, and a second consumer there shares it.
   singleton-auto-one-namespace-instantiates =
@@ -229,83 +173,54 @@ in
     (opNamespaces ms == [ "a" ] && whoIn "a" ms == "a/op")
     || throw "singleton not auto-instantiated once: ${builtins.toJSON (opNamespaces ms)}";
 
-  # Consumers in a and b: one conflict naming both placements, with
-  # declaring op once first and the binding for b second.
-  singleton-auto-two-namespaces-conflict =
+  # Consumers in a and b with no declared instance: auto-instantiation would
+  # place op in both namespaces, so the cluster is refused.
+  singleton-auto-two-namespaces-fail =
+    fails (mkCluster [
+      (shelfWith singleton)
+      {
+        instances.a.consumer.package = consumer;
+        instances.b.consumer.package = consumer;
+      }
+    ])
+    || throw "a singleton demanded from two namespaces evaluated";
+
+  # A meta.roles claim makes a shelf package one per cluster too, also when
+  # the demand names the package rather than the role.
+  singleton-auto-role-claimer-two-namespaces-fail =
     let
-      cs = conflictsOf {
-        instances = {
-          a.consumer.package = consumer;
-          b.consumer.package = consumer;
+      claimer = mkCmPackage {
+        name = "op";
+        metaExtra = {
+          defaultAliases = [ "op" ];
+          roles = [ "snapshotController" ];
         };
-      };
-      c = firstConflict cs;
-      cases = {
-        one = builtins.length cs == 1;
-        name = c.name == "op";
-        namespaces =
-          map (p: p.ns) c.placements == [
-            "a"
-            "b"
-          ];
-        consumers =
-          map (p: p.requester) c.placements == [
-            "a/consumer"
-            "b/consumer"
-          ];
-        dependency =
-          map (p: p.depName) c.placements == [
-            "op"
-            "op"
-          ];
-        declared = c.declared == [ ];
-        declareFirst =
-          lib.hasInfix "Declare op once" c.message
-          && lib.hasInfix "  instances.<namespace>.op.package = packages.op;" c.message
-          && lib.hasPrefix "Declare op once" (builtins.elemAt (lib.splitString "\n" c.message) 3);
-        binding = hasLine "  instances.b.consumer.deps.op = ref.a.op;" c;
-        autoLabel = lib.hasInfix "the copy auto-instantiated as a/op" c.message;
+        out.who = "op";
       };
     in
-    builtins.all lib.id (builtins.attrValues cases)
-    || throw "two-namespace singleton conflict: ${builtins.toJSON cases}\n${c.message or ""}";
+    fails (mkCluster [
+      (shelfWith claimer)
+      {
+        instances.a.consumer.package = consumer;
+        instances.b.consumer.package = consumer;
+      }
+    ])
+    || throw "a role-claiming shelf package demanded from two namespaces evaluated";
 
-  # computeAutoInstances itself refuses the conflict; the later
-  # conflictsWith assertion would refuse the cluster without it.
-  singleton-auto-compute-refuses =
-    computeFails {
-      a.consumer.package = consumer;
-      b.consumer.package = consumer;
-    }
-    && !(computeFails { a.consumer.package = consumer; });
-
-  # mid floats into a and b and requires op there. The mid copies are
-  # auto-instantiated, so the message marks them and prints no binding.
-  singleton-auto-transitive-requester-has-no-binding =
-    let
-      c = firstConflict (conflictsOf {
-        instances = {
-          a.mc.package = midConsumer;
-          b.mc.package = midConsumer;
-        };
-        shelf = {
+  # mid floats into a and b and requires op in each, which would place op
+  # twice.
+  singleton-auto-transitive-two-namespaces-fail =
+    fails (mkCluster [
+      {
+        availablePackages = {
           op.package = singleton;
           mid.package = middle;
         };
-      });
-      cases = {
-        origins =
-          map (p: p.origin) c.placements == [
-            "a/mc"
-            "b/mc"
-          ];
-        marked = hasLine "  b/op, for dependency 'op' of b/mid (auto-instantiated for b/mc)" c;
-        noBinding = !(lib.hasInfix ".deps.op = ref." c.message);
-        explained = lib.hasInfix "b/mid is auto-instantiated" c.message;
-      };
-    in
-    builtins.all lib.id (builtins.attrValues cases)
-    || throw "transitive singleton conflict: ${builtins.toJSON cases}\n${c.message or ""}";
+        instances.a.mc.package = midConsumer;
+        instances.b.mc.package = midConsumer;
+      }
+    ])
+    || throw "a singleton demanded through mid from two namespaces evaluated";
 
   # Declaring op once answers mid's demand in every namespace.
   singleton-auto-transitive-declared-builds =
@@ -326,32 +241,36 @@ in
     || throw "transitive declared op placed in ${builtins.toJSON (opNamespaces ms)}";
 
   # ops/myop replaces its default aliases, so it does not answer `op` and
-  # the consumer's demand would place a/op beside it. The conflict names the
-  # declared instance and both fixes.
-  singleton-auto-declared-instance-not-answering =
-    let
-      cs = conflictsOf {
-        instances = {
-          ops.myop = {
-            package = singleton;
-            aliases = [ "other" ];
-          };
-          a.consumer.package = consumer;
+  # the consumer's demand places a/op beside it. ops/myop's conflictsWith
+  # entry refuses the cluster.
+  singleton-auto-declared-instance-not-answering-fails =
+    fails (mkCluster [
+      (shelfWith singleton)
+      {
+        instances.ops.myop = {
+          package = singleton;
+          aliases = [ "other" ];
         };
-      };
-      c = firstConflict cs;
-      cases = {
-        one = builtins.length cs == 1;
-        declared = c.declared == [ "ops/myop" ];
-        aliases = hasLine "  instances.ops.myop.aliases = [ \"other\" \"op\" ];" c;
-        binding = hasLine "  instances.a.consumer.deps.op = ref.ops.myop;" c;
-      };
-    in
-    builtins.all lib.id (builtins.attrValues cases)
-    || throw "declared singleton conflict: ${builtins.toJSON cases}\n${c.message or ""}";
+        instances.a.consumer.package = consumer;
+      }
+    ])
+    || throw "a second op beside a declared instance that does not answer `op` evaluated";
 
-  # Two singletons, each demanded from two namespaces: both are reported.
-  singleton-auto-reports-every-conflict =
+  # Two declared instances answer `op` in other namespaces, so the consumer
+  # in c has more than one to bind to and resolution refuses it.
+  singleton-auto-two-declared-instances-elsewhere-fail =
+    fails (mkCluster [
+      {
+        instances.x.op.package = plain;
+        instances.y.op.package = plain;
+        instances.c.consumer.package = consumer;
+      }
+    ])
+    || throw "a consumer with two candidate instances in other namespaces evaluated";
+
+  # With autoNamespace, two singletons demanded from two namespaces are
+  # each placed once, in that namespace.
+  singleton-auto-two-singletons-auto-namespace =
     let
       op2 = mkCmPackage {
         name = "op2";
@@ -379,25 +298,25 @@ in
             root = self.cm;
           };
       };
-      cs = conflictsOf {
-        instances = {
-          a.both.package = both;
-          b.both.package = both;
-        };
-        shelf = {
-          op.package = singleton;
-          op2.package = op2;
-        };
-      };
+      ms = manifests (mkCluster [
+        {
+          availablePackages = {
+            op.package = singleton;
+            op2.package = op2;
+          };
+          autoNamespace = "ops";
+          instances.a.both.package = both;
+          instances.b.both.package = both;
+        }
+      ]);
+      op2Namespaces = map (m: m.metadata.namespace) (
+        builtins.filter (m: m.metadata.name == "op2") (ofKind "ConfigMap" ms)
+      );
     in
-    map (c: c.name) cs == [
-      "op"
-      "op2"
-    ]
-    || throw "expected conflicts for op and op2, got ${builtins.toJSON (map (c: c.name) cs)}";
+    (opNamespaces ms == [ "ops" ] && op2Namespaces == [ "ops" ])
+    || throw "expected op and op2 once in ops, got ${builtins.toJSON (opNamespaces ms)} and ${builtins.toJSON op2Namespaces}";
 
-  # The binding the error recommends: the second consumer names the first
-  # instance, so it places no demand of its own.
+  # An explicit binding to the instance in a also works.
   singleton-auto-bound-consumer-shares-instance =
     let
       ms = manifests (mkCluster [
@@ -417,8 +336,7 @@ in
     (opNamespaces ms == [ "a" ] && whoIn "b" ms == "a/op")
     || throw "bound consumer did not share the instance: ${builtins.toJSON (opNamespaces ms)}, b sees ${whoIn "b" ms}";
 
-  # The other fix: one declared instance answers consumers in every
-  # namespace.
+  # One declared instance answers consumers in every namespace.
   singleton-auto-declared-instance-serves-every-namespace =
     let
       ms = manifests (mkCluster [
@@ -451,6 +369,29 @@ in
     (opNamespaces ms == [ "ops" ] && whoIn "a" ms == "ops/op" && whoIn "b" ms == "ops/op")
     || throw "fixed-namespace singleton placed in ${builtins.toJSON (opNamespaces ms)}";
 
+  # Each namespace's optional instance answers its own consumer, even though
+  # the shelf entry for `op` runs once per cluster; the shelf is not used.
+  singleton-auto-optional-per-namespace-selection =
+    let
+      ms = manifests (mkCluster [
+        (shelfWith singleton)
+        {
+          instances.a.op = {
+            package = plain;
+            optional = true;
+          };
+          instances.b.op = {
+            package = plain;
+            optional = true;
+          };
+          instances.a.consumer.package = consumer;
+          instances.b.consumer.package = consumer;
+        }
+      ]);
+    in
+    (whoIn "a" ms == "a/op" && whoIn "b" ms == "b/op")
+    || throw "optional selection: a sees ${whoIn "a" ms}, b sees ${whoIn "b" ms}";
+
   # Without the marker, each namespace gets its own copy.
   singleton-auto-plain-package-placed-per-namespace =
     let
@@ -468,19 +409,66 @@ in
     ]
     || throw "plain shelf package placed in ${builtins.toJSON (opNamespaces ms)}";
 
-  # The rule flags a CRD owner that is not marked one per cluster, and
-  # passes one that is.
-  singleton-auto-crd-owner-rule =
+  # One instance of a CRD owner evaluates without any conflictsWith entry;
+  # two in different namespaces render the same CRD and fail.
+  singleton-auto-shared-crd-fails =
     let
-      cases = {
-        unmarked = builtins.length (crdRuleFindings { }) == 1;
-        selfConflict = crdRuleFindings { conflictsWith = [ "cluster:op" ]; } == [ ];
-        otherConflict =
-          builtins.length (crdRuleFindings {
-            conflictsWith = [ "cluster:other" ];
-          }) == 1;
+      owner = mkCrdOwner { };
+    in
+    (
+      !(fails (mkCluster [ { instances.ops.op.package = owner; } ]))
+      && fails (mkCluster [
+        {
+          instances.ops.op.package = owner;
+          instances.ops2.op.package = owner;
+        }
+      ])
+    )
+    || throw "two instances rendering the same CRD evaluated, or one failed";
+
+  # The same holds when auto-instantiation places a plain CRD owner once per
+  # requesting namespace.
+  singleton-auto-shared-crd-from-auto-instantiation-fails =
+    fails (mkCluster [
+      (shelfWith (mkCrdOwner { }))
+      {
+        instances.a.consumer.package = mkConsumer "consumer";
+        instances.b.consumer.package = mkConsumer "consumer";
+      }
+    ])
+    || throw "two auto-instantiated copies of a CRD owner evaluated";
+
+  # Two instances that render identical ClusterRoles of the same name fail
+  # too. Differing content would also fail the duplicate-resource check;
+  # identical content would otherwise be deduplicated into one object.
+  singleton-auto-shared-cluster-role-fails =
+    let
+      roleOwner = {
+        meta.version = "test";
+        build =
+          { self, scope, ... }:
+          {
+            role = scope.mkClusterResource {
+              apiVersion = "rbac.authorization.k8s.io/v1";
+              kind = "ClusterRole";
+              name = "shared";
+              extra.rules = [
+                {
+                  apiGroups = [ "" ];
+                  resources = [ "pods" ];
+                  verbs = [ "get" ];
+                }
+              ];
+            };
+            root = self.role;
+          };
       };
     in
-    builtins.all lib.id (builtins.attrValues cases)
-    || throw "crdOwnerIsClusterSingleton: ${builtins.toJSON cases}";
+    fails (mkCluster [
+      {
+        instances.a.r.package = roleOwner;
+        instances.b.r.package = roleOwner;
+      }
+    ])
+    || throw "two instances rendering an identical ClusterRole shared evaluated";
 }

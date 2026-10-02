@@ -121,7 +121,8 @@ reconciler, and no runbook should need to.
 | Meaningful empty value deleted (`emptyDir: {}`, empty selectors) | Collapse-rule normalization: literal empties render; only containers that lost every member to null-stripping collapse. `kix.keep` protects constructor-built containers |
 | Sourceless volume shipped to the apiserver | `volumeHasSource` scorecard rule (severity error) checks volumes as they will render |
 | Missing deps | DI resolution errors with an actionable message |
-| A second copy of a one-per-cluster operator, auto-instantiated for a consumer in another namespace | `eval/auto.nix` refuses it, naming each consumer and placement, and asks for one declared instance in its own namespace before offering the `deps.<name> = ref.<ns>.<inst>` binding; `architecture.crdOwnerIsClusterSingleton` (error) makes every CRD owner declare the marker this reads |
+| A second copy of a one-per-cluster operator, auto-instantiated for a consumer in another namespace | `eval/auto.nix` refuses to place a package marked one per cluster in a second namespace and names the consumers |
+| Two instances that render the same cluster-scoped object (the same CRD, ClusterRole, or IngressClass) | `buildCluster` fails, naming the object and both instances |
 | Cross-namespace mounts/secret-refs | `_kix.namespace` markers + `checkNamespacedRefs` |
 | `extra.*` shadowing managed fields | `mkResource` `_extraShadowCheck` |
 | TLS secret in wrong namespace | `kix.expose` names the TLS Secret `<instance>-tls` in the instance's own namespace |
@@ -376,8 +377,8 @@ Rule of thumb:
 | `labelStyle` | `enum { kix, helm }` | Switch label scheme, for adopting a Helm-installed workload whose selector labels are immutable. |
 | `selectorLabels` | `attrsOf str` | Override auto-generated selector labels. Escape hatch for *immutable* selectors on pre-existing StatefulSets. |
 | `partsOverlays` | `listOf (scope → self → base → attrset)` | Post-build resource transforms. Run after the package's `build` inside the same fixpoint — full access to `scope`. Can rewrite `root`, extend `out` with builders, add parts. Multiple modules concatenate. |
-| `extraDeps` | `listOf raw` | On a `kix.mkImport` instance only: dependencies for its marker that no value carries. Entries are resources or `ref.<ns>.<inst>` (that instance's PackageInstance marker; an optional target is activated, as by `deps`). A managed instance with `extraDeps`, a malformed entry, and a cycle of refs between imports fail evaluation. |
-| `optional` | `bool` | Pre-configure but only deploy if a non-optional instance transitively depends on this, through a build argument, `deps`, or an import's `extraDeps`. |
+| `extraDeps` | `listOf raw` | On a `kix.mkImport` instance only: dependencies for its marker that no value carries. Entries are resources or `ref.<ns>.<inst>` (that instance's PackageInstance marker). A ref to an optional instance that nothing activates, a malformed entry, and `extraDeps` on a managed instance fail evaluation. |
+| `optional` | `bool` | Pre-configure but only deploy if a non-optional instance transitively depends on this, through a required build argument or a `deps` ref. |
 
 **Cluster-level channels:**
 

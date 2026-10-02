@@ -1348,6 +1348,32 @@ let
       (lib.hasInfix dnsHash annot && lib.hasInfix dbSvcHash annot && !(lib.hasInfix dnsPiHash annot))
       || throw "app depends-on missing dns/db edge; annotation: ${annot}";
 
+    # An optional DNS import that nothing demands, as most flavours declare
+    # platform-dns, emits no marker, so no workload may depend on it.
+    t02b-optional-dns-import-adds-no-edge =
+      let
+        cluster = mkCluster [
+          {
+            instances.dbns.db = baseInstances.instances.dbns.db;
+            instances.appns.app = baseInstances.instances.appns.app;
+            instances.kube-system.platform-dns = {
+              package = eval.mkImport {
+                kind = "Deployment";
+                apiVersion = "apps/v1";
+                roles = [ "dns" ];
+                out.name = "coredns";
+              };
+              optional = true;
+            };
+          }
+        ];
+        ms = manifests cluster;
+        markerHash = k8s.extractStoreHash cluster.instances.kube-system.platform-dns.root.outPath;
+        annot = dependsOn (byName "app" (ofKind "Deployment" ms));
+      in
+      (!(lib.hasInfix markerHash annot) && !(hasName "platform-dns" (ofKind "PackageInstance" ms)))
+      || throw "app depends on the inactive platform-dns marker; annotation: ${annot}";
+
     # netpol enabled with a conforming enforcer: per-workload egress CNP,
     # per-namespace default-deny, and the caller-side ingress CNP parented
     # into the CALLEE's namespace via emit.inNamespace.
@@ -1662,27 +1688,33 @@ let
 
     # An optional dependency on a role resolves to a platform import that
     # provides it, as the kind flavour's platform-storage import does for
-    # ludo-kind, and the shelf provider is not pulled.
+    # ludo-kind, and the shelf provider is not pulled. An optional import
+    # that nothing demands stays inactive and answers nothing.
     t22-optional-role-dep-resolves-import =
       let
-        ms = manifests (mkCluster [
-          baseInstances
-          {
-            availablePackages.stock-storage.package = stockStorage;
-            instances.platform.storage = {
-              package = eval.mkImport {
-                roles = [ "storageClasses" ];
-                out.storageClassName = "import-sc";
-              };
-              optional = true;
-            };
-            instances.appns.consumer.package = optionalScConsumer;
-          }
-        ]);
-        probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
+        sc =
+          optional:
+          let
+            ms = manifests (mkCluster [
+              baseInstances
+              {
+                availablePackages.stock-storage.package = stockStorage;
+                instances.platform.storage = {
+                  package = eval.mkImport {
+                    roles = [ "storageClasses" ];
+                    out.storageClassName = "import-sc";
+                  };
+                  inherit optional;
+                };
+                instances.appns.consumer.package = optionalScConsumer;
+              }
+            ]);
+          in
+          lib.optionalString (hasName "stock-sc" (ofKind "ConfigMap" ms)) "stock+"
+          + (byName "sc-consumer" (ofKind "ConfigMap" ms)).data.sc or "no-consumer";
       in
-      (!(hasName "stock-sc" (ofKind "ConfigMap" ms)) && probe != null && probe.data.sc == "import-sc")
-      || throw "optional role dependency did not resolve the import: ${builtins.toJSON probe}";
+      (sc false == "import-sc" && sc true == "missing")
+      || throw "optional role dependency: active import ${sc false}, inactive import ${sc true}";
 
     # --- capability-ownership decomposition (v2_discussions/128) ---
 

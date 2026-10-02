@@ -131,36 +131,6 @@ rec {
       ++ (if instanceAliases != [ ] then instanceAliases else packageMeta.defaultAliases or [ ])
     );
 
-  # The meta declarations that limit a package to one instance per cluster.
-  # `keys` are the names the instance answers to (its instance name and
-  # aliases). Returns `conflictKeys`, the keys named by a `cluster:<key>`
-  # conflictsWith entry (the conflictsWith assertion in checkMetaStatic
-  # refuses a second instance answering one), and `roles`, the meta.roles
-  # claims (hooks.checkRoleBindings refuses two managed providers of a
-  # role). Both are empty for a package that may run more than once.
-  clusterSingletonClaims =
-    { packageMeta, keys }:
-    {
-      conflictKeys = builtins.filter (k: builtins.elem k keys) (
-        map (lib.removePrefix "cluster:") (
-          builtins.filter (lib.hasPrefix "cluster:") (packageMeta.conflictsWith or [ ])
-        )
-      );
-      roles = packageMeta.roles or [ ];
-    };
-
-  # clusterSingletonClaims as the meta lines that declare them, for
-  # messages; [ ] when the package has none.
-  clusterSingletonMarkers =
-    args:
-    let
-      claims = clusterSingletonClaims args;
-      nixList = xs: "[ ${builtins.concatStringsSep " " (map builtins.toJSON xs)} ]";
-    in
-    lib.optional (claims.conflictKeys != [ ])
-      "meta.conflictsWith = ${nixList (map (k: "cluster:${k}") claims.conflictKeys)}"
-    ++ lib.optional (claims.roles != [ ]) "meta.roles = ${nixList claims.roles}";
-
   peekPackageAliases =
     {
       availEntry,
@@ -250,10 +220,21 @@ rec {
             else
               builtins.filter (c: c.namespace == namespaceName && !(isSelf c)) candidates;
           scope = if isClusterWide then "(cluster-wide)" else "in namespace '${namespaceName}'";
-          instances = builtins.concatStringsSep ", " (map (c: "${c.namespace}/${c.instName}") matching);
+          # A null autoInstantiatedFor marks a declared instance.
+          isAuto = c: (c.meta.autoInstantiatedFor or null) != null;
+          label =
+            c:
+            "${c.namespace}/${c.instName}"
+            + lib.optionalString (isAuto c) " (auto-instantiated for ${builtins.concatStringsSep ", " c.meta.autoInstantiatedFor})";
+          instances = builtins.concatStringsSep ", " (map label matching);
+          autoAdvice = lib.optionalString (builtins.any isAuto matching) (
+            ". An auto-instantiated instance is created for a required dependency that no declared instance answers. "
+            + "Make ${namespaceName}/${instanceName} answer '${name}' (instances.${namespaceName}.${instanceName}.aliases), "
+            + "or bind the consumers to it with deps.<arg> = ref.${namespaceName}.${instanceName}."
+          );
         in
         lib.optional (matching != [ ]) (
-          fail "conflicts with '${name}' ${scope}. Conflicting instances: ${instances}"
+          fail "${namespaceName}/${instanceName} conflicts with '${name}' ${scope}. Conflicting instances: ${instances}${autoAdvice}"
         )
       ) (packageMeta.conflictsWith or [ ]);
 

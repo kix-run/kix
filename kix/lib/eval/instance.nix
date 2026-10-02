@@ -106,8 +106,10 @@ in
         };
         # Missing DNS prevents Kix from ordering workloads after a DNS provider.
         # This remains a warning until diagnostics support severity levels.
+        # An inactive optional instance answering `dns`, such as a flavour's
+        # platform-dns import, declares DNS without ordering on it.
         _dnsResolutionCheck =
-          if !_dnsResolution.found then
+          if !_dnsResolution.found && !((clusterCtx.inactiveOptionalKeys or { }) ? dns) then
             builtins.trace "[kix] warning: no DNS instance (alias 'dns') was found. Kix will not wait for DNS to be ready before deploying workloads. Add a DNS provider or import if this ordering is required" null
           else
             null;

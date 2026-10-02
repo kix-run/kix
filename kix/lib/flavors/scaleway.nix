@@ -84,7 +84,6 @@
           name = "sbs-default";
         };
       };
-      optional = true;
     };
   };
 }

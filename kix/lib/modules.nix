@@ -131,11 +131,12 @@ in
                   PackageInstance marker, for ordering that no value read
                   from another instance carries. Each entry is a resource or
                   `ref.<namespace>.<instance>`, which stands for that
-                  instance's PackageInstance marker and activates the
-                  instance when it is optional. Evaluation fails for any
-                  other value, for a ref to the import itself, for a cycle of
-                  refs between imports, and for a non-empty list on a managed
-                  instance, whether or not the instance is active.
+                  instance's PackageInstance marker. Evaluation fails,
+                  whether or not the instance is active, for any other
+                  value, for a ref to the import itself, and for a non-empty
+                  list on a managed instance. When the import is active, a
+                  ref to an optional instance that is not active also fails;
+                  a ref does not activate one.
                 '';
               };
               platformIntents = lib.mkOption {

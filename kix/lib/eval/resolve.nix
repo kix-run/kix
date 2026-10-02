@@ -125,7 +125,9 @@ rec {
         }
 
       else if builtins.length sameNs > 1 then
-        throw "${prefix}dependency '${argName}' matches multiple instances in namespace '${requesterNamespace}'. Set deps.${argName} explicitly to the intended instance."
+        throw "${prefix}dependency '${argName}' matches multiple instances in namespace '${requesterNamespace}': ${
+          builtins.concatStringsSep ", " (map (c: c.instName) sameNs)
+        }. Set deps.${argName} explicitly to the intended instance."
 
       else if sameNs == [ ] && builtins.length otherNs == 1 then
         let
@@ -139,7 +141,9 @@ rec {
         }
 
       else if builtins.length otherNs > 1 then
-        throw "${prefix}dependency '${argName}' matches instances in multiple namespaces. Set deps.${argName} explicitly to the intended instance."
+        throw "${prefix}dependency '${argName}' matches instances in multiple namespaces: ${
+          builtins.concatStringsSep ", " (map (c: "${c.namespace}/${c.instName}") otherNs)
+        }. Set deps.${argName} explicitly to the intended instance."
 
       else if hasDefault then
         { found = false; }

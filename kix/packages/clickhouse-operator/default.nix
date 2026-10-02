@@ -15,8 +15,7 @@
 #
 # One replica, and it stays that way: the operator has no leader election,
 # so two of them would reconcile the same installation against each other.
-# Operand pods keep serving while it is away. One instance per cluster
-# (`meta.conflictsWith`), because the CRDs are cluster-scoped.
+# Operand pods keep serving while it is away.
 #
 # DI deps:
 #   credentials (required)  a secret or secret-ref instance with `username`
@@ -65,8 +64,6 @@ in
     version = release;
     description = "Altinity ClickHouse operator: ClickHouseInstallation and ClickHouseKeeperInstallation controller";
     defaultAliases = [ "clickhouseOperator" ];
-    # The four CRDs are cluster-scoped.
-    conflictsWith = [ "cluster:clickhouseOperator" ];
     k8s.minVersion = "1.25";
   };
 
