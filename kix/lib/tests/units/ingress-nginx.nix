@@ -12,41 +12,12 @@
   ofKind,
   byName,
   evalFails,
+  prometheusStub,
   ...
 }:
 
 let
   ingressNginx = import ../../../packages/ingress-nginx;
-
-  # A prometheus provider whose ServiceMonitor builder renders the
-  # arguments as a ServiceMonitor.
-  prometheusStub = {
-    meta = {
-      version = "test";
-      defaultAliases = [ "prometheus" ];
-    };
-    build =
-      { self, scope, ... }:
-      {
-        cm = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "prometheus";
-        };
-        root = {
-          resource = self.cm;
-          out.mkServiceMonitor =
-            consumerScope: args:
-            consumerScope.mkResource (
-              args
-              // {
-                apiVersion = "monitoring.coreos.com/v1";
-                kind = "ServiceMonitor";
-              }
-            );
-        };
-      };
-  };
 
   # One instance in namespace `ingress`, beside the shared DNS provider.
   # `extra` is a second module, for another instance or a prometheus

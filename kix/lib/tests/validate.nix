@@ -22,7 +22,19 @@ let
   # core/annotations.nix.
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
-  failures = ms: validate.crossResourceFailures { manifests = ms; };
+  # Each manifest's identity hash is a readable stand-in built from its
+  # kind, namespace and name; `dependsOn` writes the same ids, so check 21
+  # can follow kix.run/depends-on in hand-built lists.
+  idOf = m: "${m.kind}-${m.metadata.namespace or "_"}-${m.metadata.name}";
+  dependsOn = targets: {
+    metadata.annotations.${kixKeys.dependsOn} = builtins.concatStringsSep "," (map idOf targets);
+  };
+  failures =
+    ms:
+    validate.crossResourceFailures {
+      manifests = ms;
+      identityHashes = map idOf ms;
+    };
 
   # A manifest with the labels every kix resource carries.
   res =
@@ -191,16 +203,64 @@ let
     in
     fs == [ ] || throw "expected no failures, got: ${builtins.toJSON fs}";
 
-  crd =
-    scope:
-    res "CustomResourceDefinition" null "widgets.example.com" {
+  crdOf =
+    kind: plural: scope:
+    res "CustomResourceDefinition" null "${plural}.example.com" {
       apiVersion = "apiextensions.k8s.io/v1";
       spec = {
         group = "example.com";
-        names.kind = "Widget";
+        names.kind = kind;
         inherit scope;
+        versions = [
+          {
+            name = "v1";
+            served = true;
+            storage = true;
+          }
+        ];
       };
     };
+  crd = crdOf "Widget" "widgets";
+  vmCrd = res "CustomResourceDefinition" null "vmclusters.operator.victoriametrics.com" {
+    apiVersion = "apiextensions.k8s.io/v1";
+    spec = {
+      group = "operator.victoriametrics.com";
+      names.kind = "VMCluster";
+      scope = "Namespaced";
+      versions = [
+        {
+          name = "v1beta1";
+          served = true;
+          storage = true;
+        }
+      ];
+    };
+  };
+
+  # A CRD ref marker for a prometheus-operator kind in namespace `ns`, and
+  # a custom resource of that kind that depends on it.
+  promRef =
+    ns: kind: plural:
+    res "PackageInstance" ns "crd-ref-x-${plural}-monitoring-coreos-com" {
+      apiVersion = kixAnnotations.apiVersion;
+      metadata.annotations = {
+        ${kixKeys.mode} = "import";
+        ${kixKeys.importKind} = "CustomResourceDefinition";
+        ${kixKeys.importApiVersion} = "apiextensions.k8s.io/v1";
+        ${kixKeys.importName} = "${plural}.monitoring.coreos.com";
+        ${kixKeys.crdKind} = kind;
+        ${kixKeys.crdVersion} = "v1";
+        ${kixKeys.crdScope} = "Namespaced";
+      };
+    };
+  promCr = kind: plural: ns: name: [
+    (promRef "a" kind plural)
+    (res kind ns name (
+      lib.recursiveUpdate { apiVersion = "monitoring.coreos.com/v1"; } (dependsOn [
+        (promRef "a" kind plural)
+      ])
+    ))
+  ];
 
   # Inline packages for the cluster-level cases.
   clusterConfigMapPackage = {
@@ -406,8 +466,8 @@ in
   # A Service over operator-created pods declares the CR; the CR is present.
   v04c-operand-of-declared-cr-present = clean (
     base "a"
+    ++ promCr "Prometheus" "prometheuses" "a" "prom"
     ++ [
-      (res "Prometheus" "a" "prom" { apiVersion = "monitoring.coreos.com/v1"; })
       (service "a" "prom-thanos" { operated = "yes"; } {
         metadata.annotations.${kixKeys.operandOf} = "monitoring.coreos.com/Prometheus/prom";
         spec.ports = [ { port = 10901; } ];
@@ -422,8 +482,8 @@ in
       (
         base "a"
         ++ base "b"
+        ++ promCr "Prometheus" "prometheuses" "a" "prom"
         ++ [
-          (res "Prometheus" "a" "prom" { apiVersion = "monitoring.coreos.com/v1"; })
           (service "b" "prom-thanos" { operated = "yes"; } {
             metadata.annotations.${kixKeys.operandOf} = "monitoring.coreos.com/Prometheus/prom";
             spec.ports = [ { port = 10901; } ];
@@ -436,8 +496,8 @@ in
     onlyFailure "declares ${kixKeys.operandOf}=other.example/Prometheus/prom"
       (
         base "a"
+        ++ promCr "Prometheus" "prometheuses" "a" "prom"
         ++ [
-          (res "Prometheus" "a" "prom" { apiVersion = "monitoring.coreos.com/v1"; })
           (service "a" "prom-thanos" { operated = "yes"; } {
             metadata.annotations.${kixKeys.operandOf} = "other.example/Prometheus/prom";
             spec.ports = [ { port = 10901; } ];
@@ -460,7 +520,10 @@ in
   v04f-no-kind-is-exempt-by-name = onlyFailure "matches no workload pod template" (
     base "a"
     ++ [
-      (res "VMCluster" "a" "vm" { apiVersion = "operator.victoriametrics.com/v1beta1"; })
+      (res "VMCluster" "a" "vm" (
+        lib.recursiveUpdate { apiVersion = "operator.victoriametrics.com/v1beta1"; } (dependsOn [ vmCrd ])
+      ))
+      vmCrd
       (service "a" "vm-select" { "app.kubernetes.io/name" = "vmselect"; } {
         spec.ports = [ { port = 8481; } ];
       })
@@ -649,8 +712,8 @@ in
 
   p14d-pdb-operand-of-declared-cr-present = clean (
     base "a"
+    ++ promCr "Alertmanager" "alertmanagers" "a" "am"
     ++ [
-      (res "Alertmanager" "a" "am" { apiVersion = "monitoring.coreos.com/v1"; })
       (pdb "a" "am" { "app.kubernetes.io/name" = "alertmanager"; } {
         metadata.annotations.${kixKeys.operandOf} = "monitoring.coreos.com/Alertmanager/am";
       })
@@ -768,8 +831,16 @@ in
       "declares ${kixKeys.operandOf}=monitoring.coreos.com/Prometheus/prom but that custom resource"
       (
         base "a"
+        # A ref that declares the kind cluster-scoped, so check 18 accepts
+        # the CR without a namespace.
+        ++ map (
+          m:
+          if m.kind == "PackageInstance" then
+            lib.recursiveUpdate m { metadata.annotations.${kixKeys.crdScope} = "Cluster"; }
+          else
+            m
+        ) (promCr "Prometheus" "prometheuses" null "prom")
         ++ [
-          (res "Prometheus" null "prom" { apiVersion = "monitoring.coreos.com/v1"; })
           (service "a" "prom-operated" { operated = "yes"; } {
             metadata.annotations.${kixKeys.operandOf} = "monitoring.coreos.com/Prometheus/prom";
             spec.ports = [ { port = 9090; } ];
@@ -1067,7 +1138,15 @@ in
   # The group decides: a custom kind named like a built-in is not refused
   # unless its CRD in the build says Namespaced.
   v18b-same-name-in-another-group-is-fine = clean (
-    base "a" ++ [ (res "Service" null "edge" { apiVersion = "example.com/v1"; }) ]
+    base "a"
+    ++ [
+      (crdOf "Service" "services" "Cluster")
+      (res "Service" null "edge" (
+        lib.recursiveUpdate { apiVersion = "example.com/v1"; } (dependsOn [
+          (crdOf "Service" "services" "Cluster")
+        ])
+      ))
+    ]
   );
 
   v18c-namespaced-custom-kind-without-namespace =
@@ -1076,7 +1155,9 @@ in
         base "a"
         ++ [
           (crd "Namespaced")
-          (res "Widget" null "w" { apiVersion = "example.com/v1"; })
+          (res "Widget" null "w" (
+            lib.recursiveUpdate { apiVersion = "example.com/v1"; } (dependsOn [ (crd "Namespaced") ])
+          ))
         ]
       );
 
@@ -1084,7 +1165,9 @@ in
     base "a"
     ++ [
       (crd "Cluster")
-      (res "Widget" null "w" { apiVersion = "example.com/v1"; })
+      (res "Widget" null "w" (
+        lib.recursiveUpdate { apiVersion = "example.com/v1"; } (dependsOn [ (crd "Cluster") ])
+      ))
     ]
   );
 

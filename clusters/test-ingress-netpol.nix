@@ -59,13 +59,14 @@ kix.buildCluster {
           cilium = {
             package = packages.cilium;
           };
-          # No `kind`/`apiVersion`: those make the deploy verify the
-          # import against the cluster, and it looks for a namespaced
-          # object. The role and the class name are all this needs to
-          # carry.
+          # `kind`, `apiVersion` and `out.name` make the deploy wait for the
+          # StorageClass, and let the claims that name it resolve in the
+          # cluster build.
           platform-storage = {
             package = kix.mkImport {
               roles = [ "storageClasses" ];
+              kind = "StorageClass";
+              apiVersion = "storage.k8s.io/v1";
               out = {
                 name = "local-path";
                 storageClassName = "local-path";

@@ -12,6 +12,7 @@
   byName,
   evalFails,
   containerBase,
+  prometheusStub,
   ...
 }:
 
@@ -37,43 +38,9 @@ let
     );
 
   deploymentOfAll =
-    cluster: name: (byName name (ofKind "Deployment" (manifests cluster))).spec.template.spec.containers;
+    cluster: name:
+    (byName name (ofKind "Deployment" (manifests cluster))).spec.template.spec.containers;
   deploymentOf = cluster: name: builtins.head (deploymentOfAll cluster name);
-
-  # Renders a ServiceMonitor or PrometheusRule from the builder's arguments.
-  prometheusStub = {
-    meta = {
-      version = "test";
-      defaultAliases = [ "prometheus" ];
-    };
-    build =
-      { self, scope, ... }:
-      let
-        as =
-          kind: consumerScope: args:
-          consumerScope.mkResource (
-            args
-            // {
-              apiVersion = "monitoring.coreos.com/v1";
-              inherit kind;
-            }
-          );
-      in
-      {
-        cm = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "prometheus";
-        };
-        root = {
-          resource = self.cm;
-          out = {
-            mkServiceMonitor = as "ServiceMonitor";
-            mkPrometheusRule = as "PrometheusRule";
-          };
-        };
-      };
-  };
 
   # A consumer that builds a ClusterIssuer, a Certificate, and a
   # CertificateRequest through out.crds.
@@ -256,7 +223,9 @@ in
         config.image.tag = "latest";
       })
       && builtins.elem "quay.io/jetstack/cert-manager-webhook:v1.21.3" (
-        map (c: c.image) (deploymentOfAll (clusterWith { config.webhook.image.tag = "v1.21.3"; }) "cert-manager-webhook")
+        map (c: c.image) (
+          deploymentOfAll (clusterWith { config.webhook.image.tag = "v1.21.3"; }) "cert-manager-webhook"
+        )
       )
       && evalFails (clusterWith {
         config.webhook.image.tag = "v1.22.0";
@@ -353,12 +322,15 @@ in
         ]
       && count "ServiceMonitor" withProm == 3
       && count "PrometheusRule" withProm == 1
-      && map (r: r.alert) alertRules == [
-        "CertManagerAbsent"
-        "CertManagerCertificateNotReady"
-        "CertManagerCertificateRenewalOverdue"
-      ]
-      && builtins.all (r: lib.hasInfix ''namespace="cert-manager",service="cert-manager"'' r.expr) alertRules
+      &&
+        map (r: r.alert) alertRules == [
+          "CertManagerAbsent"
+          "CertManagerCertificateNotReady"
+          "CertManagerCertificateRenewalOverdue"
+        ]
+      && builtins.all (
+        r: lib.hasInfix ''namespace="cert-manager",service="cert-manager"'' r.expr
+      ) alertRules
       && count "Service" disabled == 1
       && count "ServiceMonitor" disabled == 0
     )

@@ -132,7 +132,11 @@ in
       # mounts carry DI context and the deploy engine gates on its existence.
       configSecret = scope.mkSecretRef {
         name = config.configSecretName;
-        keys = [ ];
+        # Both are mounted by subPath below.
+        keys = [
+          "Caddyfile"
+          "crs-setup.conf"
+        ];
       };
 
       # --- Deployment ---

@@ -10,6 +10,7 @@
   kixlib,
   mkCluster,
   manifests,
+  storageClassImport,
   ...
 }:
 
@@ -757,6 +758,7 @@ in
                 storageClassName = "fast";
               };
             };
+            instances.monitoring-system.fast-class = storageClassImport "fast";
           }
         ])
       );

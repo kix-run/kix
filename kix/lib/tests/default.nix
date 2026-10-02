@@ -677,7 +677,9 @@ let
   };
 
   # same consumer but builder-less: raw mkResource with a kind string;
-  # no behavior arrives unless cluster.factBehavior supplies it
+  # no behavior arrives unless cluster.factBehavior supplies it. Its own
+  # CRD ref, without factBehavior, gives the CR the declaration the cluster
+  # build requires (check 21).
   rawCrConsumerPackage = {
     meta.version = "test";
     build =
@@ -688,11 +690,18 @@ let
         ...
       }:
       {
+        testClusterCrd = scope.mkCRDRef {
+          group = "test.io";
+          kind = "TestCluster";
+          plural = "testclusters";
+          version = "v1";
+        };
         cluster = scope.mkResource {
           apiVersion = "test.io/v1";
           kind = "TestCluster";
           name = "mycluster";
           spec.connection = db.out.fqdn;
+          requires = [ self.testClusterCrd ];
         };
         deployment = scope.mkDeployment {
           name = "consumer";
@@ -825,6 +834,7 @@ let
               namespace =
                 if (intent.scope or "namespaced") == "clusterwide" then clusterScoped else namespaceResource;
               extra.spec.stubIntent = true;
+              requires = [ crdRef ];
             };
         };
       in
@@ -835,6 +845,63 @@ let
         root = {
           resource = crdRef;
           out.netpol = netpolApi;
+        };
+      };
+  };
+
+  # An import of a StorageClass the environment provides, as an instance
+  # value. It is not optional, so its marker is in every build, and claims
+  # that name the class resolve (check 20).
+  storageClassImport = name: {
+    package = eval.mkImport {
+      kind = "StorageClass";
+      apiVersion = "storage.k8s.io/v1";
+      out = {
+        inherit name;
+        storageClassName = name;
+      };
+    };
+  };
+
+  # A prometheus provider whose builders render their arguments as
+  # prometheus-operator custom resources. Each kind comes from a
+  # scope.mkCRDRef part, so a resource built through the stub depends on a
+  # declaration of its kind, as one built through the real package does.
+  prometheusStub = {
+    meta = {
+      version = "test";
+      defaultAliases = [ "prometheus" ];
+    };
+    build =
+      { self, scope, ... }:
+      let
+        ref =
+          kind: plural:
+          scope.mkCRDRef {
+            group = "monitoring.coreos.com";
+            inherit kind plural;
+            version = "v1";
+          };
+        as =
+          crd: consumerScope: args:
+          crd.out.mkCR consumerScope args;
+      in
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "prometheus";
+        };
+        serviceMonitorCrd = ref "ServiceMonitor" "servicemonitors";
+        podMonitorCrd = ref "PodMonitor" "podmonitors";
+        prometheusRuleCrd = ref "PrometheusRule" "prometheusrules";
+        root = {
+          resource = self.cm;
+          out = {
+            mkServiceMonitor = as self.serviceMonitorCrd;
+            mkPodMonitor = as self.podMonitorCrd;
+            mkPrometheusRule = as self.prometheusRuleCrd;
+          };
         };
       };
   };
@@ -1223,6 +1290,8 @@ let
       hasName
       byName
       evalFails
+      prometheusStub
+      storageClassImport
       requiredScConsumer
       containerBase
       mkReplicatedPackage
@@ -3332,7 +3401,20 @@ let
               in
               built
               // {
-                creator = scope.mkResource creator;
+                # A Knative Service is a custom resource, so its build needs
+                # a declaration of its kind (check 21).
+                knativeCrd = scope.mkCRDRef {
+                  group = "serving.knative.dev";
+                  kind = "Service";
+                  plural = "services";
+                  version = "v1";
+                };
+                creator = scope.mkResource (
+                  creator
+                  // lib.optionalAttrs (creator.apiVersion == "serving.knative.dev/v1") {
+                    requires = [ args.self.knativeCrd ];
+                  }
+                );
               }
             )
           );

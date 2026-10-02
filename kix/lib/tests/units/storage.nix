@@ -15,6 +15,7 @@
   evalFails,
   requiredScConsumer,
   kixKeys,
+  storageClassImport,
   ...
 }:
 
@@ -165,12 +166,18 @@ let
           config = claim;
         };
       }
-      (lib.optionalAttrs (classes != null) {
-        instances.kube-system.storage-classes = {
-          package = storageClassesPackage;
-          config = { inherit classes; };
-        };
-      })
+      (
+        if classes != null then
+          {
+            instances.kube-system.storage-classes = {
+              package = storageClassesPackage;
+              config = { inherit classes; };
+            };
+          }
+        else
+          # The class validClaim names, so a claim the package accepts builds.
+          { instances.apps.local-class = storageClassImport "local"; }
+      )
     ];
   claimOf = cluster: byName "data" (ofKind "PersistentVolumeClaim" (manifests cluster));
   # A claim that passes every check, so each refusal test changes one field.
@@ -231,7 +238,9 @@ in
     (
       hasName "a" (ofKind "StorageClass" (manifests unread))
       && hasName "b" (ofKind "StorageClass" (manifests unread))
-      && evalFails (clusterWith { inherit classes; })
+      && evalFails (clusterWith {
+        inherit classes;
+      })
     )
     || throw "two unannotated classes: the unread build failed, or the read did not throw";
 
@@ -296,21 +305,24 @@ in
       sc = classNamed "full" c;
     in
     (
-      sc.parameters == { fsType = "xfs"; }
+      sc.parameters == {
+        fsType = "xfs";
+      }
       && sc.reclaimPolicy == "Retain"
       && sc.volumeBindingMode == "WaitForFirstConsumer"
       && sc.allowVolumeExpansion
       && sc.mountOptions == [ "noatime" ]
-      && sc.allowedTopologies == [
-        {
-          matchLabelExpressions = [
-            {
-              key = "topology.kubernetes.io/zone";
-              values = [ "a" ];
-            }
-          ];
-        }
-      ]
+      &&
+        sc.allowedTopologies == [
+          {
+            matchLabelExpressions = [
+              {
+                key = "topology.kubernetes.io/zone";
+                values = [ "a" ];
+              }
+            ];
+          }
+        ]
       && sc.metadata.labels.tier == "fast"
     )
     || throw "optional fields: ${builtins.toJSON sc}";
@@ -358,19 +370,17 @@ in
       c = clusterWith {
         classes.local = local;
         extra.instances.storage.sc.partsOverlays = [
-          (
-            scope: _self: super: {
-              classes = super.classes // {
-                local = scope.mkClusterResource {
-                  apiVersion = "storage.k8s.io/v1";
-                  kind = "StorageClass";
-                  name = "local";
-                  labels.overlaid = "true";
-                  extra.provisioner = "rancher.io/local-path";
-                };
+          (scope: _self: super: {
+            classes = super.classes // {
+              local = scope.mkClusterResource {
+                apiVersion = "storage.k8s.io/v1";
+                kind = "StorageClass";
+                name = "local";
+                labels.overlaid = "true";
+                extra.provisioner = "rancher.io/local-path";
               };
-            }
-          )
+            };
+          })
         ];
       };
       consumer = byName "sc-consumer" (ofKind "ConfigMap" (manifests c));
@@ -430,7 +440,9 @@ in
     }
     || throw "claim spec: ${builtins.toJSON claim.spec}";
 
-  storage-pvc-no-class-throws = evalFails (pvcCluster { claim.size = "1Gi"; });
+  storage-pvc-no-class-throws = evalFails (pvcCluster {
+    claim.size = "1Gi";
+  });
 
   # `""` requests no class, for a claim bound to a named PersistentVolume.
   storage-pvc-empty-class-binds-volume =
@@ -448,7 +460,13 @@ in
 
   storage-pvc-mode-refusals =
     let
-      withModes = accessModes: pvcCluster { claim = validClaim // { inherit accessModes; }; };
+      withModes =
+        accessModes:
+        pvcCluster {
+          claim = validClaim // {
+            inherit accessModes;
+          };
+        };
     in
     !evalFails (withModes [
       "ReadWriteOnce"
@@ -470,7 +488,13 @@ in
   # Zero and sub-byte sizes are refused.
   storage-pvc-size-refusals =
     let
-      withSize = size: pvcCluster { claim = validClaim // { inherit size; }; };
+      withSize =
+        size:
+        pvcCluster {
+          claim = validClaim // {
+            inherit size;
+          };
+        };
     in
     !evalFails (withSize "1")
     && evalFails (withSize "0Gi")
@@ -481,10 +505,24 @@ in
   # extraSpec cannot set the fields that have options.
   storage-pvc-extraspec-locks =
     let
-      withExtra = extraSpec: pvcCluster { claim = validClaim // { inherit extraSpec; }; };
+      withExtra =
+        extraSpec:
+        pvcCluster {
+          claim = validClaim // {
+            inherit extraSpec;
+          };
+        };
     in
-    !evalFails (withExtra { volumeMode = "Block"; })
-    && evalFails (withExtra { storageClassName = "other"; })
-    && evalFails (withExtra { accessModes = [ "ReadWriteMany" ]; })
-    && evalFails (withExtra { resources.requests.storage = "2Gi"; });
+    !evalFails (withExtra {
+      volumeMode = "Block";
+    })
+    && evalFails (withExtra {
+      storageClassName = "other";
+    })
+    && evalFails (withExtra {
+      accessModes = [ "ReadWriteMany" ];
+    })
+    && evalFails (withExtra {
+      resources.requests.storage = "2Gi";
+    });
 }

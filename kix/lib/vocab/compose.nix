@@ -1684,6 +1684,17 @@ rec {
           };
         };
 
+      # The HTTPRoute CRD arrives with the Gateway API implementation, outside
+      # Kix. The ref gives the route its CRD-before-CR dependency. Two
+      # kix.expose calls in one instance render the same marker, which the
+      # cluster build keeps once.
+      routeCrd = scope.mkCRDRef {
+        group = "gateway.networking.k8s.io";
+        kind = "HTTPRoute";
+        plural = "httproutes";
+        version = "v1";
+      };
+
       controllerEdgeParts =
         if !(wantsControllerEdge && controllerSelector != null) then
           { }
@@ -1697,6 +1708,9 @@ rec {
     in
     builtins.seq _modeCheck (
       controllerEdgeParts
+      // lib.optionalAttrs (hasExposure && useGateway) {
+        "${partName}Crd" = routeCrd;
+      }
       // {
         ${exposurePart} = {
           inherit (info)
@@ -1713,7 +1727,7 @@ rec {
           if hasExposure && useGateway then
             builtins.seq info.scheme (
               if paths != null then
-                scope.mkResource (
+                scope.mkCR routeCrd (
                   httpRoute.fromPaths (
                     {
                       inherit name;
@@ -1740,7 +1754,7 @@ rec {
                   // lib.optionalAttrs (port != null) { inherit port; }
                   // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
                 )
-                |> scope.mkResource
+                |> scope.mkCR routeCrd
             )
 
           else if hasExposure && useIngress then

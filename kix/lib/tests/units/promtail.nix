@@ -25,6 +25,7 @@
   ofKind,
   byName,
   evalFails,
+  storageClassImport,
   ...
 }:
 
@@ -90,6 +91,7 @@ let
               storageClassName = "standard";
             };
           };
+          standard-class = storageClassImport "standard";
           loki-logs = {
             inherit package config;
           }
@@ -115,6 +117,7 @@ let
               storageClassName = "standard";
             };
           };
+          standard-class = storageClassImport "standard";
           credentials = {
             package = secretPackage;
             aliases = [ "credentials" ];
@@ -408,6 +411,7 @@ in
                   storageClassName = "standard";
                 };
               };
+              standard-class = storageClassImport "standard";
               inherit ship;
               loki-logs = {
                 package = lokiLogsPackage;

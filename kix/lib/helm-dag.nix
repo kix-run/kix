@@ -373,6 +373,39 @@ rec {
         ) (safeList ((r.spec or { }).rules or [ ]))
       ) (builtins.filter (r: r.kind == "HTTPRoute") resources);
 
+      # Custom resources to the chart's own CRD of their group and kind, so
+      # the deploy applies the CR after the CRD is served. A chart resource
+      # of a kind the chart does not ship gets no edge here; the cluster
+      # build refuses it unless it depends on a declaration (check 21).
+      crdsByGroupKind = builtins.listToAttrs (
+        map (crd: {
+          name = "${crd.spec.group or ""}/${crd.spec.names.kind or ""}";
+          value = crd;
+        }) (builtins.filter (r: r.kind == "CustomResourceDefinition") resources)
+      );
+      groupOf =
+        apiVersion:
+        let
+          parts = lib.splitString "/" apiVersion;
+        in
+        if builtins.length parts == 2 then builtins.head parts else "";
+      instanceOfEdges = builtins.concatMap (
+        r:
+        let
+          key = "${groupOf (r.apiVersion or "")}/${r.kind}";
+        in
+        if r.kind != "CustomResourceDefinition" && crdsByGroupKind ? ${key} then
+          [
+            {
+              from = r;
+              to = crdsByGroupKind.${key};
+              type = "instance-of";
+            }
+          ]
+        else
+          [ ]
+      ) resources;
+
       # ServiceMonitors to Services selected by labels.
       serviceMonitorEdges = builtins.concatMap (
         r:
@@ -398,7 +431,8 @@ rec {
     ++ pdbEdges
     ++ ingressEdges
     ++ httpRouteEdges
-    ++ serviceMonitorEdges;
+    ++ serviceMonitorEdges
+    ++ instanceOfEdges;
 
   # Convert edges to a resourceId -> [resourceId] map.
   # Direction: from depends on to.
