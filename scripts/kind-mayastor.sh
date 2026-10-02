@@ -41,6 +41,17 @@ check() {
   fi
 }
 
+# Like check, but returns 1 on failure, for a step the later checks need.
+require() {
+  local desc=$1
+  shift
+  if "$@" >/dev/null 2>&1; then echo "ok:   $desc"; else
+    echo "FAIL: $desc; the remaining checks need it and are skipped"
+    fail=1
+    return 1
+  fi
+}
+
 refuse() {
   echo "preflight: $1" >&2
   exit 2
@@ -110,30 +121,36 @@ rest() {
   curl -sf "http://127.0.0.1:18081/v0/$1"
 }
 
+# Polls a volume's state `tries` times, `interval` seconds apart.
 wait_volume_state() {
-  local uuid=$1 want=$2
-  for _ in $(seq 1 60); do
+  local uuid=$1 want=$2 tries=$3 interval=$4
+  for _ in $(seq 1 "$tries"); do
     [ "$(rest "volumes/$uuid" | jq -r .state.status)" = "$want" ] && return 0
-    sleep 10
+    sleep "$interval"
   done
-  rest "volumes/$uuid" >"$H/volume-$uuid-timeout.json" || true
+  rest "volumes/$uuid" >"$H/volume-$uuid-timeout-$want.json" || true
   return 1
 }
 
+# Background jobs of run_check (policy-verdict captures, the port-forward),
+# killed on exit so a failed step leaves none running.
+PIDS=()
+kill_jobs() { [ "${#PIDS[@]}" -eq 0 ] || kill "${PIDS[@]}" 2>/dev/null || true; }
+
 run_check() {
   need_h
+  trap kill_jobs EXIT
   # 0. One policy-verdict capture per Cilium agent, started before the
   # control plane restarts so cold-start traffic is captured.
-  local pids=()
   for p in $(k -n kube-system get pods -l k8s-app=cilium -o name); do
     k -n kube-system exec "$p" -c cilium-agent -- cilium-dbg monitor --type policy-verdict >"$H/verdict-${p##*/}.log" 2>&1 &
-    pids+=($!)
+    PIDS+=($!)
   done
-  k -n "$NS" rollout restart deploy
-  k -n "$NS" rollout status deploy --timeout 10m
+  require "control plane restarted" k -n "$NS" rollout restart deploy || return 1
+  require "control plane rolled out" k -n "$NS" rollout status deploy --timeout 10m || return 1
 
   k -n "$NS" port-forward svc/mayastor-api-rest 18081:8081 >/dev/null 2>&1 &
-  pids+=($!)
+  PIDS+=($!)
   sleep 3
 
   # 1-2. The deploy and the derived policies.
@@ -154,7 +171,7 @@ run_check() {
 
   # 5-7. A two-replica volume read from the node without a pool, a
   # snapshot of it, and a claim restored from the snapshot.
-  k create namespace ms-test
+  k create namespace ms-test --dry-run=client -o yaml | k apply -f -
   k -n ms-test apply -f - <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -176,7 +193,7 @@ spec:
       volumeMounts: [{ name: d, mountPath: /data }]
   volumes: [{ name: d, persistentVolumeClaim: { claimName: data } }]
 EOF
-  k -n ms-test wait --for=condition=Ready pod/writer --timeout 5m
+  require "writer pod Ready on its volume" k -n ms-test wait --for=condition=Ready pod/writer --timeout 5m || return 1
   sleep 5
   local sum uuid
   sum=$(k -n ms-test exec writer -- cat /data/f.md5 | cut -d' ' -f1)
@@ -221,11 +238,13 @@ EOF
   check "restored data matches" test "$(k -n ms-test exec reader -- md5sum /data/f | cut -d' ' -f1)" = "$sum"
 
   # 8. Restart the io-engine that does not hold the nexus; the volume
-  # degrades and rebuilds.
+  # degrades and rebuilds. Waiting for Degraded first keeps the Online
+  # check from passing before the replica was lost.
   local other
   other=$(k -n "$NS" get pods -l app.kubernetes.io/component=io-engine -o jsonpath='{range .items[*]}{.metadata.name} {.spec.nodeName}{"\n"}{end}' | awk -v n="$nexus_node" '$2 != n {print $1; exit}')
-  k -n "$NS" delete pod "$other"
-  check "volume rebuilds to Online within 10 minutes" wait_volume_state "$uuid" Online
+  require "io-engine pod $other deleted" k -n "$NS" delete pod "$other" || return 1
+  check "volume reports Degraded within 2 minutes" wait_volume_state "$uuid" Degraded 60 2
+  check "volume rebuilds to Online within 10 minutes" wait_volume_state "$uuid" Online 60 10
   check "data still matches after the rebuild" test "$(k -n ms-test exec writer -- md5sum /data/f | cut -d' ' -f1)" = "$sum"
 
   # 9. An encrypted volume, and the io-engine Secret access.
@@ -249,7 +268,7 @@ spec:
       volumeMounts: [{ name: d, mountPath: /data }]
   volumes: [{ name: d, persistentVolumeClaim: { claimName: enc } }]
 EOF
-  k -n ms-test wait --for=condition=Ready pod/enc --timeout 5m
+  require "encrypted volume's pod Ready" k -n ms-test wait --for=condition=Ready pod/enc --timeout 5m || return 1
   sleep 3
   check "encrypted volume reads back" k -n ms-test exec enc -- md5sum -c /data/f.md5
   local enc_uuid
@@ -259,7 +278,7 @@ EOF
   check "io-engine may not read other Secrets" test "$(k auth can-i --as=system:serviceaccount:$NS:mayastor-io-engine get secret/other -n "$NS" || true)" = no
 
   # 10. Policy verdicts: enforcement was on and nothing was denied.
-  kill "${pids[@]}" 2>/dev/null || true
+  kill_jobs
   check "no policy denies" test -z "$(grep -h 'action deny' "$H"/verdict-*.log || true)"
   check "policy allows were recorded" test "$(cat "$H"/verdict-*.log | grep -c 'action allow' || true)" -gt 0
 

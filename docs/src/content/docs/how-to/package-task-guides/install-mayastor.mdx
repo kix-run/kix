@@ -49,7 +49,8 @@ Label the pool nodes:
 
 <Command commands={["kubectl label node <node> openebs.io/engine=mayastor"]} />
 
-The label is `ioEngine.nodeSelector`'s default. The Mayastor images are
+The label is `ioEngine.nodeSelector`'s default; setting `ioEngine.nodeSelector`
+replaces it as a whole. The Mayastor images are
 published for amd64 only, so every Mayastor pod also selects
 `kubernetes.io/arch=amd64`.
 
@@ -130,20 +131,46 @@ The DiskPool operator reads DiskPools only in the instance's namespace. To
 build a DiskPool from a package of your own, use `out.crds.DiskPool` in that
 namespace.
 
-Removing a pool from `diskPools` deletes its DiskPool, and the operator then
-destroys the pool on disk once no replica lives on it.
+After you remove a pool from `diskPools`, `kix deploy --prune` deletes its
+DiskPool, and the operator then destroys the pool on disk once no replica
+lives on it. A deploy without `--prune` reports the DiskPool as an orphan and
+leaves it in place.
 
 ## Encrypt pools
 
-Create a Secret in the instance's namespace with the key
+The pool key is a Secret in the instance's namespace with the key
 `encryption_parameters`, holding Mayastor's JSON key description:
 
 ```json
 { "cipher": "AesXts", "key": "<32 hex digits>", "key_len": 128, "key2": "<32 hex digits>", "key2_len": 128 }
 ```
 
-Wire it as `deps.poolEncryptionKey` and set `encrypted = true` on each pool
-that uses it. A class with `parameters.encrypted = "true"` places replicas on
+Generate the two keys for your cluster (for example with `openssl rand -hex
+16`) and keep them out of the repository. Declare the Secret as an instance:
+a `secret` instance with a SOPS-encrypted `source`, or a `secret-ref` for a
+Secret that something outside Kix creates. Then wire it as
+`deps.poolEncryptionKey` and set `encrypted = true` on each pool that uses it:
+
+```nix
+instances.mayastor = {
+  pool-key = {
+    package = packages.secret-ref;
+    config.keys = [ "encryption_parameters" ];
+  };
+  mayastor = {
+    package = packages.mayastor;
+    deps.poolEncryptionKey = ref.mayastor.pool-key;
+    config.diskPools.pool-node1 = {
+      node = "node1";
+      disks = [ "/dev/disk/by-id/nvme-..." ];
+      encrypted = true;
+    };
+  };
+};
+```
+
+Evaluation fails when the wired Secret does not declare
+`encryption_parameters`. A class with `parameters.encrypted = "true"` places replicas on
 encrypted pools only. Mayastor fixes a pool's key when it creates the pool and
 reads it again when it imports the pool, so rewiring the dependency does not
 rotate it. Every encrypted pool of an instance uses the one key; a pool that
@@ -170,31 +197,48 @@ template, `kix deploy` reports the DaemonSet ready with the number of pods
 still on the previous template:
 
 ```text
-✔ DaemonSet/mayastor-io-engine@mayastor ready, 2 pods pending manual restart (OnDelete) 2 pods run the previous template; delete them one node at a time after volume rebuilds finish
+✔ DaemonSet/mayastor-io-engine@mayastor ready, 2 pods pending manual restart (OnDelete): the DaemonSet replaces a pod with the current template only when the pod is deleted
 ```
 
-Restart the pods one node at a time. Before each, check that no volume is
-rebuilding (`kubectl mayastor get volumes`, or the api-rest `/v0/volumes`
-endpoint), then delete the node's io-engine pod and wait until it is Ready and
-every volume is Online again.
+Restart the pods one node at a time, so that every volume keeps a replica
+while a node's targets are down. Before each, check that no volume is
+rebuilding through the api-rest `/v0/volumes` endpoint (or upstream's
+`kubectl mayastor get volumes` plugin, which Kix does not install), then
+delete the node's io-engine pod and wait until it is Ready and every volume is
+Online again.
 
 ## Monitoring
 
 With a `prometheus` dependency and `metrics.enabled`, the package adds a
 Service for the io-engine metrics exporter, a ServiceMonitor, and alerts for
-faulted pools and pools more than 75 and 90 percent full. The exporter runs in
+faulted pools, pools more than 75 and 90 percent full, and an io-engine
+metrics target that Prometheus cannot scrape. The exporter runs in
 every io-engine pod either way, so turning monitoring on later does not
 change io-engine's pod template.
 
 ## Uninstall
 
-The deploy that removes the instance does not wait for DiskPool finalizers,
-so remove Mayastor in this order:
+A deploy deletes removed objects only with `--prune`, and a pruning deploy
+does not wait for DiskPool finalizers before it deletes the operator that
+removes them. Remove Mayastor in this order:
 
 1. Delete every claim on a Mayastor class and wait for its volume to go.
-2. Remove `diskPools` from the configuration, deploy, and wait until
-   `kubectl -n <namespace> get diskpool` lists none.
-3. Remove the instance and deploy.
+2. Remove `diskPools` from the configuration, run `kix deploy --prune`, and
+   wait until `kubectl -n <namespace> get diskpool` lists none.
+3. Remove the instance and run `kix deploy --prune`.
+
+## Network policy
+
+Under a network-policy enforcer, the derived rules cover the traffic between
+the control plane's pods. The node agents and the CSI controller run on the
+host network, which pod-based rules cannot select, so the package also opens
+a fixed set of ports to every pod in the cluster: etcd (2379), api-rest
+(8081), agent-core (50051), and agent-ha-cluster (50052). The rules apply to
+every pod workload of the instance. Three of these endpoints take requests
+without authentication: etcd, api-rest (which can create and delete volumes
+and pools), and agent-core's gRPC. Upstream's chart policies are no narrower.
+Treat any pod in the cluster as able to manage Mayastor, and keep workloads
+you do not trust off clusters that run it.
 
 ## What the package does not render
 
