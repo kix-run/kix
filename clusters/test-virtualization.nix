@@ -51,7 +51,12 @@ let
                       url = "docker://quay.io/kubevirt/cirros-container-disk-demo@sha256:b3173a795eddc0c8f6923bb197928b7c0876aade4daf85d0558dfae65f403fe2";
                       pullMethod = "pod";
                     };
-                    storage.resources.requests.storage = "1Gi";
+                    storage = {
+                      # CDI has no StorageProfile defaults for kind's
+                      # rancher.io/local-path provisioner.
+                      accessModes = [ "ReadWriteOnce" ];
+                      resources.requests.storage = "1Gi";
+                    };
                   };
                 }
               ];
@@ -79,7 +84,10 @@ let
             name = "scratch";
             spec = {
               source.blank = { };
-              storage.resources.requests.storage = "64Mi";
+              storage = {
+                accessModes = [ "ReadWriteOnce" ];
+                resources.requests.storage = "64Mi";
+              };
             };
           };
 

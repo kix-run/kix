@@ -25,9 +25,19 @@
 #     name = "scratch";
 #     spec = {
 #       source.blank = { };
-#       storage.resources.requests.storage = "64Mi";
+#       storage = {
+#         accessModes = [ "ReadWriteOnce" ];
+#         resources.requests.storage = "64Mi";
+#       };
 #     };
 #   };
+#
+# A DataVolume's `storage` form takes the access and volume modes it omits
+# from the StorageClass's StorageProfile. CDI fills a StorageProfile only for
+# provisioners it recognises; for others, such as kind's
+# rancher.io/local-path, the DataVolume stays unbound with ErrClaimNotValid
+# unless it sets `storage.accessModes` or the StorageProfile's
+# `spec.claimPropertySets` is set.
 #
 # Network policy: with an enforcer, the API server reaches cdi-apiserver (an
 # aggregated API and the admission webhooks) and the operands reach DNS and
