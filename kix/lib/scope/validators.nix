@@ -50,18 +50,25 @@ let
 
   quantity = import ../vocab/quantity.nix { inherit lib; };
 
-  # True when a Service spec's `loadBalancerClass` carries string context,
-  # which means it was read from a provider's `out` (tailscale's
-  # `out.loadBalancerClass`), so a provider in the build serves the Service.
-  # A raw class string is false. An external balancer that publishes a class
-  # with context must also open the Service's pods to its own callers, since
-  # derived policy then gives the Service no ingress from outside the cluster.
+  markers = import ../core/markers.nix { inherit lib; };
+
+  # True when a Service spec's `loadBalancerClass` carries string context
+  # other than a `kix.untrackedRef` marker, which means it was read from a
+  # provider's `out` (tailscale's `out.loadBalancerClass`), so a provider in
+  # the build serves the Service. A raw class string, or one wrapped in
+  # `kix.untrackedRef`, is false. The check cannot tell a provider's class
+  # from a string interpolated from any other resource's `out`; a class
+  # built that way also skips the loadBalancer role. An external balancer
+  # that publishes a class with context must also open the Service's pods
+  # to its own callers, since derived policy then gives the Service no
+  # ingress from outside the cluster.
   hasProviderClass =
     spec:
     let
       class = spec.loadBalancerClass or null;
+      context = builtins.attrNames (builtins.getContext class);
     in
-    builtins.isString class && builtins.hasContext class;
+    builtins.isString class && context != [ ] && !(builtins.any markers.isUntrackedRefPath context);
 in
 {
   inherit hasProviderClass;

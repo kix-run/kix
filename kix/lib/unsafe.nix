@@ -56,7 +56,9 @@ rec {
         Mounting BPF into the kernel, writing sysfs parameters or attaching
         to block devices needs a privileged container, and a CNI or a
         storage driver cannot do its job without one. Legitimate holders:
-        CNI packages, CSI node plugins and node-level agents.
+        CNI packages, CSI node plugins, node-level agents, and operators
+        that create privileged pods in their own namespace (tailscale's
+        proxies run a privileged init container that enables IP forwarding).
       '';
     };
     "cluster-admin" = {
