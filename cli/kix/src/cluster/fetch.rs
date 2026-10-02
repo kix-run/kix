@@ -967,8 +967,9 @@ pub fn normalize_for_diff(obj: &mut DynamicObject) {
 /// question a change review actually needs answered: "does what kix would
 /// apply differ from what kix last applied?"
 ///
-/// A Secret's `stringData` is restored from its `data`, see
-/// [`restore_string_data`].
+/// The view holds no Secret values kix applied through `stringData`: the
+/// server stores them only in `data`, which kix's fieldset does not list.
+/// [`kix_owned_manifests_against`] restores them against a build.
 ///
 /// Objects without a kix `Apply` entry (adopted externally, or predating SSA)
 /// fall back to the whole object with server metadata stripped.
@@ -978,9 +979,6 @@ pub fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
         normalize_for_diff(&mut fallback);
         return to_manifest_value(&fallback);
     };
-    if let Some(fields) = super::fieldsv1::kix_fieldset(obj) {
-        restore_string_data(&mut view, obj, &fields);
-    }
     if let Some(map) = view.as_object_mut() {
         for key in ["apiVersion", "kind"] {
             if let Some(v) = obj.data.get(key) {
@@ -1002,18 +1000,27 @@ pub fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
     view
 }
 
-/// Put a Secret's `stringData` back into its kix-owned view.
+/// Stands in for a live Secret value that differs from the build's, so a
+/// diff shows the key as changed without printing what the cluster holds.
+pub const HIDDEN_SECRET_VALUE: &str = "(live value differs from the build, not shown)";
+
+/// Put the `stringData` keys `built` declares back into a Secret's kix-owned
+/// view, so the view compares with the build manifest of the same object.
 ///
 /// The API server merges `stringData` into `data` and never stores it, so the
 /// projection of a Secret kix applied with `stringData` has neither field.
-/// For each `stringData` key in kix's fieldset, the live `data` value is
-/// decoded and set under `stringData`, which is what the build compares
-/// against. A key whose live value is missing, or is not base64-encoded UTF-8,
-/// is left out and shows as a difference.
+/// Only keys that `built` declares under `stringData` and that kix's fieldset
+/// lists are restored. A SOPS Secret's build manifest has no `stringData`
+/// (kix decrypts its values at deploy time), so nothing of it is restored.
+///
+/// A key whose decoded live `data` value equals the build's gets the build's
+/// value. A key whose live value differs gets [`HIDDEN_SECRET_VALUE`]. A key
+/// whose live value is missing, or is not base64-encoded UTF-8, is left out.
+/// The view therefore never holds a value that is not already in the build.
 fn restore_string_data(
     view: &mut serde_json::Value,
     obj: &DynamicObject,
-    fields: &serde_json::Value,
+    built: &serde_json::Value,
 ) {
     use base64::Engine as _;
     use serde_json::Value;
@@ -1021,20 +1028,36 @@ fn restore_string_data(
     if obj.data.get("kind").and_then(Value::as_str) != Some("Secret") {
         return;
     }
+    let Some(declared) = built.get("stringData").and_then(Value::as_object) else {
+        return;
+    };
+    let Some(fields) = super::fieldsv1::kix_fieldset(obj) else {
+        return;
+    };
     let Some(owned) = fields.get("f:stringData").and_then(Value::as_object) else {
         return;
     };
     let live_data = obj.data.get("data").and_then(Value::as_object);
     let mut restored = serde_json::Map::new();
-    for key in owned.keys().filter_map(|k| k.strip_prefix("f:")) {
+    for (key, built_value) in declared {
+        if !owned.contains_key(&format!("f:{key}")) {
+            continue;
+        }
         let decoded = live_data
             .and_then(|d| d.get(key))
             .and_then(Value::as_str)
             .and_then(|b64| base64::engine::general_purpose::STANDARD.decode(b64).ok())
             .and_then(|bytes| String::from_utf8(bytes).ok());
-        if let Some(text) = decoded {
-            restored.insert(key.to_string(), Value::String(text));
-        }
+        let Some(text) = decoded else { continue };
+        let value = if built_value.as_str() == Some(text.as_str()) {
+            built_value.clone()
+        } else {
+            Value::String(HIDDEN_SECRET_VALUE.into())
+        };
+        restored.insert(key.clone(), value);
+    }
+    if restored.is_empty() {
+        return;
     }
     if let Some(map) = view.as_object_mut() {
         map.insert("stringData".into(), Value::Object(restored));
@@ -1075,18 +1098,25 @@ pub fn kix_owned_manifests(
 /// rewrote on that apply, such as an operator's mutating webhook default.
 ///
 /// A Secret kix applied with `stringData` is always compared through its
-/// view. The applied-content hash cannot see a change made in `data`, and
-/// [`restore_string_data`] can.
+/// view, with [`restore_string_data`] run against the build manifest of the
+/// same name. The applied-content hash cannot see a change made in `data`.
 pub fn kix_owned_manifests_against(
     objects: impl IntoIterator<Item = DynamicObject>,
     built: &HashMap<String, &serde_json::Value>,
 ) -> Vec<serde_json::Value> {
+    let by_id: HashMap<ResourceId, &serde_json::Value> = built
+        .values()
+        .map(|m| (ResourceId::from_value(m), *m))
+        .collect();
     objects
         .into_iter()
         .map(|obj| match unchanged_since_apply(&obj, built) {
             Some(manifest) => manifest.clone(),
             None => {
                 let mut manifest = kix_owned_view(&obj);
+                if let Some(build) = by_id.get(&ResourceId::from_value(&manifest)) {
+                    restore_string_data(&mut manifest, &obj, build);
+                }
                 crate::legacy_domain::upgrade_manifest(&mut manifest);
                 manifest
             }
@@ -1416,19 +1446,36 @@ mod tests {
         );
     }
 
-    /// A Secret kix applied with `stringData`: the server stored only
-    /// `data`, and the view shows the decoded values under `stringData`.
-    #[test]
-    fn kix_owned_view_restores_secret_string_data_from_data() {
-        let secret = |password_b64: &str| DynamicObject {
+    /// A live Secret kix applied with `stringData`: the server stored only
+    /// `data`, under the given base64 password and `other`, which is not kix's.
+    fn string_data_secret(password_b64: &str, annotations: Value) -> DynamicObject {
+        let annotation_fields: serde_json::Map<String, Value> = annotations
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, _)| (format!("f:{k}"), json!({})))
+            .collect();
+        DynamicObject {
             metadata: ObjectMeta {
                 name: Some("creds".into()),
                 namespace: Some("app".into()),
+                annotations: Some(
+                    annotations
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))
+                        .collect(),
+                ),
                 managed_fields: Some(vec![managed(
                     "kix",
                     "Apply",
                     None,
-                    json!({"f:stringData": {".": {}, "f:password": {}, "f:user": {}}, "f:type": {}}),
+                    json!({
+                        "f:metadata": {"f:annotations": annotation_fields},
+                        "f:stringData": {".": {}, "f:password": {}, "f:user": {}},
+                        "f:type": {}
+                    }),
                 )]),
                 ..Default::default()
             },
@@ -1437,25 +1484,17 @@ mod tests {
                 "apiVersion": "v1",
                 "kind": "Secret",
                 "type": "Opaque",
-                // "admin" and the given password; `other` is not kix's.
+                // "admin", the given password, and "x".
                 "data": {"user": "YWRtaW4=", "password": password_b64, "other": "eA=="}
             }),
-        };
+        }
+    }
 
-        let view = kix_owned_view(&secret("ZGV2LXBhc3N3b3Jk"));
-        assert_eq!(
-            view["stringData"],
-            json!({"user": "admin", "password": "dev-password"})
-        );
+    #[test]
+    fn kix_owned_view_of_a_string_data_secret_holds_no_values() {
+        let view = kix_owned_view(&string_data_secret("ZGV2LXBhc3N3b3Jk", json!({})));
+        assert!(view.get("stringData").is_none());
         assert!(view.get("data").is_none());
-
-        // A value someone changed in `data` shows as the changed plaintext.
-        let changed = kix_owned_view(&secret("cm90YXRlZA=="));
-        assert_eq!(changed["stringData"]["password"], json!("rotated"));
-
-        // A value that does not decode is left out.
-        let broken = kix_owned_view(&secret("not base64"));
-        assert_eq!(broken["stringData"], json!({"user": "admin"}));
     }
 
     /// A live SGCluster after an apply: the operator's webhook added
@@ -1524,36 +1563,64 @@ mod tests {
         assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
     }
 
-    #[test]
-    fn a_secret_applied_with_string_data_compares_through_its_view() {
-        let mut secret = DynamicObject {
-            metadata: ObjectMeta {
-                name: Some("creds".into()),
-                namespace: Some("app".into()),
-                managed_fields: Some(vec![managed(
-                    "kix",
-                    "Apply",
-                    None,
-                    json!({"f:stringData": {".": {}, "f:password": {}}}),
-                )]),
-                ..Default::default()
-            },
-            types: None,
-            data: json!({"apiVersion": "v1", "kind": "Secret", "data": {"password": "cm90YXRlZA=="}}),
-        };
-        let applied = crate::cluster::fieldsv1::applied_content_hash(&secret).unwrap();
-        secret.metadata.annotations = Some(
-            [
-                (keys::IDENTITY_HASH.to_string(), "h-sec".to_string()),
-                (keys::APPLIED_HASH.to_string(), applied),
-            ]
-            .into(),
-        );
-        let built = json!({"kind": "Secret", "stringData": {"password": "dev-password"}});
-        let by_hash: HashMap<String, &Value> = [("h-sec".to_string(), &built)].into();
+    fn compare_with_build(live: DynamicObject, built: &Value) -> Value {
+        let by_hash: HashMap<String, &Value> = [("h-sec".to_string(), built)].into();
+        kix_owned_manifests_against([live], &by_hash).remove(0)
+    }
 
-        let out = kix_owned_manifests_against([secret], &by_hash);
-        assert_eq!(out[0]["stringData"], json!({"password": "rotated"}));
+    /// Literal `stringData` in the build: a live value equal to the build's
+    /// reads as the build's, a changed one is hidden, and one that does not
+    /// decode is left out. `other` is not in the build and never appears.
+    #[test]
+    fn a_secret_applied_with_string_data_compares_against_the_build() {
+        let built = json!({
+            "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+            "metadata": {"name": "creds", "namespace": "app"},
+            "stringData": {"user": "admin", "password": "dev-password"}
+        });
+
+        let same = compare_with_build(string_data_secret("ZGV2LXBhc3N3b3Jk", json!({})), &built);
+        assert_eq!(same, built);
+
+        // "rotated"
+        let changed = compare_with_build(string_data_secret("cm90YXRlZA==", json!({})), &built);
+        assert_eq!(
+            changed["stringData"],
+            json!({"user": "admin", "password": HIDDEN_SECRET_VALUE})
+        );
+        assert!(!changed.to_string().contains("rotated"));
+
+        let broken = compare_with_build(string_data_secret("not base64", json!({})), &built);
+        assert_eq!(broken["stringData"], json!({"user": "admin"}));
+    }
+
+    /// A SOPS Secret: the build has no `stringData`, and kix applied the
+    /// decrypted values through it. The live object reads as the build, and
+    /// no decrypted value appears in the comparison or the view.
+    #[test]
+    fn a_sops_secret_compares_unchanged_without_its_values() {
+        let annotations = json!({
+            keys::SOPS_SOURCE: "/nix/store/abc-secrets.yaml",
+            keys::IDENTITY_HASH: "h-sec"
+        });
+        let built = json!({
+            "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+            "metadata": {"name": "creds", "namespace": "app", "annotations": annotations}
+        });
+        // "s3cr3t-from-sops"
+        let live = || string_data_secret("czNjcjN0LWZyb20tc29wcw==", annotations.clone());
+
+        let compared = compare_with_build(live(), &built);
+        let config = crate::manifest::diff::DiffConfig::default();
+        assert_eq!(
+            crate::manifest::diff::engine::structural_diff(&built, &compared, "$", &config),
+            vec![]
+        );
+        for out in [compared, kix_owned_view(&live())] {
+            let text = out.to_string();
+            assert!(!text.contains("s3cr3t-from-sops"), "{text}");
+            assert!(!text.contains("admin"), "{text}");
+        }
     }
 
     /// No kix Apply entry (adopted externally, or pre-SSA): the whole object,
