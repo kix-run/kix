@@ -232,11 +232,28 @@ in
     )
     || throw "reloader withReloadOn: local ${builtins.toJSON local}, external ${builtins.toJSON external}, composed ${builtins.toJSON composed}, chained ${builtins.toJSON chained}";
 
-  # Each refused case fails and its corrected form builds, so a refusal
-  # cannot pass on an unrelated failure in the fixture.
+  # Each refused case fails and its corrected form builds, which shows that
+  # the fixture around the refusal builds. evalFails cannot read the
+  # message, so it does not show which check failed.
   reloader-refusals =
     let
       withRefs = refs: clusterWith { consumer = mkConsumer { inherit refs; }; };
+      # A consumer that does not call withReloadOn, for the checks that must
+      # fail the build without one.
+      noReloadOn =
+        extraArgs:
+        clusterWith {
+          config = { inherit extraArgs; };
+          consumer = mkConsumer {
+            transform =
+              p:
+              p.scope.mkDeployment {
+                name = "web";
+                spec.selector.matchLabels = p.scope.selectorLabels;
+                spec.template.spec.containers = [ container ];
+              };
+          };
+        };
       withArgs =
         args:
         clusterWith {
@@ -278,6 +295,16 @@ in
               restartPolicy = "OnFailure";
               containers = [ container ];
             };
+          };
+          good = withArgs {
+            name = "web";
+            spec.template.spec.containers = [ container ];
+          };
+        };
+        noTemplate = {
+          bad = withArgs {
+            name = "web";
+            spec.containers = [ container ];
           };
           good = withArgs {
             name = "web";
@@ -355,17 +382,34 @@ in
           ];
           good = inDemo [ "--namespaces=demo" ];
         };
+        bareNamespacesToIgnore = {
+          bad = noReloadOn [
+            "--namespaces-to-ignore"
+            "demo"
+          ];
+          good = noReloadOn [ "--namespaces-to-ignore=demo" ];
+        };
+        bareResourceLabelSelector = {
+          bad = noReloadOn [
+            "--resource-label-selector"
+            "a=b"
+          ];
+          good = noReloadOn [ "--resource-label-selector=a=b" ];
+        };
+        olderImage = {
+          bad = withConfig { image.tag = "v1.3.0"; };
+          good = withConfig { image.tag = "v1.4.0"; };
+        };
         notWatched = {
-          bad = inDemo [ "--namespaces=other" ];
-          good = inDemo [ "--namespaces=demo,other" ];
+          bad = inDemo [ "--namespaces=reloader" ];
+          good = inDemo [ "--namespaces=demo,reloader" ];
         };
         repeatedNamespaces = {
           bad = inDemo [
-            "--namespaces=other"
-            "--namespaces=more"
+            "--namespaces=reloader"
           ];
           good = inDemo [
-            "--namespaces=other"
+            "--namespaces=reloader"
             "--namespaces=demo"
           ];
         };
@@ -443,27 +487,73 @@ in
     (withDep == [ ] && builtins.length noDep == 1)
     || throw "reloader annotation domains: with dependency ${builtins.toJSON withDep}, without ${builtins.toJSON noDep}";
 
-  # A second instance fails under the default alias (conflictsWith) and
-  # under another alias (the annotation-domain index).
+  # A second instance is refused by two guards: the annotation-domain index,
+  # whatever the aliases, and conflictsWith, while either instance has the
+  # alias `reloader`. The index runs first, so each guard is tested on a
+  # second instance (alias `secondReloader`) whose package lacks the other
+  # guard, against one whose package lacks both and builds.
   reloader-singleton =
     let
-      second = aliases: {
-        instances.other.reloader = {
-          package = reloaderPackage;
-          inherit aliases;
-        };
-      };
+      without =
+        keys:
+        # Named arguments, because the lib passes a package what its
+        # function asks for.
+        {
+          scope,
+          lib,
+          kix,
+          availability,
+        }@args:
+        let
+          p = reloaderPackage args;
+        in
+        p // { meta = removeAttrs p.meta keys; };
+      pair =
+        second:
+        mkCluster [
+          {
+            instances.reloader.reloader.package = reloaderPackage;
+            instances.other.reloader2 = {
+              package = second;
+              aliases = [ "secondReloader" ];
+            };
+          }
+        ];
     in
     (
-      evalFails (clusterWith {
-        modules = [ (second [ "reloader" ]) ];
-      })
-      && evalFails (clusterWith {
-        modules = [ (second [ "secondReloader" ]) ];
-      })
-      && !(evalFails (clusterWith { }))
+      evalFails (pair reloaderPackage)
+      && evalFails (pair (without [ "conflictsWith" ]))
+      && evalFails (pair (without [ "annotationDomains" ]))
+      && !(evalFails (
+        pair (without [
+          "annotationDomains"
+          "conflictsWith"
+        ])
+      ))
     )
-    || throw "reloader singleton: a second instance built";
+    || throw "reloader singleton: a guard let a second instance build, or the unguarded pair failed";
+
+  # With --namespaces, each listed namespace gets a Role and RoleBinding
+  # `reloader` bound to the reloader's ServiceAccount, and no ClusterRole is
+  # emitted.
+  reloader-scoped-rbac =
+    let
+      ms = manifests (clusterWith {
+        config.extraArgs = [ "--namespaces=demo" ];
+      });
+      role = byName "reloader" (ofKind "Role" ms);
+      binding = byName "reloader" (ofKind "RoleBinding" ms);
+    in
+    (
+      byName "reloader" (ofKind "ClusterRole" ms) == null
+      && byName "reloader" (ofKind "ClusterRoleBinding" ms) == null
+      && role.metadata.namespace == "demo"
+      && binding.metadata.namespace == "demo"
+      && binding.roleRef.kind == "Role"
+      && (builtins.head binding.subjects).namespace == "reloader"
+      && builtins.elem "secrets" (lib.concatMap (r: r.resources) role.rules)
+    )
+    || throw "reloader scoped rbac: role ${builtins.toJSON role}, binding ${builtins.toJSON binding}";
 
   # At `node` the Deployment runs two replicas with every strategy flag, and
   # the ClusterRole grants nothing on ConfigMaps or batch.
