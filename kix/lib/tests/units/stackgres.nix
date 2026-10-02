@@ -1,13 +1,14 @@
 # Tests for the stackgres packages and the kix/lib behaviour they rely on:
 # kix.availability.spreadConstraints (the spread rule for operator-placed
 # operands), the refusals of stackgres-operator, stackgres-cluster, and
-# stackgres-object-storage, the operand image table, and the rendered
-# SGCluster.
+# stackgres-object-storage, the operand image table, the rendered
+# SGCluster, and the webhook check that StackGres custom resources wait for.
 
 {
   lib,
   eval,
   kixlib,
+  kixKeys,
   mkCluster,
   manifests,
   ofKind,
@@ -367,6 +368,69 @@ in
       })
     )
     || throw "stackgres-operator refusals: ${builtins.toJSON { inherit got jvm; }}";
+
+  # Every StackGres custom resource built through out.crds requires the
+  # webhook-check Job. The Job's image takes the operator's registry prefix
+  # and pull policy, and its tag is the newest kubectl entry in
+  # versions.properties.
+  stackgres-operator-crd-handles-gated =
+    let
+      cluster = sgCluster {
+        config = {
+          pooling = { };
+          scripts = [
+            {
+              name = "init";
+              script = "SELECT 1";
+            }
+          ];
+        };
+        operatorConfig.image = {
+          repository = "registry.example.com/mirror/stackgres/operator";
+          pullPolicy = "Always";
+        };
+        extra = singleNode;
+      };
+      ms = manifests cluster;
+      operator = cluster.instances.stackgres-system.stackgres-operator;
+      jobHash = builtins.unsafeDiscardStringContext operator.raw.webhookCheck.out.identityHash;
+      dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+      customResources = builtins.filter (
+        m: lib.hasPrefix "stackgres.io/" m.apiVersion && m.kind != "SGConfig"
+      ) ms;
+      ungated = map (m: "${m.kind}/${m.metadata.name}") (
+        builtins.filter (m: !(lib.hasInfix jobHash (dependsOn m))) customResources
+      );
+      kinds = lib.unique (lib.naturalSort (map (m: m.kind) customResources));
+      container = builtins.head (byName "stackgres-operator-webhook-check" (ofKind "Job" ms))
+        .spec.template.spec.containers;
+      newestKubectl = builtins.head (
+        releaseTable.kubectlImages {
+          registry = "registry.example.com/mirror";
+          k8sVersion = null;
+        }
+      );
+    in
+    (
+      ungated == [ ]
+      &&
+        kinds == [
+          "SGCluster"
+          "SGInstanceProfile"
+          "SGPoolingConfig"
+          "SGPostgresConfig"
+          "SGScript"
+        ]
+      && lib.hasPrefix "${newestKubectl}@sha256:" container.image
+      && container.imagePullPolicy == "Always"
+    )
+    || throw "webhook-check gate: ${
+      builtins.toJSON {
+        inherit ungated kinds newestKubectl;
+        inherit (container) image;
+        imagePullPolicy = container.imagePullPolicy or null;
+      }
+    }";
 
   # The operand image table: a major takes its newest minor and the Patroni
   # build of that minor; unknown, unpublished, and `latest` versions throw.
