@@ -48,8 +48,8 @@ configuration. Dependencies of the created package are resolved in the same
 way, so creation is transitive.
 
 An optional build argument creates no demand. It resolves to an existing
-instance or import, or is null. An optional import it resolves to becomes
-active.
+instance or import, or is null. An optional import it resolves to stays
+dormant.
 
 The new instance uses the catalog entry's name, even when an alias or role
 caused its creation. Its namespace is chosen in this order:
@@ -57,6 +57,13 @@ caused its creation. Its namespace is chosen in this order:
 1. the entry's `namespace`;
 2. the cluster's `autoNamespace`; or
 3. the requesting instance's namespace.
+
+Requesters in different namespaces each get their own copy, except for a
+package that runs once per cluster: one whose `meta.conflictsWith` lists
+`"cluster:<a name it answers>"`, or that claims a role. Kix creates it once,
+for the first demand, and requesters in other namespaces resolve to that
+instance. Two instances that render the same cluster-scoped object, such as a
+CustomResourceDefinition, fail evaluation.
 
 Catalog entries have default package configuration. To preconfigure a
 dormant provider, declare it under `instances` with `optional = true`.
