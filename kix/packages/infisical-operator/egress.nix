@@ -18,12 +18,9 @@
     }:
     let
       networkPolicy = clusterConfig.networkPolicy or { };
-      enforced =
-        networkPolicy.enable or false
-        && builtins.elem (networkPolicy.directions or "both") [
-          "egress"
-          "both"
-        ];
+      # `networkPolicy.enforced` is defined whenever the netpol module is
+      # loaded, which `enable` implies.
+      enforced = networkPolicy.enable or false && networkPolicy.enforced.egress;
       domain = clusterConfig.clusterDomain;
 
       parsed = builtins.match "(https?)://([^/:]+)(:([0-9]+))?(/.*)?" address;

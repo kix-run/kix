@@ -13,13 +13,7 @@ let
 
   enforcerRole = "network-policy-enforcer";
 
-  # The directions default deny and the derived policies cover, from the
-  # typed `directions` option. The plugin's policy builders take this record;
-  # `kix.operandPolicy` reads the option through `scope.networkPolicyDirections`.
-  enforced = {
-    ingress = cfg.directions != "egress";
-    egress = cfg.directions != "ingress";
-  };
+  inherit (cfg) enforced;
 
   resolveEnforcerOut =
     {
@@ -38,43 +32,61 @@ let
 in
 {
   options.networkPolicy = lib.mkOption {
-    type = lib.types.submodule {
-      options = {
-        enable = lib.mkOption {
-          type = lib.types.bool;
-          default = false;
-          description = "Generate CiliumNetworkPolicies from DI graph.";
+    type = lib.types.submodule (
+      { config, ... }:
+      {
+        options = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Generate CiliumNetworkPolicies from DI graph.";
+          };
+          defaultDeny = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            description = "Generate deny-all CiliumNetworkPolicy per namespace.";
+          };
+          directions = lib.mkOption {
+            type = lib.types.enum [
+              "ingress"
+              "egress"
+              "both"
+            ];
+            default = "both";
+            description = "Which policy directions to generate.";
+          };
+          enforced = lib.mkOption {
+            type = lib.types.attrsOf lib.types.bool;
+            readOnly = true;
+            internal = true;
+            default = {
+              ingress = config.directions != "egress";
+              egress = config.directions != "ingress";
+            };
+            description = ''
+              `directions` as `{ ingress; egress; }`, the directions default
+              deny and every derived policy cover. The netpol plugin's policy
+              builders take it, and `kix.operandPolicy` reads it through
+              `scope.networkPolicyEnforced`.
+            '';
+          };
+          platformIntents = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+            description = ''
+              Platform connectivity intents for non-kix-managed pods (e.g.
+              CoreDNS, local-path-provisioner in kind). Each intent declares
+              enforcer-agnostic connectivity requirements; the enforcer
+              materializes them into native policy CRs. Set by flavors.
+              Also used for a Kix workload whose egress depends on its
+              configuration, when the package's error or description asks
+              for one (infisical-operator `address`, coredns `servers`).
+              See v2_discussions/archive/92_declarative_network_policy_intents.md.
+            '';
+          };
         };
-        defaultDeny = lib.mkOption {
-          type = lib.types.bool;
-          default = true;
-          description = "Generate deny-all CiliumNetworkPolicy per namespace.";
-        };
-        directions = lib.mkOption {
-          type = lib.types.enum [
-            "ingress"
-            "egress"
-            "both"
-          ];
-          default = "both";
-          description = "Which policy directions to generate.";
-        };
-        platformIntents = lib.mkOption {
-          type = lib.types.attrsOf lib.types.anything;
-          default = { };
-          description = ''
-            Platform connectivity intents for non-kix-managed pods (e.g.
-            CoreDNS, local-path-provisioner in kind). Each intent declares
-            enforcer-agnostic connectivity requirements; the enforcer
-            materializes them into native policy CRs. Set by flavors.
-            Also used for a Kix workload whose egress depends on its
-            configuration, when the package's error or description asks
-            for one (infisical-operator `address`, coredns `servers`).
-            See v2_discussions/archive/92_declarative_network_policy_intents.md.
-          '';
-        };
-      };
-    };
+      }
+    );
     default = { };
     description = ''
       CiliumNetworkPolicy generation from DI graph. See v2_discussions/37

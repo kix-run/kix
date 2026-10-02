@@ -63,13 +63,13 @@ rec {
       };
       inherit (scopeLabels) selectorLabels instanceLabels labels;
 
-      # The policy directions the cluster enforces (`networkPolicy.directions`:
-      # "both", "ingress", or "egress"), or null without an enforcer. A
-      # policy section for a direction outside it isolates the selected pods
-      # in a direction default deny leaves open. An enforcer is set only when
-      # the netpol plugin is enabled, so the typed option is defined.
-      networkPolicyDirections =
-        if networkPolicyEnforcer == null then null else clusterCtx.config.networkPolicy.directions;
+      # The policy directions the cluster enforces, `{ ingress; egress; }`
+      # from `networkPolicy.directions`, or null without an enforcer. A
+      # policy section for a direction it leaves false isolates the selected
+      # pods in a direction default deny leaves open. An enforcer is set only
+      # when the netpol plugin is enabled, so the option is defined.
+      networkPolicyEnforced =
+        if networkPolicyEnforcer == null then null else clusterCtx.config.networkPolicy.enforced;
 
       # Role satisfaction for validator gates: "provided" (managed provider
       # or environment binding), "absent" (declared vacant), "unknown"
@@ -150,7 +150,7 @@ rec {
           namespaces
           mkOptional
           networkPolicyEnforcer
-          networkPolicyDirections
+          networkPolicyEnforced
           ;
         namespace = namespaceResource;
 
