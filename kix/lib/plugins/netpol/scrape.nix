@@ -352,7 +352,7 @@ in
       # Ingress policies that already select pods, for the check without
       # default deny. A cluster-wide policy names the namespace with
       # Cilium's `k8s:io.kubernetes.pod.namespace` label, if at all.
-      ingressPolicies = builtins.filter (
+      isolatingPolicies = builtins.filter (
         r:
         builtins.elem (r.kind or "") (enforcerApi.policyKinds or [ ])
         && (
@@ -376,7 +376,7 @@ in
           && matchesSelector selector (
             t.podSelector // { "k8s:io.kubernetes.pod.namespace" = plain t.namespace; }
           )
-        ) ingressPolicies;
+        ) isolatingPolicies;
 
       perScraper =
         r:
