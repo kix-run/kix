@@ -8,6 +8,16 @@
 #   version         the storage version, which custom resources use
 #   servedVersions  every served version, when there is more than one
 #   readiness       the condition that marks a custom resource ready
+#
+# Kinds with conditions but no readiness:
+#   - SGDbOps and SGShardedDbOps set Completed=True when the operation ends,
+#     which for a major version upgrade or a repack can take hours. A deploy
+#     waiting on it would fail at its readiness timeout (`kix deploy
+#     --timeout`, 3 minutes by default) while the operation is healthy.
+#   - SGDistributedLogs sets only a Failed condition.
+#   - An SGStream is Running while it streams and Completed once a finite
+#     stream ends, so no one condition marks it ready.
+# SGConfig has no reference (default.nix).
 let
   # The operator sets no Ready or Available condition on a cluster.
   # Bootstrapped=True means the primary accepts connections.

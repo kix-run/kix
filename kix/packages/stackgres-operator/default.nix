@@ -41,13 +41,20 @@
 #                     the labels of an SGCluster's pods.
 #   out.podSelector   the operator pods' labels.
 #   out.release       the StackGres release.
-#   out.postgresVersions
-#                     PostgreSQL major -> minors this release ships.
 #   out.resolvePostgres { who; version; }
 #                     { major; minor; images } for an SGCluster at `version`,
 #                     with images from this operator's registry. Throws,
 #                     prefixed with `who`, for `latest` or a release the table
 #                     does not ship.
+#   out.kubectlImages the kubectl images the operator's backup and
+#                     major-upgrade Jobs run: one when the cluster sets
+#                     k8sVersion, else every candidate.
+#
+# Network policy for operand pods comes from the package that builds the
+# custom resource: stackgres-cluster writes it for SGCluster pods. The pods
+# of an SGShardedCluster, SGDistributedLogs, or SGStream built from
+# out.crds get no policy, so under an enforcer's namespace default-deny they
+# cannot reach the API server or each other.
 #
 # root = the operator Deployment.
 #
@@ -67,8 +74,8 @@
 let
   inherit (import ./release.nix { inherit lib; })
     release
-    postgresVersions
     resolvePostgres
+    kubectlImages
     ;
   kinds = import ./kinds.nix;
 
@@ -182,7 +189,7 @@ in
       description = "Operator image. Its tag must be the package's StackGres release (a -jvm tag is accepted). The repository minus /stackgres/operator is the registry prefix StackGres pulls operand images from, and pullPolicy is their pull policy.";
     };
 
-    # The 1.19.2 chart's defaults.
+    # The upstream chart's defaults.
     resources = kix.options.resources {
       requests = {
         cpu = "10m";
@@ -216,7 +223,12 @@ in
   };
 
   build =
-    { self, config, ... }:
+    {
+      self,
+      config,
+      clusterConfig,
+      ...
+    }:
     let
       registry = lib.removeSuffix operatorSuffix config.image.repository;
       nativeTag = lib.removeSuffix "-jvm" config.image.tag;
@@ -431,7 +443,16 @@ in
         ))
         (manage (rbacGroup "coordination.k8s.io" [ "leases" ]).leases)
         (manage sg)
-        (allow [ "update" ] (map (sub "status") sg ++ map (sub "finalizers") sg))
+        (allow [ "update" ] (
+          map (sub "finalizers") sg
+          # The kinds whose definitions have a status subresource, as the
+          # upstream chart grants.
+          ++ map (p: sub "status" (rbacGroup group [ ] p)) [
+            "sgconfigs"
+            "sgclusters"
+            "sgdistributedlogs"
+          ]
+        ))
         (allow [
           "get"
           "list"
@@ -477,15 +498,15 @@ in
         ];
         spec = {
           replicas = 1;
-          # The chart's selector.
           selector.matchLabels = podLabels;
           template = {
             metadata.labels = podLabels;
             spec = {
               serviceAccount = self.serviceAccount;
-              # Kubernetes' default; the chart sets none.
+              # The Kubernetes default, written out for the scorecard's
+              # gracefulShutdown rule.
               terminationGracePeriodSeconds = 30;
-              # The chart's user: 185 in the JVM image, 1000 in the native one.
+              # The image's user: 185 in the JVM image, 1000 in the native one.
               securityContext = {
                 runAsNonRoot = true;
                 runAsUser = uid;
@@ -617,6 +638,11 @@ in
                 podSelector = cr: operandSelectors.sgCluster cr.metadata.name;
               };
             }
+            // lib.optionalAttrs (kind == "SGObjectStorage") {
+              # No pod dials the endpoint for the SGObjectStorage; the
+              # SGCluster that references it carries the address on.
+              factBehavior.endpoint = "conduct";
+            }
           )
         )
       ) referencedKinds;
@@ -629,8 +655,12 @@ in
         ++ builtins.attrValues self.clusterRole;
         out = {
           crds = lib.mapAttrs (_: k: self.crds.${k.part}) referencedKinds;
-          inherit operandSelectors release postgresVersions;
+          inherit operandSelectors release;
           podSelector = self.operatorDeployment.out.selector;
+          kubectlImages = kubectlImages {
+            inherit registry;
+            k8sVersion = clusterConfig.k8sVersion or null;
+          };
           resolvePostgres =
             { who, version }:
             resolvePostgres {
