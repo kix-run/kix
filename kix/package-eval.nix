@@ -188,6 +188,19 @@ let
         cookieEncryptionSalt = "cookie-encryption";
       };
     };
+    # The administrator's login, and a Prometheus provider, so the
+    # ServiceMonitor is built.
+    grafana.instances = {
+      grafana-admin = {
+        package = packages.secret;
+        aliases = [ "grafanaAdmin" ];
+        config.stringData = {
+          admin-user = "admin";
+          admin-password = "password";
+        };
+      };
+      prometheus-operator.package = packages.prometheus-operator;
+    };
     harbor = {
       instances = {
         inherit storage;

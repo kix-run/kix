@@ -745,6 +745,7 @@ in
         "prometheus"
         "prometheus-default-rules"
         "prometheus-operator"
+        "secret"
       ] pkg;
       claim = lib.findFirst (m: m.kind == "PersistentVolumeClaim") null (
         manifests (mkCluster [
@@ -759,6 +760,14 @@ in
               };
             };
             instances.monitoring-system.fast-class = storageClassImport "fast";
+            instances.monitoring-system.grafana-admin = {
+              package = pkg "secret";
+              aliases = [ "grafanaAdmin" ];
+              config.stringData = {
+                admin-user = "admin";
+                admin-password = "test-only";
+              };
+            };
           }
         ])
       );

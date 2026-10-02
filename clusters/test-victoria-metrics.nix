@@ -134,6 +134,15 @@ kix.buildCluster {
           # default name, which holds the same uid.
           config.deleteDatasources = [ { name = "Prometheus"; } ];
         };
+        # Test values only.
+        grafana-admin = {
+          package = packages.secret;
+          aliases = [ "grafanaAdmin" ];
+          config.stringData = {
+            admin-user = "admin";
+            admin-password = "test-only";
+          };
+        };
         scrape-consumer = {
           package = scrapeConsumerPackage;
         };

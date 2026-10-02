@@ -279,7 +279,7 @@ let
         ...
       }:
       {
-        writer = prometheus.out.mkPrometheus scope {
+        writer = scope.mkCR prometheus.out.crds.Prometheus {
           name = "writer";
           spec.remoteWrite = [ { url = "http://${receiver.out.fqdn}:9201/api/v1/write"; } ];
         };
@@ -491,7 +491,7 @@ in
   # leaves it out; node-exporter's monitor carries no `team` label either.
   prometheus-scrape-honours-monitor-selector =
     let
-      cluster = clusterWith { server.serviceMonitorSelector.matchLabels.team = "platform"; };
+      cluster = clusterWith { server.extraSpec.serviceMonitorSelector.matchLabels.team = "platform"; };
       names = map (m: m.metadata.name) (cnpsOf cluster);
     in
     (
@@ -506,7 +506,7 @@ in
   # PodMonitor in `apps` is not selected.
   prometheus-scrape-null-namespace-selector-is-own-namespace =
     let
-      cluster = clusterWith { server.podMonitorNamespaceSelector = null; };
+      cluster = clusterWith { server.extraSpec.podMonitorNamespaceSelector = null; };
     in
     (
       serviceRuleFor cluster "app" "operand" == null
@@ -524,15 +524,10 @@ in
 
   prometheus-scrape-alertmanager-target =
     let
+      # The prometheus package names the Alertmanager it binds in
+      # spec.alerting.
       cluster = clusterWith {
         extra.instances.monitoring.alertmanager.package = pkg "alertmanager";
-        server.alerting.alertmanagers = [
-          {
-            namespace = "monitoring";
-            name = "alertmanager-operated";
-            port = "web";
-          }
-        ];
       };
       ingress = byPrefix "monitoring-prometheus-server-scrape-svc-alertmanager-operated" (cnpsOf cluster);
     in
@@ -550,14 +545,15 @@ in
 
   # Without enforced egress, neither the server's operand policy nor the
   # scrape egress exists, so the server pods keep open egress. Target
-  # ingress is still emitted.
+  # ingress is still emitted, including the server's own for its
+  # self-scrape.
   prometheus-scrape-ingress-only-direction =
     let
       cluster = clusterWith { extra.networkPolicy.directions = "ingress"; };
       cnps = cnpsOf cluster;
       names = map (m: m.metadata.name) cnps;
       serverPolicies = builtins.filter (
-        p: (p.spec.endpointSelector.matchLabels or null) == serverSelector
+        p: (p.spec.endpointSelector.matchLabels or null) == serverSelector && p.spec ? egress
       ) cnps;
     in
     (
