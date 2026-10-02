@@ -43,6 +43,7 @@
         kind = ./test-kind.nix;
         spread = ./test-spread.nix;
         monitoring-native = ./test-monitoring-native.nix;
+        monitoring-loki = ./test-monitoring-loki.nix;
         test-secrets = ./test-secrets.nix;
         victoria-metrics = ./test-victoria-metrics.nix;
         kind-probe = ./test-kind-probe.nix;

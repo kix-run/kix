@@ -12,7 +12,7 @@
 #   prometheus ? null         prometheus-operator, for ServiceMonitor creation
 #   prometheusServer ? null   auto-wires Prometheus datasource via out.serviceUrl
 #   alertmanager ? null       auto-wires Alertmanager datasource via out.serviceUrl
-#   loki ? null               auto-wires Loki datasource (if out.serviceUrl exists)
+#   loki ? null               auto-wires the Loki datasource from loki.out.serviceUrl
 #
 # Each auto-wired datasource has a fixed uid, set by `prometheusDatasource`,
 # `alertmanagerDatasource` and `lokiDatasource`. Dashboards find their
@@ -774,9 +774,7 @@ in
             implementation = "prometheus";
           };
         }
-        # Loki wiring: if the loki instance exposes out.serviceUrl, use it.
-        # For Helm-wrapped Loki, pass the URL via config.datasources instead.
-        ++ lib.optional (loki != null && loki ? out && loki.out ? serviceUrl) {
+        ++ lib.optional (loki != null) {
           inherit (config.lokiDatasource) name uid;
           type = "loki";
           url = loki.out.serviceUrl;

@@ -1,3 +1,0 @@
-# 2026-10-01 · `kix/packages/*` · Packages render `cluster.local` into manifests, which breaks them on a cluster with another `clusterDomain`.
-
-`kix/package-eval.nix` builds every package with `clusterDomain = "eval.kix.test"`, and the `architecture.clusterDomainLiteral` rule finds the literal in loki (its chart ConfigMaps, also reached through promtail). Each is listed in `knownFailures` through `domainLiteral` or `domainLiteralViaLoki`. No package writes the literal in source, so `sourceDomainLiteralExceptions` is empty. Remove a package's entries when it derives the domain from `out.fqdn` or `clusterConfig.clusterDomain`, and delete this file when no entry is left.
