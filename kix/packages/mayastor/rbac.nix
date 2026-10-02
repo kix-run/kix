@@ -1,5 +1,5 @@
-# One ServiceAccount per component and the API access each binary uses in
-# Mayastor 2.12.1:
+# One ServiceAccount per component and the API access each binary of this
+# release uses:
 # - agent-core and agent-ha-cluster (one pod) read the kube-system
 #   Namespace's uid, which keys Mayastor's records in etcd.
 # - operator-diskpool creates, migrates, and reconciles the DiskPool CRD and
@@ -61,12 +61,7 @@ let
     "mayastorpools.openebs.io"
   ];
 
-  key = kix.checkSecretKeys {
-    inherit (c) who;
-    arg = "poolEncryptionKey";
-    dep = poolEncryptionKey;
-    keys = [ "encryption_parameters" ];
-  };
+  key = c.poolKey poolEncryptionKey;
 
   serviceAccount =
     component: automount:

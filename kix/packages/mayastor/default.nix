@@ -297,9 +297,14 @@ in
     # api-rest 8081 (csi-controller, csi-node, the metrics exporter),
     # agent-core 50051 (io-engine), and agent-ha-cluster 50052
     # (agent-ha-node). Egress, from agent-core to the node agents: io-engine
-    # 10124, csi-node 10199, and agent-ha-node 50053. `all-pods` also lets
-    # every pod reach etcd, which runs without authentication; upstream's
-    # chart policy is no narrower. NVMe-oF (8420, 4421) runs between hosts.
+    # 10124, csi-node 10199, and agent-ha-node 50053. A package intent lands
+    # on every pod workload of the instance, and `all-pods` admits every pod
+    # in the cluster, so these ports are open cluster-wide on agent-core,
+    # api-rest, operator-diskpool, and etcd. Three of them take requests
+    # without authentication: etcd on 2379, api-rest on 8081 (`--no-auth`,
+    # which can create and delete volumes and pools), and agent-core's
+    # plaintext gRPC on 50051. Upstream's chart policies are no narrower.
+    # NVMe-oF (8420, 4421) runs between hosts.
     network.intents.hostNetworkPeers =
       let
         tcp = map (port: {
@@ -361,11 +366,10 @@ in
         description = "Memory of io-engine. Its CPU comes from `ioEngine.cpuCount` and its hugepages from `ioEngine.hugepages2Mi`; setting either here is refused.";
       };
       nodeSelector = lib.mkOption {
-        type = lib.types.attrsOf lib.types.str;
-        default = {
-          "openebs.io/engine" = "mayastor";
-        };
-        description = "Labels of the nodes that run io-engine and so may hold pools. `kubernetes.io/arch = amd64` is always added.";
+        type = lib.types.nullOr (lib.types.attrsOf lib.types.str);
+        default = null;
+        defaultText = lib.literalExpression ''{ "openebs.io/engine" = "mayastor"; }'';
+        description = "Labels of the nodes that run io-engine and so may hold pools. Null selects `openebs.io/engine = mayastor`; a set replaces that label as a whole. `kubernetes.io/arch = amd64` is always added.";
       };
       tolerations = lib.mkOption {
         type = lib.types.listOf tolerationType;
@@ -377,79 +381,112 @@ in
     };
 
     agentCore = {
-      image = mayastorImage "agent-core" "sha256:6c4d5a9b445bb7f9cf8596cac07fe7b01903426e730cb5a8c510a27719270897" "Image of agent-core.";
-      resources = resourcesOption "agent-core" {
-        cpu = "500m";
-        memory = "32Mi";
-      } {
-        cpu = "1";
-        memory = "128Mi";
-      };
+      image =
+        mayastorImage "agent-core" "sha256:6c4d5a9b445bb7f9cf8596cac07fe7b01903426e730cb5a8c510a27719270897"
+          "Image of agent-core.";
+      resources =
+        resourcesOption "agent-core"
+          {
+            cpu = "500m";
+            memory = "32Mi";
+          }
+          {
+            cpu = "1";
+            memory = "128Mi";
+          };
       extraArgs = argsOption "agent-core";
       env = envOption "agent-core";
     };
 
     agentHaCluster = {
-      image = mayastorImage "agent-ha-cluster" "sha256:e00ff76f8fc522ce53cfc22461ec56fec83d0deb148025f19ba03d4cf6d8dcdc" "Image of agent-ha-cluster, which runs in the agent-core pod.";
-      resources = resourcesOption "agent-ha-cluster" {
-        cpu = "100m";
-        memory = "16Mi";
-      } {
-        cpu = "100m";
-        memory = "64Mi";
-      };
+      image =
+        mayastorImage "agent-ha-cluster"
+          "sha256:e00ff76f8fc522ce53cfc22461ec56fec83d0deb148025f19ba03d4cf6d8dcdc"
+          "Image of agent-ha-cluster, which runs in the agent-core pod.";
+      resources =
+        resourcesOption "agent-ha-cluster"
+          {
+            cpu = "100m";
+            memory = "16Mi";
+          }
+          {
+            cpu = "100m";
+            memory = "64Mi";
+          };
       extraArgs = argsOption "agent-ha-cluster";
       env = envOption "agent-ha-cluster";
     };
 
     apiRest = {
-      image = mayastorImage "api-rest" "sha256:2579357ed8127aea15dc8ccefdfbf3de09b154c0c5c0732d1639ef63c0cb654a" "Image of api-rest.";
-      resources = resourcesOption "api-rest" {
-        cpu = "50m";
-        memory = "32Mi";
-      } {
-        cpu = "100m";
-        memory = "64Mi";
-      };
+      image =
+        mayastorImage "api-rest" "sha256:2579357ed8127aea15dc8ccefdfbf3de09b154c0c5c0732d1639ef63c0cb654a"
+          "Image of api-rest.";
+      resources =
+        resourcesOption "api-rest"
+          {
+            cpu = "50m";
+            memory = "32Mi";
+          }
+          {
+            cpu = "100m";
+            memory = "64Mi";
+          };
       extraArgs = argsOption "api-rest";
       env = envOption "api-rest";
     };
 
     operatorDiskpool = {
-      image = mayastorImage "operator-diskpool" "sha256:19739f0ed7277bfafd6a80724171d23a3dbbc1c5c7afc90897cce0af118ed98f" "Image of operator-diskpool.";
-      resources = resourcesOption "operator-diskpool" {
-        cpu = "50m";
-        memory = "16Mi";
-      } {
-        cpu = "100m";
-        memory = "32Mi";
-      };
+      image =
+        mayastorImage "operator-diskpool"
+          "sha256:19739f0ed7277bfafd6a80724171d23a3dbbc1c5c7afc90897cce0af118ed98f"
+          "Image of operator-diskpool.";
+      resources =
+        resourcesOption "operator-diskpool"
+          {
+            cpu = "50m";
+            memory = "16Mi";
+          }
+          {
+            cpu = "100m";
+            memory = "32Mi";
+          };
       extraArgs = argsOption "operator-diskpool";
       env = envOption "operator-diskpool";
     };
 
     csiController = {
-      image = mayastorImage "csi-controller" "sha256:97b21a6229f1bab446ff5a2565696858099292ead9bcfbe2e7194ff609dc3719" "Image of the CSI controller plugin.";
-      resources = resourcesOption "the CSI controller plugin" {
-        cpu = "16m";
-        memory = "64Mi";
-      } {
-        cpu = "32m";
-        memory = "128Mi";
-      };
+      image =
+        mayastorImage "csi-controller"
+          "sha256:97b21a6229f1bab446ff5a2565696858099292ead9bcfbe2e7194ff609dc3719"
+          "Image of the CSI controller plugin.";
+      resources =
+        resourcesOption "the CSI controller plugin"
+          {
+            cpu = "16m";
+            memory = "64Mi";
+          }
+          {
+            cpu = "32m";
+            memory = "128Mi";
+          };
       extraArgs = argsOption "the CSI controller plugin";
       env = envOption "the CSI controller plugin";
     };
 
     csiNode = {
-      image = mayastorImage "csi-node" "sha256:483219d1bdc645ae63113224b8b6a341add7f03ad0f6194e9ac91527cd039f2b" "Image of the CSI node plugin.";
-      resources = resourcesOption "the CSI node plugin" {
-        cpu = "100m";
-        memory = "64Mi";
-      } {
-        cpu = "100m";
-        memory = "128Mi";
-      };
+      image =
+        mayastorImage "csi-node" "sha256:483219d1bdc645ae63113224b8b6a341add7f03ad0f6194e9ac91527cd039f2b"
+          "Image of the CSI node plugin.";
+      resources =
+        resourcesOption "the CSI node plugin"
+          {
+            cpu = "100m";
+            memory = "64Mi";
+          }
+          {
+            cpu = "100m";
+            memory = "128Mi";
+          };
       kubeletDir = lib.mkOption {
         type = lib.types.str;
         default = "/var/lib/kubelet";
@@ -477,20 +514,29 @@ in
     };
 
     agentHaNode = {
-      image = mayastorImage "agent-ha-node" "sha256:547f60e1667fe018415c6dd21c1eae4015c6075272f0a188cdae687759e84c6b" "Image of agent-ha-node, placed with the CSI node plugin.";
-      resources = resourcesOption "agent-ha-node" {
-        cpu = "100m";
-        memory = "64Mi";
-      } {
-        cpu = "100m";
-        memory = "64Mi";
-      };
+      image =
+        mayastorImage "agent-ha-node"
+          "sha256:547f60e1667fe018415c6dd21c1eae4015c6075272f0a188cdae687759e84c6b"
+          "Image of agent-ha-node, placed with the CSI node plugin.";
+      resources =
+        resourcesOption "agent-ha-node"
+          {
+            cpu = "100m";
+            memory = "64Mi";
+          }
+          {
+            cpu = "100m";
+            memory = "64Mi";
+          };
       extraArgs = argsOption "agent-ha-node";
       env = envOption "agent-ha-node";
     };
 
     metricsExporter = {
-      image = mayastorImage "metrics-exporter-io-engine" "sha256:ff563da470cdb8a46d8dac5a0f4fc65bfedd09d835252510084973ffcddc0d1b" "Image of the io-engine metrics exporter, which runs in every io-engine pod.";
+      image =
+        mayastorImage "metrics-exporter-io-engine"
+          "sha256:ff563da470cdb8a46d8dac5a0f4fc65bfedd09d835252510084973ffcddc0d1b"
+          "Image of the io-engine metrics exporter, which runs in every io-engine pod.";
       # The upstream chart sets none.
       resources = kix.options.resources {
         requests = {
@@ -563,13 +609,16 @@ in
         digest = "sha256:c86c06f1ce6a08b6df21eb7a9655b1818778b64c85b5cbb8413ebf7534789730";
         description = "Image of etcd. The package configures it through the Bitnami etcd image's variables.";
       };
-      resources = resourcesOption "etcd" {
-        cpu = "250m";
-        memory = "256Mi";
-      } {
-        cpu = "375m";
-        memory = "384Mi";
-      };
+      resources =
+        resourcesOption "etcd"
+          {
+            cpu = "250m";
+            memory = "256Mi";
+          }
+          {
+            cpu = "375m";
+            memory = "384Mi";
+          };
       env = envOption "etcd";
       storage = {
         size = lib.mkOption {
@@ -634,10 +683,11 @@ in
         }
       '';
       description = ''
-        DiskPools, keyed by pool name. Removing a pool here deletes its
-        DiskPool, and the operator then destroys the pool on disk once no
-        replica lives on it (the control plane refuses while replicas
-        remain).
+        DiskPools, keyed by pool name. After a pool is removed here, a
+        deploy with `--prune` deletes its DiskPool, and the operator then
+        destroys the pool on disk once no replica lives on it (the control
+        plane refuses while replicas remain). A deploy without `--prune`
+        reports the DiskPool as an orphan and leaves it.
       '';
     };
 
@@ -651,11 +701,12 @@ in
     });
 
   assertions =
-    { config, ... }:
+    { config, deps, ... }:
     let
       res = config.ioEngine.resources;
       setByPackage =
-        side: builtins.filter (k: k == "cpu" || lib.hasPrefix "hugepages-" k) (
+        side:
+        builtins.filter (k: k == "cpu" || lib.hasPrefix "hugepages-" k) (
           builtins.attrNames (lib.filterAttrs (_: v: v != null) res.${side})
         );
       owned = lib.unique (setByPackage "requests" ++ setByPackage "limits");
@@ -671,7 +722,9 @@ in
         ) config.diskPools
       );
       byDevice = lib.groupBy (cl: "${cl.node} ${cl.disk}") claims;
-      shared = lib.filterAttrs (_: cls: builtins.length (lib.unique (map (cl: cl.pool) cls)) > 1) byDevice;
+      shared = lib.filterAttrs (
+        _: cls: builtins.length (lib.unique (map (cl: cl.pool) cls)) > 1
+      ) byDevice;
       sharedText = lib.concatStringsSep "; " (
         lib.mapAttrsToList (
           _: cls:
@@ -681,7 +734,36 @@ in
         ) shared
       );
 
-      reservedPools = builtins.filter (n: n == "root" || n == "meta") (builtins.attrNames config.diskPools);
+      # Each pool and snapshot class is a part named by its key, and Kix
+      # does not render parts named root or meta.
+      reserved = builtins.filter (n: n == "root" || n == "meta");
+      reservedNames =
+        map (n: "diskPools.${n}") (reserved (builtins.attrNames config.diskPools))
+        ++ map (n: "volumeSnapshotClasses.${n}") (
+          reserved (builtins.attrNames config.volumeSnapshotClasses)
+        );
+
+      # Combinations the apiserver refuses in a toleration, which the
+      # submodule's types cannot express.
+      tolerationErrors =
+        option:
+        lib.concatLists (
+          lib.imap0 (
+            i: t:
+            let
+              at = "${option}[${toString i}]";
+            in
+            lib.optional (t.key == null && t.operator != "Exists")
+              "${at} has no key, which the apiserver accepts only with operator Exists (tolerate every taint). Set key, or set operator = \"Exists\"."
+            ++
+              lib.optional (t.operator == "Exists" && t.value != null)
+                "${at} sets value with operator Exists, which matches any value; the apiserver refuses it. Remove value, or set operator = \"Equal\"."
+            ++
+              lib.optional (t.tolerationSeconds != null && t.effect != "NoExecute")
+                "${at} sets tolerationSeconds, which the apiserver accepts only with effect NoExecute. Set effect = \"NoExecute\", or remove tolerationSeconds."
+          ) (lib.attrByPath (lib.splitString "." option) [ ] config)
+        );
+      badTolerations = tolerationErrors "ioEngine.tolerations" ++ tolerationErrors "csiNode.tolerations";
 
       defaultSnapshotClasses = builtins.attrNames (
         lib.filterAttrs (
@@ -691,6 +773,10 @@ in
     in
     [
       {
+        assertion = badTolerations == [ ];
+        message = lib.concatStringsSep " " badTolerations;
+      }
+      {
         assertion = owned == [ ];
         message = "ioEngine.resources sets ${lib.concatStringsSep ", " owned}, which the package sets: CPU from ioEngine.cpuCount and 2 MiB hugepages from ioEngine.hugepages2Mi. Set those options instead.";
       }
@@ -699,8 +785,14 @@ in
         message = "diskPools name the same disk more than once: ${sharedText}. A disk belongs to one pool; Mayastor refuses the second as claimed. The comparison is by text, so two paths to one disk (a by-id link and its /dev name) are not detected.";
       }
       {
-        assertion = reservedPools == [ ];
-        message = "diskPools.${builtins.head reservedPools}: Kix drops parts named root or meta, so this DiskPool would not be rendered. Rename it.";
+        assertion = reservedNames == [ ];
+        message = "${lib.concatStringsSep " and " reservedNames}: Kix drops parts named root or meta, so ${
+          if builtins.length reservedNames == 1 then "it" else "they"
+        } would not be rendered. Rename ${if builtins.length reservedNames == 1 then "it" else "them"}.";
+      }
+      {
+        assertion = config.volumeSnapshotClasses == { } || (deps.snapshotController or null) != null;
+        message = "volumeSnapshotClasses defines ${lib.concatStringsSep ", " (builtins.attrNames config.volumeSnapshotClasses)}, but nothing provides the snapshotController role, so the VolumeSnapshotClass kind has no owner. Add a snapshot-controller instance, or on a cluster whose environment runs the controller use a flavour or an import that provides the role, or remove volumeSnapshotClasses.";
       }
       {
         assertion = builtins.length defaultSnapshotClasses <= 1;
@@ -721,10 +813,11 @@ in
       lib.concatLists (
         lib.mapAttrsToList (
           cls: def:
-          lib.optional (lib.toInt def.parameters.repl > builtins.length poolNodes) "storageClasses.${cls} asks for ${def.parameters.repl} replicas, but diskPools has pools on ${toString (builtins.length poolNodes)} node(s); each replica needs a pool on a different node, so its volumes cannot be created. This counts only pools this instance declares."
-          ++ lib.optional (
-            (def.parameters.encrypted or "false") == "true" && encryptedPools == [ ]
-          ) "storageClasses.${cls} sets encrypted = \"true\", but no pool in diskPools is encrypted, so its volumes cannot be placed. This counts only pools this instance declares."
+          lib.optional (lib.toInt def.parameters.repl > builtins.length poolNodes)
+            "storageClasses.${cls} asks for ${def.parameters.repl} replicas, but diskPools has pools on ${toString (builtins.length poolNodes)} node(s); each replica needs a pool on a different node, so its volumes cannot be created. This counts only pools this instance declares."
+          ++
+            lib.optional ((def.parameters.encrypted or "false") == "true" && encryptedPools == [ ])
+              "storageClasses.${cls} sets encrypted = \"true\", but no pool in diskPools is encrypted, so its volumes cannot be placed. This counts only pools this instance declares."
         ) config.storageClasses
       )
     );
@@ -760,19 +853,14 @@ in
           ];
         };
 
-        key = kix.checkSecretKeys {
-          inherit who;
-          arg = "poolEncryptionKey";
-          dep = poolEncryptionKey;
-          keys = [ "encryption_parameters" ];
-        };
+        key = c.poolKey poolEncryptionKey;
 
         # Pool nodes are checked against `cluster.nodes` when the cluster
         # lists its nodes and does not autoscale them. Node labels may be set
         # outside the cluster definition, so a missing label is a warning.
         nodes = clusterConfig.cluster.nodes;
         checkNodes = nodes != { } && clusterConfig.cluster.capabilities.nodeAutoscaling != true;
-        ioEngineLabels = config.ioEngine.nodeSelector;
+        ioEngineLabels = c.ioEngineLabels config;
         checkPool =
           poolName: pool:
           if !checkNodes then
@@ -807,11 +895,10 @@ in
 
         classes = sc.resources;
 
+        # Without the snapshot API the assertions refuse volumeSnapshotClasses.
         snapshotClasses =
-          if config.volumeSnapshotClasses == { } then
+          if snapshotController == null then
             { }
-          else if snapshotController == null then
-            throw "${who}: volumeSnapshotClasses defines ${lib.concatStringsSep ", " (builtins.attrNames config.volumeSnapshotClasses)}, but nothing provides the snapshotController role, so the VolumeSnapshotClass kind has no owner. Add a snapshot-controller instance, or on a cluster whose environment runs the controller use a flavour or an import that provides the role, or remove volumeSnapshotClasses."
           else
             lib.mapAttrs (
               className: cls:
@@ -954,6 +1041,13 @@ in
         # Package defaults for capacity and health warnings on every pool
         # of this instance.
         alerts = {
+          MayastorIoEngineMetricsDown = {
+            expr = "up{${sel}} == 0";
+            "for" = "5m";
+            severity = "critical";
+            summary = "A Mayastor io-engine metrics target is down";
+            description = "Prometheus has not scraped the io-engine metrics exporter in pod {{ $labels.pod }} of Mayastor in ${c.ns} for 5 minutes, so the DiskPool alerts cannot fire for that node. Check the io-engine pod and its node.";
+          };
           MayastorDiskPoolNotOnline = {
             # diskpool_status: 0 unknown, 1 online, 2 degraded, 3 faulted,
             # 4 suspected.

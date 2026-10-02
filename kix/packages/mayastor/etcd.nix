@@ -129,7 +129,7 @@ let
           {
             names = map (v: v.name) podVars;
             from = "the pod (Downward API), listed first so the variables below can expand them";
-            fix = "Remove it.";
+            fix = "Remove it from etcd.env.";
           }
           {
             vars = {
@@ -152,7 +152,7 @@ let
               ETCD_QUOTA_BACKEND_BYTES = toString quotaBytes;
             };
             from = "the package: member names and URLs follow the StatefulSet and its headless Service, the quota follows etcd.storage.size, and authentication is off";
-            fix = "Remove it; set etcd.storage.size for the quota.";
+            fix = "Remove it from etcd.env; set etcd.storage.size for the quota.";
           }
         ];
       } config.etcd.env
@@ -177,7 +177,7 @@ in
   etcd = scope.mkStatefulSet {
     name = statefulSetName;
     spec = {
-      serviceName = self.etcdHeadless.name;
+      headlessService = self.etcdHeadless;
       replicas = members;
       # Members must start together to form the initial cluster.
       podManagementPolicy = "Parallel";

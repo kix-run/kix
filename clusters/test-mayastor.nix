@@ -54,7 +54,8 @@ kix.buildCluster {
 
           mayastor = {
             # The example key pair from the OpenEBS pool encryption
-            # documentation, for this kind test only.
+            # documentation, for this kind test only. These keys are
+            # public: never reuse them for a pool that holds real data.
             pool-key = {
               package = packages.secret;
               config.stringData.encryption_parameters = builtins.toJSON {

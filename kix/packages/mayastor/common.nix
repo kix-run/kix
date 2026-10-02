@@ -31,14 +31,42 @@ rec {
     "kubernetes.io/arch" = "amd64";
   };
 
+  # The labels of the nodes that run io-engine: `ioEngine.nodeSelector`, or
+  # upstream's engine label when it is null.
+  defaultIoEngineLabels = {
+    "openebs.io/engine" = "mayastor";
+  };
+  ioEngineLabels =
+    config:
+    if config.ioEngine.nodeSelector == null then
+      defaultIoEngineLabels
+    else
+      config.ioEngine.nodeSelector;
+
+  # The poolEncryptionKey dependency with its key checked, or null when it
+  # is not wired.
+  poolKey =
+    dep:
+    kix.checkSecretKeys {
+      inherit who dep;
+      arg = "poolEncryptionKey";
+      keys = [ "encryption_parameters" ];
+    };
+
   # Upstream's tolerations on the control plane: move off a lost node after
   # 5 seconds instead of the default 300.
-  controlPlaneTolerations = map (key: {
-    inherit key;
-    operator = "Exists";
-    effect = "NoExecute";
-    tolerationSeconds = 5;
-  }) [ "node.kubernetes.io/unreachable" "node.kubernetes.io/not-ready" ];
+  controlPlaneTolerations =
+    map
+      (key: {
+        inherit key;
+        operator = "Exists";
+        effect = "NoExecute";
+        tolerationSeconds = 5;
+      })
+      [
+        "node.kubernetes.io/unreachable"
+        "node.kubernetes.io/not-ready"
+      ];
 
   imageRef =
     image:
@@ -135,8 +163,11 @@ rec {
 
   # A component's env: `defaults` the instance may override or remove,
   # then the instance's `env`, then the variables the package owns.
+  # `option` is the instance's env option, which the refusal names because
+  # `kix.mergeEnv`'s message names only the variable.
   env =
     {
+      option,
       defaults ? { },
       owned ? { },
     }:
@@ -147,7 +178,7 @@ rec {
         owned = lib.optional (owned != { }) {
           vars = owned;
           from = "the pod's Downward API fields, which the package's flags and the program read";
-          fix = "Remove it.";
+          fix = "Remove it from ${option}.";
         };
       } instanceEnv
     );

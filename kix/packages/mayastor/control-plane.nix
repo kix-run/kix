@@ -66,71 +66,63 @@ in
             name = "agent-core";
             image = c.imageRef config.agentCore.image;
             imagePullPolicy = config.agentCore.image.pullPolicy;
-            args =
-              c.args
-                {
-                  option = "agentCore.extraArgs";
-                  base = [
-                    "--store=${ep.etcdStore}"
-                    "--grpc-server-addr=[::]:50051"
-                  ];
-                  owned = {
-                    "--store" = "the package points it at this instance's etcd; remove it.";
-                    "-s" = "the package sets --store to this instance's etcd; remove it.";
-                    "--grpc-server-addr" = "the agent-core Service and its clients use port 50051; remove it.";
-                    "-g" = "the package sets --grpc-server-addr, which the agent-core Service uses; remove it.";
-                  };
-                }
-                config.agentCore.extraArgs;
-            env =
-              c.env
-                {
-                  defaults.RUST_LOG = "info";
-                  # The namespace is part of the key of every record in etcd.
-                  owned = {
-                    MY_POD_NAME = fieldRef "metadata.name";
-                    MY_POD_NAMESPACE = fieldRef "metadata.namespace";
-                  };
-                }
-                config.agentCore.env;
+            args = c.args {
+              option = "agentCore.extraArgs";
+              base = [
+                "--store=${ep.etcdStore}"
+                "--grpc-server-addr=[::]:50051"
+              ];
+              owned = {
+                "--store" = "the package points it at this instance's etcd; remove it.";
+                "-s" = "the package sets --store to this instance's etcd; remove it.";
+                "--grpc-server-addr" = "the agent-core Service and its clients use port 50051; remove it.";
+                "-g" = "the package sets --grpc-server-addr, which the agent-core Service uses; remove it.";
+              };
+            } config.agentCore.extraArgs;
+            env = c.env {
+              option = "agentCore.env";
+              defaults.RUST_LOG = "info";
+              # The namespace is part of the key of every record in etcd.
+              owned = {
+                MY_POD_NAME = fieldRef "metadata.name";
+                MY_POD_NAMESPACE = fieldRef "metadata.namespace";
+              };
+            } config.agentCore.env;
             ports = [ (kix.port "grpc" 50051) ];
             resources = config.agentCore.resources;
+            securityContext.readOnlyRootFilesystem = true;
           }
           {
             name = "agent-ha-cluster";
             image = c.imageRef config.agentHaCluster.image;
             imagePullPolicy = config.agentHaCluster.image.pullPolicy;
-            args =
-              c.args
-                {
-                  option = "agentHaCluster.extraArgs";
-                  base = [
-                    "--grpc-endpoint=[::]:50052"
-                    "--store=${ep.etcdUrl}"
-                    "--core-grpc=https://127.0.0.1:50051"
-                  ];
-                  owned = {
-                    "--grpc-endpoint" = "the agent-core Service and agent-ha-node use port 50052; remove it.";
-                    "-g" = "the package sets --grpc-endpoint, which the agent-core Service uses; remove it.";
-                    "--store" = "the package points it at this instance's etcd; remove it.";
-                    "-s" = "the package sets --store to this instance's etcd; remove it.";
-                    "--core-grpc" = "agent-core runs in the same pod; remove it.";
-                    "-c" = "the package sets --core-grpc to agent-core in the same pod; remove it.";
-                  };
-                }
-                config.agentHaCluster.extraArgs;
-            env =
-              c.env
-                {
-                  defaults.RUST_LOG = "info";
-                  owned = {
-                    MY_POD_NAME = fieldRef "metadata.name";
-                    MY_POD_NAMESPACE = fieldRef "metadata.namespace";
-                  };
-                }
-                config.agentHaCluster.env;
+            args = c.args {
+              option = "agentHaCluster.extraArgs";
+              base = [
+                "--grpc-endpoint=[::]:50052"
+                "--store=${ep.etcdUrl}"
+                "--core-grpc=https://127.0.0.1:50051"
+              ];
+              owned = {
+                "--grpc-endpoint" = "the agent-core Service and agent-ha-node use port 50052; remove it.";
+                "-g" = "the package sets --grpc-endpoint, which the agent-core Service uses; remove it.";
+                "--store" = "the package points it at this instance's etcd; remove it.";
+                "-s" = "the package sets --store to this instance's etcd; remove it.";
+                "--core-grpc" = "agent-core runs in the same pod; remove it.";
+                "-c" = "the package sets --core-grpc to agent-core in the same pod; remove it.";
+              };
+            } config.agentHaCluster.extraArgs;
+            env = c.env {
+              option = "agentHaCluster.env";
+              defaults.RUST_LOG = "info";
+              owned = {
+                MY_POD_NAME = fieldRef "metadata.name";
+                MY_POD_NAMESPACE = fieldRef "metadata.namespace";
+              };
+            } config.agentHaCluster.env;
             ports = [ (kix.port "ha-cluster" 50052) ];
             resources = config.agentHaCluster.resources;
+            securityContext.readOnlyRootFilesystem = true;
           }
         ];
       };
@@ -181,32 +173,33 @@ in
               imagePullPolicy = config.apiRest.image.pullPolicy;
               # --dummy-certificates serves the HTTPS listener (8080), which
               # the package does not expose, with built-in certificates.
-              args =
-                c.args
-                  {
-                    option = "apiRest.extraArgs";
-                    base = [
-                      "--http=[::]:8081"
-                      "--no-auth"
-                      "--dummy-certificates"
-                      "--core-grpc=${ep.coreGrpc}"
-                    ];
-                    tunables = [ "--core-health-freq=20s" ];
-                    owned = {
-                      "--http" = "the api-rest Service, the probes, and every client use port 8081; remove it.";
-                      "--core-grpc" = "the package points it at this instance's agent-core; remove it.";
-                      "-z" = "the package sets --core-grpc to this instance's agent-core; remove it.";
-                      "--no-auth" = "the package sets it; clients send no token.";
-                      "--dummy-certificates" = "the package sets it.";
-                      "-d" = "the package sets --dummy-certificates.";
-                    };
-                  }
-                  config.apiRest.extraArgs;
-              env = c.env { defaults.RUST_LOG = "info"; } config.apiRest.env;
+              args = c.args {
+                option = "apiRest.extraArgs";
+                base = [
+                  "--http=[::]:8081"
+                  "--no-auth"
+                  "--dummy-certificates"
+                  "--core-grpc=${ep.coreGrpc}"
+                ];
+                tunables = [ "--core-health-freq=20s" ];
+                owned = {
+                  "--http" = "the api-rest Service, the probes, and every client use port 8081; remove it.";
+                  "--core-grpc" = "the package points it at this instance's agent-core; remove it.";
+                  "-z" = "the package sets --core-grpc to this instance's agent-core; remove it.";
+                  "--no-auth" = "the package sets it; clients send no token.";
+                  "--dummy-certificates" = "the package sets it.";
+                  "-d" = "the package sets --dummy-certificates.";
+                };
+              } config.apiRest.extraArgs;
+              env = c.env {
+                option = "apiRest.env";
+                defaults.RUST_LOG = "info";
+              } config.apiRest.env;
               ports = [ (kix.port "http" 8081) ];
               readinessProbe = probe "/ready" 20;
               livenessProbe = probe "/live" 30;
               resources = config.apiRest.resources;
+              securityContext.readOnlyRootFilesystem = true;
             }
           ];
         };
@@ -236,28 +229,27 @@ in
             name = "operator-diskpool";
             image = c.imageRef config.operatorDiskpool.image;
             imagePullPolicy = config.operatorDiskpool.image.pullPolicy;
-            args =
-              c.args
-                {
-                  option = "operatorDiskpool.extraArgs";
-                  base = [
-                    "--endpoint=${ep.rest}"
-                    "--namespace=${ns}"
-                  ];
-                  owned = {
-                    "--endpoint" = "the package points it at this instance's api-rest; remove it.";
-                    "-e" = "the package sets --endpoint to this instance's api-rest; remove it.";
-                    "--namespace" = "the operator reads DiskPools in this instance's namespace, where its RBAC and the package's DiskPools are; remove it.";
-                    "-n" = "the package sets --namespace to this instance's namespace; remove it.";
-                  };
-                }
-                config.operatorDiskpool.extraArgs;
-            env =
-              c.env {
-                defaults.RUST_LOG = "info";
-                owned.MY_POD_NAME = fieldRef "metadata.name";
-              } config.operatorDiskpool.env;
+            args = c.args {
+              option = "operatorDiskpool.extraArgs";
+              base = [
+                "--endpoint=${ep.rest}"
+                "--namespace=${ns}"
+              ];
+              owned = {
+                "--endpoint" = "the package points it at this instance's api-rest; remove it.";
+                "-e" = "the package sets --endpoint to this instance's api-rest; remove it.";
+                "--namespace" =
+                  "the operator reads DiskPools in this instance's namespace, where its RBAC and the package's DiskPools are; remove it.";
+                "-n" = "the package sets --namespace to this instance's namespace; remove it.";
+              };
+            } config.operatorDiskpool.extraArgs;
+            env = c.env {
+              option = "operatorDiskpool.env";
+              defaults.RUST_LOG = "info";
+              owned.MY_POD_NAME = fieldRef "metadata.name";
+            } config.operatorDiskpool.env;
             resources = config.operatorDiskpool.resources;
+            securityContext.readOnlyRootFilesystem = true;
           }
         ];
       };
@@ -288,24 +280,25 @@ in
             name = "csi-controller";
             image = c.imageRef config.csiController.image;
             imagePullPolicy = config.csiController.image.pullPolicy;
-            args =
-              c.args
-                {
-                  option = "csiController.extraArgs";
-                  base = [
-                    "--csi-socket=${csiSocket}"
-                    "--rest-endpoint=${ep.rest}"
-                  ];
-                  owned = {
-                    "--csi-socket" = "the CSI sidecars dial this socket; remove it.";
-                    "-c" = "the package sets --csi-socket, which the CSI sidecars dial; remove it.";
-                    "--rest-endpoint" = "the package points it at this instance's api-rest; remove it.";
-                    "-r" = "the package sets --rest-endpoint to this instance's api-rest; remove it.";
-                  };
-                }
-                config.csiController.extraArgs;
-            env = c.env { defaults.RUST_LOG = "info"; } config.csiController.env;
+            args = c.args {
+              option = "csiController.extraArgs";
+              base = [
+                "--csi-socket=${csiSocket}"
+                "--rest-endpoint=${ep.rest}"
+              ];
+              owned = {
+                "--csi-socket" = "the CSI sidecars dial this socket; remove it.";
+                "-c" = "the package sets --csi-socket, which the CSI sidecars dial; remove it.";
+                "--rest-endpoint" = "the package points it at this instance's api-rest; remove it.";
+                "-r" = "the package sets --rest-endpoint to this instance's api-rest; remove it.";
+              };
+            } config.csiController.extraArgs;
+            env = c.env {
+              option = "csiController.env";
+              defaults.RUST_LOG = "info";
+            } config.csiController.env;
             resources = config.csiController.resources;
+            securityContext.readOnlyRootFilesystem = true;
             volumeMounts = [
               {
                 name = "socket-dir";
