@@ -730,9 +730,8 @@ for that shape (design: `v2_discussions/133`, shipped 2026-09-07):
   `scope.mkServiceRef` for the Services the operator creates
   (`vmselect-<name>`, `vminsert-<name>`), and builds `out.serviceUrl` /
   `out.insertUrl` on the ref's `out.fqdn` so consumers keep dependency
-  context. Same pattern as `packages/prometheus` (`prometheus-operated`)
-  and `packages/alertmanager` (`alertmanager-operated`). A Service kix must
-  render itself over operator pods (the Thanos sidecar) declares the CR with
+  context. A Service Kix renders itself over operator pods declares the CR
+  with
   `metadata.annotations."kix.run/operand-of" = "<group>/<Kind>/<name>"`;
   otherwise the cross-resource check refuses a selector that matches no pod
   template in the build. There is no list of operator kinds anywhere.
@@ -747,7 +746,11 @@ native backend. `kix.modules.monitoring` instantiates
 prometheus-operator, prometheus, alertmanager, grafana, node-exporter,
 kube-state-metrics, and prometheus-default-rules
 (`clusters/test-monitoring-native.nix`, kix-examples
-`how-to/package-stacks/monitoring-cluster.nix`). For VictoriaMetrics,
+`how-to/package-stacks/monitoring-cluster.nix`). Grafana needs a
+`grafanaAdmin` secret (keys `admin-user`, `admin-password`) in the module's
+namespace. The Prometheus and Alertmanager resources take their fields
+through each instance's `extraSpec`, and Alertmanager's routing through
+`monitoring.alertmanager.settings`. For VictoriaMetrics,
 keep the `prometheus` alias on the operator package and the
 `prometheusServer` alias on the cluster package
 (`clusters/test-victoria-metrics.nix`, kix-examples

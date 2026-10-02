@@ -1,26 +1,81 @@
-# grafana: Grafana observability dashboard.
+# grafana: Grafana, with datasources wired from its dependencies and
+# k8s-sidecar containers that load dashboards and datasources from labelled
+# ConfigMaps.
 #
-# Deployment with optional k8s-sidecar containers for auto-provisioning
-# dashboards and datasources from ConfigMaps/Secrets labeled with
-# grafana_dashboard=1 / grafana_datasource=1.
+# Installs a Deployment and its ServiceAccount, a Service on port 80, the
+# grafana.ini ConfigMap, a datasources ConfigMap, and, when the cluster has
+# an ingress controller or a gateway and the instance has a host
+# (`ingress.host`, or `<instance>.<cluster.domain>`), a route through
+# `kix.expose`. Grafana's `root_url` is that route's URL.
+#
+# Dependencies:
+#   grafanaAdmin (required)      a secret with keys `admin-user` and
+#                                `admin-password`, the login of Grafana's
+#                                administrator. The sidecars use it to tell
+#                                Grafana to reload. A `secret` (SOPS source)
+#                                or a `secret-ref`. A change to a `secret`
+#                                restarts the pod; a `secret-ref` has no
+#                                content Kix can hash, so a new password
+#                                takes effect only when the pod restarts.
+#   storage (optional)           a claim for /var/lib/grafana (SQLite
+#                                database, plugins), such as a
+#                                persistent-volume-claim instance. Without
+#                                one the data lives in an emptyDir, which a
+#                                pod restart empties.
+#   prometheusServer (optional)  the default Prometheus datasource, from
+#                                `out.serviceUrl`.
+#   alertmanager (optional)      an Alertmanager datasource.
+#   loki (optional)              a Loki datasource.
+#   prometheus (optional)        the operator whose ServiceMonitor scrapes
+#                                Grafana while `metrics.enabled`.
+#
+# Minimal instances:
+#
+#   instances.monitoring-system = {
+#     grafana.package = packages.grafana;
+#     grafana-admin = {
+#       package = packages.secret;
+#       aliases = [ "grafanaAdmin" ];
+#       config.source = ./secrets/grafana-admin.sops.yaml;
+#       config.keys = [ "admin-user" "admin-password" ];
+#     };
+#   };
+#
+# clusters/test-monitoring-native.nix evaluates this pair with `stringData`
+# in place of the SOPS file.
+#
+# Each wired datasource has a fixed uid, set by `prometheusDatasource`,
+# `alertmanagerDatasource`, and `lokiDatasource`, so a dashboard that names
+# it by uid works on every cluster. `datasources` adds more; a name or uid
+# that clashes with a wired one is refused.
+#
+# The dashboards sidecar watches ConfigMaps labelled `grafana_dashboard: "1"`
+# in every namespace; the datasources sidecar watches `grafana_datasource:
+# "1"` in Grafana's namespace. Either needs read access to every ConfigMap
+# in the cluster (and every Secret with `sidecar.sources.secrets`). With the
+# datasources sidecar off, the package mounts its datasources ConfigMap
+# directly.
+#
+# The package turns off Grafana's calls to grafana.com: usage reports,
+# update checks, plugin signing-key downloads, plugin preinstalls, and the
+# news feed. `settings` turns them back on.
+#
+# Grafana serves /metrics on its HTTP port without authentication, and the
+# route sends every path there, so the metrics (request counts and the
+# number of users, dashboards, and datasources) are public at
+# <host>/metrics wherever the route exists. Kix has no switch that keeps the
+# route off. To keep them private, set `settings.metrics.enabled = false`
+# and `metrics.enabled = false`, which also stops the scrape.
+#
+# `out`: the Service's `name`, `fqdn`, and `port` (80).
+#
+# Escape hatches: `settings` for grafana.ini, `env`, `datasources`, and the
+# instance's `partsOverlays` for mounts, placement, and the pod's
+# securityContext.
 #
 # Limits: one pod (`availability.max = "none"` on the Deployment). The
 # package wires no alerting HA (ha_peers or ha_redis_address), and the
 # default SQLite database and data claim take one writer.
-#
-# DI deps:
-#   storage ? null            optional PVC for /var/lib/grafana. When absent,
-#                             an emptyDir is used. Provision via a sibling
-#                             `persistent-volume-claim` instance (immich pattern);
-#                             storage sizing/class stays with the cluster op.
-#   prometheus ? null         prometheus-operator, for ServiceMonitor creation
-#   prometheusServer ? null   auto-wires Prometheus datasource via out.serviceUrl
-#   alertmanager ? null       auto-wires Alertmanager datasource via out.serviceUrl
-#   loki ? null               auto-wires the Loki datasource from loki.out.serviceUrl
-#
-# Each auto-wired datasource has a fixed uid, set by `prometheusDatasource`,
-# `alertmanagerDatasource` and `lokiDatasource`. Dashboards find their
-# datasource by uid, so a fixed one lets a dashboard move between clusters.
 
 {
   scope,
@@ -28,22 +83,23 @@
   kix,
 }:
 let
+  release = "13.1.1";
   name = scope.instanceName;
   ns = scope.namespaceName;
+  who = "grafana ${ns}/${name}";
 
-  # `fsGroup` is what gives Grafana its data volume: the kubelet makes the
-  # volume group 472, group-writable and setgid. `OnRootMismatch` limits
-  # that to mounts where the top directory is wrong, rather than walking
-  # the whole volume on every start.
-  defaultSecurityContext = {
-    runAsNonRoot = true;
-    runAsUser = 472;
-    runAsGroup = 472;
-    fsGroup = 472;
-    fsGroupChangePolicy = "OnRootMismatch";
+  httpPort = 3000;
+
+  # Where the image keeps its data, plugins, and provisioning files. The
+  # mounts below depend on them, so the package owns them.
+  paths = {
+    GF_PATHS_DATA = "/var/lib/grafana/";
+    GF_PATHS_LOGS = "/var/log/grafana";
+    GF_PATHS_PLUGINS = "/var/lib/grafana/plugins";
+    GF_PATHS_PROVISIONING = "/etc/grafana/provisioning";
   };
 
-  # The display name and uid of one auto-wired datasource.
+  # The display name and uid of one wired datasource.
   autoDatasourceOption =
     kind: dep: defaultName: defaultUid:
     lib.mkOption {
@@ -64,31 +120,51 @@ let
       default = { };
       description = "Name and uid of the ${kind} datasource wired from the `${dep}` dependency.";
     };
+
+  iniValue = lib.types.nullOr (
+    lib.types.oneOf [
+      lib.types.bool
+      lib.types.int
+      lib.types.float
+      lib.types.str
+    ]
+  );
+
+  sidecarOptions = kind: label: searchNamespace: {
+    enabled = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Run the k8s-sidecar container that loads ${kind} from labelled ConfigMaps or Secrets.";
+    };
+    searchNamespace = lib.mkOption {
+      type = lib.types.nullOr lib.types.nonEmptyStr;
+      default = searchNamespace;
+      description = "Namespace the sidecar searches (k8s-sidecar's NAMESPACE): `ALL` or one namespace name. Null leaves NAMESPACE unset, so the sidecar searches Grafana's own namespace.";
+    };
+    label = lib.mkOption {
+      type = lib.types.nonEmptyStr;
+      default = label;
+      description = "Label key that marks a ConfigMap or Secret as holding ${kind}.";
+    };
+    labelValue = lib.mkOption {
+      type = lib.types.str;
+      default = "1";
+      description = "Value of `label` that the sidecar matches.";
+    };
+  };
 in
 {
   meta = {
-    version = "13.1.1";
+    version = release;
     description = "Grafana: observability and data visualization";
     owner = "platform";
     defaultAliases = [ "grafana" ];
     k8s.minVersion = "1.25";
-    # persistence.inlinePvc hand-rolls a claim; the preferred path is the
-    # `storage` dep + sibling persistent-volume-claim instance. Grant kept
-    # until the inline option is removed (audited by unsafeGrants).
     # With `initChownData.enabled`, init-chown-data runs as root to hand the
     # data volume to uid 472. Off by default; the grafana container itself
     # always runs as 472.
-    unsafe = [
-      "raw-pvc"
-      "run-as-root"
-    ];
+    unsafe = [ "run-as-root" ];
   };
-
-  # Grafana's own default login. Anyone who reaches Grafana can use it.
-  warnings =
-    { config, ... }:
-    lib.optional (config.admin.existingSecret == "" && config.adminPassword == "admin")
-      "grafana: the admin password is the default `admin`. Set `admin.existingSecret` to a Secret holding the credentials.";
 
   assertions =
     { config, ... }:
@@ -98,19 +174,15 @@ in
           !(config.sidecar.dashboards.enabled || config.sidecar.datasources.enabled)
           || config.sidecar.sources.configMaps
           || config.sidecar.sources.secrets;
-        message = "grafana: the sidecars are on but `sidecar.sources` turns off both ConfigMaps and Secrets, so they have nothing to read.";
+        message = "the sidecars are on but `sidecar.sources` turns off both ConfigMaps and Secrets, so they have nothing to read.";
       }
     ];
 
   options = {
-    nodeSelector = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = { };
-      description = "Merged over the default kubernetes.io/os=linux selector.";
-    };
     image = kix.options.image {
       repository = "docker.io/grafana/grafana";
-      tag = "13.1.1";
+      tag = release;
+      digest = "sha256:7cb8c64c4d57a57e734073f3cc94620adb24a0acb929bd80ba9f14017e3a975b";
     };
     resources = kix.options.resources {
       requests = {
@@ -122,14 +194,44 @@ in
         memory = "1Gi";
       };
     };
+    settings = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.attrsOf iniValue);
+      default = { };
+      example = {
+        server.root_url = "https://grafana.example.com";
+        "auth.generic_oauth" = {
+          enabled = true;
+          client_id = "grafana";
+        };
+      };
+      description = ''
+        grafana.ini, as sections of keys, merged over the package's. The
+        package sets `analytics.reporting_enabled`,
+        `analytics.check_for_updates`, `analytics.check_for_plugin_updates`,
+        `plugins.public_key_retrieval_disabled`, `plugins.preinstall_disabled`,
+        and `news.news_feed_enabled` so that Grafana does not call
+        grafana.com, `log.mode = "console"`, the data proxy's timeouts, and
+        `server.root_url` from the route. A null value removes a key. The
+        package refuses the `paths` section, `server.http_port`, and
+        `security.admin_user` and `security.admin_password`, which the
+        mounts, the Service, and the grafanaAdmin dependency decide. Take a
+        credential from the environment (`env` with a `secretKeyRef`) or
+        from a file Grafana reads (`$__file{...}`) rather than writing it
+        here: the file lands in a ConfigMap.
+      '';
+    };
+    env = kix.options.env // {
+      description = "Extra environment variables for Grafana, such as `GF_<SECTION>_<KEY>` settings: a string, a `fieldRef` source, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. The `GF_PATHS_*` variables and the administrator's login, which the grafanaAdmin dependency gives, are refused.";
+    };
     sidecar = {
       image = kix.options.image {
         repository = "quay.io/kiwigrid/k8s-sidecar";
         tag = "2.8.1";
-        description = "Image for the k8s-sidecar containers that load dashboards, datasources and alerting resources from labelled ConfigMaps and Secrets.";
+        digest = "sha256:abb55b2165c60e8f97e473862c7a3123df6f67d44f592949577c29b8fb2df9d6";
+        description = "Image for the k8s-sidecar containers that load dashboards and datasources from labelled ConfigMaps and Secrets.";
       };
-      # The grafana chart (10.5.15) leaves its `sidecar.resources` value
-      # empty and suggests these values in a comment.
+      # k8s-sidecar 2.8.1 documents no requests; these hold the two Python
+      # watchers on kind.
       resources = kix.options.resources {
         requests = {
           cpu = "50m";
@@ -141,305 +243,42 @@ in
         };
         description = "Resources for each k8s-sidecar container.";
       };
-      # What the sidecars read. Reading Secrets means watching every Secret in
-      # the cluster, so a Grafana that is broken into exposes all of them.
-      # Dashboards and datasources rarely need to be secret; a datasource
-      # password can come from the environment instead.
-      sources = lib.mkOption {
-        type = lib.types.submodule {
-          options = {
-            configMaps = lib.mkOption {
-              type = lib.types.bool;
-              default = true;
-              description = ''
-                When true, Grafana loads dashboards and datasources from
-                ConfigMaps. The sidecars watch for ConfigMaps labelled
-                `grafana_dashboard: "1"` or `grafana_datasource: "1"` (set
-                in `sidecar.dashboards` and `sidecar.datasources`) and
-                load each one within seconds, including changes and
-                deletions. By default,
-                dashboards come from every namespace and datasources only
-                from Grafana's own; `sidecar.*.searchNamespace` changes that.
-                Grafana gets read access to every ConfigMap in the cluster,
-                whatever `searchNamespace` says.
-              '';
-            };
-            secrets = lib.mkOption {
-              type = lib.types.bool;
-              default = false;
-              description = ''
-                When true, Grafana loads dashboards and datasources from
-                Secrets, with the same labels and namespaces as `configMaps`.
-                Grafana gets read access to every Secret in the cluster, so
-                anyone who breaks into Grafana can read all of them. Turn it
-                on only if a datasource definition has to hold a credential
-                and cannot take it from Grafana's environment.
-              '';
-            };
-          };
-        };
-        default = { };
-      };
-      dashboards = {
-        enabled = lib.mkOption {
+      # Reading Secrets means watching every Secret in the cluster, so a
+      # Grafana that is broken into exposes all of them.
+      sources = {
+        configMaps = lib.mkOption {
           type = lib.types.bool;
           default = true;
-          description = "Run the k8s-sidecar container that loads dashboards from labelled ConfigMaps or Secrets.";
+          description = "When true, the sidecars load dashboards and datasources from ConfigMaps labelled as `sidecar.dashboards` and `sidecar.datasources` say, within seconds of a change. Grafana gets read access to every ConfigMap in the cluster, whatever `searchNamespace` says.";
         };
-        searchNamespace = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = "ALL";
-          description = "Namespace the sidecar searches (k8s-sidecar's NAMESPACE): `ALL` or one namespace name. Null leaves NAMESPACE unset, so the sidecar searches Grafana's own namespace.";
-        };
-        label = lib.mkOption {
-          type = lib.types.str;
-          default = "grafana_dashboard";
-          description = "Label key that marks a ConfigMap or Secret as holding dashboards.";
-        };
-        labelValue = lib.mkOption {
-          type = lib.types.str;
-          default = "1";
-          description = "Value of `label` that the sidecar matches.";
-        };
-      };
-      datasources = {
-        enabled = lib.mkOption {
+        secrets = lib.mkOption {
           type = lib.types.bool;
-          default = true;
-          description = "Run the k8s-sidecar container that loads datasources from labelled ConfigMaps or Secrets.";
-        };
-        searchNamespace = lib.mkOption {
-          type = lib.types.nullOr lib.types.str;
-          default = null;
-          description = "Namespace the sidecar searches (k8s-sidecar's NAMESPACE): `ALL` or one namespace name. Null leaves NAMESPACE unset, so the sidecar searches Grafana's own namespace.";
-        };
-        label = lib.mkOption {
-          type = lib.types.str;
-          default = "grafana_datasource";
-          description = "Label key that marks a ConfigMap or Secret as holding datasources.";
-        };
-        labelValue = lib.mkOption {
-          type = lib.types.str;
-          default = "1";
-          description = "Value of `label` that the sidecar matches.";
+          default = false;
+          description = "When true, the sidecars also load dashboards and datasources from Secrets with the same labels. Grafana gets read access to every Secret in the cluster, so anyone who breaks into Grafana can read all of them. Turn it on only if a datasource definition has to hold a credential and cannot take it from Grafana's environment.";
         };
       };
+      dashboards = sidecarOptions "dashboards" "grafana_dashboard" "ALL";
+      datasources = sidecarOptions "datasources" "grafana_datasource" null;
     };
-    # grafana.ini overrides merged on top of defaults
-    grafanaIni = lib.mkOption {
-      type = lib.types.anything;
-      default = { };
-      description = "Extra grafana.ini sections merged on top of defaults.";
-    };
-    rootUrl = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "Grafana root URL (server.root_url in grafana.ini).";
-    };
-    adminUser = lib.mkOption {
-      type = lib.types.str;
-      default = "admin";
-    };
-    adminPassword = lib.mkOption {
-      type = lib.types.str;
-      default = "admin";
-      description = "Default admin password. Override via secret in production.";
-    };
-
-    # ── Existing-secret admin credentials ─────────────────────────────────
-    # Mirrors chart's `admin.existingSecret` + `userKey`/`passwordKey`.
-    # When `existingSecret` is set, kix skips the inline Secret and wires
-    # both the grafana container and the sidecars to the user-provided
-    # Secret. Sealed-secret / ExternalSecret-friendly.
-    admin = lib.mkOption {
-      type = lib.types.submodule {
-        options = {
-          existingSecret = lib.mkOption {
-            type = lib.types.str;
-            default = "";
-            description = ''
-              Name of an existing Secret holding admin creds. When something
-              creates that Secret at deploy time, such as an operator,
-              pass `kix.untrackedRef { kind = "Secret"; name = "..."; }` so
-              the deploy waits for it before starting Grafana.
-            '';
-          };
-          userKey = lib.mkOption {
-            type = lib.types.str;
-            default = "admin-user";
-          };
-          passwordKey = lib.mkOption {
-            type = lib.types.str;
-            default = "admin-password";
-          };
-        };
+    initChownData = {
+      enabled = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Run a root init container that chowns /var/lib/grafana to 472:472
+          before Grafana starts. Only for a volume whose driver ignores
+          `fsGroup`; everywhere else the pod's `fsGroup` already gives
+          Grafana the volume. The container carries DAC_READ_SEARCH as well
+          as CHOWN, because Grafana creates directories with mode 0700 and
+          root needs it to read inside them on the next start.
+        '';
       };
-      default = { };
-    };
-
-    # ── Persistence (inline PVC mode) ─────────────────────────────────────
-    # Mirrors chart's `persistence` block. Default-off matches upstream.
-    # When `enabled = true && type = "pvc"` and the package isn't already
-    # receiving a PVC via the `storage` DI alias, kix emits a sibling PVC
-    # and mounts it at `/var/lib/grafana`. The chart's `type = "sts"`
-    # (StatefulSet) path is intentionally not implemented. Use the DI
-    # `storage` alias and a sibling persistent-volume-claim instance for
-    # that workflow.
-    persistence = lib.mkOption {
-      type = lib.types.submodule {
-        options = {
-          enabled = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-          };
-          # Upstream's chart also offers "sts" (a StatefulSet with a volume
-          # claim template); kix implements only an inline PVC.
-          type = lib.mkOption {
-            type = lib.types.enum [ "pvc" ];
-            default = "pvc";
-            description = "How grafana persists its data. Only `pvc` is implemented; for other storage, wire the `storage` dependency to a persistent-volume-claim instance.";
-          };
-          size = lib.mkOption {
-            type = lib.types.str;
-            default = "10Gi";
-          };
-          storageClassName = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-          };
-          accessModes = lib.mkOption {
-            type = lib.types.listOf lib.types.str;
-            default = [ "ReadWriteOnce" ];
-          };
-          annotations = lib.mkOption {
-            type = lib.types.attrs;
-            default = { };
-          };
-          finalizers = lib.mkOption {
-            type = lib.types.listOf lib.types.str;
-            default = [ "kubernetes.io/pvc-protection" ];
-          };
-          existingClaim = lib.mkOption {
-            type = lib.types.str;
-            default = "";
-            description = "If set, mount this PVC instead of creating one.";
-          };
-          subPath = lib.mkOption {
-            type = lib.types.str;
-            default = "";
-          };
-        };
+      image = kix.options.image {
+        repository = "docker.io/library/busybox";
+        tag = "1.38.0";
+        digest = "sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e";
+        description = "Image of the init-chown-data container. It runs `chown -R`.";
       };
-      default = { };
-    };
-
-    # ── Extra mounts ──────────────────────────────────────────────────────
-    extraVolumes = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
-      default = [ ];
-      description = "Extra volume entries appended to the pod template.";
-    };
-    extraVolumeMounts = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
-      default = [ ];
-      description = "Extra volumeMount entries appended to the grafana container.";
-    };
-    extraConfigmapMounts = lib.mkOption {
-      type = lib.types.listOf (
-        lib.types.submodule {
-          options = {
-            name = lib.mkOption { type = lib.types.str; };
-            mountPath = lib.mkOption { type = lib.types.str; };
-            configMap = lib.mkOption { type = lib.types.str; };
-            subPath = lib.mkOption {
-              type = lib.types.str;
-              default = "";
-            };
-            readOnly = lib.mkOption {
-              type = lib.types.bool;
-              default = true;
-            };
-            optional = lib.mkOption {
-              type = lib.types.bool;
-              default = false;
-            };
-          };
-        }
-      );
-      default = [ ];
-      description = "ConfigMap mounts. Each entry creates a volume + volumeMount pair.";
-    };
-    extraSecretMounts = lib.mkOption {
-      type = lib.types.listOf (
-        lib.types.submodule {
-          options = {
-            name = lib.mkOption { type = lib.types.str; };
-            mountPath = lib.mkOption { type = lib.types.str; };
-            secretName = lib.mkOption { type = lib.types.str; };
-            subPath = lib.mkOption {
-              type = lib.types.str;
-              default = "";
-            };
-            readOnly = lib.mkOption {
-              type = lib.types.bool;
-              default = true;
-            };
-            optional = lib.mkOption {
-              type = lib.types.bool;
-              default = false;
-            };
-            defaultMode = lib.mkOption {
-              type = lib.types.nullOr lib.types.int;
-              default = null;
-            };
-          };
-        }
-      );
-      default = [ ];
-      description = "Secret mounts. Each entry creates a volume + volumeMount pair.";
-    };
-
-    # ── envFrom shortcuts ────────────────────────────────────────────────
-    # Chart distinguishes envFromSecret (single string) from envFromSecrets
-    # / envFromConfigMaps (lists). All three are appended to the
-    # container's envFrom; `envFrom` (free-form) above remains the most
-    # general entry point.
-    envFromSecret = lib.mkOption {
-      type = lib.types.str;
-      default = "";
-      description = ''
-        Single Secret name appended to the grafana container's envFrom. As
-        with `admin.existingSecret`, pass `kix.untrackedRef { kind =
-        "Secret"; name = "..."; }` for a Secret created at deploy time.
-      '';
-    };
-    envFromSecrets = lib.mkOption {
-      type = lib.types.listOf (
-        lib.types.submodule {
-          options = {
-            name = lib.mkOption { type = lib.types.str; };
-            optional = lib.mkOption {
-              type = lib.types.nullOr lib.types.bool;
-              default = null;
-            };
-          };
-        }
-      );
-      default = [ ];
-    };
-    envFromConfigMaps = lib.mkOption {
-      type = lib.types.listOf (
-        lib.types.submodule {
-          options = {
-            name = lib.mkOption { type = lib.types.str; };
-            optional = lib.mkOption {
-              type = lib.types.nullOr lib.types.bool;
-              default = null;
-            };
-          };
-        }
-      );
-      default = [ ];
     };
     # Rename the Prometheus one when VictoriaMetrics answers the alias, so
     # the picker says what it is. Keep the uid, so dashboards still find it.
@@ -453,9 +292,32 @@ in
         "alertmanager";
     lokiDatasource = autoDatasourceOption "Loki" "loki" "Loki" "loki";
     datasources = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
+      type = lib.types.listOf (
+        lib.types.submodule {
+          freeformType = lib.types.attrsOf lib.types.anything;
+          options = {
+            name = lib.mkOption {
+              type = lib.types.nonEmptyStr;
+              description = "Display name in the datasource picker.";
+            };
+            type = lib.mkOption {
+              type = lib.types.nonEmptyStr;
+              description = "Datasource plugin id, such as `prometheus`, `loki`, or `postgres`.";
+            };
+          };
+        }
+      );
       default = [ ];
-      description = "Extra datasources appended to auto-discovered ones.";
+      example = [
+        {
+          name = "Tempo";
+          type = "tempo";
+          uid = "tempo";
+          url = "http://tempo.tracing.svc:3200";
+          access = "proxy";
+        }
+      ];
+      description = "Datasources provisioned after the wired ones, in Grafana's provisioning format. The package does not read their URLs, so under default deny Grafana gets no egress to them; add a policy that allows it. They land in a ConfigMap, so a `secureJsonData` value (and the older `password` and `basicAuthPassword`) must be a reference that Grafana expands, such as `$DS_TOKEN` with `DS_TOKEN` in `env`, or `$__file{<path>}`; a literal is refused.";
     };
     deleteDatasources = lib.mkOption {
       type = lib.types.listOf (
@@ -480,772 +342,519 @@ in
         name that does not exist does nothing, so the entry can stay.
       '';
     };
-    dashboardProviders = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
-      default = [ ];
-      description = "Dashboard providers in addition to the sidecar's. None by default.";
-    };
-    securityContext = lib.mkOption {
-      type = lib.types.attrsOf lib.types.anything;
-      default = { };
-      defaultText = lib.literalExpression (lib.generators.toPretty { } defaultSecurityContext);
-      description = "Pod securityContext, deep-merged over the package's, which runs Grafana as user and group 472. A null value removes the package's key, for example `fsGroupChangePolicy = null`.";
-    };
-    initChownData.enabled = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-      description = ''
-        Run a root init container that chowns /var/lib/grafana to 472:472
-        before Grafana starts. Only for a volume whose driver ignores
-        `fsGroup`; everywhere else `securityContext.fsGroup` already gives
-        Grafana the volume. The container carries DAC_READ_SEARCH as well as
-        CHOWN, because Grafana creates directories with mode 0700 and root
-        needs it to read inside them on the next start.
-      '';
-    };
+    ingress = kix.options.ingress;
     metrics = kix.options.monitor;
-    extraEnv = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
-      default = [ ];
-      description = ''
-        Extra env entries appended to the grafana container. Escape hatch for
-        e.g. OIDC client_secret (`{ name = "GF_AUTH_..."; valueFrom.secretKeyRef = ...; }`).
-      '';
-    };
-    envFrom = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
-      default = [ ];
-      description = ''
-        envFrom entries on the grafana container, typically `secretRef` /
-        `configMapRef`. Use to bulk-inject GF_AUTH_GENERIC_OAUTH_* from a Secret.
-      '';
-    };
-    ingress = lib.mkOption {
-      type = lib.types.submodule {
-        options = {
-          enabled = lib.mkOption {
-            type = lib.types.bool;
-            default = false;
-          };
-          ingressClassName = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-          };
-          annotations = lib.mkOption {
-            type = lib.types.attrsOf lib.types.str;
-            default = { };
-          };
-          labels = lib.mkOption {
-            type = lib.types.attrsOf lib.types.str;
-            default = { };
-          };
-          hosts = lib.mkOption {
-            type = lib.types.listOf lib.types.str;
-            default = [ ];
-          };
-          path = lib.mkOption {
-            type = lib.types.str;
-            default = "/";
-          };
-          pathType = lib.mkOption {
-            type = lib.types.str;
-            default = "Prefix";
-          };
-          tls = lib.mkOption {
-            type = lib.types.listOf lib.types.anything;
-            default = [ ];
-          };
-          extraPaths = lib.mkOption {
-            type = lib.types.listOf lib.types.anything;
-            default = [ ];
-          };
-        };
-      };
-      default = { };
-      description = "Ingress for Grafana. Mirrors upstream chart's `grafana.ingress`.";
-    };
   };
 
-  build =
-    {
-      self,
-      config,
-      # Sibling PVC instance (persistent-volume-claim package). Optional:
-      # when absent the Deployment falls back to emptyDir (useful for
-      # ephemeral/kind clusters).
-      storage ? null,
-      # prometheus-operator, for ServiceMonitor creation (alias: "prometheus")
-      prometheus ? null,
-      # prometheus server, for datasource URL (alias: "prometheusServer")
-      prometheusServer ? null,
-      alertmanager ? null,
-      loki ? null,
-      ...
-    }:
-    let
-      hasMetrics = config.metrics.enabled && prometheus != null;
-      mkServiceMonitor = if prometheus != null then prometheus.out.mkServiceMonitor scope else null;
-
-      sidecarImg = kix.image.ref config.sidecar.image;
-
-      # k8s-sidecar's RESOURCE: which kinds the sidecars watch.
-      sidecarResource =
-        if config.sidecar.sources.configMaps && config.sidecar.sources.secrets then
-          "both"
-        else if config.sidecar.sources.secrets then
-          "secret"
-        else
-          "configmap";
-
-      # ── Admin secret indirection ────────────────────────────────────────
-      # Chart's `admin.existingSecret` lets users supply pre-existing creds.
-      # When set, kix skips its own Secret and wires both the grafana
-      # container env and the sidecars' REQ_USERNAME/REQ_PASSWORD to the
-      # external Secret via `secretKeyRef`. The external-secret name passes
-      # through `kix.untrackedRef` so the DI-tracking check accepts it; as
-      # with the mounts below, a caller's `{ kind = "Secret"; ... }`
-      # reference survives the wrap.
-      useExternalAdminSecret = config.admin.existingSecret != "";
-
-      adminUserEnv =
-        envName:
-        if useExternalAdminSecret then
-          {
-            name = envName;
-            valueFrom.secretKeyRef = {
-              name = kix.untrackedRef config.admin.existingSecret;
-              key = config.admin.userKey;
-            };
-          }
-        else
-          self.secret.out.keyRef "admin-user" // { name = envName; };
-
-      adminPasswordEnv =
-        envName:
-        if useExternalAdminSecret then
-          {
-            name = envName;
-            valueFrom.secretKeyRef = {
-              name = kix.untrackedRef config.admin.existingSecret;
-              key = config.admin.passwordKey;
-            };
-          }
-        else
-          self.secret.out.keyRef "admin-password" // { name = envName; };
-
-      # ── Persistence (inline PVC) ────────────────────────────────────────
-      # Storage precedence: DI alias `storage` wins (existing behaviour);
-      # falls back to inline PVC when `persistence.enabled = true && type =
-      # "pvc"` AND no DI storage is supplied; falls back to emptyDir
-      # otherwise.
-
-      useInlinePvc =
-        storage == null
-        && config.persistence.enabled
-        && config.persistence.type == "pvc"
-        && config.persistence.existingClaim == "";
-      useExistingClaim =
-        storage == null
-        && config.persistence.enabled
-        && config.persistence.type == "pvc"
-        && config.persistence.existingClaim != "";
-      inlinePvcName = "${name}";
-
-      # Volume entry that mounts grafana's /var/lib/grafana. Picks PVC
-      # (DI / inline / existing-claim) or falls back to emptyDir.
-      grafanaStorageVolume =
-        if storage != null then
-          {
-            name = self.storageMount.name;
-          }
-          // self.storageMount.source
-        else if useInlinePvc then
-          {
-            name = "storage";
-            persistentVolumeClaim.claimName = self.persistencePvc.out.name;
-          }
-        else if useExistingClaim then
-          {
-            name = "storage";
-            persistentVolumeClaim.claimName = config.persistence.existingClaim;
-          }
-        else
-          {
-            name = "storage";
-            emptyDir = { };
-          };
-
-      # ── Extra mount conversion ──────────────────────────────────────────
-      # Names supplied via `extraConfigmapMounts`/`extraSecretMounts`/
-      # `envFromSecret*`/`envFromConfigMaps` reference external resources
-      # the package doesn't manage. Wrap with `kix.untrackedRef` so the
-      # DI-tracking check passes without forcing every caller to wrap by
-      # hand. Wrapping keeps the context a caller's value already carries,
-      # so a caller that passes `kix.untrackedRef { kind = "Secret"; name =
-      # "..."; }` still makes kix wait for that Secret to exist before it
-      # applies the Deployment.
-      extraConfigmapVolumes = map (m: {
-        inherit (m) name;
-        configMap = {
-          name = kix.untrackedRef m.configMap;
-        }
-        // lib.optionalAttrs m.optional { optional = true; };
-      }) config.extraConfigmapMounts;
-      extraConfigmapVolumeMounts = map (
-        m:
-        {
-          inherit (m) name mountPath readOnly;
-        }
-        // lib.optionalAttrs (m.subPath != "") { inherit (m) subPath; }
-      ) config.extraConfigmapMounts;
-
-      extraSecretVolumes = map (m: {
-        inherit (m) name;
-        secret = {
-          secretName = kix.untrackedRef m.secretName;
-        }
-        // lib.optionalAttrs m.optional { optional = true; }
-        // lib.optionalAttrs (m.defaultMode != null) {
-          inherit (m) defaultMode;
+  build = [
+    (
+      {
+        self,
+        config,
+        grafanaAdmin,
+        storage ? null,
+        prometheusServer ? null,
+        alertmanager ? null,
+        loki ? null,
+        ...
+      }:
+      let
+        admin = kix.checkSecretKeys {
+          inherit who;
+          arg = "grafanaAdmin";
+          dep = grafanaAdmin;
+          keys = [
+            "admin-user"
+            "admin-password"
+          ];
         };
-      }) config.extraSecretMounts;
-      extraSecretVolumeMounts = map (
-        m:
-        {
-          inherit (m) name mountPath readOnly;
-        }
-        // lib.optionalAttrs (m.subPath != "") { inherit (m) subPath; }
-      ) config.extraSecretMounts;
+        adminUser = admin.out.keyRef "admin-user";
+        adminPassword = admin.out.keyRef "admin-password";
 
-      extraEnvFromSecret = lib.optional (config.envFromSecret != "") {
-        secretRef.name = kix.untrackedRef config.envFromSecret;
-      };
-      extraEnvFromSecrets = map (
-        s:
-        {
-          secretRef.name = kix.untrackedRef s.name;
-        }
-        // lib.optionalAttrs (s.optional != null) {
-          secretRef.optional = s.optional;
-        }
-      ) config.envFromSecrets;
-      extraEnvFromConfigMaps = map (
-        c:
-        {
-          configMapRef.name = kix.untrackedRef c.name;
-        }
-        // lib.optionalAttrs (c.optional != null) {
-          configMapRef.optional = c.optional;
-        }
-      ) config.envFromConfigMaps;
-
-      # ── Auto-wired datasources from DI ──────────────────────────────────
-      autoDatasources =
-        lib.optional (prometheusServer != null) {
-          inherit (config.prometheusDatasource) name uid;
-          type = "prometheus";
-          url = prometheusServer.out.serviceUrl;
-          access = "proxy";
-          isDefault = true;
-          jsonData.httpMethod = "POST";
-        }
-        ++ lib.optional (alertmanager != null) {
-          inherit (config.alertmanagerDatasource) name uid;
-          type = "alertmanager";
-          url = alertmanager.out.serviceUrl;
-          access = "proxy";
-          jsonData = {
-            handleGrafanaManagedAlerts = false;
-            implementation = "prometheus";
-          };
-        }
-        ++ lib.optional (loki != null) {
-          inherit (config.lokiDatasource) name uid;
-          type = "loki";
-          url =
-            loki.out.serviceUrl
-              or (throw "grafana ${ns}/${name}: deps.loki resolved to an instance without out.serviceUrl, the base URL of Loki's HTTP API. Wire a loki instance, or set out.serviceUrl in the kix.mkImport that answers loki.");
-          access = "proxy";
-        };
-
-      allDatasources = autoDatasources ++ config.datasources;
-
-      # ── grafana.ini ─────────────────────────────────────────────────────
-      # No calls home: no usage reports, no update checks.
-      defaultIni = {
-        analytics = {
-          reporting_enabled = false;
-          check_for_updates = false;
-          check_for_plugin_updates = false;
-        };
-        "dataproxy".keep_alive_seconds = 600;
-        "dataproxy".timeout = 600;
-        log.mode = "console";
-        paths = {
-          data = "/var/lib/grafana/";
-          logs = "/var/log/grafana";
-          plugins = "/var/lib/grafana/plugins";
-          provisioning = "/etc/grafana/provisioning";
-        };
-        server = lib.optionalAttrs (config.rootUrl != null) {
-          root_url = config.rootUrl;
-        };
-      };
-
-      mergedIni = lib.recursiveUpdate defaultIni config.grafanaIni;
-
-      # Booleans render as `true`/`false`. `toString` would give `1` and an
-      # empty string, and Grafana reads an empty value as the setting's
-      # default, so `false` would be lost.
-      renderIniValue = v: if builtins.isBool v then (if v then "true" else "false") else toString v;
-
-      renderIniSection =
-        sectionName: attrs:
-        let
-          lines = lib.mapAttrsToList (k: v: "${k} = ${renderIniValue v}") attrs;
-        in
-        "[${sectionName}]\n${lib.concatStringsSep "\n" lines}\n";
-
-      grafanaIniStr = lib.concatStringsSep "\n" (
-        lib.mapAttrsToList (
-          section: value:
-          if builtins.isAttrs value then
-            renderIniSection section value
+        sidecarResource =
+          if config.sidecar.sources.configMaps && config.sidecar.sources.secrets then
+            "both"
+          else if config.sidecar.sources.secrets then
+            "secret"
           else
-            renderIniSection section { "${section}" = value; }
-        ) mergedIni
-      );
+            "configmap";
 
-      # ── Dashboard providers ─────────────────────────────────────────────
-      sidecarProvider = {
-        name = "sidecarProvider";
-        orgId = 1;
-        folder = "";
-        folderUid = "";
-        type = "file";
-        disableDeletion = false;
-        allowUiUpdates = false;
-        updateIntervalSeconds = 30;
-        options = {
-          foldersFromFilesStructure = false;
-          path = "/tmp/dashboards";
-        };
-      };
+        dashboardsOn = config.sidecar.dashboards.enabled;
+        datasourcesOn = config.sidecar.datasources.enabled;
 
-      # Only with `initChownData.enabled`; see the option.
-      initChownContainer = {
-        name = "init-chown-data";
-        image = "docker.io/library/busybox:1.38.0";
-        command = [
-          "chown"
-          "-R"
-          "472:472"
-          "/var/lib/grafana"
-        ];
-        # The chart's commented `initChownData.resources` example
-        # (grafana chart 10.5.15).
-        resources = {
-          requests = {
-            cpu = "100m";
-            memory = "128Mi";
+        # Wired datasources from DI.
+        wiredDatasources =
+          lib.optional (prometheusServer != null) {
+            inherit (config.prometheusDatasource) name uid;
+            type = "prometheus";
+            url =
+              prometheusServer.out.serviceUrl
+                or (throw "${who}: deps.prometheusServer resolved to an instance without out.serviceUrl, the base URL of the Prometheus HTTP API. Wire a prometheus instance, or set out.serviceUrl in the kix.mkImport that answers prometheusServer.");
+            access = "proxy";
+            isDefault = true;
+            jsonData.httpMethod = "POST";
+          }
+          ++ lib.optional (alertmanager != null) {
+            inherit (config.alertmanagerDatasource) name uid;
+            type = "alertmanager";
+            url =
+              alertmanager.out.serviceUrl
+                or (throw "${who}: deps.alertmanager resolved to an instance without out.serviceUrl, the base URL of Alertmanager's API. Wire an alertmanager instance, or set out.serviceUrl in the kix.mkImport that answers alertmanager.");
+            access = "proxy";
+            jsonData = {
+              handleGrafanaManagedAlerts = false;
+              implementation = "prometheus";
+            };
+          }
+          ++ lib.optional (loki != null) {
+            inherit (config.lokiDatasource) name uid;
+            type = "loki";
+            url =
+              loki.out.serviceUrl
+                or (throw "${who}: deps.loki resolved to an instance without out.serviceUrl, the base URL of Loki's HTTP API. Wire a loki instance, or set out.serviceUrl in the kix.mkImport that answers loki.");
+            access = "proxy";
           };
-          limits = {
-            cpu = "100m";
-            memory = "128Mi";
+
+        clashes =
+          field:
+          let
+            wired = map (d: d.${field}) wiredDatasources;
+          in
+          builtins.filter (v: builtins.elem v wired) (
+            builtins.filter (v: v != null) (map (d: d.${field} or null) config.datasources)
+          );
+        clashing = clashes "name" ++ clashes "uid";
+
+        # The datasources ConfigMap is not secret. Grafana expands $VAR,
+        # ${VAR}, $__env{VAR}, and $__file{path} in provisioning files, so a
+        # credential is written as one of those references.
+        inlineSecrets = lib.concatMap (
+          d:
+          let
+            where = "datasources \"${d.name}\"";
+            literal = v: builtins.isString v && !(lib.hasInfix "$" v);
+          in
+          lib.mapAttrsToList (k: _: "${where} secureJsonData.${k}") (
+            lib.filterAttrs (_: literal) (d.secureJsonData or { })
+          )
+          ++ map (k: "${where} ${k}") (
+            builtins.filter (k: literal (d.${k} or null)) [
+              "password"
+              "basicAuthPassword"
+            ]
+          )
+        ) config.datasources;
+
+        # Only the option description warns that the URLs in
+        # config.datasources get no egress under default deny. A candidate
+        # for an evaluation error while network policy is on.
+        datasources =
+          if inlineSecrets != [ ] then
+            throw "${who}: ${lib.concatStringsSep ", " inlineSecrets} holds a value written inline, and the datasources ConfigMap would carry it. Write a reference that Grafana expands: $NAME with NAME in `env` from a secretKeyRef, or $__file{<path>} for a mounted file, and put it under secureJsonData."
+          else if clashing != [ ] then
+            throw "${who}: datasources reuses ${
+              lib.concatMapStringsSep ", " (v: "\"${v}\"") clashing
+            }, the name or uid of a datasource wired from a dependency. Rename the entry, or change prometheusDatasource, alertmanagerDatasource, or lokiDatasource."
+          else
+            wiredDatasources ++ map (lib.filterAttrs (_: v: v != null)) config.datasources;
+
+        # grafana.ini. Booleans render as `true`/`false`: Grafana reads an
+        # empty value as the setting's default, so `toString false` would
+        # be lost.
+        rootUrl = if self.exposure.via == null then null else self.exposure.url;
+        defaultIni = {
+          analytics = {
+            reporting_enabled = false;
+            check_for_updates = false;
+            check_for_plugin_updates = false;
           };
-        };
-        # chown writes only to the mounted volume.
-        securityContext = {
-          runAsNonRoot = false;
-          runAsUser = 0;
-          readOnlyRootFilesystem = true;
-          capabilities = {
-            add = [
-              "CHOWN"
-              "DAC_READ_SEARCH"
+          plugins = {
+            public_key_retrieval_disabled = true;
+            preinstall_disabled = true;
+          };
+          news.news_feed_enabled = false;
+          dataproxy = {
+            keep_alive_seconds = 600;
+            timeout = 600;
+          };
+          log.mode = "console";
+        }
+        // lib.optionalAttrs (rootUrl != null) { server.root_url = rootUrl; };
+
+        ini = lib.mapAttrs (_: lib.filterAttrs (_: v: v != null)) (
+          kix.mergeGuarded {
+            inherit who;
+            what = "settings";
+            locked = [
+              [ "paths" ]
+              [
+                "server"
+                "http_port"
+              ]
+              [
+                "security"
+                "admin_user"
+              ]
+              [
+                "security"
+                "admin_password"
+              ]
             ];
-            drop = [ "ALL" ];
-          };
+          } defaultIni config.settings
+        );
+
+        renderIniValue = v: if builtins.isBool v then lib.boolToString v else toString v;
+
+        # grafana.ini is line-based: a line break in a value, or `]` in a
+        # section name or `=` in a key, would start a new section or key
+        # past the locks above.
+        hasLineBreak = v: lib.hasInfix "\n" v || lib.hasInfix "\r" v;
+        iniProblems = lib.concatLists (
+          lib.mapAttrsToList (
+            section: keys:
+            lib.optional (hasLineBreak section || lib.hasInfix "]" section) "section name ${builtins.toJSON section}"
+            ++ lib.concatLists (
+              lib.mapAttrsToList (
+                k: v:
+                lib.optional (hasLineBreak k || lib.hasInfix "=" k) "key ${builtins.toJSON "${section}.${k}"}"
+                ++ lib.optional (hasLineBreak (renderIniValue v)) "the value of ${section}.${k}"
+              ) keys
+            )
+          ) ini
+        );
+        iniText =
+          if iniProblems != [ ] then
+            throw "${who}: settings: ${lib.concatStringsSep ", " iniProblems} would break a grafana.ini line, so the file would carry sections or keys that settings does not show. Keep values on one line, and leave line breaks and `]` out of section names and line breaks and `=` out of keys."
+          else
+            lib.concatStringsSep "\n" (
+              lib.mapAttrsToList (
+                section: keys:
+                "[${section}]\n"
+                + lib.concatStrings (lib.mapAttrsToList (k: v: "${k} = ${renderIniValue v}\n") keys)
+              ) ini
+            );
+
+        env = kix.mkEnvVars (
+          kix.mergeEnv {
+            inherit who;
+            owned = [
+              {
+                vars = paths;
+                from = "the package, which mounts the data, plugins, and provisioning directories there";
+                fix = "Remove it from env.";
+              }
+              {
+                vars = {
+                  GF_SECURITY_ADMIN_USER = adminUser;
+                  GF_SECURITY_ADMIN_PASSWORD = adminPassword;
+                };
+                names = [
+                  "GF_SECURITY_ADMIN_USER__FILE"
+                  "GF_SECURITY_ADMIN_PASSWORD__FILE"
+                ];
+                from = "the grafanaAdmin dependency";
+                fix = "Wire a different secret through deps.grafanaAdmin instead.";
+              }
+              {
+                vars.GF_SERVER_HTTP_PORT = toString httpPort;
+                from = "the package, so the Service and probes match the container";
+                fix = "Remove it from env.";
+              }
+            ];
+          } config.env
+        );
+
+        securityContext = {
+          allowPrivilegeEscalation = false;
+          capabilities.drop = [ "ALL" ];
+          readOnlyRootFilesystem = true;
           seccompProfile.type = "RuntimeDefault";
         };
-        volumeMounts = [
+
+        # Only with `initChownData.enabled`; see the option.
+        initChownContainer = {
+          name = "init-chown-data";
+          image = kix.image.ref config.initChownData.image;
+          imagePullPolicy = config.initChownData.image.pullPolicy;
+          command = [
+            "chown"
+            "-R"
+            "472:472"
+            paths.GF_PATHS_DATA
+          ];
+          resources = {
+            requests = {
+              cpu = "100m";
+              memory = "128Mi";
+            };
+            limits = {
+              cpu = "100m";
+              memory = "128Mi";
+            };
+          };
+          # chown writes only to the mounted volume.
+          securityContext = {
+            runAsNonRoot = false;
+            runAsUser = 0;
+            readOnlyRootFilesystem = true;
+            capabilities = {
+              add = [
+                "CHOWN"
+                "DAC_READ_SEARCH"
+              ];
+              drop = [ "ALL" ];
+            };
+            seccompProfile.type = "RuntimeDefault";
+          };
+          volumeMounts = [
+            {
+              name = "storage";
+              mountPath = paths.GF_PATHS_DATA;
+            }
+          ];
+        };
+
+        # k8s-sidecar serves /healthz on HEALTH_PORT (default 8080): 503 until
+        # the first sync completes, and again if the watchers die or the
+        # Kubernetes API has not answered for 60s. The sidecars share the pod
+        # network, so each needs its own port. On kind, under the 100m CPU
+        # limit, a sidecar took longer than 35s to open the port; the
+        # startupProbe holds liveness off for up to five minutes.
+        sidecar =
           {
-            name = "storage";
-            mountPath = "/var/lib/grafana";
-          }
-        ];
-      };
-
-      # ── Sidecar security context ────────────────────────────────────────
-      # The sidecars write only to their mounted folders. The
-      # grafana-community chart (13.2.6) sets a read-only root for them.
-      sidecarSecCtx = {
-        allowPrivilegeEscalation = false;
-        capabilities.drop = [ "ALL" ];
-        readOnlyRootFilesystem = true;
-        seccompProfile.type = "RuntimeDefault";
-      };
-
-      # k8s-sidecar serves /healthz on HEALTH_PORT (default 8080): 503 until
-      # the first sync completes, and again if the watchers die or the
-      # Kubernetes API has not answered for 60s. The sidecars share the pod
-      # network, so each needs its own port; these are the
-      # grafana-community chart's (13.2.6), as is the startupProbe. The other
-      # timings are the k8s-sidecar 2.8.1 README's examples. On kind, under
-      # the 100m CPU limit, a sidecar took longer than the README's 35s
-      # liveness delay to open the port and was restarted; the startupProbe
-      # holds liveness off for up to five minutes.
-      sidecarHealth = port: {
-        env = kix.mkEnvVars { HEALTH_PORT = toString port; };
-        probes = {
-          startupProbe = {
-            httpGet = {
-              path = "/healthz";
-              inherit port;
+            container,
+            healthPort,
+            folder,
+            reloadPath,
+            options,
+          }:
+          let
+            healthz = {
+              httpGet = {
+                path = "/healthz";
+                port = healthPort;
+              };
             };
-            initialDelaySeconds = 5;
-            periodSeconds = 5;
-            failureThreshold = 60;
-          };
-          readinessProbe = {
-            httpGet = {
-              path = "/healthz";
-              inherit port;
-            };
-            initialDelaySeconds = 20;
-            periodSeconds = 5;
-          };
-          livenessProbe = {
-            httpGet = {
-              path = "/healthz";
-              inherit port;
-            };
-            initialDelaySeconds = 35;
-            periodSeconds = 10;
-          };
-        };
-      };
-      dashboardHealth = sidecarHealth 8084;
-      datasourceHealth = sidecarHealth 8082;
-
-      # ── Sidecar containers ──────────────────────────────────────────────
-      dashboardSidecar = lib.optional config.sidecar.dashboards.enabled (
-        {
-          name = "grafana-sc-dashboard";
-          image = sidecarImg;
-          imagePullPolicy = config.sidecar.image.pullPolicy;
-          env =
-            kix.mkEnvVars {
-              FOLDER = "/tmp/dashboards";
-              LABEL = config.sidecar.dashboards.label;
-              LABEL_VALUE = config.sidecar.dashboards.labelValue;
+          in
+          {
+            name = container;
+            image = kix.image.ref config.sidecar.image;
+            imagePullPolicy = config.sidecar.image.pullPolicy;
+            env = kix.mkEnvVars {
+              FOLDER = folder;
+              LABEL = options.label;
+              LABEL_VALUE = options.labelValue;
               METHOD = "WATCH";
-              NAMESPACE = config.sidecar.dashboards.searchNamespace;
+              NAMESPACE = options.searchNamespace;
               REQ_METHOD = "POST";
-              REQ_URL = "http://localhost:3000/api/admin/provisioning/dashboards/reload";
+              REQ_URL = "http://localhost:${toString httpPort}${reloadPath}";
+              REQ_USERNAME = adminUser;
+              REQ_PASSWORD = adminPassword;
               RESOURCE = sidecarResource;
-            }
-            ++ dashboardHealth.env
-            ++ [
-              (adminUserEnv "REQ_USERNAME")
-              (adminPasswordEnv "REQ_PASSWORD")
-            ];
-          resources = config.sidecar.resources;
-          securityContext = sidecarSecCtx;
-          volumeMounts = [
-            {
-              name = "sc-dashboard-volume";
-              mountPath = "/tmp/dashboards";
-            }
-          ];
-        }
-        // dashboardHealth.probes
-      );
-
-      datasourceSidecar = lib.optional config.sidecar.datasources.enabled (
-        {
-          name = "grafana-sc-datasources";
-          image = sidecarImg;
-          imagePullPolicy = config.sidecar.image.pullPolicy;
-          env =
-            kix.mkEnvVars (
-              {
-                FOLDER = "/etc/grafana/provisioning/datasources";
-                LABEL = config.sidecar.datasources.label;
-                LABEL_VALUE = config.sidecar.datasources.labelValue;
-                METHOD = "WATCH";
-                REQ_METHOD = "POST";
-                REQ_URL = "http://localhost:3000/api/admin/provisioning/datasources/reload";
-                RESOURCE = sidecarResource;
-              }
-              // lib.optionalAttrs (config.sidecar.datasources.searchNamespace != null) {
-                NAMESPACE = config.sidecar.datasources.searchNamespace;
-              }
-            )
-            ++ datasourceHealth.env
-            ++ [
-              (adminUserEnv "REQ_USERNAME")
-              (adminPasswordEnv "REQ_PASSWORD")
-            ];
-          resources = config.sidecar.resources;
-          securityContext = sidecarSecCtx;
-          volumeMounts = [
-            {
-              name = "sc-datasources-volume";
-              mountPath = "/etc/grafana/provisioning/datasources";
-            }
-          ];
-        }
-        // datasourceHealth.probes
-      );
-
-      # ── RBAC for sidecars ───────────────────────────────────────────────
-      # Sidecars watch the kinds in `sidecar.sources` across all namespaces.
-      needsClusterRbac = config.sidecar.dashboards.enabled || config.sidecar.datasources.enabled;
-
-      inherit (scope.rbac)
-        core
-        grant
-        watch
-        mkClusterRoleSet
-        ;
-
-      clusterRoles = lib.optionalAttrs needsClusterRbac (
-        mkClusterRoleSet scope {
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = self.serviceAccount.out.name;
-              namespace = ns;
-            }
-          ];
-          labels = scope.selectorLabels;
-          roles = {
-            "${name}" = grant (
-              lib.optional config.sidecar.sources.configMaps (core.configmaps |> watch)
-              ++ lib.optional config.sidecar.sources.secrets (core.secrets |> watch)
-            );
-          };
-        }
-      );
-
-    in
-    {
-      serviceAccount = scope.mkResource {
-        apiVersion = "v1";
-        kind = "ServiceAccount";
-        inherit name;
-        extra.automountServiceAccountToken = true;
-      };
-
-      # ── Config ──────────────────────────────────────────────────────────
-
-      configMap = scope.mkResource {
-        apiVersion = "v1";
-        kind = "ConfigMap";
-        name = "${name}-config";
-        extra.data = {
-          "grafana.ini" = grafanaIniStr;
-          "dashboardproviders.yaml" = builtins.toJSON {
-            apiVersion = 1;
-            providers = config.dashboardProviders;
-          };
-        };
-      };
-
-      scDashboardProvider =
-        if config.sidecar.dashboards.enabled then
-          scope.mkResource {
-            apiVersion = "v1";
-            kind = "ConfigMap";
-            name = "${name}-sc-dashboard-provider";
-            extra.data = {
-              "provider.yaml" = builtins.toJSON {
-                apiVersion = 1;
-                providers = [ sidecarProvider ];
-              };
+              HEALTH_PORT = toString healthPort;
             };
-          }
-        else
-          null;
-
-      datasourcesConfigMap = scope.mkResource {
-        apiVersion = "v1";
-        kind = "ConfigMap";
-        name = "${name}-datasources";
-        extra = {
-          metadata.labels = {
-            grafana_datasource = "1";
-          };
-          data = {
-            "datasources.yaml" = builtins.toJSON (
+            resources = config.sidecar.resources;
+            inherit securityContext;
+            volumeMounts = [
               {
-                apiVersion = 1;
-                datasources = allDatasources;
+                name = container;
+                mountPath = folder;
               }
-              // lib.optionalAttrs (config.deleteDatasources != [ ]) {
-                inherit (config) deleteDatasources;
-              }
-            );
-          };
-        };
-      };
-
-      # When `admin.existingSecret` is set, the user-provided Secret is the
-      # source of truth: kix skips its own Secret resource. Reading
-      # `self.secret` in that mode is a programmer error; gate consumers
-      # off `useExternalAdminSecret` instead.
-      secret =
-        if useExternalAdminSecret then
-          null
-        else
-          scope.mkSecret {
-            inherit name;
-            stringData = {
-              admin-user = config.adminUser;
-              admin-password = config.adminPassword;
+            ];
+            startupProbe = healthz // {
+              initialDelaySeconds = 5;
+              periodSeconds = 5;
+              failureThreshold = 60;
+            };
+            readinessProbe = healthz // {
+              initialDelaySeconds = 20;
+              periodSeconds = 5;
+            };
+            livenessProbe = healthz // {
+              initialDelaySeconds = 35;
+              periodSeconds = 10;
             };
           };
 
-      # Inline PVC, only when persistence is enabled in pvc mode and no DI
-      # storage is supplied (DI takes precedence). `existingClaim` skips
-      # this; we mount the user's PVC directly.
-      persistencePvc =
-        if useInlinePvc then
-          scope.mkResource (
+        dashboardFolder = "/tmp/dashboards";
+        datasourceFolder = "${paths.GF_PATHS_PROVISIONING}/datasources";
+
+        sidecars =
+          lib.optional dashboardsOn (sidecar {
+            container = "grafana-sc-dashboard";
+            healthPort = 8084;
+            folder = dashboardFolder;
+            reloadPath = "/api/admin/provisioning/dashboards/reload";
+            options = config.sidecar.dashboards;
+          })
+          ++ lib.optional datasourcesOn (sidecar {
+            container = "grafana-sc-datasources";
+            healthPort = 8082;
+            folder = datasourceFolder;
+            reloadPath = "/api/admin/provisioning/datasources/reload";
+            options = config.sidecar.datasources;
+          });
+
+        inherit (scope.rbac) core grant watch;
+
+        storageVolume =
+          if storage != null then
             {
+              name = "storage";
+            }
+            // (kix.mount.pvc storage { mountPath = paths.GF_PATHS_DATA; }).source
+          else
+            {
+              name = "storage";
+              emptyDir = { };
+            };
+
+        httpProbe = {
+          httpGet = {
+            path = "/api/health";
+            port = "grafana";
+          };
+        };
+      in
+      {
+        serviceAccount = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ServiceAccount";
+          inherit name;
+        };
+
+        # The sidecars watch the kinds in `sidecar.sources` across all
+        # namespaces.
+        sidecarRbac =
+          if dashboardsOn || datasourcesOn then
+            scope.rbac.mkClusterRoleSet scope {
+              labels = scope.selectorLabels;
+              subjects = [
+                {
+                  kind = "ServiceAccount";
+                  name = self.serviceAccount.out.name;
+                  namespace = ns;
+                }
+              ];
+              roles.${name} = grant (
+                lib.optional config.sidecar.sources.configMaps (core.configmaps |> watch)
+                ++ lib.optional config.sidecar.sources.secrets (core.secrets |> watch)
+              );
+            }
+          else
+            null;
+
+        configMap = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "${name}-config";
+          extra.data."grafana.ini" = iniText;
+        };
+
+        scDashboardProvider =
+          if dashboardsOn then
+            scope.mkResource {
               apiVersion = "v1";
-              kind = "PersistentVolumeClaim";
-              name = inlinePvcName;
-              annotations = config.persistence.annotations;
-              spec = {
-                accessModes = config.persistence.accessModes;
-                resources.requests.storage = config.persistence.size;
-              }
-              // lib.optionalAttrs (config.persistence.storageClassName != null) {
-                inherit (config.persistence) storageClassName;
+              kind = "ConfigMap";
+              name = "${name}-sc-dashboard-provider";
+              extra.data."provider.yaml" = builtins.toJSON {
+                apiVersion = 1;
+                providers = [
+                  {
+                    name = "sidecarProvider";
+                    orgId = 1;
+                    type = "file";
+                    disableDeletion = false;
+                    allowUiUpdates = false;
+                    updateIntervalSeconds = 30;
+                    options = {
+                      foldersFromFilesStructure = false;
+                      path = dashboardFolder;
+                    };
+                  }
+                ];
               };
             }
-            // lib.optionalAttrs (config.persistence.finalizers != [ ]) {
-              extra.metadata.finalizers = config.persistence.finalizers;
+          else
+            null;
+
+        # The datasources sidecar loads this ConfigMap by its label; with the
+        # sidecar off, the Deployment mounts it.
+        datasourcesConfigMap = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "${name}-datasources";
+          labels = lib.optionalAttrs datasourcesOn {
+            ${config.sidecar.datasources.label} = config.sidecar.datasources.labelValue;
+          };
+          extra.data."datasources.yaml" = builtins.toJSON (
+            {
+              apiVersion = 1;
+              inherit datasources;
             }
-          )
-        else
-          null;
+            // lib.optionalAttrs (config.deleteDatasources != [ ]) {
+              inherit (config) deleteDatasources;
+            }
+          );
+        };
 
-      # ── Storage mount (DI) ──────────────────────────────────────────────
-      # Grafana's /var/lib/grafana is backed by the sibling `storage`
-      # instance when present. `kix.mount.pvc` returns null if storage is
-      # null, which we use below to pick an emptyDir fallback.
-      storageMount =
-        if storage != null then
-          kix.mount.pvc storage {
-            name = "storage";
-            mountPath = "/var/lib/grafana";
-          }
-        else
-          null;
-
-      # ── Deployment ──────────────────────────────────────────────────────
-
-      # A partsOverlays entry that rebuilds this Deployment without
-      # availability.max can run more pods once the limits in the header are
-      # addressed.
-      deployment =
-        {
+        deployment = scope.mkDeployment {
           inherit name;
           availability.max = "none";
           spec = {
             replicas = 1;
             selector.matchLabels = scope.selectorLabels;
+            # One pod writes the SQLite database and the data claim.
             strategy.type = "Recreate";
-            # The datasource sidecar reads the datasources ConfigMap through
-            # the API, so no volume links it to the pod. This annotation
-            # carries its Service addresses into the pod spec, which gives
-            # Grafana derived egress to each datasource, and restarts the pod
-            # when a datasource changes.
-            template.metadata.annotations = lib.optionalAttrs config.sidecar.datasources.enabled {
+            # The datasources reach the pod through the sidecar or a volume,
+            # so this annotation carries their Service addresses into the pod
+            # spec, which gives Grafana derived egress to each datasource,
+            # and restarts the pod when a datasource changes. The others
+            # restart it when grafana.ini or the administrator's login
+            # changes; Grafana reads both only at start.
+            template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
               "checksum/datasources" = self.datasourcesConfigMap.out.identityHash;
+              "checksum/config" = self.configMap.out.identityHash;
+              "checksum/grafana-admin" = admin.out.identityHash or null;
             };
             template.spec = {
               serviceAccountName = self.serviceAccount.out.name;
-              automountServiceAccountToken = true;
-              # Kubernetes' default, set explicitly; the grafana chart
-              # (10.5.15) sets none.
+              # Kubernetes' default; Grafana documents no shutdown drain.
               terminationGracePeriodSeconds = 30;
-              securityContext = lib.filterAttrsRecursive (_: v: v != null) (
-                lib.recursiveUpdate defaultSecurityContext config.securityContext
-              );
+              # `fsGroup` gives Grafana its data volume: the kubelet makes the
+              # volume group 472, group-writable and setgid. `OnRootMismatch`
+              # limits that to mounts where the top directory is wrong.
+              securityContext = {
+                runAsNonRoot = true;
+                runAsUser = 472;
+                runAsGroup = 472;
+                fsGroup = 472;
+                fsGroupChangePolicy = "OnRootMismatch";
+              };
               containers = [
                 {
                   name = "grafana";
                   image = kix.image.ref config.image;
                   imagePullPolicy = config.image.pullPolicy;
-                  env = [
-                    {
-                      name = "GF_PATHS_DATA";
-                      value = "/var/lib/grafana/";
-                    }
-                    {
-                      name = "GF_PATHS_LOGS";
-                      value = "/var/log/grafana";
-                    }
-                    {
-                      name = "GF_PATHS_PLUGINS";
-                      value = "/var/lib/grafana/plugins";
-                    }
-                    {
-                      name = "GF_PATHS_PROVISIONING";
-                      value = "/etc/grafana/provisioning";
-                    }
-                    (adminUserEnv "GF_SECURITY_ADMIN_USER")
-                    (adminPasswordEnv "GF_SECURITY_ADMIN_PASSWORD")
-                    {
-                      name = "POD_IP";
-                      valueFrom.fieldRef = {
-                        apiVersion = "v1";
-                        fieldPath = "status.podIP";
-                      };
-                    }
-                  ]
-                  ++ config.extraEnv;
-                  envFrom = config.envFrom ++ extraEnvFromSecret ++ extraEnvFromSecrets ++ extraEnvFromConfigMaps;
-                  ports = [
-                    (kix.port "grafana" 3000)
-                  ];
+                  inherit env;
+                  ports = [ (kix.port "grafana" httpPort) ];
                   resources = config.resources;
                   # Grafana writes to /var/lib/grafana (storage) and /tmp;
-                  # the grafana-community chart (13.2.6) runs it read-only
-                  # with the same /tmp emptyDir. Logs go to the console.
-                  # Grafana 13 installs zipkin and elasticsearch into
-                  # /var/lib/grafana/plugins at startup and deletes the
-                  # copies in plugins-bundled first; on a read-only root the
-                  # delete fails and neither plugin loads. The emptyDir over
-                  # that directory is the chart's `shadowBundledPlugins`.
-                  securityContext = {
-                    allowPrivilegeEscalation = false;
-                    capabilities.drop = [ "ALL" ];
-                    readOnlyRootFilesystem = true;
-                    seccompProfile.type = "RuntimeDefault";
-                  };
-                  livenessProbe = {
-                    httpGet = {
-                      path = "/api/health";
-                      port = 3000;
-                    };
+                  # logs go to the console. Grafana 13 installs zipkin and
+                  # elasticsearch into the plugins directory at startup and
+                  # deletes the copies in plugins-bundled first; on a
+                  # read-only root the delete fails and neither plugin
+                  # loads, so plugins-bundled is an emptyDir.
+                  inherit securityContext;
+                  livenessProbe = httpProbe // {
                     initialDelaySeconds = 60;
                     periodSeconds = 10;
                     failureThreshold = 10;
                     timeoutSeconds = 30;
                   };
-                  readinessProbe = {
-                    httpGet = {
-                      path = "/api/health";
-                      port = 3000;
-                    };
+                  readinessProbe = httpProbe // {
                     periodSeconds = 10;
                     failureThreshold = 3;
-                    timeoutSeconds = 1;
                   };
                   volumeMounts = [
                     {
@@ -1262,49 +871,30 @@ in
                       subPath = "grafana.ini";
                     }
                     {
-                      name = "config";
-                      mountPath = "/etc/grafana/provisioning/dashboards/dashboardproviders.yaml";
-                      subPath = "dashboardproviders.yaml";
+                      name = "storage";
+                      mountPath = paths.GF_PATHS_DATA;
                     }
                   ]
-                  ++ lib.optional config.sidecar.dashboards.enabled {
-                    name = "sc-dashboard-provider";
-                    mountPath = "/etc/grafana/provisioning/dashboards/sc-dashboardproviders.yaml";
-                    subPath = "provider.yaml";
-                  }
-                  ++ lib.optional config.sidecar.datasources.enabled {
-                    name = "sc-datasources-volume";
-                    mountPath = "/etc/grafana/provisioning/datasources";
-                  }
-                  ++ lib.optional config.sidecar.dashboards.enabled {
-                    name = "sc-dashboard-volume";
-                    mountPath = "/tmp/dashboards";
-                  }
-                  ++ [
-                    (
-                      if self.storageMount != null then
-                        {
-                          inherit (self.storageMount) name mountPath;
-                        }
-                      else
-                        (
-                          {
-                            name = "storage";
-                            mountPath = "/var/lib/grafana";
-                          }
-                          // lib.optionalAttrs (config.persistence.subPath != "") {
-                            inherit (config.persistence) subPath;
-                          }
-                        )
-                    )
+                  ++ lib.optionals dashboardsOn [
+                    {
+                      name = "sc-dashboard-provider";
+                      mountPath = "${paths.GF_PATHS_PROVISIONING}/dashboards/sc-dashboardproviders.yaml";
+                      subPath = "provider.yaml";
+                    }
+                    {
+                      name = "grafana-sc-dashboard";
+                      mountPath = dashboardFolder;
+                    }
                   ]
-                  ++ extraConfigmapVolumeMounts
-                  ++ extraSecretVolumeMounts
-                  ++ config.extraVolumeMounts;
+                  ++ [
+                    {
+                      name = if datasourcesOn then "grafana-sc-datasources" else "datasources";
+                      mountPath = datasourceFolder;
+                    }
+                  ];
                 }
               ]
-              ++ dashboardSidecar
-              ++ datasourceSidecar;
+              ++ sidecars;
               volumes = [
                 {
                   name = "tmp";
@@ -1318,126 +908,77 @@ in
                   name = "config";
                   configMap.name = self.configMap.out.name;
                 }
+                storageVolume
               ]
-              ++ lib.optional (self.scDashboardProvider != null) {
-                name = "sc-dashboard-provider";
-                configMap.name = self.scDashboardProvider.out.name;
-              }
-              ++ lib.optional config.sidecar.dashboards.enabled {
-                name = "sc-dashboard-volume";
-                emptyDir = { };
-              }
-              ++ lib.optional config.sidecar.datasources.enabled {
-                name = "sc-datasources-volume";
-                emptyDir = { };
-              }
-              ++ [ grafanaStorageVolume ]
-              ++ extraConfigmapVolumes
-              ++ extraSecretVolumes
-              ++ config.extraVolumes;
-              nodeSelector = {
-                "kubernetes.io/os" = "linux";
-              }
-              // config.nodeSelector;
+              ++ lib.optionals dashboardsOn [
+                {
+                  name = "sc-dashboard-provider";
+                  configMap.name = self.scDashboardProvider.out.name;
+                }
+                {
+                  name = "grafana-sc-dashboard";
+                  emptyDir = { };
+                }
+              ]
+              ++ [
+                (
+                  if datasourcesOn then
+                    {
+                      name = "grafana-sc-datasources";
+                      emptyDir = { };
+                    }
+                  else
+                    {
+                      name = "datasources";
+                      configMap.name = self.datasourcesConfigMap.out.name;
+                    }
+                )
+              ];
+              nodeSelector."kubernetes.io/os" = "linux";
             }
             // lib.optionalAttrs config.initChownData.enabled {
               initContainers = [ initChownContainer ];
             };
           };
-        }
-        |> scope.mkDeployment;
+        };
 
-      # ── Service ─────────────────────────────────────────────────────────
-
-      service =
-        self.deployment
-        |> kix.service.fromWorkload {
-          inherit name;
-          type = "ClusterIP";
-          ports = [
-            {
-              name = "http-web";
-              port = 80;
-              targetPort = 3000;
-              protocol = "TCP";
-            }
-          ];
-        }
-        |> scope.mkResource;
-
-      # ── Ingress (optional) ──────────────────────────────────────────────
-
-      ingress =
-        if config.ingress.enabled then
-          scope.mkResource {
-            apiVersion = "networking.k8s.io/v1";
-            kind = "Ingress";
+        service =
+          self.deployment
+          |> kix.service.fromWorkload {
             inherit name;
-            annotations = config.ingress.annotations;
-            labels = config.ingress.labels;
-            spec = {
-              rules = map (host: {
-                inherit host;
-                http.paths = config.ingress.extraPaths ++ [
-                  {
-                    inherit (config.ingress) path pathType;
-                    backend.service = {
-                      name = self.service.out.name;
-                      port.number = 80;
-                    };
-                  }
-                ];
-              }) config.ingress.hosts;
-            }
-            // lib.optionalAttrs (config.ingress.ingressClassName != null) {
-              inherit (config.ingress) ingressClassName;
-            }
-            // lib.optionalAttrs (config.ingress.tls != [ ]) {
-              inherit (config.ingress) tls;
-            };
+            ports = [
+              {
+                name = "http-web";
+                port = 80;
+                targetPort = "grafana";
+                protocol = "TCP";
+              }
+            ];
           }
-        else
-          null;
+          |> scope.mkResource;
 
-      # ── Monitoring (optional via DI) ────────────────────────────────────
-
-      serviceMonitor =
-        if hasMetrics then
-          mkServiceMonitor {
-            name = "${name}-monitor";
-            spec = {
-              # A ServiceMonitor selects Services, not pods.
-              selector.matchLabels = self.service.out.selector;
-              endpoints = [
-                (
-                  {
-                    port = "http-web";
-                    path = "/metrics";
-                  }
-                  // lib.optionalAttrs (config.metrics.interval != null) {
-                    inherit (config.metrics) interval;
-                  }
-                )
-              ];
-            };
-          }
-        else
-          null;
-
-      root = {
-        resource = self.service;
-        requires = [
-          self.serviceAccount
-          self.configMap
-          self.datasourcesConfigMap
-        ]
-        ++ lib.optional (self.secret != null) self.secret
-        ++ [ self.deployment ]
-        ++ lib.optional (self.persistencePvc != null) self.persistencePvc
-        ++ lib.optional (self.scDashboardProvider != null) self.scDashboardProvider
-        ++ lib.optional (self.serviceMonitor != null) self.serviceMonitor
-        ++ lib.optional (self.ingress != null) self.ingress;
-      };
-    }
-    // clusterRoles;
+        root = {
+          resource = self.service;
+          requires = [
+            self.serviceAccount
+            self.configMap
+            self.datasourcesConfigMap
+            self.deployment
+          ]
+          ++ builtins.filter (p: p != null) [
+            self.scDashboardProvider
+            self.serviceMonitor
+          ];
+        };
+      }
+    )
+    # The header warns that Grafana's unauthenticated /metrics is public on
+    # this route; nothing refuses it. A candidate for an evaluation error
+    # once kix.options.ingress can turn the route off.
+    (kix.expose { service = "service"; })
+    (kix.monitor {
+      service = "service";
+      port = "http-web";
+    })
+  ];
 }

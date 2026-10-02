@@ -1,3 +1,0 @@
-# 2026-10-02 · `kix/packages/prometheus` · Targets named in `additionalScrapeConfigs` get no network policy, and Kix gives no warning.
-
-The scrape join in `kix/lib/plugins/netpol/scrape.nix` reads only ServiceMonitors, PodMonitors, and Alertmanagers. Under an enforcer the server pods carry `<name>-server-egress` and `<name>-scrape-egress`, so they are isolated for egress even with `networkPolicy.defaultDeny = false`, and a target listed only in `additionalScrapeConfigs` (inline or `additionalScrapeConfigsSecret`) is dropped. The target shows `up == 0` at runtime. The package knows at evaluation that the option is set and an enforcer is present, so it could warn.

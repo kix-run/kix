@@ -253,7 +253,7 @@ the package revision like any other file, so pin coherence covers it.
 | velero, arc, infisical-operator, openebs | vendored by hand (PR #118) | `sources.txt` added; the refresh reproduced every file byte for byte except a reformat of the three snapshot CRDs, which confirms the hand-vendored provenance (done) |
 | victoria-metrics-operator | table plus `vendor-vm-crd-schemas.py` | `sources.txt` with the overlay bundle and the eight consumer names, old script deleted, files moved to `crds/` (done); `kinds.nix` stays for the indexer invariant |
 | cert-manager | one vendored file (moved to `crds/`, `sources.txt` names it in the release asset), five stubs | all six vendored from the v1.21.2 release asset (done) |
-| prometheus-operator | stubs with provenance annotations | vendor from the pinned operator release |
+| prometheus-operator | stubs with provenance annotations | all ten vendored from the release's stripped-down-crds.yaml, ClusterRole from the release's examples (done) |
 | cdi | one vendored file (moved to `crds/`, from the operator bundle), filtered, plus stubs | keep the filter; vendor the rest or turn them into markers, whichever cdi-operator's behaviour dictates |
 | kubevirt | one vendored file (moved to `crds/`, from the operator bundle) plus stubs virt-operator also creates | markers for every kubevirt.io kind except KubeVirt |
 

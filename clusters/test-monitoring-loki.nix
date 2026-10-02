@@ -24,6 +24,15 @@ let
           grafana.persistence.enabled = false;
           loki.enabled = true;
         };
+        # Test values only.
+        instances.monitoring-system.grafana-admin = {
+          package = packages.secret;
+          aliases = [ "grafanaAdmin" ];
+          config.stringData = {
+            admin-user = "admin";
+            admin-password = "test-only";
+          };
+        };
       }
     ];
   };
