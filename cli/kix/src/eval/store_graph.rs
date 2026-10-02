@@ -467,7 +467,13 @@ impl StoreGraph {
                 },
             );
 
-            if m.get("kind").and_then(Value::as_str) == Some(PACKAGE_INSTANCE_KIND) {
+            // An import marker (`crd-ref-*`, `secret-ref-*`, ...) is a
+            // PackageInstance, but a build lists it as a resource of the
+            // package that declares it, not as a package of its own. It is
+            // grouped below by its `kix.run/package` stamp like any resource.
+            if m.get("kind").and_then(Value::as_str) == Some(PACKAGE_INSTANCE_KIND)
+                && !crate::manifest::lifecycle::is_marker(m)
+            {
                 let ns = m
                     .pointer("/metadata/namespace")
                     .and_then(Value::as_str)
@@ -753,6 +759,26 @@ mod tests {
             let dns = pkg(&g, "kube-system", "dns");
             assert!(dns.resource_paths.is_empty());
             assert_eq!(dns.version.as_deref(), Some("2.0"));
+        }
+
+        /// A live import marker stamped with the package that declares it
+        /// lands among that package's resources, the way a build lists it,
+        /// and is not a package of its own.
+        #[test]
+        fn an_import_marker_is_a_resource_of_its_declaring_package() {
+            let mut marker = package_instance("data", "crd-ref-pg-sgclusters", "", &h("mk"));
+            let anns = marker["metadata"]["annotations"].as_object_mut().unwrap();
+            anns.insert(keys::PACKAGE.into(), json!("pg"));
+            anns.insert(keys::PACKAGE_NAMESPACE.into(), json!("data"));
+            anns.insert(keys::MODE.into(), json!("import"));
+            let manifests = vec![package_instance("data", "pg", "1", &h("pi")), marker];
+            let g = StoreGraph::synthesize(&manifests, &StoreGraph::empty("c"));
+
+            assert_eq!(g.packages.len(), 1);
+            let pg = pkg(&g, "data", "pg");
+            assert_eq!(pg.resource_paths.len(), 1);
+            let owned = &g.resources[&pg.resource_paths[0]].manifest;
+            assert_eq!(owned["metadata"]["name"], json!("crd-ref-pg-sgclusters"));
         }
 
         #[test]
