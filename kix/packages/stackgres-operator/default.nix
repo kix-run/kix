@@ -11,6 +11,16 @@
 # (INSTALL_CONFIG, SGCONFIG). The Deployment requires the two configurations,
 # so they exist before the operator starts and it updates them.
 #
+# The operator writes the webhook entries a few seconds after it installs
+# the definitions and reports ready. An SGCluster created in that window
+# gets no status from the mutating webhook, and StackGres 1.19's
+# StatusUpdateValidator then throws a NullPointerException on every update
+# of it, so the operator never creates the cluster's pods. Every CRD
+# reference in `out.crds` therefore adds the webhook-check Job to the
+# requires of each custom resource built from it. The Job waits until both
+# configurations hold their entries and a server-side dry-run create of an
+# SGInstanceProfile comes back mutated by the operator.
+#
 # A cluster runs one instance: the definitions and webhook configurations are
 # cluster-wide, and the webhooks have no namespaceSelector, so they admit
 # every namespace. `conflictsWith` refuses a second instance.
@@ -32,7 +42,8 @@
 # DI deps: none.
 #
 # Escape hatches: `sgConfig` (SGConfig spec), `env` (operator variables such
-# as OPERATOR_LOG_LEVEL or JAVA_OPTS), and the instance's `partsOverlays`.
+# as OPERATOR_LOG_LEVEL or JAVA_OPTS), `webhookCheck.image`, and the
+# instance's `partsOverlays`.
 #
 # Exposes:
 #   out.crds.<Kind>   CRD references for scope.mkCR, one per stackgres.io kind
@@ -57,14 +68,17 @@
 # out.crds get no policy, so under an enforcer's namespace default-deny they
 # cannot reach the API server or each other.
 #
-# root = the operator Deployment.
+# root = the operator Deployment; the webhook check runs after it.
 #
 # Moving to another release: replace versions.properties with
 # versions-<major.minor>.properties from stackgres-k8s/src/common/src/main/resources
-# at the new tag, set `release` in release.nix and the image digest below
-# (`crane digest quay.io/stackgres/operator:<release>`), compare kinds.nix
-# with the chart's crds/ and the RBAC below with its operator-cluster-role.yaml,
-# then run the stackgres eval checks (every-package-evaluates, ludo-kind).
+# at the new tag, set `release` in release.nix and the digest of `image`
+# below (`crane digest quay.io/stackgres/operator:<release>`), set the tag of
+# `webhookCheck.image` to the newest kubectl entry in versions.properties and
+# its digest (`crane digest quay.io/ongres/kubectl:v<entry>`), compare
+# kinds.nix with the chart's crds/ and the RBAC below with its
+# operator-cluster-role.yaml, then run the stackgres eval checks
+# (every-package-evaluates, ludo-kind).
 
 {
   scope,
@@ -125,6 +139,7 @@ let
   ];
 
   operatorSuffix = "/stackgres/operator";
+  registryOf = repository: lib.removeSuffix operatorSuffix repository;
   fieldRef = path: { valueFrom.fieldRef.fieldPath = path; };
 in
 {
@@ -218,10 +233,28 @@ in
       '';
     };
 
+    webhookCheck.image = kix.options.image {
+      repository = "quay.io/ongres/kubectl";
+      tag = "v1.37.1-build-6.56";
+      digest = "sha256:8e3f36d49e403423627b450d803c94cf93c8bbebae8f59b11cb5e458bb0c1a39";
+      description = "Image of the webhook-check Job, StackGres's kubectl image. It needs bash and kubectl. The declared tag is the newest kubectl entry in versions.properties. Its repository follows the registry prefix of `image.repository` and its pull policy follows `image.pullPolicy`.";
+    };
+
     env = kix.options.env // {
       description = "Extra operator environment variables, such as OPERATOR_LOG_LEVEL or JAVA_OPTS. A value is a string, a `fieldRef`, or `kix.untrackedRef`. The variables the package sets are refused with the option that sets them.";
     };
   };
+
+  # The check image comes from the operator's registry prefix, as the
+  # operand images do.
+  config =
+    { config, ... }:
+    {
+      webhookCheck.image = {
+        repository = lib.mkDefault "${registryOf config.image.repository}/ongres/kubectl";
+        pullPolicy = lib.mkDefault config.image.pullPolicy;
+      };
+    };
 
   build =
     {
@@ -231,7 +264,7 @@ in
       ...
     }:
     let
-      registry = lib.removeSuffix operatorSuffix config.image.repository;
+      registry = registryOf config.image.repository;
       nativeTag = lib.removeSuffix "-jvm" config.image.tag;
       jvm = lib.hasSuffix "-jvm" config.image.tag;
       uid = if jvm then 185 else 1000;
@@ -342,6 +375,7 @@ in
         restrictTo
         sub
         mkClusterRoleSet
+        mkRoleSet
         ;
       rbacGroup = scope.rbac.group;
       apps = rbacGroup "apps" [
@@ -364,6 +398,76 @@ in
       sgPlurals = lib.mapAttrsToList (_: k: k.plural) kinds;
       sg = map (rbacGroup group [ ]) sgPlurals;
       sgCrdNames = map (p: "${p}.${group}") sgPlurals;
+
+      # The webhook check: once both configurations name the SGCluster
+      # entries, a dry-run create of an SGInstanceProfile must carry the
+      # operatorVersion annotation that the operator's mutating webhook
+      # adds. That shows the API server calls the mutating webhook and
+      # trusts its certificate, which is what gives a new SGCluster its
+      # defaults and status. The operator writes every entry of a
+      # configuration in one update, so one entry stands for all of them.
+      checkName = "${name}-webhook-check";
+      checkLabels.app = checkName;
+      checkProfile = builtins.toJSON {
+        apiVersion = "${group}/${kinds.SGInstanceProfile.version}";
+        kind = "SGInstanceProfile";
+        # The API server generates the name. A fixed name fails the dry-run
+        # with AlreadyExists when an SGInstanceProfile of that name exists.
+        metadata = {
+          generateName = "${checkName}-";
+          namespace = ns;
+        };
+        spec = {
+          cpu = "1";
+          memory = "1Gi";
+        };
+      };
+      checkScript = ''
+        set -u
+        check() {
+          for type in mutating validating; do
+            entries=$(kubectl get "''${type}webhookconfiguration" ${name} -o 'jsonpath={.webhooks[*].name}') || return 1
+            case " $entries " in
+              *" sgcluster.''${type}-webhook.${group} "*) ;;
+              *) echo "''${type}webhookconfiguration/${name} has no SGCluster entry yet"; return 1 ;;
+            esac
+          done
+          version=$(echo '${checkProfile}' | kubectl create --dry-run=server -o 'jsonpath={.metadata.annotations.stackgres\.io/operatorVersion}' -f -) || return 1
+          if [ -z "$version" ]; then
+            echo "the dry-run SGInstanceProfile came back without the mutating webhook's annotation"
+            return 1
+          fi
+          echo "the StackGres ${release} admission webhooks are serving (operatorVersion $version)"
+        }
+        deadline=$((SECONDS + 120))
+        until check; do
+          if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "the StackGres admission webhooks did not serve within 120 s; see the logs of deployment/${name} in ${ns}"
+            exit 1
+          fi
+          sleep 2
+        done
+      '';
+      checkSubjects = [
+        {
+          kind = "ServiceAccount";
+          name = self.webhookCheckServiceAccount.out.name;
+          namespace = ns;
+        }
+      ];
+
+      # Each CRD reference adds the webhook check to the requires of every
+      # custom resource built from it.
+      withCheck = args: args // { requires = (args.requires or [ ]) ++ [ self.webhookCheck ]; };
+      gate =
+        crd:
+        crd
+        // {
+          out = crd.out // {
+            cr = args: crd.out.cr (withCheck args);
+            mkCR = consumerScope: args: crd.out.mkCR consumerScope (withCheck args);
+          };
+        };
 
       manage = allow [
         "get"
@@ -623,32 +727,156 @@ in
         inherit name;
       };
 
+      webhookCheckServiceAccount = scope.mkResource {
+        apiVersion = "v1";
+        kind = "ServiceAccount";
+        name = checkName;
+        labels = checkLabels;
+        extra.automountServiceAccountToken = true;
+      };
+
+      webhookCheckClusterRole = mkClusterRoleSet scope {
+        subjects = checkSubjects;
+        labels = checkLabels;
+        roles.${checkName} = grant [
+          (
+            [
+              admission.mutatingwebhookconfigurations
+              admission.validatingwebhookconfigurations
+            ]
+            |> map (restrictTo [ name ])
+            |> allow [ "get" ]
+          )
+        ];
+      };
+
+      # A dry-run create needs the create verb; the API server persists
+      # nothing.
+      webhookCheckRole = mkRoleSet scope {
+        subjects = checkSubjects;
+        labels = checkLabels;
+        roles.${checkName} = grant [
+          (allow [ "create" ] (rbacGroup group [ "sginstanceprofiles" ]).sginstanceprofiles)
+        ];
+      };
+
+      webhookCheck = scope.mkJob {
+        name = checkName;
+        labels = checkLabels;
+        # A Job's pod template is immutable, so a changed check replaces the
+        # Job.
+        annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
+        requires = [
+          self.operatorDeployment
+          self.operatorService
+          self.validatingWebhook
+          self.mutatingWebhook
+          self.crds.${kinds.SGInstanceProfile.part}
+        ]
+        ++ builtins.attrValues self.webhookCheckClusterRole
+        ++ builtins.attrValues self.webhookCheckRole;
+        spec = {
+          backoffLimit = 1;
+          template = {
+            metadata.labels = checkLabels;
+            spec = {
+              restartPolicy = "Never";
+              serviceAccount = self.webhookCheckServiceAccount;
+              enableServiceLinks = false;
+              # The image's stackgres user.
+              securityContext = {
+                runAsNonRoot = true;
+                runAsUser = 1000;
+                runAsGroup = 1000;
+                seccompProfile.type = "RuntimeDefault";
+              };
+              containers = [
+                (
+                  {
+                    name = "webhook-check";
+                    image = kix.image.ref config.webhookCheck.image;
+                    command = [
+                      "/bin/bash"
+                      "-c"
+                      checkScript
+                    ];
+                    # kubectl writes its discovery cache under $HOME.
+                    env = [
+                      {
+                        name = "HOME";
+                        value = "/tmp";
+                      }
+                    ];
+                    securityContext = {
+                      allowPrivilegeEscalation = false;
+                      capabilities.drop = [ "ALL" ];
+                      readOnlyRootFilesystem = true;
+                    };
+                    # A ResourceQuota on requests or limits refuses a pod
+                    # that does not set them, and every StackGres custom
+                    # resource waits on this Job.
+                    resources = {
+                      requests = {
+                        cpu = "10m";
+                        memory = "32Mi";
+                      };
+                      limits = {
+                        cpu = "200m";
+                        memory = "128Mi";
+                      };
+                    };
+                    volumeMounts = [
+                      {
+                        name = "tmp";
+                        mountPath = "/tmp";
+                      }
+                    ];
+                  }
+                  // lib.optionalAttrs (config.webhookCheck.image.pullPolicy != null) {
+                    imagePullPolicy = config.webhookCheck.image.pullPolicy;
+                  }
+                )
+              ];
+              volumes = [
+                {
+                  name = "tmp";
+                  emptyDir = { };
+                }
+              ];
+            };
+          };
+        };
+      };
+
       # One reference per kind. A custom resource built from one waits for
-      # the definition, which the operator installs after it starts.
+      # the definition, which the operator installs after it starts, and for
+      # the webhook check.
       crds = lib.mapAttrs' (
         kind: k:
         lib.nameValuePair k.part (
-          scope.mkCRDRef (
-            {
-              inherit group kind;
-              inherit (k) plural version;
-              servedVersions = k.servedVersions or null;
-              readiness = k.readiness or null;
-              installedBy = self.operatorDeployment;
-            }
-            // lib.optionalAttrs (kind == "SGCluster") {
-              # The operand pods dial the addresses in an SGCluster spec,
-              # including an SGObjectStorage endpoint it references.
-              factBehavior = {
-                endpoint = "terminate";
-                podSelector = cr: operandSelectors.sgCluster cr.metadata.name;
-              };
-            }
-            // lib.optionalAttrs (kind == "SGObjectStorage") {
-              # No pod dials the endpoint for the SGObjectStorage; the
-              # SGCluster that references it carries the address on.
-              factBehavior.endpoint = "conduct";
-            }
+          gate (
+            scope.mkCRDRef (
+              {
+                inherit group kind;
+                inherit (k) plural version;
+                servedVersions = k.servedVersions or null;
+                readiness = k.readiness or null;
+                installedBy = self.operatorDeployment;
+              }
+              // lib.optionalAttrs (kind == "SGCluster") {
+                # The operand pods dial the addresses in an SGCluster spec,
+                # including an SGObjectStorage endpoint it references.
+                factBehavior = {
+                  endpoint = "terminate";
+                  podSelector = cr: operandSelectors.sgCluster cr.metadata.name;
+                };
+              }
+              // lib.optionalAttrs (kind == "SGObjectStorage") {
+                # No pod dials the endpoint for the SGObjectStorage; the
+                # SGCluster that references it carries the address on.
+                factBehavior.endpoint = "conduct";
+              }
+            )
           )
         )
       ) referencedKinds;
@@ -659,6 +887,7 @@ in
           self.operatorService
         ]
         ++ builtins.attrValues self.clusterRole;
+        postHooks = [ self.webhookCheck ];
         out = {
           crds = lib.mapAttrs (_: k: self.crds.${k.part}) referencedKinds;
           inherit operandSelectors release;

@@ -181,6 +181,7 @@ when a check fails or the path is not evaluated by default.
 - C18. Does a chart `values` toggle render a foreign-kind CR (ServiceMonitor)? *(lib: check 21)* Fix: turn it off and use the owner's builder.
 - C19. Does a webhook with `failurePolicy: Fail` match objects the program does not serve (all namespaces, other classes)? Fix: `namespaceSelector`, `objectSelector`, `matchConditions`, or a stated known limit.
 - C20. Does the package write an object another controller owns (an environment's HelmChartConfig, a kube-system Namespace)? Can a second writer exist outside Kix, and does removing the instance prune an object the environment needs? Fix: document both as known limits; housekeeping when the lib cannot help.
+- C21. Can a custom resource built from `out.crds` reach the API server before the operator's admission webhooks serve? A CRD reference is satisfied once the definition is Established, and an operator that installs its own definitions often writes its webhook entries seconds later; a resource created in between misses its defaults. Detection: in the operator log, the definitions are installed before the webhook entries. Fix: a check Job that proves the webhook serves (a server-side dry-run that comes back mutated, or the operator's own check command) and a gate on every handle that adds it to `requires` (cert-manager `apiCheck`, stackgres-operator `webhookCheck`), with an evaluation test that every custom resource's `kix.run/depends-on` names the Job's identity hash (`cert-manager-crd-handles-gated`, `stackgres-operator-crd-handles-gated`); without it, a refactor that drops the gate passes every check and the race returns only on a fresh install.
 
 ### Workloads and availability (W)
 
@@ -431,7 +432,7 @@ list outside the public repository; ask for it when you do not have it.
 
 **3. Read the code once, for the judgement items.** Read the package in
 checklist order and judge only what the automation and the grep hits do not
-settle: M2 to M15, O6 to O24, D, S, C4 to C20, W, I, N, Mo, E, Na, L, P, and
+settle: M2 to M15, O6 to O24, D, S, C4 to C21, W, I, N, Mo, E, Na, L, P, and
 T. Skip an item marked *(lib)* unless its check failed or its path is off by
 default. Evaluate the package once with every toggle on, once with each
 optional dependency present, and once with two instances in two namespaces

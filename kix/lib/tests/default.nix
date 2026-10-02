@@ -6051,6 +6051,7 @@ let
           "cert-manager"
           "clickhouse-operator"
           "prometheus-operator"
+          "stackgres-operator"
           "tailscale"
         ];
         missing = lib.subtractLists withConfig expected;

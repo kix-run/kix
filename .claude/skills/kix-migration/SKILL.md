@@ -391,7 +391,11 @@ edge but NO netpol hole. Consequences when authoring:
   ready (cert-manager's `failurePolicy: Fail` webhook before cainjector
   injects the CA), wrap each CRD handle so `cr` and `mkCR` add the
   operator's API-check Job to the custom resource's `requires`. See
-  `kix/packages/cert-manager/crds.nix`.
+  `kix/packages/cert-manager/crds.nix`. Gate the handles the same way
+  when the operator writes its webhook entries after it reports ready:
+  a CRD reference is satisfied once the definition is Established, which
+  can be seconds before the webhook admits anything
+  (`stackgres-operator`, `webhookCheck`).
 
 ### Composition helpers (kix.*)
 
