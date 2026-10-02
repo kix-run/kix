@@ -591,10 +591,28 @@ in
                   null
                 else
                   let
+                    # `parse` throws for a value it cannot compute exactly:
+                    # a cpu value the quantity type accepts can be out of
+                    # range in millicores. Throw first with the field named.
+                    problem =
+                      field: values:
+                      let
+                        reason = quantity.problem res values.${res};
+                      in
+                      if reason == null then
+                        null
+                      else
+                        "[${instanceName}] Container '${c.name}' resources.${field}.${res} (${toString values.${res}}) cannot be computed exactly: ${reason}. Kix computes quantities as 64-bit integers.";
+                    limitProblem = problem "limits" limits;
+                    requestProblem = problem "requests" requests;
                     l = quantity.parse res limits.${res};
                     r = quantity.parse res requests.${res};
                   in
-                  if l == null || r == null then
+                  if limitProblem != null then
+                    throw limitProblem
+                  else if requestProblem != null then
+                    throw requestProblem
+                  else if l == null || r == null then
                     null
                   else if l < r then
                     throw "[${instanceName}] Container '${c.name}' resources.limits.${res} (${toString limits.${res}}) is lower than resources.requests.${res} (${toString requests.${res}}). "

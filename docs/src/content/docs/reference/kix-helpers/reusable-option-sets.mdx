@@ -97,8 +97,12 @@ kix.parseQuantity "memory" "512Mi"  # 536870912
 ```
 
 Kix computes quantities in signed 64-bit integers. A value above that range,
-such as `"8Ei"`, or one written with more than 18 digits, is an evaluation
-error, and `kix.types.quantity` refuses it.
+such as `"8Ei"`, or one with more than 18 significant digits, is an
+evaluation error, and `kix.types.quantity` refuses it. Leading zeros and
+trailing zeros after the decimal point do not count. The type checks the
+range in bytes, so a cpu value it accepts can still be out of range in
+millicores (`"2Ei"`); the limits-versus-requests check then fails and names
+the container field.
 
 ## Guards for values the package owns
 

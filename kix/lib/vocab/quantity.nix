@@ -111,21 +111,82 @@ let
           if x == null then "" else x;
       };
 
-  # Whether `parse` can compute the split quantity `p` exactly in signed
-  # 64-bit integers: the digit string has at most 18 digits, the fraction's
-  # divisor at most 18, and the product with the suffix and `scale`
-  # multipliers is at most `maxInt`. Dividing `maxInt` first keeps the
-  # check itself from overflowing.
-  maxInt = 9223372036854775807;
-  exact =
-    scale: p:
+  stripLeading = d: if lib.hasPrefix "0" d then stripLeading (lib.removePrefix "0" d) else d;
+  stripTrailing = d: if lib.hasSuffix "0" d then stripTrailing (lib.removeSuffix "0" d) else d;
+  toInt =
+    d:
     let
-      mult = suffixes.${p.suffix};
-      mantissa = p.whole + p.frac;
+      t = stripLeading d;
     in
-    builtins.stringLength mantissa <= 18
-    && builtins.stringLength p.frac + digits mult.den <= 18
-    && lib.toIntBase10 mantissa <= maxInt / mult.num / scale;
+    if t == "" then 0 else lib.toIntBase10 t;
+
+  # A split quantity without the zeros that do not change its value, so
+  # "007Mi" has one significant digit and "1.500" two. `mantissa` is the
+  # digit string, `frac` the fraction digits it ends with.
+  normalize =
+    p:
+    let
+      frac = stripTrailing p.frac;
+    in
+    {
+      whole = stripLeading p.whole;
+      inherit frac;
+      mantissa = stripLeading (p.whole + frac);
+    };
+
+  # The suffix multiplier times `scale`, as num * scale / den with common
+  # factors removed. `scale` and the suffix denominator are each 1 or 1000,
+  # so "250m" in millicores has the multiplier 1 * 1 / 1. num and scale stay
+  # separate because their product overflows for "Ei" in millicores.
+  factor =
+    scale: suffix:
+    let
+      mult = suffixes.${suffix};
+      same = mult.den == scale;
+    in
+    {
+      inherit (mult) num;
+      scale = if same then 1 else scale;
+      den = if same then 1 else mult.den;
+    };
+
+  # Why `parse` cannot compute the split quantity `p` exactly in signed
+  # 64-bit integers, or null when it can. `parse` computes
+  # mantissa * num * scale / (den * 10^fraction digits), so the significant
+  # digits, that divisor, and the product mantissa * num * scale must each
+  # fit. Dividing `maxInt` first keeps the checks themselves from
+  # overflowing.
+  maxInt = 9223372036854775807;
+  inexact =
+    scale: unit: p:
+    let
+      n = normalize p;
+      f = factor scale p.suffix;
+      maxFrac = 18 - digits f.den;
+      limit = maxInt / f.num / f.scale;
+    in
+    if builtins.stringLength n.mantissa > 18 then
+      "it has more than 18 significant digits. Round it to at most 18"
+    else if builtins.stringLength n.frac > maxFrac then
+      "it has more than ${toString maxFrac} significant digits after the decimal point. Round it to at most ${toString maxFrac}"
+    else if toInt n.whole > limit then
+      "it is more than ${toString maxInt} ${unit}, the largest signed 64-bit integer. Use a smaller value"
+    else if toInt n.mantissa > limit then
+      "with its digits after the decimal point it overflows a signed 64-bit integer in ${unit}. Round it to fewer digits after the decimal point"
+    else
+      null;
+
+  scaleOf = resource: if resource == "cpu" then 1000 else 1;
+  unitOf = resource: if resource == "cpu" then "millicores" else "bytes";
+
+  # Why `parse resource q` would throw, or null when it parses or `q` is
+  # outside the grammar. For a caller that names the field in its own error.
+  problem =
+    resource: q:
+    let
+      p = split q;
+    in
+    if p == null then null else inexact (scaleOf resource) (unitOf resource) p;
 
   # The type accepts what `parse "memory"` computes; a "cpu" value close to
   # the limit can still fail `parse`, which then throws.
@@ -134,11 +195,12 @@ let
     let
       p = split q;
     in
-    p != null && exact 1 p;
+    p != null && inexact 1 "bytes" p == null;
 
   # The quantity in millicores when `resource` is "cpu", and in bytes (or
   # the base unit) otherwise, rounded down. null outside the grammar.
-  # Throws when the value cannot be computed exactly (`exact`).
+  # Throws when the value cannot be computed exactly in 64-bit integers
+  # (`problem` gives the reason).
   #
   #   parse "cpu" "250m"     => 250
   #   parse "memory" "1.5Gi" => 1610612736
@@ -146,20 +208,19 @@ let
     resource: q:
     let
       p = split q;
-      scale = if resource == "cpu" then 1000 else 1;
-      unit = if resource == "cpu" then "millicores" else "bytes";
-      mult = suffixes.${p.suffix};
-      fracLength = builtins.stringLength p.frac;
+      n = normalize p;
+      reason = problem resource q;
+      f = factor (scaleOf resource) p.suffix;
     in
     if p == null then
       null
-    else if !(exact scale p) then
-      throw "quantity \"${asString q}\" cannot be computed exactly in ${unit}: Kix computes quantities in 64-bit integers, so a value can be at most ${toString maxInt} ${unit} and have at most 18 digits. Write it with fewer digits."
+    else if reason != null then
+      throw "${resource} quantity \"${asString q}\" cannot be computed exactly: ${reason}. Kix computes quantities as 64-bit integers."
     else
-      lib.toIntBase10 (p.whole + p.frac) * mult.num * scale / (mult.den * pow 10 fracLength);
+      toInt n.mantissa * f.num * f.scale / (f.den * pow 10 (builtins.stringLength n.frac));
 in
 {
-  inherit parse;
+  inherit parse problem;
 
   type = lib.mkOptionType {
     name = "quantity";
