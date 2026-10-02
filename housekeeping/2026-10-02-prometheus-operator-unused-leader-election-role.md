@@ -1,0 +1,3 @@
+# 2026-10-02 · `kix/packages/prometheus-operator/operator.nix` · The operator gets a leader-election Role for a lease it never takes.
+
+The operator has no leader election upstream, so the package runs it under `meta.availability.max = "none"` with one replica. `operatorLeaderElection` still grants create, get, update and patch on `coordination.k8s.io` leases, plus write access to ConfigMaps and events, in the instance's namespace. The lease rules grant access the operator does not use. Check whether the operator writes the ConfigMaps or events in that Role before deleting it, since those rules may be needed for another reason.

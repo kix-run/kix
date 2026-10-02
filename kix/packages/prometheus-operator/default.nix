@@ -15,7 +15,6 @@
   scope,
   lib,
   kix,
-  availability,
 }:
 
 let
@@ -27,9 +26,9 @@ in
 {
   meta = {
     version = release;
-    # Leader election is not enabled in the operator args, so one replica
-    # is the ceiling this package can honour.
-    availability.max = "pod";
+    # The operator has no leader election upstream, so a second replica
+    # reconciles everything twice.
+    availability.max = "none";
     description = "Prometheus Operator: monitoring.coreos.com CRD controller";
     owner = "platform";
     defaultAliases = [
@@ -54,17 +53,6 @@ in
       tagText = "config.image.tag";
       pullPolicy = null;
       description = "Image the operator injects as the config-reloader sidecar into Prometheus and Alertmanager pods. Its pull policy follows the imagePullPolicy of the Prometheus or Alertmanager resource, so `pullPolicy` here has no effect.";
-    };
-    replicas = lib.mkOption {
-      type = lib.types.int;
-      # Fixed at 1: the package grants the leader election lease role but
-      # never passes the flag that turns leader election on, so a second
-      # replica would reconcile everything twice. See meta.availability.max.
-      default = 1;
-      description = ''
-        Number of operator replicas. Defaults from the cluster's
-        availability level (v2_discussions/145).
-      '';
     };
     resources = kix.options.resources {
       requests = {
