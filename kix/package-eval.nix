@@ -238,6 +238,17 @@ let
       };
       instances.prometheus-operator.package = packages.prometheus-operator;
     };
+    metabase.instances = {
+      database = {
+        package = packages.stackgres-database;
+        config.password = "password";
+      };
+      encryption-key = {
+        package = packages.secret;
+        aliases = [ "encryptionKey" ];
+        config.stringData.key = "0123456789abcdef";
+      };
+    };
     # metrics.enabled with a prometheus provider renders the ServiceMonitor
     # and N8N_METRICS.
     n8n = {

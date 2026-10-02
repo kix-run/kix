@@ -1,18 +1,79 @@
-# Metabase analytics/BI platform: kix package.
+# metabase: Metabase, a business intelligence and analytics tool, with its
+# application database on PostgreSQL.
 #
-# Deploys Metabase backed by PostgreSQL (via StackGres). Simple
-# single-deployment architecture with DI-driven Ingress/TLS.
+# Installs a Deployment and a Service on port 3000, and a route through
+# `kix.expose` when the cluster has an ingress controller or a gateway and
+# the instance has a host (`ingress.host`, or the cluster's `cluster.domain`).
+# Metabase keeps all of its state in the application database, so the pods
+# are stateless.
 #
 # Dependencies:
-#   postgres              required, database
-#   ingressNginx          optional, auto-creates ingress when present (+ host is set)
-#   clusterIssuer         optional, auto-enables TLS when present
+#   database (required)       a PostgreSQL database and role with
+#                             `out.{host,port,database}` and `out.credentials`
+#                             (keys `username` and `password`), such as
+#                             stackgres-database. The package asks it for the
+#                             citext extension, which Metabase's first
+#                             migration creates. A database from
+#                             `kix.mkImport` takes no configuration, so it
+#                             must already have citext.
+#   encryptionKey (required)  a secret with key `key`, at least 16
+#                             characters, that encrypts the data-source
+#                             credentials Metabase stores. A `secret`, or a
+#                             `secret-ref` for a Secret that ESO, Vault, or
+#                             Infisical writes.
+#   prometheus (optional)     adds the metrics port to the Service and a
+#                             ServiceMonitor. The container serves metrics on
+#                             port 9191 while `metrics.enabled` is true, with
+#                             or without this dependency, so adding a
+#                             Prometheus does not restart Metabase.
 #
-# Resources: Deployment (web), Service (web, port 80 -> 3000),
-# Ingress (optional, DI-driven).
+# Minimal instances, with a stackgres-cluster `postgres` elsewhere:
 #
-# root = Service (port 80).
-# External secret expected to contain DB connection env vars.
+#   instances.analytics = {
+#     metabase.package = packages.metabase;
+#     metabase-db = {
+#       package = packages.stackgres-database;
+#       config.passwordSource = ./secrets/metabase-db.yaml;
+#       config.passwordHash = "...";
+#     };
+#     metabase-encryption-key = {
+#       package = packages.secret;
+#       aliases = [ "encryptionKey" ];
+#       config.source = ./secrets/metabase-key.sops.yaml;
+#       config.keys = [ "key" ];   # a SOPS source must declare its keys
+#       config.hash = "...";
+#     };
+#   };
+#
+# The encryption key cannot change after the first start without Metabase's
+# `rotate-encryption-key` command: the stored data-source credentials would
+# no longer decrypt.
+#
+# Give each instance its own database. Two instances on one application
+# database both migrate its schema and encrypt with different keys, and
+# nothing in the build refuses that wiring.
+#
+# The first start runs Metabase's schema migrations and can take longer than
+# `kix deploy` waits for a Deployment. If the deploy reports a timeout, follow
+# the rollout with `kubectl rollout status -n <namespace> deploy/<instance>`.
+#
+# `MB_SITE_URL` is the route's URL. When TLS terminates outside Kix (for
+# example behind cloudflared), set `env.MB_SITE_URL` to the public URL.
+#
+# `MB_ANON_TRACKING_ENABLED` defaults to "false", so Metabase sends no
+# anonymous usage statistics; set `env.MB_ANON_TRACKING_ENABLED = "true"` to
+# send them.
+#
+# Network policy covers the database and the route. The databases Metabase
+# queries (its data sources) differ per instance, and the package declares
+# no egress to them. Under default-deny, add a NetworkPolicy or a
+# CiliumNetworkPolicy that selects this instance's pods and allows egress to
+# its data sources.
+#
+# `out`: the Service's `name`, `fqdn`, and `port` (3000).
+#
+# Escape hatches: `env` for Metabase settings, and the instance's
+# `partsOverlays` for probes, strategy, replicas, and placement.
 
 {
   scope,
@@ -22,159 +83,50 @@
 }:
 
 let
+  release = "0.63.19";
   name = scope.instanceName;
+  who = "metabase ${scope.namespaceName}/${name}";
 
-  # A Kubernetes memory quantity in MiB, for the forms a limit is written
-  # in. Any other form fails the build rather than guessing a heap size.
-  quantityToMiB =
-    q:
-    let
-      m = builtins.match "([0-9]+)(Ki|Mi|Gi|Ti|K|M|G|T)?" q;
-      n = lib.toInt (builtins.head m);
-      bytesPer = {
-        Ki = 1024;
-        Mi = 1048576;
-        Gi = 1073741824;
-        Ti = 1099511627776;
-        K = 1000;
-        M = 1000000;
-        G = 1000000000;
-        T = 1000000000000;
-      };
-      unit = builtins.elemAt m 1;
-    in
-    if m == null then
-      throw "metabase '${name}': cannot read the memory limit '${q}'; write it as an integer with an optional Ki, Mi, Gi, Ti, K, M, G or T suffix, or set JAVA_OPTS in env."
-    else
-      n * (if unit == null then 1 else bytesPer.${unit}) / 1048576;
+  # The first start creates Metabase's schema. A pod killed during a
+  # migration can leave the application database corrupt, so the startup
+  # probe and the progress deadline both allow 30 minutes.
+  startupSeconds = 1800;
 
-  # Metabase's docs size -Xmx to leave 1 to 2 GB for everything else
-  # ("1g on a machine with 2 GB of RAM, 2g on one with 4 GB"). The JVM in
-  # metabase/metabase:v0.50.34 sized its heap from the node's memory on
-  # kind, not the container's, so the heap is set explicitly.
-  heapMiB = limitMiB: limitMiB - lib.min 2048 (limitMiB / 2);
+  httpPort = 3000;
+  metricsPort = 9191;
 in
 {
   meta = {
-    version = "v0.50.34";
-    description = "Metabase, a business intelligence and analytics tool, backed by PostgreSQL";
+    version = release;
+    description = "Metabase, a business intelligence and analytics tool, with its application database on PostgreSQL";
     owner = "app-team";
   };
 
-  # Metabase's first migration runs CREATE EXTENSION citext, and StackGres
-  # installs an extension on the postgres image only when the SGCluster
-  # lists it.
-  deps.postgres.config.extensions = [ { name = "citext"; } ];
+  # Metabase's first migration runs CREATE EXTENSION citext.
+  deps.database.config.extensions = [ "citext" ];
 
   options = {
     image = kix.options.image {
       repository = "docker.io/metabase/metabase";
-      tag = "v0.50.34";
+      tag = "v${release}";
+      digest = "sha256:7324f83713df9851c6c7b6c8247098de14c0924fc3b868202f886df4877cd4ff";
     };
-    replicaCount = lib.mkOption {
-      type = lib.types.int;
-      # Stateless and serving user traffic; all state lives in the shared
-      # postgres application database, so replicas scale out freely.
-      default = kix.availability.pick availability {
-        none = 1;
-        pod = 2;
-        node = 2;
-        zone = 3;
+    # A memory limit also sizes the heap (see JAVA_OPTS).
+    resources = kix.options.resources {
+      requests = {
+        cpu = "250m";
+        memory = "2Gi";
       };
-      description = ''
-        Number of Metabase `Deployment` replicas. Defaults from the
-        cluster's availability level (v2_discussions/145).
-      '';
-    };
-    port = lib.mkOption {
-      type = lib.types.int;
-      default = 3000;
-    };
-    servicePort = lib.mkOption {
-      type = lib.types.int;
-      default = 80;
-    };
-    # The pmint93/metabase chart sets no resources. The requests cover an
-    # idle Metabase JVM, which held 1.9 GiB once started on kind. The
-    # memory limit also sets the heap: -Xmx is the limit less 2 GiB, or
-    # less half of it below 4 GiB. JAVA_OPTS in `env` overrides it.
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "250m";
-          memory = "2Gi";
-        };
-        limits = {
-          cpu = "2";
-          memory = "4Gi";
-        };
+      limits = {
+        cpu = "2";
+        memory = "4Gi";
       };
+    };
+    env = kix.options.env // {
+      description = "Extra environment variables for Metabase settings the package does not set: a string, a `fieldRef` source, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. The database and encryptionKey dependencies are wired by the package. `JAVA_OPTS` replaces the heap setting and `MB_SITE_URL` the routed URL; null removes either. `MB_ANON_TRACKING_ENABLED` defaults to \"false\".";
     };
     ingress = kix.options.ingress;
-    existingSecret = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-    };
-    database = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        type = "postgres";
-      };
-    };
-    siteUrl = lib.mkOption {
-      type = lib.types.str;
-      default = "";
-    };
-    timezone = lib.mkOption {
-      type = lib.types.str;
-      default = "America/Toronto";
-    };
-    emojiInLogs = lib.mkOption {
-      type = lib.types.str;
-      default = "1";
-    };
-    jettyHost = lib.mkOption {
-      type = lib.types.str;
-      default = "0.0.0.0";
-    };
-    env = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = { };
-    };
-    # Probe defaults follow the pmint93/metabase chart (2.x). /api/health
-    # answers 503 until migrations and initialisation finish, so the startup
-    # probe holds the other two off for up to five minutes.
-    startupProbe = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        path = "/api/health";
-        initialDelaySeconds = 5;
-        periodSeconds = 5;
-        timeoutSeconds = 3;
-        failureThreshold = 60;
-      };
-    };
-    livenessProbe = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        path = "/api/health";
-        initialDelaySeconds = 5;
-        periodSeconds = 10;
-        timeoutSeconds = 30;
-        failureThreshold = 6;
-      };
-    };
-    readinessProbe = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        path = "/api/health";
-        initialDelaySeconds = 5;
-        periodSeconds = 5;
-        timeoutSeconds = 3;
-        failureThreshold = 3;
-      };
-    };
+    metrics = kix.options.monitor;
   };
 
   build = [
@@ -182,137 +134,226 @@ in
       {
         self,
         config,
-        clusterConfig,
-        postgres,
         scope,
         kix,
+        database,
+        encryptionKey,
+        prometheus ? null,
         ...
       }:
-      {
-        # --- Secret ref (external or default name) ---
-        appSecret = scope.mkSecretRef {
-          name = if config.existingSecret != null then config.existingSecret else "${name}-secrets";
-          keys = [ ]; # keys unknown: external secret, used via envFrom
+      let
+        # Only `metrics.enabled` decides the metrics variable and container
+        # port. Wiring a prometheus dependency changes the Service and the
+        # ServiceMonitor but not the pod template, so it does not restart
+        # the Recreate Deployment.
+        metricsOn = config.metrics.enabled;
+        scraped = metricsOn && prometheus != null;
+        ek = kix.checkSecretKeys {
+          inherit who;
+          arg = "encryptionKey";
+          dep = encryptionKey;
+          keys = [ "key" ];
         };
+        # `kix.options.resources` drops null fields, so a removed limit is
+        # absent here.
+        hasMemoryLimit = (config.resources.limits or { }) ? memory;
 
-        # --- Deployment ---
+        env = kix.mkEnvVars (
+          kix.mergeEnv {
+            inherit who;
+            defaults = {
+              # Null when nothing routes to the instance; Metabase then
+              # records the URL of the first administrator's request.
+              MB_SITE_URL = self.exposure.url;
+              # The temurin JVM sizes its heap from the cgroup memory limit,
+              # 25% by default. Half leaves room for metaspace, threads, and
+              # off-heap buffers. run_metabase.sh puts a user's JAVA_OPTS
+              # before its own flags, so env.JAVA_OPTS replaces only this.
+              JAVA_OPTS = if hasMemoryLimit then "-XX:MaxRAMPercentage=50" else null;
+              # Metabase sends anonymous usage statistics unless this is false.
+              MB_ANON_TRACKING_ENABLED = "false";
+            };
+            owned = [
+              {
+                vars = {
+                  MB_DB_TYPE = "postgres";
+                  MB_DB_HOST = database.out.host;
+                  MB_DB_PORT = toString database.out.port;
+                  MB_DB_DBNAME = database.out.database;
+                  MB_DB_USER = database.out.credentials.out.keyRef "username";
+                  MB_DB_PASS = database.out.credentials.out.keyRef "password";
+                };
+                # MB_DB_CONNECTION_URI, or the file MB_DB_CONNECTION_URI_FILE
+                # names, replaces the host, port, and credentials above.
+                # run_metabase.sh exits 1 when MB_DB_USER or MB_DB_PASS and
+                # its _FILE variant are both set.
+                names = [
+                  "MB_DB_CONNECTION_URI"
+                  "MB_DB_CONNECTION_URI_FILE"
+                  "MB_DB_USER_FILE"
+                  "MB_DB_PASS_FILE"
+                ];
+                from = "the database dependency";
+                fix = "Wire a different database instance through deps.database instead.";
+              }
+              {
+                vars.MB_ENCRYPTION_SECRET_KEY = ek.out.keyRef "key";
+                from = "the encryptionKey dependency";
+                fix = "Wire a different secret through deps.encryptionKey instead.";
+              }
+              {
+                vars = {
+                  MB_JETTY_HOST = "0.0.0.0";
+                  MB_JETTY_PORT = toString httpPort;
+                };
+                from = "the package, so the Service and probes match the container";
+                fix = "Remove it from env.";
+              }
+              {
+                vars = lib.optionalAttrs metricsOn { MB_PROMETHEUS_SERVER_PORT = toString metricsPort; };
+                names = lib.optional (!metricsOn) "MB_PROMETHEUS_SERVER_PORT";
+                from = "the metrics.enabled option (port ${toString metricsPort}, matching the container port, the Service, and the ServiceMonitor)";
+                fix =
+                  if metricsOn then
+                    "Remove it from env."
+                  else
+                    "Remove it from env, and set metrics.enabled = true to serve metrics.";
+              }
+            ];
+          } config.env
+        );
+
+        httpProbe = path: {
+          httpGet = {
+            inherit path;
+            port = "http";
+          };
+        };
+      in
+      {
         deployment =
           {
-            name = "web";
+            inherit name;
             spec = {
-              replicas = config.replicaCount;
+              replicas = kix.availability.pick availability {
+                none = 1;
+                pod = 2;
+                node = 2;
+                zone = 3;
+              };
+              # Metabase migrates its schema on start, and pods of the old
+              # version fail against the migrated schema. Pods of one version
+              # may start together: Liquibase locks the application database.
+              strategy.type = "Recreate";
+              progressDeadlineSeconds = startupSeconds + 60;
               selector.matchLabels = scope.selectorLabels;
-              # Kubernetes default: Metabase documents no shutdown drain.
-              template.spec.terminationGracePeriodSeconds = 30;
-              template.spec.containers = [
-                {
-                  name = "web";
-                  image = kix.image.ref config.image;
-                  imagePullPolicy = config.image.pullPolicy;
-                  env = kix.mkEnvVars (
-                    {
-                      JAVA_OPTS =
-                        let
-                          limit = config.resources.limits.memory or null;
-                        in
-                        if limit == null then null else "-Xmx${toString (heapMiB (quantityToMiB (toString limit)))}m";
-                      JAVA_TIMEZONE = config.timezone;
-                      MB_DB_TYPE = config.database.type;
-                      MB_EMOJI_IN_LOGS = config.emojiInLogs;
-                      MB_JETTY_HOST = config.jettyHost;
-                      MB_JETTY_PORT = toString config.port;
-                      MB_SITE_URL = if config.siteUrl != "" then config.siteUrl else null;
-                    }
-                    // config.env
-                  );
-                  envFrom = [
-                    self.appSecret.out.envFrom
-                  ];
-                  ports = [
-                    (kix.port "http" config.port)
-                  ];
-                  startupProbe = {
-                    httpGet = {
-                      path = config.startupProbe.path;
-                      port = config.port;
-                      scheme = "HTTP";
+              # A changed database password or encryption key restarts the
+              # pods, which read both once at start. A `secret-ref` has no
+              # content hash; an External Secret rolls the pods through
+              # reloader's `withReloadOn`.
+              template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
+                "checksum/database" = database.out.credentials.out.identityHash or null;
+                "checksum/encryption-key" = ek.out.identityHash or null;
+              };
+              template.spec = {
+                automountServiceAccountToken = false;
+                # Metabase reads every MB_* variable as a setting, and a
+                # Service named mb-<x> would inject MB_<X>_SERVICE_HOST and
+                # MB_<X>_PORT.
+                enableServiceLinks = false;
+                # Kubernetes default: Metabase documents no shutdown drain.
+                terminationGracePeriodSeconds = 30;
+                containers = [
+                  {
+                    name = "metabase";
+                    image = kix.image.ref config.image;
+                    imagePullPolicy = config.image.pullPolicy;
+                    inherit env;
+                    ports = [
+                      (kix.port "http" httpPort)
+                    ]
+                    ++ lib.optional metricsOn (kix.port "metrics" metricsPort);
+                    # /api/health answers 503 until the migrations finish.
+                    startupProbe = httpProbe "/api/health" // {
+                      periodSeconds = 10;
+                      timeoutSeconds = 5;
+                      failureThreshold = startupSeconds / 10;
                     };
-                    initialDelaySeconds = config.startupProbe.initialDelaySeconds;
-                    periodSeconds = config.startupProbe.periodSeconds;
-                    timeoutSeconds = config.startupProbe.timeoutSeconds;
-                    failureThreshold = config.startupProbe.failureThreshold;
-                  };
-                  livenessProbe = {
-                    httpGet = {
-                      path = config.livenessProbe.path;
-                      port = config.port;
-                      scheme = "HTTP";
+                    # /livez does not check the database, so an outage of the
+                    # application database does not restart every pod into a
+                    # fresh start.
+                    livenessProbe = httpProbe "/livez" // {
+                      periodSeconds = 10;
+                      timeoutSeconds = 5;
+                      failureThreshold = 6;
                     };
-                    initialDelaySeconds = config.livenessProbe.initialDelaySeconds;
-                    periodSeconds = config.livenessProbe.periodSeconds;
-                    timeoutSeconds = config.livenessProbe.timeoutSeconds;
-                    failureThreshold = config.livenessProbe.failureThreshold;
-                  };
-                  readinessProbe = {
-                    httpGet = {
-                      path = config.readinessProbe.path;
-                      port = config.port;
-                      scheme = "HTTP";
+                    # /readyz answers 503 while the application database is
+                    # unreachable, so the pods leave the Service.
+                    readinessProbe = httpProbe "/readyz" // {
+                      periodSeconds = 5;
+                      timeoutSeconds = 3;
+                      failureThreshold = 3;
                     };
-                    initialDelaySeconds = config.readinessProbe.initialDelaySeconds;
-                    periodSeconds = config.readinessProbe.periodSeconds;
-                    timeoutSeconds = config.readinessProbe.timeoutSeconds;
-                    failureThreshold = config.readinessProbe.failureThreshold;
-                  };
-                  resources = config.resources;
-                  # run_metabase.sh drops from root to the `metabase` user,
-                  # uid and gid 2000 unless MUID/MGID say otherwise, and
-                  # starts Java directly when it is already non-root.
-                  securityContext = {
-                    runAsNonRoot = true;
-                    runAsUser = 2000;
-                    runAsGroup = 2000;
-                    allowPrivilegeEscalation = false;
-                    readOnlyRootFilesystem = true;
-                  };
-                }
-              ];
+                    resources = config.resources;
+                    # run_metabase.sh starts Java directly when it is already
+                    # non-root. 2000 is the uid run_metabase.sh gives its
+                    # `metabase` user when the container starts as root.
+                    securityContext = {
+                      runAsNonRoot = true;
+                      runAsUser = 2000;
+                      runAsGroup = 2000;
+                      allowPrivilegeEscalation = false;
+                      readOnlyRootFilesystem = true;
+                      capabilities.drop = [ "ALL" ];
+                    };
+                  }
+                ];
+              };
             };
           }
           |> kix.withMounts [
-            # Metabase extracts its bundled drivers into /plugins on start.
+            # Metabase's plugins directory, `plugins` under the image's
+            # working directory `/`, for drivers that metabase.jar does not
+            # bundle.
             (kix.mount.emptyDir {
               name = "plugins";
               mountPath = "/plugins";
+              sizeLimit = "512Mi";
             })
+            # java.io.tmpdir, for JVM and Jetty temporary files. The kubelet
+            # evicts the pod when a volume exceeds its sizeLimit.
             (kix.mount.emptyDir {
               name = "tmp";
               mountPath = "/tmp";
+              sizeLimit = "2Gi";
             })
           ]
           |> scope.mkDeployment;
 
-        # --- Service ---
-        # Port 80 -> targetPort 3000, so we pass explicit ports to override auto-derived ones.
+        # The metrics port joins the Service only when something scrapes it.
         service =
           self.deployment
           |> kix.service.fromWorkload {
-            name = "web";
+            inherit name;
             ports = [
               {
-                name = "metabase";
-                port = config.servicePort;
-                targetPort = config.port;
-                protocol = "TCP";
+                name = "http";
+                port = httpPort;
+                targetPort = "http";
               }
-            ];
+            ]
+            ++ lib.optional scraped {
+              name = "metrics";
+              port = metricsPort;
+              targetPort = "metrics";
+            };
           }
           |> scope.mkResource;
 
-        # --- Entry point ---
         root = self.service;
       }
     )
     (kix.expose { service = "service"; })
+    (kix.monitor { service = "service"; })
   ];
 }
