@@ -415,7 +415,7 @@ static ISO27001: &[Control] = &[
     Control {
         id: "a.8.22",
         title: "Segregation of Networks",
-        narrative: "NetworkPolicies are auto-derived from the DI graph (lib/netpol.nix).",
+        narrative: "NetworkPolicies are auto-derived from the DI graph (kix/lib/plugins/netpol).",
         required_rules: &["security.network"],
     },
     Control {
