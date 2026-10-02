@@ -112,8 +112,11 @@ let
   };
 
   # Stands in for a custom resource whose operator creates the `app=operand`
-  # pods, with an operand policy that admits only their peers.
-  operandPeers =
+  # pods, with an operand policy on `endpointSelector` that admits only
+  # their peers.
+  operandPeers = operandPeersOn { matchLabels.app = "operand"; };
+  operandPeersOn =
+    endpointSelector:
     { kix, ... }:
     {
       meta.version = "test";
@@ -125,7 +128,7 @@ let
             inherit scope;
             name = "operand-peers";
             spec = {
-              endpointSelector.matchLabels.app = "operand";
+              inherit endpointSelector;
               ingress = [ { fromEndpoints = [ { matchLabels.app = "operand"; } ]; } ];
             };
           };
@@ -232,6 +235,87 @@ let
             self.service
             self.serviceMonitor
             self.peers
+          ];
+        };
+      };
+  };
+
+  # Two Deployments behind one Service declare the container port `metrics`
+  # with different numbers, and the Service's targetPort is that name.
+  twoNumbers = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        prometheus,
+        ...
+      }:
+      let
+        deployment =
+          name: containerPort:
+          let
+            podLabels = scope.selectorLabels // {
+              role = name;
+            };
+          in
+          scope.mkDeployment {
+            inherit name;
+            spec = {
+              selector.matchLabels = podLabels;
+              template = {
+                metadata.labels = podLabels;
+                spec.containers = [
+                  (
+                    {
+                      name = "app";
+                      image = "example/app:1";
+                      ports = [
+                        {
+                          name = "metrics";
+                          inherit containerPort;
+                        }
+                      ];
+                    }
+                    // containerBase
+                  )
+                ];
+              };
+            };
+          };
+      in
+      {
+        first = deployment "amb-a" 8080;
+        second = deployment "amb-b" 9090;
+        service = scope.mkResource {
+          apiVersion = "v1";
+          kind = "Service";
+          name = "amb";
+          labels = scope.selectorLabels;
+          spec = {
+            selector = scope.selectorLabels;
+            ports = [
+              {
+                name = "metrics";
+                port = 80;
+                targetPort = "metrics";
+              }
+            ];
+          };
+        };
+        serviceMonitor = prometheus.out.mkServiceMonitor scope {
+          name = "amb";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            endpoints = [ { port = "metrics"; } ];
+          };
+        };
+        root = {
+          resource = self.service;
+          requires = [
+            self.first
+            self.second
+            self.serviceMonitor
           ];
         };
       };
@@ -414,6 +498,49 @@ let
     };
   };
 
+  scrapeLib = import ../../plugins/netpol/scrape.nix { inherit lib; };
+
+  # Runs `scrape.derive` under default deny over the cluster's resources and
+  # reports its errors as warnings prefixed "scrape error: ".
+  errorProbe.hooks.clusterProcessors.scrape-error-probe = ctx: {
+    warnings =
+      map (e: "scrape error: ${e}")
+        (scrapeLib.derive {
+          inherit (ctx) resources nsResources realNsNames;
+          enforcerApi = (ctx.cluster.findRoleProvider "network-policy-enforcer").out.netpol;
+          enforced = {
+            ingress = true;
+            egress = true;
+          };
+          defaultDeny = true;
+        }).errors;
+  };
+
+  # True when `extra` fails evaluation under default deny and the scrape
+  # derivation reports an error containing `infix` for it. The errors are
+  # read from a cluster without default deny, which evaluates.
+  failsUnderDefaultDeny =
+    infix: extra:
+    let
+      probed = clusterWith {
+        extra.imports = [
+          extra
+          noDefaultDeny
+          errorProbe
+        ];
+      };
+      errors = map (lib.removePrefix "scrape error: ") (
+        builtins.filter (lib.hasPrefix "scrape error: ") (warningsOf probed)
+      );
+    in
+    (
+      evalFails (clusterWith {
+        inherit extra;
+      })
+      && builtins.any (lib.hasInfix infix) errors
+    )
+    || throw "expected a default-deny scrape error containing '${infix}'; errors: ${show errors}";
+
   cnpsOf = cluster: ofKind "CiliumNetworkPolicy" (manifests cluster);
   # Target ingress policies end in a hash of the server and the target.
   byPrefix =
@@ -566,9 +693,7 @@ in
     || throw "named port: rules ${show (egressRules cluster)}; warnings ${show (warningsOf cluster)}";
 
   # Under default deny the same target fails evaluation.
-  prometheus-scrape-unresolved-port-name-fails-under-default-deny = evalFails (clusterWith {
-    extra = namedPortPods;
-  });
+  prometheus-scrape-unresolved-port-name-fails-under-default-deny = failsUnderDefaultDeny "target watch/pods-named has port pgexporter, a name no Kix container declares" namedPortPods;
 
   # The target ingress rule keeps the name, which the receiving pod
   # resolves.
@@ -749,6 +874,126 @@ in
     (byExtraLabel != null && byMissingLabel == null)
     || throw "isolation: by extra label ${show byExtraLabel}; by missing label ${show byMissingLabel}";
 
+  # Pods Kix did not build are known by the target selector alone. A policy
+  # the selector implies isolates all of them, including one with NotIn on
+  # a key the selector fixes. A policy with DoesNotExist on a key outside the
+  # selector may isolate only some, so the target gets no scrape ingress and
+  # a warning.
+  prometheus-scrape-isolation-of-unknown-pods =
+    let
+      clusterOn =
+        endpointSelector:
+        clusterWith {
+          extra = noDefaultDeny // {
+            instances.apps.operand-peers.package = operandPeersOn endpointSelector;
+          };
+        };
+      operandIngress =
+        cluster: byPrefix "monitoring-prometheus-server-scrape-pods-operand" (cnpsOf cluster);
+      byNotIn = clusterOn {
+        matchExpressions = [
+          {
+            key = "app";
+            operator = "NotIn";
+            values = [ "other" ];
+          }
+        ];
+      };
+      byDoesNotExist = clusterOn {
+        matchLabels.app = "operand";
+        matchExpressions = [
+          {
+            key = "role";
+            operator = "DoesNotExist";
+          }
+        ];
+      };
+    in
+    (
+      operandIngress byNotIn != null
+      && operandIngress byDoesNotExist == null
+      && hasWarning "another ingress policy may isolate only some of the pods behind target apps/pods-operand" byDoesNotExist
+    )
+    || throw "unknown pods: NotIn ${show (operandIngress byNotIn)}; DoesNotExist ${show (operandIngress byDoesNotExist)}, warnings ${show (warningsOf byDoesNotExist)}";
+
+  # A Kubernetes NetworkPolicy from `namespaces.<ns>.networkPolicies`
+  # isolates ingress when its policyTypes include Ingress or are absent, with
+  # or without an `ingress` key. One with only Egress does not.
+  prometheus-scrape-isolation-reads-kubernetes-network-policies =
+    let
+      webIngress =
+        policy:
+        byPrefix "monitoring-prometheus-server-scrape-svc-web" (
+          cnpsOf (clusterWith {
+            extra = noDefaultDeny // {
+              namespaces.apps.networkPolicies.lockdown = policy;
+            };
+          })
+        );
+      noTypes = webIngress { podSelector = { }; };
+      ingressType = webIngress {
+        podSelector = { };
+        policyTypes = [ "Ingress" ];
+      };
+      egressType = webIngress {
+        podSelector = { };
+        policyTypes = [ "Egress" ];
+      };
+    in
+    (noTypes != null && ingressType != null && egressType == null)
+    || throw "NetworkPolicy isolation: no types ${show noTypes}; Ingress ${show ingressType}; Egress ${show egressType}";
+
+  # A port name the Kix workloads behind a Service declare with two numbers
+  # resolves to both, on the egress and the ingress rule.
+  prometheus-scrape-port-name-with-two-numbers =
+    let
+      cluster = clusterWith { extra.instances.apps.amb.package = twoNumbers; };
+      sortPorts = ports: lib.sort (a: b: a.port < b.port) ports;
+      expected = [
+        {
+          port = "8080";
+          protocol = "TCP";
+        }
+        {
+          port = "9090";
+          protocol = "TCP";
+        }
+      ];
+      egress = serviceRuleFor cluster "app.kubernetes.io/name" "amb";
+      ingress = byPrefix "monitoring-prometheus-server-scrape-svc-amb" (cnpsOf cluster);
+    in
+    (
+      sortPorts egress.ports == expected
+      && sortPorts (builtins.head ingress.spec.ingress).ports == expected
+    )
+    || throw "two numbers: egress ${show egress}; ingress ${show ingress}";
+
+  # The Thanos sidecar's discovery Service targets numeric ports by default,
+  # so its ServiceMonitor gets an egress rule under default deny.
+  prometheus-scrape-thanos-sidecar-under-default-deny =
+    let
+      cluster = clusterWith {
+        server.thanos = {
+          service.enabled = true;
+          serviceMonitor.enabled = true;
+        };
+      };
+      rule = lib.findFirst (r: r.selector == serverSelector && r.namespace == "monitoring") null (
+        rulesOf "service-egress" (egressRules cluster)
+      );
+    in
+    (
+      rule != null
+      &&
+        rule.ports == [
+          {
+            port = "10902";
+            protocol = "TCP";
+          }
+        ]
+    )
+    || throw "thanos sidecar: ${show (rulesOf "service-egress" (egressRules cluster))}";
+
   # `namespaceSelector.any` covers every Kix namespace: the monitor's own,
   # which has no workload, and one that holds only custom resources.
   prometheus-scrape-any-namespace =
@@ -808,9 +1053,7 @@ in
     )
     || throw "matchExpressions warning: ${show (warningsOf cluster)}";
 
-  prometheus-scrape-match-expressions-fails-under-default-deny = evalFails (clusterWith {
-    extra = matchExpressionsPods;
-  });
+  prometheus-scrape-match-expressions-fails-under-default-deny = failsUnderDefaultDeny "PodMonitor watch/expr: its selector uses matchExpressions" matchExpressionsPods;
 
   # A host rule without ports would open every node port, so the target
   # gets none and a warning instead.
@@ -830,10 +1073,10 @@ in
     || throw "portless host target: rules ${show hostRules}; warnings ${show (warningsOf cluster)}";
 
   prometheus-scrape-host-network-without-port-number-fails-under-default-deny =
-    evalFails
-      (clusterWith {
-        extra.instances.apps.hostexp.package = hostExporter;
-      });
+    failsUnderDefaultDeny "target apps/svc-hostexp runs on the host network"
+      {
+        instances.apps.hostexp.package = hostExporter;
+      };
 
   # A Prometheus CRD without a podSelector (here through the cluster
   # override) gives no scrape policy and a warning.
@@ -849,9 +1092,7 @@ in
     )
     || throw "no podSelector: ${show (warningsOf cluster)}";
 
-  prometheus-scrape-without-pod-selector-fails-under-default-deny = evalFails (clusterWith {
-    extra = unnamedServer;
-  });
+  prometheus-scrape-without-pod-selector-fails-under-default-deny = failsUnderDefaultDeny "Prometheus monitoring/prometheus-server: the Prometheus CRD declares no factBehavior.podSelector" unnamedServer;
 
   # The CRD's `endpoint = "terminate"` gives a remote-write URL built from a
   # dependency's address an operand egress from the server pods and an

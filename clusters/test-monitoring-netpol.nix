@@ -5,7 +5,9 @@
 # Prometheus, Alertmanager, kube-state-metrics, and node-exporter (on the host
 # network) in `monitoring-system`, reloader in `reloader`, and a one-instance
 # StackGres cluster in `data`, whose PodMonitor scrapes the exporter sidecar
-# of operator-created pods on port 9187 (`portNumber`). Cilium is
+# of operator-created pods on port 9187 (`portNumber`). The Prometheus
+# server runs the Thanos sidecar, scraped through the discovery Service on
+# its numeric target port 10902. Cilium is
 # installed by Kix with `networkPolicy.enable`. Every target in Prometheus's
 # `/api/v1/targets` should be up, and Alertmanager should be discovered.
 #
@@ -35,6 +37,15 @@ kix.buildCluster {
 
       monitoring.enabled = true;
       monitoring.grafana.enabled = false;
+      # A sidecar without object storage, which the operator adds for any
+      # non-null `spec.thanos`.
+      instances.monitoring-system.prometheus-server.config = {
+        extraSpec.thanos = { };
+        thanos = {
+          service.enabled = true;
+          serviceMonitor.enabled = true;
+        };
+      };
 
       instances.reloader.reloader.package = packages.reloader;
 

@@ -164,12 +164,14 @@ in
         ) workloads;
 
       # A port name resolves through the container ports of the Kix workloads
-      # behind the selector. It stays a name when no workload declares it,
-      # which is the case for pods an operator creates.
+      # behind the selector, to every number they declare it with: a Service
+      # targetPort name resolves per pod, so two workloads may give it two
+      # numbers. It stays a name when no workload declares it, which is the
+      # case for pods an operator creates.
       resolvePort =
         backing: port:
         if isNumeric port then
-          toString port
+          [ (toString port) ]
         else
           let
             hits = lib.unique (
@@ -178,7 +180,7 @@ in
               )
             );
           in
-          if builtins.length hits == 1 then builtins.head hits else port;
+          if hits == [ ] then [ port ] else hits;
 
       # One target: pods by selector in a namespace, with the pod ports a
       # scrape reaches. `key` is the readable part of the policy name; `id`
@@ -202,15 +204,14 @@ in
             namespace
             podSelector
             ;
-          ports = map (p: {
-            port = resolvePort backing p;
-            inherit protocol;
-          }) ports;
+          ports = map (port: { inherit port protocol; }) (
+            lib.unique (builtins.concatMap (resolvePort backing) ports)
+          );
           # Kix knows the pods' network and labels only for pods it built;
-          # unknown pods are taken to be on the pod network and are known by
-          # `podSelector` alone.
+          # unknown pods are taken to be on the pod network, and
+          # `podLabelSets` is empty for them.
           hostNetwork = backing != [ ] && builtins.all (w: w.hostNetwork) backing;
-          podLabelSets = if backing == [ ] then [ podSelector ] else map (w: w.podLabels) backing;
+          podLabelSets = map (w: w.podLabels) backing;
         };
 
       # Pod port of a Service port, before name resolution.
@@ -358,45 +359,84 @@ in
         "Prometheus ${plain (nsOfRaw r.rawManifest)}/${plain r.rawManifest.metadata.name}: the Prometheus CRD declares no factBehavior.podSelector, so Kix cannot name the server pods and derives no scrape policy for them. Under default deny the server reaches no target. Set cluster.factBehavior.\"monitoring.coreos.com/Prometheus\" to { endpoint = \"terminate\"; podSelector = <the server pods' labels>; }."
       ) (builtins.filter (r: !hasPodSelector r) prometheuses);
 
-      # Ingress policies that already select pods, for the check without
-      # default deny. A cluster-wide policy names the namespace with
-      # Cilium's `k8s:io.kubernetes.pod.namespace` label, if at all.
-      isolatingPolicies = builtins.filter (
+      # Policies that isolate the pods they select for ingress, for the check
+      # without default deny: an enforcer policy with an ingress section, and
+      # a Kubernetes NetworkPolicy whose policyTypes include Ingress (absent
+      # policyTypes include it). `namespaces.<ns>.networkPolicies` reach the
+      # check through `nsResources`.
+      isolatesIngress =
         r:
-        builtins.elem (r.kind or "") (enforcerApi.policyKinds or [ ])
-        && (
-          let
-            spec = r.rawManifest.spec or { };
-          in
-          spec ? ingress || spec ? ingressDeny
-        )
-      ) (resources ++ extraPolicies);
-      isolatedForIngress =
-        namespace: podLabels:
-        builtins.any (
+        let
+          spec = r.rawManifest.spec or { };
+          kind = r.kind or "";
+        in
+        if kind == "NetworkPolicy" && groupOf r == "networking.k8s.io" then
+          builtins.elem "Ingress" (spec.policyTypes or [ "Ingress" ])
+        else
+          builtins.elem kind (enforcerApi.policyKinds or [ ]) && (spec ? ingress || spec ? ingressDeny);
+      namespacePolicies = builtins.concatMap (ns: builtins.attrValues (ns.netpols or { })) (
+        builtins.attrValues nsResources
+      );
+      isolatingPolicies = builtins.filter isolatesIngress (
+        resources ++ extraPolicies ++ namespacePolicies
+      );
+
+      # The pod selectors of the isolating policies that apply in a
+      # namespace, and the labels they are matched against. A cluster-wide
+      # policy names the namespace with Cilium's
+      # `k8s:io.kubernetes.pod.namespace` label, if at all.
+      isolatingSelectorsIn =
+        namespace:
+        builtins.concatMap (
           p:
           let
             raw = p.rawManifest;
             policyNs = nsOfRaw raw;
             selector = raw.spec.endpointSelector or raw.spec.podSelector or null;
           in
-          selector != null
-          && (policyNs == null || plain policyNs == plain namespace)
-          && matchesSelector selector (podLabels // { "k8s:io.kubernetes.pod.namespace" = plain namespace; })
+          lib.optional (selector != null && (policyNs == null || plain policyNs == plain namespace)) selector
         ) isolatingPolicies;
+      withNamespace =
+        namespace: labels: labels // { "k8s:io.kubernetes.pod.namespace" = plain namespace; };
 
-      # A policy selects pods by their own labels, which can carry more than
-      # the target's selector, so each pod Kix built behind the target is
-      # checked. "some" means the target ingress would isolate pods that no
-      # other policy isolates.
+      # A selector holds for every pod whose labels include `labels` only
+      # when each key it reads is one of them and it matches them.
+      selectorImplied =
+        selector: labels:
+        builtins.all (k: labels ? ${k}) (
+          builtins.attrNames (selector.matchLabels or { })
+          ++ map (e: e.key) (selector.matchExpressions or [ ])
+        )
+        && matchesSelector selector labels;
+
+      # "all", "some", or "none" of the target's pods are already isolated
+      # for ingress. "some" means the target ingress would isolate pods that
+      # no other policy isolates. A policy selects pods by their own labels,
+      # which can carry more than the target's selector, so each pod Kix
+      # built behind the target is checked. Pods Kix did not build are known
+      # by `podSelector` alone: a policy isolates all of them only when
+      # `podSelector` implies its selector, and one that matches
+      # `podSelector` without implying it (a NotIn or DoesNotExist on a key
+      # outside it) may isolate only some.
       isolationOf =
         t:
         let
-          isolated = builtins.filter (isolatedForIngress t.namespace) t.podLabelSets;
+          selectors = isolatingSelectorsIn t.namespace;
+          isolated =
+            labels: builtins.any (sel: matchesSelector sel (withNamespace t.namespace labels)) selectors;
+          count = builtins.length (builtins.filter isolated t.podLabelSets);
+          selectorLabels = withNamespace t.namespace t.podSelector;
         in
-        if isolated == [ ] then
+        if t.podLabelSets == [ ] then
+          if builtins.any (sel: selectorImplied sel selectorLabels) selectors then
+            "all"
+          else if isolated t.podSelector then
+            "some"
+          else
+            "none"
+        else if count == 0 then
           "none"
-        else if builtins.length isolated == builtins.length t.podLabelSets then
+        else if count == builtins.length t.podLabelSets then
           "all"
         else
           "some";
@@ -545,7 +585,12 @@ in
           warnings = lib.optionals enforced.ingress (
             map (
               t:
-              "Prometheus ${promNs}/${promName}: another ingress policy isolates only some of the pods behind target ${plain t.namespace}/${plain t.key}. Without default deny Kix adds scrape ingress only where every pod is already isolated, so the server cannot reach the isolated pods. Select all of the target's pods in that policy, or turn on networkPolicy.defaultDeny."
+              "Prometheus ${promNs}/${promName}: another ingress policy ${
+                if t.podLabelSets == [ ] then
+                  "may isolate only some of the pods behind target ${plain t.namespace}/${plain t.key}, which Kix did not build, depending on labels outside the target's selector"
+                else
+                  "isolates only some of the pods behind target ${plain t.namespace}/${plain t.key}"
+              }. Without default deny Kix adds scrape ingress only where it can show that every pod is already isolated, so the server cannot reach the isolated pods. Select all of the target's pods in that policy, or turn on networkPolicy.defaultDeny."
             ) partlyIsolatedTargets
           );
           breakages =
