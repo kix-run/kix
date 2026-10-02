@@ -104,8 +104,9 @@ rec {
   # Instances pulled from availablePackages to satisfy demands. Only a
   # required dependency places a demand. An optional dependency resolves
   # against existing instances and imports, and is null otherwise; it never
-  # pulls a shelf package.
-  computeAutoInstances =
+  # pulls a shelf package. Returns `singletonConflicts` as data next to the
+  # placements; computeAutoInstances refuses them.
+  planAutoInstances =
     {
       explicitInstances,
       availablePackages,
@@ -212,11 +213,18 @@ rec {
       # consumers in two namespaces share one provider instead of
       # instantiating two strong symbols of the same role. `requester`
       # (`<ns>/<inst>`) names the first demand for the refusal messages and
-      # does not take part in deduplication.
-      mkItem = depName: requesterNs: requester: {
+      # does not take part in deduplication. `origin` is null when the
+      # requester is a declared instance; for an auto-instantiated requester
+      # it is the declared instance whose demands pulled the requester in.
+      mkItem = depName: requesterNs: requester: origin: {
         key =
           if builtins.elem depName roles.roleNames then "role:${depName}" else "${depName}@${requesterNs}";
-        inherit depName requesterNs requester;
+        inherit
+          depName
+          requesterNs
+          requester
+          origin
+          ;
       };
 
       # The demands an instance places on optional instances and the shelf.
@@ -224,7 +232,7 @@ rec {
       # with `deps.<arg>` places none by name; if the wiring is a `ref` to an
       # optional instance, that instance is demanded directly.
       demandsOf =
-        instCfg: ns: instName:
+        instCfg: ns: instName: origin:
         let
           requester = "${ns}/${instName}";
           # resolveArg treats a null entry as not wired.
@@ -234,9 +242,7 @@ rec {
             v: isRef v && (optional.${v.namespace} or { }) ? ${v.instanceName}
           ) (map (d: wired.${d}) (builtins.filter (d: wired ? ${d}) (getAllDeps instCfg.package)));
         in
-        map (d: mkItem d ns requester) (
-          builtins.filter (d: !(wired ? ${d})) required
-        )
+        map (d: mkItem d ns requester origin) (builtins.filter (d: !(wired ? ${d})) required)
         ++ map (v: {
           key = "ref:${v.namespace}/${v.instanceName}";
           target = {
@@ -336,7 +342,7 @@ rec {
 
       seeds = builtins.concatMap (
         ns:
-        builtins.concatMap (instName: demandsOf mandatory.${ns}.${instName} ns instName) (
+        builtins.concatMap (instName: demandsOf mandatory.${ns}.${instName} ns instName null) (
           builtins.attrNames (mandatory.${ns} or { })
         )
       ) (builtins.attrNames mandatory);
@@ -349,13 +355,15 @@ rec {
             opt = activatedBy item;
           in
           if opt != null then
-            demandsOf optional.${opt.ns}.${opt.instName} opt.ns opt.instName
+            demandsOf optional.${opt.ns}.${opt.instName} opt.ns opt.instName null
 
           else if availableByKey ? ${item.depName} then
             let
               shelf = shelfInstance item;
             in
-            demandsOf { inherit (shelf.avPkg) package; } shelf.ns shelf.canonicalName
+            demandsOf { inherit (shelf.avPkg) package; } shelf.ns shelf.canonicalName (
+              if item.origin == null then item.requester else item.origin
+            )
 
           else
             [ ];
@@ -380,6 +388,12 @@ rec {
           [
             {
               inherit ns;
+              inherit (item)
+                depName
+                requester
+                requesterNs
+                origin
+                ;
               instName = canonicalName;
               instCfg = {
                 package = avPkg.package;
@@ -415,6 +429,173 @@ rec {
         }
       ) { } autoInstanceList;
 
+      # A shelf package marked one per cluster (meta.clusterSingletonClaims)
+      # that the closure places in two namespaces, or beside a declared
+      # instance that claims the same `cluster:` conflictsWith key or role
+      # without answering the demanded key. conflictsWith or the role index
+      # would refuse either later, but without naming the consumer or the
+      # fix. Each entry carries the refusal text as `message`.
+      singletonConflicts =
+        let
+          placementsByName = builtins.groupBy (p: p.instName) autoInstanceList;
+
+          # Declared instances in the cluster: the mandatory ones and the
+          # optional ones the closure activated.
+          declaredList =
+            builtins.concatMap (
+              ns:
+              map (instName: {
+                inherit ns instName;
+                instCfg = mandatory.${ns}.${instName};
+              }) (builtins.attrNames mandatory.${ns})
+            ) (builtins.attrNames mandatory)
+            ++ builtins.concatMap (
+              ns:
+              map
+                (instName: {
+                  inherit ns instName;
+                  instCfg = optional.${ns}.${instName};
+                })
+                (
+                  builtins.filter (instName: activatedOptionals ? "${ns}/${instName}") (
+                    builtins.attrNames optional.${ns}
+                  )
+                )
+            ) (builtins.attrNames optional);
+
+          plural =
+            n: one: many:
+            if n == 1 then one else many;
+
+          bindLine =
+            target: p:
+            "  instances.${p.requesterNs}.${lib.removePrefix "${p.requesterNs}/" p.requester}.deps.${p.depName} = ref.${target};";
+
+          # An auto-instantiated requester has no instance definition to
+          # set deps on, so it gets no binding line.
+          bindingAdvice =
+            {
+              name,
+              target,
+              label,
+              consumers,
+            }:
+            let
+              bindable = builtins.filter (p: p.origin == null) consumers;
+              unbindable = lib.unique (map (p: p.requester) (builtins.filter (p: p.origin != null) consumers));
+              n = builtins.length unbindable;
+            in
+            lib.optional (bindable != [ ])
+              "or bind ${plural (builtins.length bindable) "this consumer" "these consumers"} to ${label}:"
+            ++ map (bindLine target) bindable
+            ++
+              lib.optional (unbindable != [ ])
+                "${builtins.concatStringsSep ", " unbindable} ${plural n "is" "are"} auto-instantiated, so ${plural n "it has" "they have"} no deps to set; declaring ${name} once covers ${plural n "it" "them"}.";
+
+          conflictFor =
+            name:
+            let
+              placements = placementsByName.${name};
+              # One placement per namespace, in closure order; a second
+              # placement in a namespace is the same instance.
+              perNs = builtins.foldl' (
+                acc: p: if builtins.any (q: q.ns == p.ns) acc then acc else acc ++ [ p ]
+              ) [ ] placements;
+              first = builtins.head perNs;
+              packageMeta = meta.peekPackageMeta {
+                package = normalizedAvail.${name}.package;
+                inherit kixlib;
+              };
+              claimArgs = {
+                inherit packageMeta;
+                keys = shelfKeys name;
+              };
+              claims = meta.clusterSingletonClaims claimArgs;
+              markers = meta.clusterSingletonMarkers claimArgs;
+
+              declaredMeta =
+                d:
+                meta.peekPackageMeta {
+                  package = d.instCfg.package;
+                  inherit kixlib;
+                };
+              # Mirrors the later refusals: d lists `cluster:<key>` for a key
+              # this package claims, or d is managed and claims one of its
+              # roles. A declared instance at the same coordinates as a
+              # placement is that instance, not a second copy.
+              claimsSameSlot =
+                d:
+                let
+                  dm = declaredMeta d;
+                in
+                !(builtins.any (p: p.ns == d.ns && name == d.instName) perNs)
+                && (
+                  builtins.any (k: builtins.elem "cluster:${k}" (dm.conflictsWith or [ ])) claims.conflictKeys
+                  || (
+                    (d.instCfg.package._type or "") != "kix-import"
+                    && lib.intersectLists claims.roles (dm.roles or [ ]) != [ ]
+                  )
+                );
+              declared = builtins.filter claimsSameSlot declaredList;
+
+              describePlacement =
+                p:
+                "  ${p.ns}/${name}, for dependency '${p.depName}' of ${p.requester}"
+                + lib.optionalString (p.origin != null) " (auto-instantiated for ${p.origin})";
+              header = "kix: ${name} runs once per cluster (${builtins.concatStringsSep ", " markers})";
+
+              messageAuto = [
+                "${header}, but auto-instantiation would place it in ${toString (builtins.length perNs)} namespaces:"
+              ]
+              ++ map describePlacement perNs
+              ++ [
+                "Declare ${name} once, in its own namespace, and every consumer resolves to it:"
+                "  instances.<namespace>.${name}.package = packages.${name};"
+              ]
+              ++ bindingAdvice {
+                inherit name;
+                target = "${first.ns}.${name}";
+                label = "the copy auto-instantiated as ${first.ns}/${name}";
+                consumers = builtins.tail perNs;
+              };
+
+              messageDeclared =
+                let
+                  d = builtins.head declared;
+                  dLabel = "${d.ns}/${d.instName}";
+                  dm = declaredMeta d;
+                  current = if (d.instCfg.aliases or [ ]) != [ ] then d.instCfg.aliases else dm.defaultAliases or [ ];
+                  depNames = lib.unique (map (p: p.depName) placements);
+                  nixList = xs: "[ ${builtins.concatStringsSep " " (map builtins.toJSON xs)} ]";
+                in
+                [
+                  "${header}, and ${builtins.concatStringsSep ", " (map (x: "${x.ns}/${x.instName}") declared)} ${
+                    plural (builtins.length declared) "is" "are"
+                  } declared, but auto-instantiation would add another copy:"
+                ]
+                ++ map describePlacement perNs
+                ++ [
+                  "${dLabel} does not answer ${builtins.concatStringsSep ", " (map (k: "'${k}'") depNames)}. Add ${
+                    plural (builtins.length depNames) "it" "them"
+                  } to its aliases:"
+                  "  instances.${d.ns}.${d.instName}.aliases = ${nixList (lib.unique (current ++ depNames))};"
+                ]
+                ++ bindingAdvice {
+                  inherit name;
+                  target = "${d.ns}.${d.instName}";
+                  label = dLabel;
+                  consumers = perNs;
+                };
+            in
+            lib.optional (markers != [ ] && (builtins.length perNs > 1 || declared != [ ])) {
+              inherit name markers;
+              placements = perNs;
+              declared = map (x: "${x.ns}/${x.instName}") declared;
+              message = builtins.concatStringsSep "\n" (if declared != [ ] then messageDeclared else messageAuto);
+            };
+        in
+        builtins.concatMap conflictFor (builtins.attrNames placementsByName);
+
       traceMsg =
         let
           items = map (item: "${item.instName} (${item.ns})") autoInstanceList;
@@ -435,7 +616,26 @@ rec {
             ""
         );
     in
-    (if traceMsg != "" then builtins.trace "[kix] ${traceMsg}" else lib.id) {
-      inherit autoInstances activatedOptionals;
+    {
+      inherit
+        autoInstances
+        activatedOptionals
+        singletonConflicts
+        traceMsg
+        ;
     };
+
+  # planAutoInstances' placements, refusing every singleton conflict it
+  # found in one error.
+  computeAutoInstances =
+    args:
+    let
+      plan = planAutoInstances args;
+    in
+    if plan.singletonConflicts != [ ] then
+      throw (builtins.concatStringsSep "\n" (map (c: c.message) plan.singletonConflicts))
+    else
+      (if plan.traceMsg != "" then builtins.trace "[kix] ${plan.traceMsg}" else lib.id) {
+        inherit (plan) autoInstances activatedOptionals;
+      };
 }
