@@ -63,6 +63,11 @@ pub fn extract_key(parent_field: &str, item: &Value) -> Option<String> {
             let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
             Some(format!("{kind}:{name}"))
         }
+        "volumeClaimTemplates" => obj
+            .get("metadata")
+            .and_then(|m| m.get("name"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
         _ => None,
     }
 }
@@ -79,11 +84,14 @@ pub fn is_keyed_field(parent_field: &str) -> bool {
             | "env"
             | "hostAliases"
             | "subjects"
+            | "volumeClaimTemplates"
     )
 }
 
-/// Try to build keyed indices for two lists. Returns `None` if:
-/// - The parent field is not a known keyed list type
+/// Try to build keyed indices for two lists. A known keyed field uses its
+/// own key; any other list is keyed by `name` when every item on both sides
+/// is an object with a non-empty string `name`. Returns `None` if:
+/// - The list is neither a known keyed field nor keyable by `name`
 /// - Any item is not an object
 /// - Keys are not unique within either list
 ///
@@ -96,7 +104,7 @@ pub fn try_key_lists<'a>(
     b: &'a [Value],
 ) -> Option<KeyedListPair<'a>> {
     if !is_keyed_field(parent_field) {
-        return None;
+        return key_by_name(a, b);
     }
 
     // For ports, check if all items have names. If not, force containerPort:protocol keying.
@@ -133,6 +141,29 @@ pub fn try_key_lists<'a>(
     }
 
     Some((a_map, b_map))
+}
+
+/// Key two lists of named objects, such as a custom resource's list of
+/// extensions, by `name`, so an item changed in place reads as a change to
+/// that item rather than as one item removed and another added.
+fn key_by_name<'a>(a: &'a [Value], b: &'a [Value]) -> Option<KeyedListPair<'a>> {
+    let index = |items: &'a [Value]| -> Option<IndexMap<String, &'a Value>> {
+        let mut map = IndexMap::new();
+        for item in items {
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|n| !n.is_empty())?;
+            if map.insert(name.to_string(), item).is_some() {
+                return None;
+            }
+        }
+        Some(map)
+    };
+    if a.is_empty() && b.is_empty() {
+        return None;
+    }
+    Some((index(a)?, index(b)?))
 }
 
 /// Internal key extraction that handles the ports_by_number pseudo-field.
@@ -193,6 +224,34 @@ mod tests {
         let (a_map, b_map) = result.unwrap();
         assert_eq!(a_map.len(), 2);
         assert_eq!(b_map.len(), 2);
+    }
+
+    #[test]
+    fn volume_claim_templates_key_by_metadata_name() {
+        let a = vec![json!({"metadata": {"name": "data"}})];
+        let b = vec![json!({"metadata": {"name": "data"}, "kind": "PersistentVolumeClaim"})];
+        let (a_map, b_map) = try_key_lists("volumeClaimTemplates", &a, &b).unwrap();
+        assert!(a_map.contains_key("data") && b_map.contains_key("data"));
+    }
+
+    #[test]
+    fn other_lists_of_named_objects_key_by_name() {
+        let a = vec![json!({"name": "cube"}), json!({"name": "vector"})];
+        let b = vec![
+            json!({"name": "vector", "publisher": "x"}),
+            json!({"name": "cube"}),
+        ];
+        let (a_map, b_map) = try_key_lists("extensions", &a, &b).unwrap();
+        assert_eq!(a_map.keys().collect::<Vec<_>>(), ["cube", "vector"]);
+        assert_eq!(b_map.len(), 2);
+
+        // One unnamed item, or a repeated name, leaves the list to
+        // content matching.
+        let unnamed = vec![json!({"name": "cube"}), json!({"version": "1"})];
+        assert!(try_key_lists("extensions", &a, &unnamed).is_none());
+        let repeated = vec![json!({"name": "cube"}), json!({"name": "cube"})];
+        assert!(try_key_lists("extensions", &a, &repeated).is_none());
+        assert!(try_key_lists("args", &[json!("a")], &[json!("b")]).is_none());
     }
 
     #[test]
