@@ -1,8 +1,6 @@
 { lib, kixlib }:
 
 let
-  optionContract = import ./options.nix { inherit lib; };
-
   systemArgNames = [
     "scope"
     "lib"
@@ -223,11 +221,9 @@ rec {
   # `instances.<ns>.<instance>.config.<option>`. Every module, the package's
   # and the instance's, can take `clusterConfig` as a module argument, so a
   # default can derive from a cluster fact such as `clusterDomain`.
-  # `packageOptions` must satisfy the option contract (eval/options.nix),
-  # and a violation throws before the options are evaluated. A package whose
-  # `meta.unsafe` (passed as `unsafeGrants`) holds `lossy-option-defaults`
-  # skips the check; an instance that sets part of one of its attrset
-  # options then replaces that option's whole default.
+  # `packageOptions` is not checked against the option contract here;
+  # package CI checks it once per package (eval/options.nix,
+  # kix/package-eval.nix).
   evaluateInstanceConfig =
     {
       packageOptions,
@@ -238,7 +234,6 @@ rec {
       configInjections ? [ ],
       namespaceName ? null,
       instanceName ? null,
-      unsafeGrants ? [ ],
     }:
     let
       deferredConfig = instCfg.config;
@@ -347,17 +342,8 @@ rec {
             ++ wrappedModules;
           }).config
           [ "_module" ];
-
-      _contractCheck =
-        if builtins.elem "lossy-option-defaults" unsafeGrants then
-          null
-        else
-          optionContract.checkOptionContract {
-            who = instanceText;
-            options = packageOptions;
-          };
     in
-    builtins.seq _contractCheck (builtins.seq _lockedCheck evaluated);
+    builtins.seq _lockedCheck evaluated;
 
   # `availability` is the instance's resolved level (core/availability.nix),
   # a plain string a package may take as an argument so its option defaults

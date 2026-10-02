@@ -113,7 +113,7 @@ reconciler, and no runbook should need to.
 | Pod reads a Secret or ConfigMap key that is not there | `out.keyRef` at build time; cross-resource check 22 for names written directly |
 | Managed Secret created without its keys | `scope.mkSecret` refuses a key with no value and no SOPS source |
 | Two default StorageClasses, IngressClasses, or global-default PriorityClasses | cross-resource check 23 |
-| Instance value discards part of an option default | The option contract (`kix/lib/eval/options.nix`): an untyped or `attrsOf` option with a non-empty attrset default, or a submodule default that disagrees with its fields, fails evaluation (§12.13) |
+| Instance value discards part of an option default | The option contract (`kix/lib/eval/options.nix`): an untyped or `attrsOf` option with a non-empty attrset default, a submodule default that disagrees with its fields, or a declaration the check cannot read fails `every-package-evaluates` (§12.13); outside kixpkgs, `kix.checkPackageOptions` or `mkFlake { packages.<name> = ...; }` |
 | Instance value replaces a config path, env var, or flag the package owns | `kix.mergeGuarded`, `kix.mergeEnv`, and `kix.guardArgs` refuse it with one message per hit |
 | Package reads a key its secret dependency does not declare | `kix.checkSecretKeys` names the secret, its keys, and the missing ones |
 | More than one replica of a workload that runs one pod at a time | the availability plugin refuses `spec.replicas > 1` under an effective ceiling of `none` |
@@ -920,7 +920,10 @@ resources = kix.options.resources { requests = { cpu = "100m"; memory = "128Mi";
 
 An instance value replaces an `anything`, `attrsOf`, or submodule default
 as a whole, so the package's entries disappear without a message. The
-option contract refuses such a default at evaluation. Put the defaults on
+option contract refuses such a default in package CI
+(`every-package-evaluates`, once per package; a cluster evaluation does not
+run it, so run it on a package kept outside kixpkgs yourself, see the
+`options` reference page). Put the defaults on
 submodule fields; to keep `attrsOf` entries an instance adds to, default
 the option to `{ }` and set each entry in the package's `config` with
 `lib.mkDefault`; when the instance should replace the value as a whole,

@@ -21,9 +21,6 @@ in
     version = "2.10.0-cf";
     description = "Caddy reverse proxy";
     owner = "app-team";
-    # Its options are not retyped yet
-    # (housekeeping/2026-10-01-caddy-exempted-from-option-contract.md).
-    unsafe = [ "lossy-option-defaults" ];
     network = {
       # Entities for auto-derived external ingress (LoadBalancer Service).
       externalIngressEntities = [ "all" ];
@@ -60,53 +57,84 @@ in
         availability level (v2_discussions/145).
       '';
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "200m";
-          memory = "256Mi";
-        };
-        limits = {
-          cpu = "500m";
-          memory = "512Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "200m";
+        memory = "256Mi";
+      };
+      limits = {
+        cpu = "500m";
+        memory = "512Mi";
       };
     };
 
-    # --- Service ---
     service = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        type = "LoadBalancer";
-        annotations = { };
-      };
-    };
-
-    # --- Custom domains service (optional, prod-only) ---
-    customDomainsService = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        enabled = false;
-        annotations = { };
-      };
-    };
-
-    # --- HPA ---
-    hpa = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        # The floor follows replicaCount's mapping of the availability
-        # level (v2_discussions/145), so the autoscaler never undoes it.
-        minReplicas = kix.availability.pick availability {
-          none = 1;
-          pod = 2;
-          node = 2;
-          zone = 3;
+      type = lib.types.submodule {
+        options = {
+          type = lib.mkOption {
+            type = lib.types.str;
+            default = "LoadBalancer";
+            description = "Service `spec.type` of the main Service.";
+          };
+          annotations = lib.mkOption {
+            type = lib.types.attrsOf lib.types.str;
+            default = { };
+            description = "Annotations on the main Service.";
+          };
         };
-        maxReplicas = 10;
-        targetCPUUtilization = 60;
       };
+      default = { };
+      description = "The Service that serves ports 80 and 443.";
+    };
+
+    customDomainsService = lib.mkOption {
+      type = lib.types.submodule {
+        options = {
+          enabled = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Emit a second LoadBalancer Service, `<instance>-custom-domains`, on ports 80 and 443.";
+          };
+          annotations = lib.mkOption {
+            type = lib.types.attrsOf lib.types.str;
+            default = { };
+            description = "Annotations on the custom-domains Service.";
+          };
+        };
+      };
+      default = { };
+      description = "An optional second LoadBalancer Service for custom domains.";
+    };
+
+    hpa = lib.mkOption {
+      type = lib.types.submodule {
+        options = {
+          minReplicas = lib.mkOption {
+            type = lib.types.int;
+            # The floor follows replicaCount's mapping of the availability
+            # level (v2_discussions/145), so the autoscaler never undoes it.
+            default = kix.availability.pick availability {
+              none = 1;
+              pod = 2;
+              node = 2;
+              zone = 3;
+            };
+            description = "HorizontalPodAutoscaler `spec.minReplicas`. Defaults from the cluster's availability level.";
+          };
+          maxReplicas = lib.mkOption {
+            type = lib.types.int;
+            default = 10;
+            description = "HorizontalPodAutoscaler `spec.maxReplicas`.";
+          };
+          targetCPUUtilization = lib.mkOption {
+            type = lib.types.int;
+            default = 60;
+            description = "Average CPU utilization, as a percentage of the CPU request, that the autoscaler targets.";
+          };
+        };
+      };
+      default = { };
+      description = "The HorizontalPodAutoscaler on the Deployment.";
     };
 
     # --- Config secret name ---

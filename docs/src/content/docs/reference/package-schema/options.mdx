@@ -68,8 +68,8 @@ undeclared option is an evaluation error.
 
 A package option's default must survive an instance that sets only part of
 the option. The module system replaces an attribute-set default as a whole
-as soon as any definition exists, so Kix refuses three declarations whose
-defaults an instance would partly discard:
+as soon as any definition exists, so the option contract refuses three
+declarations whose defaults an instance would partly discard:
 
 | Rule | Declaration | What an instance loses |
 |---|---|---|
@@ -78,15 +78,95 @@ defaults an instance would partly discard:
 | 3 | A submodule whose own `default` sets a key that the field does not default to the same value | That key once it sets any field |
 
 `nullOr`, `uniq`, and `unique` are looked through, and each branch of an
-`either` or `oneOf` is checked. Submodule fields are checked to a depth of
-six. List defaults are not checked, because every Nix merge replaces a list.
+`either` or `oneOf` is checked. A `coercedTo` whose source type rejects the
+default is checked as its final type. An option declared without `type`
+merges as `unspecified`, so rule 1 applies to it. A default wrapped in
+`lib.mkDefault`, `lib.mkOverride`, `lib.mkOrder`, `lib.mkMerge`, or
+`lib.mkIf` is checked as the value it wraps. The default of an option whose
+type takes no attribute set, such as `str`, `int`, or `listOf`, is not
+evaluated, so it may read a sibling field that has no default. List
+defaults are not checked, because every Nix merge replaces a list.
 
-Evaluation fails with one bullet per violating option, each naming the file
+A declaration the check cannot read also breaks the contract: a default
+that throws when evaluated, a default with any other `_type`, a submodule
+whose fields throw when evaluated with `{ }`, a non-empty attribute-set
+default on a type none of the rules covers (such as `attrTag`, or a
+`coercedTo` whose source type accepts the default), an entry in `options`
+that is not an option, and an option nested more than twelve levels deep.
+A recursive submodule type stops at the first option that repeats a
+declaration on its path, so the depth limit applies only to options
+without a declaration position.
+
+The check fails with one bullet per violating option, each naming the file
 and line of the declaration:
 
 ```text
-package options of instance <namespace>/<instance> break the option contract (docs: reference/package-schema/options, "Option contract"):
+the options of kix/packages/<package> break the option contract (docs: reference/package-schema/options, "Option contract"):
   - <file>:<line>: option `hpa` has type `anything` and a non-empty default (keys: maxReplicas, minReplicas). ...
+```
+
+### Where the contract is checked
+
+The `every-package-evaluates` check of kixpkgs checks every package under
+`kix/packages/` before it evaluates any package in a cluster. Evaluating a
+cluster does not check the contract, so a package outside kixpkgs is
+checked only by its own flake or its author.
+
+`kix.checkPackageOptions` runs the check on one package. It calls the
+package the way instance evaluation does, at each availability level up to
+the package's `meta.availability.max`, so a default that depends on
+`availability` is checked at every level the package can run at. A
+violation that occurs at some levels only names them. It returns `null`
+when the options pass and throws otherwise:
+
+```nix
+kix.checkPackageOptions {
+  package = import ./my-package;
+  # Names the package in the error message.
+  who = "./my-package";
+  # Optional; the phase-1 scope the package is called with.
+  scope = { instanceName = "my-package"; namespaceName = "my-package"; };
+}
+```
+
+From the directory that holds a package, with the kixpkgs flake reference
+your flake uses:
+
+```sh
+nix eval --impure --extra-experimental-features 'nix-command flakes pipe-operators' --expr '
+  let
+    kixpkgs = builtins.getFlake "<kixpkgs flake reference>";
+    inherit (kixpkgs.inputs.nixpkgs) lib;
+    pkgs = kixpkgs.inputs.nixpkgs.legacyPackages.x86_64-linux;
+    inherit (kixpkgs.lib.forPkgs { inherit pkgs lib; }) kix;
+  in
+  kix.checkPackageOptions { package = import ./my-package; who = "./my-package"; }'
+```
+
+A flake built with `mkFlake` gets one check per package listed in its
+`packages` argument, named `option-contract-<name>`, so `nix flake check`
+runs the contract:
+
+```nix title="flake.nix"
+outputs = inputs: inputs.kixpkgs.lib.mkFlake {
+  inherit inputs;
+  clusters.production = ./clusters/production.nix;
+  packages.my-package = ./packages/my-package;
+};
+```
+
+To check one kixpkgs package from the repository root, run the following.
+It prints `null` when the options pass:
+
+```sh
+nix eval --impure --extra-experimental-features 'nix-command flakes pipe-operators' --expr '
+  let
+    nixpkgs = (builtins.getFlake (toString ./.)).inputs.nixpkgs;
+  in
+  (import ./kix/package-eval.nix {
+    inherit (nixpkgs) lib;
+    kix = import ./kix/lib { pkgs = nixpkgs.legacyPackages.x86_64-linux; inherit (nixpkgs) lib; };
+  }).checkOptionContract "<package>"'
 ```
 
 Each rule has a remedy that keeps the package's values:

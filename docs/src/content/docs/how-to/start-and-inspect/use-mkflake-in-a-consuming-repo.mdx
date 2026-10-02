@@ -80,6 +80,25 @@ outputs = inputs: inputs.kixpkgs.lib.mkFlake {
 A cluster that needs a different value sets the option itself with
 `lib.mkForce`.
 
+## Check the packages the repository defines
+
+Evaluating a cluster does not check the
+[option contract](/docs/reference/package-schema/options/#option-contract).
+List the packages the repository defines under `packages`, and the flake
+gets the check `option-contract-<name>` for each one:
+
+```nix title="flake.nix"
+outputs = inputs: inputs.kixpkgs.lib.mkFlake {
+  inherit inputs;
+  clusters.production = ./clusters/production.nix;
+  packages.billing-api = ./packages/billing-api;
+};
+```
+
+`nix flake check` then fails when a default of `billing-api` would be
+partly discarded by an instance that sets part of the option, at any
+availability level the package can run at.
+
 ## Lock the inputs
 
 Create or update `flake.lock` after adding the inputs:

@@ -35,9 +35,6 @@ in
     unsafe = [
       "run-as-root"
       "privileged"
-      # Its options are not retyped yet
-      # (housekeeping/2026-10-01-firezone-exempted-from-option-contract.md).
-      "lossy-option-defaults"
     ];
   };
 
@@ -78,73 +75,194 @@ in
     };
 
     wireguard = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        port = 51820;
-        privateKey = null;
-        ipv4Network = "100.64.0.0/10";
-        ipv4Address = "100.64.0.1";
-        ipv6Network = "fd00::/106";
-        ipv6Address = "fd00::1";
+      type = lib.types.submodule {
+        options = {
+          port = lib.mkOption {
+            type = lib.types.port;
+            default = 51820;
+            description = "UDP port of the WireGuard interface, also advertised to clients.";
+          };
+          privateKey = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "WireGuard private key of the server (`wg genkey`). Written into the `<instance>-files` Secret.";
+          };
+          ipv4Network = lib.mkOption {
+            type = lib.types.str;
+            default = "100.64.0.0/10";
+            description = "IPv4 network that client addresses are allocated from.";
+          };
+          ipv4Address = lib.mkOption {
+            type = lib.types.str;
+            default = "100.64.0.1";
+            description = "IPv4 address of the server on the WireGuard interface.";
+          };
+          ipv6Network = lib.mkOption {
+            type = lib.types.str;
+            default = "fd00::/106";
+            description = "IPv6 network that client addresses are allocated from.";
+          };
+          ipv6Address = lib.mkOption {
+            type = lib.types.str;
+            default = "fd00::1";
+            description = "IPv6 address of the server on the WireGuard interface.";
+          };
+        };
       };
-      description = "WireGuard configuration. privateKey must be set.";
+      default = { };
+      description = "WireGuard interface settings. `privateKey` must be set.";
     };
 
     admin = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        email = null;
-        password = null;
-        resetOnBoot = true;
+      type = lib.types.submodule {
+        options = {
+          email = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Email address of the default admin.";
+          };
+          password = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Password of the default admin.";
+          };
+          resetOnBoot = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            description = "Reset the default admin to these credentials on every start (`RESET_ADMIN_ON_BOOT`).";
+          };
+        };
       };
-      description = "Default admin credentials. Both email and password must be set.";
+      default = { };
+      description = "The default admin account. `email` and `password` must be set.";
     };
 
     secrets = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        guardianSecretKey = null;
-        secretKeyBase = null;
-        liveViewSigningSalt = null;
-        cookieSigningSalt = null;
-        cookieEncryptionSalt = null;
-        databaseEncryptionKey = null;
+      type = lib.types.submodule {
+        options = {
+          guardianSecretKey = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "`GUARDIAN_SECRET_KEY`.";
+          };
+          secretKeyBase = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "`SECRET_KEY_BASE`.";
+          };
+          liveViewSigningSalt = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "`LIVE_VIEW_SIGNING_SALT`, empty when unset.";
+          };
+          cookieSigningSalt = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "`COOKIE_SIGNING_SALT`, empty when unset.";
+          };
+          cookieEncryptionSalt = lib.mkOption {
+            type = lib.types.str;
+            default = "";
+            description = "`COOKIE_ENCRYPTION_SALT`, empty when unset.";
+          };
+          databaseEncryptionKey = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "`DATABASE_ENCRYPTION_KEY`.";
+          };
+        };
       };
-      description = "Application secrets. All must be set for production use.";
+      default = { };
+      description = "Application secrets. `guardianSecretKey`, `secretKeyBase`, and `databaseEncryptionKey` must be set.";
     };
 
     database = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        name = "firezone";
-        user = "firezone";
-        passwordSecretRef = null;
+      type = lib.types.submodule {
+        options = {
+          name = lib.mkOption {
+            type = lib.types.str;
+            default = "firezone";
+            description = "Database name (`DATABASE_NAME`).";
+          };
+          user = lib.mkOption {
+            type = lib.types.str;
+            default = "firezone";
+            description = "Database user (`DATABASE_USER`).";
+          };
+          passwordSecretRef = lib.mkOption {
+            type = lib.types.nullOr (
+              lib.types.submodule {
+                options = {
+                  name = lib.mkOption {
+                    type = lib.types.str;
+                    description = "Name of an existing Secret.";
+                  };
+                  key = lib.mkOption {
+                    type = lib.types.str;
+                    description = "Key in that Secret that holds the password.";
+                  };
+                };
+              }
+            );
+            default = null;
+            description = "Existing Secret key that `DATABASE_PASSWORD` is read from. Null sets no `DATABASE_PASSWORD`.";
+          };
+        };
       };
-      description = "Database configuration. passwordSecretRef = { name, key } for existing secret.";
+      default = { };
+      description = "Database settings.";
     };
 
     saml = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        cert = null;
-        key = null;
+      type = lib.types.submodule {
+        options = {
+          cert = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "SAML certificate (PEM).";
+          };
+          key = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "SAML private key (PEM).";
+          };
+        };
       };
-      description = "SAML certificate and key (PEM strings). Null to disable.";
+      default = { };
+      description = "SAML certificate and key (PEM strings). Both set enables SAML; otherwise the image generates a self-signed pair.";
     };
 
     telemetry = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        enabled = false;
+      type = lib.types.submodule {
+        options = {
+          enabled = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Send telemetry to Firezone (`TELEMETRY_ENABLED`).";
+          };
+        };
       };
+      default = { };
+      description = "Firezone telemetry.";
     };
 
     service = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        type = "ClusterIP";
-        annotations = { };
+      type = lib.types.submodule {
+        options = {
+          type = lib.mkOption {
+            type = lib.types.str;
+            default = "ClusterIP";
+            description = "Service `spec.type`.";
+          };
+          annotations = lib.mkOption {
+            type = lib.types.attrsOf lib.types.str;
+            default = { };
+            description = "Annotations on the Service.";
+          };
+        };
       };
+      default = { };
+      description = "The Service on ports 13000 (HTTP) and the WireGuard port (UDP).";
     };
 
     ingress = kix.options.ingress;
@@ -153,17 +271,14 @@ in
     # idle instance holds under 100 MiB; startup (migrations) takes about
     # 15 CPU-seconds. The ConfigMap's ERL_FLAGS sizes the BEAM for two
     # CPUs; set `env.ERL_FLAGS` when changing limits.cpu.
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "100m";
-          memory = "256Mi";
-        };
-        limits = {
-          cpu = "2";
-          memory = "1Gi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "100m";
+        memory = "256Mi";
+      };
+      limits = {
+        cpu = "2";
+        memory = "1Gi";
       };
     };
 
@@ -286,9 +401,9 @@ in
             DEFAULT_ADMIN_PASSWORD = config.admin.password;
             GUARDIAN_SECRET_KEY = config.secrets.guardianSecretKey;
             SECRET_KEY_BASE = config.secrets.secretKeyBase;
-            LIVE_VIEW_SIGNING_SALT = config.secrets.liveViewSigningSalt or "";
-            COOKIE_SIGNING_SALT = config.secrets.cookieSigningSalt or "";
-            COOKIE_ENCRYPTION_SALT = config.secrets.cookieEncryptionSalt or "";
+            LIVE_VIEW_SIGNING_SALT = config.secrets.liveViewSigningSalt;
+            COOKIE_SIGNING_SALT = config.secrets.cookieSigningSalt;
+            COOKIE_ENCRYPTION_SALT = config.secrets.cookieEncryptionSalt;
             DATABASE_ENCRYPTION_KEY = config.secrets.databaseEncryptionKey;
           };
         };

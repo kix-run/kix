@@ -87,21 +87,11 @@ kix.buildCluster {
           package = packages.firezone;
           config = {
             domain = "vpn.example.com";
-            # firezone holds the `lossy-option-defaults` grant, so `admin` and
-            # `wireguard` are set in full: a partial value replaces the default.
             admin = {
               email = "admin@example.com";
               password = "changeme";
-              resetOnBoot = true;
             };
-            wireguard = {
-              port = 51820;
-              privateKey = "PLACEHOLDER_GENERATE_WITH_wg_genkey";
-              ipv4Network = "100.64.0.0/10";
-              ipv4Address = "100.64.0.1";
-              ipv6Network = "fd00::/106";
-              ipv6Address = "fd00::1";
-            };
+            wireguard.privateKey = "PLACEHOLDER_GENERATE_WITH_wg_genkey";
             secrets = {
               guardianSecretKey = "PLACEHOLDER_CHANGE_ME_guardian";
               secretKeyBase = "PLACEHOLDER_CHANGE_ME_secret_key_base";
