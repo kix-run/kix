@@ -2,18 +2,22 @@
 # Alertmanager resource.
 #
 # Installs the Alertmanager resource, its ServiceAccount, the configuration
-# Secret (alertmanager.yaml from `settings`), the egress policy of the
-# Alertmanager pods, and, while `metrics.enabled`, a ServiceMonitor through
-# which Prometheus scrapes it. The operator turns the resource into a
-# StatefulSet and a headless Service `alertmanager-operated` (port `web`,
-# 9093), which `service` describes.
+# Secret (alertmanager.yaml from `settings`), a headless Service named after
+# the instance (port `web`, 9093) that the resource names as its governing
+# Service (`spec.serviceName`), the egress policy of the Alertmanager pods,
+# and, while `metrics.enabled`, a ServiceMonitor through which Prometheus
+# scrapes it. The operator turns the resource into a StatefulSet; with
+# `spec.serviceName` set it creates no `alertmanager-operated` Service, and
+# it reports an error for a governing Service that does not select the pods.
 #
 # Dependencies:
 #   prometheusOperator (required)  the operator, whose `out.crds.Alertmanager`
 #                                  builds the resource.
 #   storageClasses (optional)      the class of the data volumes when
-#                                  `storage.size` is set and
-#                                  `storage.storageClassName` is null.
+#                                  `storage.size` is set. Without one the
+#                                  claims take the cluster's default class.
+#                                  For another class, set
+#                                  `deps.storageClasses = ref.<ns>.<instance>`.
 #   priorityClass (optional)       the Alertmanager pods' PriorityClass.
 #
 # Minimal instance, with a prometheus-operator in the same cluster:
@@ -22,21 +26,33 @@
 #
 # Without `settings` every alert goes to the receiver `null`, which drops it.
 #
-# `out`: the `alertmanager-operated` Service's `name`, `fqdn`, and `port`,
-# plus `namespace` and `portName`, which a Prometheus resource's
-# `spec.alerting` names (the prometheus package reads them), and
-# `serviceUrl`, the base URL of the API (Grafana's datasource).
+# `out`: the Service's `name` and `fqdn`, plus `namespace` and
+# `portName`, which a Prometheus resource's `spec.alerting` names (the
+# prometheus package reads them), and `serviceUrl`, the base URL of the API
+# (Grafana's datasource). Each instance has its own Service, so two
+# instances in one namespace do not share one.
 #
-# Replicas follow the instance's availability: one up to `pod`, three from
-# `node`, gossiping silences and the notification log, spread across the
-# level's failure domain, with a PodDisruptionBudget that keeps two up.
+# Replicas follow the instance's availability: one at `none`, two at `pod`,
+# and three from `node`, gossiping silences and the notification log. With
+# more than one, the pods spread across the level's failure domain and a
+# PodDisruptionBudget lets one be down at a time.
+#
+# Credentials: `settings` lands in a Secret that Kix renders, so the package
+# refuses a credential written inline (`auth_password`, `routing_key`,
+# `api_key`, a Slack `api_url`, and the rest in inline-secrets.nix). Put the
+# value in a Secret, list it in `extraSpec.secrets`, and name the mounted
+# file in the `_file` key. Kix renders no dependency on that Secret: the
+# deploy neither waits for it nor checks its keys.
 #
 # Network policy: the egress policy opens DNS, the gossip port between the
-# replicas, and the world on the ports of the receivers in `settings`: the
-# port in each receiver URL (443 or 80 by scheme when the URL has none, 443
-# for a receiver whose URL comes from a file or Alertmanager's default), and
-# the port of each email smarthost. A receiver inside the cluster, or one
-# reached through `http_config.proxy_url`, needs a policy of its own.
+# replicas, and the world on the ports the receivers in `settings` dial
+# (receiver-ports.nix): the port in each receiver's URL (443 or 80 by scheme
+# when the URL has none, 443 when it comes from a file or from
+# Alertmanager's built-in address), and the port of each email smarthost.
+# Three kinds of receiver get no egress and need a policy of their own: one
+# inside the cluster, one reached through `http_config.proxy_url`, and one
+# that an AlertmanagerConfig resource adds
+# (`extraSpec.alertmanagerConfigSelector`).
 #
 # Escape hatches: `settings` for alertmanager.yaml, `extraSpec` for the
 # Alertmanager resource's spec, and the instance's `partsOverlays`.
@@ -55,15 +71,20 @@ let
 
   defaultSettings = import ./default-settings.nix;
 
+  # Two at `pod`, so a restarting pod leaves one to notify; three from
+  # `node`, so a lost node leaves two peers to gossip.
   replicas = kix.availability.pick availability {
     none = 1;
-    pod = 1;
+    pod = 2;
     node = 3;
     zone = 3;
   };
 
+  webPort = 9093;
+
   # The ports Alertmanager dials to deliver notifications (see the header).
   receiverPorts = import ./receiver-ports.nix { inherit lib who; };
+  refuseInlineSecrets = import ./inline-secrets.nix { inherit lib who; };
 in
 {
   meta = {
@@ -76,15 +97,6 @@ in
     # storage backend swaps. See v2_discussions/67_stateful_migration_orchestration.md.
     lifecycle = "ephemeral";
   };
-
-  assertions =
-    { config, ... }:
-    [
-      {
-        assertion = config.storage.size != null || config.storage.storageClassName == null;
-        message = "storage.storageClassName is set but storage.size is null, so Alertmanager keeps its data in an emptyDir and the class is unused. Set storage.size, or remove storage.storageClassName.";
-      }
-    ];
 
   options = {
     image = kix.options.image {
@@ -107,19 +119,14 @@ in
       type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
       default = null;
       defaultText = lib.literalMD "null: the package's configuration, which routes every alert to the receiver `null`";
-      description = "The Alertmanager configuration file, alertmanager.yaml (`global`, `route`, `receivers`, `inhibit_rules`, `templates`). A value replaces the package's configuration as a whole rather than merging into it, because the package's routing tree names its own `null` receiver. Null uses the package's configuration, which routes every alert to the receiver `null`. The receivers' URLs and smarthosts decide the egress policy (see the package header). The configuration lands in a Secret that Kix renders, so take a credential from a file (`api_url_file`, `password_file`, `credentials_file`) mounted through `extraSpec.secrets` rather than writing it here.";
+      description = "The Alertmanager configuration file, alertmanager.yaml (`global`, `route`, `receivers`, `inhibit_rules`, `templates`). A value replaces the package's configuration as a whole rather than merging into it, because the package's routing tree names its own `null` receiver. Null uses the package's configuration, which routes every alert to the receiver `null`. The receivers' URLs and smarthosts decide the egress policy (see the package header). The configuration lands in a Secret that Kix renders, so a credential written inline (`auth_password`, `routing_key`, `api_key`, a Slack `api_url`, and the like) is refused: take it from a file (`api_url_file`, `password_file`, `credentials_file`) mounted through `extraSpec.secrets`.";
     };
     storage = {
       size = lib.mkOption {
         type = lib.types.nullOr kix.types.quantity;
         default = null;
         example = "1Gi";
-        description = "Size of each pod's data volume, holding silences and the notification log, a claim the operator creates from the resource's volume claim template. Null keeps them in an emptyDir, which a pod restart empties.";
-      };
-      storageClassName = lib.mkOption {
-        type = lib.types.nullOr lib.types.nonEmptyStr;
-        default = null;
-        description = "StorageClass of the data volumes. Null takes the `storageClasses` dependency's class, or the cluster's default class without one.";
+        description = "Size of each pod's data volume, holding silences and the notification log, a claim the operator creates from the resource's volume claim template, in the `storageClasses` dependency's class. Null keeps them in an emptyDir, which a pod restart empties.";
       };
     };
     extraSpec = lib.mkOption {
@@ -136,10 +143,11 @@ in
         at /etc/alertmanager/{secrets,configmaps}/<name>), `web`, or
         `alertmanagerConfigSelector` and its namespace selector. The package
         refuses `image`, `version`, and `imagePullPolicy`, which image sets,
-        `replicas`, which follows the instance's availability, `resources`,
-        `serviceAccountName`, `storage`, `configSecret`, which holds
-        `settings`, and, when the instance has the dependency,
-        `priorityClassName`.
+        `replicas` and `topologySpreadConstraints`, which follow the
+        instance's availability, `resources`, `serviceAccountName`,
+        `serviceName`, `storage`, `configSecret` and
+        `alertmanagerConfiguration`, which `settings` decides, and, when the
+        instance has the dependency, `priorityClassName`.
       '';
     };
     metrics = kix.options.monitor;
@@ -156,25 +164,23 @@ in
       ...
     }:
     let
-      settings = if config.settings == null then defaultSettings else config.settings;
+      settings = refuseInlineSecrets (
+        if config.settings == null then defaultSettings else config.settings
+      );
+      # Only the header warns that receivers inside the cluster, behind
+      # http_config.proxy_url, or from AlertmanagerConfig resources get no
+      # egress. Candidates for evaluation errors while network policy is on.
       ports = receiverPorts settings;
 
       # The labels the operator puts on this resource's pods.
       podSelector = prometheusOperator.out.operandSelectors.alertmanager name;
-
-      storageClassName =
-        if config.storage.storageClassName != null then
-          config.storage.storageClassName
-        else if storageClasses != null then
-          storageClasses.out.storageClassName
-        else
-          null;
 
       baseSpec = {
         inherit replicas;
         image = kix.image.ref config.image;
         version = config.image.tag;
         serviceAccountName = self.serviceAccount.out.name;
+        serviceName = self.service.out.name;
         resources = config.resources;
         configSecret = self.configSecret.out.name;
       }
@@ -186,7 +192,9 @@ in
           accessModes = [ "ReadWriteOnce" ];
           resources.requests.storage = toString config.storage.size;
         }
-        // lib.optionalAttrs (storageClassName != null) { inherit storageClassName; };
+        // lib.optionalAttrs (storageClasses != null) {
+          inherit (storageClasses.out) storageClassName;
+        };
       }
       // lib.optionalAttrs (priorityClass != null) {
         priorityClassName = priorityClass.out.name;
@@ -207,9 +215,13 @@ in
           [ "imagePullPolicy" ]
           [ "replicas" ]
           [ "resources" ]
+          [ "topologySpreadConstraints" ]
           [ "serviceAccountName" ]
+          [ "serviceName" ]
           [ "storage" ]
           [ "configSecret" ]
+          # The operator then ignores configSecret.
+          [ "alertmanagerConfiguration" ]
         ]
         ++ lib.optional (priorityClass != null) [ "priorityClassName" ];
       } baseSpec config.extraSpec;
@@ -300,23 +312,29 @@ in
         else
           null;
 
-      # The operator creates `alertmanager-operated` (headless, port web
-      # 9093) over the pods of every Alertmanager in the namespace. A
-      # ServiceRef describes it; the prometheus package's `service` part
-      # gives the reasons (v2_discussions/135).
-      service = scope.mkServiceRef {
-        name = "alertmanager-operated";
-        selector = podSelector;
-        # The label the operator puts on alertmanager-operated.
-        labels."operated-alertmanager" = "true";
-        ports = [
-          {
-            name = "web";
-            port = 9093;
-            protocol = "TCP";
-          }
-        ];
-        requires = [ self.alertmanager ];
+      # The governing Service of the operator's StatefulSet, named in
+      # `spec.serviceName`. The operator gives each peer its
+      # `<pod>.<service>` address for gossip, so the Service is headless and
+      # publishes pods before they are ready. Check 4 cannot see the
+      # operator's pods; the annotation names the resource that creates them.
+      service = scope.mkResource {
+        apiVersion = "v1";
+        kind = "Service";
+        inherit name;
+        annotations.${kix.keys.operandOf} = "monitoring.coreos.com/Alertmanager/${name}";
+        spec = {
+          clusterIP = "None";
+          publishNotReadyAddresses = true;
+          selector = podSelector;
+          ports = [
+            {
+              name = "web";
+              port = webPort;
+              targetPort = webPort;
+              protocol = "TCP";
+            }
+          ];
+        };
       };
 
       selfMonitor =
@@ -324,9 +342,9 @@ in
           prometheusOperator.out.mkServiceMonitor scope {
             inherit name;
             spec = {
-              # A ServiceMonitor selects Services, not pods, so this uses the
-              # labels of the operator's Service from its ref.
-              selector.matchLabels = self.service.out.labels;
+              # A Service's out.selector is its metadata labels, which a
+              # ServiceMonitor matches.
+              selector.matchLabels = self.service.out.selector;
               namespaceSelector.matchNames = [ ns ];
               endpoints = [
                 (
@@ -357,7 +375,7 @@ in
         out = {
           namespace = ns;
           portName = "web";
-          serviceUrl = "http://${self.service.out.fqdn}:${self.service.out.port}";
+          serviceUrl = self.service.out.url { };
           # The operator runs this image in a StatefulSet that Kix does not
           # render.
           extraImages = [ (kix.image.ref config.image) ];
