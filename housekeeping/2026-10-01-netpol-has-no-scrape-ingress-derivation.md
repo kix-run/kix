@@ -5,3 +5,4 @@
 Under an enforcer, cert-manager's `CertManagerAbsent` alert (`absent(up{...} == 1)` on the controller Service) therefore fires on every cluster until this is fixed.
 
 - Hit again 2026-10-02 by `kix/packages/mayastor`: the io-engine metrics exporter runs on the host network, so the scraper reaches it as the host or a remote node, which no derived rule admits.
+- Hit again 2026-10-02 by `kix/packages/ingress-nginx`: its ServiceMonitor scrapes Service `<name>-metrics` on 10254, which a default-deny cluster such as ludo-kind drops.

@@ -1283,8 +1283,8 @@
             .[]
             | select(
                 (.kind == "Deployment" and .metadata.namespace == "ingress-system")
-                or (.kind == "Service" and .metadata.namespace == "ingress-system" and .metadata.name == "ingressNginx")
-                or (.kind == "IngressClass" and .metadata.name == "ingressNginx")
+                or (.kind == "Service" and .metadata.namespace == "ingress-system" and .metadata.name == "ingress-nginx")
+                or (.kind == "IngressClass" and .metadata.name == "ingress-nginx")
               )
             | if .kind == "Deployment" then
                 {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, replicas: .spec.replicas}

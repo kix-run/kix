@@ -1,0 +1,3 @@
+# 2026-10-02 · `kix/lib/vocab/rbac.nix` · Merging two role sets with `//` drops parts whenever both use the same role name, and nothing reports it.
+
+`buildRoleSet` keys its parts by the Kubernetes name, `<role>` and `<role>-binding`, so a ClusterRole set and a Role set that share a name return the same keys, and `clusterSet // namespacedSet` keeps only the Role pair. The dropped ClusterRole is missing from `rawManifests`, the scorecard and every check. If another part `requires` it, the CLI still deploys it through `kix.run/depends-on`; if not, it is never deployed. kix/packages/ingress-nginx shipped this way until its 2026-10-02 rework. Packages that read each set by fixed keys (`clusterRole = set.${name};`) are safe, but nothing refuses the merge.

@@ -825,7 +825,6 @@ mod tests {
 
     #[test]
     fn zero_ttl_still_counts() {
-        // ingress-nginx admission hooks use ttlSecondsAfterFinished: 0
         assert!(declares_own_deletion(&json!({
             "kind": "Job",
             "spec": { "ttlSecondsAfterFinished": 0 },

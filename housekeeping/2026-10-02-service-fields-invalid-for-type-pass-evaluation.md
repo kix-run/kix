@@ -1,0 +1,3 @@
+# 2026-10-02 · `kix/lib/scope/validators.nix` · No check refuses Service fields that the Service's type rejects or ignores.
+
+The API server rejects `externalTrafficPolicy` and `nodePort` on a ClusterIP Service, and ignores `loadBalancerIP`, `loadBalancerClass` and `loadBalancerSourceRanges` on any type but LoadBalancer. Kix evaluates all of these without a word, so the mistake shows up at deploy or never. `kix/packages/ingress-nginx` checks its own two fields; every other package that builds a Service, and every Helm import (`kix/lib/helm.nix`), does not. A validator would have to ignore null and empty values, because charts render `loadBalancerSourceRanges: []`.
