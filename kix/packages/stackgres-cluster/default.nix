@@ -14,8 +14,10 @@
 #   instances.data.postgres.package = packages.stackgres-cluster;
 #
 # DI deps:
-#   stackgresOperator (required)  the operator; its release decides the
-#                                 PostgreSQL versions and operand images.
+#   stackgresOperator (required)  a stackgres-operator instance; its release
+#                                 decides the PostgreSQL versions and operand
+#                                 images. An imported operator is refused:
+#                                 an import has no out.resolvePostgres.
 #   storageClasses (optional)     the class of the data volumes when
 #                                 `persistentVolume.storageClass` is null.
 #   sgObjectStorage (optional)    a stackgres-object-storage instance in this
@@ -24,9 +26,14 @@
 #
 # Defaults: `instances` from the availability level (1 at none, 2 at pod
 # and node, 3 at zone), PostgreSQL 17, 1 CPU and 2Gi per instance, 20Gi
-# volumes, TLS on, no connection pooler, no backups. When `instances` is above one, the pods
-# spread over nodes and zones as the availability level asks, and StackGres's
-# production profile keeps one pod per node.
+# volumes, TLS on, no connection pooler, no backups.
+#
+# Placement: with more than one instance, the pods spread over nodes and
+# zones as the availability level asks. StackGres's production profile also
+# requires every SGCluster pod of a namespace, of any cluster, to run on its
+# own node, so the clusters of one namespace need as many nodes as they have
+# instances together. On a single-node cluster the package turns that rule
+# off (nonProductionOptions.disableClusterPodAntiAffinity).
 #
 # Network policy: with an enforcer, the package opens the PostgreSQL pods'
 # DNS, API server, and peer traffic, the operator's access to Patroni (TCP
@@ -37,7 +44,12 @@
 #
 # Escape hatch: `extraSpec`, merged over the SGCluster spec. The fields the
 # options own are refused (listed on `extraSpec`), and so are
-# `pods.disableEnvoy = false` and `postgres.flavor`.
+# `pods.disableEnvoy = false`, `postgres.flavor`, and turning the
+# one-pod-per-node rule off at availability node or zone.
+#
+# Limits: the operator also creates pods for SGDbOps and manually created
+# SGBackups. Their labels differ from the cluster's pods, so under a
+# network policy enforcer they get no policy from this package.
 #
 # Exposes:
 #   out.name, out.fqdn, out.port  the primary Service (port 5432).
@@ -147,6 +159,7 @@ let
         name = n;
         version = firstNonNull (map (e: e.version) entries);
         publisher = firstNonNull (map (e: e.publisher) entries);
+        repository = firstNonNull (map (e: e.repository) entries);
       }
     ) names;
 
@@ -166,6 +179,31 @@ let
     ) (lib.unique (map (e: e.name) config.extensions));
 
   quantity = q: if builtins.isString q then q else toString q;
+
+  # The StackGres CRDs accept a narrower quantity grammar than Kubernetes.
+  quantityChecks = config: [
+    {
+      option = "instanceProfile.cpu";
+      value = config.instanceProfile.cpu;
+      pattern = "[1-9][0-9]*m?";
+      shown = "^[1-9][0-9]*[m]?$";
+      fix = "Write whole cores (\"2\") or millicores (\"1500m\").";
+    }
+    {
+      option = "instanceProfile.memory";
+      value = config.instanceProfile.memory;
+      pattern = "[0-9]+([.][0-9]+)?(Mi|Gi)";
+      shown = "^[0-9]+(\\.[0-9]+)?(Mi|Gi)$";
+      fix = "Use Mi or Gi, such as \"2Gi\".";
+    }
+    {
+      option = "persistentVolume.size";
+      value = config.persistentVolume.size;
+      pattern = "[0-9]+([.][0-9]+)?(Mi|Gi|Ti)";
+      shown = "^[0-9]+(\\.[0-9]+)?(Mi|Gi|Ti)$";
+      fix = "Use Mi, Gi, or Ti, such as \"20Gi\".";
+    }
+  ];
 
   postgresPort = 5432;
 in
@@ -201,16 +239,21 @@ in
     ++ lib.imap0 (i: s: {
       assertion = (s.script == null) != (s.scriptFrom == null);
       message = "scripts entry ${toString i} must set exactly one of script or scriptFrom.";
-    }) config.scripts;
+    }) config.scripts
+    ++ map (c: {
+      assertion = builtins.match c.pattern (quantity c.value) != null;
+      message = "${c.option} is \"${quantity c.value}\", which StackGres refuses: it must match ${c.shown}. ${c.fix}";
+    }) (quantityChecks config);
 
   warnings =
     { config, deps, ... }:
     lib.optional (config.backups == null && deps ? sgObjectStorage)
       "an sgObjectStorage instance resolved in ${ns} but backups is null, so this cluster takes no backups.";
 
+  # An imported operator has no out.release; the build refuses it first.
   deps.stackgresOperator.assertions = dep: [
     {
-      assertion = lib.versions.majorMinor dep.out.release == supportedRelease;
+      assertion = !(dep.out ? release) || lib.versions.majorMinor dep.out.release == supportedRelease;
       message = "this package writes the SGCluster fields of StackGres ${supportedRelease}, and the stackgresOperator dependency runs ${dep.out.release}. Update kix/packages/stackgres-cluster for that release.";
     }
   ];
@@ -258,6 +301,11 @@ in
               type = lib.types.nullOr lib.types.nonEmptyStr;
               default = null;
               description = "Extension publisher. Null takes the repository's default.";
+            };
+            repository = lib.mkOption {
+              type = lib.types.nullOr lib.types.nonEmptyStr;
+              default = null;
+              description = "Base URL of the extensions repository to install the extension from. Null lets the operator choose among the repositories of its SGConfig (`extensions.repositoryUrls`).";
             };
           };
         }
@@ -388,6 +436,7 @@ in
                   lib.types.enum [
                     "lz4"
                     "lzma"
+                    "zstd"
                     "brotli"
                   ]
                 );
@@ -429,7 +478,11 @@ in
         `configurations.sgPoolingConfig`, `configurations.backups`,
         `managedSql.scripts`, `pods.persistentVolume.size`,
         `pods.persistentVolume.storageClass`, `pods.disableConnectionPooling`,
-        and `pods.disableEnvoy = false`.
+        and `pods.disableEnvoy = false`. `pods.scheduling.topologySpreadConstraints`
+        replaces the spread the package derives from the availability level.
+        A non-production `profile`, or
+        `nonProductionOptions.disableClusterPodAntiAffinity = true`, is
+        refused at availability node or zone with more than one instance.
       '';
     };
   };
@@ -446,11 +499,16 @@ in
       ...
     }:
     let
-      pg = stackgresOperator.out.resolvePostgres {
+      operator =
+        if stackgresOperator.out ? resolvePostgres then
+          stackgresOperator.out
+        else
+          throw "${who}: the stackgresOperator dependency has no out.resolvePostgres, as with an import. This package reads the operator's release, operand images, and pod labels from it. Wire a managed stackgres-operator instance with deps.stackgresOperator = ref.<namespace>.<instance>.";
+      pg = operator.resolvePostgres {
         inherit who;
         inherit (config.postgres) version;
       };
-      operandSelector = stackgresOperator.out.operandSelectors.sgCluster name;
+      operandSelector = operator.operandSelectors.sgCluster name;
       extensions = extensionsOf config;
       extensionNames = map (e: e.name) extensions;
       backupsOn = config.backups != null;
@@ -482,6 +540,11 @@ in
           topology = clusterConfig.cluster.topology;
         }
       );
+
+      # The production profile's required anti-affinity matches every
+      # SGCluster pod in the namespace on kubernetes.io/hostname, so on one
+      # node a second pod of any cluster in the namespace stays Pending.
+      singleNode = clusterConfig.cluster.topology.failureDomainKeys == [ ];
 
       baseSpec = {
         inherit (config) instances;
@@ -516,6 +579,9 @@ in
           scheduling.topologySpreadConstraints = spread;
         };
       }
+      // lib.optionalAttrs singleNode {
+        nonProductionOptions.disableClusterPodAntiAffinity = true;
+      }
       // lib.optionalAttrs (config.scripts != [ ]) {
         managedSql.scripts = [ { sgScript = self.scripts.out.name; } ];
       };
@@ -526,10 +592,17 @@ in
         } baseSpec config.extraSpec
       );
 
+      # StackGres turns the anti-affinity off when
+      # nonProductionOptions.disableClusterPodAntiAffinity is true, or when
+      # it is unset and the profile is not production.
       profile = spec.profile or "production";
-      _profile =
-        if config.instances > 1 && availability != "none" && profile != "production" then
-          throw "${who}: extraSpec.profile is \"${profile}\" with ${toString config.instances} instances at availability ${availability}. Only the production profile keeps StackGres's one-pod-per-node rule; use it, or lower instances."
+      antiAffinityFlag = (spec.nonProductionOptions or { }).disableClusterPodAntiAffinity or null;
+      antiAffinityOff = if antiAffinityFlag != null then antiAffinityFlag else profile != "production";
+      _antiAffinity =
+        if kix.availability.atLeast "node" availability && config.instances > 1 && antiAffinityOff then
+          throw "${who}: extraSpec turns off StackGres's one-pod-per-node anti-affinity (profile \"${profile}\", nonProductionOptions.disableClusterPodAntiAffinity ${
+            if antiAffinityFlag == null then "unset" else "= true"
+          }) with ${toString config.instances} instances at availability ${availability}, which needs the instances on different nodes. Use the production profile or set nonProductionOptions.disableClusterPodAntiAffinity = false, or lower the instance's availability."
         else
           null;
 
@@ -563,7 +636,7 @@ in
         }
       );
 
-      crds = stackgresOperator.out.crds;
+      crds = operator.crds;
 
       postgresService = scope.mkServiceRef {
         inherit name;
@@ -588,37 +661,31 @@ in
 
       # Read only when the scope has an enforcer (kix.operandPolicy).
       netpol = scope.networkPolicyEnforcer.netpol;
-      tcp = port: [
-        {
-          ports = [
+      tcp = port: {
+        inherit port;
+        protocol = "TCP";
+      };
+      worldEgress =
+        ports:
+        (netpol.translateIntentRules {
+          intents.operand.egress = [
             {
-              port = toString port;
-              protocol = "TCP";
+              to = "world";
+              ports = map tcp ports;
             }
           ];
-        }
-      ];
-      worldTcp = port: (netpol.mkExternalEgressRule { }) // { toPorts = tcp port; };
+        }).egressRules;
       storagePort = if backupsOn then sgObjectStorage.out.worldEgressPort else null;
       operatorNamespace = (scope.forService stackgresOperator).namespaceName;
-      patroniPorts = [
-        {
-          ports =
-            map
-              (port: {
-                port = toString port;
-                protocol = "TCP";
-              })
-              [
-                8008
-                8009
-              ];
-        }
+      # Patroni's REST API, which the operator calls.
+      patroniPorts = map tcp [
+        8008
+        8009
       ];
       self' = netpol.mkSelfRules { selector = operandSelector; };
     in
     builtins.seq _storage (
-      builtins.seq _profile {
+      builtins.seq _antiAffinity {
         inherit postgresService superuserSecret;
 
         instanceProfile = scope.mkCR crds.SGInstanceProfile {
@@ -700,8 +767,8 @@ in
             ]
             ++ self'.egress
             # The extensions repository.
-            ++ lib.optional (extensions != [ ]) (worldTcp 443)
-            ++ lib.optional (storagePort != null) (worldTcp storagePort);
+            ++ lib.optionals (extensions != [ ]) (worldEgress [ 443 ])
+            ++ lib.optionals (storagePort != null) (worldEgress [ storagePort ]);
           };
         };
         operandIngress = kix.operandPolicy {
@@ -710,16 +777,11 @@ in
           spec = {
             endpointSelector.matchLabels = operandSelector;
             ingress = self'.ingress ++ [
-              {
-                fromEndpoints = [
-                  {
-                    matchLabels = stackgresOperator.out.podSelector // {
-                      "k8s:io.kubernetes.pod.namespace" = operatorNamespace;
-                    };
-                  }
-                ];
-                toPorts = patroniPorts;
-              }
+              (netpol.mkCallerIngressRule {
+                callerSelector = operator.podSelector;
+                callerNamespace = operatorNamespace;
+                ports = patroniPorts;
+              })
             ];
           };
         };
@@ -728,18 +790,14 @@ in
           scope = scope.forService stackgresOperator;
           name = "${ns}-${name}-operator-egress";
           spec = {
-            endpointSelector.matchLabels = stackgresOperator.out.podSelector;
+            endpointSelector.matchLabels = operator.podSelector;
             egress = [
-              {
-                toEndpoints = [
-                  {
-                    matchLabels = operandSelector // {
-                      "k8s:io.kubernetes.pod.namespace" = ns;
-                    };
-                  }
-                ];
-                toPorts = patroniPorts;
-              }
+              (netpol.mkServiceEgressRule {
+                selector = operandSelector;
+                namespace = ns;
+                sourceNamespace = operatorNamespace;
+                ports = patroniPorts;
+              })
             ];
           };
         };
@@ -771,7 +829,9 @@ in
               pg.images.clusterController
             ]
             ++ lib.optional exporterOn pg.images.prometheusPostgresExporter
-            ++ lib.optional poolingOn pg.images.pgbouncer;
+            ++ lib.optional poolingOn pg.images.pgbouncer
+            # The backup CronJob runs kubectl.
+            ++ lib.optionals backupsOn operator.kubectlImages;
           };
         };
       }
