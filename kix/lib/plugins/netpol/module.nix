@@ -61,7 +61,7 @@ in
             Also used for a Kix workload whose egress depends on its
             configuration, when the package's error or description asks
             for one (infisical-operator `address`, coredns `servers`).
-            See v2_discussions/92_declarative_network_policy_intents.md.
+            See v2_discussions/archive/92_declarative_network_policy_intents.md.
           '';
         };
       };
