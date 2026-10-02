@@ -9,3 +9,8 @@ once in its own namespace; nothing enforces that. A consumer in another
 namespace binds to that copy (a package marked one per cluster is placed once,
 `mkItem` in `eval/auto.nix`), so the first consumer in namespace order decides
 where the operator runs.
+
+On ludo-kind-tls with a Certificate consumer in a namespace that sorts
+before `cert-manager` (`aaa`), cert-manager lands in `aaa`, and
+cluster-issuer's refusal advises moving the issuer to `aaa` rather than
+declaring cert-manager in `cert-manager`.
