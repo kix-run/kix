@@ -1121,9 +1121,10 @@ in
               Tailnet = self.crds.tailnets;
             };
 
-            loadBalancerClass = builtins.appendContext "tailscale" (
-              builtins.getContext self.deployment.out.name
-            );
+            loadBalancerClass = kix.providedLoadBalancerClass {
+              class = "tailscale";
+              by = self.deployment;
+            };
             inherit (self) ingressClass;
             podSelector = managedLabels;
             podNamespace = ns;

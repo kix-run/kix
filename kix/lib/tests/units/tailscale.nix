@@ -1,9 +1,9 @@
 # Tests for kix/packages/tailscale (refusals, the operator Deployment, the
 # custom resource builders, out.mkIngress, out.mkBackendPolicy, and the
 # CRD source tag) and for
-# Services whose loadBalancerClass carries a dependency: checkLoadBalancer
-# skips the loadBalancer role for them, and derived policy gives them no
-# ingress from outside the cluster. The operator runs in namespace
+# Services whose loadBalancerClass comes from kix.providedLoadBalancerClass:
+# checkLoadBalancer skips the loadBalancer role for them, and derived policy
+# gives them no ingress from outside the cluster. The operator runs in namespace
 # `tailscale`, the consumer in `demo`.
 
 {
@@ -21,7 +21,7 @@
 let
   tailscalePackage = import ../../../packages/tailscale;
   secretPackage = import ../../../packages/secret;
-  inherit (import ../../vocab { inherit lib; }) untrackedRef;
+  inherit (import ../../vocab { inherit lib; }) untrackedRef providedLoadBalancerClass;
 
   nameserverDigest = "sha256:3676e2277ad16da948caee7952b2a27859a66b905edd981e1bb58b2626bc92a4";
 
@@ -202,7 +202,8 @@ let
 
   # A one-Service package for the loadBalancerClass tests. `class` is
   # "provider" (tailscale's out.loadBalancerClass), "untracked" (the class
-  # wrapped in kix.untrackedRef), or a raw string.
+  # wrapped in kix.untrackedRef), "context" (the class with the context of
+  # a resource and no provider marker), or a raw string.
   mkLbPackage = class: {
     meta = {
       version = "test";
@@ -247,6 +248,8 @@ let
                 tailscale.out.loadBalancerClass
               else if class == "untracked" then
                 untrackedRef "tailscale"
+              else if class == "context" then
+                builtins.appendContext "tailscale" (builtins.getContext self.deployment.out.name)
               else
                 class;
             selector = scope.selectorLabels;
@@ -792,18 +795,54 @@ in
     || throw "tailscale gated parts: ${builtins.toJSON (map (m: m.metadata.name) operandPolicies)}";
 
   # With the loadBalancer role absent, a Service whose class comes from
-  # tailscale builds, and a raw class or one from kix.untrackedRef still
-  # fails.
+  # tailscale builds, and the class adds the operator Deployment to its
+  # depends-on and no entry for the marker. A raw class, one from
+  # kix.untrackedRef, or one with other context still fails.
   tailscale-load-balancer-role =
+    let
+      cluster = lbCluster "provider" [ noLoadBalancer ];
+      serviceDeps = c: lib.sort (a: b: a < b) (dependsOn (byName "lb" (ofKind "Service" (manifests c))));
+      rawDeps = serviceDeps (lbCluster "x" [ ]);
+      operator = hashOf cluster "tailscale" "tailscale" "deployment";
+    in
     (
-      !(evalFails (lbCluster "provider" [ noLoadBalancer ]))
+      !(evalFails cluster)
+      && serviceDeps cluster == lib.sort (a: b: a < b) (rawDeps ++ [ operator ])
       && evalFails (lbCluster "tailscale" [ noLoadBalancer ])
       && evalFails (lbCluster "untracked" [ noLoadBalancer ])
+      && evalFails (lbCluster "context" [ noLoadBalancer ])
     )
-    || throw "tailscale load balancer role: provider class refused, or raw or untracked class accepted";
+    || throw "tailscale load balancer role: provider class refused or its depends-on is ${builtins.toJSON (serviceDeps cluster)}, or a class without the provider marker accepted";
+
+  # kix.providedLoadBalancerClass needs a class string and a resource in
+  # `by`, and refuses other attributes.
+  tailscale-provided-class-arguments =
+    let
+      throws = v: !(builtins.tryEval (builtins.deepSeq v true)).success;
+      by = {
+        outPath = "/nix/store/00000000000000000000000000000000-x";
+      };
+    in
+    (
+      throws (providedLoadBalancerClass { class = "x"; })
+      && throws (providedLoadBalancerClass {
+        class = "x";
+        by = "operator";
+      })
+      && throws (providedLoadBalancerClass {
+        class = "";
+        inherit by;
+      })
+      && throws (providedLoadBalancerClass {
+        class = "x";
+        inherit by;
+        extra = 1;
+      })
+    )
+    || throw "kix.providedLoadBalancerClass accepted a malformed argument";
 
   # Derived policy gives a LoadBalancer Service's pods ingress from outside
-  # the cluster unless its class comes from a provider's `out`.
+  # the cluster unless its class comes from kix.providedLoadBalancerClass.
   tailscale-external-ingress =
     let
       supplements =
@@ -814,6 +853,11 @@ in
           && (m.metadata.labels or { }).${kixKeys.policyType} or null == "external-ingress-supplement"
         ) (ofKind "CiliumNetworkPolicy" (manifests (lbCluster class [ netpolOn ])));
     in
-    (supplements "provider" == [ ] && supplements "other" != [ ] && supplements "untracked" != [ ])
+    (
+      supplements "provider" == [ ]
+      && supplements "other" != [ ]
+      && supplements "untracked" != [ ]
+      && supplements "context" != [ ]
+    )
     || throw "tailscale external ingress: provider ${builtins.toJSON (supplements "provider")}";
 }

@@ -1026,6 +1026,8 @@ rec {
 
   untrackedRef = markers.mkUntrackedRef;
 
+  providedLoadBalancerClass = markers.mkProvidedLoadBalancerClass;
+
   # True when a string carries a `kix.untrackedRef` marker, so it names an
   # object Kix does not build.
   isUntrackedRef =

@@ -236,6 +236,7 @@ when a check fails or the path is not evaluated by default.
 - N10. Does a policy builder copy a Service selector that may be empty, so `matchLabels = { }` selects the whole namespace? Fix: refuse an empty selector.
 - N11. Do clients need egress to pods an operator creates in another namespace (egress proxies, gateways) that the graph cannot see? Fix: a builder on `out` (cdi `out.mkImporterPolicy`) or a stated limit.
 - N12. Does a docs example or fixture put an instance in kube-system (or another environment namespace) with network policy on and no flavour intents, giving the namespace default deny? Fix: its own namespace, or a flavour that declares the intents.
+- N13. Does a package whose controller serves a `loadBalancerClass` publish the class as a plain string or with `builtins.appendContext`? *(lib: only a class from `kix.providedLoadBalancerClass` skips the loadBalancer role check and the external-ingress supplement)* Fix: `out.loadBalancerClass = kix.providedLoadBalancerClass { class = "<class>"; by = self.<controller>; }`, plus a backend policy builder on `out`.
 
 ### Monitoring (Mo)
 

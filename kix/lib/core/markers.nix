@@ -1,8 +1,15 @@
-# Mark references to resources created outside this cluster definition.
-# The marker supplies string context so reference validators accept the name.
-# core/resource.nix excludes marker paths from depends-on because they have
-# no deployable manifest. A marker with a kind also supplies an expectation
+# Inert context markers: `toFile` paths in a string's context that record a
+# claim about the string and are not resources. core/resource.nix excludes
+# them from depends-on (`isMarkerPath`) because they have no deployable
+# manifest.
+#
+# An untracked-reference marker names an object created outside this
+# cluster definition. It supplies string context so reference validators
+# accept the name, and a marker with a kind also supplies an expectation
 # that deploy checks before applying the resource that refers to it.
+#
+# A load-balancer-class marker says a provider in the build serves the
+# class a Service names in `spec.loadBalancerClass`.
 { lib }:
 
 rec {
@@ -10,6 +17,7 @@ rec {
   pathName = p: builtins.substring 44 (builtins.stringLength p) p;
 
   untrackedRefName = "kix-untracked-ref";
+  loadBalancerClassName = "kix-load-balancer-class";
 
   # Built-in kinds that `by` rejects, keyed by API group ("" is the core
   # group), and that may not hold a `by = "self"` reference. None of them
@@ -150,6 +158,54 @@ rec {
     builtins.seq _check (builtins.appendContext name (builtins.getContext "${marker}" // byCtx));
 
   isUntrackedRefPath = p: lib.hasPrefix untrackedRefName (pathName p);
+
+  # A `spec.loadBalancerClass` value served by a load balancer provider in
+  # the build: `class` with a marker, and with the context of `by`, the
+  # provider resource that serves it, so a Service naming the class depends
+  # on that resource. The loadBalancer role check (scope/validators.nix
+  # checkLoadBalancer) skips a Service whose class carries the marker, and
+  # derived network policy gives that Service no ingress from outside the
+  # cluster (plugins/netpol/derive.nix).
+  #   kix.providedLoadBalancerClass { class = "tailscale"; by = self.deployment; }
+  mkProvidedLoadBalancerClass =
+    args:
+    let
+      who = "kix.providedLoadBalancerClass";
+      class = args.class or (throw "${who}: expected { class; by; }");
+      by = args.by or (throw "${who} (${class}): `by` is required: the resource that serves the class");
+      unknown = builtins.attrNames (
+        removeAttrs args [
+          "class"
+          "by"
+        ]
+      );
+      _check =
+        if !(builtins.isString class) || class == "" then
+          throw "${who}: class must be a non-empty string"
+        else if unknown != [ ] then
+          throw "${who} (${class}): unknown attribute(s) ${builtins.concatStringsSep ", " unknown}; takes class and by"
+        else if !(builtins.isAttrs by && by ? outPath) then
+          throw "${who} (${class}): `by` must be a resource, the controller that serves the class"
+        else
+          null;
+      marker = builtins.toFile loadBalancerClassName (builtins.unsafeDiscardStringContext class);
+    in
+    builtins.seq _check (
+      builtins.appendContext (builtins.unsafeDiscardStringContext class) (
+        builtins.getContext "${marker}" // builtins.getContext "${by}"
+      )
+    );
+
+  isLoadBalancerClassPath = p: lib.hasPrefix loadBalancerClassName (pathName p);
+
+  # Whether a string carries a load-balancer-class marker.
+  isProvidedLoadBalancerClass =
+    s:
+    builtins.isString s
+    && builtins.any isLoadBalancerClassPath (builtins.attrNames (builtins.getContext s));
+
+  # Whether a context path is a marker rather than a resource.
+  isMarkerPath = p: isUntrackedRefPath p || isLoadBalancerClassPath p;
 
   # A marker's JSON record, or null for a bare string reference.
   readMarker =
