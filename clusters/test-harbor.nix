@@ -1,9 +1,9 @@
 # clusters/test-harbor.nix: Harbor smoke test.
 #
-# Harbor with every dep wired: its secrets, a StackGres postgres plus a
-# per-app database, valkey, a registry PVC, ingress-nginx, a self-signed
-# ClusterIssuer (TLS on the Ingress), and the prometheus operator
-# (ServiceMonitors and a PrometheusRule).
+# Harbor with every dep wired: its secrets, an extra CA bundle, a StackGres
+# postgres plus a per-app database, valkey, a registry PVC, ingress-nginx, a
+# self-signed ClusterIssuer (TLS on the Ingress), and the prometheus
+# operator (ServiceMonitors and a PrometheusRule).
 # Network policy and the full scorecard rule set are on so the package is
 # held to the same bar ludo holds its packages to.
 #
@@ -121,6 +121,26 @@ kix.buildCluster {
                 -----END RSA PRIVATE KEY-----
               '';
             };
+          };
+          # A CA nothing in the cluster uses, so the caBundle mounts and
+          # their rollout annotations are built and deployed. The private
+          # key was discarded when the certificate was made.
+          harbor-ca = {
+            package = packages.secret;
+            aliases = [ "caBundle" ];
+            config.stringData."ca.crt" = ''
+              -----BEGIN CERTIFICATE-----
+              MIIBkDCCATWgAwIBAgIUD0TlcAiWMUSCrBZl+czc8rkKd1EwCgYIKoZIzj0EAwIw
+              HTEbMBkGA1UEAwwSdGVzdC1oYXJib3IgZGV2IENBMB4XDTI2MTAwMjAzNDQyOFoX
+              DTM2MDkyOTAzNDQyOFowHTEbMBkGA1UEAwwSdGVzdC1oYXJib3IgZGV2IENBMFkw
+              EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdznoTbiHSdkZ+2iDYR6X9Zvg/ULr6jGL
+              fyC8jZYXTya08XDePFK3L8ShL/QZkw6okprurQKAcd3gXjFdnksUbqNTMFEwHQYD
+              VR0OBBYEFCshERICZVX2X3UW5or7fAQx6+eHMB8GA1UdIwQYMBaAFCshERICZVX2
+              X3UW5or7fAQx6+eHMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+              ANq7MztMZYwAUmRgqkQroNRZ8GJo1+FRlIGVGy7M28DtAiEA7VT9Kwdh27Xz+gzj
+              6+sqIO6AcTVuew65Awov9XW5Wsk=
+              -----END CERTIFICATE-----
+            '';
           };
           harbor-registry = {
             package = packages."persistent-volume-claim";

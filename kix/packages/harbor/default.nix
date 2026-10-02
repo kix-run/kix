@@ -1,10 +1,10 @@
-# Harbor container registry.
+# harbor: the Harbor OCI container registry.
 #
-# Multi-component OCI registry: core (API and auth), portal (web UI),
-# registry (blob storage, with the registryctl sidecar), jobservice
-# (replication, garbage collection, and other async jobs), and exporter
-# (Harbor-wide metrics). The database and the cache are dependencies, not
-# sub-components (BEST-PRACTICES §12.5).
+# Components: core (API and auth), portal (web UI), registry (blob storage,
+# with the registryctl sidecar), jobservice (replication, garbage
+# collection, and other async jobs), and exporter (Harbor-wide metrics).
+# The database and the cache are dependencies, not sub-components
+# (BEST-PRACTICES §12.5).
 #
 # Dependencies:
 #   database (required)       a logical PostgreSQL database: stackgres-database,
@@ -15,7 +15,11 @@
 #   valkey (required)         Redis-compatible cache and job queue
 #                             (out.{fqdn,port,authSecret,authPasswordKey}),
 #                             reached through Sentinel when the instance
-#                             publishes out.{sentinelPort,primarySet}.
+#                             publishes out.{sentinelPort,primarySet}. Harbor
+#                             uses fixed database indexes 0 to 2 and a fixed
+#                             job-queue prefix, so give each Harbor instance
+#                             its own valkey; for a second Harbor in one
+#                             namespace, wire deps.valkey = ref.<ns>.<valkey>.
 #   storage (required)        a persistent volume for registry blobs.
 #   harborSecrets (required)  a Secret declaring the keys in `secretKeys` below.
 #   caBundle (optional)       a Secret declaring `ca.crt`: extra CA certificates
@@ -24,6 +28,7 @@
 #   ingressNginx / gateway / clusterIssuer (optional)  the route and its TLS,
 #                             through kix.expose.
 #   prometheus (optional)     the exporter, ServiceMonitors, and alerts.
+#   reloader (optional)       restarts pods when a secret-ref Secret changes.
 #
 #   instances.harbor = {
 #     harbor.package = packages.harbor;
@@ -66,12 +71,15 @@
 # Ingress has a clusterIssuer or the Gateway listener terminates TLS. Set
 # `externalURL` only when clients reach that host on another port or scheme.
 #
-# Rollouts: a pod restarts when a Kix-built Secret it reads changes. A
-# Secret from `packages.secret-ref` carries no content hash, so use
-# reloader's `withReloadOn` for it.
+# Rollouts: a pod restarts when a Kix-built Secret it reads changes
+# (harborSecrets, caBundle, the database credentials, and the valkey
+# password), through a `checksum/<name>` pod annotation. A Secret from
+# `packages.secret-ref` carries no content hash. With a reloader dependency,
+# the package names such Secrets in reloader's annotation on the
+# Deployments that read them; without one, a change to them restarts no pod.
 #
 # Network policy: every component dials the others through
-# `self.<service>.out.fqdn`, so policy and deploy order derive from the
+# `self.<service>.out.url`, so policy and deploy order derive from the
 # manifests. Every Harbor pod may reach the world on TCP 443 for
 # replication, proxy-cache, and OIDC. Other ports (LDAP on 389 or 636, a
 # plain-HTTP replication source) need a CiliumNetworkPolicy added through
@@ -228,6 +236,20 @@ let
       severity = "warning";
       summary = "High task concurrency in Harbor";
       description = "Harbor ${scope.namespaceName}/${name} runs more than 10 {{ $labels.type }} tasks at once.";
+    };
+    # `up == 0` needs a target to report; this fires when a component
+    # has no scrape target at all.
+    HarborComponentAbsent = {
+      expr = lib.concatMapStringsSep " or " (s: "absent(up{${sel s}})") [
+        svc.core
+        svc.registry
+        svc.jobservice
+        svc.exporter
+      ];
+      "for" = "10m";
+      severity = "critical";
+      summary = "Harbor component has no scrape target";
+      description = "Prometheus has no target for Harbor ${scope.namespaceName}/${name} Service {{ $labels.service }}.";
     };
     HarborInstanceDown = {
       expr = ''up{namespace="${scope.namespaceName}",service=~"${
@@ -466,6 +488,7 @@ in
         harborSecrets,
         caBundle ? null,
         prometheus ? null,
+        reloader ? null,
         ...
       }:
       let
@@ -486,20 +509,38 @@ in
           dep = caBundle;
           keys = [ "ca.crt" ];
         };
-        dbCredentials = kix.checkSecretKeys {
-          inherit who;
-          arg = "database";
-          dep = database.out.credentials;
-          keys = [ "password" ];
-        };
+        # Not kix.checkSecretKeys: its message suggests wiring another Secret
+        # through deps.database, which takes a database.
+        dbCredentials =
+          let
+            creds = database.out.credentials;
+            declared = if creds.out.keys or null == null then [ ] else creds.out.keys;
+          in
+          if builtins.elem "password" declared then
+            creds
+          else
+            throw "${who}: the database dependency's credentials Secret \"${creds.out.name}\" declares ${
+              if declared == [ ] then "no keys" else lib.concatStringsSep ", " declared
+            }; this package reads its `password` key. Wire a database whose out.credentials declares `password`.";
+        valkeySecret = if redisAuth then valkey.out.authSecret else null;
 
         # A pod template annotation that changes with a Secret's content,
         # so the pods roll when it changes. A secret-ref has no content
-        # hash and gets none.
+        # hash and gets none; `reloadOn` covers it.
         checksumOf =
-          key: s: lib.optionalAttrs (s.out ? identityHash) { "checksum/${key}" = s.out.identityHash; };
+          key: s:
+          lib.optionalAttrs (s != null && s.out ? identityHash) { "checksum/${key}" = s.out.identityHash; };
 
-        # --- Public URL ---
+        # Names the secret-ref Secrets among `refs` in reloader's annotation
+        # on Deployment builder args, when a reloader is wired.
+        reloadOn =
+          refs: args:
+          let
+            untracked = builtins.filter (s: s != null && !(s.out ? identityHash)) refs;
+          in
+          if reloader == null || untracked == [ ] then args else reloader.out.withReloadOn untracked args;
+
+        # Public URL
         exposure = self.exposure;
         hostKnown = config.ingress.host != null || (clusterConfig.cluster.domain or null) != null;
         urlProblem =
@@ -517,7 +558,7 @@ in
           else
             throw "${who}: Harbor needs the URL clients reach it on (EXT_ENDPOINT), and Kix cannot derive one. ${urlProblem} Or set externalURL.";
 
-        # --- Database ---
+        # Database
         dbTls = database.out.tls or null;
         sslmode =
           if config.database.sslmode != null then
@@ -530,15 +571,16 @@ in
             throw "${who}: the database dependency does not say whether it serves TLS (it publishes no out.tls). Set database.sslmode to \"require\" for a server with TLS, or \"disable\" for one without.";
         dbPasswordEnv = var: dbCredentials.out.mkEnv { ${var} = "password"; };
 
-        # --- Internal addresses ---
-        # `out.fqdn` carries the endpoint fact: the consuming pod gets the
+        # Internal addresses
+
+        # `out.url` carries the endpoint fact: the consuming pod gets the
         # netpol egress and waits for the Service.
-        coreUrl = "http://${self.coreService.out.fqdn}:${self.coreService.out.port}";
+        coreUrl = self.coreService.out.url { };
         tokenServiceUrl = "${coreUrl}/service/token";
-        portalUrl = "http://${self.portalService.out.fqdn}:${self.portalService.out.port}";
-        registryUrl = "http://${self.registryService.out.fqdn}:5000";
-        registryCtlUrl = "http://${self.registryService.out.fqdn}:8080";
-        jobserviceUrl = "http://${self.jobserviceService.out.fqdn}:${self.jobserviceService.out.port}";
+        portalUrl = self.portalService.out.url { };
+        registryUrl = self.registryService.out.url { };
+        registryCtlUrl = self.registryService.out.url { port = 8080; };
+        jobserviceUrl = self.jobserviceService.out.url { };
 
         # Valkey. The password arrives as REDIS_PASSWORD from valkey's own
         # Secret and Kubernetes splices it into each URL through $(VAR)
@@ -563,9 +605,10 @@ in
         redisPasswordRef =
           var: valkey.out.authSecret.out.keyRef valkey.out.authPasswordKey // { name = var; };
         redisPasswordEnv = lib.optional redisAuth (redisPasswordRef "REDIS_PASSWORD");
-        valkeyChecksum = lib.optionalAttrs redisAuth (checksumOf "valkey-password" valkey.out.authSecret);
+        valkeyChecksum = checksumOf "valkey-password" valkeySecret;
 
-        # --- Environment ---
+        # Environment
+
         # Go's crypto/x509 on Linux reads the first bundle file it finds
         # (/etc/pki/tls/certs/ca-bundle.crt on Photon) plus every file in
         # each SSL_CERT_DIR directory. The first two entries are Go's
@@ -623,7 +666,7 @@ in
             } env
           );
 
-        # --- Shared pod bits ---
+        # Shared pod bits
         componentSelector =
           component: scope.selectorLabels // { "app.kubernetes.io/component" = component; };
         coreSelector = componentSelector "core";
@@ -637,12 +680,13 @@ in
           capabilities.drop = [ "ALL" ];
           privileged = false;
           # Each container mounts an emptyDir at every path it writes: /tmp,
-          # plus /etc/core/ca and /etc/core/token for core. The images'
-          # entrypoints run install_cert.sh first, which appends certificates
-          # to /etc/pki/tls/certs/ca-bundle.crt in the image. Each container's
-          # `command` and `args` are the exec line of its v2.15.2 entrypoint
-          # script instead, and SSL_CERT_DIR has the Go binaries read
-          # /harbor_cust_cert directly.
+          # plus /etc/core/ca and /etc/core/token for core. The Go
+          # components' image entrypoints run install_cert.sh first, which
+          # writes to /etc/pki/tls/certs/ca-bundle.crt in the image and so
+          # fails on this read-only root. Their `command` and `args` are the
+          # exec line of that entrypoint script instead, and SSL_CERT_DIR has
+          # the binaries read /harbor_cust_cert directly. Recheck the exec
+          # lines when the release changes.
           readOnlyRootFilesystem = true;
           runAsNonRoot = true;
           seccompProfile.type = "RuntimeDefault";
@@ -657,11 +701,14 @@ in
               subPath = "ca.crt";
             };
 
+        # The kubelet evicts a pod whose emptyDir grows past its sizeLimit,
+        # so a runaway temp file cannot fill the node's disk.
         tmpMount =
           name:
           kix.mount.emptyDir {
             inherit name;
             mountPath = "/tmp";
+            sizeLimit = "1Gi";
           };
 
         harborPodDefaults = {
@@ -714,7 +761,7 @@ in
           protocol = "TCP";
         };
 
-        # --- ConfigMap data: the facts each component reads through envFrom ---
+        # ConfigMap data: the facts each component reads through envFrom
         coreConfigData = {
           EXT_ENDPOINT = externalURL;
           CONFIG_PATH = "/etc/core/app.conf";
@@ -782,7 +829,7 @@ in
           HARBOR_SERVICE_SCHEME = "http";
         };
 
-        # --- Registry config.yml ---
+        # Registry config.yml
         registryStorageKeys = [
           "cache"
           "maintenance"
@@ -790,12 +837,15 @@ in
           "redirect"
           "tag"
         ];
-        badStorageKeys = builtins.filter (k: !(builtins.elem k registryStorageKeys)) (
-          builtins.attrNames (config.registry.settings.storage or { })
+        # A non-attrset `storage` is left to mergeGuarded, which refuses it
+        # as the replaced ancestor of the locked storage.filesystem.
+        storageSettings = config.registry.settings.storage or { };
+        badStorageKeys = lib.optionals (builtins.isAttrs storageSettings) (
+          builtins.filter (k: !(builtins.elem k registryStorageKeys)) (builtins.attrNames storageSettings)
         );
         registryConfig =
           if badStorageKeys != [ ] then
-            throw "${who}: registry.settings.storage sets ${lib.concatStringsSep ", " badStorageKeys}, a storage driver or an unknown key. This package stores blobs on the storage claim with the filesystem driver; object storage is not supported. registry.settings.storage accepts ${lib.concatStringsSep ", " registryStorageKeys}."
+            throw "${who}: registry.settings.storage sets ${lib.concatStringsSep ", " badStorageKeys}, a storage driver or an unknown key. This package stores blobs on the storage claim with the filesystem driver; object storage is not supported. registry.settings.storage accepts cache, maintenance, delete, redirect, and tag."
           else
             lib.filterAttrsRecursive (_: v: v != null) (
               kix.mergeGuarded
@@ -888,7 +938,8 @@ in
                 config.registry.settings
             );
 
-        # --- Jobservice config.yml ---
+        # Jobservice config.yml
+
         # The redis URL arrives as JOB_SERVICE_POOL_REDIS_URL, because it
         # carries the password; jobservice reads JOB_SERVICE_* env over the
         # file. The DB job logger keeps every job's log in the database, so
@@ -962,9 +1013,7 @@ in
         );
       in
       {
-        # ============================================================
         # Core: API server, auth, project management
-        # ============================================================
 
         coreConfigMap = scope.mkResource {
           apiVersion = "v1";
@@ -1011,6 +1060,7 @@ in
                 "checksum/config" = self.coreConfigMap.out.identityHash;
               }
               // checksumOf "harbor-secrets" secrets
+              // checksumOf "ca-bundle" ca
               // checksumOf "database-credentials" dbCredentials
               // valkeyChecksum;
               template.spec = harborPodDefaults // {
@@ -1101,19 +1151,25 @@ in
             (kix.mount.emptyDir {
               name = "ca-download";
               mountPath = "/etc/core/ca";
+              sizeLimit = "16Mi";
             })
             (kix.mount.emptyDir {
               name = "psc";
               mountPath = "/etc/core/token";
+              sizeLimit = "16Mi";
             })
             (tmpMount "tmp")
             caBundleMount
           ]
+          |> reloadOn [
+            secrets
+            ca
+            dbCredentials
+            valkeySecret
+          ]
           |> scope.mkDeployment;
 
-        # ============================================================
         # Portal: web UI (nginx)
-        # ============================================================
 
         portalConfigMap = scope.mkResource {
           apiVersion = "v1";
@@ -1216,9 +1272,7 @@ in
           ]
           |> scope.mkDeployment;
 
-        # ============================================================
         # Registry: OCI blob storage, plus the registryctl sidecar
-        # ============================================================
 
         registryConfigMap = scope.mkResource {
           apiVersion = "v1";
@@ -1277,6 +1331,7 @@ in
             authMount = kix.mount.emptyDir {
               name = "registry-auth";
               mountPath = "/etc/registry-auth";
+              sizeLimit = "1Mi";
             };
             registryEnv =
               secrets.out.mkEnv { REGISTRY_HTTP_SECRET = "registryHttpSecret"; }
@@ -1286,8 +1341,8 @@ in
           {
             name = "${name}-registry";
             labels = componentSelector "registry";
-            # The blob claim is ReadWriteOnce and the filesystem driver keeps
-            # upload state on it, so a second pod has no volume of its own.
+            # The filesystem driver keeps blobs and upload state on the one
+            # storage claim, which a second pod would have to share.
             availability.max = "none";
             spec = {
               replicas = 1;
@@ -1298,6 +1353,7 @@ in
                 "checksum/config" = self.registryConfigMap.out.identityHash;
               }
               // checksumOf "harbor-secrets" secrets
+              // checksumOf "ca-bundle" ca
               // valkeyChecksum;
               template.spec = harborPodDefaults // {
                 securityContext = harborPodDefaults.securityContext // {
@@ -1418,11 +1474,14 @@ in
             caBundleMount
           ]
           |> kix.withMountsOn "registryctl" [ (tmpMount "registryctl-tmp") ]
+          |> reloadOn [
+            secrets
+            ca
+            valkeySecret
+          ]
           |> scope.mkDeployment;
 
-        # ============================================================
         # Jobservice: async jobs (replication, GC, retention)
-        # ============================================================
 
         jobserviceConfigMap = scope.mkResource {
           apiVersion = "v1";
@@ -1480,6 +1539,7 @@ in
                 "checksum/env" = self.jobserviceEnvConfigMap.out.identityHash;
               }
               // checksumOf "harbor-secrets" secrets
+              // checksumOf "ca-bundle" ca
               // checksumOf "database-credentials" dbCredentials
               // valkeyChecksum;
               template.spec = harborPodDefaults // {
@@ -1550,11 +1610,15 @@ in
             (tmpMount "tmp")
             caBundleMount
           ]
+          |> reloadOn [
+            secrets
+            ca
+            dbCredentials
+            valkeySecret
+          ]
           |> scope.mkDeployment;
 
-        # ============================================================
         # Exporter: Harbor-wide metrics (with metrics only)
-        # ============================================================
 
         exporterEnvConfigMap =
           if !metricsEnabled then
@@ -1597,6 +1661,7 @@ in
                   "checksum/env" = self.exporterEnvConfigMap.out.identityHash;
                 }
                 // checksumOf "harbor-secrets" secrets
+                // checksumOf "ca-bundle" ca
                 // checksumOf "database-credentials" dbCredentials
                 // valkeyChecksum;
                 template.spec = harborPodDefaults // {
@@ -1644,17 +1709,21 @@ in
               (tmpMount "tmp")
               caBundleMount
             ]
+            |> reloadOn [
+              secrets
+              ca
+              dbCredentials
+              valkeySecret
+            ]
             |> scope.mkDeployment;
 
-        # ============================================================
         # Entry point
-        # ============================================================
 
         # Reachable through the route: the core and portal Services.
         # Neither the core nor the jobservice Service carries a workload
         # edge (see above), so both Deployments are listed here; core's
-        # ConfigMap reaches every other component. The exporter and the
-        # monitors hang off nothing.
+        # ConfigMap reaches every other component. No other part refers to
+        # the exporter or the monitors, so they are listed too.
         root = {
           resource = if self.route != null then self.route else self.coreService;
           requires = builtins.filter (r: r != null) [
@@ -1672,8 +1741,8 @@ in
     )
 
     # API paths route to core, everything else to the portal. A layer
-    # upload outlasts a Gateway's 15s default request timeout, and Gateway
-    # API reads "0s" as no timeout.
+    # upload can outlast Envoy Gateway's 15s default route timeout, and
+    # Gateway API reads "0s" as no timeout.
     (kix.expose {
       paths = [
         {
@@ -1701,8 +1770,8 @@ in
       defaultAnnotations."nginx.ingress.kubernetes.io/proxy-body-size" = "0";
     })
 
-    # One ServiceMonitor per metrics Service. The alert rules ride on the
-    # core entry; they cover every component.
+    # One ServiceMonitor per metrics Service. The core entry also carries
+    # the alert rules for every component.
     (kix.monitor {
       service = "coreService";
       port = "http-metrics";
