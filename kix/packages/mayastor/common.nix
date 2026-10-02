@@ -146,7 +146,7 @@ rec {
         inherit who defaults;
         owned = lib.optional (owned != { }) {
           vars = owned;
-          from = "the package, which passes them to the program's flags or reads them in it";
+          from = "the pod's Downward API fields, which the package's flags and the program read";
           fix = "Remove it.";
         };
       } instanceEnv

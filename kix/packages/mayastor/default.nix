@@ -279,9 +279,10 @@ in
     conflictsWith = [ "cluster:mayastor" ];
     # io-engine runs SPDK with raw device access and hugepages, csi-node runs
     # `nvme connect` and mounts with Bidirectional propagation, and
-    # agent-ha-node replaces NVMe paths: all three are privileged and run
-    # as root on the host network, as csi-controller does upstream. The
-    # etcd init container chowns the data volume as root.
+    # agent-ha-node replaces NVMe paths, so all three are privileged. They
+    # and csi-controller use the host network as upstream runs them, the
+    # Mayastor images run as root, and the etcd init container chowns the
+    # data volume as root.
     unsafe = [
       "privileged"
       "host-network"

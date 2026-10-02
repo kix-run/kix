@@ -6,3 +6,4 @@ world for every provider, including `inmemory`, which calls nothing, and
 cannot open port 53 for `rfc2136`, 8081 for `pdns`, 80 for `pihole`, or 2379
 for `coredns` and `skydns`. Under an enforcer it warns for those providers,
 and the user adds a namespace NetworkPolicy for the port.
+- Hit again 2026-10-02 by `kix/packages/mayastor`: io-engine, agent-ha-node, and the CSI node plugin need ingress from host-network peers and egress to node agents on fixed ports, written as one package-wide `hostNetworkPeers` intent.
