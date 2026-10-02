@@ -12,8 +12,7 @@
 # all resource names derive from scope.instanceName.
 #
 # Resources: EnvoyProxy (optional), GatewayClass, Gateway, plus CRD refs
-# for the two Gateway API kinds and, with an EnvoyProxy, for EnvoyProxy
-# (`out.crds.EnvoyProxy`).
+# for the two Gateway API kinds and, with an EnvoyProxy, for EnvoyProxy.
 # root = Gateway, with out.gatewayRef and out.listeners for kix.expose.
 
 {
@@ -335,9 +334,6 @@ in
           # Selector for network policies: matches the envoy proxy pods
           # spawned by the controller for this Gateway.
           selector = selectorLabels;
-        }
-        // lib.optionalAttrs haveProxy {
-          crds.EnvoyProxy = self.envoyProxyCrd;
         };
       };
     };
