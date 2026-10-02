@@ -18,7 +18,6 @@ kix.buildCluster {
 
     (
       {
-        lib,
         kix,
         packages,
         ...
@@ -48,16 +47,9 @@ kix.buildCluster {
           package = packages."ingress-nginx";
         };
 
-        instances.cert-manager.cluster-issuers = {
-          package = packages."cluster-issuers";
-          config = {
-            mainIssuer = "selfsigned";
-            issuers = lib.mkForce {
-              selfsigned = {
-                kind = "selfSigned";
-              };
-            };
-          };
+        instances.cert-manager.selfsigned = {
+          package = packages.cluster-issuer;
+          config.spec.selfSigned = { };
         };
 
         instances.monitoring.prometheus-operator = {

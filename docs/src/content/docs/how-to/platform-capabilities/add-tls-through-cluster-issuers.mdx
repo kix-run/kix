@@ -42,8 +42,10 @@ Install cert-manager and configure the issuer:
 
 <Snippet {...acmeClusterIssuer} />
 
-The `cluster-issuers` package declares `clusterIssuer` as a default alias, so
+The `cluster-issuer` package declares `clusterIssuer` as a default alias, so
 TLS-capable packages resolve it without per-application `deps` entries.
+Exactly one instance should answer `clusterIssuer`; give any other issuer,
+such as a staging one, its own `aliases`.
 
 See [Configure cert-manager issuers](/docs/how-to/package-task-guides/configure-cert-manager-issuers/)
 for the credential and self-signed configurations.
