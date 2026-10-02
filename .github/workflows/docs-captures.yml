@@ -50,6 +50,13 @@ jobs:
           path: kixpkgs
           fetch-depth: 0
 
+      # The captures must match the kix-examples revision docs/flake.lock
+      # pins, which can be ahead of kix-examples' default branch while a
+      # paired kix-examples PR is open.
+      - name: Read the pinned kix-examples revision
+        id: examples-rev
+        run: echo "rev=$(nix eval --raw --impure --expr '(builtins.fromJSON (builtins.readFile ./kixpkgs/docs/flake.lock)).nodes.kix-examples.locked.rev')" >> "$GITHUB_OUTPUT"
+
       # kix-examples is a separate private repo in another org, which the
       # job's GITHUB_TOKEN cannot reach, so it is checked out with its own
       # token and the flake input is overridden to point at it.
@@ -57,6 +64,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: kix-ops/kix-examples
+          ref: ${{ steps.examples-rev.outputs.rev }}
           token: ${{ secrets.KIX_EXAMPLES_TOKEN }}
           path: kix-examples
           fetch-depth: 0
