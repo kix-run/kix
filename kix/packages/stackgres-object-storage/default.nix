@@ -33,6 +33,15 @@
 #   storageCredentials (required)  the Secret the selectors name. The keys
 #                                  it must declare depend on `type`; see
 #                                  `credentialKeys`.
+#   endpointService (optional)     an S3 store in the cluster, as an
+#                                  instance whose root is its S3 Service.
+#                                  `s3Compatible` only. The package sets the
+#                                  endpoint to that Service's URL and turns
+#                                  on path-style addressing, and the
+#                                  clusters that back up here get network
+#                                  policy to the store. No package has the
+#                                  alias, so wire it with
+#                                  deps.endpointService = ref.<ns>.<instance>.
 #
 # Credentials from a cloud metadata service or workload identity
 # (`useIAMRole`, `fetchCredentialsFromMetadataService`) are not modelled:
@@ -40,16 +49,16 @@
 #
 # Escape hatch: `extraSpec`, merged over the SGObjectStorage spec. It reaches
 # the endpoint, region, path-style addressing, storage class, and
-# `encryption`. The type, the bucket, and the credential selectors are
-# locked.
+# `encryption`. The type, the bucket, the credential selectors, and, with
+# `endpointService`, the endpoint are locked. An endpoint written here is
+# treated as outside the cluster.
 #
 # Exposes:
 #   out.name             the SGObjectStorage's name.
 #   out.worldEgressPort  the TCP port backups reach outside the cluster: the
 #                        endpoint's port, else 80 or 443 from its scheme,
-#                        else 443. null when the endpoint was built from a
-#                        Kix Service's address, whose endpoint fact opens
-#                        the in-cluster path.
+#                        else 443. null with `endpointService`, whose
+#                        address opens the in-cluster path.
 #
 # root = the SGObjectStorage.
 
@@ -157,9 +166,10 @@ in
       }
     ];
 
+  # An imported operator carries no release to check.
   deps.stackgresOperator.assertions = dep: [
     {
-      assertion = lib.versions.majorMinor dep.out.release == "1.19";
+      assertion = !(dep.out ? release) || lib.versions.majorMinor dep.out.release == "1.19";
       message = "this package writes the SGObjectStorage fields of StackGres 1.19, and the stackgresOperator dependency runs ${dep.out.release}. Update kix/packages/stackgres-object-storage for that release.";
     }
   ];
@@ -225,10 +235,17 @@ in
       config,
       stackgresOperator,
       storageCredentials,
+      endpointService ? null,
       ...
     }:
     let
       t = types.${config.type};
+      inCluster = endpointService != null;
+      _inClusterType =
+        if inCluster && config.type != "s3Compatible" then
+          throw "${who}: deps.endpointService is wired, and type is \"${config.type}\". Only s3Compatible takes an endpoint; set type = \"s3Compatible\", or remove the dependency."
+        else
+          null;
       keys = selectorKeys config;
       creds = kix.checkSecretKeys {
         inherit who;
@@ -245,6 +262,14 @@ in
             name = creds.out.name;
             inherit key;
           }) keys;
+        }
+        // lib.optionalAttrs inCluster {
+          endpoint =
+            (endpointService.out.url
+              or (throw "${who}: deps.endpointService has no out.url. Wire an instance whose root is its S3 Service.")
+            )
+              { };
+          enablePathStyleAddressing = true;
         };
       };
 
@@ -262,16 +287,20 @@ in
           t.block
           "secretKeySelectors"
           s
-        ]) (builtins.attrNames keys);
+        ]) (builtins.attrNames keys)
+        ++ lib.optional inCluster [
+          config.type
+          "endpoint"
+        ];
       } base config.extraSpec;
 
       endpoint = spec.${config.type}.endpoint or null;
       endpointParts = builtins.match "([a-zA-Z]+)://[^/:]+(:([0-9]+))?.*" endpoint;
       worldEgressPort =
-        if endpoint == null then
-          443
-        else if builtins.hasContext endpoint then
+        if inCluster then
           null
+        else if endpoint == null then
+          443
         else if endpointParts == null then
           throw "${who}: extraSpec.${config.type}.endpoint \"${endpoint}\" is not a URL such as https://s3.example.com."
         else if builtins.elemAt endpointParts 2 != null then
@@ -281,10 +310,15 @@ in
         else
           443;
     in
-    {
-      objectStorage = scope.mkCR stackgresOperator.out.crds.SGObjectStorage {
-        inherit name spec;
-      };
+    builtins.seq _inClusterType {
+      objectStorage =
+        scope.mkCR
+          (stackgresOperator.out.crds.SGObjectStorage
+            or (throw "${who}: the stackgresOperator dependency has no out.crds.SGObjectStorage. Wire a stackgres-operator instance, or an import that declares the SGObjectStorage CRD in its crds.")
+          )
+          {
+            inherit name spec;
+          };
 
       root = {
         resource = self.objectStorage;
