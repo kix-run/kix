@@ -369,12 +369,15 @@ rec {
 
   # `availability` is the instance's resolved level (core/availability.nix),
   # a plain string a package may take as an argument so its option defaults
-  # can read it.
+  # can read it. `kix` is the helper set the package receives; eval/instance.nix
+  # passes one whose `availability.pick` and `atLeast` know the package
+  # ceiling.
   normalizePackage =
     {
       package,
       scope,
       availability ? "none",
+      kix ? kixlib,
     }:
     if builtins.isAttrs package && package ? build then
       package
@@ -388,7 +391,7 @@ rec {
         {
           inherit scope lib;
         }
-        // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
+        // lib.optionalAttrs (fnArgs ? kix) { inherit kix; }
         // lib.optionalAttrs (fnArgs ? availability) { inherit availability; }
       );
 

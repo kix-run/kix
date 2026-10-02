@@ -27,6 +27,15 @@ Use `pick` for option defaults such as replica counts, quorum sizes, or storage
 replication factors. The mapping belongs to the package because only the
 package knows what each level requires.
 
+Under a package ceiling (`meta.availability.max`), the package never sees a
+level above the ceiling. A table whose values above the ceiling differ from
+its value at the ceiling is an evaluation error, because those values are
+never used. A table that is constant from the ceiling up is accepted. Only
+numbers, strings, booleans, and null are compared; lists, attribute sets, and
+functions are not. When only some workloads cannot reach the higher levels,
+or the limit depends on configuration, put `availability.max` on those
+builder calls instead and keep the full table.
+
 ## `atLeast`
 
 ```nix
@@ -36,6 +45,9 @@ kix.availability.atLeast "node" availability
 Returns `true` when `availability` is `node` or `zone`. Use it for a feature
 that becomes useful at a threshold, such as enabling an automatic-failover
 topology.
+
+Under a package ceiling, a threshold above the ceiling is an evaluation error:
+the test could never be true.
 
 ## `rank` and `levels`
 

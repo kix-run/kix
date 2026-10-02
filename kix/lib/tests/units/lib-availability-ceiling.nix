@@ -1,7 +1,9 @@
 # Tests for availability ceilings: the replica guard under a `none` ceiling
 # (plugins/availability), ceiling validation (core/availability.nix
-# checkCeiling, scope/builders.nix workloadCeilingOf) and the effective
-# ceiling a sealed workload records.
+# checkCeiling and ceilingOfMeta, scope/builders.nix workloadCeilingOf), the
+# effective ceiling a sealed workload records, and the dead-mapping guard on
+# `kix.availability.pick` and `atLeast` under a package ceiling
+# (core/availability.nix underCeiling).
 
 {
   lib,
@@ -12,6 +14,7 @@
   evalFails,
   containerBase,
   mkReplicatedPackage,
+  mkLevelPackage,
   singleNode,
   multiZone,
   ...
@@ -97,6 +100,26 @@ let
 
   noneCeiling = {
     max = "none";
+  };
+
+  availabilityLib = import ../../core/availability.nix { inherit lib; };
+
+  fails = v: !(builtins.tryEval (builtins.deepSeq v true)).success;
+
+  levelPackageAt =
+    mods: args:
+    mkCluster (
+      mods
+      ++ [
+        { instances.appns.web.package = mkLevelPackage args; }
+      ]
+    );
+
+  constantTable = {
+    none = 1;
+    pod = 1;
+    node = 1;
+    zone = 1;
   };
 in
 {
@@ -310,4 +333,148 @@ in
         uncapped = removeAttrs uncapped [ "warnings" ];
       }
     }";
+
+  # Under meta.availability.max = "none" the package only sees "none", so a
+  # `pick` table that differs above it fails, at every level. A constant
+  # table builds. A package without a package ceiling may keep the table
+  # beside a workload with a builder ceiling of `none`.
+  lib-availability-ceiling-package-none-dead-pick =
+    let
+      twoWorkloads =
+        { kix, availability, ... }:
+        {
+          meta.version = "test";
+          build =
+            { self, scope, ... }:
+            {
+              root = self.app;
+              app = appDeployment scope {
+                replicas = kix.availability.pick availability {
+                  none = 1;
+                  pod = 2;
+                  node = 2;
+                  zone = 3;
+                };
+              };
+              single = scope.mkDeployment {
+                name = "single";
+                availability = noneCeiling;
+                spec = {
+                  replicas = 1;
+                  selector.matchLabels = scope.selectorLabels // {
+                    part = "single";
+                  };
+                  template = {
+                    metadata.labels = scope.selectorLabels // {
+                      part = "single";
+                    };
+                    spec.containers = [
+                      (
+                        {
+                          name = "single";
+                          image = "example/single:1";
+                        }
+                        // containerBase
+                      )
+                    ];
+                  };
+                };
+              };
+            };
+        };
+      underNone = availabilityLib.underCeiling {
+        ceiling = "none";
+        where = "appns/web";
+      };
+      unbounded = availabilityLib.underCeiling {
+        ceiling = null;
+        where = "appns/web";
+      };
+      table = {
+        none = 1;
+        pod = 2;
+        node = 2;
+        zone = 3;
+      };
+    in
+    (evalFails (levelPackageAt [ multiZone ] { metaExtra.availability.max = "none"; }))
+    && (evalFails (levelPackageAt [ singleNode ] { metaExtra.availability.max = "none"; }))
+    && !(evalFails (
+      levelPackageAt [ multiZone ] {
+        metaExtra.availability.max = "none";
+        table = constantTable;
+      }
+    ))
+    && replicasOf [ multiZone ] { package = twoWorkloads; } == 3
+    && fails (underNone.pick "none" table)
+    && underNone.pick "none" constantTable == 1
+    # A function value is not compared, so a table of builders passes.
+    && (underNone.pick "none" (lib.genAttrs availabilityLib.levels (l: _: l))) null == "none"
+    && unbounded.pick "zone" table == 3
+    || throw "a dead pick table under the package ceiling none was accepted, or a valid table was refused";
+
+  # Under meta.availability.max = "pod", `atLeast "node"` is always false
+  # and fails; `atLeast "pod"` still answers. The build function takes
+  # `kix` as an argument, which is the path the dead-pick test does not
+  # cover.
+  lib-availability-ceiling-atleast-above-ceiling =
+    let
+      pkg = min: {
+        meta = {
+          version = "test";
+          availability.max = "pod";
+        };
+        build =
+          {
+            self,
+            scope,
+            kix,
+            availability,
+            ...
+          }:
+          {
+            root = self.app;
+            app = appDeployment scope { replicas = 2; };
+            seen = scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "at-least";
+              data.result = lib.boolToString (kix.availability.atLeast min availability);
+            };
+          };
+      };
+      resultAt =
+        min:
+        (byName "at-least" (
+          ofKind "ConfigMap" (manifests (clusterWith [ multiZone ] { package = pkg min; }))
+        )).data.result;
+    in
+    (evalFails (clusterWith [ multiZone ] { package = pkg "node"; })) && resultAt "pod" == "true"
+    || throw "atLeast above the package ceiling was accepted, or atLeast at the ceiling failed";
+
+  # meta.availability takes only `max`; anything else fails rather than
+  # being ignored.
+  lib-availability-ceiling-meta-availability-unknown-key =
+    (evalFails (
+      clusterWith [ multiZone ] {
+        package = appPackage { } // {
+          meta = {
+            version = "test";
+            availability.maximum = "none";
+          };
+        };
+      }
+    ))
+    && (evalFails (
+      clusterWith [ multiZone ] {
+        package = appPackage { } // {
+          meta = {
+            version = "test";
+            availability = "none";
+          };
+        };
+      }
+    ))
+    && builds [ multiZone ] { package = appPackage { packageMax = "pod"; }; }
+    || throw "an unknown meta.availability key was accepted";
 }

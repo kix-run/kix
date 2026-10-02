@@ -24,6 +24,14 @@ packages omit it.
 
 When an instance requests a higher level, Kix passes the ceiling to the
 package and warns that the instance does not meet the requested level.
+Because the package never sees a level above its ceiling,
+`kix.availability.pick` refuses a table whose values above the ceiling differ
+from its value at the ceiling, and `kix.availability.atLeast` refuses a
+threshold above the ceiling. Both are evaluation errors that name the
+instance.
+
+`max` is the only key of `meta.availability`. Any other key, or a value that
+is not an attribute set, is an evaluation error.
 
 Use a package ceiling for a limit of the program itself that holds for every
 workload and that no configuration lifts. Do not use it merely because one
