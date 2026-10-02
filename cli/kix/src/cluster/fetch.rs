@@ -967,6 +967,9 @@ pub fn normalize_for_diff(obj: &mut DynamicObject) {
 /// question a change review actually needs answered: "does what kix would
 /// apply differ from what kix last applied?"
 ///
+/// A Secret's `stringData` is restored from its `data`, see
+/// [`restore_string_data`].
+///
 /// Objects without a kix `Apply` entry (adopted externally, or predating SSA)
 /// fall back to the whole object with server metadata stripped.
 pub fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
@@ -975,6 +978,9 @@ pub fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
         normalize_for_diff(&mut fallback);
         return to_manifest_value(&fallback);
     };
+    if let Some(fields) = super::fieldsv1::kix_fieldset(obj) {
+        restore_string_data(&mut view, obj, &fields);
+    }
     if let Some(map) = view.as_object_mut() {
         for key in ["apiVersion", "kind"] {
             if let Some(v) = obj.data.get(key) {
@@ -994,6 +1000,45 @@ pub fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
         }
     }
     view
+}
+
+/// Put a Secret's `stringData` back into its kix-owned view.
+///
+/// The API server merges `stringData` into `data` and never stores it, so the
+/// projection of a Secret kix applied with `stringData` has neither field.
+/// For each `stringData` key in kix's fieldset, the live `data` value is
+/// decoded and set under `stringData`, which is what the build compares
+/// against. A key whose live value is missing, or is not base64-encoded UTF-8,
+/// is left out and shows as a difference.
+fn restore_string_data(
+    view: &mut serde_json::Value,
+    obj: &DynamicObject,
+    fields: &serde_json::Value,
+) {
+    use base64::Engine as _;
+    use serde_json::Value;
+
+    if obj.data.get("kind").and_then(Value::as_str) != Some("Secret") {
+        return;
+    }
+    let Some(owned) = fields.get("f:stringData").and_then(Value::as_object) else {
+        return;
+    };
+    let live_data = obj.data.get("data").and_then(Value::as_object);
+    let mut restored = serde_json::Map::new();
+    for key in owned.keys().filter_map(|k| k.strip_prefix("f:")) {
+        let decoded = live_data
+            .and_then(|d| d.get(key))
+            .and_then(Value::as_str)
+            .and_then(|b64| base64::engine::general_purpose::STANDARD.decode(b64).ok())
+            .and_then(|bytes| String::from_utf8(bytes).ok());
+        if let Some(text) = decoded {
+            restored.insert(key.to_string(), Value::String(text));
+        }
+    }
+    if let Some(map) = view.as_object_mut() {
+        map.insert("stringData".into(), Value::Object(restored));
+    }
 }
 
 /// The kix-owned view of every object in a sweep, brought to the current
@@ -1319,6 +1364,48 @@ mod tests {
                 }
             })
         );
+    }
+
+    /// A Secret kix applied with `stringData`: the server stored only
+    /// `data`, and the view shows the decoded values under `stringData`.
+    #[test]
+    fn kix_owned_view_restores_secret_string_data_from_data() {
+        let secret = |password_b64: &str| DynamicObject {
+            metadata: ObjectMeta {
+                name: Some("creds".into()),
+                namespace: Some("app".into()),
+                managed_fields: Some(vec![managed(
+                    "kix",
+                    "Apply",
+                    None,
+                    json!({"f:stringData": {".": {}, "f:password": {}, "f:user": {}}, "f:type": {}}),
+                )]),
+                ..Default::default()
+            },
+            types: None,
+            data: json!({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "type": "Opaque",
+                // "admin" and the given password; `other` is not kix's.
+                "data": {"user": "YWRtaW4=", "password": password_b64, "other": "eA=="}
+            }),
+        };
+
+        let view = kix_owned_view(&secret("ZGV2LXBhc3N3b3Jk"));
+        assert_eq!(
+            view["stringData"],
+            json!({"user": "admin", "password": "dev-password"})
+        );
+        assert!(view.get("data").is_none());
+
+        // A value someone changed in `data` shows as the changed plaintext.
+        let changed = kix_owned_view(&secret("cm90YXRlZA=="));
+        assert_eq!(changed["stringData"]["password"], json!("rotated"));
+
+        // A value that does not decode is left out.
+        let broken = kix_owned_view(&secret("not base64"));
+        assert_eq!(broken["stringData"], json!({"user": "admin"}));
     }
 
     /// No kix Apply entry (adopted externally, or pre-SSA): the whole object,
