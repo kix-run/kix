@@ -608,7 +608,7 @@ If the cluster installs its own managed package (e.g. `storage-classes`), it aut
 
 ### Helm charts — three tiers
 
-**Tier 1: Inline** (no package file): `package = kix.helmChart { repo; name; version; hash; }; config.values = { ... };`
+**Tier 1: Inline** (no package file): `package = kix.helmChart { repo; name; version; hash; }; config.values = { ... };`. Add `root = { kind; name; }` when the chart has several Services or workloads.
 
 **Tier 2: Real package with `importChart`** (full control — DI, CRD refs, custom root):
 ```nix
