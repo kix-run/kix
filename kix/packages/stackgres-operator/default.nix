@@ -399,10 +399,10 @@ in
       # The webhook check: once both configurations name the SGCluster
       # entries, a dry-run create of an SGInstanceProfile must carry the
       # operatorVersion annotation that the operator's mutating webhook
-      # adds. That proves the API server reaches the operator and trusts its
-      # certificate, and that new custom resources will get their defaults
-      # and status. The operator writes every entry of a configuration in
-      # one update, so one entry stands for all of them.
+      # adds. That shows the API server calls the mutating webhook and
+      # trusts its certificate, which is what gives a new SGCluster its
+      # defaults and status. The operator writes every entry of a
+      # configuration in one update, so one entry stands for all of them.
       checkName = "${name}-webhook-check";
       checkLabels.app = checkName;
       checkProfile = builtins.toJSON {
