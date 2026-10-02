@@ -100,12 +100,7 @@ in
           type = lib.types.nullOr quantity.type;
           default = null;
           example = "50Gi";
-          description = "Size of each Prometheus server's data volume. Null keeps the data in an emptyDir.";
-        };
-        storageClassName = lib.mkOption {
-          type = lib.types.nullOr lib.types.nonEmptyStr;
-          default = null;
-          description = "StorageClass of the data volumes. Null takes the cluster's `storageClasses` provider.";
+          description = "Size of each Prometheus server's data volume, in the class of the cluster's `storageClasses` provider. For another class, set `instances.<monitoring.namespace>.prometheus-server.deps.storageClasses`. Null keeps the data in an emptyDir.";
         };
       };
     };

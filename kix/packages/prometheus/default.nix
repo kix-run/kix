@@ -2,10 +2,13 @@
 # Prometheus resource.
 #
 # Installs the Prometheus resource, its ServiceAccount, a ClusterRole for
-# Kubernetes service discovery, the egress policy of the server pods, and,
-# while `metrics.enabled`, a ServiceMonitor through which the server scrapes
-# itself. The operator turns the resource into a StatefulSet and a headless
-# Service `prometheus-operated` (port `web`, 9090), which `service` describes.
+# Kubernetes service discovery, a headless Service named after the instance
+# (port `web`, 9090) that the resource names as its governing Service
+# (`spec.serviceName`), the egress policy of the server pods, and, while
+# `metrics.enabled`, a ServiceMonitor through which the server scrapes
+# itself. The operator turns the resource into a StatefulSet; with
+# `spec.serviceName` set it creates no `prometheus-operated` Service, and it
+# reports an error for a governing Service that does not select the pods.
 #
 # By default the server selects every ServiceMonitor, PodMonitor, and
 # PrometheusRule in every namespace, keeps 7 days of data in an emptyDir,
@@ -15,29 +18,37 @@
 #   prometheusOperator (required)  the operator, whose `out.crds.Prometheus`
 #                                  builds the resource.
 #   alertmanager (optional)        where the server sends alerts
-#                                  (`spec.alerting`), from the
-#                                  alertmanager package's `out`.
+#                                  (`spec.alerting`), an alertmanager
+#                                  instance in the cluster. For an
+#                                  Alertmanager outside the cluster, give its
+#                                  address in
+#                                  `extraSpec.additionalAlertManagerConfigs`.
 #   storageClasses (optional)      the class of the data volumes when
-#                                  `storage.size` is set and
-#                                  `storage.storageClassName` is null.
+#                                  `storage.size` is set. Without one the
+#                                  claims take the cluster's default class.
+#                                  For another class, set
+#                                  `deps.storageClasses = ref.<ns>.<instance>`.
 #   priorityClass (optional)       the server pods' PriorityClass.
 #
 # Minimal instance, with a prometheus-operator in the same cluster:
 #
 #   instances.monitoring-system.prometheus-server.package = packages.prometheus;
 #
-# `out`: the `prometheus-operated` Service's `name`, `fqdn`, and `port`, its
-# `namespace`, and `serviceUrl`, the base URL of the HTTP API (Grafana's
-# datasource).
+# `out`: the Service's `name` and `fqdn`, its `namespace`, and `serviceUrl`,
+# the base URL of the HTTP API (Grafana's datasource). Each instance has its
+# own Service, so two instances in one namespace do not share one, and the
+# self-scrape of each lands in a job named after the instance.
 #
-# Replicas follow the instance's availability: one up to `pod`, two from
-# `node`, each scraping and storing everything, spread across the level's
-# failure domain, with a PodDisruptionBudget that keeps one up.
+# Replicas follow the instance's availability: one at `none`, two from
+# `pod`, each scraping and storing everything, so one can restart while the
+# other serves. With two, the pods spread across the level's failure domain
+# and a PodDisruptionBudget lets one be down at a time.
 #
 # Network policy: the netpol plugin derives the scrape egress from the
 # monitors this server selects and the Alertmanager egress from
 # `spec.alerting`; `serverEgress` adds DNS and the API server. Targets that
-# `extraSpec.additionalScrapeConfigs` or a ScrapeConfig names get no policy.
+# `extraSpec.additionalScrapeConfigs` or a ScrapeConfig names get no policy,
+# and neither does an Alertmanager in `extraSpec.additionalAlertManagerConfigs`.
 #
 # Escape hatches: `extraSpec` for the Prometheus resource's spec, and the
 # instance's `partsOverlays`.
@@ -56,10 +67,12 @@ let
 
   replicas = kix.availability.pick availability {
     none = 1;
-    pod = 1;
+    pod = 2;
     node = 2;
     zone = 2;
   };
+
+  webPort = 9090;
 in
 {
   meta = {
@@ -72,15 +85,6 @@ in
     # storage backend swaps. See v2_discussions/67_stateful_migration_orchestration.md.
     lifecycle = "ephemeral";
   };
-
-  assertions =
-    { config, ... }:
-    [
-      {
-        assertion = config.storage.size != null || config.storage.storageClassName == null;
-        message = "storage.storageClassName is set but storage.size is null, so the server keeps its data in an emptyDir and the class is unused. Set storage.size, or remove storage.storageClassName.";
-      }
-    ];
 
   options = {
     image = kix.options.image {
@@ -104,12 +108,7 @@ in
         type = lib.types.nullOr kix.types.quantity;
         default = null;
         example = "50Gi";
-        description = "Size of each server's data volume, a claim the operator creates from the resource's volume claim template. Null keeps the data in an emptyDir, which a pod restart empties.";
-      };
-      storageClassName = lib.mkOption {
-        type = lib.types.nullOr lib.types.nonEmptyStr;
-        default = null;
-        description = "StorageClass of the data volumes. Null takes the `storageClasses` dependency's class, or the cluster's default class without one.";
+        description = "Size of each server's data volume, a claim the operator creates from the resource's volume claim template, in the `storageClasses` dependency's class. Null keeps the data in an emptyDir, which a pod restart empties.";
       };
     };
     extraSpec = lib.mkOption {
@@ -130,10 +129,10 @@ in
         `scrapeInterval` and `evaluationInterval` to "30s", selectors that
         select everything, and a securityContext running as user 1000 and
         group 2000. It refuses `image`, `version`, and `imagePullPolicy`,
-        which image sets, `replicas`, which follows the instance's
-        availability, `resources`, `serviceAccountName`, `storage`, and,
-        when the instance has the dependency, `alerting` and
-        `priorityClassName`.
+        which image sets, `replicas` and `topologySpreadConstraints`, which
+        follow the instance's availability, `resources`,
+        `serviceAccountName`, `serviceName`, `storage`, and, when the
+        instance has the dependency, `alerting` and `priorityClassName`.
       '';
     };
     metrics = kix.options.monitor;
@@ -154,19 +153,22 @@ in
       # The labels the operator puts on this resource's server pods.
       serverPodSelector = prometheusOperator.out.operandSelectors.prometheus name;
 
-      storageClassName =
-        if config.storage.storageClassName != null then
-          config.storage.storageClassName
-        else if storageClasses != null then
-          storageClasses.out.storageClassName
+      # spec.alerting names an Alertmanager resource's governing Service,
+      # which only an alertmanager instance in the cluster publishes.
+      alertmanagerOut =
+        if alertmanager == null then
+          null
+        else if alertmanager.out ? namespace && alertmanager.out ? portName then
+          alertmanager.out
         else
-          null;
+          throw "${who}: deps.alertmanager resolved to an instance whose out has no namespace and portName, so spec.alerting cannot name its Service. Wire an alertmanager instance from packages.alertmanager. For an Alertmanager outside the cluster, give its address in extraSpec.additionalAlertManagerConfigs and let the kix.mkImport answer another alias, so this instance does not bind it.";
 
       baseSpec = {
         inherit replicas;
         image = kix.image.ref config.image;
         version = config.image.tag;
         serviceAccountName = self.serviceAccount.out.name;
+        serviceName = self.service.out.name;
         resources = config.resources;
 
         # Neither lets a client write: the admin API deletes series, and the
@@ -201,13 +203,15 @@ in
           accessModes = [ "ReadWriteOnce" ];
           resources.requests.storage = toString config.storage.size;
         }
-        // lib.optionalAttrs (storageClassName != null) { inherit storageClassName; };
+        // lib.optionalAttrs (storageClasses != null) {
+          inherit (storageClasses.out) storageClassName;
+        };
       }
-      // lib.optionalAttrs (alertmanager != null) {
+      // lib.optionalAttrs (alertmanagerOut != null) {
         alerting.alertmanagers = [
           {
-            inherit (alertmanager.out) namespace name;
-            port = alertmanager.out.portName;
+            inherit (alertmanagerOut) namespace name;
+            port = alertmanagerOut.portName;
             apiVersion = "v2";
           }
         ];
@@ -231,7 +235,9 @@ in
           [ "imagePullPolicy" ]
           [ "replicas" ]
           [ "resources" ]
+          [ "topologySpreadConstraints" ]
           [ "serviceAccountName" ]
+          [ "serviceName" ]
           [ "storage" ]
         ]
         ++ lib.optional (alertmanager != null) [ "alerting" ]
@@ -290,6 +296,10 @@ in
         inherit name spec;
       };
 
+      # Only the header warns that targets in additionalScrapeConfigs and
+      # Alertmanagers in additionalAlertManagerConfigs get no egress.
+      # Candidates for evaluation errors while network policy is on.
+      #
       # The operator creates the server pods, so no workload policy is
       # derived for them. Kubernetes service discovery needs the API server;
       # the netpol plugin adds the scrape and Alertmanager egress from the
@@ -324,24 +334,27 @@ in
         else
           null;
 
-      # The operator creates `prometheus-operated` (headless, port web 9090)
-      # over the server pods of every Prometheus in the namespace. A
-      # ServiceRef describes that Service, so out.fqdn carries dependency
-      # context, the deploy engine waits for the Service, and netpol derives
-      # the same edges as for a rendered Service (v2_discussions/135).
-      service = scope.mkServiceRef {
-        name = "prometheus-operated";
-        selector = serverPodSelector;
-        # The label the operator puts on prometheus-operated.
-        labels."operated-prometheus" = "true";
-        ports = [
-          {
-            name = "web";
-            port = 9090;
-            protocol = "TCP";
-          }
-        ];
-        requires = [ self.prometheus ];
+      # The governing Service of the operator's StatefulSet, named in
+      # `spec.serviceName`, headless as the operator's own would be. Check 4
+      # cannot see the operator's pods; the annotation names the resource
+      # that creates them.
+      service = scope.mkResource {
+        apiVersion = "v1";
+        kind = "Service";
+        inherit name;
+        annotations.${kix.keys.operandOf} = "monitoring.coreos.com/Prometheus/${name}";
+        spec = {
+          clusterIP = "None";
+          selector = serverPodSelector;
+          ports = [
+            {
+              name = "web";
+              port = webPort;
+              targetPort = webPort;
+              protocol = "TCP";
+            }
+          ];
+        };
       };
 
       selfMonitor =
@@ -349,9 +362,9 @@ in
           prometheusOperator.out.mkServiceMonitor scope {
             inherit name;
             spec = {
-              # A ServiceMonitor selects Services, not pods, so this uses the
-              # labels of the operator's Service from its ref.
-              selector.matchLabels = self.service.out.labels;
+              # A Service's out.selector is its metadata labels, which a
+              # ServiceMonitor matches.
+              selector.matchLabels = self.service.out.selector;
               namespaceSelector.matchNames = [ ns ];
               endpoints = [
                 (
@@ -379,8 +392,7 @@ in
         ];
         out = {
           namespace = ns;
-          # Built on the ref's fqdn: the URL carries the marker's context.
-          serviceUrl = "http://${self.service.out.fqdn}:${self.service.out.port}";
+          serviceUrl = self.service.out.url { };
           # The operator runs this image in a StatefulSet that Kix does not
           # render.
           extraImages = [ (kix.image.ref config.image) ];
