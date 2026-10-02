@@ -489,8 +489,11 @@ in
         matchLabels = resource.spec.selector or { };
         values = builtins.attrValues matchLabels;
         anyWithContext = builtins.any (v: builtins.isString v && builtins.getContext v != { }) values;
+        # A Service over an operator's pods has no workload to derive from;
+        # cross-resource check 4 checks the custom resource it names.
+        isOperandService = (resource.metadata.annotations or { }) ? ${kixKeys.operandOf};
       in
-      if matchLabels == { } || anyWithContext then
+      if matchLabels == { } || anyWithContext || isOperandService then
         [ ]
       else
         [
