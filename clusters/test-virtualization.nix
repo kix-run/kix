@@ -46,7 +46,9 @@ let
                   metadata.name = "demo-disk";
                   spec = {
                     source.registry = {
-                      url = "docker://quay.io/kubevirt/cirros-container-disk-demo:v1.5.0@sha256:b3173a795eddc0c8f6923bb197928b7c0876aade4daf85d0558dfae65f403fe2";
+                      # The importer refuses a reference with both a tag and a digest,
+                      # so the image is named by digest alone (the v1.5.0 tag).
+                      url = "docker://quay.io/kubevirt/cirros-container-disk-demo@sha256:b3173a795eddc0c8f6923bb197928b7c0876aade4daf85d0558dfae65f403fe2";
                       pullMethod = "pod";
                     };
                     storage.resources.requests.storage = "1Gi";
@@ -140,14 +142,7 @@ kix.buildCluster {
       };
 
       instances = {
-        kube-system.cilium = {
-          package = packages.cilium;
-          config.values = {
-            kubeProxyReplacement = false;
-            prometheus.enabled = false;
-            ipam.operator.clusterPoolIPv4PodCIDRList = [ "10.244.0.0/16" ];
-          };
-        };
+        kube-system.cilium.package = packages.cilium;
         kubevirt.kubevirt = {
           package = packages.kubevirt;
           availability = "node";

@@ -1,8 +1,15 @@
 # Tests for kix.operandPolicy, the network policy for pods an operator
 # creates, and for kix/packages/kubevirt and kix/packages/cdi: the
-# VirtualMachine and DataVolume builders, operand replicas, the extraSpec
-# guard, images, RBAC, and operand policies. kubevirt runs in namespace
-# `kubevirt`, cdi in `cdi`, and the consumer in `vms`.
+# VirtualMachine and DataVolume builders, the importer policy builder,
+# operand replicas, the extraSpec guard, images, RBAC, the vendored sources'
+# release, and operand policies. kubevirt runs in namespace `kubevirt`, cdi
+# in `cdi`, and the consumer in `vms`.
+#
+# Refusals raised with `throw` are checked with evalFails, which uses
+# builtins.tryEval and cannot read the message, so each refused case
+# differs from an accepted one by the field under test. A failed assertion
+# fails the whole cluster before its diagnostics can be read, so assertion
+# messages are taken from the package's `assertions` directly.
 
 {
   lib,
@@ -14,6 +21,7 @@
   ofKind,
   byName,
   evalFails,
+  kixlib,
   ...
 }:
 
@@ -57,6 +65,62 @@ let
 
   kubevirtPackage = import ../../../packages/kubevirt;
   cdiPackage = import ../../../packages/cdi;
+  ciliumPackage = import ../../../packages/cilium;
+  metaLib = import ../../meta.nix { inherit lib; };
+
+  # The real cilium package in environment mode, so policies carry the
+  # translated rules (the stub enforcer translates intents to nothing).
+  ciliumOn = {
+    cluster.roles.cni = {
+      binding = "shadowable";
+      provider = "cilium (environment)";
+    };
+    cluster.network.environmentCilium.helmChartConfig = null;
+    networkPolicy.enable = true;
+    instances.net.cilium.package = ciliumPackage;
+  };
+
+  # A package's top level, as instance `<ns>/<ns>`.
+  instantiate =
+    package: ns:
+    package {
+      inherit lib;
+      kix = kixlib;
+      scope = {
+        instanceName = ns;
+        namespaceName = ns;
+      };
+      availability = "none";
+    };
+  metaOf = package: (instantiate package "test").meta;
+
+  # The messages of the package's failed assertions for `config`, with the
+  # package's own `config` module applied.
+  failedMessages =
+    package: ns: config:
+    let
+      pkg = instantiate package ns;
+      evaluated =
+        (lib.evalModules {
+          modules = [
+            { options = pkg.options; }
+            pkg.config
+            { inherit config; }
+          ];
+        }).config;
+    in
+    map (a: a.message) (builtins.filter (a: !a.assertion) (pkg.assertions { config = evaluated; }));
+
+  # The cluster with `config` on the package's instance fails, and one of
+  # the package's failed assertions contains `infix`.
+  refusedWith =
+    infix: ns: config:
+    evalFails (mkVirtCluster {
+      ${ns}.config = config;
+    })
+    && builtins.any (lib.hasInfix infix) (
+      failedMessages (if ns == "kubevirt" then kubevirtPackage else cdiPackage) ns config
+    );
 
   # A consumer whose parts are `vms`, a function of the kubevirt and cdi
   # dependencies (cdi may be null) and the consumer's scope. The first part
@@ -417,13 +481,17 @@ in
       };
       movedEnv = envOf moved "kubevirt-operator";
 
+      releaseMessage = "kubevirt/{crds,rbac} are vendored from v1.5.0";
       refused = {
-        minor = mkVirtCluster { kubevirt.config.image.tag = "v1.6.0"; };
-        latest = mkVirtCluster { kubevirt.config.image.tag = "latest"; };
-        cdiMinor = mkVirtCluster { cdi.config.image.tag = "v1.63.0"; };
-        operandPullPolicy = mkVirtCluster { cdi.config.operandImages.cdi-importer.pullPolicy = "Always"; };
+        minor = refusedWith releaseMessage "kubevirt" { image.tag = "v1.6.0"; };
+        latest = refusedWith releaseMessage "kubevirt" { image.tag = "latest"; };
+        noV = refusedWith releaseMessage "kubevirt" { image.tag = "1.5.0"; };
+        cdiMinor = refusedWith "is not a v1.62 release" "cdi" { image.tag = "v1.63.0"; };
+        operandPullPolicy = refusedWith "operandImages.cdi-importer.pullPolicy" "cdi" {
+          operandImages.cdi-importer.pullPolicy = "Always";
+        };
       };
-      notFailing = builtins.attrNames (lib.filterAttrs (_: c: !(evalFails c)) refused);
+      notFailing = builtins.attrNames (lib.filterAttrs (_: ok: !ok) refused);
     in
     (
       builtins.length (builtins.attrNames kvOperands) == 9
@@ -444,9 +512,37 @@ in
     )
     || throw "images: kubevirt ${builtins.toJSON kvEnv}, v1.5.1 ${builtins.toJSON patchEnv}, moved ${builtins.toJSON movedEnv}, accepted ${builtins.toJSON notFailing}";
 
-  # A second instance of either package is refused.
+  # A second instance of either package is refused, naming the other
+  # instance. The meta check is called directly: a failed meta assertion
+  # fails the cluster before its diagnostics can be read.
   kubevirt-cdi-singleton =
     let
+      conflict =
+        package: alias:
+        map (a: a.message) (
+          builtins.filter (a: !a.assertion)
+            (metaLib.checkMetaStatic {
+              packageMeta = metaOf package;
+              instanceName = alias;
+              namespaceName = alias;
+              clusterConfig.k8sVersion = null;
+              resolvedDepMeta = { };
+              resolutionIndex.byKey.${alias} = [
+                {
+                  instName = alias;
+                  namespace = alias;
+                }
+                {
+                  instName = "${alias}2";
+                  namespace = "${alias}2";
+                }
+              ];
+            }).assertions
+        );
+      got = {
+        kubevirt = conflict kubevirtPackage "kubevirt";
+        cdi = conflict cdiPackage "cdi";
+      };
       kv2 = mkVirtCluster { modules = [ { instances.kv2.kv2.package = kubevirtPackage; } ]; };
       # Without kubevirt, whose optional `cdi` dependency would fail first
       # on the two candidates.
@@ -457,10 +553,201 @@ in
         }
       ];
     in
-    (evalFails kv2 && evalFails cdi2) || throw "a second kubevirt or cdi instance evaluated";
+    (
+      got.kubevirt
+      == [ "conflicts with 'kubevirt' (cluster-wide). Conflicting instances: kubevirt2/kubevirt2" ]
+      && got.cdi == [ "conflicts with 'cdi' (cluster-wide). Conflicting instances: cdi2/cdi2" ]
+      && evalFails kv2
+      && evalFails cdi2
+    )
+    || throw "singleton: ${builtins.toJSON got}";
+
+  # The tags in crds/sources.txt and rbac/sources.txt are the package's
+  # release, so the vendored CRD and roles match the default images.
+  kubevirt-cdi-sources-match-release =
+    let
+      urls =
+        file:
+        builtins.filter (l: l != "" && !lib.hasPrefix "#" l) (
+          map (l: builtins.head (lib.splitString " " (lib.trim l))) (
+            lib.splitString "\n" (builtins.readFile file)
+          )
+        );
+      stray =
+        package: dir:
+        let
+          release = (metaOf package).version;
+        in
+        builtins.filter (u: !(lib.hasInfix "/${release}/" u)) (
+          urls (dir + "/crds/sources.txt") ++ urls (dir + "/rbac/sources.txt")
+        );
+      got = {
+        kubevirt = stray kubevirtPackage ../../../packages/kubevirt;
+        cdi = stray cdiPackage ../../../packages/cdi;
+      };
+    in
+    got == {
+      kubevirt = [ ];
+      cdi = [ ];
+    }
+    || throw "sources.txt URLs not at the package's release: ${builtins.toJSON got}";
+
+  # The importer policy lands in the caller's namespace under a name that
+  # carries the caller's instance, so two callers in one namespace do not
+  # collide. It selects the importer pods, allows DNS and the given egress,
+  # and admits cdi-deployment from cdi's namespace on 8443. Without an
+  # enforcer it is null.
+  kubevirt-cdi-importer-policy =
+    let
+      importer =
+        { cdi, scope, ... }:
+        {
+          policy = cdi.out.mkImporterPolicy scope {
+            egress = [
+              {
+                to = "world";
+                ports = [
+                  {
+                    port = 443;
+                    protocol = "TCP";
+                  }
+                ];
+              }
+            ];
+          };
+        };
+      consumer = {
+        meta.version = "test";
+        build =
+          {
+            self,
+            scope,
+            cdi,
+            ...
+          }:
+          let
+            parts = importer { inherit cdi scope; };
+          in
+          parts
+          // {
+            cm = scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "${scope.instanceName}-cm";
+            };
+            root = {
+              resource = self.cm;
+              requires = lib.optional (self.policy != null) self.policy;
+            };
+          };
+      };
+      twoCallers = mkCluster [
+        ciliumOn
+        {
+          instances.cdi.cdi.package = cdiPackage;
+          instances.vms.a.package = consumer;
+          instances.vms.b.package = consumer;
+        }
+      ];
+      off = mkCluster [
+        {
+          instances.cdi.cdi.package = cdiPackage;
+          instances.vms.a.package = consumer;
+        }
+      ];
+      policyOf = c: name: find c "CiliumNetworkPolicy" name;
+      a = policyOf twoCallers "a-cdi-importer";
+      selectors = (outOf twoCallers "cdi").operandSelectors;
+      ingressFrom = (builtins.head a.spec.ingress).fromEndpoints or [ ];
+      egressText = builtins.toJSON a.spec.egress;
+    in
+    (
+      a != null
+      && policyOf twoCallers "b-cdi-importer" != null
+      && a.metadata.namespace == "vms"
+      && a.spec.endpointSelector.matchLabels == selectors.importer
+      && lib.hasInfix "kube-dns" egressText
+      && lib.hasInfix "world" egressText
+      && lib.hasInfix "\"443\"" egressText
+      &&
+        ingressFrom == [
+          {
+            matchLabels = selectors.deployment // {
+              "k8s:io.kubernetes.pod.namespace" = "cdi";
+            };
+          }
+        ]
+      && (builtins.head (builtins.head (builtins.head a.spec.ingress).toPorts).ports).port == "8443"
+      && policyOf off "a-cdi-importer" == null
+      &&
+        selectors == {
+          importer = {
+            app = "containerized-data-importer";
+            "cdi.kubevirt.io" = "importer";
+          };
+          deployment = {
+            app = "containerized-data-importer";
+            "cdi.kubevirt.io" = "";
+          };
+          uploadProxy."cdi.kubevirt.io" = "cdi-uploadproxy";
+        }
+    )
+    || throw "mkImporterPolicy: ${builtins.toJSON a}, selectors ${builtins.toJSON selectors}";
+
+  # A priorityClass dependency names the class in the CDI resource, orders
+  # the resource after the class, and locks the field; without one the field
+  # is unset.
+  kubevirt-cdi-cdi-priority-class =
+    let
+      classPackage = {
+        meta.version = "test";
+        build =
+          { self, scope, ... }:
+          {
+            class = scope.mkClusterResource {
+              apiVersion = "scheduling.k8s.io/v1";
+              kind = "PriorityClass";
+              name = "virt-infra";
+              extra.value = 1000;
+            };
+            root = self.class;
+          };
+      };
+      withClass =
+        extraSpec:
+        mkVirtCluster {
+          withCdi = false;
+          modules = [
+            (
+              { ref, ... }:
+              {
+                instances.cdi.cdi = {
+                  package = cdiPackage;
+                  deps.priorityClass = ref.cdi.virt-infra;
+                  config.extraSpec = extraSpec;
+                };
+                instances.cdi.virt-infra.package = classPackage;
+              }
+            )
+          ];
+        };
+      spec = c: (find c "CDI" "cdi").spec;
+      classHash =
+        builtins.unsafeDiscardStringContext
+          (withClass { }).instances.cdi.virt-infra.raw.class.out.identityHash;
+    in
+    (
+      (spec (withClass { })).priorityClass or null == "virt-infra"
+      && builtins.elem classHash (dependsOn (find (withClass { }) "CDI" "cdi"))
+      && !((spec (mkVirtCluster { })) ? priorityClass)
+      && evalFails (withClass {
+        priorityClass = "other";
+      })
+    )
+    || throw "CDI priorityClass: ${builtins.toJSON (spec (withClass { }))}";
 
   # With an enforcer, each operand gets its policy; without one, none
-  # renders.
+  # renders. virt-exportproxy gets one only with the VMExport gate.
   kubevirt-cdi-operand-policies =
     let
       names = [
@@ -474,6 +761,10 @@ in
       ];
       on = mkVirtCluster { modules = [ netpolOn ]; };
       off = mkVirtCluster { };
+      exportGate = mkVirtCluster {
+        kubevirt.config.extraSpec.configuration.developerConfiguration.featureGates = [ "VMExport" ];
+        modules = [ netpolOn ];
+      };
       # The test enforcer's mkEndpointSelector writes `matchLabels` at the
       # top of the spec.
       selectorOf = c: n: (find c "CiliumNetworkPolicy" n).spec.matchLabels or null;
@@ -483,6 +774,8 @@ in
     (
       missing == [ ]
       && present == [ ]
+      && find on "CiliumNetworkPolicy" "kubevirt-virt-exportproxy" == null
+      && selectorOf exportGate "kubevirt-virt-exportproxy" == { "kubevirt.io" = "virt-exportproxy"; }
       && selectorOf on "kubevirt-virt-handler" == { "kubevirt.io" = "virt-handler"; }
       &&
         selectorOf on "cdi-cdi-deployment" == {
