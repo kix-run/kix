@@ -103,6 +103,10 @@ class CrdsIn(unittest.TestCase):
         with self.assertRaisesRegex(v.VendorError, "not YAML"):
             v.crds_in("kind: [unterminated\n")
 
+    def test_bare_equals_is_a_string(self):
+        doc = v.documents_in("enum:\n- '!='\n- =\n- =~\n", "s")
+        self.assertEqual(doc, [{"enum": ["!=", "=", "=~"]}])
+
 
 class FetchCrds(unittest.TestCase):
     def test_only_filters_and_sorts(self):

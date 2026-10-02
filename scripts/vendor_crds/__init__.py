@@ -27,6 +27,18 @@ class VendorError(Exception):
     """A problem with one package's sources; reported, never a traceback."""
 
 
+class _Loader(yaml.SafeLoader):
+    """SafeLoader that reads a plain `=` as the string "=", as Kubernetes
+    does. PyYAML resolves it to the YAML 1.1 `value` tag, which SafeLoader
+    cannot construct, so an enum listing `- =` would fail to parse."""
+
+
+_Loader.yaml_implicit_resolvers = {
+    first: [(tag, regexp) for tag, regexp in resolvers if tag != "tag:yaml.org,2002:value"]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+
+
 def fetch(url: str, *, timeout: float = 30.0, attempts: int = 3) -> bytes:
     """GET a public URL. Retries transient failures with a short backoff."""
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
@@ -50,7 +62,7 @@ def documents_in(text: bytes | str, source: str) -> list[dict]:
     if isinstance(text, bytes):
         text = text.decode("utf-8")
     try:
-        documents = list(yaml.safe_load_all(text))
+        documents = list(yaml.load_all(text, Loader=_Loader))
     except yaml.YAMLError as error:
         raise VendorError(f"{source}: not YAML: {error}") from error
     return [d for d in documents if isinstance(d, dict)]
