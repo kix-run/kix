@@ -17,7 +17,7 @@ through `meta.roles`.
 | `binding` | Meaning |
 |---|---|
 | `null` | Unknown. Consumers that rely on the role warn. |
-| `absent` | The environment does not provide the role. A managed instance fills it; a consumer with no provider fails to build. |
+| `absent` | The environment does not provide the role. A managed instance fills it. Without one, a consumer that requires the role fails to build, and an optional dependency on it is null. |
 | `shadowable` | The environment provides a default, usually through a platform import. A managed instance that claims the role replaces it. |
 | `exclusive` | The environment owns the role. A managed instance that claims it is an evaluation error. |
 
@@ -40,8 +40,10 @@ or imported.
 
 A CSI driver package such as `zfs-localpv` does not claim `storageClasses`.
 A consumer names the driver instance with
-`deps.storageClasses = ref.<namespace>.<instance>`, or the instance lists
-`storageClasses` in its `aliases`.
+`deps.storageClasses = ref.<namespace>.<instance>`, or the instance sets
+`aliases = [ "storageClasses" "zfsLocalPv" ]` to serve every consumer. Keep
+`zfsLocalPv` in that list: the package's one-instance-per-cluster check
+matches on it.
 
 ## Flavour bindings
 
