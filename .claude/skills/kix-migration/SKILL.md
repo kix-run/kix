@@ -727,9 +727,8 @@ for that shape (design: `v2_discussions/133`, shipped 2026-09-07):
   `scope.mkServiceRef` for the Services the operator creates
   (`vmselect-<name>`, `vminsert-<name>`), and builds `out.serviceUrl` /
   `out.insertUrl` on the ref's `out.fqdn` so consumers keep dependency
-  context. Same pattern as `packages/prometheus` (`prometheus-operated`)
-  and `packages/alertmanager` (`alertmanager-operated`). A Service kix must
-  render itself over operator pods declares the CR with
+  context. A Service Kix renders itself over operator pods declares the CR
+  with
   `metadata.annotations."kix.run/operand-of" = "<group>/<Kind>/<name>"`;
   otherwise the cross-resource check refuses a selector that matches no pod
   template in the build. There is no list of operator kinds anywhere.
