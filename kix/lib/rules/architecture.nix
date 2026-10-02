@@ -784,43 +784,27 @@ in
         # label character, so "x.svc.<domain>" never reads as cluster.local.
         sentinel = builtins.fromJSON ''"\u0001"'';
         masked = builtins.replaceStrings [ domain ] [ sentinel ];
-        isLabelChar = c: builtins.match "[A-Za-z0-9-]" c != null;
-        lastChar = s: if s == "" then "" else builtins.substring (builtins.stringLength s - 1) 1 s;
-        firstChar = s: builtins.substring 0 1 s;
 
-        # Index into `builtins.split` output of the first whole-label
-        # occurrence, or null. Even indices are the text between matches.
-        firstHit =
-          s:
-          let
-            pieces = builtins.split "cluster\\.local" (masked s);
-            n = builtins.length pieces;
-            go =
-              i:
-              if i >= n then
-                null
-              else if
-                !(isLabelChar (lastChar (builtins.elemAt pieces (i - 1))))
-                && !(isLabelChar (firstChar (builtins.elemAt pieces (i + 1))))
-              then
-                i
-              else
-                go (i + 2);
-          in
-          if n == 1 then null else go 1;
+        # `builtins.split` output for whole-label occurrences of
+        # cluster.local, each match capturing the character on either side.
+        # The string is padded with a space at both ends so an occurrence at
+        # either end also has a non-label character beside it.
+        pieces = s: builtins.split "([^A-Za-z0-9-])cluster\\.local([^A-Za-z0-9-])" (" " + masked s + " ");
+        hasHit = s: builtins.length (pieces s) > 1;
 
-        # Up to 80 characters either side of the hit, on one line.
+        # Up to 80 characters either side of the first hit, on one line.
         excerpt =
           s:
           let
-            pieces = builtins.split "cluster\\.local" (masked s);
-            i = firstHit s;
-            before = lib.concatMapStrings (p: if builtins.isString p then p else "cluster.local") (
-              lib.take i pieces
+            p = pieces s;
+            m = builtins.elemAt p 1;
+            rejoin = lib.concatMapStrings (
+              x: if builtins.isString x then x else "${builtins.elemAt x 0}cluster.local${builtins.elemAt x 1}"
             );
-            after = lib.concatMapStrings (p: if builtins.isString p then p else "cluster.local") (
-              lib.drop (i + 1) pieces
-            );
+            padded = builtins.head p + builtins.elemAt m 0;
+            before = builtins.substring 1 (builtins.stringLength padded - 1) padded;
+            rest = builtins.elemAt m 1 + rejoin (lib.drop 2 p);
+            after = builtins.substring 0 (builtins.stringLength rest - 1) rest;
             lb = builtins.stringLength before;
             la = builtins.stringLength after;
           in
@@ -833,7 +817,7 @@ in
         findingFor =
           r:
           let
-            offending = builtins.filter (s: firstHit s != null) (collectStrings r);
+            offending = builtins.filter hasHit (collectStrings r);
           in
           lib.optional (offending != [ ]) {
             namespace = r.metadata.namespace or null;

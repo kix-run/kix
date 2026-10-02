@@ -698,15 +698,24 @@ in
     }";
 
   # The rule finds cluster.local on a cluster with another domain, as whole
-  # labels only, outside CRDs, and stays silent on the default domain.
+  # labels only (also at either end of the string), outside CRDs, and stays
+  # silent on the default domain. The message quotes the first whole-label
+  # hit with its surroundings.
   lib-expose-domain-version-domain-rule =
     let
       crd = configMapWith "a.b.svc.cluster.local" // {
         kind = "CustomResourceDefinition";
       };
+      messageFor = v: (builtins.head (domainRule "corp.test" [ (configMapWith v) ])).message;
+      quoted = v: lib.hasInfix "contains \"${v}\"" (messageFor v);
     in
     (
       builtins.length (domainRule "corp.test" [ (configMapWith "a.b.svc.cluster.local") ]) == 1
+      && builtins.length (domainRule "corp.test" [ (configMapWith "cluster.local") ]) == 1
+      && builtins.length (domainRule "corp.test" [ (configMapWith "cluster.local:53") ]) == 1
+      && quoted "x.svc.corp.test mycluster.local a.svc.cluster.local:53"
+      && quoted "cluster.local"
+      && lib.hasInfix "contains \"line\\na.svc.cluster.local\\n\"" (messageFor "line\na.svc.cluster.local\n")
       && domainRule "corp.test" [ (configMapWith "mycluster.local") ] == [ ]
       && domainRule "corp.test" [ (configMapWith "cluster.localhost") ] == [ ]
       && domainRule "corp.test" [ crd ] == [ ]
