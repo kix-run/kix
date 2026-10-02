@@ -13,6 +13,7 @@
   ofKind,
   byName,
   evalFails,
+  storageClassImport,
   ...
 }:
 
@@ -35,7 +36,9 @@ let
         { ref, ... }:
         {
           instances.mayastor = {
-            local-path.package = eval.mkImport { out.storageClassName = importClass; };
+            local-path = storageClassImport importClass;
+            # The class the named-class cases give etcd.
+            local-class = storageClassImport "local";
             mayastor = {
               package = mayastorPackage;
               inherit config;

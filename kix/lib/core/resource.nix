@@ -960,6 +960,9 @@ rec {
             ${kixKeys.crdKind} = kind;
             ${kixKeys.crdVersion} = _validatedVersion;
             ${kixKeys.crdScope} = _validatedScope;
+          }
+          // lib.optionalAttrs (_validatedServed != [ _validatedVersion ]) {
+            ${kixKeys.crdServedVersions} = builtins.concatStringsSep "," _validatedServed;
           };
           extraRequires = installedByList;
         }

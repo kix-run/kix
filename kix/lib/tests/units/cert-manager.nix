@@ -12,6 +12,7 @@
   byName,
   evalFails,
   containerBase,
+  prometheusStub,
   ...
 }:
 
@@ -39,41 +40,6 @@ let
   deploymentOfAll =
     cluster: name: (byName name (ofKind "Deployment" (manifests cluster))).spec.template.spec.containers;
   deploymentOf = cluster: name: builtins.head (deploymentOfAll cluster name);
-
-  # Renders a ServiceMonitor or PrometheusRule from the builder's arguments.
-  prometheusStub = {
-    meta = {
-      version = "test";
-      defaultAliases = [ "prometheus" ];
-    };
-    build =
-      { self, scope, ... }:
-      let
-        as =
-          kind: consumerScope: args:
-          consumerScope.mkResource (
-            args
-            // {
-              apiVersion = "monitoring.coreos.com/v1";
-              inherit kind;
-            }
-          );
-      in
-      {
-        cm = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "prometheus";
-        };
-        root = {
-          resource = self.cm;
-          out = {
-            mkServiceMonitor = as "ServiceMonitor";
-            mkPrometheusRule = as "PrometheusRule";
-          };
-        };
-      };
-  };
 
   # A consumer that builds a ClusterIssuer, a Certificate, and a
   # CertificateRequest through out.crds.

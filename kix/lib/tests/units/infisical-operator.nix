@@ -12,6 +12,7 @@
   ofKind,
   byName,
   evalFails,
+  prometheusStub,
   ...
 }:
 
@@ -144,36 +145,6 @@ let
           inherit self scope infisicalOperator;
         };
     };
-
-  # A prometheus provider whose ServiceMonitor builder renders the
-  # arguments as a ServiceMonitor.
-  prometheusStub = {
-    meta = {
-      version = "test";
-      defaultAliases = [ "prometheus" ];
-    };
-    build =
-      { self, scope, ... }:
-      {
-        cm = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "prometheus";
-        };
-        root = {
-          resource = self.cm;
-          out.mkServiceMonitor =
-            consumerScope: args:
-            consumerScope.mkResource (
-              args
-              // {
-                apiVersion = "monitoring.coreos.com/v1";
-                kind = "ServiceMonitor";
-              }
-            );
-        };
-      };
-  };
 
   clusterWith =
     {

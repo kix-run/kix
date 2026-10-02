@@ -93,14 +93,7 @@ let
 
   # Error-severity scorecard rules each package fails, with the file that
   # records why. A housekeeping file may cover several packages.
-  knownFailures = {
-    smartctl-exporter = [
-      {
-        rule = "architecture.monitorSelectorMatchesService";
-        reason = "housekeeping/2026-09-27-smartctl-exporter-monitor-selects-helm-labels.md";
-      }
-    ];
-  };
+  knownFailures = { };
 
   # What a package needs beyond its defaults. `config` is the instance
   # config, `instances` are added to the package's namespace, and `module`
@@ -130,6 +123,7 @@ let
       };
     };
     clickhouse.instances = { inherit credentials storage; };
+    cloudflared.config.token = "eval-only";
     clickhouse-cluster.instances = { inherit credentials; };
     clickhouse-database = {
       config.password = "password";

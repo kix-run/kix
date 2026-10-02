@@ -15,6 +15,7 @@
   evalFails,
   requiredScConsumer,
   kixKeys,
+  storageClassImport,
   ...
 }:
 
@@ -165,12 +166,18 @@ let
           config = claim;
         };
       }
-      (lib.optionalAttrs (classes != null) {
-        instances.kube-system.storage-classes = {
-          package = storageClassesPackage;
-          config = { inherit classes; };
-        };
-      })
+      (
+        if classes != null then
+          {
+            instances.kube-system.storage-classes = {
+              package = storageClassesPackage;
+              config = { inherit classes; };
+            };
+          }
+        else
+          # The class validClaim names, so a claim the package accepts builds.
+          { instances.apps.local-class = storageClassImport "local"; }
+      )
     ];
   claimOf = cluster: byName "data" (ofKind "PersistentVolumeClaim" (manifests cluster));
   # A claim that passes every check, so each refusal test changes one field.

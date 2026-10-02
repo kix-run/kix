@@ -88,6 +88,11 @@ pub struct ImportTarget {
     /// `data`. Parsed from the `kix.run/import-secret-keys` annotation (comma
     /// separated). Empty = identity-only check (resource existence).
     pub expected_keys: Vec<String>,
+    /// For `CustomResourceDefinition` imports from a CRD ref marker, the API
+    /// versions the declaration says the CRD serves: `kix.run/crd-served-versions`,
+    /// else `kix.run/crd-version`. Each must be in the live CRD's
+    /// `spec.versions` with `served: true`. Empty = no version check.
+    pub served_versions: Vec<String>,
 }
 
 /// Extract an [`ImportTarget`] from a manifest if it is a PackageInstance
@@ -142,12 +147,29 @@ pub fn import_target_from_manifest(manifest: &Value) -> Option<ImportTarget> {
         })
         .unwrap_or_default();
 
+    let served_versions = if import_kind == "CustomResourceDefinition" {
+        let listed = annotations
+            .get(keys::CRD_SERVED_VERSIONS)
+            .or_else(|| annotations.get(keys::CRD_VERSION))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        listed
+            .split(',')
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(String::from)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     Some(ImportTarget {
         kind: import_kind,
         api_version: import_api_version,
         name: import_name,
         namespace,
         expected_keys,
+        served_versions,
     })
 }
 
@@ -237,6 +259,21 @@ pub async fn wait_for_import_target(
                 // actually serving requests before we advance the wave.
                 if target.kind == "CustomResourceDefinition" {
                     if check_crd_ready(&obj.data) {
+                        // A declared version the CRD does not serve fails
+                        // every apply of the kind at that version, and
+                        // waiting does not change what the CRD serves.
+                        let unserved = unserved_crd_versions(&obj.data, &target.served_versions);
+                        if !unserved.is_empty() {
+                            return Ok(ReadinessResult::ImportMismatch {
+                                missing_keys: Vec::new(),
+                                message: format!(
+                                    "CustomResourceDefinition {} does not serve {} (serves {}). Correct version or servedVersions on the scope.mkCRDRef or mkImport crds entry that declares it.",
+                                    target.name,
+                                    unserved.join(", "),
+                                    served_crd_versions(&obj.data).join(", ")
+                                ),
+                            });
+                        }
                         let _ = probe_crd_discovery(client, &obj.data).await;
                         return Ok(ReadinessResult::Ready);
                     }
@@ -1481,6 +1518,30 @@ fn check_crd_ready(data: &Value) -> bool {
     has_condition(data, "Established", "True")
 }
 
+/// Names in a CRD's `spec.versions` with `served: true`.
+fn served_crd_versions(data: &Value) -> Vec<String> {
+    data.pointer("/spec/versions")
+        .and_then(Value::as_array)
+        .map(|versions| {
+            versions
+                .iter()
+                .filter(|v| v.get("served").and_then(Value::as_bool) == Some(true))
+                .filter_map(|v| v.get("name").and_then(Value::as_str).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The entries of `wanted` the CRD does not serve, in `wanted`'s order.
+fn unserved_crd_versions(data: &Value, wanted: &[String]) -> Vec<String> {
+    let served = served_crd_versions(data);
+    wanted
+        .iter()
+        .filter(|v| !served.contains(v))
+        .cloned()
+        .collect()
+}
+
 /// Generic CR: check .status.conditions for Ready=True or Available=True, else immediate.
 fn check_generic_ready(data: &Value) -> bool {
     // If there are conditions, check for Ready or Available
@@ -2184,6 +2245,81 @@ mod tests {
         assert!(import_target_from_manifest(&manifest).is_none());
         // The marker itself is ready as soon as it exists.
         assert!(is_immediate_kind("PackageInstance"));
+    }
+
+    #[test]
+    fn crd_ref_marker_carries_served_versions() {
+        let marker = |extra: Value| {
+            let mut annotations = json!({
+                keys::MODE: "import",
+                keys::IMPORT_KIND: "CustomResourceDefinition",
+                keys::IMPORT_API_VERSION: "apiextensions.k8s.io/v1",
+                keys::IMPORT_NAME: "scrapeconfigs.monitoring.coreos.com",
+                keys::CRD_VERSION: "v1alpha1",
+            });
+            for (k, v) in extra.as_object().unwrap() {
+                annotations[k] = v.clone();
+            }
+            json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": "PackageInstance",
+                "metadata": {
+                    "name": "crd-ref-vm-scrapeconfigs-monitoring-coreos-com",
+                    "namespace": "monitoring",
+                    "annotations": annotations,
+                }
+            })
+        };
+        let default_only = import_target_from_manifest(&marker(json!({}))).unwrap();
+        assert_eq!(default_only.served_versions, vec!["v1alpha1"]);
+        let listed = import_target_from_manifest(&marker(json!({
+            keys::CRD_SERVED_VERSIONS: "v1alpha1,v1beta1"
+        })))
+        .unwrap();
+        assert_eq!(listed.served_versions, vec!["v1alpha1", "v1beta1"]);
+    }
+
+    #[test]
+    fn non_crd_import_has_no_served_versions() {
+        let manifest = json!({
+            "kind": "PackageInstance",
+            "metadata": {
+                "name": "secret-ref-myapp-bootstrap",
+                "namespace": "myapp",
+                "annotations": {
+                    keys::MODE: "import",
+                    keys::IMPORT_KIND: "Secret",
+                    keys::IMPORT_API_VERSION: "v1",
+                    keys::IMPORT_NAME: "bootstrap",
+                    keys::CRD_VERSION: "v1",
+                }
+            }
+        });
+        let target = import_target_from_manifest(&manifest).unwrap();
+        assert!(target.served_versions.is_empty());
+    }
+
+    #[test]
+    fn crd_served_version_check() {
+        let crd = json!({
+            "spec": {
+                "versions": [
+                    { "name": "v1", "served": true, "storage": true },
+                    { "name": "v1beta1", "served": false, "storage": false },
+                ]
+            }
+        });
+        let wanted = |vs: &[&str]| vs.iter().map(|v| v.to_string()).collect::<Vec<_>>();
+        // Served.
+        assert!(unserved_crd_versions(&crd, &wanted(&["v1"])).is_empty());
+        // Listed but not served, and absent.
+        assert_eq!(
+            unserved_crd_versions(&crd, &wanted(&["v1", "v1beta1", "v2"])),
+            vec!["v1beta1", "v2"]
+        );
+        // No declared versions (a marker without the annotation): nothing to check.
+        assert!(unserved_crd_versions(&crd, &[]).is_empty());
+        assert_eq!(served_crd_versions(&crd), vec!["v1"]);
     }
 
     #[test]

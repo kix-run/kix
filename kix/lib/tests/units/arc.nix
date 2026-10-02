@@ -18,6 +18,7 @@
   ofKind,
   byName,
   evalFails,
+  prometheusStub,
   ...
 }:
 
@@ -33,42 +34,6 @@ let
     scope = { };
     kix = { };
     availability = "none";
-  };
-
-  # A prometheus provider whose builders render their arguments.
-  prometheusStub = {
-    meta = {
-      version = "test";
-      defaultAliases = [ "prometheus" ];
-    };
-    build =
-      { self, scope, ... }:
-      let
-        as =
-          kind: consumerScope: args:
-          consumerScope.mkResource (
-            args
-            // {
-              apiVersion = "monitoring.coreos.com/v1";
-              inherit kind;
-            }
-          );
-      in
-      {
-        cm = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "prometheus";
-        };
-        root = {
-          resource = self.cm;
-          out = {
-            mkServiceMonitor = as "ServiceMonitor";
-            mkPodMonitor = as "PodMonitor";
-            mkPrometheusRule = as "PrometheusRule";
-          };
-        };
-      };
   };
 
   clusterWith =

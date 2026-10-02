@@ -687,9 +687,27 @@
           (
             validate.crossResourceFailures {
               manifests = rawManifestList;
+              identityHashes = map (r: if r ? outPath then k8s.extractStoreHash r.outPath else null) allResources;
+              owners = map (r: resourceOwners.${outPathKey r} or null) allResources;
               externalNames = externalRefNames;
             }
           );
+
+      outPathKey =
+        r: if r ? outPath then builtins.unsafeDiscardStringContext (toString r.outPath) else "";
+
+      # Store path -> "<ns>/<instance>" of the active instance whose parts
+      # produced it. Namespace objects, cluster hooks and the Activation have
+      # no owner.
+      resourceOwners = builtins.listToAttrs (
+        builtins.concatMap (
+          inst:
+          map (r: {
+            name = outPathKey r;
+            value = "${inst._meta.namespaceName or "?"}/${inst._meta.instanceName or "?"}";
+          }) (collectResources inst)
+        ) allInstancesList
+      );
 
       # Collect names marked with kix.untrackedRef before rawManifestList
       # removes string context. Key entries by the referring resource's
