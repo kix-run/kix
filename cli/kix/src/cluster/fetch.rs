@@ -17,7 +17,7 @@ use kube::{
     api::{Api, DynamicObject, ListParams},
     client::Client,
     config::{KubeConfigOptions, Kubeconfig},
-    discovery::{ApiResource, Discovery, Scope},
+    discovery::{ApiResource, Scope},
 };
 use thiserror::Error;
 use tokio::task::JoinSet;
@@ -55,6 +55,22 @@ pub enum FetchError {
 
     #[error("could not discover the resource types supported by the Kubernetes API: {}", super::errors::describe(.0))]
     DiscoveryError(#[source] kube::Error),
+
+    /// `/apis` kept listing group versions that answered 404 for
+    /// [`DISCOVERY_SETTLE`]. `missing` holds their paths.
+    #[error(
+        "could not discover the resource types supported by the Kubernetes API: \
+         the API server lists {} but answered 404 for {} for {}s. \
+         `kubectl get --raw {}` shows what it answers now.",
+        missing.join(", "),
+        if missing.len() == 1 { "it" } else { "them" },
+        waited.as_secs(),
+        missing.first().map_or("/apis", String::as_str)
+    )]
+    DiscoveryUnsettled {
+        missing: Vec<String>,
+        waited: Duration,
+    },
 
     #[error("failed to list {resource}: {}", super::errors::describe(source))]
     ListError {
@@ -209,60 +225,163 @@ fn server_responded(e: &kube::Error) -> bool {
     )
 }
 
+/// How long [`discover_resources`] keeps asking about group versions that
+/// `/apis` lists but that answer 404. On fresh kind clusters, a walk made
+/// just after new CRDs were Established has got a plain-text
+/// `404 page not found` for a listed group version, and a rerun of the
+/// same deploy got past that point.
+pub const DISCOVERY_SETTLE: Duration = Duration::from_secs(30);
+const DISCOVERY_BACKOFF_START: Duration = Duration::from_millis(250);
+const DISCOVERY_BACKOFF_MAX: Duration = Duration::from_secs(2);
+
 /// Run API discovery and return all listable resources with their scope.
+///
+/// The core group comes first, then the groups in the order `/apis` lists
+/// them, so a kind lookup that takes the first match is deterministic.
+///
+/// A listed group version that answers 404 makes the whole walk run again,
+/// with backoff, until every listed group version answers or
+/// [`DISCOVERY_SETTLE`] has passed ([`FetchError::DiscoveryUnsettled`]).
+/// The walk is repeated from `/apis` because a group that is going away
+/// stops being listed, and one that is arriving starts being served. Any
+/// other failure is returned at once: the transport has already retried it.
 pub async fn discover_resources(client: &Client) -> Result<Vec<(ApiResource, Scope)>, FetchError> {
-    let discovery = Discovery::new(client.clone())
-        .run()
+    let start = tokio::time::Instant::now();
+    let mut delay = DISCOVERY_BACKOFF_START;
+    loop {
+        let pass = discovery_pass(client).await?;
+        if pass.missing.is_empty() {
+            tracing::debug!(count = pass.resources.len(), "API resources discovered");
+            return Ok(pass.resources);
+        }
+        let waited = start.elapsed();
+        if waited >= DISCOVERY_SETTLE {
+            return Err(FetchError::DiscoveryUnsettled {
+                missing: pass.missing,
+                waited,
+            });
+        }
+        tracing::debug!(
+            missing = ?pass.missing,
+            "listed group versions answered 404, discovering again"
+        );
+        tokio::time::sleep(delay.min(DISCOVERY_SETTLE - waited)).await;
+        delay = (delay * 2).min(DISCOVERY_BACKOFF_MAX);
+    }
+}
+
+/// One discovery walk. `missing` holds the path of every listed group
+/// version that answered 404; their resources are absent from `resources`.
+#[derive(Default)]
+struct DiscoveryPass {
+    resources: Vec<(ApiResource, Scope)>,
+    missing: Vec<String>,
+}
+
+async fn discovery_pass(client: &Client) -> Result<DiscoveryPass, FetchError> {
+    let mut pass = DiscoveryPass::default();
+    walk_core(client, &mut pass).await?;
+    let groups = client
+        .list_api_groups()
         .await
         .map_err(FetchError::DiscoveryError)?;
-
-    let mut resources = Vec::new();
-    for group in discovery.groups() {
-        resources.extend(collect_group_resources(group));
+    for g in groups.groups {
+        walk_api_group(client, g, &mut pass).await?;
     }
-    tracing::debug!(count = resources.len(), "API resources discovered");
-    Ok(resources)
+    Ok(pass)
 }
 
-/// Walk one ApiGroup's resources across EVERY served version.
+async fn walk_core(client: &Client, pass: &mut DiscoveryPass) -> Result<(), FetchError> {
+    let core = client
+        .list_core_api_versions()
+        .await
+        .map_err(FetchError::DiscoveryError)?;
+    walk_group(client, "", Some("v1"), core.versions, pass).await
+}
+
+async fn walk_api_group(
+    client: &Client,
+    g: k8s_openapi::apimachinery::pkg::apis::meta::v1::APIGroup,
+    pass: &mut DiscoveryPass,
+) -> Result<(), FetchError> {
+    let versions = g.versions.into_iter().map(|v| v.version).collect();
+    let preferred = g.preferred_version.map(|v| v.version);
+    walk_group(client, &g.name, preferred.as_deref(), versions, pass).await
+}
+
+/// Fetch each version of one group and add its listable resources to
+/// `pass`, recording versions that answer 404 in `pass.missing`.
 ///
-/// recommended_resources() only covers the group's preferred version. A group
-/// may serve different kinds at different versions, so using only the preferred
-/// version can hide kinds from the deploy scheduler. Walk every version,
-/// preferred first, and keep the first ApiResource seen per kind.
-fn collect_group_resources(group: &kube::discovery::ApiGroup) -> Vec<(ApiResource, Scope)> {
-    let mut resources = Vec::new();
-    let mut seen_kinds = std::collections::HashSet::new();
-    let preferred = group.preferred_version_or_latest();
-    let mut versions: Vec<&str> = vec![preferred];
-    versions.extend(group.versions().filter(|v| *v != preferred));
-    for ver in versions {
-        for (ar, caps) in group.versioned_resources(ver) {
-            if !seen_kinds.insert(ar.kind.clone()) {
+/// Versions are walked preferred first, then newest first by Kubernetes
+/// version priority, and the first ApiResource seen per kind wins. Every
+/// served version is walked, not only the preferred one, because a group
+/// may serve some kinds only at an older version
+/// (operator.victoriametrics.com serves kinds at both v1 and v1beta1).
+async fn walk_group(
+    client: &Client,
+    group: &str,
+    preferred: Option<&str>,
+    mut versions: Vec<String>,
+    pass: &mut DiscoveryPass,
+) -> Result<(), FetchError> {
+    versions.sort_by_cached_key(|v| {
+        (
+            Some(v.as_str()) != preferred,
+            std::cmp::Reverse(kube::core::Version::parse(v).priority()),
+        )
+    });
+    let mut seen_kinds = HashSet::new();
+    for version in versions {
+        let gv = kube::core::GroupVersion::gv(group, &version);
+        let ag = match kube::discovery::pinned_group(client, &gv).await {
+            Ok(ag) => ag,
+            Err(kube::Error::Api(r)) if r.code == 404 => {
+                pass.missing.push(if group.is_empty() {
+                    format!("/api/{version}")
+                } else {
+                    format!("/apis/{group}/{version}")
+                });
                 continue;
             }
-            // Only include listable resources
-            if !caps.supports_operation("list") {
-                continue;
+            Err(e) => return Err(FetchError::DiscoveryError(e)),
+        };
+        for (ar, caps) in ag.versioned_resources(&version) {
+            if seen_kinds.insert(ar.kind.clone()) && caps.supports_operation("list") {
+                pass.resources.push((ar, caps.scope));
             }
-            resources.push((ar, caps.scope));
         }
     }
-    resources
+    Ok(())
 }
 
-/// Targeted single-group discovery is the fallback when the full
-/// sweep misses a kind. A bulk Discovery::run() under deploy load can
-/// transiently omit a group. Fetching one group uses a separate, smaller
-/// request. `group` is "" for the core group.
+/// Discovery of one group, the targeted fetch behind refresh-on-miss: a
+/// bulk walk under deploy load can transiently omit a group, and this is a
+/// smaller request. `group` is "" for the core group. A version that
+/// answers 404 is left out rather than failing the group, so the caller
+/// gets whatever the group serves now and can ask again.
 pub async fn discover_group(
     client: &Client,
     group: &str,
 ) -> Result<Vec<(ApiResource, Scope)>, FetchError> {
-    let ag = kube::discovery::group(client, group)
-        .await
-        .map_err(FetchError::DiscoveryError)?;
-    Ok(collect_group_resources(&ag))
+    let mut pass = DiscoveryPass::default();
+    if group.is_empty() {
+        walk_core(client, &mut pass).await?;
+    } else {
+        let groups = client
+            .list_api_groups()
+            .await
+            .map_err(FetchError::DiscoveryError)?;
+        let Some(g) = groups.groups.into_iter().find(|g| g.name == group) else {
+            return Err(FetchError::DiscoveryError(kube::Error::Discovery(
+                kube::error::DiscoveryError::MissingApiGroup(group.to_string()),
+            )));
+        };
+        walk_api_group(client, g, &mut pass).await?;
+    }
+    if !pass.missing.is_empty() {
+        tracing::debug!(missing = ?pass.missing, "group versions answered 404");
+    }
+    Ok(pass.resources)
 }
 
 /// Merge a fresh discovery result into an existing cache, unioned by
@@ -1864,5 +1983,72 @@ mod tests {
         );
         assert_eq!(prune, vec![rid("ClusterRole", "once-shared")]);
         assert!(kept.is_empty());
+    }
+
+    const RBAC_V1: &str = "/apis/rbac.authorization.k8s.io/v1";
+
+    fn gets(api: &crate::cluster::fake_api::FakeApi, path: &str) -> usize {
+        let line = format!("GET {path}");
+        api.requests().iter().filter(|r| **r == line).count()
+    }
+
+    /// A group version that `/apis` lists but that answers 404, as a CRD's
+    /// group can for a moment after the CRD is Established, is fetched again
+    /// until it answers.
+    #[tokio::test(start_paused = true)]
+    async fn discovery_waits_for_a_listed_group_version_that_404s() {
+        use crate::cluster::fake_api::FakeApi;
+        let api = FakeApi::new([]);
+        api.fail_next(RBAC_V1, 2, 404);
+        let found = discover_resources(&api.client()).await.unwrap();
+        assert!(found.iter().any(|(ar, _)| ar.kind == "ClusterRole"));
+        assert_eq!(gets(&api, RBAC_V1), 3);
+    }
+
+    /// A group version that keeps answering 404 ends discovery after
+    /// `DISCOVERY_SETTLE`, and the error names it.
+    #[tokio::test(start_paused = true)]
+    async fn discovery_that_never_settles_names_the_group_version() {
+        use crate::cluster::fake_api::FakeApi;
+        let api = FakeApi::new([]);
+        api.fail_next(RBAC_V1, u32::MAX, 404);
+        let start = tokio::time::Instant::now();
+        let err = discover_resources(&api.client()).await.unwrap_err();
+        let waited = start.elapsed();
+        assert!(
+            waited >= DISCOVERY_SETTLE && waited <= DISCOVERY_SETTLE + DISCOVERY_BACKOFF_MAX,
+            "{waited:?}"
+        );
+        let msg = err.to_string();
+        assert!(msg.contains("rbac.authorization.k8s.io/v1"), "{msg}");
+        assert!(msg.contains("404"), "{msg}");
+    }
+
+    /// Only a 404 is waited out. Other failures have already been through
+    /// the transport's retries, so discovery reports them at once.
+    #[tokio::test(start_paused = true)]
+    async fn discovery_reports_other_failures_at_once() {
+        use crate::cluster::fake_api::FakeApi;
+        let api = FakeApi::new([]);
+        api.fail_next(RBAC_V1, u32::MAX, 403);
+        let start = tokio::time::Instant::now();
+        assert!(discover_resources(&api.client()).await.is_err());
+        assert_eq!(start.elapsed(), Duration::ZERO);
+        assert_eq!(gets(&api, RBAC_V1), 1);
+    }
+
+    /// The targeted fetch behind refresh-on-miss keeps the versions of a
+    /// group that answer when another one 404s.
+    #[tokio::test(start_paused = true)]
+    async fn group_discovery_skips_a_version_that_404s() {
+        use crate::cluster::fake_api::FakeApi;
+        let api = FakeApi::new([]);
+        api.fail_next(RBAC_V1, u32::MAX, 404);
+        let found = discover_group(&api.client(), "rbac.authorization.k8s.io")
+            .await
+            .unwrap();
+        assert!(found.is_empty());
+        let core = discover_group(&api.client(), "").await.unwrap();
+        assert!(core.iter().any(|(ar, _)| ar.kind == "ConfigMap"));
     }
 }

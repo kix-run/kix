@@ -8,6 +8,8 @@
 //!
 //! [`FakeApi::after_get`] changes an object right after the next GET of it
 //! is answered, which models a concurrent writer between a read and a delete.
+//! [`FakeApi::fail_next`] answers the next requests for one path with a
+//! plain-text error, as the apiserver does for a path it has not registered.
 
 use std::sync::{Arc, Mutex};
 
@@ -42,6 +44,9 @@ struct State {
     /// `METHOD path` of every request, in order, with `?query` when it has one.
     requests: Vec<String>,
     after_get: Vec<(String, Hook)>,
+    /// `(path, remaining, status)`: answer that many requests for `path`
+    /// with `status` and a plain-text body.
+    failures: Vec<(String, u32, u16)>,
 }
 
 impl State {
@@ -86,6 +91,18 @@ impl FakeApi {
             .push((name.to_string(), Box::new(f)));
     }
 
+    /// Answer the next `times` requests for `path` (no query string) with
+    /// `status` and a plain-text body. With 404 this is the apiserver's
+    /// `404 page not found` for a path nothing serves. `u32::MAX` keeps
+    /// failing.
+    pub fn fail_next(&self, path: &str, times: u32, status: u16) {
+        self.state
+            .lock()
+            .unwrap()
+            .failures
+            .push((path.to_string(), times, status));
+    }
+
     /// Names of the objects of `kind` still held, sorted.
     pub fn names(&self, kind: &str) -> Vec<String> {
         let st = self.state.lock().unwrap();
@@ -113,11 +130,11 @@ impl FakeApi {
                 let path = req.uri().path().to_string();
                 let query = req.uri().query().unwrap_or("").to_string();
                 let body = req.into_body().collect().await.unwrap().to_bytes();
-                let (status, value) = api.handle(&method, &path, &query, &body);
+                let (status, content_type, body) = api.respond(&method, &path, &query, &body);
                 let resp = http::Response::builder()
                     .status(status)
-                    .header("content-type", "application/json")
-                    .body(Full::new(Bytes::from(value.to_string())))
+                    .header("content-type", content_type)
+                    .body(Full::new(Bytes::from(body)))
                     .unwrap();
                 Ok::<_, std::convert::Infallible>(resp)
             }
@@ -125,14 +142,39 @@ impl FakeApi {
         Client::new(service, "default")
     }
 
+    fn respond(
+        &self,
+        method: &http::Method,
+        path: &str,
+        query: &str,
+        body: &[u8],
+    ) -> (u16, &'static str, String) {
+        {
+            let mut st = self.state.lock().unwrap();
+            let line = if query.is_empty() {
+                format!("{method} {path}")
+            } else {
+                format!("{method} {path}?{query}")
+            };
+            st.requests.push(line);
+            if let Some(f) = st
+                .failures
+                .iter_mut()
+                .find(|(p, remaining, _)| p == path && *remaining > 0)
+            {
+                if f.1 != u32::MAX {
+                    f.1 -= 1;
+                }
+                let code = f.2;
+                return (code, "text/plain", format!("{code} page not found\n"));
+            }
+        }
+        let (status, value) = self.handle(method, path, query, body);
+        (status, "application/json", value.to_string())
+    }
+
     fn handle(&self, method: &http::Method, path: &str, query: &str, body: &[u8]) -> (u16, Value) {
         let mut st = self.state.lock().unwrap();
-        let line = if query.is_empty() {
-            format!("{method} {path}")
-        } else {
-            format!("{method} {path}?{query}")
-        };
-        st.requests.push(line);
         if let Some(doc) = discovery(path) {
             return (200, doc);
         }

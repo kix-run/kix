@@ -48,7 +48,9 @@ async fn probe_crd_discovery(client: &Client, crd: &Value) -> bool {
     };
     let deadline = Instant::now() + CRD_DISCOVERY_PROBE_BUDGET;
     loop {
-        if let Ok(resources) = fetch::discover_resources(client).await
+        // One group, not a full walk: a full walk waits out every listed
+        // group version that answers 404, which would outlast this budget.
+        if let Ok(resources) = fetch::discover_group(client, group).await
             && resources
                 .iter()
                 .any(|(ar, _)| ar.group == group && ar.kind == kind)
