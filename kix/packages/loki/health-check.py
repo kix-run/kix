@@ -16,8 +16,8 @@ kix.healthCheck:
 
 Checks, both of which must pass in the same round:
   1. GET /ready answers 200 with "ready"
-  2. GET /loki/api/v1/labels answers 200 with status "success", which takes
-     the query path through the index on the volume
+  2. GET /loki/api/v1/labels answers 200 with status "success", so the
+     query path answers as well as the readiness handler
 
 One round must finish inside kix.healthCheck's round budget (90 s): two
 requests at a 10 s timeout, then the 10 s pause.
