@@ -12,7 +12,8 @@
 # all resource names derive from scope.instanceName.
 #
 # Resources: EnvoyProxy (optional), GatewayClass, Gateway, plus CRD refs
-# for the two Gateway API kinds.
+# for the two Gateway API kinds and, with an EnvoyProxy, for EnvoyProxy
+# (`out.crds.EnvoyProxy`).
 # root = Gateway, with out.gatewayRef and out.listeners for kix.expose.
 
 {
@@ -244,10 +245,16 @@ in
     # provisions the proxy Deployment/Service from it. The reference is by
     # name and namespace, so it must exist before the class is accepted;
     # the `self.envoyProxy.out.name` below is what buys that ordering edge.
+    # The EnvoyProxy CRD is installed with the Envoy Gateway controller.
     lib.optionalAttrs haveProxy {
-      envoyProxy = scope.mkResource {
-        apiVersion = "gateway.envoyproxy.io/v1alpha1";
+      envoyProxyCrd = scope.mkCRDRef {
+        group = "gateway.envoyproxy.io";
         kind = "EnvoyProxy";
+        plural = "envoyproxies";
+        version = "v1alpha1";
+      };
+
+      envoyProxy = scope.mkCR self.envoyProxyCrd {
         name = "${name}-proxy";
         labels = selectorLabels;
         spec = config.proxySpec;
@@ -328,6 +335,9 @@ in
           # Selector for network policies: matches the envoy proxy pods
           # spawned by the controller for this Gateway.
           selector = selectorLabels;
+        }
+        // lib.optionalAttrs haveProxy {
+          crds.EnvoyProxy = self.envoyProxyCrd;
         };
       };
     };
