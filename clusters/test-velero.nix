@@ -204,6 +204,10 @@ let
               skipImmediately = true;
               template.includedNamespaces = [ scope.namespaceName ];
             };
+            # The PackageInstance reaches a part only through the instance's
+            # own resources, and the location this CR waits for belongs to
+            # velero.
+            requires = [ self.deployment ];
           };
           root = {
             resource = self.deployment;
