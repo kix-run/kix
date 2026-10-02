@@ -12,13 +12,17 @@
 #
 # `optionContractViolations` walks a package's raw `options` declaration,
 # including submodule fields, and returns one entry per violation.
-# `checkOptionContract` throws when there is any. The walker runs inside
-# every cluster that uses a package, so it guards each access and catches
-# the throws it can; a declaration it cannot read is skipped, not reported.
+# `checkOptionContract` throws when there is any. Package CI runs the check
+# once per package (kix/package-eval.nix); instance evaluation does not.
+# A declaration the walker cannot read is a violation too: a default or a
+# submodule that throws, an attrset default on a type the rules do not
+# cover, an entry that is not an option, and anything nested deeper than
+# `maxDepth`.
 { lib }:
 
 let
-  maxDepth = 6;
+  # Bounds the walk through recursive submodule types.
+  maxDepth = 12;
 
   isOption = v: builtins.isAttrs v && (v._type or "") == "option";
 
@@ -83,22 +87,33 @@ let
 
   typeText = t: t.description or t.name or "unknown";
 
-  # The default when it is a non-empty attrset, otherwise null. Only the
-  # top level is forced.
+  # `{ ok = true; value; }` with the default when it is a non-empty
+  # attrset and null otherwise, or `{ ok = false; }` when forcing the
+  # default throws. Only the top level is forced. A derivation default
+  # (`types.package`) is not an attrset the module system merges.
   attrsDefault =
     opt:
     if !(opt ? default) then
-      null
+      {
+        ok = true;
+        value = null;
+      }
     else
       let
         r = builtins.tryEval (
           let
             d = opt.default;
           in
-          if builtins.isAttrs d && d != { } && !(d ? _type) then d else null
+          if builtins.isAttrs d && d != { } && !(d ? _type) && !(lib.isDerivation d) then d else null
         );
       in
-      if r.success then r.value else null;
+      if r.success then
+        {
+          ok = true;
+          inherit (r) value;
+        }
+      else
+        { ok = false; };
 
   showKeys = attrs: lib.concatStringsSep ", " (builtins.attrNames attrs);
 
@@ -217,6 +232,17 @@ let
       + ". An instance that sets any field discards the option's default, so `${key}` falls back to the field. "
       + "Put the value on the field's `default` and give `${name}` the default { }.";
 
+  unreadableMessage =
+    name: reason:
+    "option `${name}` cannot be checked against the option contract: ${reason}. "
+    + "Change the declaration so the check can read it; an unread declaration fails the check.";
+
+  unknownTypeMessage =
+    name: t: d:
+    "option `${name}` has type `${typeText t}` and a non-empty attrset default (keys: ${showKeys d}), "
+    + "and the option contract has no rule for that type, so the check cannot tell whether an instance that sets part of `${name}` keeps the rest. "
+    + remedies name;
+
   showPos = pos: if pos == null then "<unknown position>" else "${pos.file}:${toString pos.line}";
 
   # The declaration position of an option returned by getSubOptions, or
@@ -237,14 +263,16 @@ let
     { path, pos }:
     opt:
     let
-      d = attrsDefault opt;
+      dr = attrsDefault opt;
+      d = dr.value;
       name = lib.concatStringsSep "." path;
       mk = message: {
         inherit path message;
         head = builtins.head path;
         position = pos;
       };
-      # The first alternative whose rule the default breaks.
+      # mkOption without `type` merges as `types.unspecified`.
+      type = opt.type or lib.types.unspecified;
       perBranch =
         t:
         let
@@ -254,16 +282,30 @@ let
           [ (mk (rule1Message name t d)) ]
         else if rule == "rule2" then
           [ (mk (rule2Message name t d)) ]
-        else if rule == "rule3" then
+        else
           let
             got = fieldDefaults t;
           in
-          if got == null then [ ] else map (p: mk (rule3Message name p)) (rule3Problems [ ] d got)
-        else
-          [ ];
-      found = lib.findFirst (xs: xs != [ ]) [ ] (map perBranch (branches opt.type));
+          if got == null then
+            [
+              (mk (
+                unreadableMessage name "it is a submodule with a non-empty default, and evaluating its fields with the value { } throws"
+              ))
+            ]
+          else
+            map (p: mk (rule3Message name p)) (rule3Problems [ ] d got);
+      # The alternatives a rule covers; the first whose rule the default
+      # breaks is reported.
+      covered = builtins.filter (t: classify t != null) (branches type);
     in
-    if d == null || !(opt ? type) then [ ] else found;
+    if !dr.ok then
+      [ (mk (unreadableMessage name "evaluating its default throws")) ]
+    else if d == null then
+      [ ]
+    else if covered == [ ] then
+      [ (mk (unknownTypeMessage name type d)) ]
+    else
+      lib.findFirst (xs: xs != [ ]) [ ] (map perBranch covered);
 
   # The fields of a submodule-typed option, and the path segment that stands
   # for one element of an attrsOf or listOf.
@@ -291,22 +333,37 @@ let
     in
     {
       inherit segment;
+      ok = r.success;
       options = if r.success then r.value else { };
     };
 
   walk =
     depth: path: pos: node:
+    let
+      name = lib.concatStringsSep "." path;
+      mk = message: {
+        inherit path message;
+        head = if path == [ ] then "<options>" else builtins.head path;
+        position = pos;
+      };
+    in
     if depth > maxDepth then
-      [ ]
+      [
+        (mk (unreadableMessage name "it is nested more than ${toString maxDepth} option levels deep"))
+      ]
     else if isOption node then
       let
         subs = subOptions node;
         here = checkOne { inherit path pos; } node;
-        below = lib.concatLists (
-          lib.mapAttrsToList (
-            n: child: walk (depth + 1) (path ++ subs.segment ++ [ n ]) (subPosition pos child) child
-          ) subs.options
-        );
+        below =
+          if !subs.ok then
+            [ (mk (unreadableMessage name "reading the fields of its type throws")) ]
+          else
+            lib.concatLists (
+              lib.mapAttrsToList (
+                n: child: walk (depth + 1) (path ++ subs.segment ++ [ n ]) (subPosition pos child) child
+              ) subs.options
+            );
       in
       here ++ below
     else if builtins.isAttrs node && !(node ? _type) then
@@ -316,18 +373,29 @@ let
         ) node
       )
     else
-      [ ];
+      [
+        (mk (
+          (if path == [ ] then "`options`" else "`${name}` in `options`")
+          + " is not an option declaration or an attrset of them (found "
+          + (
+            if builtins.isAttrs node then
+              "a value of _type \"${toString node._type}\""
+            else
+              "a value of type ${builtins.typeOf node}"
+          )
+          + "). Declare it with lib.mkOption."
+        ))
+      ];
 
   optionContractViolations =
     { options }:
-    map (v: v // { message = "${showPos v.position}: ${v.message}"; }) (
-      walk 0 [ ] null (if builtins.isAttrs options then options else { })
-    );
+    map (v: v // { message = "${showPos v.position}: ${v.message}"; }) (walk 0 [ ] null options);
 in
 {
   inherit optionContractViolations;
 
-  # Throws when `options` breaks the contract; `who` is `<ns>/<instance>`.
+  # Throws when `options` breaks the contract; `who` names the package, such
+  # as `kix/packages/caddy`.
   checkOptionContract =
     { who, options }:
     let
@@ -337,7 +405,7 @@ in
       null
     else
       throw (
-        "package options of instance ${who} break the option contract (docs: reference/package-schema/options, \"Option contract\"):\n"
+        "the options of ${who} break the option contract (docs: reference/package-schema/options, \"Option contract\"):\n"
         + lib.concatMapStringsSep "\n" (v: "  - ${v.message}") violations
       );
 }

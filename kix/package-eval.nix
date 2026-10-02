@@ -25,12 +25,10 @@
 # known to fail them; like `knownFailures`, a listed package that passes
 # fails the check until its entry is removed.
 #
-# Instance evaluation refuses a package whose options break the option
-# contract (kix/lib/eval/options.nix) unless its `meta.unsafe` holds
-# `lossy-option-defaults`. `optionContractExemptions` lists the packages
-# here that hold that grant. A package that holds it without an entry, or
-# whose options pass, fails the check until the grant and the entry are
-# removed.
+# Every package's options must satisfy the option contract
+# (kix/lib/eval/options.nix). Instance evaluation does not check it, so
+# this file is where it is enforced: once per package, on the options a
+# cluster reads, before any synthetic cluster is evaluated.
 #
 # Every package is evaluated twice: on the kind flavour alone (availability
 # "none") and with three availability zones declared ("zone"). Replica
@@ -164,21 +162,11 @@ let
     filebrowser.instances = { inherit storage; };
     firezone.config = {
       domain = "firezone.example.com";
-      # firezone holds the `lossy-option-defaults` grant, so `admin` and
-      # `wireguard` are set in full: a partial value replaces the default.
       admin = {
         email = "admin@example.com";
         password = "password";
-        resetOnBoot = true;
       };
-      wireguard = {
-        port = 51820;
-        privateKey = "key";
-        ipv4Network = "100.64.0.0/10";
-        ipv4Address = "100.64.0.1";
-        ipv6Network = "fd00::/106";
-        ipv6Address = "fd00::1";
-      };
+      wireguard.privateKey = "key";
       secrets = {
         guardianSecretKey = "guardian";
         secretKeyBase = "base";
@@ -391,14 +379,6 @@ let
   # Packages whose meta.version is not a version, with the reason.
   versionExceptions = { };
 
-  # Packages kept unreworked although their options break the option
-  # contract. Each names the housekeeping entry that records what is wrong
-  # and the decision the package waits on.
-  optionContractExemptions = {
-    caddy = "housekeeping/2026-10-01-caddy-exempted-from-option-contract.md";
-    firezone = "housekeeping/2026-10-01-firezone-exempted-from-option-contract.md";
-  };
-
   # Packages that cannot be evaluated on their own, with the reason.
   skip = { };
 
@@ -485,20 +465,15 @@ let
       };
     };
 
-  checkOptionContractExemption =
+  # The options phase 1 reads are the ones every instance evaluates
+  # against. A package whose options depend on `availability` is checked
+  # at "none" only.
+  checkOptions =
     name: package:
-    let
-      raw = phase1Package name package;
-      granted = builtins.elem "lossy-option-defaults" (raw.meta.unsafe or [ ]);
-    in
-    if optionContractExemptions ? ${name} then
-      lib.assertMsg (optionContract.optionContractViolations { options = raw.options or { }; } != [ ])
-        "kix/packages/${name}: its options satisfy the option contract now; remove \"lossy-option-defaults\" from its meta.unsafe and its entry from optionContractExemptions in kix/package-eval.nix, and delete ${
-          optionContractExemptions.${name}
-        }"
-    else
-      lib.assertMsg (!granted)
-        "kix/packages/${name}: meta.unsafe holds \"lossy-option-defaults\", which kixpkgs packages may hold only with an entry in optionContractExemptions (kix/package-eval.nix) naming a housekeeping entry. Retype its options and remove the grant.";
+    optionContract.checkOptionContract {
+      who = "kix/packages/${name}";
+      options = (phase1Package name package).options or { };
+    };
 
   # The availability levels every package is evaluated at, as cluster
   # modules added after the kind flavour.
@@ -552,7 +527,6 @@ let
     in
     assert checkSource name;
     assert checkVersion name package;
-    assert checkOptionContractExemption name package;
     builtins.addErrorContext
       "while evaluating kix/packages/${name} in its synthetic cluster at availability \"${level}\""
       (
@@ -581,7 +555,6 @@ let
     ++ builtins.attrNames skip
     ++ sourceDomainLiteralExceptions
     ++ builtins.attrNames versionExceptions
-    ++ builtins.attrNames optionContractExemptions
   );
 
   levels = builtins.attrNames levelModules;
@@ -597,7 +570,6 @@ in
     skip
     sourceDomainLiteralExceptions
     versionExceptions
-    optionContractExemptions
     levels
     ;
 
@@ -605,10 +577,15 @@ in
   # when `names` throws.
   evaluate = level: name: evaluatePackage level name packages.${name};
 
-  # Forcing this evaluates every package that is not skipped, at every
-  # level. Each package name appears once per level.
+  # The option contract of one package: null when its options pass, a
+  # throw listing each violation otherwise.
+  checkOptionContract = name: checkOptions name packages.${name};
+
+  # Forcing this checks the option contract of every package, then
+  # evaluates every package that is not skipped, at every level. Each
+  # package name appears once per level.
   names =
     assert lib.assertMsg (strayKeys == [ ])
-      "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions`, `versionExceptions` or `optionContractExemptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a directory under kix/packages/";
-    builtins.deepSeq evaluated evaluated;
+      "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions` or `versionExceptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a directory under kix/packages/";
+    builtins.deepSeq (lib.mapAttrsToList checkOptions packages) (builtins.deepSeq evaluated evaluated);
 }

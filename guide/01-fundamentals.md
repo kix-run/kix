@@ -437,7 +437,8 @@ immich-db = {
 #### The option contract
 
 - An instance value replaces an option's default under the module system's own rules: `anything` and `attrsOf` replace a whole attrset default, and a submodule's own default is discarded when any field is set. Kix adds no merge of its own.
-- So a package may not declare a default that a partial instance value would discard. `checkOptionContract` (`kix/lib/eval/options.nix`) refuses, at evaluation: an untyped option (`anything`, `attrs`, `attrsOf anything`, ...) with a non-empty attrset default; an `attrsOf` option with a non-empty default; a submodule whose own default sets a key its field does not default to.
+- So a package may not declare a default that a partial instance value would discard. `checkOptionContract` (`kix/lib/eval/options.nix`) refuses an untyped option (`anything`, `attrs`, `attrsOf anything`, ...) with a non-empty attrset default; an `attrsOf` option with a non-empty default; a submodule whose own default sets a key its field does not default to; and any declaration it cannot read.
+- Package CI runs it once per package (`every-package-evaluates`, `kix/package-eval.nix`); evaluating a cluster does not. The `options` reference page gives the command for one package, in kixpkgs or outside it.
 - Remedies: put defaults on submodule fields (`kix.options.resources` for container resources); for `attrsOf` entries an instance adds to, default to `{ }` and set each entry in the package's `config` with `lib.mkDefault`; when the instance should replace the value as a whole, default to null and apply the package's value in the build. Give the option a `defaultText` naming the package's value in the last two cases.
 
 ### Option type patterns

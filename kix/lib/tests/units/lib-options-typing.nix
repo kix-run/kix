@@ -511,10 +511,67 @@ in
     in
     vs == [ ] || throw "expected no violations: ${builtins.toJSON vs}";
 
+  # Declarations the walker cannot read are violations: a default that
+  # throws, an attrset default on a type no rule covers, a submodule that
+  # throws when evaluated (reported for its field defaults and for its
+  # fields), a non-option entry, and an option without `type` (merged as
+  # `unspecified`, so Rule 1).
+  lib-options-typing-contract-unreadable =
+    let
+      vs = violations {
+        throwing = lib.mkOption {
+          type = t.attrsOf t.str;
+          default = throw "no default";
+        };
+        coerced = lib.mkOption {
+          type = t.coercedTo t.str (x: { v = x; }) (t.attrsOf t.str);
+          default.v = "x";
+        };
+        brokenFields = lib.mkOption {
+          type = t.submodule { config = throw "broken"; };
+          default.x = 1;
+        };
+        notAnOption = 5;
+        untyped = lib.mkOption { default.a = 1; };
+      };
+      byPath = lib.groupBy (v: lib.concatStringsSep "." v.path) vs;
+      mentions = path: needle: builtins.any (v: lib.hasInfix needle v.message) byPath.${path};
+    in
+    (
+      builtins.length vs == 6
+      && mentions "throwing" "evaluating its default throws"
+      && mentions "coerced" "no rule for that type"
+      && mentions "brokenFields" "evaluating its fields"
+      && mentions "brokenFields" "reading the fields of its type throws"
+      && mentions "notAnOption" "is not an option declaration"
+      && mentions "untyped" "has type `unspecified"
+    )
+    || throw "unreadable: ${builtins.toJSON vs}";
+
+  # A recursive submodule type is reported once at the depth bound instead
+  # of being walked without end.
+  lib-options-typing-contract-depth =
+    let
+      node = t.submodule {
+        options.child = lib.mkOption {
+          type = t.nullOr node;
+          default = null;
+        };
+      };
+      vs = violations {
+        tree = lib.mkOption {
+          type = node;
+          default = { };
+        };
+      };
+    in
+    (builtins.length vs == 1 && lib.hasInfix "option levels deep" (builtins.head vs).message)
+    || throw "depth: ${builtins.toJSON vs}";
+
   lib-options-typing-check-throws =
     throws (
       eval.checkOptionContract {
-        who = "ns/inst";
+        who = "kix/packages/example";
         options.x = lib.mkOption {
           type = t.anything;
           default.a = 1;
@@ -523,7 +580,7 @@ in
     )
     &&
       eval.checkOptionContract {
-        who = "ns/inst";
+        who = "kix/packages/example";
         options = { };
       } == null;
 
@@ -786,15 +843,13 @@ in
     in
     cfg.issuers == { local.kind = "selfSigned"; } || throw "issuers: ${builtins.toJSON cfg.issuers}";
 
-  # A package whose `settings` default an instance value would partly
-  # discard (Rule 1), rendered into a ConfigMap. `grants` is its meta.unsafe.
-  lib-options-typing-build-enforces-contract =
+  # Instance evaluation does not check the option contract (package CI
+  # does, in kix/package-eval.nix): a package whose `settings` breaks Rule 1
+  # evaluates, and the instance's partial value replaces the whole default.
+  lib-options-typing-instance-eval-skips-contract =
     let
-      lossyPackage = grants: {
-        meta = {
-          version = "test";
-          unsafe = grants;
-        };
+      lossyPackage = {
+        meta.version = "test";
         options.settings = lib.mkOption {
           type = t.anything;
           default = {
@@ -819,21 +874,16 @@ in
             };
           };
       };
-      build =
-        grants:
-        mkCluster [
+      cm = lib.findFirst (m: m.kind == "ConfigMap") null (
+        manifests (mkCluster [
           {
             instances.appns.app = {
-              package = lossyPackage grants;
+              package = lossyPackage;
               config.settings.a = "3";
             };
           }
-        ];
-      refused = builtins.tryEval (builtins.deepSeq (manifests (build [ ])) true);
-      granted = lib.findFirst (m: m.kind == "ConfigMap") null (
-        manifests (build [ "lossy-option-defaults" ])
+        ])
       );
     in
-    (!refused.success && granted.data == { a = "3"; })
-    || throw "contract: refused=${builtins.toJSON refused.success} granted=${builtins.toJSON granted}";
+    cm.data == { a = "3"; } || throw "instance eval: ${builtins.toJSON cm}";
 }

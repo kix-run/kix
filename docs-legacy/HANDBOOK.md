@@ -395,12 +395,28 @@ refuses three declarations: an untyped option (`anything`, `unspecified`,
 `raw`, `attrs`, or `attrsOf` of those) with a non-empty attrset default; an
 `attrsOf`/`lazyAttrsOf` of any other type with a non-empty default; and a
 submodule whose own default sets a key its field does not default to the
-same value. The remedies are a submodule whose fields carry their defaults
-(`kix.options.resources` for container resources), entries set one by one
-with `lib.mkDefault` in the package's `config` over a `{ }` default, or a
-`null` default that the build replaces with the package's value, named in a
-`defaultText`. The error lists every violation with its file and line, under
-`package options of instance <ns>/<inst> break the option contract`.
+same value. An option without `type` counts as `unspecified`. A declaration
+the walker cannot read is a violation too: a default that throws, a
+submodule that throws when evaluated with `{ }`, a non-empty attrset default
+on a type no rule covers (`coercedTo`), a non-option entry in `options`, and
+nesting deeper than twelve levels. The remedies are a submodule whose fields
+carry their defaults (`kix.options.resources` for container resources),
+entries set one by one with `lib.mkDefault` in the package's `config` over a
+`{ }` default, or a `null` default that the build replaces with the
+package's value, named in a `defaultText`. The error lists every violation
+with its file and line, under `the options of <who> break the option
+contract`.
+
+The contract is checked once per package, by `every-package-evaluates`
+(`kix/package-eval.nix` checks every package's phase-1 options, at
+availability `none`, before it evaluates any synthetic cluster). Instance
+evaluation does not check it, so a cluster that uses a package outside
+kixpkgs never runs it. One kixpkgs package:
+`(import ./kix/package-eval.nix { inherit lib kix; }).checkOptionContract "<name>"`
+returns null or throws; the full `nix eval` command, and the one for a
+package in another repository (`import "${kixpkgs}/kix/lib/eval/options.nix"`
+over `kix.callPackagePhase1`), are in
+`docs/src/content/docs/reference/package-schema/options.mdx`.
 
 ### 5.1 Build args
 
