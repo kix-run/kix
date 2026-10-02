@@ -279,6 +279,13 @@ discriminator (explicit `labels` on the Service, selected explicitly); a
 first-class `kix.run/part` identity label is an open design question in
 ROADMAP.
 
+Under default deny the scrape path is derived like any other edge: the
+netpol plugin joins each Prometheus with the monitors it selects and opens
+the server's egress and each target's ingress. A package never opens its
+metrics port with an intent. What Kix cannot see stays closed: targets on the
+host network that Kix did not build, and scrape configs outside the monitor
+objects.
+
 ### 6.3 Wiring (DI) > module system > meta
 
 Reach for these in order:

@@ -140,8 +140,58 @@ let
   };
 
   show = builtins.toJSON;
+  inherit (import ../../plugins/netpol/scrape.nix { inherit lib; }) matchesSelector;
 in
 {
+  prometheus-scrape-label-selector-semantics =
+    let
+      labels = {
+        team = "apps";
+        tier = "web";
+      };
+      cases = [
+        (matchesSelector { } labels)
+        (matchesSelector { matchLabels.team = "apps"; } labels)
+        (!matchesSelector { matchLabels.team = "platform"; } labels)
+        (matchesSelector {
+          matchExpressions = [
+            {
+              key = "team";
+              operator = "In";
+              values = [
+                "apps"
+                "data"
+              ];
+            }
+            {
+              key = "env";
+              operator = "DoesNotExist";
+            }
+          ];
+        } labels)
+        (
+          !matchesSelector {
+            matchExpressions = [
+              {
+                key = "tier";
+                operator = "NotIn";
+                values = [ "web" ];
+              }
+            ];
+          } labels
+        )
+        (matchesSelector {
+          matchExpressions = [
+            {
+              key = "tier";
+              operator = "Exists";
+            }
+          ];
+        } labels)
+      ];
+    in
+    builtins.all (c: c) cases || throw "label selector cases: ${show cases}";
+
   prometheus-scrape-server-egress-has-dns-and-apiserver =
     let
       p = byName "prometheus-server-server-egress" (cnpsOf (clusterWith { }));
@@ -150,10 +200,11 @@ in
       p != null
       && p.metadata.namespace == "monitoring"
       && p.spec.endpointSelector.matchLabels == serverSelector
-      && map (r: r.stubRule) p.spec.egress == [
-        "dns-egress"
-        "apiserver-egress"
-      ]
+      &&
+        map (r: r.stubRule) p.spec.egress == [
+          "dns-egress"
+          "apiserver-egress"
+        ]
     )
     || throw "server egress: ${show p}";
 
@@ -167,12 +218,13 @@ in
       p.metadata.namespace == "monitoring"
       && p.spec.endpointSelector.matchLabels == serverSelector
       && rule.namespace == "apps"
-      && rule.ports == [
-        {
-          port = "8080";
-          protocol = "TCP";
-        }
-      ]
+      &&
+        rule.ports == [
+          {
+            port = "8080";
+            protocol = "TCP";
+          }
+        ]
     )
     || throw "web egress rule: ${show rule}; policy: ${show p}";
 
@@ -186,12 +238,13 @@ in
       && rule.stubRule == "caller-ingress"
       && rule.callerSelector == serverSelector
       && rule.callerNamespace == "monitoring"
-      && rule.ports == [
-        {
-          port = "8080";
-          protocol = "TCP";
-        }
-      ]
+      &&
+        rule.ports == [
+          {
+            port = "8080";
+            protocol = "TCP";
+          }
+        ]
     )
     || throw "web ingress: ${show p}";
 
@@ -205,12 +258,13 @@ in
     in
     (
       egress.ports == [ ]
-      && (builtins.head ingress.spec.ingress).ports == [
-        {
-          port = "pgexporter";
-          protocol = "TCP";
-        }
-      ]
+      &&
+        (builtins.head ingress.spec.ingress).ports == [
+          {
+            port = "pgexporter";
+            protocol = "TCP";
+          }
+        ]
     )
     || throw "operand rules: egress ${show egress}; ingress ${show ingress}";
 
@@ -259,7 +313,10 @@ in
     let
       cluster = clusterWith { server.podMonitorNamespaceSelector = null; };
     in
-    (serviceRuleFor cluster "app" "operand" == null && serviceRuleFor cluster "app.kubernetes.io/name" webName != null)
+    (
+      serviceRuleFor cluster "app" "operand" == null
+      && serviceRuleFor cluster "app.kubernetes.io/name" webName != null
+    )
     || throw "podMonitorNamespaceSelector null: ${show (egressRules cluster)}";
 
   prometheus-scrape-egress-only-direction =
@@ -286,12 +343,13 @@ in
     in
     (
       ingress != null
-      && (builtins.head ingress.spec.ingress).ports == [
-        {
-          port = "9093";
-          protocol = "TCP";
-        }
-      ]
+      &&
+        (builtins.head ingress.spec.ingress).ports == [
+          {
+            port = "9093";
+            protocol = "TCP";
+          }
+        ]
     )
     || throw "alertmanager ingress: ${show ingress}";
 

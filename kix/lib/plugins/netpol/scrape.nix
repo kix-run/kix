@@ -5,15 +5,17 @@
 # it after every instance is built. A Prometheus CR selects monitors by
 # `serviceMonitorSelector`/`podMonitorSelector` and their namespace selectors;
 # a ServiceMonitor selects Services by label, and a PodMonitor selects pods.
-# None of these carry endpoint facts, and the scraper pods live in another
-# namespace from the monitor, so the per-workload derivation cannot see them.
+# None of these carry endpoint facts, and the scraper pods usually run in a
+# different namespace from the monitor, so the per-workload derivation cannot
+# see the connection.
 #
 # The scraper pods are named by the Prometheus CRD's `factBehavior.podSelector`,
 # which the prometheus-operator package declares; a Prometheus CR without one
 # is skipped. Targets are resolved against the resources Kix built: Services,
 # ServiceRef markers, and workloads (pod labels, named container ports,
-# `hostNetwork`). A target Kix did not build (the kubelet, control-plane static
-# pods) gets an egress rule for the selector it names and nothing more.
+# `hostNetwork`). A Service over pods Kix did not build gets an egress rule for
+# its selector, which does not reach pods on the host network. A monitor whose
+# Service Kix does not render (the kubelet) gets no rule.
 
 { lib }:
 
@@ -87,36 +89,35 @@ in
       # Services and ServiceRef markers, as { namespace, name, labels,
       # selector, ports }. A Service without a selector has no pods Kix can
       # name, so it is left out.
-      services =
-        builtins.concatMap (
-          r:
-          let
-            raw = r.rawManifest;
-            anns = raw.metadata.annotations or { };
-          in
-          if (r.kind or "") == "Service" && (raw.spec.selector or { }) != { } then
-            [
-              {
-                namespace = nsOfRaw raw;
-                name = raw.metadata.name;
-                labels = raw.metadata.labels or { };
-                selector = raw.spec.selector;
-                ports = raw.spec.ports or [ ];
-              }
-            ]
-          else if isServiceRef r && anns ? ${kixKeys.serviceSelector} then
-            [
-              {
-                namespace = nsOfRaw raw;
-                name = anns.${kixKeys.importName};
-                labels = builtins.fromJSON (anns.${kixKeys.serviceLabels} or "{}");
-                selector = builtins.fromJSON anns.${kixKeys.serviceSelector};
-                ports = builtins.fromJSON (anns.${kixKeys.servicePorts} or "[]");
-              }
-            ]
-          else
-            [ ]
-        ) resources;
+      services = builtins.concatMap (
+        r:
+        let
+          raw = r.rawManifest;
+          anns = raw.metadata.annotations or { };
+        in
+        if (r.kind or "") == "Service" && (raw.spec.selector or { }) != { } then
+          [
+            {
+              namespace = nsOfRaw raw;
+              name = raw.metadata.name;
+              labels = raw.metadata.labels or { };
+              selector = raw.spec.selector;
+              ports = raw.spec.ports or [ ];
+            }
+          ]
+        else if isServiceRef r && anns ? ${kixKeys.serviceSelector} then
+          [
+            {
+              namespace = nsOfRaw raw;
+              name = anns.${kixKeys.importName};
+              labels = builtins.fromJSON (anns.${kixKeys.serviceLabels} or "{}");
+              selector = builtins.fromJSON anns.${kixKeys.serviceSelector};
+              ports = builtins.fromJSON (anns.${kixKeys.servicePorts} or "[]");
+            }
+          ]
+        else
+          [ ]
+      ) resources;
 
       workloads = map (
         w:
@@ -154,7 +155,11 @@ in
           toString port
         else
           let
-            hits = lib.unique (map toString (builtins.concatMap (w: lib.optional (w.namedPorts ? ${port}) w.namedPorts.${port}) backing));
+            hits = lib.unique (
+              map toString (
+                builtins.concatMap (w: lib.optional (w.namedPorts ? ${port}) w.namedPorts.${port}) backing
+              )
+            );
           in
           if builtins.length hits == 1 then builtins.head hits else port;
 
@@ -202,7 +207,9 @@ in
           names = sel.matchNames or [ ];
         in
         if sel.any or false then
-          lib.unique (builtins.filter (n: n != null) (map (s: s.namespace) services ++ map (w: w.namespace) workloads))
+          lib.unique (
+            builtins.filter (n: n != null) (map (s: s.namespace) services ++ map (w: w.namespace) workloads)
+          )
         else if names != [ ] then
           names
         else
@@ -315,7 +322,8 @@ in
           promNs = plain (nsOfRaw prom);
           promName = plain prom.metadata.name;
           podSelectorDecl = r.factBehavior.podSelector;
-          scraperSelector = if builtins.isFunction podSelectorDecl then podSelectorDecl prom else podSelectorDecl;
+          scraperSelector =
+            if builtins.isFunction podSelectorDecl then podSelectorDecl prom else podSelectorDecl;
 
           rawTargets =
             builtins.concatMap (m: serviceMonitorTargets m.rawManifest) (
@@ -336,7 +344,8 @@ in
               in
               acc
               // {
-                ${id} = if acc ? ${id} then acc.${id} // { ports = lib.unique (acc.${id}.ports ++ t.ports); } else t;
+                ${id} =
+                  if acc ? ${id} then acc.${id} // { ports = lib.unique (acc.${id}.ports ++ t.ports); } else t;
               }
             ) { } rawTargets
           );
@@ -380,9 +389,7 @@ in
 
           # Host-network pods are outside Cilium's endpoint policy, so they
           # get no ingress rule.
-          ingressTargets = builtins.filter (
-            t: !t.hostNetwork && nsResources ? ${plain t.namespace}
-          ) targets;
+          ingressTargets = builtins.filter (t: !t.hostNetwork && nsResources ? ${plain t.namespace}) targets;
 
           ingressPolicy =
             t:
