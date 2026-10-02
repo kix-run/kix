@@ -167,8 +167,8 @@ pub const CRD_KIND: &str = key!("crd-kind");
 pub const CRD_VERSION: &str = key!("crd-version");
 
 /// Comma-separated API versions a CRD ref marker declares as served,
-/// `CRD_VERSION` among them. The library stamps it on every CRD ref marker;
-/// the deploy reads `CRD_VERSION` alone from a marker without it.
+/// `CRD_VERSION` among them. The library stamps it on every CRD ref marker,
+/// and it is the only list the deploy checks against the live CRD.
 pub const CRD_SERVED_VERSIONS: &str = key!("crd-served-versions");
 
 /// Scope a CRD ref marker declares for its kind: `Namespaced` or `Cluster`.
