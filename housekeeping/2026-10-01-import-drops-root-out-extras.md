@@ -3,3 +3,4 @@
 `evaluateImportInstance` builds `out = (rootRes.out or { }) // importDef.out`, so keys a package adds through `root.out` are missing on an import. An imported valkey has no `out.authSecret` or `out.authPasswordKey`, and immich and harbor then connect to it without a password because they guard on `valkey.out ? authSecret`. Nothing warns. `clusters/example-import.nix` imports valkey this way.
 
 Decision required from Adam: whether an import carries `root.out` (and how it would read the dependencies those values come from), or consumers must treat a missing key as an error.
+- Hit again 2026-10-02 by `kix/packages/stackgres-cluster`: an import from it gets `out.port` only because the SGCluster resource sets `outputs.port`, and it has no `out.superuserSecret`, so stackgres-database references the Secret by the cluster's name for an import.

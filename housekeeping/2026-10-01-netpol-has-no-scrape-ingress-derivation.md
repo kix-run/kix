@@ -5,3 +5,4 @@
 Under an enforcer, cert-manager's `CertManagerAbsent` alert (`absent(up{...} == 1)` on the controller Service) therefore fires on every cluster until this is fixed.
 
 - Hit again 2026-10-02 by `kix/packages/mayastor`: the io-engine metrics exporter runs on the host network, so the scraper reaches it as the host or a remote node, which no derived rule admits.
+- Hit again 2026-10-02 by `kix/packages/stackgres-cluster`: its PodMonitor scrapes the exporter sidecar on TCP 9187 of pods the operator creates, and the operand ingress policy admits only the pods' peers and the operator.
