@@ -33,19 +33,22 @@ use super::CommandContext;
 use kix::manifest::keys;
 
 pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<()> {
+    let cluster = ctx.cluster_identity(&args.cluster);
     if args.list {
-        return ctx.runtime.block_on(run_list_async(args, ctx));
+        return ctx.runtime.block_on(run_list_async(&cluster, ctx));
     }
     if args.operator {
-        return ctx.runtime.block_on(run_operator_async(args, ctx));
+        return ctx
+            .runtime
+            .block_on(run_operator_async(args, &cluster, ctx));
     }
-    ctx.runtime.block_on(run_async(args, ctx))
+    ctx.runtime.block_on(run_async(args, &cluster, ctx))
 }
 
 /// Read-only: connect, enumerate Superseded activations, print history, exit.
 /// Works the same whether the cluster is operator-managed or direct-apply
 /// because it only inspects Activation CRs. Supports `--output json|yaml`.
-async fn run_list_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
+async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
     let client = fetch::make_client(ctx.global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
@@ -61,7 +64,7 @@ async fn run_list_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()>
 
     // The current Active activation is an optional position marker
     // in the history listing, but we must still print even if none exists.
-    let current = activation::find_active(&client, &activation_ar, &args.cluster)
+    let current = activation::find_active(&client, &activation_ar, cluster)
         .await
         .map_err(|e| miette!("failed to find active activation: {e}"))?;
 
@@ -70,7 +73,7 @@ async fn run_list_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()>
     // in, but it was never running, so rolling back to it would apply a state
     // the cluster has never been in.
     let superseded: Vec<_> =
-        activation::list_superseded_activations(&client, &activation_ar, &args.cluster)
+        activation::list_superseded_activations(&client, &activation_ar, cluster)
             .await
             .map_err(|e| miette!("failed to list superseded activations: {e}"))?
             .into_iter()
@@ -81,7 +84,7 @@ async fn run_list_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()>
     match format {
         OutputFormat::Json | OutputFormat::Yaml => {
             let value = serde_json::json!({
-                "cluster": args.cluster,
+                "cluster": cluster,
                 "current": current.as_ref().map(|c| serde_json::json!({
                     "name": c.name,
                     "identity_hash": c.identity_hash,
@@ -92,7 +95,7 @@ async fn run_list_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()>
                         .identity_hash
                         .as_deref()
                         .and_then(|h| {
-                            kix::eval::store::resolve_activation_by_hash(&args.cluster, h)
+                            kix::eval::store::resolve_activation_by_hash(cluster, h)
                         })
                         .is_some();
                     serde_json::json!({
@@ -115,7 +118,7 @@ async fn run_list_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()>
             }
         }
         OutputFormat::Text | OutputFormat::Markdown => {
-            print_history_text(&args.cluster, current.as_ref(), &superseded);
+            print_history_text(cluster, current.as_ref(), &superseded);
         }
     }
 
@@ -208,7 +211,7 @@ fn print_history_text(
     );
 }
 
-async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
+async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Result<()> {
     // 1. Connect to cluster
     if !ctx.global.quiet {
         println!("Connecting to cluster...");
@@ -228,13 +231,13 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         .clone();
 
     // 2. Find current Active activation
-    let current = activation::find_active(&client, &activation_ar, &args.cluster)
+    let current = activation::find_active(&client, &activation_ar, cluster)
         .await
         .map_err(|e| miette!("failed to find active activation: {e}"))?
         .ok_or_else(|| {
             miette!(
                 "no active deployment record found for cluster '{}'",
-                args.cluster
+                cluster
             )
         })?;
 
@@ -257,7 +260,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     // in, but it was never running, so rolling back to it would apply a state
     // the cluster has never been in.
     let superseded: Vec<_> =
-        activation::list_superseded_activations(&client, &activation_ar, &args.cluster)
+        activation::list_superseded_activations(&client, &activation_ar, cluster)
             .await
             .map_err(|e| miette!("failed to list superseded activations: {e}"))?
             .into_iter()
@@ -276,7 +279,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     } else {
         println!();
         println!("Available activations to rollback to:");
-        print_superseded_entries(&args.cluster, &superseded);
+        print_superseded_entries(cluster, &superseded);
 
         print!("\nSelect activation [1]: ");
         std::io::stdout().flush().into_diagnostic()?;
@@ -333,7 +336,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         .as_ref()
         .map(std::path::PathBuf::from)
         .filter(|p| p.join("kix-packages.json").exists())
-        .or_else(|| kix::eval::store::resolve_activation_by_hash(&args.cluster, target_hash))
+        .or_else(|| kix::eval::store::resolve_activation_by_hash(cluster, target_hash))
         .ok_or_else(|| {
             miette!(
                 "store path for activation '{}' not found locally (hash: {}). \
@@ -369,7 +372,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         .filter(|p| p.join("kix-packages.json").exists())
         .or_else(|| {
             let hash = current.identity_hash.as_deref().unwrap_or("");
-            kix::eval::store::resolve_activation_by_hash(&args.cluster, hash)
+            kix::eval::store::resolve_activation_by_hash(cluster, hash)
         });
     let (current_graph, current_manifests) = match current_result_dir {
         Some(dir) => match StoreGraph::from_result_dir_with_status(&dir, &noop2) {
@@ -387,16 +390,12 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     //     likely thing to run straight after one, and its baseline has exactly
     //     the same hole as a deploy's: those objects are in neither the
     //     current closure nor the target one (kixpkgs#82).
-    let failed_baseline = match baseline::deploy_in_flight(&client, &activation_ar, &args.cluster)
-        .await
-    {
+    let failed_baseline = match baseline::deploy_in_flight(&client, &activation_ar, cluster).await {
         Some(record) => {
             baseline::report_in_flight(&record, ctx.global.quiet);
             baseline::FailedBaseline::default()
         }
-        None => {
-            baseline::load_failed(&client, &activation_ar, &args.cluster, ctx.global.quiet).await
-        }
+        None => baseline::load_failed(&client, &activation_ar, cluster, ctx.global.quiet).await,
     };
 
     // The merged set is for the plan display and for prune ordering only.
@@ -406,7 +405,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     // target declares it at the same hash the plan would skip it and the
     // rollback would finalize claiming an object that is not there.
     // Builds whose orphans an earlier warn-only deploy kept, as in deploy.
-    let kept_baseline = baseline::load_kept(&current, &args.cluster, ctx.global.quiet);
+    let kept_baseline = baseline::load_kept(&current, cluster, ctx.global.quiet);
     let baseline_manifests = kix::cluster::apply::baseline_manifests(
         &current_manifests,
         &[
@@ -442,7 +441,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         }
     }
     let (orphan_rids, shared_orphans) =
-        super::shared_orphans::keep_shared(&client, &args.cluster, orphan_rids).await?;
+        super::shared_orphans::keep_shared(&client, cluster, orphan_rids).await?;
 
     let resource_graph = ResourceGraph::from_manifests(&target_manifests).into_diagnostic()?;
     let plan = DeployPlan::from_graph_and_changes(&resource_graph, &all_actions);
@@ -473,7 +472,7 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
         println!(
             "{} Rolling back cluster '{}' to activation '{}'",
             output::bold("Rollback:"),
-            output::bold(&args.cluster),
+            output::bold(cluster),
             output::bold(&target_name),
         );
         plan::print_package_plan(&pkg_diff, ctx.global.verbose > 0);
@@ -616,12 +615,12 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     .await;
 
     if let Some(recorded) = kube_ops.recorded_orphans_kept_from() {
-        baseline::sync_kept_roots(&args.cluster, &recorded);
+        baseline::sync_kept_roots(cluster, &recorded);
     }
 
     // Save activation path for next deploy's diff
     if result.is_ok()
-        && let Err(e) = kix::eval::store::save_activation_path(&args.cluster, &target_result_dir)
+        && let Err(e) = kix::eval::store::save_activation_path(cluster, &target_result_dir)
     {
         tracing::warn!(
             "could not save the local build path; later commands may be unable to find this deployment: {e}"
@@ -644,7 +643,11 @@ async fn run_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
     }
 }
 
-async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result<()> {
+async fn run_operator_async(
+    args: &RollbackArgs,
+    cluster: &str,
+    ctx: &CommandContext,
+) -> Result<()> {
     // 1. Connect and find current + superseded activations
     let (client, ar) =
         super::operator::connect_and_verify(ctx.global.context.as_deref(), ctx.global.quiet)
@@ -660,13 +663,13 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
         .clone();
 
     // 2. Find current Active activation
-    let current = activation::find_active(&client, &activation_ar, &args.cluster)
+    let current = activation::find_active(&client, &activation_ar, cluster)
         .await
         .map_err(|e| miette!("failed to find active activation: {e}"))?
         .ok_or_else(|| {
             miette!(
                 "no active deployment record found for cluster '{}'",
-                args.cluster
+                cluster
             )
         })?;
 
@@ -689,7 +692,7 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
     // in, but it was never running, so rolling back to it would apply a state
     // the cluster has never been in.
     let superseded: Vec<_> =
-        activation::list_superseded_activations(&client, &activation_ar, &args.cluster)
+        activation::list_superseded_activations(&client, &activation_ar, cluster)
             .await
             .map_err(|e| miette!("failed to list superseded activations: {e}"))?
             .into_iter()
@@ -708,7 +711,7 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
     } else {
         println!();
         println!("Available activations to rollback to:");
-        print_superseded_entries(&args.cluster, &superseded);
+        print_superseded_entries(cluster, &superseded);
 
         print!("\nSelect activation [1]: ");
         std::io::Write::flush(&mut std::io::stdout()).into_diagnostic()?;
@@ -753,7 +756,7 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
         .cloned()
         .or_else(|| {
             target_hash.as_ref().and_then(|h| {
-                kix::eval::store::resolve_activation_by_hash(&args.cluster, h)
+                kix::eval::store::resolve_activation_by_hash(cluster, h)
                     .map(|p| p.display().to_string())
             })
         })
@@ -814,7 +817,7 @@ async fn run_operator_async(args: &RollbackArgs, ctx: &CommandContext) -> Result
         &client,
         &ar,
         &current.name,
-        &args.cluster,
+        cluster,
         &target_source_path,
         target_hash.as_deref(),
         // A rollback re-applies a build from an earlier deploy, which wrote

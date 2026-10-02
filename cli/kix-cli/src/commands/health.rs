@@ -125,6 +125,8 @@ impl PackageHealth {
 }
 
 pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
+    let cluster = ctx.cluster_identity(&args.cluster);
+
     // 1. Connect to cluster
     if !ctx.global.quiet {
         println!("Connecting to cluster...");
@@ -144,16 +146,16 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
             .map_err(|e| miette!("{e}"))?
             .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?;
 
-        let active = activation::find_active(&client, &activation_ar.0, &args.cluster)
+        let active = activation::find_active(&client, &activation_ar.0, &cluster)
             .await
             .map_err(|e| miette!("failed to find activation: {e}"))?
-            .ok_or_else(|| miette!("no active deployment record found for cluster '{}'", args.cluster))?;
+            .ok_or_else(|| miette!("no active deployment record found for cluster '{cluster}'"))?;
 
         // 3. Fetch this cluster's kix-managed resources
         let live_objects = fetch::fetch_managed_resources(
             &client,
             &discovery,
-            fetch::SweepScope::Cluster(&args.cluster),
+            fetch::SweepScope::Cluster(&cluster),
         )
         .await
         .map_err(|e| miette!("failed to fetch resources: {e}"))?;

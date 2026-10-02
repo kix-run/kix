@@ -31,6 +31,24 @@ nix build → StoreGraph → stamp annotations
     (stopped before finalize? → ops.abort marks the record Failed)
 ```
 
+## Cluster identity
+
+The `<cluster>` argument is a flake attribute (`clusters.harbor =
+./test-harbor.nix` makes it `harbor`). A cluster is identified by the `name`
+its definition passes to `buildCluster` (`test-harbor`), which the build
+writes into `kix-packages.json` (`StoreGraph::cluster_name`) and the
+Activation record's `kix.run/cluster` label. Every lookup of cluster state
+uses that name: the Activation records, the `SweepScope::Cluster` sweep, and
+the local cache files `~/.cache/kix/activations/<name>.{path,root,kept-*}`.
+`kix deploy` and `kix gc --hard` take it from the build. Commands that read
+state without building, or before building (health, rollback, status, soft gc,
+gc `--operator`, compliance attest `--from-cluster`), call
+`CommandContext::cluster_identity()`, which evaluates
+`kixClusters.<attr>.name` with `kix::eval::eval_cluster_name()` and uses the
+argument unchanged when the flake does not define it or there is no flake.
+`kix snapshot save` and `kix drift --cluster` need no flake and take the name
+itself.
+
 Doc 99 ("graph streaming") replaced the wave-barrier executor with the
 DAG-streaming `scheduler`. Each node becomes eligible the moment its direct
 predecessors have emitted `Verdict::Ready`, independent subtrees stream

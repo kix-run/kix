@@ -53,6 +53,39 @@ impl CommandContext {
         self.global.output.unwrap_or(default)
     }
 
+    /// The name that identifies the cluster `arg` names, for every lookup a
+    /// command makes on the Kubernetes cluster or in the local activation
+    /// cache.
+    ///
+    /// `arg` is the flake attribute the user typed. Activation records and
+    /// the cache are keyed by the cluster definition's own `name` instead
+    /// (see [`kix::eval::eval_cluster_name`]), so this evaluates that name.
+    /// When the flake does not define `arg`, or there is no flake, `arg` is
+    /// taken to be the cluster's name already, which keeps the commands that
+    /// need no flake working. A command that builds the cluster reads the
+    /// name from the build, `StoreGraph::cluster_name`, instead.
+    pub fn cluster_identity(&self, arg: &str) -> String {
+        let flake_path = match resolve_flake_path(&self.global.flake) {
+            Ok(p) => p,
+            Err(_) => return arg.to_string(),
+        };
+        // A local directory without a flake has nothing to evaluate, and
+        // `nix eval` there would only print an error.
+        if !self.global.flake.contains(':') && !flake_path.join("flake.nix").exists() {
+            return arg.to_string();
+        }
+        match kix::eval::eval_cluster_name(&flake_path, arg, &self.global.input_overrides()) {
+            Ok(Some(name)) => name,
+            Ok(None) => arg.to_string(),
+            Err(e) => {
+                tracing::warn!(
+                    "could not evaluate the name of cluster '{arg}', so looking it up as '{arg}': {e}"
+                );
+                arg.to_string()
+            }
+        }
+    }
+
     /// Evaluate a cluster, returning a helpful error with available cluster names if not found.
     pub fn eval_cluster_or_suggest(
         &mut self,
@@ -106,5 +139,56 @@ fn create_evaluator(
     } else {
         let cache_dir = kix::eval::store::default_cache_dir();
         kix::eval::KixEvaluator::new(backend, &flake_path, &cache_dir).into_diagnostic()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn context(flake: &str) -> CommandContext {
+        let cli = crate::cli::Cli::try_parse_from(["kix", "--flake", flake, "health", "x"])
+            .expect("arguments parse");
+        CommandContext::new(&cli.global).expect("context")
+    }
+
+    fn repo_root() -> String {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("repo root");
+        root.display().to_string()
+    }
+
+    /// The repository flake maps attribute `minimal` to
+    /// `clusters/test-minimal.nix`, whose `name` is `test-minimal`. Records
+    /// carry that name, so it is what the lookups get. Runs `nix eval`.
+    #[test]
+    fn a_flake_attribute_resolves_to_the_cluster_name() {
+        assert_eq!(
+            context(&repo_root()).cluster_identity("minimal"),
+            "test-minimal"
+        );
+    }
+
+    /// An argument the flake does not define is already a cluster name, as
+    /// it is for a cluster deployed from another flake. Runs `nix eval`.
+    #[test]
+    fn a_name_the_flake_does_not_define_is_kept() {
+        assert_eq!(
+            context(&repo_root()).cluster_identity("test-minimal"),
+            "test-minimal"
+        );
+    }
+
+    /// Without a flake there is nothing to resolve, and no `nix` runs.
+    #[test]
+    fn without_a_flake_the_argument_is_the_name() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            context(&dir.path().display().to_string()).cluster_identity("harbor"),
+            "harbor"
+        );
     }
 }

@@ -83,6 +83,9 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     if !ctx.global.quiet {
         eprint!("\r\x1b[2K");
     }
+    // Records and the local cache are keyed by the name the build gives the
+    // cluster, which need not match the flake attribute in `args.cluster`.
+    let cluster = new_graph.cluster_name.clone();
 
     // Collect stamped manifests from the new graph.
     let new_manifests: Vec<Value> = new_graph
@@ -110,13 +113,13 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // Resolve the old activation from the cluster or local cache.
     let (old_graph, active_manifests, pre_client, active) = if args.current_activation {
         // Local cache mode does not connect before confirmation.
-        let (og, om) = load_old_from_cache(&args.cluster, &ctx.global);
-        let active = cached_as_active(&args.cluster, &om);
+        let (og, om) = load_old_from_cache(&cluster, &ctx.global);
+        let active = cached_as_active(&cluster, &om);
         (og, om, None, active)
     } else {
         // Fetch the active Activation from the cluster.
         ctx.runtime
-            .block_on(load_old_from_cluster(&args.cluster, &ctx.global))?
+            .block_on(load_old_from_cluster(&cluster, &ctx.global))?
     };
     let active_hash = active.as_ref().and_then(|a| a.identity_hash.clone());
 
@@ -124,7 +127,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // closure no longer declares those objects, so without these the plan
     // cannot see them.
     let kept_baseline = match &active {
-        Some(active) => baseline::load_kept(active, &args.cluster, ctx.global.quiet),
+        Some(active) => baseline::load_kept(active, &cluster, ctx.global.quiet),
         None => baseline::KeptBaseline::default(),
     };
 
@@ -148,12 +151,12 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             // Another deploy still in flight would be applying the very
             // objects this plan might prune, so leave its work alone rather
             // than guessing which of the two is real.
-            if let Some(record) = baseline::deploy_in_flight(client, ar, &args.cluster).await {
+            if let Some(record) = baseline::deploy_in_flight(client, ar, &cluster).await {
                 baseline::report_in_flight(&record, ctx.global.quiet);
                 return Ok(baseline::FailedBaseline::default());
             }
             Ok::<_, miette::Report>(
-                baseline::load_failed(client, ar, &args.cluster, ctx.global.quiet).await,
+                baseline::load_failed(client, ar, &cluster, ctx.global.quiet).await,
             )
         })?,
         _ => baseline::FailedBaseline::default(),
@@ -523,14 +526,13 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     let global = ctx.global.clone();
-    let cluster_name = new_graph.cluster_name.clone();
     let deploy_result = ctx.runtime.block_on(run_deploy_async(
         args,
         &global,
         plan,
         &orphan_rids,
         &old_manifests,
-        &cluster_name,
+        &cluster,
         activation_name.as_deref(),
         activation_identity_hash.as_deref(),
         receipt.as_ref(),
@@ -546,7 +548,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // the real deploy as garbage.
     if deploy_result.is_ok()
         && !args.dry_run
-        && let Err(e) = kix::eval::store::save_activation_path(&args.cluster, &result_path)
+        && let Err(e) = kix::eval::store::save_activation_path(&cluster, &result_path)
     {
         tracing::warn!(
             "could not save the local build path; later commands may be unable to find this deployment: {e}"
@@ -1330,7 +1332,7 @@ async fn run_deploy_async(
     drop(tui_driver);
 
     if let Some(recorded) = kube_ops.recorded_orphans_kept_from() {
-        baseline::sync_kept_roots(&args.cluster, &recorded);
+        baseline::sync_kept_roots(cluster_name, &recorded);
     }
 
     match result {
@@ -1633,6 +1635,8 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     if !ctx.global.quiet {
         eprint!("\r\x1b[2K");
     }
+    // Keyed by the build's cluster name, as in the direct path.
+    let cluster = new_graph.cluster_name.clone();
 
     let new_manifests: Vec<Value> = new_graph
         .resources
@@ -1675,11 +1679,11 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // Show the plan when requested.
     if !ctx.global.quiet {
         let old_graph = if args.current_activation {
-            let (og, _) = load_old_from_cache(&args.cluster, &ctx.global);
+            let (og, _) = load_old_from_cache(&cluster, &ctx.global);
             og
         } else {
             ctx.runtime
-                .block_on(load_old_from_cluster(&args.cluster, &ctx.global))
+                .block_on(load_old_from_cluster(&cluster, &ctx.global))
                 .ok()
                 .and_then(|(og, _, _, _)| og)
         };
@@ -1769,7 +1773,6 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // Apply the Activation and watch its progress.
     let global = ctx.global.clone();
     let source_path = result_path.display().to_string();
-    let cluster_name = new_graph.cluster_name.clone();
 
     ctx.runtime.block_on(async {
         let (client, ar) =
@@ -1787,7 +1790,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             &client,
             &ar,
             &activation_name,
-            &cluster_name,
+            &cluster,
             &source_path,
             activation_identity_hash.as_deref(),
             Some(&receipt),
@@ -1822,7 +1825,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     })?;
 
     // Save activation path for next deploy's diff
-    if let Err(e) = kix::eval::store::save_activation_path(&args.cluster, &result_path) {
+    if let Err(e) = kix::eval::store::save_activation_path(&cluster, &result_path) {
         tracing::warn!(
             "could not save the local build path; later commands may be unable to find this deployment: {e}"
         );

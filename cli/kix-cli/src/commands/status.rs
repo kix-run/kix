@@ -215,14 +215,15 @@ pub fn run(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // Legacy: flat resource view
     let _cluster = ctx.eval_cluster_or_suggest(&args.cluster)?;
+    let cluster = ctx.cluster_identity(&args.cluster);
     let global = ctx.global.clone();
-    ctx.runtime.block_on(run_flat_async(args, &global))
+    ctx.runtime.block_on(run_flat_async(&cluster, &global))
 }
 
 fn run_operator(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
+    let cluster = ctx.cluster_identity(&args.cluster);
     let global = ctx.global.clone();
-    ctx.runtime
-        .block_on(run_operator_async(&args.cluster, &global))
+    ctx.runtime.block_on(run_operator_async(&cluster, &global))
 }
 
 async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs) -> Result<()> {
@@ -503,20 +504,16 @@ fn compute_age_from_obj(obj: &kube::api::DynamicObject) -> String {
     }
 }
 
-async fn run_flat_async(args: &StatusArgs, global: &crate::cli::GlobalArgs) -> Result<()> {
+async fn run_flat_async(cluster: &str, global: &crate::cli::GlobalArgs) -> Result<()> {
     let spinner = make_spinner(global);
 
     let client = fetch::make_client(global.context.as_deref())
         .await
         .into_diagnostic()?;
     let discovery = fetch::discover_resources(&client).await.into_diagnostic()?;
-    let sweep = fetch::sweep_managed(
-        &client,
-        &discovery,
-        fetch::SweepScope::Cluster(&args.cluster),
-    )
-    .await
-    .into_diagnostic()?;
+    let sweep = fetch::sweep_managed(&client, &discovery, fetch::SweepScope::Cluster(cluster))
+        .await
+        .into_diagnostic()?;
 
     if let Some(sp) = &spinner {
         sp.finish_and_clear();
@@ -529,10 +526,7 @@ async fn run_flat_async(args: &StatusArgs, global: &crate::cli::GlobalArgs) -> R
     }
     let resources = sweep.managed;
     if resources.is_empty() {
-        eprintln!(
-            "No resources of Kix cluster {} found on the cluster.",
-            args.cluster
-        );
+        eprintln!("No resources of Kix cluster {cluster} found on the cluster.");
         return Ok(());
     }
 
