@@ -253,7 +253,7 @@ when a check fails or the path is not evaluated by default.
 - Mo8. Do two monitors select each other's Services (same labels)? Fix: a component label per Service.
 - Mo9. Is the scrape scheme wrong for an HTTPS port? Fix: `kix.monitor` `scheme` and `tlsConfig`.
 - Mo10. Are secondary components' metrics dropped? Fix: another `kix.monitor` with `name`, `monitorPart`, `rulesPart`.
-- Mo11. Is `/metrics` served on the public route by default? Fix: off, or state the trade-off.
+- Mo11. Is `/metrics` served on the public route by default? Fix: off, `kix.expose { deriveHost = false; }` so only an instance that sets `ingress.host` is routed (Grafana), or state the trade-off.
 - Mo12. Does the program need a flag or setting before it serves the metrics the ServiceMonitor scrapes (ingress-nginx `--enable-metrics`)? Read upstream's flag defaults, not the chart's values.
 - Mo13. When `root` is an attrset with its own `requires`, does it omit the `kix.monitor` parts (`serviceMonitor`, `prometheusRules`, filtered for null), leaving them orphaned? Detection: a package-eval fixture with a real `prometheus` provider and the orphaned-part trace.
 

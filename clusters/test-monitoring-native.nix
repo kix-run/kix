@@ -70,6 +70,7 @@ kix.buildCluster {
           extraSpec.secrets = [ "slack" ];
         };
         grafana.config = {
+          ingress.host = "grafana.monitoring.test";
           initChownData.enabled = true;
           sidecar.sources.secrets = true;
         };

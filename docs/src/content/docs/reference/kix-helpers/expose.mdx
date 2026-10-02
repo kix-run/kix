@@ -26,7 +26,8 @@ the Gateway API CRDs before applying it.
 
 No route is emitted when neither provider is available or when no host can be
 resolved. The host comes from `config.ingress.host`, then falls back to
-`<instance>.<cluster.domain>`.
+`<instance>.<cluster.domain>`. With `deriveHost = false` there is no
+fallback: the instance gets a route only when it sets `ingress.host`.
 
 The helper adds two parts to the package: the Ingress or HTTPRoute, named
 `route` by default, and `exposure`, a record that describes it. A
@@ -72,6 +73,7 @@ the Service's `out.port`, and evaluation fails when neither is available.
 | `defaultAnnotations` | `{ }` | Base Ingress annotations. `config.ingress.annotations` takes precedence on duplicate keys. Ignored in Gateway mode. |
 | `port` | `null` | Single-backend Service port. `null` reads `out.port`. |
 | `timeouts` | `null` | Gateway API rule timeouts. Copied to every rule and ignored in Ingress mode. |
+| `deriveHost` | `true` | When `false`, the host comes only from `config.ingress.host`. Without it there is no route and `exposure.via` is `null`. Use it for a package that should not be public unless the instance names a host. |
 
 ## TLS
 

@@ -663,6 +663,7 @@ These return functions whose own DI args are auto-discovered.
   defaultAnnotations ? {},       # package-level Ingress annotations
   port ? null,                   # override auto-derived service port
   timeouts ? null,               # Gateway mode only: HTTPRoute rule timeouts, e.g. { request = "0s"; }
+  deriveHost ? true,             # false: route only when config.ingress.host is set
 })
 ```
 
@@ -670,6 +671,7 @@ These return functions whose own DI args are auto-discovered.
 - `ingressNginx` DI dep present → emits `Ingress` with optional TLS via `clusterIssuer`.
 - Both present → fail loudly (ambiguous; cluster must wire exactly one).
 - Neither present → no exposure resource emitted.
+- The host is `config.ingress.host`, else `<instance>.<cluster.domain>`. With `deriveHost = false` only `config.ingress.host` counts: an instance without it gets no route and `exposure.via` is null, with no error. Grafana uses this because its route also serves its unauthenticated `/metrics`.
 - `service` and `paths` are mutually exclusive. `paths` renders an Ingress with a rule per path, or one HTTPRoute with a rule per path in Gateway mode; `pathType` uses the Ingress words (`Prefix`, `Exact`) in both and is translated for the Gateway.
 - The record part (`self.exposure`) describes the rendered route: `url` is `<scheme>://<host>[:port]`. Ingress: `https` when a `clusterIssuer` is wired, else `http`. Gateway: from the listener the HTTPRoute attaches to (protocol, hostname, `allowedRoutes.namespaces.from`); no matching listener fails; a gateway without `out.listeners` gives `scheme = null`. Reading `url` without a route or a scheme fails evaluation with a message naming the instance and the cause (nothing wired, no host, or the Gateway that publishes no listeners); a package that works without a URL reads `urlOrNull`, which is null then (metabase, n8n, and harbor, which falls back to its own `externalURL` message). The record carries `_type = "kix-exposure"` so the part walkers do not force `url`. The TLS Secret is `<instance>-tls`.
 - With `networkPolicy.enable` on, the Ingress path also emits one policy per backing Service, opening that Service's pod port to the controller's pods and nothing else. An Ingress routes but opens nothing, so without it a default-deny cluster answers every request through the Ingress with a 504 that evaluation cannot see. The controller supplies the two facts through its root `out`: `podSelector` and `podNamespace`. A controller package that publishes neither gets a warning and no policy. Gateway API is not covered — a Gateway's data plane is whatever the implementation schedules, and `gateway.out` carries a parentRef, not a pod selector.
@@ -1082,8 +1084,10 @@ Set at the top level of the cluster module (or under `config.*` in module form).
   installed with a different cluster domain.
 - `cluster.domain` is the public base domain and defaults to `null`. When an
   instance does not set `ingress.host`, `kix.expose` uses this option to derive
-  `<instanceName>.<cluster.domain>`, which also gives Grafana its route and
-  root URL. When it is null, `kix.expose` creates no route.
+  `<instanceName>.<cluster.domain>`. A package that calls `kix.expose` with
+  `deriveHost = false`, such as Grafana, is routed only when the instance sets
+  `ingress.host`. When `cluster.domain` is null, an instance without
+  `ingress.host` gets no route.
 
 Kix does not currently detect when these values are exchanged. Doing so
 produces invalid addresses without an evaluation error.

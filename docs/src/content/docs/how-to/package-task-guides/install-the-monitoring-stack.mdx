@@ -89,12 +89,12 @@ Before deploying, adjust these settings for the cluster:
   name the file in the matching `_file` key.
 - `monitoring.nodeExporter.enabled` controls the node-exporter DaemonSet.
 
-When the cluster has an ingress controller or a gateway and a
-`cluster.domain`, Grafana gets a route at `grafana.<cluster.domain>`, and
-that URL is its `root_url`. Set
-`instances.monitoring-system.grafana.config.ingress.host` for another host.
-Grafana serves its own metrics at `/metrics` without a login, so they are
-reachable through that route too. To keep them private, set
+Grafana has no route until you set
+`instances.monitoring-system.grafana.config.ingress.host`. With that host and
+an ingress controller or a gateway, Grafana gets a route at the host, and
+that URL is its `root_url`. Without it, reach Grafana with `kix pf`. Grafana
+serves its own metrics at `/metrics` without a login, so a route makes them
+reachable too. To keep them private on a routed Grafana, set
 `instances.monitoring-system.grafana.config.settings.metrics.enabled = false`
 and `instances.monitoring-system.grafana.config.metrics.enabled = false`.
 

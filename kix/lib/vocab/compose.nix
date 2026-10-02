@@ -91,7 +91,9 @@ let
   # null then, for a package that works without a public URL. It reads
   # config, clusterConfig, scope and the exposure deps, never `self`, so
   # any part can read it. `rawHost` keeps the string context of
-  # config.ingress.host for rendering.
+  # config.ingress.host for rendering. With `deriveHost = false` the host
+  # comes only from config.ingress.host, so an instance without one has no
+  # route.
   exposureOf =
     {
       name,
@@ -101,6 +103,7 @@ let
       gateway,
       ingressNginx,
       clusterIssuer,
+      deriveHost ? true,
     }:
     let
       publicDomain = clusterConfig.cluster.domain or null;
@@ -108,7 +111,7 @@ let
       candidateHost =
         if configHost != null then
           configHost
-        else if publicDomain != null then
+        else if deriveHost && publicDomain != null then
           "${name}.${publicDomain}"
         else
           null;
@@ -162,7 +165,10 @@ let
         if mode == null then
           "nothing routes to it: wire a gateway or ingressNginx dependency"
         else if candidateHost == null then
-          "its route has no host: set ingress.host on the instance or cluster.domain"
+          if deriveHost then
+            "its route has no host: set ingress.host on the instance or cluster.domain"
+          else
+            "its route has no host: set ingress.host on the instance"
         else
           "Gateway ${gwRef.namespace}/${gwRef.name} publishes no out.listeners, so Kix cannot tell which listener the HTTPRoute attaches to, or its scheme and port: use a gateway instance that publishes out.listeners";
     in
@@ -1555,6 +1561,10 @@ rec {
       # { request = "0s"; } to disable the default 15s request timeout for
       # long-lived streaming backends. Ignored in Ingress (nginx) mode.
       timeouts ? null,
+      # When false, the route's host comes only from config.ingress.host:
+      # without it the instance gets no route and `exposure.via` is null.
+      # When true, a missing host defaults to <instance>.<cluster.domain>.
+      deriveHost ? true,
     }:
     {
       self,
@@ -1589,6 +1599,7 @@ rec {
           gateway
           ingressNginx
           clusterIssuer
+          deriveHost
           ;
       };
 

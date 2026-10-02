@@ -4,9 +4,10 @@
 #
 # Installs a Deployment and its ServiceAccount, a Service on port 80, the
 # grafana.ini ConfigMap, a datasources ConfigMap, and, when the cluster has
-# an ingress controller or a gateway and the instance has a host
-# (`ingress.host`, or `<instance>.<cluster.domain>`), a route through
-# `kix.expose`. Grafana's `root_url` is that route's URL.
+# an ingress controller or a gateway and the instance sets `ingress.host`, a
+# route through `kix.expose`. Without `ingress.host` there is no route, even
+# on a cluster with a `cluster.domain`. Grafana's `root_url` is that route's
+# URL.
 #
 # Dependencies:
 #   grafanaAdmin (required)      a secret with keys `admin-user` and
@@ -63,9 +64,9 @@
 # Grafana serves /metrics on its HTTP port without authentication, and the
 # route sends every path there, so the metrics (request counts and the
 # number of users, dashboards, and datasources) are public at
-# <host>/metrics wherever the route exists. Kix has no switch that keeps the
-# route off. To keep them private, set `settings.metrics.enabled = false`
-# and `metrics.enabled = false`, which also stops the scrape.
+# <host>/metrics once `ingress.host` is set. To keep them private on a
+# routed instance, set `settings.metrics.enabled = false` and
+# `metrics.enabled = false`, which also stops the scrape.
 #
 # `out`: the Service's `name`, `fqdn`, and `port` (80).
 #
@@ -342,7 +343,11 @@ in
         name that does not exist does nothing, so the entry can stay.
       '';
     };
-    ingress = kix.options.ingress;
+    ingress = kix.options.ingress // {
+      host = kix.options.ingress.host // {
+        description = "Public hostname of Grafana's route. Null means no route: Grafana does not take `<instance>.<cluster.domain>`, because the route also serves its unauthenticated /metrics.";
+      };
+    };
     metrics = kix.options.monitor;
   };
 
@@ -972,10 +977,11 @@ in
         };
       }
     )
-    # The header warns that Grafana's unauthenticated /metrics is public on
-    # this route; nothing refuses it. A candidate for an evaluation error
-    # once kix.options.ingress can turn the route off.
-    (kix.expose { service = "service"; })
+    # Routed only with an explicit ingress.host; see the header on /metrics.
+    (kix.expose {
+      service = "service";
+      deriveHost = false;
+    })
     (kix.monitor {
       service = "service";
       port = "http-web";

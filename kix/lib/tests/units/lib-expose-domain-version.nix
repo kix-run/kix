@@ -383,6 +383,53 @@ in
     in
     r.url == "http://app.other.test" || throw "config.ingress.host: ${builtins.toJSON r}";
 
+  # deriveHost = false: with cluster.domain and an ingress controller but no
+  # config.ingress.host there is no route and no error; with a host the
+  # route renders. The default (deriveHost = true) still derives
+  # <instance>.<cluster.domain>.
+  lib-expose-domain-version-derive-host-off =
+    let
+      app = mkWebPackage {
+        exposeArgs.deriveHost = false;
+        urlField = "urlOrNull";
+      };
+      noHost = mkExposeCluster {
+        inherit app;
+        ingress = true;
+      };
+      noHostGateway = mkExposeCluster {
+        inherit app;
+        gatewayConfig.listeners = [ httpAll ];
+      };
+      withHost = mkExposeCluster {
+        inherit app;
+        ingress = true;
+        appConfig.ingress.host = "app.other.test";
+      };
+      derived = mkExposeCluster { ingress = true; };
+      rNoHost = recordOf { cluster = noHost; };
+      rWithHost = recordOf { cluster = withHost; };
+      ingressHosts =
+        cluster: map (i: (builtins.head i.spec.rules).host) (ofKind "Ingress" (manifests cluster));
+    in
+    (
+      rNoHost.via == null
+      && rNoHost.host == null
+      && rNoHost.urlOrNull == null
+      && fails rNoHost.url
+      && noHost.instances.appns.web.raw.route == null
+      && ofKind "Ingress" (manifests noHost) == [ ]
+      && publicUrlEnv noHost == null
+      && (recordOf { cluster = noHostGateway; }).via == null
+      && ofKind "HTTPRoute" (manifests noHostGateway) == [ ]
+      && rWithHost.via == "ingress"
+      && rWithHost.url == "http://app.other.test"
+      && ingressHosts withHost == [ "app.other.test" ]
+      && (recordOf { cluster = derived; }).url == "http://web.example.test"
+      && ingressHosts derived == [ "web.example.test" ]
+    )
+    || throw "deriveHost = false: ${builtins.toJSON (removeAttrs rNoHost [ "url" ])} / ${builtins.toJSON (removeAttrs rWithHost [ "url" ])}";
+
   # Default part names are `route` and `exposure`; both arguments rename them.
   lib-expose-domain-version-part-names =
     let
