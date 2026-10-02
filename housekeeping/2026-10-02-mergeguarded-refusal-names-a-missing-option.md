@@ -1,0 +1,11 @@
+# 2026-10-02 · `kix/lib/vocab/compose.nix` · The `kix.mergeGuarded` refusal tells the user to "Use the option that owns it." when no option owns the locked path.
+
+`mergeGuarded` ends every refusal with that sentence (`compose.nix`, the
+`throw` at the end of `mergeGuarded`). The loki package locks `auth_enabled`,
+`server.http_listen_port`, and five `common.*` paths in `settings`, and no
+loki option sets any of them, so `settings.auth_enabled = true` prints
+`loki loki/loki: settings overrides auth_enabled, which the package sets for correctness. Use the option that owns it.`
+The user looks for an option that does not exist. ORDER D3 of the package
+rework rules out a per-call `hint`, so a package cannot correct the text.
+A neutral remedy ("remove it from settings") or a reason per locked path
+would fit every caller.
