@@ -5,7 +5,7 @@
 # Installs a Deployment and its ServiceAccount, a Service on port 80, the
 # grafana.ini ConfigMap, a datasources ConfigMap, and, when the cluster has
 # an ingress controller or a gateway and the instance has a host
-# (`ingress.host`, or `grafana.<cluster.domain>`), a route through
+# (`ingress.host`, or `<instance>.<cluster.domain>`), a route through
 # `kix.expose`. Grafana's `root_url` is that route's URL.
 #
 # Dependencies:
@@ -13,7 +13,10 @@
 #                                `admin-password`, the login of Grafana's
 #                                administrator. The sidecars use it to tell
 #                                Grafana to reload. A `secret` (SOPS source)
-#                                or a `secret-ref`.
+#                                or a `secret-ref`. A change to a `secret`
+#                                restarts the pod; a `secret-ref` has no
+#                                content Kix can hash, so a new password
+#                                takes effect only when the pod restarts.
 #   storage (optional)           a claim for /var/lib/grafana (SQLite
 #                                database, plugins), such as a
 #                                persistent-volume-claim instance. Without
@@ -38,6 +41,9 @@
 #     };
 #   };
 #
+# clusters/test-monitoring-native.nix evaluates this pair with `stringData`
+# in place of the SOPS file.
+#
 # Each wired datasource has a fixed uid, set by `prometheusDatasource`,
 # `alertmanagerDatasource`, and `lokiDatasource`, so a dashboard that names
 # it by uid works on every cluster. `datasources` adds more; a name or uid
@@ -53,6 +59,13 @@
 # The package turns off Grafana's calls to grafana.com: usage reports,
 # update checks, plugin signing-key downloads, plugin preinstalls, and the
 # news feed. `settings` turns them back on.
+#
+# Grafana serves /metrics on its HTTP port without authentication, and the
+# route sends every path there, so the metrics (request counts and the
+# number of users, dashboards, and datasources) are public at
+# <host>/metrics wherever the route exists. Kix has no switch that keeps the
+# route off. To keep them private, set `settings.metrics.enabled = false`
+# and `metrics.enabled = false`, which also stops the scrape.
 #
 # `out`: the Service's `name`, `fqdn`, and `port` (80).
 #
@@ -304,7 +317,7 @@ in
           access = "proxy";
         }
       ];
-      description = "Datasources provisioned after the wired ones, in Grafana's provisioning format. The package does not read their URLs, so under default deny Grafana gets no egress to them; add a policy that allows it.";
+      description = "Datasources provisioned after the wired ones, in Grafana's provisioning format. The package does not read their URLs, so under default deny Grafana gets no egress to them; add a policy that allows it. They land in a ConfigMap, so a `secureJsonData` value (and the older `password` and `basicAuthPassword`) must be a reference that Grafana expands, such as `$DS_TOKEN` with `DS_TOKEN` in `env`, or `$__file{<path>}`; a literal is refused.";
     };
     deleteDatasources = lib.mkOption {
       type = lib.types.listOf (
@@ -374,7 +387,9 @@ in
           lib.optional (prometheusServer != null) {
             inherit (config.prometheusDatasource) name uid;
             type = "prometheus";
-            url = prometheusServer.out.serviceUrl;
+            url =
+              prometheusServer.out.serviceUrl
+                or (throw "${who}: deps.prometheusServer resolved to an instance without out.serviceUrl, the base URL of the Prometheus HTTP API. Wire a prometheus instance, or set out.serviceUrl in the kix.mkImport that answers prometheusServer.");
             access = "proxy";
             isDefault = true;
             jsonData.httpMethod = "POST";
@@ -382,7 +397,9 @@ in
           ++ lib.optional (alertmanager != null) {
             inherit (config.alertmanagerDatasource) name uid;
             type = "alertmanager";
-            url = alertmanager.out.serviceUrl;
+            url =
+              alertmanager.out.serviceUrl
+                or (throw "${who}: deps.alertmanager resolved to an instance without out.serviceUrl, the base URL of Alertmanager's API. Wire an alertmanager instance, or set out.serviceUrl in the kix.mkImport that answers alertmanager.");
             access = "proxy";
             jsonData = {
               handleGrafanaManagedAlerts = false;
@@ -407,8 +424,34 @@ in
             builtins.filter (v: v != null) (map (d: d.${field} or null) config.datasources)
           );
         clashing = clashes "name" ++ clashes "uid";
+
+        # The datasources ConfigMap is not secret. Grafana expands $VAR,
+        # ${VAR}, $__env{VAR}, and $__file{path} in provisioning files, so a
+        # credential is written as one of those references.
+        inlineSecrets = lib.concatMap (
+          d:
+          let
+            where = "datasources \"${d.name}\"";
+            literal = v: builtins.isString v && !(lib.hasInfix "$" v);
+          in
+          lib.mapAttrsToList (k: _: "${where} secureJsonData.${k}") (
+            lib.filterAttrs (_: literal) (d.secureJsonData or { })
+          )
+          ++ map (k: "${where} ${k}") (
+            builtins.filter (k: literal (d.${k} or null)) [
+              "password"
+              "basicAuthPassword"
+            ]
+          )
+        ) config.datasources;
+
+        # Only the option description warns that the URLs in
+        # config.datasources get no egress under default deny. A candidate
+        # for an evaluation error while network policy is on.
         datasources =
-          if clashing != [ ] then
+          if inlineSecrets != [ ] then
+            throw "${who}: ${lib.concatStringsSep ", " inlineSecrets} holds a value written inline, and the datasources ConfigMap would carry it. Write a reference that Grafana expands: $NAME with NAME in `env` from a secretKeyRef, or $__file{<path>} for a mounted file, and put it under secureJsonData."
+          else if clashing != [ ] then
             throw "${who}: datasources reuses ${
               lib.concatMapStringsSep ", " (v: "\"${v}\"") clashing
             }, the name or uid of a datasource wired from a dependency. Rename the entry, or change prometheusDatasource, alertmanagerDatasource, or lokiDatasource."
@@ -461,13 +504,35 @@ in
         );
 
         renderIniValue = v: if builtins.isBool v then lib.boolToString v else toString v;
-        iniText = lib.concatStringsSep "\n" (
+
+        # grafana.ini is line-based: a line break in a value, or `]` in a
+        # section name or `=` in a key, would start a new section or key
+        # past the locks above.
+        hasLineBreak = v: lib.hasInfix "\n" v || lib.hasInfix "\r" v;
+        iniProblems = lib.concatLists (
           lib.mapAttrsToList (
             section: keys:
-            "[${section}]\n"
-            + lib.concatStrings (lib.mapAttrsToList (k: v: "${k} = ${renderIniValue v}\n") keys)
+            lib.optional (hasLineBreak section || lib.hasInfix "]" section) "section name ${builtins.toJSON section}"
+            ++ lib.concatLists (
+              lib.mapAttrsToList (
+                k: v:
+                lib.optional (hasLineBreak k || lib.hasInfix "=" k) "key ${builtins.toJSON "${section}.${k}"}"
+                ++ lib.optional (hasLineBreak (renderIniValue v)) "the value of ${section}.${k}"
+              ) keys
+            )
           ) ini
         );
+        iniText =
+          if iniProblems != [ ] then
+            throw "${who}: settings: ${lib.concatStringsSep ", " iniProblems} would break a grafana.ini line, so the file would carry sections or keys that settings does not show. Keep values on one line, and leave line breaks and `]` out of section names and line breaks and `=` out of keys."
+          else
+            lib.concatStringsSep "\n" (
+              lib.mapAttrsToList (
+                section: keys:
+                "[${section}]\n"
+                + lib.concatStrings (lib.mapAttrsToList (k: v: "${k} = ${renderIniValue v}\n") keys)
+              ) ini
+            );
 
         env = kix.mkEnvVars (
           kix.mergeEnv {
@@ -907,6 +972,9 @@ in
         };
       }
     )
+    # The header warns that Grafana's unauthenticated /metrics is public on
+    # this route; nothing refuses it. A candidate for an evaluation error
+    # once kix.options.ingress can turn the route off.
     (kix.expose { service = "service"; })
     (kix.monitor {
       service = "service";
