@@ -189,7 +189,7 @@ pub fn import_target_from_manifest(
                             .unwrap_or("")
                     ),
                     reason: format!(
-                        "CRD ref marker for {crd_kind} ({import_name}) lists no versions in {}. The kix library stamps it on every CRD ref marker, so this build did not come from the current library; rebuild it.",
+                        "CRD ref marker for {crd_kind} ({import_name}) lists no versions in {}. Builds from a kix library before 2026-10-02 lack it. Rebuild and deploy; a rollback or the operator cannot apply this build.",
                         keys::CRD_SERVED_VERSIONS
                     ),
                 });
