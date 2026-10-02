@@ -15,7 +15,7 @@
 #                          a Sentinel-aware client (redis-py `Sentinel`,
 #                          django-redis `SentinelClient`, Celery `sentinel://`).
 #                          An app that cannot needs a standalone valkey
-#                          (sentinel.enabled = false, replicaCount = 1).
+#                          (sentinel.enabled = false, replicas = 1).
 #   ingressNginx          optional, auto-creates ingress when present (+ hosts non-empty)
 #   clusterIssuer         optional, auto-enables TLS when present
 #

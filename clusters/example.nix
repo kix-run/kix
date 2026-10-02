@@ -95,7 +95,9 @@ kix.buildCluster {
           };
 
           # immich reads the password through a secretKeyRef, so valkey and
-          # its password live in immich's namespace.
+          # its password live in immich's namespace. The inline password is
+          # for development only; outside it, use a SOPS `source` with
+          # keys = [ "password" ], or a secret-ref.
           valkey-password = {
             package = packages.secret;
             aliases = [ "valkeyPassword" ];
