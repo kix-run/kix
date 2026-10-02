@@ -27,8 +27,9 @@
 #
 # Every package's options must satisfy the option contract
 # (kix/lib/eval/options.nix). Instance evaluation does not check it, so
-# this file is where it is enforced: once per package, on the options a
-# cluster reads, before any synthetic cluster is evaluated.
+# this file is where it is enforced: once per package and availability
+# level (`kix.checkPackageOptions`), before any synthetic cluster is
+# evaluated.
 #
 # Every package is evaluated twice: on the kind flavour alone (availability
 # "none") and with three availability zones declared ("zone"). Replica
@@ -41,7 +42,6 @@
 let
   piChecks = import ./pi-checks.nix { inherit lib; };
   versions = import ./lib/core/version.nix { inherit lib; };
-  optionContract = import ./lib/eval/options.nix { inherit lib; };
 
   # The clusterDomain of every synthetic cluster.
   evalClusterDomain = "eval.kix.test";
@@ -167,13 +167,11 @@ let
         password = "password";
       };
       wireguard.privateKey = "key";
+      # The three salts are optional; clusters/test-immich.nix sets them.
       secrets = {
         guardianSecretKey = "guardian";
         secretKeyBase = "base";
         databaseEncryptionKey = "encryption";
-        liveViewSigningSalt = "live-view";
-        cookieSigningSalt = "cookie";
-        cookieEncryptionSalt = "cookie-encryption";
       };
     };
     harbor = {
@@ -453,27 +451,20 @@ let
     else
       lib.assertMsg ok "kix/packages/${name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\" or \"v1.19.6\".";
 
-  # The package read the way the cluster evaluation reads it (phase 1,
-  # availability "none").
-  phase1Package =
+  checkOptions =
     name: package:
-    kix.callPackagePhase1 {
+    kix.checkPackageOptions {
       inherit package;
+      who = "kix/packages/${name}";
       scope = {
         instanceName = name;
         namespaceName = name;
       };
     };
 
-  # The options phase 1 reads are the ones every instance evaluates
-  # against. A package whose options depend on `availability` is checked
-  # at "none" only.
-  checkOptions =
-    name: package:
-    optionContract.checkOptionContract {
-      who = "kix/packages/${name}";
-      options = (phase1Package name package).options or { };
-    };
+  # True when every package in `packages` passes the option contract;
+  # throws with the violations otherwise.
+  checkOptionContracts = packages: builtins.deepSeq (lib.mapAttrsToList checkOptions packages) true;
 
   # The availability levels every package is evaluated at, as cluster
   # modules added after the kind flavour.
@@ -581,11 +572,14 @@ in
   # throw listing each violation otherwise.
   checkOptionContract = name: checkOptions name packages.${name};
 
+  inherit checkOptionContracts;
+
   # Forcing this checks the option contract of every package, then
   # evaluates every package that is not skipped, at every level. Each
   # package name appears once per level.
   names =
     assert lib.assertMsg (strayKeys == [ ])
       "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions` or `versionExceptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a directory under kix/packages/";
-    builtins.deepSeq (lib.mapAttrsToList checkOptions packages) (builtins.deepSeq evaluated evaluated);
+    assert checkOptionContracts packages;
+    builtins.deepSeq evaluated evaluated;
 }

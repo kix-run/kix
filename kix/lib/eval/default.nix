@@ -29,6 +29,11 @@ let
   };
   resolve = import ./resolve.nix { inherit lib kixlib; };
   optionContract = import ./options.nix { inherit lib; };
+  packageOptions = import ./package-options.nix {
+    inherit lib kixlib meta;
+    inherit (resolve) callPackagePhase1;
+    inherit (optionContract) optionContractViolations;
+  };
   import_ = import ./import.nix {
     inherit
       lib
@@ -137,4 +142,6 @@ in
   inherit (cluster) buildCluster;
 
   inherit (optionContract) optionContractViolations checkOptionContract;
+
+  inherit (packageOptions) packageOptionViolations checkPackageOptions;
 }

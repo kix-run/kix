@@ -8,6 +8,7 @@
   lib,
   eval,
   kixlib,
+  publicKix,
   mkCluster,
   manifests,
   storageClassImport,
@@ -512,9 +513,11 @@ in
     vs == [ ] || throw "expected no violations: ${builtins.toJSON vs}";
 
   # Declarations the walker cannot read are violations: a default that
-  # throws, an attrset default on a type no rule covers, a submodule that
-  # throws when evaluated (reported for its field defaults and for its
-  # fields), a non-option entry, and an option without `type` (merged as
+  # throws, an attrset default on a type no rule covers (a `coercedTo` whose
+  # `coercedType` accepts the default, an `attrTag`), a default with a
+  # `_type` that is not a module-system wrapper, a submodule that throws
+  # when evaluated (reported for its field defaults and for its fields), a
+  # non-option entry, and an option without `type` (merged as
   # `unspecified`, so Rule 1).
   lib-options-typing-contract-unreadable =
     let
@@ -524,8 +527,19 @@ in
           default = throw "no default";
         };
         coerced = lib.mkOption {
-          type = t.coercedTo t.str (x: { v = x; }) (t.attrsOf t.str);
+          type = t.coercedTo (t.attrsOf t.str) (x: x) (t.attrsOf t.str);
           default.v = "x";
+        };
+        tagged = lib.mkOption {
+          type = t.attrTag { x = lib.mkOption { type = t.str; }; };
+          default.x = "1";
+        };
+        wrapped = lib.mkOption {
+          type = t.attrsOf t.str;
+          default = {
+            _type = "custom";
+            a = "1";
+          };
         };
         brokenFields = lib.mkOption {
           type = t.submodule { config = throw "broken"; };
@@ -538,9 +552,11 @@ in
       mentions = path: needle: builtins.any (v: lib.hasInfix needle v.message) byPath.${path};
     in
     (
-      builtins.length vs == 6
+      builtins.length vs == 8
       && mentions "throwing" "evaluating its default throws"
       && mentions "coerced" "no rule for that type"
+      && mentions "tagged" "no rule for that type"
+      && mentions "wrapped" "_type \"custom\""
       && mentions "brokenFields" "evaluating its fields"
       && mentions "brokenFields" "reading the fields of its type throws"
       && mentions "notAnOption" "is not an option declaration"
@@ -548,25 +564,303 @@ in
     )
     || throw "unreadable: ${builtins.toJSON vs}";
 
-  # A recursive submodule type is reported once at the depth bound instead
-  # of being walked without end.
+  # A recursive submodule type stops at the option that repeats a
+  # declaration on its path, so a tree whose levels default to null passes,
+  # and a lossy default inside it is reported once. A chain of distinct
+  # declarations deeper than the bound is reported at the bound.
   lib-options-typing-contract-depth =
     let
-      node = t.submodule {
-        options.child = lib.mkOption {
-          type = t.nullOr node;
-          default = null;
+      node =
+        labels:
+        t.submodule {
+          options.child = lib.mkOption {
+            type = t.nullOr (node labels);
+            default = null;
+          };
+          options.labels = lib.mkOption {
+            type = t.attrsOf t.str;
+            default = labels;
+          };
+        };
+      tree =
+        labels:
+        violations {
+          tree = lib.mkOption {
+            type = node labels;
+            default = { };
+          };
+        };
+      # Thirteen levels, each declaring its own field `c<n>`.
+      chain =
+        n:
+        if n == 0 then
+          t.str
+        else
+          t.submodule {
+            options."c${toString n}" = lib.mkOption {
+              type = t.nullOr (chain (n - 1));
+              default = null;
+            };
+          };
+      deep = violations {
+        deep = lib.mkOption {
+          type = chain 13;
+          default = { };
         };
       };
+      lossy = tree { team = "x"; };
+    in
+    (
+      tree { } == [ ]
+      &&
+        map (v: lib.concatStringsSep "." v.path) lossy == [
+          "tree.child.labels"
+          "tree.labels"
+        ]
+      && builtins.length deep == 1
+      && lib.hasInfix "option levels deep" (builtins.head deep).message
+    )
+    || throw "depth: ${builtins.toJSON { inherit lossy deep; }}";
+
+  # A field default that reads a sibling with no default throws under
+  # getSubOptions. The field's type takes no attrset, so its default is not
+  # evaluated and nothing is reported.
+  lib-options-typing-contract-sibling-default =
+    let
+      server =
+        { config, ... }:
+        {
+          options.host = lib.mkOption { type = t.str; };
+          options.port = lib.mkOption { type = t.port; };
+          options.url = lib.mkOption {
+            type = t.str;
+            default = "http://${config.host}:${toString config.port}";
+          };
+          options.args = lib.mkOption {
+            type = t.listOf t.str;
+            default = [ "--host=${config.host}" ];
+          };
+        };
       vs = violations {
-        tree = lib.mkOption {
-          type = node;
+        servers = lib.mkOption {
+          type = t.attrsOf (t.submodule server);
+          default = { };
+        };
+        server = lib.mkOption {
+          type = t.submodule server;
           default = { };
         };
       };
     in
-    (builtins.length vs == 1 && lib.hasInfix "option levels deep" (builtins.head vs).message)
-    || throw "depth: ${builtins.toJSON vs}";
+    vs == [ ] || throw "sibling default: ${builtins.toJSON vs}";
+
+  # A default wrapped in lib.mkDefault, lib.mkOverride, lib.mkOrder,
+  # lib.mkMerge, or a true lib.mkIf is checked as the value it wraps, at the
+  # top level and in a submodule field.
+  lib-options-typing-contract-wrapped-defaults =
+    let
+      vs = violations {
+        mkDefault = lib.mkOption {
+          type = t.attrsOf t.str;
+          default = lib.mkDefault { a = "1"; };
+        };
+        mkMerge = lib.mkOption {
+          type = t.attrsOf t.str;
+          default = lib.mkMerge [
+            { }
+            (lib.mkBefore { a = "1"; })
+          ];
+        };
+        mkIf = lib.mkOption {
+          type = t.attrsOf t.str;
+          default = lib.mkIf true { a = "1"; };
+        };
+        mkIfFalse = lib.mkOption {
+          type = t.attrsOf t.str;
+          default = lib.mkIf false { a = "1"; };
+        };
+        sub = lib.mkOption {
+          type = t.submodule {
+            options.m = lib.mkOption {
+              type = t.attrsOf t.str;
+              default = lib.mkOverride 900 { x = "y"; };
+            };
+            options.a = lib.mkOption { type = t.str; };
+          };
+          default = lib.mkDefault { a = "1"; };
+        };
+      };
+    in
+    map (v: lib.concatStringsSep "." v.path) vs == [
+      "mkDefault"
+      "mkIf"
+      "mkMerge"
+      "sub"
+      "sub.m"
+    ]
+    || throw "wrapped defaults: ${builtins.toJSON vs}";
+
+  # A coercedTo whose coercedType rejects the default stores it as its
+  # finalType, so the finalType's rule applies.
+  lib-options-typing-contract-coerced =
+    let
+      fields = t.submodule {
+        options.size = lib.mkOption {
+          type = t.str;
+          default = "1Gi";
+        };
+      };
+      vs = violations {
+        matching = lib.mkOption {
+          type = t.coercedTo t.str (size: { inherit size; }) fields;
+          default.size = "1Gi";
+        };
+        differing = lib.mkOption {
+          type = t.coercedTo t.str (size: { inherit size; }) fields;
+          default.size = "2Gi";
+        };
+        labels = lib.mkOption {
+          type = t.coercedTo t.str (v: { app = v; }) (t.attrsOf t.str);
+          default.app = "x";
+        };
+      };
+    in
+    (
+      map (v: lib.concatStringsSep "." v.path) vs == [
+        "differing"
+        "labels"
+      ]
+      && lib.hasInfix "has the default \"1Gi\"" (builtins.head vs).message
+      && messagesMention "lib.mkDefault" (lib.tail vs)
+    )
+    || throw "coercedTo: ${builtins.toJSON vs}";
+
+  # kix.checkPackageOptions calls phase 1 at each availability level up to
+  # the package's ceiling, and names the levels of a violation that does
+  # not occur at all of them.
+  lib-options-typing-check-package-levels =
+    let
+      levelPackage =
+        ceiling:
+        { availability, ... }:
+        {
+          meta = {
+            version = "test";
+          }
+          // lib.optionalAttrs (ceiling != null) { availability.max = ceiling; };
+          options.zones = lib.mkOption {
+            type = t.attrsOf t.str;
+            default = if availability == "zone" then { "topology.kubernetes.io/zone" = "a"; } else { };
+          };
+          build = _: { };
+        };
+      plain = {
+        meta.version = "test";
+        options.x = lib.mkOption {
+          type = t.anything;
+          default.a = 1;
+        };
+        build = _: { };
+      };
+      vs = publicKix.packageOptionViolations { package = levelPackage null; };
+    in
+    (
+      map (v: v.levels) vs == [ [ "zone" ] ]
+      && throws (publicKix.checkPackageOptions { package = levelPackage null; })
+      && publicKix.checkPackageOptions { package = levelPackage "node"; } == null
+      && map (v: v.levels) (publicKix.packageOptionViolations { package = plain; }) == [ [ "none" ] ]
+    )
+    || throw "package levels: ${builtins.toJSON vs}";
+
+  # firezone writes an empty string for each salt an instance leaves unset,
+  # so every value in its env Secret is a string.
+  lib-options-typing-firezone-unset-salts =
+    let
+      postgres = {
+        meta.version = "test";
+        options.extensions = lib.mkOption {
+          type = t.listOf t.anything;
+          default = [ ];
+        };
+        build =
+          { self, scope, ... }:
+          {
+            cm = scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "postgres";
+            };
+            root = {
+              resource = self.cm;
+              out = {
+                fqdn = "postgres.vpn.svc";
+                port = "5432";
+              };
+            };
+          };
+      };
+      ms = manifests (mkCluster [
+        {
+          instances.vpn = {
+            postgres.package = postgres;
+            firezone = {
+              package = pkg "firezone";
+              config = {
+                domain = "vpn.example.com";
+                admin = {
+                  email = "admin@example.com";
+                  password = "password";
+                };
+                wireguard.privateKey = "key";
+                secrets = {
+                  guardianSecretKey = "guardian";
+                  secretKeyBase = "base";
+                  databaseEncryptionKey = "encryption";
+                };
+              };
+            };
+          };
+        }
+      ]);
+      stringData =
+        (lib.findFirst (m: m.kind == "Secret" && m.metadata.name == "firezone-env") { } ms).stringData
+          or null;
+    in
+    (
+      stringData != null
+      && builtins.all builtins.isString (builtins.attrValues stringData)
+      && stringData.COOKIE_SIGNING_SALT == ""
+    )
+    || throw "firezone env Secret: ${builtins.toJSON stringData}";
+
+  # every-package-evaluates refuses a package that breaks the contract:
+  # `names` asserts checkOptionContracts over the catalogue.
+  lib-options-typing-package-eval-contract =
+    let
+      packageEval = import ../../../package-eval.nix {
+        inherit lib;
+        kix = publicKix;
+      };
+      good = {
+        meta.version = "test";
+        options.labels = lib.mkOption {
+          type = t.attrsOf t.str;
+          default = { };
+        };
+        build = _: { };
+      };
+      lossy = good // {
+        options.labels = lib.mkOption {
+          type = t.attrsOf t.str;
+          default.app = "x";
+        };
+      };
+    in
+    (
+      packageEval.checkOptionContracts { inherit good; }
+      && throws (packageEval.checkOptionContracts { inherit good lossy; })
+    )
+    || throw "package-eval does not refuse a lossy package";
 
   lib-options-typing-check-throws =
     throws (

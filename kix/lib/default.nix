@@ -57,6 +57,8 @@ in
     evaluateInstance
     evaluateImportInstance
     buildCluster
+    checkPackageOptions
+    packageOptionViolations
     ;
 
   inherit (env) mkEnv;
