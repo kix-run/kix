@@ -346,7 +346,7 @@ in
       // lib.optionalAttrs (config.extraVolumes != [ ]) { volumes = config.extraVolumes; };
 
       baseSpec = {
-        replicas = config.replicas;
+        replicas = 1;
         selector.matchLabels = {
           "app.kubernetes.io/name" = "prometheus-operator";
           "app.kubernetes.io/instance" = name;

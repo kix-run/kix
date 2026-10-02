@@ -15,7 +15,9 @@
 #
 # Pure: no module system, no scope. `resolve` is called once per instance
 # by eval/instance.nix; `pick`, `atLeast` and `spreadConstraints` are what
-# packages see as `kix.availability`.
+# packages see as `kix.availability`, with `pick` and `atLeast` replaced by
+# their `underCeiling` forms for an instance whose package declares
+# meta.availability.max.
 { lib }:
 
 let
@@ -60,15 +62,99 @@ let
 
   # pick level { none = 1; pod = 2; node = 2; zone = 3; }. Every level must
   # be present so a package's mapping is complete by construction.
-  pick =
-    level: table:
+  pick = level: table: builtins.seq (checkPickTable table) table.${level};
+
+  # true when `table` has every level; throws otherwise.
+  checkPickTable =
+    table:
     let
       missing = builtins.filter (l: !(table ? ${l})) levels;
     in
-    if missing != [ ] then
-      throw "kix.availability.pick: table is missing ${lib.concatStringsSep ", " missing} (need every level: ${lib.concatStringsSep ", " levels})"
+    missing == [ ]
+    || throw "kix.availability.pick: table is missing ${lib.concatStringsSep ", " missing} (need every level: ${lib.concatStringsSep ", " levels})";
+
+  # A package's `meta.availability`: null, or an attrset whose only key is
+  # `max`. Returns `max` (checked later by `resolve`) or null.
+  ceilingOfMeta =
+    { value, where }:
+    let
+      unknown = builtins.attrNames (removeAttrs value [ "max" ]);
+    in
+    if value == null then
+      null
+    else if !builtins.isAttrs value then
+      throw "[${where}] meta.availability is a ${builtins.typeOf value}. Write meta.availability.max = \"<level>\"."
+    else if unknown != [ ] then
+      throw "[${where}] meta.availability has unknown key(s) ${lib.concatStringsSep ", " unknown}. The only key is max."
     else
-      table.${level};
+      value.max or null;
+
+  # `pick` and `atLeast` as handed to a package whose meta.availability.max
+  # is `ceiling` ("ns/inst" in `where`). `resolve` caps the level at the
+  # ceiling, so the package never sees a higher level. A table whose values
+  # above the ceiling differ from its value at the ceiling, and an `atLeast`
+  # threshold above the ceiling, describe behaviour that cannot happen;
+  # both throw. Only primitive values are compared; lists, attrsets and
+  # functions are skipped, because `==` on two functions is always false.
+  # The table's completeness is checked first. The comparison then
+  # evaluates the entries above the ceiling and the entry at the ceiling.
+  # An entry that throws is not compared; any other evaluation error, such
+  # as a missing attribute, still stops the build.
+  underCeiling =
+    { ceiling, where }:
+    let
+      quoted = ls: lib.concatMapStringsSep ", " (l: "\"${l}\"") ls;
+      above = builtins.filter (l: rank l > rank ceiling) levels;
+      isPrimitive =
+        v:
+        builtins.elem (builtins.typeOf v) [
+          "int"
+          "float"
+          "string"
+          "bool"
+          "null"
+        ];
+    in
+    if ceiling == null then
+      { inherit pick atLeast; }
+    else
+      {
+        pick =
+          level: table:
+          let
+            differs =
+              l:
+              let
+                probe = builtins.tryEval (isPrimitive table.${l} && table.${l} != table.${ceiling});
+              in
+              probe.success && probe.value;
+            dead = builtins.filter differs above;
+          in
+          builtins.seq (checkPickTable table) (
+            if dead != [ ] then
+              throw (
+                "[${where}] kix.availability.pick: meta.availability.max is \"${ceiling}\", so this package "
+                + "never sees a level above \"${ceiling}\", and the table's values for ${quoted dead} differ "
+                + "from its value for \"${ceiling}\" and are never used. If only some workloads cannot reach "
+                + "the higher levels, or the limit depends on configuration, put availability.max on their "
+                + "builder calls (scope.mkDeployment { availability.max = \"${ceiling}\"; ... }) and remove "
+                + "meta.availability.max. A chart package keeps the package ceiling and uses the value for "
+                + "\"${ceiling}\" directly."
+              )
+            else
+              table.${level}
+          );
+        atLeast =
+          min: level:
+          if rank min > rank ceiling then
+            throw (
+              "[${where}] kix.availability.atLeast \"${min}\": meta.availability.max is \"${ceiling}\", "
+              + "so this test is always false. Put the ceiling on the builder calls of the workloads that "
+              + "cannot reach \"${min}\", or remove the test."
+            )
+          else
+            atLeast min level;
+      };
 
   # The largest level the substrate can honour, and whether that is known.
   # `certain = false` when the capabilities that decide it are unknown
@@ -213,6 +299,8 @@ in
     levels
     rank
     checkCeiling
+    ceilingOfMeta
+    underCeiling
     atLeast
     pick
     substrate

@@ -63,6 +63,8 @@ in
           inherit kixlib;
         };
 
+        where = "${namespaceName}/${instanceName}";
+
         # Resolve the instance override or cluster default against the package
         # ceiling and substrate capabilities. Pass the result to the package,
         # workload interceptors, and instance processors.
@@ -72,8 +74,22 @@ in
             ((clusterConfig.cluster or { }).availability or { }).default
               or (availabilityLib.substrate (clusterConfig.cluster.capabilities or { })).level;
           instanceOverride = instCfg.availability or null;
-          ceiling = (peekedPackageMeta.availability or { }).max or null;
-          where = "${namespaceName}/${instanceName}";
+          ceiling = availabilityLib.ceilingOfMeta {
+            value = peekedPackageMeta.availability or null;
+            inherit where;
+          };
+          inherit where;
+        };
+
+        # The helper set this instance's package receives, in its option
+        # defaults and its build functions alike.
+        packageKix = kixlib // {
+          availability =
+            kixlib.availability
+            // availabilityLib.underCeiling {
+              inherit (availability) ceiling;
+              inherit where;
+            };
         };
 
         requester = describeRequester namespaceName instanceName instCfg;
@@ -194,6 +210,7 @@ in
           package = instCfg.package;
           scope = scope';
           availability = availability.level;
+          kix = packageKix;
         };
 
         packageMeta = raw.meta or { };
@@ -294,7 +311,7 @@ in
             extra =
               lib.optionalAttrs (args ? scope) { scope = scope'; }
               // lib.optionalAttrs (args ? lib) { inherit lib; }
-              // lib.optionalAttrs (args ? kix) { kix = kixlib; }
+              // lib.optionalAttrs (args ? kix) { kix = packageKix; }
               // lib.optionalAttrs (args ? deps) { deps = resolvedDeps; }
               // lib.optionalAttrs (args ? availability) { availability = availability.level; };
             depArgs = lib.intersectAttrs args resolvedDeps;

@@ -18,13 +18,12 @@
 # Escape hatches: the instance's `partsOverlays`.
 #
 # Limits: one replica at every availability level (`availability.max =
-# "pod"`), because a second unsharded replica duplicates every series.
+# "none"`), because a second unsharded replica duplicates every series.
 
 {
   scope,
   lib,
   kix,
-  availability,
 }:
 let
   name = scope.instanceName;
@@ -36,9 +35,9 @@ in
     owner = "platform";
     defaultAliases = [ "kubeStateMetrics" ];
     k8s.minVersion = "1.25";
-    # Unsharded exporter: a second replica duplicates every series, so
-    # there is no honest way to go above "pod".
-    availability.max = "pod";
+    # One exporter: a second replica duplicates every series, and this
+    # package does not wire `--shard`/`--total-shards`.
+    availability.max = "none";
   };
 
   options = {
@@ -50,22 +49,6 @@ in
     image = kix.options.image {
       repository = "registry.k8s.io/kube-state-metrics/kube-state-metrics";
       tag = "v2.19.1";
-    };
-    replicas = lib.mkOption {
-      type = lib.types.int;
-      # One at every level: a second replica scrapes the same API objects
-      # and duplicates every series.
-      default = kix.availability.pick availability {
-        none = 1;
-        pod = 1;
-        node = 1;
-        zone = 1;
-      };
-      description = ''
-        Number of kube-state-metrics replicas. Read from the cluster's
-        availability level (v2_discussions/145), but one at every level
-        because a second replica would duplicate every series.
-      '';
     };
     resources = kix.options.resources {
       requests = {
@@ -195,7 +178,7 @@ in
         {
           inherit name;
           spec = {
-            replicas = config.replicas;
+            replicas = 1;
             selector.matchLabels = scope.selectorLabels;
             template.spec = {
               serviceAccountName = self.serviceAccount.out.name;

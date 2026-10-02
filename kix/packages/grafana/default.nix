@@ -4,6 +4,10 @@
 # dashboards and datasources from ConfigMaps/Secrets labeled with
 # grafana_dashboard=1 / grafana_datasource=1.
 #
+# Limits: one pod (`availability.max = "none"` on the Deployment). The
+# package wires no alerting HA (ha_peers or ha_redis_address), and the
+# default SQLite database and data claim take one writer.
+#
 # DI deps:
 #   storage ? null            optional PVC for /var/lib/grafana. When absent,
 #                             an emptyDir is used. Provision via a sibling
@@ -22,7 +26,6 @@
   scope,
   lib,
   kix,
-  availability,
 }:
 let
   name = scope.instanceName;
@@ -69,9 +72,6 @@ in
     owner = "platform";
     defaultAliases = [ "grafana" ];
     k8s.minVersion = "1.25";
-    # This package configures no external database, so Grafana runs on
-    # its local SQLite file and cannot run more than one replica.
-    availability.max = "none";
     # persistence.inlinePvc hand-rolls a claim; the preferred path is the
     # `storage` dep + sibling persistent-volume-claim instance. Grant kept
     # until the inline option is removed (audited by unsafeGrants).
@@ -111,21 +111,6 @@ in
     image = kix.options.image {
       repository = "docker.io/grafana/grafana";
       tag = "13.1.1";
-    };
-    replicas = lib.mkOption {
-      type = lib.types.int;
-      # Pinned to one at every level: see meta.availability.max.
-      default = kix.availability.pick availability {
-        none = 1;
-        pod = 1;
-        node = 1;
-        zone = 1;
-      };
-      description = ''
-        Number of Grafana replicas. Pinned to one at every availability
-        level (v2_discussions/145) because the SQLite database takes a
-        single writer.
-      '';
     };
     resources = kix.options.resources {
       requests = {
@@ -1163,11 +1148,15 @@ in
 
       # ── Deployment ──────────────────────────────────────────────────────
 
+      # A partsOverlays entry that rebuilds this Deployment without
+      # availability.max can run more pods once the limits in the header are
+      # addressed.
       deployment =
         {
           inherit name;
+          availability.max = "none";
           spec = {
-            replicas = config.replicas;
+            replicas = 1;
             selector.matchLabels = scope.selectorLabels;
             strategy.type = "Recreate";
             # The datasource sidecar reads the datasources ConfigMap through
