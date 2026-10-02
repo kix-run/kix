@@ -167,7 +167,8 @@ in
       };
 
       # The `cilium` package reads out.helmChartConfig to write its values
-      # into RKE2's bundled chart.
+      # into RKE2's bundled chart. Not optional: the package takes it as an
+      # optional dependency, which never activates an optional import.
       platform-cilium = lib.mkIf (primary == "cilium") {
         package = kix.mkImport {
           roles = [ "cni" ];
@@ -176,7 +177,6 @@ in
             namespace = "kube-system";
           };
         };
-        optional = true;
       };
 
       platform-snapshot-controller = {
