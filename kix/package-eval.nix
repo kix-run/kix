@@ -244,7 +244,7 @@ let
     n8n.instances.valkey-password = valkeyPassword;
     persistent-volume-claim.config.size = "1Gi";
     posthog-proxy.config.host = "posthog.example.com";
-    priority-classes.config.classes.default.value = 1000;
+    priority-class.config.value = 1000;
     python-app = {
       config.backend.image = {
         repository = "ghcr.io/example/python-app";
