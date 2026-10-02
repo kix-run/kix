@@ -135,17 +135,27 @@ pub async fn apply_activation(
     Ok(())
 }
 
+/// How the operator finished an Activation it reconciled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reconciled {
+    Active,
+    /// Every resource was attempted and some failed. The record is current,
+    /// and the command that waited on it exits non-zero.
+    Degraded,
+}
+
 /// Watch an Activation CR's status until it reaches Active phase or fails.
 ///
 /// Polls the Activation status periodically, printing wave progress as it happens.
-/// Completion is signaled by `status.phase == "Active"`.
+/// Returns when `status.phase` is `Active` or `Degraded`; `Failed`,
+/// `Superseded`, and a 10 minute timeout are errors.
 pub async fn watch_activation_progress(
     client: &Client,
     ar: &ApiResource,
     activation_name: &str,
     _expected_source: &str,
     quiet: bool,
-) -> Result<()> {
+) -> Result<Reconciled> {
     let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
     let poll_interval = Duration::from_secs(2);
     let timeout = Duration::from_secs(600);
@@ -248,7 +258,11 @@ pub async fn watch_activation_progress(
                     phase_colored,
                 );
             }
-            return Ok(());
+            return Ok(if phase == "Active" {
+                Reconciled::Active
+            } else {
+                Reconciled::Degraded
+            });
         }
 
         // Check for Superseded (another activation took over)
@@ -326,5 +340,40 @@ pub async fn wait_for_deletion(
         }
 
         tokio::time::sleep(poll_interval).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kix::cluster::fake_api::FakeApi;
+    use kix::manifest::lifecycle::RECORD_KIND;
+
+    fn record(name: &str, phase: &str) -> Value {
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": RECORD_KIND,
+            "metadata": { "name": name },
+            "status": { "phase": phase },
+        })
+    }
+
+    async fn watch(phase: &str) -> Result<Reconciled> {
+        let api = FakeApi::new([record("rec", phase)]);
+        let client = api.client();
+        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let (ar, _) = kix::cluster::activation::find_activation_ar(&discovery)
+            .unwrap()
+            .unwrap();
+        watch_activation_progress(&client, ar, "rec", "", true).await
+    }
+
+    /// A Degraded record is reported apart from an Active one, so
+    /// `kix deploy --operator` can exit non-zero for it.
+    #[tokio::test]
+    async fn a_degraded_record_is_not_reported_as_active() {
+        assert_eq!(watch("Active").await.unwrap(), Reconciled::Active);
+        assert_eq!(watch("Degraded").await.unwrap(), Reconciled::Degraded);
+        assert!(watch("Failed").await.is_err());
     }
 }

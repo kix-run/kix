@@ -388,7 +388,7 @@ Wave-based deployment with confirmation.
 - `--reconcile` — Re-apply all resources (heal drift).
 - `--prune`: Delete orphaned resources. Without it the plan still lists every orphan by name and says they are kept, and the new Activation lists the builds they came from under `status.orphansKeptFrom`, so a later `kix deploy --prune` or soft `kix gc` still deletes them. The previous deploy record (Activation) is never an orphan.
 - `--prune-mode <MODE>` — default (after apply), no (skip).
-- `--on-error <MODE>` — stop (default) or continue.
+- `--on-error <MODE>` — stop (default) or continue. Any failed resource exits 1 under both.
 - `--timeout <DURATION>` — Readiness timeout (default: 5m).
 - `--skip-import-checks` — Skip pre-deploy import verification.
 - `--current-activation` — Use local cache instead of fetching from cluster.

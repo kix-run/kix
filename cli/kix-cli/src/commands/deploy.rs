@@ -42,6 +42,7 @@ use crate::output;
 use crate::plan;
 
 use super::CommandContext;
+use super::operator::Reconciled;
 use kix::manifest::keys;
 
 pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
@@ -526,7 +527,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     let global = ctx.global.clone();
-    let deploy_result = ctx.runtime.block_on(run_deploy_async(
+    let end = ctx.runtime.block_on(run_deploy_async(
         args,
         &global,
         plan,
@@ -540,13 +541,15 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         activation_manifest,
         &failed_baseline.consumed,
         kept_orphans,
-    ));
+    ))?;
 
     // Save activation path for next deploy's diff and for soft `kix gc`.
-    // Never after a dry run: nothing was deployed, and a cache that names a
-    // build the cluster does not run makes soft gc treat every resource of
-    // the real deploy as garbage.
-    if deploy_result.is_ok()
+    // Only when this build's record became current. A cache that names a
+    // build the cluster does not run (a dry run, or a run that left nodes
+    // unattempted) makes soft gc treat the current closure as garbage, and
+    // makes the next `--current-activation` plan skip the nodes this run
+    // never applied.
+    if end.current
         && !args.dry_run
         && let Err(e) = kix::eval::store::save_activation_path(&cluster, &result_path)
     {
@@ -555,7 +558,38 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         );
     }
 
-    deploy_result
+    if !end.succeeded {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// How an engine run ends `kix deploy` and `kix rollback`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RunEnd {
+    /// The command exits zero. `run_deploy` returns `Ok` with failures in
+    /// the counts under `--on-error continue` and when a prune delete fails,
+    /// so `Ok` alone does not mean every operation succeeded.
+    pub succeeded: bool,
+    /// The run's record became the current one. An `Err` or an `Ok` with
+    /// cancelled nodes means the engine marked the record Failed and the
+    /// previous activation stays current.
+    pub current: bool,
+}
+
+impl RunEnd {
+    pub(crate) fn of(result: &Result<DeployResult, scheduler::DeployError>) -> Self {
+        match result {
+            Ok(r) => RunEnd {
+                succeeded: r.failed == 0 && r.cancelled == 0,
+                current: r.cancelled == 0,
+            },
+            Err(_) => RunEnd {
+                succeeded: false,
+                current: false,
+            },
+        }
+    }
 }
 
 /// Load old activation from local cache (--current-activation mode).
@@ -1165,7 +1199,7 @@ async fn run_deploy_async(
     activation_manifest: Option<&Value>,
     consumed_failed: &[String],
     kept_orphans: activation::KeptOrphans,
-) -> Result<()> {
+) -> Result<RunEnd> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
 
     // Reuse pre-established connection or create a new one. A plan made
@@ -1302,26 +1336,22 @@ async fn run_deploy_async(
         None
     };
 
-    let observer: Arc<dyn DeployObserver> = if let Some(d) = &tui_driver {
-        d.observer()
-    } else {
-        match args.log_format {
-            crate::cli::LogFormat::Json => {
-                Arc::new(super::deploy_log::JsonObserver::new(global.verbose > 0))
-            }
-            crate::cli::LogFormat::Line => Arc::new(super::deploy_log::LineObserver {
-                verbose: global.verbose > 0,
-            }),
-            crate::cli::LogFormat::Pretty if !interactive => {
-                Arc::new(super::deploy_log::LineObserver {
-                    verbose: global.verbose > 0,
-                })
-            }
-            crate::cli::LogFormat::Pretty => Arc::new(StreamCliObserver {
+    // The JSON log ends with a summary object in place of the summary line,
+    // so its stdout stays NDJSON.
+    let json_log = (tui_driver.is_none() && args.log_format == crate::cli::LogFormat::Json)
+        .then(|| Arc::new(super::deploy_log::JsonObserver::new(global.verbose > 0)));
+    let observer: Arc<dyn DeployObserver> = match (&tui_driver, &json_log) {
+        (Some(d), _) => d.observer(),
+        (None, Some(json)) => json.clone(),
+        (None, None) if args.log_format == crate::cli::LogFormat::Pretty && interactive => {
+            Arc::new(StreamCliObserver {
                 quiet: global.quiet,
                 verbose: global.verbose > 0,
-            }),
+            })
         }
+        (None, None) => Arc::new(super::deploy_log::LineObserver {
+            verbose: global.verbose > 0,
+        }),
     };
 
     let result =
@@ -1335,26 +1365,29 @@ async fn run_deploy_async(
         baseline::sync_kept_roots(cluster_name, &recorded);
     }
 
-    match result {
-        Ok(r) => {
+    let end = RunEnd::of(&result);
+    let counts = match &result {
+        Ok(r) => Some(r),
+        Err(e) => e.partial(),
+    };
+    match (&json_log, counts) {
+        (Some(json), counts) => json.summary(counts, args.dry_run, end.succeeded),
+        (None, Some(r)) => {
             println!();
-            print_summary(&r, args.dry_run);
-            Ok(())
+            println!("{}", summary_line(r, args.dry_run, end.succeeded));
         }
-        Err(e) => {
-            if let Some(r) = e.partial() {
-                print_summary(r, args.dry_run);
-            }
-            if matches!(
-                e,
-                kix::cluster::scheduler::DeployError::DiscoveryFailed { .. }
-                    | kix::cluster::scheduler::DeployError::Internal { .. }
-            ) {
-                eprintln!("{} {e}", output::red("error:"));
-            }
-            std::process::exit(1);
-        }
+        (None, None) => {}
     }
+    // The event stream already reports failed nodes and cancellation.
+    if let Err(e) = &result
+        && !matches!(
+            e,
+            scheduler::DeployError::NodesFailed { .. } | scheduler::DeployError::Cancelled { .. }
+        )
+    {
+        eprintln!("{} {e}", output::red("error:"));
+    }
+    Ok(end)
 }
 
 /// Decide whether an offline-dry-run Apply node corresponds to a Create or
@@ -1438,7 +1471,7 @@ fn render_offline_dry_run(
     result.pruned = pruned;
 
     println!();
-    print_summary(&result, true);
+    println!("{}", summary_line(&result, true, true));
     Ok(())
 }
 
@@ -1523,7 +1556,10 @@ fn render_prune_start(resources: &[ResourceId], kept: &[ResourceId], delete: boo
     out
 }
 
-fn print_summary(r: &DeployResult, dry_run: bool) {
+/// The last line of a deploy. Its first words say how the run ended:
+/// `complete` when nothing failed, `failed` when a resource operation did,
+/// and `stopped` when the run ended early with no failure, as on Ctrl-C.
+fn summary_line(r: &DeployResult, dry_run: bool, succeeded: bool) -> String {
     let failed_str = r.failed.to_string();
     let mut cancelled_tail = if r.cancelled > 0 {
         format!(", {} cancelled", output::dim(&r.cancelled.to_string()),)
@@ -1533,14 +1569,16 @@ fn print_summary(r: &DeployResult, dry_run: bool) {
     if r.pruned > 0 {
         cancelled_tail.push_str(&format!(", {} pruned", output::red(&r.pruned.to_string())));
     }
-    let prefix = if dry_run {
-        "Dry run complete"
+    let run = if dry_run { "Dry run" } else { "Deploy" };
+    let ending = if succeeded {
+        "complete"
+    } else if r.failed > 0 {
+        "failed"
     } else {
-        "Deploy complete"
+        "stopped"
     };
-    println!(
-        "{}: {} created, {} configured, {} unchanged, {} failed{}",
-        prefix,
+    format!(
+        "{run} {ending}: {} created, {} configured, {} unchanged, {} failed{}",
         output::green(&r.created.to_string()),
         output::yellow(&r.configured.to_string()),
         output::dim(&r.unchanged.to_string()),
@@ -1550,7 +1588,7 @@ fn print_summary(r: &DeployResult, dry_run: bool) {
             output::dim(&failed_str)
         },
         cancelled_tail,
-    );
+    )
 }
 
 fn parse_timeout(s: Option<&str>) -> Result<Duration> {
@@ -1774,7 +1812,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let global = ctx.global.clone();
     let source_path = result_path.display().to_string();
 
-    ctx.runtime.block_on(async {
+    let reconciled = ctx.runtime.block_on(async {
         let (client, ar) =
             super::operator::connect_and_verify(global.context.as_deref(), global.quiet).await?;
 
@@ -1804,7 +1842,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             );
         }
 
-        super::operator::watch_activation_progress(
+        let reconciled = super::operator::watch_activation_progress(
             &client,
             &ar,
             &activation_name,
@@ -1813,24 +1851,30 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         )
         .await?;
 
+        let (ending, phase) = match reconciled {
+            Reconciled::Active => (output::green("complete"), output::green("Active")),
+            Reconciled::Degraded => (output::red("failed"), output::yellow("Degraded")),
+        };
         println!();
         println!(
-            "Deploy via operator {}: Activation '{}' is {}",
-            output::green("complete"),
+            "Deploy via operator {ending}: Activation '{}' is {phase}",
             output::bold(&activation_name),
-            output::green("Active"),
         );
 
-        Ok::<(), miette::Report>(())
+        Ok::<_, miette::Report>(reconciled)
     })?;
 
-    // Save activation path for next deploy's diff
+    // Save activation path for next deploy's diff. A Degraded record is
+    // current too.
     if let Err(e) = kix::eval::store::save_activation_path(&cluster, &result_path) {
         tracing::warn!(
             "could not save the local build path; later commands may be unable to find this deployment: {e}"
         );
     }
 
+    if reconciled == Reconciled::Degraded {
+        std::process::exit(1);
+    }
     Ok(())
 }
 
@@ -2133,5 +2177,172 @@ mod rebuild_from_live_tests {
             .collect();
         names.sort();
         assert_eq!(names, vec!["current", "failed-left", "kept-left", "shared"]);
+    }
+}
+
+#[cfg(test)]
+mod run_end_tests {
+    use super::*;
+    use kix::cluster::ops::scripted::{ApplyFailure, Behaviour, NodeScript, ScriptedOps};
+    use kix::cluster::stream::NullObserver;
+    use serde_json::json;
+
+    fn deployment(name: &str, deps: &[&str]) -> Value {
+        let mut annotations = serde_json::Map::new();
+        annotations.insert(keys::IDENTITY_HASH.into(), json!(format!("h_{name}")));
+        if !deps.is_empty() {
+            let deps: Vec<String> = deps.iter().map(|d| format!("h_{d}")).collect();
+            annotations.insert(keys::DEPENDS_ON.into(), json!(deps.join(",")));
+        }
+        json!({
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": { "name": name, "namespace": "default", "annotations": annotations },
+        })
+    }
+
+    fn deployment_id(name: &str) -> ResourceId {
+        ResourceId {
+            kind: "Deployment".into(),
+            namespace: "default".into(),
+            name: name.into(),
+        }
+    }
+
+    fn apply_all(manifests: &[Value]) -> DeployPlan {
+        let graph = ResourceGraph::from_manifests(manifests).unwrap();
+        let changes: Vec<ChangeAction> =
+            manifests.iter().cloned().map(ChangeAction::Apply).collect();
+        DeployPlan::from_graph_and_changes(&graph, &changes)
+    }
+
+    fn config(on_error: OnErrorPolicy, prune: PrunePolicy) -> SchedulerConfig {
+        SchedulerConfig {
+            timeout: Duration::from_secs(300),
+            on_error,
+            prune,
+            cancel: kix::cluster::cancel::CancelToken::new(),
+            dry_run: false,
+            concurrency: scheduler::CONCURRENCY,
+            stall: StallPolicy::off(),
+            rerun_failed: true,
+        }
+    }
+
+    /// `a` fails to apply; every other node applies.
+    fn ops_failing_a() -> Arc<ScriptedOps> {
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            deployment_id("a"),
+            NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::Other("boom".into())))),
+        );
+        ops
+    }
+
+    async fn run(
+        ops: &Arc<ScriptedOps>,
+        manifests: &[Value],
+        orphans: &[ResourceId],
+        old: &[Value],
+        config: &SchedulerConfig,
+    ) -> std::result::Result<DeployResult, scheduler::DeployError> {
+        let ops: Arc<dyn ClusterOps> = ops.clone();
+        scheduler::run_deploy(
+            ops,
+            apply_all(manifests),
+            orphans,
+            old,
+            config,
+            Arc::new(NullObserver),
+        )
+        .await
+    }
+
+    /// Under `--on-error continue`, a failed node whose siblings all
+    /// applied finalizes the record (Degraded), so the build is current,
+    /// and the command exits non-zero.
+    #[tokio::test]
+    async fn continue_with_a_failed_node_exits_non_zero() {
+        let manifests = [deployment("a", &[]), deployment("b", &[])];
+        let cfg = config(OnErrorPolicy::Continue, PrunePolicy::WarnOnly);
+        let result = run(&ops_failing_a(), &manifests, &[], &[], &cfg).await;
+        assert_eq!(result.as_ref().unwrap().failed, 1);
+        assert_eq!(
+            RunEnd::of(&result),
+            RunEnd {
+                succeeded: false,
+                current: true,
+            }
+        );
+    }
+
+    /// Under `--on-error continue`, a failed node cancels its dependent.
+    /// The engine marks the record Failed, so the build is not current
+    /// and the command exits non-zero.
+    #[tokio::test]
+    async fn continue_with_a_cancelled_dependent_is_not_current() {
+        let manifests = [deployment("a", &[]), deployment("b", &["a"])];
+        let cfg = config(OnErrorPolicy::Continue, PrunePolicy::WarnOnly);
+        let result = run(&ops_failing_a(), &manifests, &[], &[], &cfg).await;
+        let counts = result.as_ref().unwrap();
+        assert_eq!((counts.failed, counts.cancelled), (1, 1));
+        assert_eq!(
+            RunEnd::of(&result),
+            RunEnd {
+                succeeded: false,
+                current: false,
+            }
+        );
+    }
+
+    /// Under the default `--on-error stop`, every node applying but a
+    /// prune delete failing still exits non-zero.
+    #[tokio::test]
+    async fn a_failed_prune_delete_exits_non_zero() {
+        let ops = Arc::new(ScriptedOps::new());
+        ops.delete_behaviour(Behaviour::Now(Err("forbidden".into())));
+        let cfg = config(OnErrorPolicy::Stop, PrunePolicy::Delete);
+        let result = run(
+            &ops,
+            &[deployment("a", &[])],
+            &[deployment_id("old")],
+            &[deployment("old", &[])],
+            &cfg,
+        )
+        .await;
+        assert_eq!(result.as_ref().unwrap().failed, 1);
+        assert!(!RunEnd::of(&result).succeeded);
+    }
+
+    #[tokio::test]
+    async fn a_clean_run_succeeds() {
+        let manifests = [deployment("a", &[]), deployment("b", &["a"])];
+        let cfg = config(OnErrorPolicy::Continue, PrunePolicy::WarnOnly);
+        let result = run(&Arc::new(ScriptedOps::new()), &manifests, &[], &[], &cfg).await;
+        assert_eq!(
+            RunEnd::of(&result),
+            RunEnd {
+                succeeded: true,
+                current: true,
+            }
+        );
+    }
+
+    #[test]
+    fn the_summary_line_names_a_failed_run() {
+        let counts = DeployResult {
+            created: 2,
+            unchanged: 348,
+            failed: 2,
+            cancelled: 3,
+            ..DeployResult::default()
+        };
+        let line = summary_line(&counts, false, false);
+        assert!(line.starts_with("Deploy failed: "), "{line}");
+        assert!(line.contains("2 failed"), "{line}");
+        let stopped = summary_line(&DeployResult::default(), false, false);
+        assert!(stopped.starts_with("Deploy stopped: "), "{stopped}");
+        let ok = summary_line(&DeployResult::default(), true, true);
+        assert!(ok.starts_with("Dry run complete: "), "{ok}");
     }
 }

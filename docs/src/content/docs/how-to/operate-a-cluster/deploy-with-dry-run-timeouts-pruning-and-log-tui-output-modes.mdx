@@ -95,9 +95,10 @@ not a terminal. Select `line` explicitly for stable CI logs:
   cwd="kix-examples/"
 />
 
-Use `json` when another program needs the deploy events. The plan and final
-summary are still plain text on the same stream, so filter valid JSON lines
-before treating the result as NDJSON:
+Use `json` when another program needs the deploy events. The plan is still
+plain text on the same stream, so filter valid JSON lines before treating the
+result as NDJSON. The last event is a `summary` object with the counts and
+`succeeded`:
 
 <Command
   commands={[

@@ -7,7 +7,8 @@
 //!   motion. Safe to pipe into `less`, CI logs, `tee`. Used automatically
 //!   when `--log-format=pretty` is requested against a non-TTY stdout.
 //! - [`JsonObserver`]: one NDJSON object per [`DeployEvent`],
-//!   flushed immediately. Shape is stable across events (every object
+//!   flushed immediately, then one `summary` object with the counts and
+//!   whether the run succeeded. Shape is stable across events (every object
 //!   carries `type` and timestamp); consumers can `jq -c` or pipe to log
 //!   aggregators. Readiness progress events are suppressed unless `-v` is
 //!   on to match the `line` format's suppression rule.
@@ -22,7 +23,8 @@ use serde_json::json;
 
 use kix::cluster::apply::ApplyAction;
 use kix::cluster::stream::{
-    CancelReason, DeployEvent, DeployObserver, NodeDetail, NodeId, TransitionKind, Verdict,
+    CancelReason, DeployEvent, DeployObserver, DeployResult, NodeDetail, NodeId, TransitionKind,
+    Verdict,
 };
 use kix::manifest::types::ResourceId;
 
@@ -171,6 +173,40 @@ impl JsonObserver {
             started_at: Instant::now(),
         }
     }
+
+    /// Print the run's last object, which stands in for the text summary
+    /// line. `counts` is `None` when the run ended before the engine counted
+    /// anything.
+    pub fn summary(&self, counts: Option<&DeployResult>, dry_run: bool, succeeded: bool) {
+        let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
+        println!("{}", summary_json(counts, dry_run, succeeded, elapsed_ms));
+        let _ = io::stdout().flush();
+    }
+}
+
+/// The `summary` object: whether the run succeeded, which matches the exit
+/// status, and the counts the text summary line shows.
+fn summary_json(
+    counts: Option<&DeployResult>,
+    dry_run: bool,
+    succeeded: bool,
+    elapsed_ms: u64,
+) -> serde_json::Value {
+    let mut obj = json!({
+        "type": "summary",
+        "elapsed_ms": elapsed_ms,
+        "dry_run": dry_run,
+        "succeeded": succeeded,
+    });
+    if let Some(r) = counts {
+        obj["created"] = json!(r.created);
+        obj["configured"] = json!(r.configured);
+        obj["unchanged"] = json!(r.unchanged);
+        obj["failed"] = json!(r.failed);
+        obj["cancelled"] = json!(r.cancelled);
+        obj["pruned"] = json!(r.pruned);
+    }
+    obj
 }
 
 impl DeployObserver for JsonObserver {
@@ -476,6 +512,33 @@ mod tests {
                 "prune> 1 orphaned resources are never deleted automatically",
                 "Namespace/gone@app> orphan, kept",
             ]
+        );
+    }
+
+    /// A run with failed nodes reports `succeeded: false` and its counts.
+    #[test]
+    fn summary_json_reports_failures() {
+        let counts = DeployResult {
+            created: 2,
+            unchanged: 348,
+            failed: 2,
+            cancelled: 3,
+            ..DeployResult::default()
+        };
+        assert_eq!(
+            summary_json(Some(&counts), false, false, 7),
+            json!({
+                "type": "summary",
+                "elapsed_ms": 7,
+                "dry_run": false,
+                "succeeded": false,
+                "created": 2,
+                "configured": 0,
+                "unchanged": 348,
+                "failed": 2,
+                "cancelled": 3,
+                "pruned": 0,
+            })
         );
     }
 }

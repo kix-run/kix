@@ -877,9 +877,8 @@ pub async fn run_deploy(
     // stays Active, so a prune here would delete objects the still current
     // closure cannot get back.
     //
-    // The run still returns `Ok`. `--on-error=continue` means the caller
-    // asked to push past failures, and it has always exited zero with a
-    // summary that names them; changing that is a separate decision.
+    // The run still returns `Ok` with the counts. Callers read `failed` and
+    // `cancelled` to decide the outcome; `kix deploy` exits non-zero.
     if !config.dry_run && result.cancelled > 0 {
         let reason = format!(
             "{} failed, {} never attempted",

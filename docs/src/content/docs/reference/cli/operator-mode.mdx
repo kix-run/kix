@@ -64,7 +64,8 @@ A timeout ends the CLI only. The operator keeps working on the record.
 
 Operator-mode commands exit `1` on any of the errors above, when confirmation
 is needed on a non-interactive terminal, or when a record could not be
-deleted.
+deleted. `deploy --operator` and `rollback --operator` also exit `1` when the
+operator finishes the Activation as `Degraded`.
 
 :::tip[Use it in a task]
 See [Roll back an activation](/docs/how-to/operate-a-cluster/roll-back-an-activation/)

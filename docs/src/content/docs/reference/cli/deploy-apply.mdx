@@ -33,13 +33,13 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
 | `--prune` | Delete orphans: resources the previous activation had and this build does not, including orphans earlier deploys kept. Without it, orphans are listed and kept, and the new Activation records where they came from so a later `kix deploy --prune` or `kix gc` deletes them. |
 | `--prune-mode <MODE>` | `default` prunes according to `--prune`. `no` never prunes in this run, even with `--prune`; use `kix gc` later. |
 | `--timeout <DURATION>` | How long to wait for each resource to become ready: `5m`, `300s`, or a bare number of seconds. Default `180s`. |
-| `--on-error <MODE>` | `stop` (default) halts the run at the first failure and cancels what has not started. `continue` cancels only the dependents of a failed resource and carries on with the rest. |
+| `--on-error <MODE>` | `stop` (default) halts the run at the first failure and cancels what has not started. `continue` cancels only the dependents of a failed resource and carries on with the rest. Either way, a run in which any resource failed exits `1`. |
 | `--reconcile` | Re-apply every resource, including those whose identity hash matches the running activation. Use it to put back fields that were changed on the cluster. |
 | `--force-conflicts` | Take ownership of fields another field manager owns. Without it, a conflict fails that resource and names the fields and their current owner. |
 | `--accept-migrations` | Proceed when the plan removes and adds stateful resources in the same slot. Without it such a deploy stops, even with `--yes`. Kix does not copy data. |
 | `--current-activation` | Take the previous activation from the local cache instead of the cluster. The plan is computed offline, so it cannot see deploys that stopped part way or orphans that earlier deploys kept; the new Activation lists the builds those orphans came from again, so a later plain deploy can prune them. With `--dry-run` nothing contacts the cluster. |
 | `--operator` | Hand the build to the Kix operator instead of applying it from this machine. See [Operator mode](/docs/reference/cli/operator-mode/). |
-| `--log-format <FORMAT>` | `pretty` (default): interactive progress, coloured when stdout is a terminal; falls back to `line` when stdin is not a terminal. `line`: one plain line per resource outcome. `json`: JSON deploy events, one per line. The plan and final summary are still plain text on the same stream. |
+| `--log-format <FORMAT>` | `pretty` (default): interactive progress, coloured when stdout is a terminal; falls back to `line` when stdin is not a terminal. `line`: one plain line per resource outcome. `json`: JSON deploy events, one per line, ending with a `summary` object. The plan is still plain text on the same stream. |
 | `--tui` | Draw a live dependency tree while deploying. Ignored when stdin is not a terminal. |
 | `--group-by-ns` | With `--tui`, group the tree by namespace instead of package. Execution order does not change. |
 | `--fold-height <ROWS>` | With `--tui`, cap the live view at this many rows. Default: half the terminal height, between 10 and 40. |
@@ -126,15 +126,17 @@ non-interactive.
 ]} />
 
 `--log-format json` does not currently produce a standalone NDJSON document:
-the plan and completion summary remain plain text. A consumer must separate
-JSON event lines from the surrounding text.
+the plan remains plain text. A consumer must separate JSON event lines from
+the surrounding text. The last JSON line is the `summary` object, with
+`succeeded` (which matches the exit status), `dry_run`, and the `created`,
+`configured`, `unchanged`, `failed`, `cancelled`, and `pruned` counts.
 
 ## Exit status
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Deploy complete, nothing to apply, or the prompt was declined |
-| `1` | A resource failed or the run was cancelled; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; or a build, evaluation or cluster error |
+| `1` | A resource failed, under either `--on-error` mode, or the run was cancelled; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; or a build, evaluation or cluster error |
 
 :::tip[Use it in a task]
 See [Deploy with dry-run, timeouts, pruning, and log or TUI output modes](/docs/how-to/operate-a-cluster/deploy-with-dry-run-timeouts-pruning-and-log-tui-output-modes/)

@@ -618,8 +618,10 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         baseline::sync_kept_roots(cluster, &recorded);
     }
 
-    // Save activation path for next deploy's diff
-    if result.is_ok()
+    // Save activation path for next deploy's diff, once the target's record
+    // is current again.
+    let end = super::deploy::RunEnd::of(&result);
+    if end.current
         && let Err(e) = kix::eval::store::save_activation_path(cluster, &target_result_dir)
     {
         tracing::warn!(
@@ -627,20 +629,22 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         );
     }
 
-    match result {
+    match &result {
         Ok(r) => {
             println!();
-            print_summary(&r);
-            Ok(())
+            print_summary(r, end.succeeded);
         }
         Err(e) => {
-            let partial = e.partial();
-            if let Some(r) = partial {
-                print_summary(r);
+            if let Some(r) = e.partial() {
+                print_summary(r, end.succeeded);
             }
-            std::process::exit(1);
         }
     }
+    // A prune delete that fails leaves `result` `Ok` with `failed > 0`.
+    if !end.succeeded {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 async fn run_operator_async(
@@ -833,7 +837,7 @@ async fn run_operator_async(
         );
     }
 
-    super::operator::watch_activation_progress(
+    let reconciled = super::operator::watch_activation_progress(
         &client,
         &ar,
         &current.name,
@@ -843,12 +847,23 @@ async fn run_operator_async(
     .await?;
 
     println!();
-    println!(
-        "Rollback via operator {}: rolled back to '{}'",
-        output::green("complete"),
-        output::bold(&target_name),
-    );
+    match reconciled {
+        super::operator::Reconciled::Active => println!(
+            "Rollback via operator {}: rolled back to '{}'",
+            output::green("complete"),
+            output::bold(&target_name),
+        ),
+        super::operator::Reconciled::Degraded => println!(
+            "Rollback via operator {}: rolled back to '{}', which is {}",
+            output::red("failed"),
+            output::bold(&target_name),
+            output::yellow("Degraded"),
+        ),
+    }
 
+    if reconciled == super::operator::Reconciled::Degraded {
+        std::process::exit(1);
+    }
     Ok(())
 }
 
@@ -898,10 +913,18 @@ fn print_superseded_entries(
     }
 }
 
-fn print_summary(r: &DeployResult) {
+/// The last line of a rollback, worded as `kix deploy`'s summary line is.
+fn print_summary(r: &DeployResult, succeeded: bool) {
     let failed_str = r.failed.to_string();
+    let ending = if succeeded {
+        "complete"
+    } else if r.failed > 0 {
+        "failed"
+    } else {
+        "stopped"
+    };
     println!(
-        "Rollback complete: {} created, {} configured, {} unchanged, {} failed",
+        "Rollback {ending}: {} created, {} configured, {} unchanged, {} failed",
         output::green(&r.created.to_string()),
         output::yellow(&r.configured.to_string()),
         output::dim(&r.unchanged.to_string()),
