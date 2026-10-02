@@ -2,19 +2,30 @@
 # its IngressClass. Upstream ended development after v1.15.1; new clusters
 # should route through Gateway API (the envoy-gateway package).
 #
-# Installs the controller Deployment, its Service, ConfigMap, ServiceAccount
+# Installs the controller Deployment, its Service, ConfigMap, ServiceAccount,
 # and RBAC, an IngressClass, and a validating admission webhook whose
 # certificate two certgen Jobs create and patch into the webhook
-# configuration. With the optional `prometheus` dep and `metrics.enabled`,
-# also Service <name>-metrics and a ServiceMonitor.
+# configuration. `metrics.enabled` turns on the controller's Prometheus
+# metrics; with the optional `prometheus` dep it also adds Service
+# <name>-metrics and a ServiceMonitor.
 #
 # root = the Deployment. The controller exits at startup when its
-# `--publish-service` Service does not exist, so the Deployment requires the
-# Service, and the Service selects the pods through `rawSelector`.
+# `--publish-service` Service does not exist. The argument reads the
+# Service's name, which orders the Service first, so the Service selects the
+# pods through `rawSelector`, which does not wait for the Deployment.
 #
 # Defaults are upstream's: snippet annotations off, annotation risk level
 # High, forwarded headers not trusted, and an IngressClass that is not the
 # cluster default.
+#
+# Known limits:
+# - The webhook configuration has failurePolicy Fail and matches every
+#   Ingress in the cluster, whatever its class. While any instance's
+#   controller is unavailable, every Ingress create and update fails.
+# - IngressClass names are cluster-scoped, so instances in two namespaces
+#   need different `ingressClassName` values.
+# - The controller runs with a writable root filesystem, as upstream's
+#   does, and has no default resource limits.
 #
 # No dependency or option is required:
 #
@@ -40,13 +51,16 @@
 
 let
   release = "v1.15.1";
-  # kube-webhook-certgen has its own releases; chart 4.15.1 pins this one.
+  # kube-webhook-certgen versions separately from the controller; v1.6.9 is
+  # the release upstream deploys with controller v1.15.1.
   certgenRelease = "v1.6.9";
 
   name = scope.instanceName;
   who = "ingress-nginx ${scope.namespaceName}/${name}";
   # Cluster-scoped objects carry the namespace too, so instances with the
-  # same name in two namespaces do not collide.
+  # same name in two namespaces do not collide. Namespace `a-b` with
+  # instance `c` and namespace `a` with instance `b-c` still give the same
+  # name, and the build fails with a Duplicate resource error.
   clusterName = "${scope.namespaceName}-${name}";
 
   selectorLabels = {
@@ -134,6 +148,17 @@ in
       digest = "sha256:01038e7de14b78d702d2849c3aad72fd25903c4765af63cf16aa3398f5d5f2dd";
       description = "Image of the Jobs that create the admission webhook certificate and patch its CA into the webhook configuration.";
     };
+    certgen.resources = kix.options.resources {
+      requests = {
+        cpu = "10m";
+        memory = "20Mi";
+      };
+      description = ''
+        Resource requests and limits for the two certgen Jobs, which run for
+        a few seconds per deploy. Each field keeps its default until set,
+        and null removes a default.
+      '';
+    };
     replicas = lib.mkOption {
       type = lib.types.ints.positive;
       # Two controllers once a pod restart must not drop ingress traffic,
@@ -148,13 +173,17 @@ in
       description = "Controller replicas. Every replica serves traffic; leader election only decides which one writes Ingress status.";
     };
     ingressClassName = lib.mkOption {
-      type = lib.types.str;
+      # The API server's rule for an IngressClass name: a lowercase DNS-1123
+      # subdomain. The length limit follows from the controller value.
+      type = lib.types.strMatching "[a-z0-9]([-a-z0-9.]*[a-z0-9])?";
       default = name;
       defaultText = lib.literalExpression "scope.instanceName";
       description = ''
         Name of the IngressClass this controller serves, the name an Ingress
-        sets in `spec.ingressClassName`. The class's controller value is
-        `k8s.io/ingress-nginx/<name>`. IngressClasses are cluster-scoped, so
+        sets in `spec.ingressClassName`: lowercase letters, digits, `-`, and
+        `.`, starting and ending with a letter or digit. The class's
+        controller value is `k8s.io/ingress-nginx/<namespace>/<name>`, which
+        must fit in 250 characters. IngressClasses are cluster-scoped, so
         instances in different namespaces need different names.
       '';
     };
@@ -173,7 +202,7 @@ in
       default = { };
       example = {
         proxy-body-size = "50m";
-        use-forwarded-headers = "true";
+        ssl-protocols = "TLSv1.3";
       };
       description = ''
         Data of the controller's ConfigMap, with upstream's keys and string
@@ -241,9 +270,11 @@ in
       example = [ "--watch-ingress-without-class=true" ];
       description = ''
         Flags appended to the controller's arguments. A flag the package
-        derives (`--publish-service`, `--election-id`, `--controller-class`,
-        `--ingress-class`, `--configmap`, and the `--validating-webhook*`
-        flags) is refused, and the error names the option to use instead.
+        sets or derives from (`--publish-service`, `--election-id`,
+        `--controller-class`, `--ingress-class`, `--configmap`,
+        `--enable-metrics`, the port flags `--http-port`, `--https-port`,
+        and `--healthz-port`, and the `--validating-webhook*` flags) is
+        refused, and the error says what to do instead.
       '';
     };
     env = kix.options.env // {
@@ -278,25 +309,53 @@ in
         ...
       }:
       let
-        controllerValue = "k8s.io/ingress-nginx/${config.ingressClassName}";
+        # The namespace makes the value differ between instances in two
+        # namespaces, so two IngressClasses with one name are reported as a
+        # Duplicate resource instead of being merged into one object that
+        # both controllers serve.
+        controllerValue =
+          let
+            value = "k8s.io/ingress-nginx/${scope.namespaceName}/${config.ingressClassName}";
+          in
+          if builtins.stringLength value > 250 then
+            throw "${who}: the IngressClass controller value \"${value}\" is longer than the API server's 250-character limit. Shorten ingressClassName."
+          else
+            value;
         serviceType = config.service.spec.type;
         metricsOn = config.metrics.enabled && prometheus != null;
 
         # The controller parses booleans with Go's strconv.ParseBool, which
         # also accepts "1", "t", and "True". Other spellings are refused so
-        # the Critical-risk check below cannot be bypassed.
+        # the Critical-risk check below cannot be bypassed. The controller
+        # compares the risk level in lower case.
         snippets = config.settings."allow-snippet-annotations" or null;
+        riskLevel = lib.toLower (config.settings."annotations-risk-level" or "");
         settings =
           if snippets != null && snippets != "true" && snippets != "false" then
             throw "${who}: settings.\"allow-snippet-annotations\" is \"${snippets}\"; use \"true\" or \"false\"."
-          else if snippets == "true" && config.settings."annotations-risk-level" or null != "Critical" then
+          else if snippets == "true" && riskLevel != "critical" then
             throw "${who}: settings.\"allow-snippet-annotations\" is \"true\", but snippet annotations are Critical risk and the admission webhook rejects them unless settings.\"annotations-risk-level\" is \"Critical\". Set both, or neither."
           else
             config.settings;
 
         nodePortsSet = lib.filterAttrs (_: p: p != null) config.service.nodePorts;
+        # mergeGuarded below refuses these keys too, but its message cannot
+        # name the option to use instead.
+        serviceSpecOwned = {
+          selector = "selects the controller pods. Remove it.";
+          ports = "defines ports http and https. Set node ports with service.nodePorts.http and service.nodePorts.https, and remove service.spec.ports.";
+        };
+        serviceSpecOwnedHits = builtins.filter (k: (config.service.spec.${k} or null) != null) (
+          builtins.attrNames serviceSpecOwned
+        );
         serviceSpec =
-          if serviceType == "ClusterIP" && nodePortsSet != { } then
+          if serviceSpecOwnedHits != [ ] then
+            throw (
+              lib.concatMapStringsSep "\n" (
+                k: "${who}: service.spec.${k} is set by the package, which ${serviceSpecOwned.${k}}"
+              ) serviceSpecOwnedHits
+            )
+          else if serviceType == "ClusterIP" && nodePortsSet != { } then
             throw "${who}: service.nodePorts sets ${lib.concatStringsSep ", " (builtins.attrNames nodePortsSet)}, which needs service.spec.type NodePort or LoadBalancer; the type is ClusterIP."
           else if serviceType == "ClusterIP" && config.service.spec.externalTrafficPolicy != null then
             throw "${who}: service.spec.externalTrafficPolicy applies to NodePort and LoadBalancer Services, and the API server rejects it on ClusterIP. Change service.spec.type or remove it."
@@ -351,9 +410,17 @@ in
           "--validating-webhook-certificate=/usr/local/certificates/cert"
           "--validating-webhook-key=/usr/local/certificates/key"
         ]
+        # Upstream's default is false, which serves only Go runtime metrics
+        # on :10254. The flag follows the toggle alone, so adding a
+        # prometheus instance does not restart the controller.
+        ++ lib.optional config.metrics.enabled "--enable-metrics=true"
         ++ kix.guardArgs {
           inherit who;
           owned = {
+            "--enable-metrics" = "the package sets it from metrics.enabled; set that instead.";
+            "--http-port" = "the Service, container ports, and network policy use port 80; remove it.";
+            "--https-port" = "the Service, container ports, and network policy use port 443; remove it.";
+            "--healthz-port" = "the probes and the metrics Service use port 10254; remove it.";
             "--publish-service" = "the package points it at the controller Service; remove it.";
             "--election-id" = "the package derives it from the instance name; remove it.";
             "--controller-class" =
@@ -414,6 +481,7 @@ in
                 core.endpoints
                 core.nodes
                 core.pods
+                # Ingresses in any namespace name their TLS Secrets.
                 core.secrets
                 core.namespaces
                 core.services
@@ -480,6 +548,7 @@ in
             "--namespace=$(POD_NAMESPACE)"
             "--secret-name=${name}-admission"
           ];
+          inherit (config.certgen) resources;
           env = [
             {
               name = "POD_NAMESPACE";
@@ -544,12 +613,12 @@ in
         deployment = scope.mkDeployment {
           inherit name;
           labels = selectorLabels;
-          # The controller exits at startup without its --publish-service
-          # Service, and its caches never sync without its RBAC.
+          # The controller's caches never sync without its RBAC. The
+          # IngressClass is listed so that the instance is Ready only once
+          # the class it serves exists; nothing else in the Deployment
+          # references it.
           requires = [
-            self.service
             self.ingressClass
-            self.admissionWebhook
             self.clusterRole
             self.clusterRoleBinding
             self.role
@@ -724,7 +793,6 @@ in
             ])
             [
               self.admissionCreate
-              self.admissionWebhook
               self.admissionClusterRole
               self.admissionClusterRoleBinding
             ];
@@ -769,6 +837,9 @@ in
         # as root, the instance would report Ready before the controller.
         root = {
           resource = self.deployment;
+          # No other part references the ServiceMonitor, so the
+          # PackageInstance reaches it only through this list.
+          requires = builtins.filter (r: r != null) [ self.serviceMonitor ];
           out = {
             # Consumers depend through string context. The class name carries
             # the Deployment's and the patch Job's context as well as the

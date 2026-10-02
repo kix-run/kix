@@ -24,15 +24,21 @@ Add one instance in a platform namespace:
 
 <Snippet {...ingressControllerInstance} />
 
-The instance name becomes the IngressClass name, so it has to be a
-legal Kubernetes object name. `ingress-nginx` is lowercase; `ingressNginx`
-is refused at evaluation. Packages that use `kix.expose` still resolve this
-controller, because the package declares `meta.defaultAliases =
-[ "ingressNginx" ]` and that alias is what the dependency matches on.
+The instance name becomes the IngressClass name unless
+`config.ingressClassName` sets another. Both have to be legal Kubernetes object
+names: `ingress-nginx` is lowercase, and `ingressNginx` is refused at
+evaluation. Packages that use `kix.expose` still resolve this controller,
+because the package declares `meta.defaultAliases = [ "ingressNginx" ]` and
+that alias is what the dependency matches on.
 
 IngressClasses are cluster-scoped. Two instances with the same name in
 different namespaces need different class names; set `config.ingressClassName`
-on one of them.
+on one of them. Without it, evaluation fails with a duplicate-resource error
+for the IngressClass.
+
+The admission webhook checks every Ingress in the cluster, whatever its class,
+and rejects the write when it cannot reach a controller. While a controller is
+down, no Ingress can be created or changed.
 
 ## Choose how traffic reaches the controller
 
@@ -84,6 +90,11 @@ sets those headers. Snippet annotations run arbitrary NGINX configuration, so
 they need two keys, `allow-snippet-annotations = "true"` and
 `annotations-risk-level = "Critical"`; evaluation fails when only the first is
 set.
+
+`config.metrics.enabled` (on by default) turns on the controller's Prometheus
+metrics. When the instance's `prometheus` dependency resolves, for example to
+a prometheus-operator instance, the package also adds a metrics Service and a
+ServiceMonitor.
 
 ## Make it the default class
 
