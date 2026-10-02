@@ -10,3 +10,4 @@ referenced by its PackageInstance or its dependencies". Its package-eval
 fixture wires no `prometheus`, so every-package-evaluates does not show it.
 
 - Hit again 2026-10-01 while reworking `kix/packages/cert-manager`: `ludo-kind-tls` built with `PrometheusRule/cert-manager-alerts` outside the PackageInstance's closure until the package listed `controllerAlerts` in `root.requires`.
+- Hit again 2026-10-02 by `kix/packages/mayastor`: its ServiceMonitor and PrometheusRule warned as unreferenced until root.requires listed them.

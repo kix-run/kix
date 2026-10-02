@@ -60,6 +60,7 @@
         velero = ./test-velero.nix;
         reloader = ./test-reloader/kind.nix;
         tailscale = ./test-tailscale/cluster.nix;
+        mayastor = ./test-mayastor.nix;
       };
     };
 }

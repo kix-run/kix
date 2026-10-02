@@ -646,6 +646,25 @@ pub async fn run_deploy(
                         });
                         finish_success(&mut state, &mut barrier, &node_id, &entry);
                     }
+                    NodeOutcome::PendingRestart {
+                        apply_action,
+                        stale,
+                        message,
+                    } => {
+                        checkpoints.count(&apply_action, &mut result);
+                        if matches!(entry.kind, TransitionKind::Skip)
+                            && let NodeId::Resource(rid) = &node_id
+                        {
+                            skipped.push(rid.clone());
+                        }
+                        emit(DeployEvent::NodeStateChanged {
+                            node: node_id.clone(),
+                            kind: entry.kind,
+                            verdict: Verdict::Ready,
+                            detail: Some(NodeDetail::PendingRestart { stale, message }),
+                        });
+                        finish_success(&mut state, &mut barrier, &node_id, &entry);
+                    }
                     NodeOutcome::Rerun {
                         apply_action,
                         reason,
@@ -1333,6 +1352,13 @@ enum NodeOutcome {
         apply_action: ApplyAction,
         reason: String,
     },
+    /// Ready, with `stale` pods of an `OnDelete` DaemonSet still on the
+    /// previous pod template.
+    PendingRestart {
+        apply_action: ApplyAction,
+        stale: i64,
+        message: String,
+    },
     Failed {
         detail: NodeDetail,
         message: String,
@@ -1604,6 +1630,16 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
 
     match outcome {
         ReadinessResult::Ready => done(recreated_reason),
+        // A rerun or a recreate is reported in its place, as `done` orders
+        // the outcomes.
+        ReadinessResult::ReadyPendingRestart { stale, message } => match done(recreated_reason) {
+            NodeOutcome::Ready { apply_action } => NodeOutcome::PendingRestart {
+                apply_action,
+                stale,
+                message,
+            },
+            other => other,
+        },
         ReadinessResult::Cancelled => NodeOutcome::Cancelled,
         ReadinessResult::TimedOut { elapsed, message } => NodeOutcome::Failed {
             detail: NodeDetail::ReadinessTimeout {

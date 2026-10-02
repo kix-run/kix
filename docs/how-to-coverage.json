@@ -602,6 +602,12 @@
       ]
     },
     {
+      "page": "package-task-guides/install-mayastor",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "unverifiedNixBlocks": 4
+    },
+    {
       "page": "package-task-guides/install-the-monitoring-stack",
       "scenario": "package-stacks",
       "status": "implemented",

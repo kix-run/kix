@@ -1,0 +1,248 @@
+---
+title: "Install Mayastor"
+description: "Run OpenEBS Mayastor for replicated block storage from DiskPools on labelled nodes."
+---
+
+import Command from '/src/components/Command.astro';
+
+Use the `mayastor` package to run OpenEBS Mayastor 2.12.1, which serves
+replicated block volumes over NVMe/TCP from DiskPools on the nodes you label.
+The package renders the control plane, its etcd, the node agents, the CSI
+driver `io.openebs.csi-mayastor`, and the StorageClasses, VolumeSnapshotClasses,
+and DiskPools you declare.
+
+A cluster runs one Mayastor instance. The CSI driver name, the kubelet plugin
+directory, and the cluster-wide permissions are fixed, so a second instance
+fails evaluation.
+
+## Prepare the nodes
+
+Kix cannot check the host, so prepare it before the first deploy.
+
+On every node that mounts Mayastor volumes, where the CSI node plugin and
+agent-ha-node run:
+
+- Load the `nvme_tcp` kernel module. The CSI node plugin exits at start
+  without it.
+- Keep `/sys` and `/run/udev` available to privileged pods.
+
+On every node that holds a pool, where io-engine runs, additionally:
+
+- An x86-64 CPU with SSE4.2 and kernel 5.13 or newer, with `ext4` (and `xfs`
+  if a class asks for it).
+- Two dedicated cores and 1 GiB of memory for io-engine (`ioEngine.cpuCount`
+  and `ioEngine.resources`).
+- 2 GiB of 2 MiB hugepages (`ioEngine.hugepages2Mi`), allocated before the
+  kubelet starts, or followed by a kubelet restart:
+
+  <Command commands={[
+    "echo vm.nr_hugepages=1024 | sudo tee /etc/sysctl.d/20-mayastor.conf",
+    "sudo sysctl --system",
+  ]} />
+
+- Host ports 10124, 8420, and 4421 free.
+- `nvme_core.multipath=Y` on the kernel command line, for volume target
+  failover.
+- Pool disks that are unpartitioned, unformatted, and used by nothing else.
+
+Label the pool nodes:
+
+<Command commands={["kubectl label node <node> openebs.io/engine=mayastor"]} />
+
+The label is `ioEngine.nodeSelector`'s default; setting `ioEngine.nodeSelector`
+replaces it as a whole. The Mayastor images are
+published for amd64 only, so every Mayastor pod also selects
+`kubernetes.io/arch=amd64`.
+
+When not every node loads `nvme_tcp`, set `csiNode.nodeSelector` to the
+labels of the nodes that do. Pods can then mount Mayastor volumes only on
+those nodes.
+
+## Give etcd a StorageClass
+
+Mayastor keeps its volume catalogue in etcd, which the package runs as a
+StatefulSet. etcd must not run on a Mayastor volume: Mayastor needs etcd to
+bring its volumes up, so etcd could not start after a full restart, and
+evaluation refuses it. etcd's volumes come from one of three places:
+
+- The `storageClasses` dependency. On kind, k3s, and other flavours with a
+  platform default class, it resolves to that class with no wiring.
+- An explicit `deps.storageClasses` to a node-local provider: a
+  `zfs-localpv` or `storage-classes` instance, or an import of a class the
+  cluster already has, such as local-path-provisioner's.
+- `config.etcd.storage.storageClassName`, naming a class Kix does not
+  provide. A cloud block class also works.
+
+```nix
+instances.mayastor = {
+  local-path.package = kix.mkImport { out.storageClassName = "local-path"; };
+  mayastor = {
+    package = packages.mayastor;
+    deps.storageClasses = ref.mayastor.local-path;
+  };
+};
+```
+
+When the Mayastor instance itself answers `storageClasses` for the cluster
+(its `aliases` include `storageClasses`), wire `deps.storageClasses`
+explicitly as above; evaluation refuses the instance otherwise.
+
+The number of etcd members follows the instance's availability level: one at
+`none`, three above. Three members need three nodes on which the etcd class
+can provision a volume, one member per node; with fewer, a member stays
+Pending and the deploy does not finish. A node-local class limited by
+`allowedTopologies` counts only its listed nodes.
+
+Changing the level of a live instance changes etcd's membership. A member's
+data directory lists every member, so add the new members with
+`etcdctl member add` before raising the level, remove members with
+`etcdctl member remove` before lowering it, or save a snapshot with
+`etcdctl snapshot save` and restore it into a fresh cluster.
+
+## Declare pools and classes
+
+```nix
+instances.mayastor.mayastor.config = {
+  diskPools = {
+    pool-node1 = { node = "node1"; disks = [ "/dev/disk/by-id/nvme-..." ]; };
+    pool-node2 = { node = "node2"; disks = [ "/dev/disk/by-id/nvme-..." ]; };
+  };
+  storageClasses.mayastor-2 = {
+    parameters = { repl = "2"; thin = "true"; };
+    annotations."storageclass.kubernetes.io/is-default-class" = "true";
+  };
+};
+```
+
+A pool's key is its DiskPool name and `node` is the Kubernetes node name.
+Prefer `/dev/disk/by-id` paths: Mayastor reads the device when it creates or
+imports the pool. When the cluster lists its nodes in `cluster.nodes` and does
+not autoscale them, a pool on an unlisted node fails evaluation, and a node
+without the io-engine labels produces a warning. Two pools that name the same
+device on one node fail evaluation.
+
+`parameters.repl` is required: each replica of a volume lives on a pool on a
+different node, so `repl = "3"` needs pools on three nodes. The CSI driver
+reads the other parameters (`thin`, `fsType`, `ioTimeout`, `local`,
+`encrypted`, and topology keys) as strings. Kix warns when a class asks for
+more replicas than the instance has pool nodes.
+
+The DiskPool operator reads DiskPools only in the instance's namespace. To
+build a DiskPool from a package of your own, use `out.crds.DiskPool` in that
+namespace.
+
+After you remove a pool from `diskPools`, `kix deploy --prune` deletes its
+DiskPool, and the operator then destroys the pool on disk once no replica
+lives on it. A deploy without `--prune` reports the DiskPool as an orphan and
+leaves it in place.
+
+## Encrypt pools
+
+The pool key is a Secret in the instance's namespace with the key
+`encryption_parameters`, holding Mayastor's JSON key description:
+
+```json
+{ "cipher": "AesXts", "key": "<32 hex digits>", "key_len": 128, "key2": "<32 hex digits>", "key2_len": 128 }
+```
+
+Generate the two keys for your cluster (for example with `openssl rand -hex
+16`) and keep them out of the repository. Declare the Secret as an instance:
+a `secret` instance with a SOPS-encrypted `source`, or a `secret-ref` for a
+Secret that something outside Kix creates. Then wire it as
+`deps.poolEncryptionKey` and set `encrypted = true` on each pool that uses it:
+
+```nix
+instances.mayastor = {
+  pool-key = {
+    package = packages.secret-ref;
+    config.keys = [ "encryption_parameters" ];
+  };
+  mayastor = {
+    package = packages.mayastor;
+    deps.poolEncryptionKey = ref.mayastor.pool-key;
+    config.diskPools.pool-node1 = {
+      node = "node1";
+      disks = [ "/dev/disk/by-id/nvme-..." ];
+      encrypted = true;
+    };
+  };
+};
+```
+
+Evaluation fails when the wired Secret does not declare
+`encryption_parameters`. A class with `parameters.encrypted = "true"` places replicas on
+encrypted pools only. Mayastor fixes a pool's key when it creates the pool and
+reads it again when it imports the pool, so rewiring the dependency does not
+rotate it. Every encrypted pool of an instance uses the one key; a pool that
+needs its own key is built from `out.crds.DiskPool`.
+
+Only io-engine and the DiskPool operator may read the key Secret, by name.
+
+## Snapshots
+
+`volumeSnapshotClasses` needs the snapshot API, which the `snapshotController`
+dependency provides: a `snapshot-controller` instance, or an environment that
+runs its own controller. With it, the CSI controller runs the csi-snapshotter
+sidecar.
+
+```nix
+instances.mayastor.mayastor.config.volumeSnapshotClasses.mayastor-snapshots = { };
+```
+
+## Upgrade io-engine
+
+io-engine uses the `OnDelete` update strategy, because restarting it drops
+every NVMe target on its node. After a deploy that changes io-engine's pod
+template, `kix deploy` reports the DaemonSet ready with the number of pods
+still on the previous template:
+
+```text
+✔ DaemonSet/mayastor-io-engine@mayastor ready, 2 pods pending manual restart (OnDelete): the DaemonSet replaces a pod with the current template only when the pod is deleted
+```
+
+Restart the pods one node at a time, so that every volume keeps a replica
+while a node's targets are down. Before each, check that no volume is
+rebuilding through the api-rest `/v0/volumes` endpoint (or upstream's
+`kubectl mayastor get volumes` plugin, which Kix does not install), then
+delete the node's io-engine pod and wait until it is Ready and every volume is
+Online again.
+
+## Monitoring
+
+With a `prometheus` dependency and `metrics.enabled`, the package adds a
+Service for the io-engine metrics exporter, a ServiceMonitor, and alerts for
+faulted pools, pools more than 75 and 90 percent full, and an io-engine
+metrics target that Prometheus cannot scrape. The exporter runs in
+every io-engine pod either way, so turning monitoring on later does not
+change io-engine's pod template.
+
+## Uninstall
+
+A deploy deletes removed objects only with `--prune`, and a pruning deploy
+does not wait for DiskPool finalizers before it deletes the operator that
+removes them. Remove Mayastor in this order:
+
+1. Delete every claim on a Mayastor class and wait for its volume to go.
+2. Remove `diskPools` from the configuration, run `kix deploy --prune`, and
+   wait until `kubectl -n <namespace> get diskpool` lists none.
+3. Remove the instance and run `kix deploy --prune`.
+
+## Network policy
+
+Under a network-policy enforcer, the derived rules cover the traffic between
+the control plane's pods. The node agents and the CSI controller run on the
+host network, which pod-based rules cannot select, so the package also opens
+a fixed set of ports to every pod in the cluster: etcd (2379), api-rest
+(8081), agent-core (50051), and agent-ha-cluster (50052). The rules apply to
+every pod workload of the instance. Three of these endpoints take requests
+without authentication: etcd, api-rest (which can create and delete volumes
+and pools), and agent-core's gRPC. Upstream's chart policies are no narrower.
+Treat any pod in the cluster as able to manage Mayastor, and keep workloads
+you do not trust off clusters that run it.
+
+## What the package does not render
+
+- Telemetry (call-home) and eventing (NATS).
+- The hostpath provisioner, PriorityClasses, and a default StorageClass.
+- TLS between Mayastor components, which runs without it as upstream does by
+  default.
