@@ -1,4 +1,4 @@
-# gha-runner-scale-set-controller chart at the tag matching config.image.tag.
+# gha-runner-scale-set-controller chart at the tag in `release` (kix/packages/arc/default.nix).
 https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.14.2/charts/gha-runner-scale-set-controller/crds/actions.github.com_autoscalinglisteners.yaml
 https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.14.2/charts/gha-runner-scale-set-controller/crds/actions.github.com_autoscalingrunnersets.yaml
 https://raw.githubusercontent.com/actions/actions-runner-controller/gha-runner-scale-set-0.14.2/charts/gha-runner-scale-set-controller/crds/actions.github.com_ephemeralrunners.yaml
