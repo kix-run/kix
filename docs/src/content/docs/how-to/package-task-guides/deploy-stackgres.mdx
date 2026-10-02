@@ -13,7 +13,7 @@ import databaseResources from '/src/command-output/how-to/package-stackgres/data
 Use the `stackgres-operator` and `stackgres-cluster` packages to run PostgreSQL
 under the StackGres operator.
 
-This guide creates one PostgreSQL 16 instance with a 5 GiB volume. The target
+This guide creates one PostgreSQL 17 instance with a 5 GiB volume. The target
 cluster must provide a default StorageClass, or the database instance must name
 one explicitly.
 
@@ -23,8 +23,10 @@ Install one operator instance in its own namespace:
 
 <Snippet {...stackgresOperatorInstance} />
 
-The operator installs and reconciles the StackGres custom resource types. One
-operator can manage database clusters in other namespaces.
+The operator installs and reconciles the StackGres custom resource types and
+its admission webhooks when it starts. One operator manages database clusters
+in every namespace, and a cluster runs only one. The package does not run the
+StackGres web console, REST API, or OpenTelemetry collector.
 
 ## Add the PostgreSQL cluster
 
@@ -32,13 +34,89 @@ Add the database instance in the namespace where it should run:
 
 <Snippet {...stackgresClusterInstance} />
 
-The `stackgresCluster` package resolves the operator through its
+The `stackgres-cluster` package resolves the operator through its
 `stackgresOperator` dependency. Kix also connects it to the StorageClass
 provided by the cluster flavor.
 
-For a production cluster, set `instances` to match the number of PostgreSQL
-members you need, increase `storage.size`, and size `instanceProfile` for the
-workload. Set `storage.storageClass` when the flavor's default is not suitable.
+`postgres.version` takes a major, such as `"17"`, or a minor, such as
+`"17.11"`. Kix checks it against the versions the operator's StackGres release
+ships, and refuses `"latest"`, because a new operator release would then move
+the database to a new major.
+
+For a production cluster, increase `persistentVolume.size` and size
+`instanceProfile` for the workload. StackGres takes CPU as whole cores or
+millicores (`"2"`, `"1500m"`) and sizes in `Mi`, `Gi`, or (for the volume)
+`Ti`, and Kix refuses other forms. `instances` defaults from the cluster's
+availability level, and above one instance the pods spread across nodes and
+zones. On a multi-node cluster StackGres also places every database pod of a
+namespace on its own node, so the clusters in one namespace need as many nodes
+as they have instances together. Set `persistentVolume.storageClass` when the flavor's
+default is not suitable. PostgreSQL parameters go in `postgresqlConf`, and any other
+`SGCluster` field in `extraSpec`.
+
+Apps should not read the superuser Secret. Give each app a
+`stackgres-database` instance, which creates a role and a database on the
+cluster and puts the credentials in the app's namespace.
+
+## Back up to object storage
+
+Backups go to an `SGObjectStorage` in the cluster's namespace. Reference the
+Secret that holds the storage credentials, add a `stackgres-object-storage`
+instance, and turn on `backups`:
+
+```nix
+instances.database = {
+  backup-credentials = {
+    package = packages.secret-ref;
+    aliases = [ "storageCredentials" ];
+    config.keys = [ "accessKeyId" "secretAccessKey" ];
+  };
+
+  backups = {
+    package = packages.stackgres-object-storage;
+    config = {
+      type = "s3Compatible";
+      bucket = "pg-backups";
+      extraSpec.s3Compatible = {
+        endpoint = "https://s3.example.com";
+        region = "example-1";
+        enablePathStyleAddressing = true;
+      };
+    };
+  };
+
+  postgres.config.backups = [
+    {
+      cronSchedule = "0 1 * * *";
+      retention = 7;
+    }
+  ];
+};
+```
+
+Kix refuses `backups` when no `stackgres-object-storage` instance is in the
+same namespace, and refuses a credentials Secret that does not declare the
+keys the storage type reads. `credentialKeys` maps those keys to other names.
+With backups on, the package sets `archive_timeout` to 60 seconds, so a quiet
+database still archives its write-ahead log every minute.
+
+The network policy treats an `endpoint` written in `extraSpec` as an address
+outside the cluster. For an S3 store that runs in the cluster, wire the
+instance whose root is its S3 Service instead, and leave `endpoint` unset:
+
+```nix
+backups.deps.endpointService = ref.minio.minio;
+```
+
+The package then sets the endpoint to that Service's URL and turns on
+path-style addressing, and the PostgreSQL pods get network policy to the store.
+
+## Monitor PostgreSQL
+
+When the cluster has a Prometheus provider, such as `prometheus-operator`, the
+package adds a `PodMonitor` for the exporter sidecar StackGres runs beside
+PostgreSQL. Set `metrics.interval` to change the scrape interval, or
+`metrics.enabled = false` to leave the `PodMonitor` out.
 
 ## Check the generated resources
 

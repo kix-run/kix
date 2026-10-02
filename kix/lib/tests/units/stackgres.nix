@@ -1,13 +1,109 @@
-# Tests for the kix/lib behaviour the stackgres rework relies on:
-# kix.availability.spreadConstraints, the spread rule for operator-placed
-# operands.
+# Tests for the stackgres packages and the kix/lib behaviour they rely on:
+# kix.availability.spreadConstraints (the spread rule for operator-placed
+# operands), the refusals of stackgres-operator, stackgres-cluster, and
+# stackgres-object-storage, the operand image table, and the rendered
+# SGCluster.
 
 {
+  lib,
+  eval,
   kixlib,
+  mkCluster,
+  manifests,
+  ofKind,
+  byName,
+  evalFails,
+  singleNode,
+  multiZone,
   ...
 }:
 
 let
+  operatorPackage = import ../../../packages/stackgres-operator;
+  clusterPackage = import ../../../packages/stackgres-cluster;
+  objectStoragePackage = import ../../../packages/stackgres-object-storage;
+  secretPackage = import ../../../packages/secret;
+  releaseTable = import ../../../packages/stackgres-operator/release.nix { inherit lib; };
+
+  # A package's failed assertion messages for `config`, evaluated against
+  # its options. Throws lose their message in tryEval, so the tests read
+  # message text from assertions and check build throws with evalFails.
+  failedMessages =
+    {
+      package,
+      instanceName,
+      namespaceName ? "data",
+      config ? { },
+    }:
+    let
+      attrs = package (
+        builtins.intersectAttrs (builtins.functionArgs package) {
+          scope = { inherit instanceName namespaceName; };
+          inherit lib;
+          kix = kixlib;
+          availability = "none";
+        }
+      );
+      evaluated = eval.evaluateInstanceConfig {
+        packageOptions = attrs.options;
+        instCfg.config.imports = [ config ];
+        inherit namespaceName instanceName;
+      };
+    in
+    map (a: a.message) (
+      builtins.filter (a: !a.assertion) (
+        attrs.assertions {
+          config = evaluated;
+          deps = { };
+        }
+      )
+    );
+  says = fragment: messages: builtins.any (m: lib.hasInfix fragment m) messages;
+
+  # The operator, a cluster with `config`, and an object storage when
+  # `objectStorage` is set, in the namespaces StackGres users pick.
+  sgCluster =
+    {
+      config ? { },
+      operatorConfig ? { },
+      objectStorage ? null,
+      extra ? { },
+    }:
+    mkCluster [
+      {
+        instances.stackgres-system.stackgres-operator = {
+          package = operatorPackage;
+          config = operatorConfig;
+        };
+        instances.data = {
+          postgres = {
+            package = clusterPackage;
+            inherit config;
+          };
+        }
+        // lib.optionalAttrs (objectStorage != null) {
+          s3-credentials = {
+            package = secretPackage;
+            aliases = [ "storageCredentials" ];
+            config.stringData = {
+              accessKeyId = "id";
+              secretAccessKey = "key";
+            };
+          };
+          backups = {
+            package = objectStoragePackage;
+            config = objectStorage;
+          };
+        };
+      }
+      extra
+    ];
+  sgClusterSpec = cluster: (byName "postgres" (ofKind "SGCluster" (manifests cluster))).spec;
+  storage = {
+    type = "s3Compatible";
+    bucket = "backups";
+  };
+
   zoneKey = "topology.kubernetes.io/zone";
   hostKey = "kubernetes.io/hostname";
   selector.app = "operand";
@@ -58,4 +154,296 @@ in
       got = spread "none" [ ];
     in
     got == [ ] || throw "spreadConstraints on a single node: ${builtins.toJSON got}";
+
+  # The StackGres CRDs refuse quantities Kubernetes accepts: the messages
+  # name the pattern and a value that fits.
+  stackgres-cluster-quantity-patterns =
+    let
+      got = failedMessages {
+        package = clusterPackage;
+        instanceName = "postgres";
+        config = {
+          instanceProfile = {
+            cpu = "1.5";
+            memory = "2G";
+          };
+          persistentVolume.size = "20G";
+        };
+      };
+      fine = failedMessages {
+        package = clusterPackage;
+        instanceName = "postgres";
+        config = {
+          instanceProfile = {
+            cpu = "1500m";
+            memory = "1.5Gi";
+          };
+          persistentVolume.size = "1Ti";
+        };
+      };
+    in
+    (
+      says ''instanceProfile.cpu is "1.5", which StackGres refuses: it must match ^[1-9][0-9]*[m]?$. Write whole cores ("2") or millicores ("1500m").'' got
+      && says ''instanceProfile.memory is "2G", which StackGres refuses'' got
+      && says ''persistentVolume.size is "20G", which StackGres refuses: it must match ^[0-9]+(\.[0-9]+)?(Mi|Gi|Ti)$. Use Mi, Gi, or Ti, such as "20Gi".'' got
+      && fine == [ ]
+    )
+    || throw "stackgres-cluster quantity refusals: ${builtins.toJSON { inherit got fine; }}";
+
+  # The other stackgres-cluster assertions, one message each.
+  stackgres-cluster-refusals =
+    let
+      longName = "a" + lib.concatStrings (lib.replicate 44 "b");
+      named = failedMessages {
+        package = clusterPackage;
+        instanceName = longName;
+      };
+      got = failedMessages {
+        package = clusterPackage;
+        instanceName = "postgres";
+        config = {
+          extraSpec.pods.disableEnvoy = false;
+          backups = [ { sgObjectStorage = "other"; } ];
+          scripts = [ { name = "empty"; } ];
+          extensions = [
+            {
+              name = "vector";
+              version = "0.7.0";
+            }
+            {
+              name = "vector";
+              version = "0.8.0";
+            }
+          ];
+        };
+      };
+    in
+    (
+      says ''StackGres limits an SGCluster name to 44 characters matching ^[a-z]([-a-z0-9]*[a-z0-9])?$; "${longName}" is 45 characters. Rename the instance.'' named
+      && says "extraSpec sets pods.disableEnvoy = false." got
+      && says "backups entries take sgObjectStorage from the sgObjectStorage dependency. Remove it." got
+      && says "scripts entry 0 must set exactly one of script or scriptFrom." got
+      && says "extension vector is requested at versions 0.7.0 and 0.8.0." got
+    )
+    || throw "stackgres-cluster refusals: ${builtins.toJSON { inherit named got; }}";
+
+  # Each build refusal of stackgres-cluster fails the evaluation.
+  stackgres-cluster-build-refusals =
+    let
+      fails = args: evalFails (sgCluster args);
+      atZone = {
+        extra = lib.recursiveUpdate multiZone { cluster.availability.default = "zone"; };
+      };
+    in
+    (
+      fails { config.postgres.version = "latest"; }
+      && fails { config.postgres.version = "19"; }
+      && fails { config.postgres.version = "17.1"; }
+      # 12.22, the newest 12.x, has no published images.
+      && fails { config.postgres.version = "12"; }
+      && fails { config.extraSpec.postgres.flavor = "babelfish"; }
+      && fails { config.backups = [ { } ]; }
+      && fails (atZone // { config.extraSpec.profile = "development"; })
+      && fails (atZone // { config.extraSpec.nonProductionOptions.disableClusterPodAntiAffinity = true; })
+      && !(fails (
+        atZone
+        // {
+          config.extraSpec = {
+            profile = "development";
+            nonProductionOptions.disableClusterPodAntiAffinity = false;
+          };
+        }
+      ))
+      && !(fails { config.postgres.version = "17.11"; })
+    )
+    || throw "stackgres-cluster build refusals";
+
+  # The rendered SGCluster: a pooler and a script reference their resources,
+  # backups name the object storage, and a single-node cluster turns off the
+  # namespace-wide anti-affinity.
+  stackgres-cluster-renders =
+    let
+      cluster = sgCluster {
+        config = {
+          pooling = { };
+          scripts = [
+            {
+              name = "init";
+              script = "SELECT 1";
+            }
+          ];
+          backups = [ { compression = "zstd"; } ];
+          extensions = [
+            {
+              name = "pg_cron";
+              repository = "https://extensions.example.com/repo";
+            }
+          ];
+        };
+        objectStorage = storage;
+        extra = singleNode;
+      };
+      spec = sgClusterSpec cluster;
+      ms = manifests cluster;
+      pooling = byName "postgres-pooling-config" (ofKind "SGPoolingConfig" ms);
+      script = byName "postgres-init" (ofKind "SGScript" ms);
+    in
+    (
+      spec.configurations.sgPoolingConfig == "postgres-pooling-config"
+      && pooling.spec == { pgBouncer."pgbouncer.ini" = { }; }
+      && spec.pods.disableConnectionPooling == false
+      && spec.managedSql.scripts == [ { sgScript = "postgres-init"; } ]
+      &&
+        script.spec.scripts == [
+          {
+            name = "init";
+            script = "SELECT 1";
+          }
+        ]
+      &&
+        spec.configurations.backups == [
+          {
+            compression = "zstd";
+            sgObjectStorage = "backups";
+          }
+        ]
+      &&
+        spec.postgres.extensions == [
+          {
+            name = "pg_cron";
+            repository = "https://extensions.example.com/repo";
+          }
+        ]
+      && spec.nonProductionOptions == { disableClusterPodAntiAffinity = true; }
+    )
+    || throw "stackgres-cluster render: ${builtins.toJSON spec}";
+
+  # On a multi-node cluster the production profile's anti-affinity stays on.
+  stackgres-cluster-multi-node-keeps-anti-affinity =
+    let
+      spec = sgClusterSpec (sgCluster {
+        extra = multiZone;
+      });
+    in
+    !(spec ? nonProductionOptions) || throw "multi-node SGCluster: ${builtins.toJSON spec}";
+
+  # The operator's refusals: a tag other than the release, a repository
+  # outside the quay.io layout, SGConfig keys StackGres reads elsewhere, and
+  # a variable the package sets.
+  stackgres-operator-refusals =
+    let
+      got = failedMessages {
+        package = operatorPackage;
+        instanceName = "stackgres-operator";
+        namespaceName = "stackgres-system";
+        config = {
+          image = {
+            repository = "registry.example.com/operator";
+            tag = "1.19.0";
+          };
+          sgConfig = {
+            deploy.restapi = true;
+            adminui = { };
+          };
+        };
+      };
+      jvm = failedMessages {
+        package = operatorPackage;
+        instanceName = "stackgres-operator";
+        namespaceName = "stackgres-system";
+        config.image.tag = "${releaseTable.release}-jvm";
+      };
+    in
+    (
+      says ''image.tag "1.19.0" is not StackGres ${releaseTable.release}'' got
+      && says ''image.repository "registry.example.com/operator" does not end in /stackgres/operator.'' got
+      && says "sgConfig sets deploy, adminui. StackGres reads these from operator variables" got
+      && jvm == [ ]
+      && evalFails (sgCluster {
+        operatorConfig.env.SGCONFIG = "x";
+      })
+      && evalFails (sgCluster {
+        operatorConfig.env.ALLOWED_NAMESPACES = "data";
+      })
+    )
+    || throw "stackgres-operator refusals: ${builtins.toJSON { inherit got jvm; }}";
+
+  # The operand image table: a major takes its newest minor and the Patroni
+  # build of that minor; unknown, unpublished, and `latest` versions throw.
+  stackgres-resolve-postgres =
+    let
+      resolve =
+        version:
+        releaseTable.resolvePostgres {
+          who = "test";
+          inherit version;
+          registry = "quay.io";
+          operatorTag = releaseTable.release;
+        };
+      fails = version: !(builtins.tryEval (builtins.deepSeq (resolve version) true)).success;
+      pg16 = resolve "16";
+    in
+    (
+      pg16.minor == "16.15"
+      && pg16.images.patroni == "quay.io/ongres/patroni:v4.1.5-pg16.15-build-6.56"
+      && (resolve "17.6").images.postgresUtil == "quay.io/ongres/postgres-util:v17.6-build-6.44"
+      && fails "latest"
+      && fails "19"
+      && fails "17.1"
+      && fails "12"
+      && fails "12.22"
+    )
+    || throw "resolvePostgres: ${builtins.toJSON pg16}";
+
+  # kubectl follows the API server's minor within one, else the newest.
+  stackgres-kubectl-images =
+    let
+      images =
+        k8sVersion:
+        releaseTable.kubectlImages {
+          registry = "quay.io";
+          inherit k8sVersion;
+        };
+    in
+    (
+      images "1.34" == [ "quay.io/ongres/kubectl:v1.33.13-build-6.56" ]
+      && images "v1.37.2-gke.100" == [ "quay.io/ongres/kubectl:v1.37.1-build-6.56" ]
+      && images "1.10" == [ "quay.io/ongres/kubectl:v1.37.1-build-6.56" ]
+      && builtins.length (images null) == 8
+    )
+    || throw "kubectlImages: ${builtins.toJSON (images "1.34")}";
+
+  # The object storage's refusals: S3 bucket names and selectors the type
+  # does not read; a malformed endpoint and an in-cluster store on another
+  # type fail the build.
+  stackgres-object-storage-refusals =
+    let
+      got = failedMessages {
+        package = objectStoragePackage;
+        instanceName = "backups";
+        config = {
+          type = "s3";
+          bucket = "Backups..x";
+          credentialKeys.serviceAccountJSON = "json";
+        };
+      };
+      # Without an enforcer nothing reads the port, so the test reads it.
+      portOf =
+        objectStorage:
+        (sgCluster {
+          inherit objectStorage;
+          config.backups = [ { } ];
+        }).instances.data.backups.raw.root.out.worldEgressPort;
+      fails = objectStorage: !(builtins.tryEval (portOf objectStorage)).success;
+    in
+    (
+      says ''bucket "Backups..x" is not a valid S3 bucket name: it must use only lowercase letters'' got
+      && says "it contains two adjacent dots" got
+      && says ''credentialKeys sets serviceAccountJSON, which type "s3" does not read. Remove it.'' got
+      && fails (storage // { extraSpec.s3Compatible.endpoint = "s3.example.com"; })
+      && portOf (storage // { extraSpec.s3Compatible.endpoint = "https://s3.example.com:9443"; }) == 9443
+      && portOf (storage // { extraSpec.s3Compatible.endpoint = "http://s3.example.com"; }) == 80
+      && portOf storage == 443
+    )
+    || throw "stackgres-object-storage refusals: ${builtins.toJSON got}";
 }

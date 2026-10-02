@@ -169,6 +169,14 @@ rec {
           passengers: outAttrs:
           lib.mapAttrs (_: v: if builtins.isString v then scopeObj.augmentEdge passengers v else v) outAttrs;
 
+        # The dependency's out with the context of `passengers` added to
+        # every string value, plus the Service references among its parts,
+        # keyed by name. A package that re-exports a dependency's address
+        # (stackgres-database) keeps the result as a folder part. A consumer
+        # of that address then waits for the passengers, and the network
+        # policy builder, which indexes only the typed parts of a workload's
+        # direct dependencies, finds the Service reference there and gives
+        # the consumer egress to it.
         forwardEdges =
           dep: passengers:
           let

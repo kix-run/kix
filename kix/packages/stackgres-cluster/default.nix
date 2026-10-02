@@ -1,15 +1,69 @@
-# StackGres Cluster package: PostgreSQL cluster via StackGres CRDs.
+# stackgres-cluster: a PostgreSQL cluster run by the StackGres operator, as
+# one SGCluster with its instance profile, PostgreSQL configuration, and
+# optional pooling configuration and init scripts.
 #
-# Creates the custom resources that the StackGres operator manages:
-# SGInstanceProfile (sizing), SGPostgresConfig (tuning),
-# SGObjectStorage (S3 backup destination), SGCluster (the cluster),
-# and optionally SGPoolingConfig (connection pooling) and SGScript
-# (init scripts).
+# The operator creates the pods, the Services, and the Secret named after the
+# instance that holds the superuser credentials. The package references the
+# primary Service and that Secret, so consumers wait for them and get network
+# policy to the PostgreSQL pods. Apps should depend on a stackgres-database
+# instance (alias `database`), which creates a role and database for them,
+# rather than on this package.
 #
-# Designed for NW1's 7 PostgreSQL clusters; each instance of this
-# package produces one complete PostgreSQL cluster.
+# Minimal instance, with an operator elsewhere in the cluster:
 #
-# root = SGCluster, with outputs for port and service DNS name.
+#   instances.data.postgres.package = packages.stackgres-cluster;
+#
+# DI deps:
+#   stackgresOperator (required)  a stackgres-operator instance; its release
+#                                 decides the PostgreSQL versions and operand
+#                                 images. An imported operator is refused:
+#                                 an import has no out.resolvePostgres.
+#   storageClasses (optional)     the class of the data volumes when
+#                                 `persistentVolume.storageClass` is null.
+#   sgObjectStorage (optional)    a stackgres-object-storage instance in this
+#                                 namespace, read only when `backups` is set.
+#   prometheus (optional)         a PodMonitor for the exporter sidecar.
+#
+# Defaults: `instances` from the availability level (1 at none, 2 at pod
+# and node, 3 at zone), PostgreSQL 17, 1 CPU and 2Gi per instance, 20Gi
+# volumes, TLS on, no connection pooler, no backups.
+#
+# Placement: with more than one instance, the pods spread over nodes and
+# zones as the availability level asks. StackGres's production profile also
+# requires every SGCluster pod of a namespace, of any cluster, to run on its
+# own node, so the clusters of one namespace need as many nodes as they have
+# instances together. On a single-node cluster the package turns that rule
+# off (nonProductionOptions.disableClusterPodAntiAffinity).
+#
+# Network policy: with an enforcer, the package opens the PostgreSQL pods'
+# DNS, API server, and peer traffic, the operator's access to Patroni (TCP
+# 8008 and 8009), TCP 443 to the internet when `extensions` is set (the
+# extensions repository), and the object storage's port when `backups` is
+# set and the storage is outside the cluster. Clients get ingress through the
+# primary Service reference.
+#
+# Escape hatch: `extraSpec`, merged over the SGCluster spec. The fields the
+# options own are refused (listed on `extraSpec`), and so are
+# `pods.disableEnvoy = false`, `postgres.flavor`, and turning the
+# one-pod-per-node rule off at availability node or zone.
+#
+# Limits: the operator also creates pods for SGDbOps and manually created
+# SGBackups. Their labels differ from the cluster's pods, so under a
+# network policy enforcer they get no policy from this package.
+#
+# Exposes:
+#   out.name, out.fqdn, out.port  the primary Service (port 5432).
+#   out.selector                  the PostgreSQL pods' labels.
+#   out.superuserSecret           the operator's credentials Secret, keys
+#                                 `superuser-username` and
+#                                 `superuser-password`, for consumers in this
+#                                 namespace.
+#   out.extensions                the extension names in the SGCluster.
+#   out.tls                       whether PostgreSQL serves TLS
+#                                 (spec.postgres.ssl.enabled).
+#   out.extraImages               the operand images the operator runs.
+#
+# root = the SGCluster.
 
 {
   scope,
@@ -20,151 +74,416 @@
 
 let
   name = scope.instanceName;
+  ns = scope.namespaceName;
+  who = "stackgres-cluster ${ns}/${name}";
 
-  selectorLabels = {
-    "app.kubernetes.io/name" = "stackgres-cluster";
-    "app.kubernetes.io/instance" = name;
+  # The SGCluster fields this package writes are those of StackGres 1.19.
+  supportedRelease = "1.19";
+
+  # Extensions that need more than an entry in spec.postgres.extensions.
+  extensionNeeds = {
+    vchord = {
+      preload = true;
+      requires = [ "vector" ];
+    };
   };
+  # StackGres's default shared_preload_libraries.
+  defaultPreload = [
+    "pg_stat_statements"
+    "auto_explain"
+  ];
 
+  # SGCluster spec paths the options own.
+  locked = [
+    [ "instances" ]
+    [
+      "postgres"
+      "version"
+    ]
+    [
+      "postgres"
+      "extensions"
+    ]
+    [ "sgInstanceProfile" ]
+    [
+      "configurations"
+      "sgPostgresConfig"
+    ]
+    [
+      "configurations"
+      "sgPoolingConfig"
+    ]
+    [
+      "configurations"
+      "backups"
+    ]
+    [
+      "managedSql"
+      "scripts"
+    ]
+    [
+      "pods"
+      "persistentVolume"
+      "size"
+    ]
+    [
+      "pods"
+      "persistentVolume"
+      "storageClass"
+    ]
+    [
+      "pods"
+      "disableConnectionPooling"
+    ]
+  ];
+
+  dropNulls = lib.filterAttrs (_: v: v != null);
+
+  # The requested extensions, one entry per name, with the extensions they
+  # require added.
+  extensionsOf =
+    config:
+    let
+      requested = config.extensions;
+      names = lib.unique (
+        map (e: e.name) requested ++ lib.concatMap (e: extensionNeeds.${e.name}.requires or [ ]) requested
+      );
+      firstNonNull = list: lib.findFirst (v: v != null) null list;
+    in
+    map (
+      n:
+      let
+        entries = builtins.filter (e: e.name == n) requested;
+      in
+      dropNulls {
+        name = n;
+        version = firstNonNull (map (e: e.version) entries);
+        publisher = firstNonNull (map (e: e.publisher) entries);
+        repository = firstNonNull (map (e: e.repository) entries);
+      }
+    ) names;
+
+  versionConflicts =
+    config:
+    lib.concatMap (
+      n:
+      let
+        versions = lib.unique (
+          builtins.filter (v: v != null) (
+            map (e: e.version) (builtins.filter (e: e.name == n) config.extensions)
+          )
+        );
+      in
+      lib.optional (builtins.length versions > 1)
+        "extension ${n} is requested at versions ${lib.concatStringsSep " and " versions}. The packages that inject extensions through stackgres-database have to agree on one version."
+    ) (lib.unique (map (e: e.name) config.extensions));
+
+  quantity = q: if builtins.isString q then q else toString q;
+
+  # The StackGres CRDs accept a narrower quantity grammar than Kubernetes.
+  quantityChecks = config: [
+    {
+      option = "instanceProfile.cpu";
+      value = config.instanceProfile.cpu;
+      pattern = "[1-9][0-9]*m?";
+      shown = "^[1-9][0-9]*[m]?$";
+      fix = "Write whole cores (\"2\") or millicores (\"1500m\").";
+    }
+    {
+      option = "instanceProfile.memory";
+      value = config.instanceProfile.memory;
+      pattern = "[0-9]+([.][0-9]+)?(Mi|Gi)";
+      shown = "^[0-9]+(\\.[0-9]+)?(Mi|Gi)$";
+      fix = "Use Mi or Gi, such as \"2Gi\".";
+    }
+    {
+      option = "persistentVolume.size";
+      value = config.persistentVolume.size;
+      pattern = "[0-9]+([.][0-9]+)?(Mi|Gi|Ti)";
+      shown = "^[0-9]+(\\.[0-9]+)?(Mi|Gi|Ti)$";
+      fix = "Use Mi, Gi, or Ti, such as \"20Gi\".";
+    }
+  ];
+
+  postgresPort = 5432;
 in
 {
   meta = {
-    version = "1.0.0";
-    description = "PostgreSQL cluster (SGCluster) managed by the StackGres operator";
+    description = "PostgreSQL cluster run by the StackGres operator (SGCluster)";
     owner = "platform";
     defaultAliases = [ "postgres" ];
     lifecycle = "stateful";
   };
 
+  assertions =
+    { config, ... }:
+    map (message: {
+      assertion = false;
+      inherit message;
+    }) (versionConflicts config)
+    ++ [
+      {
+        assertion =
+          builtins.stringLength name <= 44 && builtins.match "[a-z]([-a-z0-9]*[a-z0-9])?" name != null;
+        message = "StackGres limits an SGCluster name to 44 characters matching ^[a-z]([-a-z0-9]*[a-z0-9])?$; \"${name}\" is ${toString (builtins.stringLength name)} characters. Rename the instance.";
+      }
+      {
+        assertion = (config.extraSpec.pods or { }).disableEnvoy or true != false;
+        message = "extraSpec sets pods.disableEnvoy = false. The Service reference and the network policy assume PostgreSQL on 5432 with no Envoy sidecar.";
+      }
+      {
+        assertion = config.backups == null || builtins.all (b: !(b ? sgObjectStorage)) config.backups;
+        message = "backups entries take sgObjectStorage from the sgObjectStorage dependency. Remove it.";
+      }
+    ]
+    ++ lib.imap0 (i: s: {
+      assertion = (s.script == null) != (s.scriptFrom == null);
+      message = "scripts entry ${toString i} must set exactly one of script or scriptFrom.";
+    }) config.scripts
+    ++ map (c: {
+      assertion = builtins.match c.pattern (quantity c.value) != null;
+      message = "${c.option} is \"${quantity c.value}\", which StackGres refuses: it must match ${c.shown}. ${c.fix}";
+    }) (quantityChecks config);
+
+  warnings =
+    { config, deps, ... }:
+    lib.optional (config.backups == null && deps ? sgObjectStorage)
+      "an sgObjectStorage instance resolved in ${ns} but backups is null, so this cluster takes no backups.";
+
+  # An imported operator has no out.release; the build refuses it first.
+  deps.stackgresOperator.assertions = dep: [
+    {
+      assertion = !(dep.out ? release) || lib.versions.majorMinor dep.out.release == supportedRelease;
+      message = "this package writes the SGCluster fields of StackGres ${supportedRelease}, and the stackgresOperator dependency runs ${dep.out.release}. Update kix/packages/stackgres-cluster for that release.";
+    }
+  ];
+
   options = {
     instances = lib.mkOption {
-      type = lib.types.int;
-      # A second instance only pays off once it can sit on another node,
-      # so failover has somewhere to go; three at "zone" so the Patroni
-      # quorum survives the loss of a zone.
+      type = lib.types.ints.positive;
+      # One instance cannot survive its own pod's restart, so `pod` needs a
+      # second; three at `zone` keep a Patroni majority through a zone loss.
       default = kix.availability.pick availability {
         none = 1;
-        pod = 1;
+        pod = 2;
         node = 2;
         zone = 3;
       };
+      defaultText = lib.literalExpression "kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 3; }";
+      description = "PostgreSQL instances (`spec.instances`): one primary, the rest streaming replicas that Patroni fails over to.";
+    };
+
+    postgres.version = lib.mkOption {
+      type = lib.types.str;
+      default = "17";
       description = ''
-        Number of PostgreSQL instances in the `SGCluster` (one primary, the
-        rest replicas with automatic failover). Defaults from the cluster's
-        availability level (v2_discussions/145).
+        PostgreSQL major ("17") or minor ("17.11"), checked against the
+        versions the operator's release ships. A major means its newest
+        minor when the cluster is created. Changing the major needs an
+        SGDbOps of type majorVersionUpgrade.
       '';
     };
-    postgres = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        version = "16";
-        flavor = "vanilla";
-        ssl.enabled = true;
-      };
-    };
+
     extensions = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            name = lib.mkOption {
+              type = lib.types.nonEmptyStr;
+              description = "Extension name in the StackGres extensions repository.";
+            };
+            version = lib.mkOption {
+              type = lib.types.nullOr lib.types.nonEmptyStr;
+              default = null;
+              description = "Extension version. Null takes the repository's default.";
+            };
+            publisher = lib.mkOption {
+              type = lib.types.nullOr lib.types.nonEmptyStr;
+              default = null;
+              description = "Extension publisher. Null takes the repository's default.";
+            };
+            repository = lib.mkOption {
+              type = lib.types.nullOr lib.types.nonEmptyStr;
+              default = null;
+              description = "Base URL of the extensions repository to install the extension from. Null lets the operator choose among the repositories of its SGConfig (`extensions.repositoryUrls`).";
+            };
+          };
+        }
+      );
       default = [ ];
       description = ''
-        PostgreSQL extensions to install (e.g. pgvecto.rs). Each entry is
-        an attrset `{ name, version? }` passed through to SGCluster;
-        `version` optionally pins a specific extension version.
-        Uses listOf for merge semantics with dep config injection.
+        Extensions the operator installs (`spec.postgres.extensions`). A
+        stackgres-database instance on this cluster adds the extensions it
+        is asked for, so list here only what no database requests. Entries
+        with the same name are merged; `vchord` adds `vector` and is
+        preloaded.
       '';
     };
-    storage = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        size = "20Gi";
-        storageClass = null;
-      };
-    };
+
     instanceProfile = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        cpu = "1";
-        memory = "2Gi";
-      };
-    };
-    pgConfig = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        name = null;
-        maxConnections = "200";
-        sharedBuffers = null;
-        postgresqlConf = { };
-      };
-    };
-    backup = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        enabled = false;
-        backups = [
-          {
-            cronSchedule = "0 1 * * *";
-            retention = 7;
-            compression = "lz4";
-          }
-          {
-            cronSchedule = "0 12 * * 1";
-            retention = 3;
-            compression = "lz4";
-          }
-        ];
-        s3 = {
-          bucket = null;
-          endpoint = null;
-          region = "gra";
-          credentialsSecret = null;
-          accessKeyField = "accesskey";
-          secretKeyField = "secretkey";
+      default = { };
+      description = "The SGInstanceProfile spec: CPU and memory per instance, and any other SGInstanceProfile field.";
+      type = lib.types.submodule {
+        freeformType = lib.types.attrsOf lib.types.anything;
+        options = {
+          cpu = lib.mkOption {
+            type = kix.types.quantity;
+            default = "1";
+            description = "CPU per instance, for the PostgreSQL container and the sidecars StackGres sizes from it.";
+          };
+          memory = lib.mkOption {
+            type = kix.types.quantity;
+            default = "2Gi";
+            description = "Memory per instance.";
+          };
         };
       };
     };
-    pgConfigIncludeVersion = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
+
+    persistentVolume = {
+      size = lib.mkOption {
+        type = kix.types.quantity;
+        default = "20Gi";
+        description = "Size of each instance's data volume.";
+      };
+      storageClass = lib.mkOption {
+        type = lib.types.nullOr lib.types.nonEmptyStr;
+        default = null;
+        description = "StorageClass of the data volumes. Null takes the `storageClasses` dependency's class, or the cluster's default class without one. StackGres does not move an existing volume to another class.";
+      };
     };
+
+    postgresqlConf = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.nullOr lib.types.str);
+      default = { };
+      example = {
+        max_connections = "200";
+        work_mem = "16MB";
+      };
+      description = ''
+        postgresql.conf parameters, over StackGres's defaults and the keys the
+        package sets (`archive_timeout` with backups, and
+        `shared_preload_libraries` for an extension that needs preloading,
+        which keeps the libraries listed here). Null removes a package key.
+        StackGres refuses some parameters it manages itself.
+      '';
+    };
+
     pooling = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        enabled = false;
-        pgbouncerConf = { };
+      type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
+      default = null;
+      example = {
+        pgBouncer."pgbouncer.ini".pgbouncer.pool_mode = "transaction";
       };
+      description = ''
+        SGPoolingConfig spec. Non-null creates it and turns on the pgbouncer
+        sidecar; `{ }` takes StackGres's defaults. Null runs no pooler, so
+        clients connect to PostgreSQL directly: the sidecar's auth_query
+        needs an `authenticator` role and caches failed logins.
+      '';
     };
-    profile = lib.mkOption {
-      type = lib.types.str;
-      default = "production";
-    };
-    replication = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        mode = "async";
-        role = "ha-read";
-      };
-    };
-    # Pod update strategy method.
-    # InPlace = upgrade without pod restart; ReducedImpact = rolling restart.
-    updateMethod = lib.mkOption {
-      type = lib.types.str;
-      default = "ReducedImpact";
-    };
-    postgresServices = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        primary = {
-          enabled = true;
-          type = "ClusterIP";
-        };
-        replicas = {
-          enabled = true;
-          type = "ClusterIP";
-        };
-      };
-    };
+
     scripts = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
+      type = lib.types.listOf (
+        lib.types.submodule {
+          freeformType = lib.types.attrsOf lib.types.anything;
+          options = {
+            name = lib.mkOption {
+              type = lib.types.nullOr lib.types.nonEmptyStr;
+              default = null;
+              description = "Script name, shown in the SGCluster status.";
+            };
+            database = lib.mkOption {
+              type = lib.types.nullOr lib.types.nonEmptyStr;
+              default = null;
+              description = "Database the script runs in. Null runs it in `postgres`.";
+            };
+            script = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = "SQL to run. Set this or scriptFrom.";
+            };
+            scriptFrom = lib.mkOption {
+              type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
+              default = null;
+              description = "A `secretKeyRef` or `configMapKeyRef` holding the SQL. Set this or script.";
+            };
+          };
+        }
+      );
       default = [ ];
+      description = "Entries of the SGScript the cluster runs once each (`spec.scripts`). Other SGScript entry fields pass through.";
+    };
+
+    backups = lib.mkOption {
+      type = lib.types.nullOr (
+        lib.types.listOf (
+          lib.types.submodule {
+            freeformType = lib.types.attrsOf lib.types.anything;
+            options = {
+              cronSchedule = lib.mkOption {
+                type = lib.types.nullOr lib.types.nonEmptyStr;
+                default = null;
+                description = "When to take a base backup, in cron syntax (UTC). Null takes StackGres's default.";
+              };
+              retention = lib.mkOption {
+                type = lib.types.nullOr lib.types.ints.positive;
+                default = null;
+                description = "Base backups to keep. Null takes StackGres's default.";
+              };
+              compression = lib.mkOption {
+                type = lib.types.nullOr (
+                  lib.types.enum [
+                    "lz4"
+                    "lzma"
+                    "zstd"
+                    "brotli"
+                  ]
+                );
+                default = null;
+                description = "Backup compression. Null takes StackGres's default.";
+              };
+            };
+          }
+        )
+      );
+      default = null;
+      example = [
+        {
+          cronSchedule = "0 1 * * *";
+          retention = 7;
+        }
+      ];
+      description = ''
+        Entries of `spec.configurations.backups`, each written with the
+        `sgObjectStorage` dependency's SGObjectStorage. Non-null needs that
+        dependency in this namespace. Other entry fields (`path`,
+        `performance`, `useVolumeSnapshot`, ...) pass through. Null takes no
+        backups.
+      '';
+    };
+
+    metrics = kix.options.monitor;
+
+    extraSpec = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
+      example = {
+        pods.scheduling.nodeSelector."example.com/database" = "true";
+      };
+      description = ''
+        Merged over the SGCluster spec. Refused: `instances`,
+        `postgres.version`, `postgres.extensions`, `postgres.flavor`,
+        `sgInstanceProfile`, `configurations.sgPostgresConfig`,
+        `configurations.sgPoolingConfig`, `configurations.backups`,
+        `managedSql.scripts`, `pods.persistentVolume.size`,
+        `pods.persistentVolume.storageClass`, `pods.disableConnectionPooling`,
+        and `pods.disableEnvoy = false`. `pods.scheduling.topologySpreadConstraints`
+        replaces the spread the package derives from the availability level.
+        A non-production `profile`, or
+        `nonProductionOptions.disableClusterPodAntiAffinity = true`, is
+        refused at availability node or zone with more than one instance.
+      '';
     };
   };
 
@@ -172,136 +491,164 @@ in
     {
       self,
       config,
+      clusterConfig,
+      stackgresOperator,
       storageClasses ? null,
-      stackgresOperator, # runtime dep; ensures operator is deployed before clusters
-      reflector ? null, # optional; when present, the superuser secret is
-      # opted into cross-namespace propagation via emberstack/reflector and
-      # this package emits a one-shot annotator Job that adds the reflector
-      # annotations to the operator-managed source secret.
+      sgObjectStorage ? null,
+      prometheus ? null,
       ...
     }:
     let
-      # Parse memory to MB for calculations.
-      memoryMB =
-        let
-          mem = config.instanceProfile.memory;
-          numericGi = lib.removeSuffix "Gi" mem;
-        in
-        if lib.hasSuffix "Gi" mem then lib.toInt numericGi * 1024 else 2048;
-
-      # Calculate shared_buffers from memory if not explicitly set.
-      # Convention: ~25% of instance memory.
-      sharedBuffers =
-        if config.pgConfig.sharedBuffers != null then
-          config.pgConfig.sharedBuffers
+      operator =
+        if stackgresOperator.out ? resolvePostgres then
+          stackgresOperator.out
         else
-          "${toString (memoryMB / 4)}MB";
-
-      # effective_cache_size: ~75% of instance memory.
-      effectiveCacheSize = "${toString (memoryMB * 3 / 4)}MB";
-
-      hasVchord = lib.any (e: e.name == "vchord") config.extensions;
-
-      # Default postgresql.conf: sensible baseline for a managed PostgreSQL cluster.
-      defaultPostgresqlConf = {
-        max_connections = config.pgConfig.maxConnections;
-        shared_buffers = sharedBuffers;
-        effective_cache_size = effectiveCacheSize;
-        maintenance_work_mem = "128MB";
-        checkpoint_completion_target = "0.9";
-        checkpoint_timeout = "15min";
-        wal_buffers = "16MB";
-        default_statistics_target = "100";
-        random_page_cost = "1.1";
-        effective_io_concurrency = "200";
-        work_mem = "100MB";
-        huge_pages = "off";
-        max_wal_senders = "20";
-        max_replication_slots = "20";
-        max_wal_size = "4GB";
-        min_wal_size = "1GB";
-        wal_keep_size = "1536MB";
-        # WAL reaches backup storage only when a 16 MB segment fills, so a quiet
-        # database can hold hours of commits that no backup has. This switches
-        # segments at least once a minute while anything is written; an idle
-        # database switches nothing. A switched segment is zero-padded, and
-        # stored as about 85 KB with lz4 (measured on a test cluster).
-        archive_timeout = "60";
-        log_min_duration_statement = "1s";
-        log_checkpoints = "on";
-        log_connections = "on";
-        log_disconnections = "on";
-        log_lock_waits = "on";
-        log_temp_files = "0kB";
-        log_statement = "none";
-        log_line_prefix = "%t [%p]: db=%d,user=%u,app=%a,client=%h ";
-        log_autovacuum_min_duration = "0ms";
-        autovacuum_max_workers = "3";
-        autovacuum_vacuum_cost_delay = "2ms";
-        autovacuum_vacuum_scale_factor = "0.04";
-        autovacuum_work_mem = "512MB";
-        default_toast_compression = "lz4";
-        max_locks_per_transaction = "128";
-        max_pred_locks_per_transaction = "128";
-        max_prepared_transactions = "32";
-        max_parallel_workers_per_gather = "1";
-        max_parallel_maintenance_workers = "1";
-        max_parallel_workers = "2";
-        max_worker_processes = "2";
-        superuser_reserved_connections = "8";
-        vacuum_cost_limit = "400";
-        track_activity_query_size = "4kB";
-        track_commit_timestamp = "on";
-        track_functions = "pl";
-        track_io_timing = "on";
-        shared_preload_libraries = lib.concatStringsSep ", " (
-          [
-            "pg_stat_statements"
-            "auto_explain"
-          ]
-          ++ lib.optional hasVchord "vchord"
-        );
-        "pg_stat_statements.track_utility" = "off";
-        "timescaledb.license" = "timescale";
-        jit_inline_above_cost = "-1";
-        enable_partitionwise_join = "on";
-        enable_partitionwise_aggregate = "on";
-        lc_monetary = "C.UTF-8";
-        lc_numeric = "C.UTF-8";
-        lc_time = "C.UTF-8";
+          throw "${who}: the stackgresOperator dependency has no out.resolvePostgres, as with an import. This package reads the operator's release, operand images, and pod labels from it. Wire a managed stackgres-operator instance with deps.stackgresOperator = ref.<namespace>.<instance>.";
+      pg = operator.resolvePostgres {
+        inherit who;
+        inherit (config.postgres) version;
       };
+      operandSelector = operator.operandSelectors.sgCluster name;
+      extensions = extensionsOf config;
+      extensionNames = map (e: e.name) extensions;
+      backupsOn = config.backups != null;
+      poolingOn = config.pooling != null;
 
-      # Merge user overrides on top of defaults, filtering out null values
-      # (set a key to null in postgresqlConf to remove a default).
-      postgresqlConf = lib.filterAttrs (_: v: v != null) (
-        defaultPostgresqlConf // config.pgConfig.postgresqlConf
-      );
+      _flavor =
+        if (config.extraSpec.postgres or { }) ? flavor then
+          throw "${who}: postgres.flavor is not supported: the version check and the operand images assume vanilla PostgreSQL."
+        else
+          null;
+      _storage =
+        if backupsOn && sgObjectStorage == null then
+          throw "${who}: backups is set but no sgObjectStorage dependency resolved in namespace ${ns}. Add a stackgres-object-storage instance there, or set backups = null."
+        else
+          null;
 
-      # Resolve effective storageClass: explicit config > DI > error.
-      effectiveStorageClass =
-        if config.storage.storageClass != null then
-          config.storage.storageClass
+      storageClass =
+        if config.persistentVolume.storageClass != null then
+          config.persistentVolume.storageClass
         else if storageClasses != null then
           storageClasses.out.storageClassName
         else
-          throw "stackgres-cluster: config.storage.storageClass must be set or a storageClasses dependency must be available";
+          null;
 
-      # CRD refs exposed by the operator; each has .mkCR for building CRs
-      # with per-resource dependencies on the CRD import marker.
-      sgCrds = stackgresOperator.out.crds;
+      spread = lib.optionals (config.instances > 1) (
+        kix.availability.spreadConstraints {
+          level = availability;
+          selector = operandSelector;
+          topology = clusterConfig.cluster.topology;
+        }
+      );
 
-      # StackGres auto-creates a secret named after the cluster holding
-      # superuser/replication/authenticator credentials. Expose a ref so
-      # consumers can pull `superuser-username` / `superuser-password`.
-      #
-      # `reflect` is wired from DI: when an emberstack/reflector instance is
-      # discovered in the cluster, helpers produced from this ref get a
-      # `_kix.reflected = true` marker and the cross-namespace check in
-      # `checkNamespacedRefs` is relaxed. Without reflector in the cluster,
-      # consumption stays strictly same-namespace and any cross-namespace
-      # consumer fails the build with the usual error. The annotator Job
-      # below is also gated on `reflectionEnabled`.
-      reflectionEnabled = reflector != null;
+      # The production profile's required anti-affinity matches every
+      # SGCluster pod in the namespace on kubernetes.io/hostname, so on one
+      # node a second pod of any cluster in the namespace stays Pending.
+      singleNode = clusterConfig.cluster.topology.failureDomainKeys == [ ];
+
+      baseSpec = {
+        inherit (config) instances;
+        postgres = {
+          inherit (config.postgres) version;
+        }
+        // lib.optionalAttrs (extensions != [ ]) { inherit extensions; };
+        sgInstanceProfile = self.instanceProfile.out.name;
+        configurations = {
+          sgPostgresConfig = self.postgresConfig.out.name;
+        }
+        // lib.optionalAttrs backupsOn {
+          backups = map (
+            b:
+            dropNulls b
+            // {
+              sgObjectStorage = sgObjectStorage.out.name;
+            }
+          ) config.backups;
+        }
+        // lib.optionalAttrs poolingOn {
+          sgPoolingConfig = self.poolingConfig.out.name;
+        };
+        pods = {
+          persistentVolume = {
+            size = quantity config.persistentVolume.size;
+          }
+          // lib.optionalAttrs (storageClass != null) { inherit storageClass; };
+          disableConnectionPooling = !poolingOn;
+        }
+        // lib.optionalAttrs (spread != [ ]) {
+          scheduling.topologySpreadConstraints = spread;
+        };
+      }
+      // lib.optionalAttrs singleNode {
+        nonProductionOptions.disableClusterPodAntiAffinity = true;
+      }
+      // lib.optionalAttrs (config.scripts != [ ]) {
+        managedSql.scripts = [ { sgScript = self.scripts.out.name; } ];
+      };
+
+      spec = builtins.seq _flavor (
+        kix.mergeGuarded {
+          inherit who locked;
+        } baseSpec config.extraSpec
+      );
+
+      # StackGres turns the anti-affinity off when
+      # nonProductionOptions.disableClusterPodAntiAffinity is true, or when
+      # it is unset and the profile is not production.
+      profile = spec.profile or "production";
+      antiAffinityFlag = (spec.nonProductionOptions or { }).disableClusterPodAntiAffinity or null;
+      antiAffinityOff = if antiAffinityFlag != null then antiAffinityFlag else profile != "production";
+      _antiAffinity =
+        if kix.availability.atLeast "node" availability && config.instances > 1 && antiAffinityOff then
+          throw "${who}: extraSpec turns off StackGres's one-pod-per-node anti-affinity (profile \"${profile}\", nonProductionOptions.disableClusterPodAntiAffinity ${
+            if antiAffinityFlag == null then "unset" else "= true"
+          }) with ${toString config.instances} instances at availability ${availability}, which needs the instances on different nodes. Use the production profile or set nonProductionOptions.disableClusterPodAntiAffinity = false, or lower the instance's availability."
+        else
+          null;
+
+      exporterOn = !((spec.pods or { }).disableMetricsExporter or false);
+
+      preloadNeeded = lib.filter (n: extensionNeeds.${n}.preload or false) extensionNames;
+      userPreload = config.postgresqlConf.shared_preload_libraries or null;
+      preload = lib.unique (
+        (
+          if userPreload != null then
+            builtins.filter (l: l != "") (map lib.trim (lib.splitString "," userPreload))
+          else
+            defaultPreload
+        )
+        ++ preloadNeeded
+      );
+
+      postgresqlConf = dropNulls (
+        lib.optionalAttrs backupsOn {
+          # WAL reaches backup storage only when a 16 MB segment fills, so a
+          # quiet database can hold hours of commits that no backup has. This
+          # switches segments at least once a minute while anything is
+          # written; an idle database switches nothing. A switched segment is
+          # zero-padded, and stored as about 85 KB with lz4 (measured on a
+          # test cluster).
+          archive_timeout = "60";
+        }
+        // config.postgresqlConf
+        // lib.optionalAttrs (preloadNeeded != [ ]) {
+          shared_preload_libraries = lib.concatStringsSep ", " preload;
+        }
+      );
+
+      crds = operator.crds;
+
+      postgresService = scope.mkServiceRef {
+        inherit name;
+        selector = operandSelector;
+        ports = [
+          {
+            port = postgresPort;
+            protocol = "TCP";
+          }
+        ];
+        requires = [ self.cluster ];
+      };
 
       superuserSecret = scope.mkSecretRef {
         inherit name;
@@ -309,373 +656,184 @@ in
           "superuser-username"
           "superuser-password"
         ];
-        reflect = reflectionEnabled;
         requires = [ self.cluster ];
       };
 
-      # Pod selector for operator-managed StackGres StatefulSet pods.
-      sgPodSelector = {
-        "app" = "StackGresCluster";
-        "stackgres.io/cluster-name" = name;
+      # Read only when the scope has an enforcer (kix.operandPolicy).
+      netpol = scope.networkPolicyEnforcer.netpol;
+      tcp = port: {
+        inherit port;
+        protocol = "TCP";
       };
-
-      # ServiceRef for the operator-managed primary Service. The StackGres
-      # operator creates a ClusterIP Service named `${name}` whose selector
-      # matches sgPodSelector. By referencing it through mkServiceRef:
-      #   (a) the deploy engine gates consumers until the Service exists,
-      #   (b) the netpol system auto-generates caller-ingress CNPs for any
-      #       consumer whose workloadInput carries this ref's store-path
-      #       context, replacing the blanket `fromEntities = ["cluster"]`.
-      postgresService = scope.mkServiceRef {
-        inherit name;
-        selector = sgPodSelector;
-        ports = [
-          {
-            port = "5432";
-            protocol = "TCP";
-          }
-        ];
-        requires = [ self.cluster ];
-      };
-
+      worldEgress =
+        ports:
+        (netpol.translateIntentRules {
+          intents.operand.egress = [
+            {
+              to = "world";
+              ports = map tcp ports;
+            }
+          ];
+        }).egressRules;
+      storagePort = if backupsOn then sgObjectStorage.out.worldEgressPort else null;
+      operatorNamespace = (scope.forService stackgresOperator).namespaceName;
+      # Patroni's REST API, which the operator calls.
+      patroniPorts = map tcp [
+        8008
+        8009
+      ];
+      self' = netpol.mkSelfRules { selector = operandSelector; };
     in
-    {
+    builtins.seq _storage (
+      builtins.seq _antiAffinity {
+        inherit postgresService superuserSecret;
 
-      # Exposed in the return attrset (not just the let binding) so
-      # `collectTypedAttrs` emits the import marker as a real manifest.
-      # Without this, consumers that reference `postgres.out.superuserSecret`
-      # or `postgres.out.fqdn` would get a context edge to a marker that
-      # never lands on the cluster.
-      inherit superuserSecret postgresService;
-
-      # ===== SGInstanceProfile (CPU/memory sizing) =====
-
-      instanceProfile = scope.mkCR sgCrds.sgInstanceProfile {
-        name = "${name}-profile";
-        labels = selectorLabels;
-        spec = {
-          cpu = config.instanceProfile.cpu;
-          memory = config.instanceProfile.memory;
+        instanceProfile = scope.mkCR crds.SGInstanceProfile {
+          name = "${name}-profile";
+          spec = config.instanceProfile // {
+            cpu = quantity config.instanceProfile.cpu;
+            memory = quantity config.instanceProfile.memory;
+          };
         };
-      };
 
-      # ===== SGPostgresConfig (PostgreSQL parameters) =====
+        # The name carries the major: an SGPostgresConfig's postgresVersion
+        # cannot change.
+        postgresConfig = scope.mkCR crds.SGPostgresConfig {
+          name = "${name}-pg${pg.major}-config";
+          spec = {
+            postgresVersion = pg.major;
+            "postgresql.conf" = postgresqlConf;
+          };
+        };
 
-      pgConfig = scope.mkCR sgCrds.sgPostgresConfig {
-        name =
-          if config.pgConfig.name != null then
-            config.pgConfig.name
-          else if config.pgConfigIncludeVersion then
-            "${name}-pg${config.postgres.version}-config"
+        poolingConfig =
+          if poolingOn then
+            scope.mkCR crds.SGPoolingConfig {
+              name = "${name}-pooling-config";
+              # The API requires a spec, and Kix drops an empty one, so
+              # `pooling = { }` writes an empty pgbouncer.ini for StackGres
+              # to default.
+              spec = lib.recursiveUpdate { pgBouncer."pgbouncer.ini" = { }; } config.pooling;
+            }
           else
-            "${name}-config";
-        labels = selectorLabels;
-        spec = {
-          postgresVersion = config.postgres.version;
-          "postgresql.conf" = postgresqlConf;
+            null;
+
+        scripts =
+          if config.scripts != [ ] then
+            scope.mkCR crds.SGScript {
+              name = "${name}-init";
+              spec.scripts = map dropNulls config.scripts;
+            }
+          else
+            null;
+
+        cluster = scope.mkCR crds.SGCluster {
+          inherit name spec;
+          # `kix.mkImport { from = packages.stackgres-cluster; }` takes its
+          # out from this resource, without the operator dependency that
+          # postgresService needs.
+          outputs.port = toString postgresPort;
         };
-      };
 
-      # ===== SGObjectStorage (S3 backup destination) =====
-
-      objectStorage = lib.optionalAttrs config.backup.enabled (
-        scope.mkCR sgCrds.sgObjectStorage ({
-          name = config.backup.s3.bucket;
-          labels = selectorLabels;
-          spec = {
-            type = "s3Compatible";
-            s3Compatible = {
-              bucket = config.backup.s3.bucket;
-              region = config.backup.s3.region;
-              enablePathStyleAddressing = true;
-            }
-            // lib.optionalAttrs (config.backup.s3.endpoint != null) {
-              endpoint = config.backup.s3.endpoint;
-            }
-            // lib.optionalAttrs (config.backup.s3.credentialsSecret != null) {
-              awsCredentials = {
-                secretKeySelectors = {
-                  accessKeyId = {
-                    name = config.backup.s3.credentialsSecret;
-                    key = config.backup.s3.accessKeyField;
-                  };
-                  secretAccessKey = {
-                    name = config.backup.s3.credentialsSecret;
-                    key = config.backup.s3.secretKeyField;
-                  };
-                };
+        podMonitor =
+          if config.metrics.enabled && prometheus != null && exporterOn then
+            prometheus.out.mkPodMonitor scope {
+              inherit name;
+              spec = {
+                selector.matchLabels = operandSelector;
+                podMetricsEndpoints = [
+                  (
+                    {
+                      port = "pgexporter";
+                    }
+                    // lib.optionalAttrs (config.metrics.interval != null) { inherit (config.metrics) interval; }
+                  )
+                ];
               };
-            };
-          };
-        })
-      );
+              requires = [ self.cluster ];
+            }
+          else
+            null;
 
-      # ===== SGPoolingConfig (optional connection pooling) =====
-
-      poolingConfig = lib.optionalAttrs config.pooling.enabled (
-        scope.mkCR sgCrds.sgPoolingConfig {
-          name = "${name}-pooling-config";
-          labels = selectorLabels;
+        # The operator creates these pods, so no policy is derived for them.
+        operandEgress = kix.operandPolicy {
+          inherit scope;
+          name = "${name}-operand-egress";
           spec = {
-            pgBouncer = {
-              "pgbouncer.ini" = {
-                pgbouncer = {
-                  pool_mode = "session";
-                  max_client_conn = "200";
-                  default_pool_size = 180;
-                  ignore_startup_parameters = "extra_float_digits";
-                  max_db_connections = "0";
-                  max_user_connections = "0";
-                }
-                // config.pooling.pgbouncerConf;
-              };
-            };
+            endpointSelector.matchLabels = operandSelector;
+            egress = [
+              netpol.dnsEgressRule
+              netpol.apiServerEgressRule
+            ]
+            ++ self'.egress
+            # The extensions repository.
+            ++ lib.optionals (extensions != [ ]) (worldEgress [ 443 ])
+            ++ lib.optionals (storagePort != null) (worldEgress [ storagePort ]);
           };
-        }
-      );
-
-      # ===== SGScript (optional initialization scripts) =====
-
-      initScript = lib.optionalAttrs (config.scripts != [ ]) (
-        scope.mkCR sgCrds.sgScript {
-          name = "${name}-init";
-          labels = selectorLabels;
+        };
+        operandIngress = kix.operandPolicy {
+          inherit scope;
+          name = "${name}-operand-ingress";
           spec = {
-            scripts = lib.imap0 (i: script: {
-              name = script.name or "script-${toString i}";
-              database = script.database or "postgres";
-              script = script.sql;
-            }) config.scripts;
-          };
-        }
-      );
-
-      # ===== SGCluster (the PostgreSQL cluster) =====
-
-      cluster = scope.mkCR sgCrds.sgCluster {
-        name = name;
-        labels = selectorLabels;
-        spec = {
-          instances = config.instances;
-          postgres = {
-            version = config.postgres.version;
-            flavor = config.postgres.flavor;
-            ssl = {
-              enabled = config.postgres.ssl.enabled;
-            };
-          }
-          // lib.optionalAttrs (config.extensions != [ ]) {
-            # add extensions and if vchord is in extensions, also add vector
-            extensions =
-              let
-                userExts = config.extensions;
-                hasVchord = lib.any (e: e.name == "vchord") userExts;
-                hasVector = lib.any (e: e.name == "vector") userExts;
-              in
-              if hasVchord && !hasVector then userExts ++ [ { name = "vector"; } ] else userExts;
-          };
-          sgInstanceProfile = self.instanceProfile.out.name;
-          profile = config.profile;
-          replication = {
-            mode = config.replication.mode;
-            role = config.replication.role;
-          };
-          postgresServices = config.postgresServices;
-          configurations = {
-            sgPostgresConfig = self.pgConfig.out.name;
-          }
-          // lib.optionalAttrs config.backup.enabled {
-            backups = map (
-              b:
-              {
-                sgObjectStorage = self.objectStorage.out.name;
-                compression = b.compression;
-                retention = b.retention;
-              }
-              // lib.optionalAttrs (b ? cronSchedule) {
-                cronSchedule = b.cronSchedule;
-              }
-            ) config.backup.backups;
-          }
-          // lib.optionalAttrs config.pooling.enabled {
-            sgPoolingConfig = self.poolingConfig.out.name;
-          };
-          pods = {
-            persistentVolume = {
-              size = config.storage.size;
-              storageClass = effectiveStorageClass;
-            };
-            updateStrategy = {
-              method = config.updateMethod;
-            };
-            # StackGres ships a pgbouncer sidecar by default even without an
-            # SGPoolingConfig. Its auth_query path needs an `authenticator`
-            # role in the DB, and when that role is missing every login gets
-            # cached as a failure ("server_login_retry"), breaking even the
-            # superuser bootstrap Job. When consumers haven't explicitly
-            # opted into pooling, disable the sidecar so the main cluster
-            # service talks to postgres directly.
-            disableConnectionPooling = !config.pooling.enabled;
-          };
-        }
-        // lib.optionalAttrs (config.scripts != [ ]) {
-          managedSql = {
-            scripts = [
-              {
-                sgScript = self.initScript.out.name;
-              }
+            endpointSelector.matchLabels = operandSelector;
+            ingress = self'.ingress ++ [
+              (netpol.mkCallerIngressRule {
+                callerSelector = operator.podSelector;
+                callerNamespace = operatorNamespace;
+                ports = patroniPorts;
+              })
             ];
           };
         };
-        outputs = {
-          # Use ServiceRef-backed values so consumers get the marker's
-          # store-path context for automatic netpol + wave ordering.
-          port = postgresService.out.port;
-          serviceName = postgresService.out.fqdn;
-          serviceNamePrimary = "${name}-primary.${scope.namespaceName}.svc";
-          serviceNameReplicas = "${name}-replicas.${scope.namespaceName}.svc";
+        # The other end of the operator rule, in the operator's namespace.
+        operatorEgress = kix.operandPolicy {
+          scope = scope.forService stackgresOperator;
+          name = "${ns}-${name}-operator-egress";
+          spec = {
+            endpointSelector.matchLabels = operator.podSelector;
+            egress = [
+              (netpol.mkServiceEgressRule {
+                selector = operandSelector;
+                namespace = ns;
+                sourceNamespace = operatorNamespace;
+                ports = patroniPorts;
+              })
+            ];
+          };
         };
-      };
 
-      # ===== Reflector annotator (cross-namespace secret propagation) =====
-      #
-      # The StackGres operator creates `${name}` Secret in this namespace
-      # holding superuser/replication credentials. To make those credentials
-      # consumable from other namespaces (immich, vaultwarden, …) we use the
-      # emberstack/reflector controller, which copies a Secret into target
-      # namespaces when its source carries `reflector.v1.k8s.emberstack.com/*`
-      # annotations.
-      #
-      # We can't add those annotations declaratively because kix doesn't own
-      # the source manifest (the operator does). The reflector package owns
-      # this wiring: when a reflector instance is resolved via DI, we call
-      # `reflector.out.reflectSecret scope { ... }` which returns the
-      # annotator bundle (SA + Role + RoleBinding + one-shot Job). The
-      # `reflector` dep edge is what marks this as DI-provided: reflector
-      # declares the annotation domain, and the architecture scorecard lints
-      # explicitly configured reflector annotations against that edge.
-
-      reflectorBundle =
-        if reflectionEnabled then
-          reflector.out.reflectSecret scope {
-            secretName = name;
-            requires = [ self.cluster ];
-          }
-        else
-          null;
-
-      # ===== Network policies for operator-managed pods ====================
-      #
-      # The StackGres operator creates StatefulSet pods with its own labels
-      # (app=StackGresCluster, stackgres.io/cluster-name=<name>), not the
-      # kix-standard app.kubernetes.io/* labels. These pods are invisible to
-      # kix's automatic netpol generation (buildWorkloadCnps) because they
-      # aren't created via scope.mkStatefulSet. Under default-deny, the
-      # cluster-controller can't reach the API server and patroni can't
-      # bootstrap.
-
-      sgClusterEgress =
-        if scope.networkPolicyEnforcer == null then
-          null
-        else
-          scope.networkPolicyEnforcer.netpol.mkPolicy {
-            mkResource = scope.mkResource;
-            extraArgs = {
-              name = "${name}-sgcluster-egress";
-              labels = {
-                ${kix.keys.derived} = "true";
-                ${kix.keys.policyType} = "operator-managed-workload";
-              };
-              spec = {
-                endpointSelector.matchLabels = sgPodSelector;
-                egress = [
-                  scope.networkPolicyEnforcer.netpol.dnsEgressRule
-                  scope.networkPolicyEnforcer.netpol.apiServerEgressRule
-                  # Self-communication: patroni HA, replication, peer discovery.
-                  { toEndpoints = [ { matchLabels = sgPodSelector; } ]; }
-                  # External: cluster-controller downloads extensions from
-                  # extensions.stackgres.io at runtime.
-                  (scope.networkPolicyEnforcer.netpol.mkExternalEgressRule { })
-                ];
-              };
-              extraDeps = [ ];
-            };
-          };
-
-      sgClusterIngress =
-        if scope.networkPolicyEnforcer == null then
-          null
-        else
-          scope.networkPolicyEnforcer.netpol.mkPolicy {
-            mkResource = scope.mkResource;
-            extraArgs = {
-              name = "${name}-sgcluster-ingress";
-              labels = {
-                ${kix.keys.derived} = "true";
-                ${kix.keys.policyType} = "operator-managed-workload";
-              };
-              spec = {
-                endpointSelector.matchLabels = sgPodSelector;
-                ingress = [
-                  # Self ingress (patroni peer traffic).
-                  { fromEndpoints = [ { matchLabels = sgPodSelector; } ]; }
-                  # Allow connections from any pod in the same namespace
-                  # (bootstrap jobs, monitoring exporters, operator probes).
-                  {
-                    fromEndpoints = [
-                      {
-                        matchLabels = {
-                          "k8s:io.kubernetes.pod.namespace" = scope.namespaceName;
-                        };
-                      }
-                    ];
-                  }
-                  # Cross-namespace consumer ingress (e.g. immich → postgres)
-                  # is now auto-generated by the netpol system via the
-                  # postgresService ServiceRef. Consumers whose workloadInput
-                  # carries the ServiceRef's store-path context get a
-                  # caller-ingress CNP targeting sgPodSelector:5432; no
-                  # blanket fromEntities=["cluster"] needed.
-                ];
-              };
-              extraDeps = [ ];
-            };
-          };
-
-      # ===== Entry point =====
-
-      root = {
-        resource = self.cluster;
-        requires = [
-          self.instanceProfile
-          self.pgConfig
-          self.postgresService
-        ]
-        ++ lib.optional (self.sgClusterEgress != null) self.sgClusterEgress
-        ++ lib.optional (self.sgClusterIngress != null) self.sgClusterIngress
-        ++ lib.optionals reflectionEnabled (lib.attrValues self.reflectorBundle)
-        ++ lib.optional config.backup.enabled self.objectStorage
-        ++ lib.optional config.pooling.enabled self.poolingConfig
-        ++ lib.optional (config.scripts != [ ]) self.initScript;
-
-        out = {
-          # ServiceRef-backed connection info. Consumers who interpolate
-          # these values automatically get netpol edges + wave ordering.
-          inherit (postgresService.out) fqdn port;
-          name = postgresService.out.name;
-          extensionNames = map (e: e.name) config.extensions;
-          # Handle to the operator-created credentials secret. Consumers use
-          # `postgres.out.superuserSecret.out.mkEnv { DB_USER = "superuser-username"; ... }`.
-          superuserSecret = superuserSecret;
-          # Images the StackGres operator will pull at reconciliation time.
-          # Not in any kix-generated manifest, so declared here for `kix images`.
-          extraImages = [
-            "quay.io/ongres/patroni:v4.1.0-pg${config.postgres.version}.13-build-6.49"
-            "quay.io/ongres/prometheus-postgres-exporter:v0.19.0-build-6.49"
-            "quay.io/ongres/postgres-util:v${config.postgres.version}.13-build-6.49"
-            "quay.io/stackgres/cluster-controller:1.18.6"
+        root = {
+          resource = self.cluster;
+          requires = [
+            self.instanceProfile
+            self.postgresConfig
+            self.postgresService
+          ]
+          ++ builtins.filter (r: r != null) [
+            self.poolingConfig
+            self.scripts
+            self.podMonitor
+            self.operandEgress
+            self.operandIngress
+            self.operatorEgress
           ];
+          out = {
+            inherit (postgresService.out) name fqdn port;
+            selector = operandSelector;
+            inherit superuserSecret;
+            extensions = extensionNames;
+            tls = (spec.postgres.ssl or { }).enabled or true;
+            extraImages = [
+              pg.images.patroni
+              pg.images.postgresUtil
+              pg.images.clusterController
+            ]
+            ++ lib.optional exporterOn pg.images.prometheusPostgresExporter
+            ++ lib.optional poolingOn pg.images.pgbouncer
+            # The backup CronJob runs kubectl.
+            ++ lib.optionals backupsOn operator.kubectlImages;
+          };
         };
-      };
-    };
+      }
+    );
 }

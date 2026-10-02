@@ -48,7 +48,20 @@ kix.buildCluster {
         # Postgres managed externally (e.g. StackGres, CloudNativePG, RDS).
         database = {
           postgres = {
-            package = kix.mkImport { from = packages."stackgres-cluster"; };
+            package = kix.mkImport {
+              from = packages."stackgres-cluster";
+              # The extensions the external cluster has installed; the
+              # stackgres-database below checks its own against them.
+              out.extensions = [
+                "vector"
+                "vchord"
+                "uuid-ossp"
+                "cube"
+                "earthdistance"
+                "unaccent"
+                "pg_trgm"
+              ];
+            };
 
           };
         };

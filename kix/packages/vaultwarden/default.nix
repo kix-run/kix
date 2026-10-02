@@ -8,26 +8,34 @@
 # Dependencies:
 #   storage (required)    a claim, mounted at /data, for attachments, icons,
 #                         and keys
-#   postgres (required)   a PostgreSQL cluster whose `out.superuserSecret`
-#                         holds the superuser credentials (stackgres-cluster)
+#   database (required)   a PostgreSQL database and role with
+#                         `out.{host,port,database}` and `out.credentials`
+#                         (keys `username` and `password`), such as
+#                         stackgres-database
 #
-# Minimal instance:
+# Minimal instance, with a stackgres-cluster `postgres` elsewhere:
 #
 #   instances.vault = {
 #     storage = {
 #       package = packages.persistent-volume-claim;
 #       config.size = "1Gi";
 #     };
+#     vaultwarden-db = {
+#       package = packages.stackgres-database;
+#       config.passwordSource = ./secrets/vaultwarden-db.yaml;
+#       config.passwordHash = "...";
+#     };
 #     vaultwarden.package = packages.vaultwarden;   # takes deps.storage
-#   };                                              # and deps.postgres
+#   };                                              # and deps.database
 #
 # `out`: the Service's `name`, `fqdn`, and `port` (8080).
 #
 # Escape hatches: `env` for Vaultwarden settings (signups, invitations,
 # ADMIN_TOKEN), `ingress` for the route, and the instance's `partsOverlays`.
 #
-# Limits: it connects as the PostgreSQL superuser to the `postgres`
-# database. One replica with the Recreate strategy.
+# Limits: one replica with the Recreate strategy. The database password goes
+# into DATABASE_URL unescaped, so it must not contain URL delimiters such as
+# `@`, `/`, or `:`.
 
 {
   scope,
@@ -114,7 +122,7 @@ in
         config,
         clusterConfig,
         storage,
-        postgres,
+        database,
         scope,
         kix,
         ...
@@ -129,11 +137,10 @@ in
           timeoutSeconds = 1;
         };
 
-        # Credentials come from stackgres' superuser secret via env var
-        # substitution ($(VAR) syntax). Until we create a dedicated
-        # vaultwarden role/db, connect with the superuser to the default
-        # `postgres` database.
-        databaseUrl = "postgresql://$(DB_USERNAME):$(DB_PASSWORD)@${postgres.out.fqdn}:${postgres.out.port}/postgres";
+        # DB_USERNAME and DB_PASSWORD come from the database's credentials
+        # Secret; Kubernetes substitutes $(VAR) from variables defined
+        # earlier in the list.
+        databaseUrl = "postgresql://$(DB_USERNAME):$(DB_PASSWORD)@${database.out.host}:${database.out.port}/${database.out.database}";
 
         dataMount = kix.mount.pvc storage { mountPath = "/data"; };
       in
@@ -145,6 +152,11 @@ in
               replicas = 1;
               strategy.type = "Recreate";
               selector.matchLabels = scope.selectorLabels;
+              # A changed database password restarts the pods, which read it
+              # once at start. A Secret Kix does not build has no hash.
+              template.metadata.annotations = lib.optionalAttrs (database.out.credentials.out ? identityHash) {
+                "checksum/database" = database.out.credentials.out.identityHash;
+              };
               template.spec = {
                 # Kubernetes default: Rocket's own shutdown grace is a few
                 # seconds.
@@ -194,11 +206,9 @@ in
                       image = kix.image.ref config.image;
                       ports = [ (kix.port "http" 8080) ];
                       env =
-                        # Secret refs FIRST so k8s can substitute $(DB_USERNAME)/$(DB_PASSWORD)
-                        # in DATABASE_URL. K8s only substitutes vars defined earlier in the list.
-                        (postgres.out.superuserSecret.out.mkEnv {
-                          DB_USERNAME = "superuser-username";
-                          DB_PASSWORD = "superuser-password";
+                        (database.out.credentials.out.mkEnv {
+                          DB_USERNAME = "username";
+                          DB_PASSWORD = "password";
                         })
                         ++ kix.mkEnvVars (
                           kix.mergeEnv {
@@ -215,8 +225,8 @@ in
                                   "DB_USERNAME"
                                   "DB_PASSWORD"
                                 ];
-                                from = "the postgres dependency";
-                                fix = "Wire another database through deps.postgres instead.";
+                                from = "the database dependency";
+                                fix = "Wire another database through deps.database instead.";
                               }
                               {
                                 vars.DOMAIN = if config.domain != null then config.domain else self.exposure.url;
