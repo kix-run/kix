@@ -261,7 +261,10 @@ in
     }";
 
   # A platform-cilium dependency on a cni binding other than shadowable
-  # fails evaluation. Control: the shadowable binding builds.
+  # fails evaluation. Control: the shadowable binding builds. Only "absent"
+  # reaches the cilium package's binding check: the core refuses "exclusive"
+  # because the import claims cni alongside a managed claimant, and the
+  # package refuses null as an unset binding before this check runs.
   cilium-platform-import-requires-shadowable =
     let
       withBinding =
