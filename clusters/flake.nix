@@ -61,6 +61,7 @@
         reloader = ./test-reloader/kind.nix;
         tailscale = ./test-tailscale/cluster.nix;
         mayastor = ./test-mayastor.nix;
+        virtualization = ./test-virtualization.nix;
       };
     };
 }

@@ -1,0 +1,3 @@
+# 2026-10-02 · `kix/lib/vocab/compose.nix` · `kix.operandPolicy` takes a finished spec, so callers repeat the same intent translation.
+
+kubevirt (`operandPolicy` in `kix/packages/kubevirt/default.nix`) and cdi (`operandPolicy` and `mkImporterPolicy` in `kix/packages/cdi/default.nix`) each wrap `kix.operandPolicy` with the same code: `netpol.translateIntentRules`, `netpol.mkEndpointSelector`, and dropping empty rule lists. tailscale and velero build their specs by hand as well. Each copy can drift in how it treats an empty `ingress` or `egress`, which changes whether the policy denies that direction.

@@ -1,4 +1,5 @@
-# kubevirt release operator bundle at the image tag in default.nix. It
-# carries the KubeVirt CRD alongside virt-operator's Deployment and RBAC;
-# virt-operator installs every other kubevirt.io kind itself at runtime.
+# kubevirt release operator bundle at the release in default.nix (also the
+# tag in rbac/sources.txt). It carries the KubeVirt CRD alongside
+# virt-operator's Deployment and RBAC; virt-operator installs every other
+# kubevirt.io kind itself at runtime.
 https://github.com/kubevirt/kubevirt/releases/download/v1.5.0/kubevirt-operator.yaml kubevirts.kubevirt.io
