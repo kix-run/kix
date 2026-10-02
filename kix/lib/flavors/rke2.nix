@@ -204,8 +204,8 @@ in
     networkPolicy.platformIntents = lib.mkIf config.networkPolicy.enable (
       {
         # In the flavour rather than on the platform-dns import: the import
-        # is optional and stays dormant until a workload depends on DNS,
-        # but kube-system's default-deny policy applies either way.
+        # is optional and stays inactive until a required dependency demands
+        # DNS, but kube-system's default-deny policy applies either way.
         rke2-coredns-egress = inKubeSystem { "k8s-app" = "kube-dns"; } {
           egress = [
             apiserver

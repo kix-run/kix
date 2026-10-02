@@ -39,8 +39,9 @@ Evaluate the complete cluster:
 <Command {...check} />
 
 Evaluation fails for a missing namespace or instance in the `ref` path, for
-an entry that is neither a resource nor a `ref`, for a `ref` to the import
-itself, and for a `ref` to an optional instance that is not active. Fix the
+an entry that is neither a resource nor a `ref`, and for a `ref` to the
+import itself, even when the import is optional and inactive. It also fails
+for a `ref` to an optional instance that is not active. Fix the
 entry before inspecting the graph.
 
 ## Verify the order

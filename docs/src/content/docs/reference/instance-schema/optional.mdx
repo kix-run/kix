@@ -34,10 +34,11 @@ optional instance is activated when that dependency closure reaches it by:
 - an explicit `deps.<argument> = ref.<namespace>.<instance>`; or
 - a dependency of another optional instance that has already been activated.
 
-An optional build argument (`x ? null`) activates nothing. It still resolves
-to a dormant optional import and reads its `out`, but the import emits no
-PackageInstance marker. An activated import emits its marker, so the deploy
-waits for the resource the import names.
+An optional build argument (`x ? null`) activates nothing, and a dormant
+optional instance or import does not answer it, so the argument is null
+unless an active instance answers it. An activated import emits its
+PackageInstance marker, so the deploy waits for the resource the import
+names.
 
 An activated optional instance is evaluated and deployed like any other
 instance. A dormant one contributes no manifests.

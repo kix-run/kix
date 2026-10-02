@@ -976,7 +976,7 @@ kix.buildCluster {
 }
 ```
 
-When a required dependency has no instance, `eval/auto.nix` looks its argument name up in `availablePackages`. An optional dependency places no demand, even when its name is a registry role: it resolves to an existing instance or import, or is null. When it resolves to an optional import, the import stays inactive and its marker is not emitted. A dependency wired with `deps.<arg>` places no demand on the shelf; when it is `ref.<ns>.<inst>` to an optional instance, that instance is activated. An entry answers its own name, its `meta.roles`, its `meta.defaultAliases` and its entry `aliases`. A shelf package is placed once per requesting namespace (or in `autoNamespace`, or in its entry's `namespace`), except one that runs once per cluster: a package whose `meta.conflictsWith` names one of the keys it answers with a `cluster:` prefix, or that claims a role. The first demand places it, and a requester in another namespace resolves to that instance. When more than one entry answers a demanded name, the build stops and lists every claimant with the source of its claim; an unused contested name is fine, so `availablePackages = packages` keeps working. Select one implementation with an optional instance named after the dependency, which is checked before the shelf and created only on demand:
+When a required dependency has no instance, `eval/auto.nix` looks its argument name up in `availablePackages`. An optional dependency places no demand, even when its name is a registry role: it resolves to an active instance or import, or is null. An inactive optional instance or import answers no dependency, so a consumer never reads the `out` of an import whose marker is not emitted. A dependency wired with `deps.<arg>` places no demand on the shelf; when it is `ref.<ns>.<inst>` to an optional instance, that instance is activated. An entry answers its own name, its `meta.roles`, its `meta.defaultAliases` and its entry `aliases`. A shelf package is placed once per requesting namespace (or in `autoNamespace`, or in its entry's `namespace`). A package that runs once per cluster, one whose `meta.conflictsWith` names one of the keys it answers with a `cluster:` prefix or that claims a role, is refused when that would place it in more than one namespace: the error names each requester and asks for one declared instance (`instances.<ns>.<name>.package = packages.<name>;`), which every consumer then resolves to. When more than one entry answers a demanded name, the build stops and lists every claimant with the source of its claim; an unused contested name is fine, so `availablePackages = packages` keeps working. Select one implementation with an optional instance named after the dependency, which is checked before the shelf and created only on demand:
 
 ```nix
 instances.data.clickhouse = {
@@ -1129,11 +1129,11 @@ modules = [
 The instance writes HelmChartConfig kube-system/rke2-cilium instead of installing a second Cilium; RKE2's chart uses `kubernetes` IPAM, so a cluster that wants cluster-pool sets `values.ipam.mode` and the pool together.
 
 **Platform imports.** Flavors declare instances for platform-managed services:
-- `platform-dns` (alias `dns`): all flavors, `optional = true` on every flavor except kind.
+- `platform-dns` (alias `dns`): all flavors, `optional = true` on every flavor except kind. Workloads order after DNS only when the `dns` provider is active; an optional platform-dns import that nothing demands adds no dependency and no "no DNS instance" warning.
 - `platform-storage` (role `storageClasses`): kind, k3s, GKE, GKE Autopilot, AKS, Scaleway, and OVH, the flavors whose provider creates the StorageClass on every new cluster. The import names the class (`kind = "StorageClass"`, `apiVersion = "storage.k8s.io/v1"`, and `out.name`), so the deploy waits for it. EKS, kubeadm, RKE2, Talos, and OpenShift bind `storageClasses` `absent`.
 - `platform-snapshot-controller` (role `snapshotController`, with `crds` for the three snapshot.storage.k8s.io kinds): RKE2.
 
-The storage and snapshot imports are not optional. Packages take `storageClasses` and `snapshotController` as optional dependencies, and an optional dependency does not activate an optional import, so an optional import would emit no marker for the StorageClass check or the CRD markers its handles need. An optional import becomes active, and its marker is emitted, when a required dependency or a `deps` ref of an active instance demands it. If a cluster installs its own `coredns` or `storage-classes` instance, the explicit instance wins: it claims the role, and DI prefers a managed provider over an import. Under network policy, coredns runs in `kube-system`. A `storage-classes` class annotated `storageclass.kubernetes.io/is-default-class` is refused where the flavor imports a default class.
+The storage and snapshot imports are not optional. Packages take `storageClasses` and `snapshotController` as optional dependencies, and an optional dependency neither activates an optional import nor resolves to an inactive one, so an optional import would leave those dependencies null and emit no marker for the StorageClass check or the CRD markers its handles need. An optional import becomes active, and its marker is emitted, when a required dependency or a `deps` ref of an active instance demands it. If a cluster installs its own `coredns` or `storage-classes` instance, the explicit instance wins: it claims the role, and DI prefers a managed provider over an import. Under network policy, coredns runs in `kube-system`. A `storage-classes` class annotated `storageclass.kubernetes.io/is-default-class` is refused where the flavor imports a default class.
 
 ## 16. Network policy auto-derivation
 
@@ -1401,7 +1401,7 @@ in {
 
 Result: namespaces `dev-app`, `prod-app` with per-env config overrides. `overrides.${setName}.${instName}` lets you override individual instances.
 
-The namespace prefix is the whole isolation mechanism. A plain dependency auto-instantiated for `dev-app` lands in `dev-app`, because `eval/auto.nix` resolves it into the requesting namespace. Two exceptions, both deliberate: a package that declares its own `namespace` in `availablePackages`, and a cluster that sets `autoNamespace`, are pinned there and so shared by every environment. Role-named deps are keyed by the role rather than by namespace, so one provider serves them all. A package marked one per cluster (`conflictsWith` naming one of its own keys with a `cluster:` prefix, or a role claimant demanded by its package name) is also placed once, by the first demand, and consumers in the other environments resolve to it. A copy beside a declared instance that claims the same key without answering the consumer's name is refused by that instance's `conflictsWith`. Two instances that render the same cluster-scoped object, such as a CRD, fail evaluation.
+The namespace prefix is the whole isolation mechanism. A plain dependency auto-instantiated for `dev-app` lands in `dev-app`, because `eval/auto.nix` resolves it into the requesting namespace. Two exceptions, both deliberate: a package that declares its own `namespace` in `availablePackages`, and a cluster that sets `autoNamespace`, are pinned there and so shared by every environment. Role-named deps are keyed by the role rather than by namespace, so one provider serves them all. A package marked one per cluster (`conflictsWith` naming one of its own keys with a `cluster:` prefix, or a role claimant demanded by its package name) that consumers in two environments require is refused: declare it once, and consumers in every environment resolve to it. A copy beside a declared instance that claims the same key without answering the consumer's name is refused by that instance's `conflictsWith`. Two instances that render the same cluster-scoped object, such as a CRD, fail evaluation.
 
 Every environment in one `mkEnv` cluster deploys together, under one activation. When you want them to deploy separately, write one cluster per environment over a shared base module instead (`clusters/example-multi-env/`).
 
@@ -1712,8 +1712,9 @@ An environment that installs CRDs itself declares them with `crds`, a list of
 `out.crds.<Kind>`, which a consumer passes to `scope.mkCR`, and a CRD marker in
 the import's namespace that `kix deploy` waits for. The markers are emitted
 only while the import is active. An optional dependency does not activate an
-optional import, so an import whose handles packages read through optional
-dependencies is declared without `optional = true`.
+optional import and does not resolve to an inactive one, so an import whose
+handles packages read through optional dependencies is declared without
+`optional = true`.
 
 ```nix
 package = kix.mkImport {
@@ -1732,8 +1733,9 @@ It does not verify imported `fqdn` or `port` values.
 
 An optional import is active, and its marker emitted, when a required
 dependency of an active instance demands it, or a `deps.<arg> =
-ref.<ns>.<inst>` names it; an optional dependency that resolves to it leaves
-it inactive. An import without `kind` is ready as soon as its marker exists,
+ref.<ns>.<inst>` names it. An inactive optional import answers no
+dependency: an optional dependency that only it would answer is null. An
+import without `kind` is ready as soon as its marker exists,
 so give an import `kind`, `apiVersion`, and `out.name` when the deploy should
 wait for the resource. A flavor declares an import only for a resource the
 provider creates on every new cluster. An import with `kind` and `out.name`
@@ -1761,12 +1763,12 @@ stands for that instance's PackageInstance marker:
 }
 ```
 
-A `ref` does not activate an optional instance. When the import is active,
-evaluation fails for a `ref` to an optional instance that nothing activates,
-for an entry that is neither a resource nor a `ref`, and for a `ref` to the
-import itself. The option applies only to imports; an active managed instance
-with `extraDeps` fails evaluation, and its resources take `requires` or
-`extraDeps` in their builders instead.
+A `ref` does not activate an optional instance. Evaluation fails, whether or
+not the instance is active, for an entry that is neither a resource nor a
+`ref`, for a `ref` to the import itself, and for `extraDeps` on a managed
+instance, whose resources take `requires` or `extraDeps` in their builders
+instead. When the import is active, a `ref` to an optional instance that
+nothing activates also fails.
 
 ## 24. Manifest stamping
 

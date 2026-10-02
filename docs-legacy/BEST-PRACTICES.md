@@ -121,7 +121,7 @@ reconciler, and no runbook should need to.
 | Meaningful empty value deleted (`emptyDir: {}`, empty selectors) | Collapse-rule normalization: literal empties render; only containers that lost every member to null-stripping collapse. `kix.keep` protects constructor-built containers |
 | Sourceless volume shipped to the apiserver | `volumeHasSource` scorecard rule (severity error) checks volumes as they will render |
 | Missing deps | DI resolution errors with an actionable message |
-| A second copy of a one-per-cluster operator, auto-instantiated for a consumer in another namespace | `eval/auto.nix` places a package marked one per cluster once and binds the other consumers to it |
+| A second copy of a one-per-cluster operator, auto-instantiated for a consumer in another namespace | `eval/auto.nix` refuses to place a package marked one per cluster in a second namespace and names the consumers |
 | Two instances that render the same cluster-scoped object (the same CRD, ClusterRole, or IngressClass) | `buildCluster` fails, naming the object and both instances |
 | Cross-namespace mounts/secret-refs | `_kix.namespace` markers + `checkNamespacedRefs` |
 | `extra.*` shadowing managed fields | `mkResource` `_extraShadowCheck` |

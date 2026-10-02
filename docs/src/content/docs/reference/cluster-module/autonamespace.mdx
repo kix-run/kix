@@ -30,7 +30,9 @@ When several consumers need a package that represents a cluster-wide role,
 Kix creates one shared role provider rather than one per consumer namespace.
 Setting `autoNamespace` gives that provider a predictable home. For ordinary
 dependency names, namespace remains part of the demand when no fixed or
-automatic namespace is configured.
+automatic namespace is configured. A package that runs once per cluster and
+is needed from two namespaces is then refused, so set `autoNamespace` or
+declare the package once.
 
 ## Related
 
