@@ -448,7 +448,11 @@ rec {
   # owns. `owned` maps each flag to the reason and fix shown in the error.
   # An argument sets a flag when it equals the flag or starts with the flag
   # followed by "=", so `--ingress-class-by-name=true` does not set
-  # `--ingress-class`. Every hit is reported, one line each.
+  # `--ingress-class`. A one-letter flag such as `-c` also matches an
+  # argument that starts with it (`-c/etc/x`), the attached-value form that
+  # getopt and clap accept. For a Go program, whose single-dash flags can be
+  # whole words, an owned `-v` would therefore refuse `-vmodule=x`. Every hit
+  # is reported, one line each.
   #
   #   args = baseArgs ++ kix.guardArgs {
   #     inherit who;
@@ -462,9 +466,12 @@ rec {
     }:
     args:
     let
+      isShortFlag = flag: builtins.match "-[^-]" flag != null;
       flagOf =
         arg:
-        lib.findFirst (flag: arg == flag || lib.hasPrefix "${flag}=" arg) null (builtins.attrNames owned);
+        lib.findFirst (
+          flag: arg == flag || lib.hasPrefix "${flag}=" arg || (isShortFlag flag && lib.hasPrefix flag arg)
+        ) null (builtins.attrNames owned);
       lines = builtins.concatMap (
         arg:
         let
