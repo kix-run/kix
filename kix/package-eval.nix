@@ -123,7 +123,6 @@ let
       };
     };
     clickhouse.instances = { inherit credentials storage; };
-    cloudflared.config.token = "eval-only";
     clickhouse-cluster.instances = { inherit credentials; };
     clickhouse-database = {
       config.password = "password";
@@ -138,6 +137,7 @@ let
       };
     };
     clickhouse-operator.instances = { inherit credentials; };
+    cloudflared.config.token = "eval-only";
     cluster-issuer.config.spec.selfSigned = { };
     # A real Prometheus provider, so the ServiceMonitor, the alert rules,
     # and the Service's metrics port are built against its builders.

@@ -153,10 +153,12 @@ in
   # An empty description would render `description: ""`, which the live
   # object lacks; the option type refuses it.
   priority-classes-empty-description-refused =
-    evalFails (classCluster "plain" {
-      value = 10;
-      description = "";
-    })
+    evalFails (
+      classCluster "plain" {
+        value = 10;
+        description = "";
+      }
+    )
     || throw "description = \"\" evaluated";
 
   # The instance name becomes the PriorityClass name, and Kubernetes reserves

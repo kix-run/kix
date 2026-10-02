@@ -152,11 +152,19 @@ in
         N8N_RUNNERS_AUTH_TOKEN_FILE = "/tmp/token";
       };
       accepted =
-        lib.filter (n: builds (n8nCluster { config.env.${n} = refusedEnv.${n}; })) (lib.attrNames refusedEnv)
+        lib.filter (
+          n:
+          builds (n8nCluster {
+            config.env.${n} = refusedEnv.${n};
+          })
+        ) (lib.attrNames refusedEnv)
         ++ map (n: "runners.env.${n}") (
-          lib.filter (n: builds (n8nCluster { config.runners.env.${n} = refusedRunnerEnv.${n}; })) (
-            lib.attrNames refusedRunnerEnv
-          )
+          lib.filter (
+            n:
+            builds (n8nCluster {
+              config.runners.env.${n} = refusedRunnerEnv.${n};
+            })
+          ) (lib.attrNames refusedRunnerEnv)
         );
     in
     (builds base && accepted == [ ]) || throw "n8n env refusals accepted: ${toString accepted}";
@@ -174,10 +182,11 @@ in
     (
       (password base "n8n").secretKeyRef.key or null == "password"
       && (password base "n8n-worker").secretKeyRef.key or null == "password"
-      && serviceLinks == [
-        false
-        false
-      ]
+      &&
+        serviceLinks == [
+          false
+          false
+        ]
     )
     || throw "n8n valkey password ${builtins.toJSON (password base "n8n")}, enableServiceLinks ${builtins.toJSON serviceLinks}";
 
@@ -199,10 +208,7 @@ in
         "n8n-worker"
       ];
     in
-    (
-      password bare "n8n" == null
-      && builtins.all (p: p.secretKeyRef.key or null == "password") supplied
-    )
+    (password bare "n8n" == null && builtins.all (p: p.secretKeyRef.key or null == "password") supplied)
     || throw "n8n imported valkey: without env ${builtins.toJSON (password bare "n8n")}, with env ${builtins.toJSON supplied}";
 
   # An import that publishes a Sentinel port fails the build; the
@@ -216,7 +222,9 @@ in
     (
       messages { out = { }; } == [ ]
       && builtins.any (lib.hasInfix "standalone valkey") sentinel
-      && evalFails (n8nCluster { valkey = importedValkey { sentinelPort = 26379; }; })
+      && evalFails (n8nCluster {
+        valkey = importedValkey { sentinelPort = 26379; };
+      })
     )
     || throw "n8n Sentinel import: messages ${builtins.toJSON sentinel}";
 
@@ -244,7 +252,9 @@ in
         "500m"
         "300m"
       ]
-      && evalFails (n8nCluster { config.env.N8N_FORMDATA_FILE_SIZE_MAX = "16mb"; })
+      && evalFails (n8nCluster {
+        config.env.N8N_FORMDATA_FILE_SIZE_MAX = "16mb";
+      })
     )
     || throw "n8n proxy-body-size: ${builtins.toJSON sizes}";
 
