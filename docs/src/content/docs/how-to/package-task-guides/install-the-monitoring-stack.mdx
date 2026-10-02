@@ -26,6 +26,24 @@ Import the module and enable the stack in a cluster module:
 
 <Snippet {...monitoringStack} />
 
+Grafana needs its administrator's login: a `grafanaAdmin` secret in the
+monitoring namespace with the keys `admin-user` and `admin-password`. The
+example writes a development password into the cluster file. On a real
+cluster, keep it in a SOPS source:
+
+```nix title="cluster.nix"
+instances.monitoring-system.grafana-admin = {
+  package = packages.secret;
+  aliases = [ "grafanaAdmin" ];
+  config.source = ./secrets/grafana-admin.sops.yaml;
+  config.keys = [ "admin-user" "admin-password" ];
+};
+```
+
+Without the secret, evaluation fails and names the missing `grafanaAdmin`
+dependency. The sidecars that load dashboards and datasources use the same
+login.
+
 The example keeps Grafana storage ephemeral so it can run on a fresh local
 cluster. For a long-lived cluster, turn persistence on and size the claim:
 
@@ -51,8 +69,23 @@ Before deploying, adjust these settings for the cluster:
 - `instances.monitoring-system.prometheus-server.config.resources` sets
   Prometheus CPU and memory requests and limits. Each field keeps its
   default until set, and null removes a default.
-- `monitoring.prometheus.storage` configures persistent Prometheus storage.
+- `monitoring.prometheus.storage.size` puts each Prometheus server's data on
+  a volume claim of that size, of the cluster's StorageClass unless
+  `storage.storageClassName` names one. Without it the data lives in an
+  emptyDir and a pod restart empties it.
+- `instances.monitoring-system.prometheus-server.config.extraSpec` takes any
+  other field of the Prometheus resource, such as `remoteWrite` or
+  `externalUrl`.
+- `monitoring.alertmanager.settings` is Alertmanager's configuration file.
+  Without it every alert goes to a receiver that drops it. The receivers'
+  URLs and email smarthosts decide which ports the Alertmanager pods may
+  reach outside the cluster under network policy.
 - `monitoring.nodeExporter.enabled` controls the node-exporter DaemonSet.
+
+When the cluster has an ingress controller or a gateway and a
+`cluster.domain`, Grafana gets a route at `grafana.<cluster.domain>`, and
+that URL is its `root_url`. Set
+`instances.monitoring-system.grafana.config.ingress.host` for another host.
 
 ## Add Loki
 
@@ -130,8 +163,8 @@ To open Grafana locally, forward its port:
   cwd="kix-examples/"
 />
 
-Open `http://127.0.0.1:3000` while the forward is running. Stop it with
-`Ctrl-C`.
+Open `http://127.0.0.1:3000` while the forward is running and sign in with
+the login from the `grafanaAdmin` secret. Stop the forward with `Ctrl-C`.
 
 If a component remains pending, use `kix status` to find its workload, then
 check node capacity, PVC provisioning, and any pod security restrictions on

@@ -242,11 +242,11 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 Declarative native Prometheus stack. Options under `monitoring`:
 - `enabled`, `namespace` (default: "monitoring-system")
 - `operator.enabled`
-- `prometheus`: enabled, retention, retentionSize, scrapeInterval, storage, externalUrl
-- `alertmanager`: enabled, routing
+- `prometheus`: enabled, retention, retentionSize, scrapeInterval, storage (size, storageClassName)
+- `alertmanager`: enabled, settings (alertmanager.yaml; its receivers decide the Alertmanager pods' world egress ports)
 - `nodeExporter.enabled`, `kubeStateMetrics.enabled`
-- `defaultRules`: enabled, per-group rule toggles, per-component monitor toggles
-- `grafana`: enabled, rootUrl, persistence (enabled, size, storageClassName), extraDatasources
+- `defaultRules.enabled` (rule groups and monitors are toggled on the `default-rules` instance's config)
+- `grafana`: enabled, persistence (enabled, size, storageClassName), datasources. Grafana needs a `grafanaAdmin` secret (keys `admin-user`, `admin-password`) in the namespace; its route and `root_url` come from `kix.expose`
 - `loki.enabled`, `loki.storageSize` (Kix-native single-binary Loki in the monitoring namespace on the claim instance `loki-storage`; tune it through `instances.<ns>.loki.config.settings`; Grafana gets the datasource by DI)
 - `lokiLogs.enabled` (loki-logs, a Kix-native Vector agent at the monitoring-log-shipper PriorityClass; defaults to loki.enabled)
 
