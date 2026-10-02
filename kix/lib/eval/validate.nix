@@ -1190,8 +1190,9 @@ rec {
 
       # --- 22. Named Secret and ConfigMap keys ---
       # A container does not start when an env var or volume item names a
-      # key its Secret or ConfigMap lacks, and a subPath of a missing key
-      # mounts an empty directory. Keys are known for a Secret built with
+      # key its Secret or ConfigMap lacks. A subPath of a missing key mounts
+      # an empty directory, and the container fails to start if its image has
+      # a file at the mount path. Keys are known for a Secret built with
       # scope.mkSecret (kix.run/secret-keys), a ref that lists keys
       # (kix.run/import-secret-keys) and a ConfigMap in the build (data,
       # binaryData). Skipped: `optional: true`; names declared external with
@@ -1381,7 +1382,7 @@ rec {
             [ ]
           else if read.subPath != null then
             [
-              "${who} mounts subPath '${read.subPath.sub}' of ${read.objKind} '${read.obj}' at ${read.subPath.mountPath} (${read.where}), and ${read.objKind} '${read.obj}' declares ${listText decl.keys}, not '${read.key}'. The kubelet would mount an empty directory there, so the container fails to start or reads a directory instead of the file. Add the key to the ${read.objKind}, or mount a declared one."
+              "${who} mounts subPath '${read.subPath.sub}' of ${read.objKind} '${read.obj}' at ${read.subPath.mountPath} (${read.where}), and ${read.objKind} '${read.obj}' declares ${listText decl.keys}, not '${read.key}'. The kubelet would mount an empty directory there: the container fails to start if its image has a file at ${read.subPath.mountPath}, and otherwise reads a directory instead of the file. Add the key to the ${read.objKind}, or mount a declared one."
             ]
           else
             [
