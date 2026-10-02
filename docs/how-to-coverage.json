@@ -517,19 +517,6 @@
       ]
     },
     {
-      "page": "package-task-guides/deploy-a-python-app",
-      "scenario": "package-stacks",
-      "status": "implemented",
-      "snippets": [
-        "pythonApplicationInstance"
-      ],
-      "offlineCaptures": [
-        "how-to/package-python/check",
-        "how-to/package-python/workload"
-      ],
-      "unverifiedNixBlocks": 1
-    },
-    {
       "page": "package-task-guides/deploy-stackgres",
       "scenario": "package-stacks",
       "status": "implemented",

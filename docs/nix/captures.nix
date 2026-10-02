@@ -1383,57 +1383,6 @@
   }
 
   {
-    group = "how-to/package-python";
-    page = "/docs/how-to/package-task-guides/deploy-a-python-app/";
-    cwd = "kix-examples/";
-    offline = [
-      {
-        capture = "check";
-        run = [
-          "kix"
-          "check"
-          "how-to-package-python"
-        ];
-      }
-      {
-        capture = "workload";
-        run = [
-          "kix"
-          "build"
-          "how-to-package-python"
-          "--output"
-          "json"
-        ];
-        stdoutJq = ''
-          [
-            .[]
-            | select(
-                (.kind == "Deployment" and .metadata.namespace == "python-example")
-                or (.kind == "Service" and .metadata.namespace == "python-example")
-                or (.kind == "ConfigMap" and .metadata.namespace == "python-example")
-              )
-            | if .kind == "Deployment" then
-                {
-                  apiVersion,
-                  kind,
-                  metadata: {name: .metadata.name, namespace: .metadata.namespace},
-                  spec: {
-                    replicas: .spec.replicas,
-                    containers: .spec.template.spec.containers
-                      | map({name, image, command, args, ports, livenessProbe, readinessProbe})
-                  }
-                }
-              else if .kind == "Service" then
-                {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec: {ports: .spec.ports}}
-              else
-                {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, data}
-              end end
-          ]'';
-      }
-    ];
-  }
-
-  {
     group = "how-to/package-stackgres";
     page = "/docs/how-to/package-task-guides/deploy-stackgres/";
     cwd = "kix-examples/";

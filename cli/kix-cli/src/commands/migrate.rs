@@ -208,7 +208,7 @@ fn print_report(report: &migrate::Report) {
     println!("  it back up. It watches the new group.");
     println!("  Then deploy. Every resource is applied once, to move its annotations.");
     println!("  Almost nothing restarts: a package that hashes a ConfigMap into its");
-    println!("  pod template rolls its pods once (valkey, n8n, python-app).");
+    println!("  pod template rolls its pods once (valkey, n8n).");
 }
 
 /// Ask unless `--yes`. Exits 1 on a non-interactive terminal without `--yes`,
