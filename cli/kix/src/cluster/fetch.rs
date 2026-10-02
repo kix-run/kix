@@ -3,7 +3,7 @@
 //! Uses `kube` discovery to enumerate API resources, then parallel LIST
 //! calls with label selectors to fetch kix-managed resources.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use super::activation::{self, Tenancy};
@@ -1062,6 +1062,56 @@ pub fn kix_owned_manifests(
         .collect()
 }
 
+/// [`kix_owned_manifests`] for comparison against a build, with each object
+/// that is unchanged since kix applied a manifest still in the build replaced
+/// by that manifest. `built` maps identity hash to the build's stamped
+/// manifest.
+///
+/// An object is unchanged when its `kix.run/identity-hash` names a manifest
+/// in `built` and [`super::drift::check_object`] finds it in sync: the
+/// manifest is the one kix last applied, and every field kix applied still
+/// holds what the server committed then. Comparing the build to the live
+/// view instead would report every field the server filled in, dropped, or
+/// rewrote on that apply, such as an operator's mutating webhook default.
+///
+/// A Secret kix applied with `stringData` is always compared through its
+/// view. The applied-content hash cannot see a change made in `data`, and
+/// [`restore_string_data`] can.
+pub fn kix_owned_manifests_against(
+    objects: impl IntoIterator<Item = DynamicObject>,
+    built: &HashMap<String, &serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    objects
+        .into_iter()
+        .map(|obj| match unchanged_since_apply(&obj, built) {
+            Some(manifest) => manifest.clone(),
+            None => {
+                let mut manifest = kix_owned_view(&obj);
+                crate::legacy_domain::upgrade_manifest(&mut manifest);
+                manifest
+            }
+        })
+        .collect()
+}
+
+/// The build manifest `obj` was applied from, when nothing has changed it
+/// since. See [`kix_owned_manifests_against`].
+fn unchanged_since_apply<'a>(
+    obj: &DynamicObject,
+    built: &HashMap<String, &'a serde_json::Value>,
+) -> Option<&'a serde_json::Value> {
+    let hash = obj
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))?;
+    let manifest = *built.get(hash)?;
+    let applied_string_data =
+        super::fieldsv1::kix_fieldset(obj).is_some_and(|f| f.get("f:stringData").is_some());
+    let in_sync = super::drift::check_object(obj).verdict == super::drift::DriftVerdict::InSync;
+    (in_sync && !applied_string_data).then_some(manifest)
+}
+
 /// Serialise a fetched object into a whole-manifest `Value`.
 ///
 /// `DynamicObject` keeps `metadata` in a typed field and puts only the
@@ -1214,7 +1264,7 @@ fn absorb(
 mod tests {
     use super::*;
     use kube::api::ObjectMeta;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn managed(
         manager: &str,
@@ -1406,6 +1456,104 @@ mod tests {
         // A value that does not decode is left out.
         let broken = kix_owned_view(&secret("not base64"));
         assert_eq!(broken["stringData"], json!({"user": "admin"}));
+    }
+
+    /// A live SGCluster after an apply: the operator's webhook added
+    /// `publisher` to each extension, inside a list kix owns whole.
+    fn webhook_defaulted_cluster(extensions: Value, applied_hash: Option<&str>) -> DynamicObject {
+        let mut annotations: BTreeMap<String, String> =
+            [(keys::IDENTITY_HASH.to_string(), "h-pg".to_string())].into();
+        let mut obj = DynamicObject {
+            metadata: ObjectMeta {
+                name: Some("postgres".into()),
+                namespace: Some("data".into()),
+                annotations: Some(annotations.clone()),
+                managed_fields: Some(vec![managed(
+                    "kix",
+                    "Apply",
+                    None,
+                    json!({
+                        "f:metadata": {"f:annotations": {format!("f:{}", keys::IDENTITY_HASH): {}}},
+                        "f:spec": {"f:postgres": {"f:extensions": {}}}
+                    }),
+                )]),
+                ..Default::default()
+            },
+            types: None,
+            data: json!({
+                "apiVersion": "stackgres.io/v1",
+                "kind": "SGCluster",
+                "spec": {"postgres": {"extensions": extensions}}
+            }),
+        };
+        let hash = match applied_hash {
+            Some(h) => h.to_string(),
+            None => crate::cluster::fieldsv1::applied_content_hash(&obj).unwrap(),
+        };
+        annotations.insert(keys::APPLIED_HASH.to_string(), hash);
+        obj.metadata.annotations = Some(annotations);
+        obj
+    }
+
+    #[test]
+    fn an_object_unchanged_since_apply_compares_as_its_build_manifest() {
+        let built = json!({
+            "apiVersion": "stackgres.io/v1",
+            "kind": "SGCluster",
+            "metadata": {"name": "postgres", "namespace": "data",
+                         "annotations": {keys::IDENTITY_HASH: "h-pg"}},
+            "spec": {"postgres": {"extensions": [{"name": "cube"}]}}
+        });
+        let by_hash: HashMap<String, &Value> = [("h-pg".to_string(), &built)].into();
+        let live_extensions = json!([{"name": "cube", "publisher": "com.ongres"}]);
+
+        let in_sync = webhook_defaulted_cluster(live_extensions.clone(), None);
+        assert_eq!(
+            kix_owned_manifests_against([in_sync], &by_hash),
+            std::slice::from_ref(&built)
+        );
+
+        // Changed since the apply: the live view, webhook default and all.
+        let drifted = webhook_defaulted_cluster(live_extensions.clone(), Some("other"));
+        let out = kix_owned_manifests_against([drifted], &by_hash);
+        assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
+
+        // Applied from a manifest the build no longer has: the live view.
+        let in_sync = webhook_defaulted_cluster(live_extensions.clone(), None);
+        let out = kix_owned_manifests_against([in_sync], &HashMap::new());
+        assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
+    }
+
+    #[test]
+    fn a_secret_applied_with_string_data_compares_through_its_view() {
+        let mut secret = DynamicObject {
+            metadata: ObjectMeta {
+                name: Some("creds".into()),
+                namespace: Some("app".into()),
+                managed_fields: Some(vec![managed(
+                    "kix",
+                    "Apply",
+                    None,
+                    json!({"f:stringData": {".": {}, "f:password": {}}}),
+                )]),
+                ..Default::default()
+            },
+            types: None,
+            data: json!({"apiVersion": "v1", "kind": "Secret", "data": {"password": "cm90YXRlZA=="}}),
+        };
+        let applied = crate::cluster::fieldsv1::applied_content_hash(&secret).unwrap();
+        secret.metadata.annotations = Some(
+            [
+                (keys::IDENTITY_HASH.to_string(), "h-sec".to_string()),
+                (keys::APPLIED_HASH.to_string(), applied),
+            ]
+            .into(),
+        );
+        let built = json!({"kind": "Secret", "stringData": {"password": "dev-password"}});
+        let by_hash: HashMap<String, &Value> = [("h-sec".to_string(), &built)].into();
+
+        let out = kix_owned_manifests_against([secret], &by_hash);
+        assert_eq!(out[0]["stringData"], json!({"password": "rotated"}));
     }
 
     /// No kix Apply entry (adopted externally, or pre-SSA): the whole object,

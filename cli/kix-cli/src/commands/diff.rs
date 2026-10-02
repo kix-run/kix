@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
@@ -9,7 +9,7 @@ use kix::cluster::apply::ApplyError;
 use kix::cluster::fetch;
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use kix::eval::build_cluster_activation_with_status;
-use kix::eval::store_graph::StoreGraph;
+use kix::eval::store_graph::{StoreGraph, store_hash};
 use kix::manifest::serialize::load_manifests_from_dir;
 use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
@@ -232,9 +232,18 @@ async fn fetch_live_manifests(
         );
     }
 
-    // Only the fields kix's server-side apply owns: server defaults and
-    // kix's own bookkeeping never enter the comparison.
-    Ok((fetch::kix_owned_manifests(compared), namespaceless))
+    // Only the fields kix's server-side apply owns, so server defaults and
+    // kix's own bookkeeping never enter the comparison. An object nothing
+    // has changed since kix applied it compares as the manifest it was
+    // applied from, so what the server filled in on that apply does not show.
+    let built: HashMap<String, &Value> = new_graph
+        .resources
+        .iter()
+        .map(|(path, node)| (store_hash(path), &node.manifest))
+        .collect();
+    let manifests = fetch::kix_owned_manifests_against(compared, &built);
+
+    Ok((manifests, namespaceless))
 }
 
 fn make_spinner(ctx: &CommandContext, msg: &str) -> Option<indicatif::ProgressBar> {
