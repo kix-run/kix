@@ -1,0 +1,3 @@
+# 2026-10-02 · `kix/lib/eval/helpers.nix` · A part folder silently drops entries keyed `root` or `meta`, at any depth.
+
+`collectTypedAttrs` removes the keys `root` and `meta` at every level it walks (`excludeKeys` in `instancePartResources`, and the same lists in `eval/instance.nix`), not only at the top of the build. A package that builds a folder from user-chosen names, such as tailscale's `proxyClasses` and `connectors` options, loses an entry named `root` or `meta` with no error, and anything that names that object (tailscale's `PROXY_DEFAULT_CLASS`) points at nothing. tailscale refuses the two keys itself; any other package keyed by user input has the same hole.
