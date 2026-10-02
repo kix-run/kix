@@ -34,7 +34,8 @@ let
   namesOfKind = kind: cluster: map (m: m.metadata.name) (ofKind kind (manifests cluster));
   controllerEnv =
     cluster:
-    (builtins.head (byName "ingress-nginx" (ofKind "Deployment" (manifests cluster))).spec.template.spec.containers).env;
+    (builtins.head (byName "ingress-nginx" (ofKind "Deployment" (manifests cluster)))
+      .spec.template.spec.containers).env;
 in
 {
   ingress-nginx-renders-cluster-rbac =
@@ -56,15 +57,15 @@ in
     && lib.all (r: r.resources == [ "leases" ]) leaseRole.rules;
 
   ingress-nginx-snippets-need-critical-risk =
-    evalFails (clusterWith { settings."allow-snippet-annotations" = "true"; })
-    && !evalFails (
-      clusterWith {
-        settings = {
-          "allow-snippet-annotations" = "true";
-          "annotations-risk-level" = "Critical";
-        };
-      }
-    );
+    evalFails (clusterWith {
+      settings."allow-snippet-annotations" = "true";
+    })
+    && !evalFails (clusterWith {
+      settings = {
+        "allow-snippet-annotations" = "true";
+        "annotations-risk-level" = "Critical";
+      };
+    });
 
   ingress-nginx-service-spec-selector-locked = evalFails (clusterWith {
     service.spec.selector.app = "other";

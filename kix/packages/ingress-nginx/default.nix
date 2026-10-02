@@ -282,9 +282,9 @@ in
         serviceType = config.service.spec.type;
         metricsOn = config.metrics.enabled && prometheus != null;
 
-        # The upstream ConfigMap decodes booleans with Go's strconv.ParseBool,
-        # which also accepts "1", "t", and "True"; only the two literal
-        # spellings are checked here.
+        # The controller parses booleans with Go's strconv.ParseBool, which
+        # also accepts "1", "t", and "True". Other spellings are refused so
+        # the Critical-risk check below cannot be bypassed.
         snippets = config.settings."allow-snippet-annotations" or null;
         settings =
           if snippets != null && snippets != "true" && snippets != "false" then
@@ -356,7 +356,8 @@ in
           owned = {
             "--publish-service" = "the package points it at the controller Service; remove it.";
             "--election-id" = "the package derives it from the instance name; remove it.";
-            "--controller-class" = "the package derives it from ingressClassName; set ingressClassName instead.";
+            "--controller-class" =
+              "the package derives it from ingressClassName; set ingressClassName instead.";
             "--ingress-class" = "the package sets it to ingressClassName; set ingressClassName instead.";
             "--configmap" = "the package points it at its ConfigMap; set settings instead.";
             "--validating-webhook" = "the package serves the admission webhook on :8443; remove it.";
@@ -467,11 +468,7 @@ in
           labels = admissionLabels;
           roles."${name}-admission" = grant [
             (core.secrets |> allow [ "create" ])
-            (
-              core.secrets
-              |> restrictTo [ "${name}-admission" ]
-              |> allow [ "get" ]
-            )
+            (core.secrets |> restrictTo [ "${name}-admission" ] |> allow [ "get" ])
           ];
         };
 
