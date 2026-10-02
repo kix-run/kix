@@ -6,3 +6,7 @@ the two objects. Two same-named instances of a cluster-scoped package in
 different namespaces fail this way: `instances.a.high` and `instances.b.high`
 of `priority-class` give `Duplicate resource: PriorityClass/cluster-scoped/high`,
 and the user has to search the cluster file for the name.
+
+kubevirt and cdi: a second instance also prints Duplicate resource lines
+for the CRD, `kubevirt.io:operator`, and `kubevirt-cluster-critical`, after
+the `conflictsWith` lines that name the instances.

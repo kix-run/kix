@@ -3,6 +3,5 @@
 `grafana`, `immich`, `immich-machine-learning` and `vaultwarden` run
 `docker.io/library/busybox:1.38.0` and `firezone` runs `busybox:1.36` in
 init containers with no option behind them. `reflector` runs
-`bitnamilegacy/kubectl:1.33` in a Job it renders beside its chart. `cdi`
-and `kubevirt` build their operand image names from the operator's
-`image.tag`. `grep -rn 'image = "' kix/packages` lists them.
+`bitnamilegacy/kubectl:1.33` in a Job it renders beside its chart.
+`grep -rn 'image = "' kix/packages` lists them.
