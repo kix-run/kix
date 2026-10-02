@@ -1,3 +1,4 @@
 # 2026-10-02 · `kix/lib/vocab/compose.nix` · `kix.mergeGuarded` tells the user to "use the option that owns it" when no option owns the path.
 
 The refusal at `mergeGuarded` always ends "which the package sets for correctness. Use the option that owns it." kubevirt locks `extraSpec.infra.replicas` at every availability level but sets it only at `none`; at `node` and `zone` the instance's `availability` decides it and no option exists, so the message points at nothing. cdi's `priorityClass` lock is owned by a dependency, not an option. ORDER D3 removed the per-call `hint` argument, so packages cannot say what owns the path.
+- Hit again 2026-10-02 while fixing kix/packages/harbor: `registry.settings.auth` and `jobservice.settings.job_loggers` are locked because the package builds the registry's htpasswd and the DB job logger, and no option owns either path.

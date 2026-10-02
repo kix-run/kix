@@ -1,0 +1,3 @@
+# 2026-10-02 · `kix/packages/{external-dns,valkey}` · Comments say reloader's `withReloadOn` rolls pods for a secret-ref Secret, but neither package takes a `reloader` dependency.
+
+`withReloadOn` transforms Deployment or StatefulSet builder args inside a package build, before `scope.mkDeployment`. A cluster author cannot apply it to a package's workload from a cluster file, so `external-dns/default.nix:561` and `valkey/default.nix:505-506` (and their how-to pages, `publish-dns-records-with-external-dns.mdx` and `deploy-valkey-redis.mdx`) describe a step nobody can take. harbor takes an optional `reloader ? null` dependency and applies `withReloadOn` itself for every secret dependency without `out.identityHash`.

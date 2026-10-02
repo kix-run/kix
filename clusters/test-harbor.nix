@@ -1,8 +1,9 @@
-# clusters/test-harbor.nix — Harbor smoke test.
+# clusters/test-harbor.nix: Harbor smoke test.
 #
-# Harbor with every dep wired: a StackGres postgres plus a per-app database,
-# valkey, a registry PVC, ingress-nginx, a self-signed ClusterIssuer (TLS on
-# the Ingress) and the prometheus operator (ServiceMonitors + PrometheusRule).
+# Harbor with every dep wired: its secrets, an extra CA bundle, a StackGres
+# postgres plus a per-app database, valkey, a registry PVC, ingress-nginx, a
+# self-signed ClusterIssuer (TLS on the Ingress), and the prometheus
+# operator (ServiceMonitors and a PrometheusRule).
 # Network policy and the full scorecard rule set are on so the package is
 # held to the same bar ludo holds its packages to.
 #
@@ -24,7 +25,9 @@ kix.buildCluster {
       }:
       {
         availablePackages = packages;
-        cluster.domain = "harbor.test";
+        # `*.localhost` resolves to loopback, so the port-forwarded Ingress
+        # needs no /etc/hosts entry.
+        cluster.domain = "localhost";
         networkPolicy.enable = true;
         # The full built-in rule set at its own severities, with no
         # override, is the default now, and clusters/flake.nix raises the
@@ -63,14 +66,24 @@ kix.buildCluster {
         instances.harbor = {
           harbor = {
             package = packages.harbor;
-            # The smoke test reaches the Ingress through
-            # `kubectl port-forward -n ingress-system svc/ingress-nginx 8443:443`,
-            # and registry clients follow the token realm core hands them, so
-            # the public URL has to carry that port.
-            config.externalURL = "https://harbor.harbor.test:8443";
-            # Dev-only values. The key and hash below were generated for this
-            # fixture and protect nothing.
-            config.secrets.values = {
+            config = {
+              # The smoke test reaches the Ingress through
+              # `kubectl port-forward -n ingress-system svc/ingress-nginx 8443:443`,
+              # and registry clients follow the token realm core hands them, so
+              # the public URL carries that port.
+              externalURL = "https://harbor.localhost:8443";
+              # kind's single node gives availability "none", which defaults
+              # to one jobservice pod. Two prove that a job's log is served
+              # by a pod that may not have run the job.
+              jobservice.replicas = 2;
+            };
+          };
+          # Dev-only values. The key below was generated for this fixture and
+          # protects nothing.
+          harbor-secrets = {
+            package = packages.secret;
+            aliases = [ "harborSecrets" ];
+            config.stringData = {
               adminPassword = "Harbor12345";
               secretKey = "0123456789abcdef";
               coreSecret = "dev-core-secret";
@@ -78,8 +91,6 @@ kix.buildCluster {
               csrfKey = "0123456789abcdef0123456789abcdef";
               registryHttpSecret = "dev-registry-http-secret";
               registryPassword = "dev-registry-password";
-              # htpasswd -nbB harbor_registry_user dev-registry-password
-              registryHtpasswd = "harbor_registry_user:\$2y\$05\$61w4.J6uFUkXoKBcFsDMwuLAC/ssV6YAkUO.cS1bTMY/xuU.sVzXq";
               tokenPrivateKey = ''
                 -----BEGIN RSA PRIVATE KEY-----
                 MIIEogIBAAKCAQEAvlnT71GdrFpAHsV+YUh13GO1NdI5mxR0dg/7oF/eCrMmGZht
@@ -111,10 +122,30 @@ kix.buildCluster {
               '';
             };
           };
+          # A CA nothing in the cluster uses, so the caBundle mounts and
+          # their rollout annotations are built and deployed. The private
+          # key was discarded when the certificate was made.
+          harbor-ca = {
+            package = packages.secret;
+            aliases = [ "caBundle" ];
+            config.stringData."ca.crt" = ''
+              -----BEGIN CERTIFICATE-----
+              MIIBkDCCATWgAwIBAgIUD0TlcAiWMUSCrBZl+czc8rkKd1EwCgYIKoZIzj0EAwIw
+              HTEbMBkGA1UEAwwSdGVzdC1oYXJib3IgZGV2IENBMB4XDTI2MTAwMjAzNDQyOFoX
+              DTM2MDkyOTAzNDQyOFowHTEbMBkGA1UEAwwSdGVzdC1oYXJib3IgZGV2IENBMFkw
+              EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdznoTbiHSdkZ+2iDYR6X9Zvg/ULr6jGL
+              fyC8jZYXTya08XDePFK3L8ShL/QZkw6okprurQKAcd3gXjFdnksUbqNTMFEwHQYD
+              VR0OBBYEFCshERICZVX2X3UW5or7fAQx6+eHMB8GA1UdIwQYMBaAFCshERICZVX2
+              X3UW5or7fAQx6+eHMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+              ANq7MztMZYwAUmRgqkQroNRZ8GJo1+FRlIGVGy7M28DtAiEA7VT9Kwdh27Xz+gzj
+              6+sqIO6AcTVuew65Awov9XW5Wsk=
+              -----END CERTIFICATE-----
+            '';
+          };
           harbor-registry = {
             package = packages."persistent-volume-claim";
             aliases = [ "storage" ];
-            config.size = "200Gi";
+            config.size = "10Gi";
           };
           harbor-valkey-password = {
             package = packages.secret;
