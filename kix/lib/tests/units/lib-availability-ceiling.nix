@@ -337,7 +337,9 @@ in
   # Under meta.availability.max = "none" the package only sees "none", so a
   # `pick` table that differs above it fails, at every level. A constant
   # table builds. A package without a package ceiling may keep the table
-  # beside a workload with a builder ceiling of `none`.
+  # beside a workload with a builder ceiling of `none`. An incomplete table,
+  # or a value that is not an attrset, fails with the completeness `throw`.
+  # An entry above the ceiling that throws is not compared.
   lib-availability-ceiling-package-none-dead-pick =
     let
       twoWorkloads =
@@ -408,6 +410,21 @@ in
     && replicasOf [ multiZone ] { package = twoWorkloads; } == 3
     && fails (underNone.pick "none" table)
     && underNone.pick "none" constantTable == 1
+    && fails (
+      underNone.pick "none" {
+        none = 1;
+        pod = 2;
+      }
+    )
+    && fails (
+      underNone.pick "none" {
+        pod = 1;
+        node = 1;
+        zone = 1;
+      }
+    )
+    && fails (underNone.pick "none" 3)
+    && underNone.pick "none" (constantTable // { pod = throw "unused"; }) == 1
     # A function value is not compared, so a table of builders passes.
     && (underNone.pick "none" (lib.genAttrs availabilityLib.levels (l: _: l))) null == "none"
     && unbounded.pick "zone" table == 3
