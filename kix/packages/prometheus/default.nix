@@ -1,7 +1,7 @@
 # prometheus: a Prometheus server, run by the Prometheus Operator from a
 # Prometheus resource.
 #
-# Installs the Prometheus resource, its ServiceAccount and a ClusterRole for
+# Installs the Prometheus resource, its ServiceAccount, a ClusterRole for
 # Kubernetes service discovery, the egress policy of the server pods, and,
 # while `metrics.enabled`, a ServiceMonitor through which the server scrapes
 # itself. The operator turns the resource into a StatefulSet and a headless

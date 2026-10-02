@@ -766,7 +766,6 @@ in
                 fsGroup = 472;
                 fsGroupChangePolicy = "OnRootMismatch";
               };
-              initContainers = lib.optional config.initChownData.enabled initChownContainer;
               containers = [
                 {
                   name = "grafana";
@@ -871,6 +870,9 @@ in
                 )
               ];
               nodeSelector."kubernetes.io/os" = "linux";
+            }
+            // lib.optionalAttrs config.initChownData.enabled {
+              initContainers = [ initChownContainer ];
             };
           };
         };

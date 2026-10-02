@@ -4,7 +4,7 @@
 #
 # Installs the ten monitoring.coreos.com CRDs, vendored under ./crds from the
 # release's stripped-down bundle (scripts/vendor-crds.py, `crds/sources.txt`),
-# the operator Deployment, its ServiceAccount and the upstream ClusterRole
+# the operator Deployment, its ServiceAccount, the upstream ClusterRole
 # (./rbac), and, while `metrics.enabled`, a metrics Service and a
 # ServiceMonitor for the operator itself.
 #
@@ -28,7 +28,7 @@
 # `out`:
 #   crds.<Kind>                  the ten CRD handles, for
 #                                `scope.mkCR prometheusOperator.out.crds.Prometheus { ... }`.
-#                                Prometheus, Alertmanager, PrometheusAgent and
+#                                Prometheus, Alertmanager, PrometheusAgent, and
 #                                ThanosRuler declare readiness on Available=True.
 #   mkServiceMonitor, mkPodMonitor, mkPrometheusRule, mkProbe
 #                                `scope: args:` builders for the four kinds
