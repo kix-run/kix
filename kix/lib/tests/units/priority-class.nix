@@ -92,7 +92,7 @@ let
   classHash = cluster: k8s.extractStoreHash cluster.instances.platform.high.raw.priorityClass.outPath;
 in
 {
-  priority-classes-dep-edge =
+  priority-class-dep-edge =
     let
       cluster = clusterWith true;
       d = deploymentOf cluster;
@@ -109,7 +109,7 @@ in
   # The consumer's argument `priorityClass` is not an instance name or alias
   # here, so it stays null. An instance or alias named `priorityClass` would
   # bind it.
-  priority-classes-unwired-dep-unbound =
+  priority-class-unwired-dep-unbound =
     let
       cluster = clusterWith false;
       d = deploymentOf cluster;
@@ -125,7 +125,7 @@ in
   # globalDefault and description are omitempty in the API, so they are left
   # out when unset; the apiserver defaults preemptionPolicy, so it is always
   # rendered.
-  priority-classes-renders-api-shape =
+  priority-class-renders-api-shape =
     let
       plain = classOf (classCluster "plain" { value = 10; });
       full = classOf (
@@ -152,7 +152,7 @@ in
 
   # An empty description would render `description: ""`, which the live
   # object lacks; the option type refuses it.
-  priority-classes-empty-description-refused =
+  priority-class-empty-description-refused =
     evalFails (
       classCluster "plain" {
         value = 10;
@@ -163,7 +163,7 @@ in
 
   # The instance name becomes the PriorityClass name, and Kubernetes reserves
   # the `system-` prefix. A name that only contains `system` still builds.
-  priority-classes-system-prefix-refused =
+  priority-class-system-prefix-refused =
     (
       evalFails (classCluster "system-x" { value = 10; })
       && !(evalFails (classCluster "x-system" { value = 10; }))

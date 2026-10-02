@@ -199,7 +199,7 @@ in
   # The default instance pushes to the loki instance's out.serviceUrl,
   # mounts its config where --config points, and names its ClusterRole and
   # read-position directory `<namespace>.<instance>`.
-  promtail-loki-logs-default =
+  log-agents-loki-logs-default =
     let
       cluster = lokiLogsCluster { };
       ms = manifests cluster;
@@ -229,7 +229,7 @@ in
 
   # Each locked loki-logs settings path is refused, also when an ancestor
   # is replaced. The keys next to the locked leaves stay open.
-  promtail-loki-logs-locked-settings =
+  log-agents-loki-logs-locked-settings =
     let
       accepted = vectorConfigOf "loki-logs" (lokiLogsCluster {
         config.settings = {
@@ -279,7 +279,7 @@ in
 
   # `sinks = null` replaces every locked sink path, and the message lists
   # each of them.
-  promtail-loki-logs-sinks-null =
+  log-agents-loki-logs-sinks-null =
     let
       message = lokiLogsRefusal { settings.sinks = null; };
     in
@@ -293,7 +293,7 @@ in
 
   # Vector's config-source flags are refused, the one-letter form with an
   # attached value included; other flags are appended after --config.
-  promtail-loki-logs-extra-args =
+  log-agents-loki-logs-extra-args =
     let
       threads =
         (containerOf "loki-logs" (lokiLogsCluster {
@@ -338,7 +338,7 @@ in
 
   # The node name and the config-source variables are the package's; other
   # variables pass through.
-  promtail-loki-logs-env =
+  log-agents-loki-logs-env =
     let
       env =
         (containerOf "loki-logs" (lokiLogsCluster {
@@ -363,7 +363,7 @@ in
 
   # A loki dependency without out.serviceUrl has no push address, and the
   # package says so instead of rendering an empty endpoint.
-  promtail-loki-logs-loki-without-service-url =
+  log-agents-loki-logs-loki-without-service-url =
     let
       loki = eval.mkImport { out.fqdn = "loki.example"; };
       message =
@@ -384,7 +384,7 @@ in
 
   # A priority-class dependency names the pods' class and adds the
   # PriorityClass to the DaemonSet's depends-on annotation.
-  promtail-loki-logs-priority-class =
+  log-agents-loki-logs-priority-class =
     let
       ship = {
         package = import ../../../packages/priority-class;
@@ -438,7 +438,7 @@ in
   # The monitoring module refuses lokiLogs without its Loki. The message is
   # read from the module loaded through `caught`. With the real module the
   # build fails, and builds once lokiLogs is off too.
-  promtail-monitoring-loki-logs-without-loki =
+  log-agents-monitoring-loki-logs-without-loki =
     let
       # Grafana is off because its claim needs a StorageClass this cluster
       # does not have.
@@ -491,7 +491,7 @@ in
 
   # clickhouse-logs' own locked paths, on top of the shared ones; its batch
   # settings stay open.
-  promtail-clickhouse-logs-locked-settings =
+  log-agents-clickhouse-logs-locked-settings =
     let
       who = "clickhouse-logs chlogs/clickhouse-logs: settings overrides ";
       accepted = vectorConfigOf "clickhouse-logs" (clickhouseLogsCluster {
@@ -523,7 +523,7 @@ in
 
   # The clickhouseDatabase check names the privileges the resolved user has
   # and the one to add; the lib prefixes the instance.
-  promtail-clickhouse-logs-insert-privilege =
+  log-agents-clickhouse-logs-insert-privilege =
     let
       package = clickhouseLogsPackage {
         inherit lib;
@@ -553,7 +553,7 @@ in
 
   # A one-letter owned flag also refuses its attached-value form; a long
   # flag that starts with the same letter, and the other letter case, pass.
-  promtail-guard-args-short-flags =
+  log-agents-guard-args-short-flags =
     let
       guard = compose.guardArgs {
         who = "pkg ns/inst";

@@ -275,7 +275,7 @@ in
   # The environment binds the role exclusive, so a managed claimant is
   # refused. Without the binding the same instances build, which shows the
   # refusal comes from the binding.
-  openebs-exclusive-refuses-managed =
+  snapshot-api-exclusive-refuses-managed =
     let
       withManaged =
         binding:
@@ -291,7 +291,7 @@ in
   # emits both markers in its namespace. A consumer's CRs built from the
   # handles depend on the markers, and the cluster-scoped one has no
   # namespace.
-  openebs-import-crds-markers =
+  snapshot-api-import-crds-markers =
     let
       cluster = clusterWith [
         (snapshotEnvironment { })
@@ -323,7 +323,7 @@ in
   # An optional import with crds, answered by a consumer whose dependency is
   # optional, becomes active and emits its markers. Without the consumer it
   # stays inactive and emits none.
-  openebs-optional-import-activates =
+  snapshot-api-optional-import-activates =
     let
       withConsumer = manifests (clusterWith [
         (snapshotEnvironment { optional = true; })
@@ -343,7 +343,7 @@ in
 
   # crds entries are checked: a missing version, a key mkImport does not
   # accept (installedBy) and a kind given twice each fail the build.
-  openebs-import-crds-entry-checks =
+  snapshot-api-import-crds-entry-checks =
     let
       oneEntry = {
         group = snapshotGroup;
@@ -368,7 +368,7 @@ in
   # Each zfs-localpv assertion names the setting and the fix: VolumeSnapshotClasses
   # without a provider of the role, two default classes, class keys that kix
   # does not render as parts, and tolerations the apiserver would reject.
-  openebs-zfs-localpv-assertion-messages =
+  snapshot-api-zfs-localpv-assertion-messages =
     let
       refusedWith =
         needles: args:
@@ -455,7 +455,7 @@ in
 
   # A VolumeSnapshotClass keyed root or meta fails the cluster; without the
   # check the build renders only the other classes.
-  openebs-zfs-localpv-reserved-class-keys-fail-the-build =
+  snapshot-api-zfs-localpv-reserved-class-keys-fail-the-build =
     (
       evalFails (zfsCluster {
         config.volumeSnapshotClasses = {
@@ -477,7 +477,7 @@ in
   # package. tryEval drops the message of a throw, so the cases check that
   # the cluster fails while the control builds; the messages were read in a
   # probe.
-  openebs-build-refusals =
+  snapshot-api-build-refusals =
     let
       cases = {
         control = !(builds (zfsCluster { }));
@@ -530,7 +530,7 @@ in
   # VolumeSnapshotClass is built from the platform import's handle, has no
   # namespace, depends on the import's marker, and the controller runs
   # csi-snapshotter. The import emits one marker per CRD in kube-system.
-  openebs-rke2-provides-snapshot-api =
+  snapshot-api-rke2-provides-snapshot-api =
     let
       cluster = zfsCluster {
         flavor = rke2Flavor;
@@ -569,7 +569,7 @@ in
   # rke2 binds the role exclusive, so a managed snapshot-controller is
   # refused; with the binding set to absent, as for a cluster that disables
   # RKE2's snapshot charts, the same instances build.
-  openebs-rke2-refuses-managed-snapshot-controller =
+  snapshot-api-rke2-refuses-managed-snapshot-controller =
     (
       evalFails (zfsCluster {
         flavor = rke2Flavor;
@@ -584,7 +584,7 @@ in
   # Without a snapshotController provider and with no VolumeSnapshotClasses,
   # the controller runs no csi-snapshotter and no VolumeSnapshotClass is
   # rendered.
-  openebs-zfs-localpv-without-snapshot-api =
+  snapshot-api-zfs-localpv-without-snapshot-api =
     let
       ms = manifests (zfsCluster {
         snapshotController = null;
@@ -604,7 +604,7 @@ in
   # The node options reach the DaemonSet and the wrapper; the node pod is
   # not on the host network, and the registrar serves a probed /healthz.
   # Without encrKeysDir no key directory is mounted.
-  openebs-zfs-localpv-node-options =
+  snapshot-api-zfs-localpv-node-options =
     let
       nodeOf =
         config:
@@ -665,7 +665,7 @@ in
 
   # snapshot-controller builds its metrics Service and ServiceMonitor only
   # when metrics are enabled and a prometheus provider resolves.
-  openebs-snapshot-controller-metrics =
+  snapshot-api-snapshot-controller-metrics =
     let
       metricsParts =
         {
