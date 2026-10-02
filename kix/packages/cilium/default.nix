@@ -417,6 +417,8 @@ in
         delivery != "none" && effectiveEnforcement == "always" && !netpolEnabled && !effectiveAudit;
     in
     builtins.seq checks (
+      # A warning because another tool may write the allow rules. Candidate for an
+      # evaluation error with an explicit opt-in for that case.
       lib.warnIf warnAlwaysWithoutRules
         "${who}: enforces policy on every endpoint (policyEnforcementMode = \"always\"), but networkPolicy.enable is false, so Kix writes no allow rules. Every pod without a policy from another source loses all traffic except cluster DNS. Enable networkPolicy, set values.policyAuditMode = true, or remove values.policyEnforcementMode."
         parts

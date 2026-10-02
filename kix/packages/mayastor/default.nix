@@ -871,6 +871,8 @@ in
             let
               missing = lib.filterAttrs (k: v: (nodes.${pool.node}.labels.${k} or null) != v) ioEngineLabels;
             in
+            # A warning because the node may be labelled outside the cluster definition.
+            # Candidate for an evaluation error once cluster.nodes is the authority for node labels.
             lib.warnIf (missing != { })
               "${who}: diskPools.${poolName} is on node ${pool.node}, whose labels in cluster.nodes lack ${
                 lib.concatStringsSep ", " (lib.mapAttrsToList (k: v: "${k}=${v}") missing)

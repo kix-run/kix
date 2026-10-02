@@ -1,0 +1,3 @@
+# 2026-10-02 · `kix/packages/mayastor` · The mayastor package reads the cluster's raw instance declarations to refuse a bad etcd wiring.
+
+`etcd.nix` and `default.nix` look up the instance's own `aliases` and `deps` in `clusterConfig.instances`, so they can refuse etcd on one of Mayastor's own StorageClasses before the `storageClasses` dependency resolves to the instance itself. No other package reads `clusterConfig.instances`; packages otherwise see only their resolved dependencies. The general problem is that the resolver can bind a provider's dependency to the provider itself, which a lib-level check should refuse for every package.

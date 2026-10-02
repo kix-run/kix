@@ -202,6 +202,8 @@ let
           if tp == null then
             null
           else if builtins.isString tp && builtins.match "[0-9]+" tp == null then
+            # A warning so the rule still renders; Cilium drops egress on a named port, so the
+            # traffic is blocked at runtime. Candidate for an evaluation error.
             lib.warn
               "kix netpol: port '${tp}' is a name, and cilium drops egress on a named port; use the container port number as targetPort (numbers are what kix.service.fromWorkload writes)"
               {
