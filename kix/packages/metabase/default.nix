@@ -162,9 +162,10 @@ in
           kix.mergeEnv {
             inherit who;
             defaults = {
-              # Null when nothing routes to the instance; Metabase then
-              # records the URL of the first administrator's request.
-              MB_SITE_URL = self.exposure.url;
+              # Null when Kix cannot derive the URL, such as when nothing
+              # routes to the instance; Metabase then records the URL of the
+              # first administrator's request.
+              MB_SITE_URL = self.exposure.urlOrNull;
               # The temurin JVM sizes its heap from the cgroup memory limit,
               # 25% by default. Half leaves room for metaspace, threads, and
               # off-heap buffers. run_metabase.sh puts a user's JAVA_OPTS

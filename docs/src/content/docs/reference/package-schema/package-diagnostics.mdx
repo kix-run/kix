@@ -66,7 +66,7 @@ value directly and are skipped when an optional dependency is absent.
 
 ```nix
 deps.storage.warnings = storage:
-  lib.optional (kix.parseGi storage.out.size < 50)
+  lib.optional (kix.parseQuantity "memory" storage.out.size < 50 * 1024 * 1024 * 1024)
     "storage is smaller than the recommended 50Gi";
 ```
 

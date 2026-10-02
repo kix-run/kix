@@ -23,9 +23,9 @@ compose
   # A workload that runs one pod at a time sets one replica and the ceiling
   # "none" (availability.max on its builder call, or meta.availability.max
   # for a limit of the program); more than one replica under it is an error.
-  # A package with meta.availability.max receives pick and atLeast that
-  # refuse table values and thresholds above the ceiling (eval/instance.nix
-  # packageKix, core/availability.nix underCeiling).
+  # A package with meta.availability.max receives an atLeast that refuses a
+  # threshold above the ceiling (eval/instance.nix packageKix,
+  # core/availability.nix underCeiling).
   # Spread for operator-placed operands: kix.availability.spreadConstraints
   # (core/availability.nix).
   availability = {

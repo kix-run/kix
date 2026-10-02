@@ -260,6 +260,7 @@ let
         ${kixKeys.importName} = "${plural}.monitoring.coreos.com";
         ${kixKeys.crdKind} = kind;
         ${kixKeys.crdVersion} = "v1";
+        ${kixKeys.crdServedVersions} = "v1";
         ${kixKeys.crdScope} = "Namespaced";
       };
     };

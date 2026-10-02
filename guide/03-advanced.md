@@ -69,7 +69,7 @@ env = creds.out.mkEnv { DB_USER = "username"; };
 
 - CLI deploy engine (`cli/kix/src/cluster/readiness.rs`) polls for the named Secret; when `keys` non-empty, waits until every declared key is in `data` before any consuming wave. Build-time validation -> deploy-time gate.
 - Marker store-path context flows onto `out.name` -> consuming workload gets a forward-closure DAG edge to the marker (won't deploy until external secret exists). Satisfies workload ref checks that reject untracked refs.
-- `keys = [ ]` allowed (referenced via `envFrom`/`volume` only); CLI then only checks existence. `keyRef` still throws "does not declare key" at use site.
+- `keys = [ ]` only when no pod reads a key by name (the Secret is used via `envFrom` or a volume without `items`); the CLI then only checks existence. `keyRef` still throws "does not declare key" at use site, and a named read in a pod spec fails check 22.
 - Marker name = `secret-ref-${instanceName}-${name}` -> two instances can reference the same external secret without colliding.
 - Cross-namespace consumption rejected by default (K8s disallows). If mirrored by emberstack reflector, pass `reflect = true` -> stamps `_kix.reflected = true`, relaxing the same-namespace check in `checkNamespacedRefs`. Producer must still put reflector annotations on the source Secret.
 

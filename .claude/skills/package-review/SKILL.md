@@ -141,6 +141,7 @@ when a check fails or the path is not evaluated by default.
 - D25. Does an `out` field exist only under a toggle, so a consumer's read fails with a missing attribute? Fix: always publish it (null when off), or state the condition in the header.
 - D26. Does a package read a dependency's resource by a fixed name that nothing in the pod spec names (velero's repository Secret)? A dependency view has no `outPath`, so it cannot go in `requires`. Fix: emit a `scope.mkSecretRef` for that name and have the workloads require it.
 - D27. Does a public `out.mk*` builder that creates a resource in the caller's scope derive its default name from the provider instead of the caller's `instanceName`? Fix: the caller's name. Errors it raises name the consumer resource from the arguments it receives (P9).
+- D28. Does the package read `self.exposure.urlOrNull` although it cannot work without a public URL, or `url` although it can? *(lib: reading `url` without a route or scheme throws)* Fix: `url` when the URL is required; `urlOrNull` with a comment saying what the program does without one.
 
 ### Secrets (S)
 
@@ -148,7 +149,7 @@ when a check fails or the path is not evaluated by default.
 - S2. Is a credential passed as a Secret name string? Fix: a dep (`secret`/`secret-ref`) read through `out.keyRef`, `out.envFrom`, or `out.volume`.
 - S3. Is a secret dep named `credentials` or another generic name? Fix: a purpose name (`valkeyPassword`, `encryptionKey`, `cloudCredentials`); two packages share a name only when they read the same keys.
 - S4. Is a dep's key checked in `deps.<x>.assertions` or not at all? Remove a key and eval: `keyRef` throws first. Fix: bind once through `kix.checkSecretKeys { who; arg; dep; keys; }` (or `anyOf`) and read through that binding.
-- S5. Does a pod read by name a key of a `keys = [ ]` ref, or does a ref used whole omit keys the deploy should wait for? *(lib: a named read of an opaque ref fails cross-resource check 22)* Fix: declare the keys read.
+- S5. Does a pod read by name a key of a `keys = [ ]` ref, or does a ref used whole omit keys the deploy should wait for? *(lib: a named read of a key of a ref that lists no keys fails cross-resource check 22)* Fix: declare the keys read.
 - S6. Does the package emit a `scope.mkSecret` with inline values for a credential the user should supply? *(lib: a key with no value and no `source` is refused)* Fix: `mkSecretRef` or a required dep.
 - S7. Is a Secret built with `scope.mkResource { kind = "Secret"; }`? Fix: `scope.mkSecret`.
 - S8. Does a required credential, when absent, still deploy? Fix: refuse at eval.
@@ -189,7 +190,7 @@ when a check fails or the path is not evaluated by default.
 - W2. Does the package write `topologySpreadConstraints` or anti-affinity, or leave an operator's own hard anti-affinity unmapped (a StackGres profile pinning one pod per node)? Fix: delete; operator-placed operands use `kix.availability.spreadConstraints { level; selector; topology; }` and map the operator's profile to the level and to single-node clusters.
 - W3. Is a ceiling set package-wide (`meta.availability.max`) when only one workload is limited, or when the limit depends on config? Fix: `availability.max` on that builder, with a reason. The header's limits line names the ceiling and where it is declared.
 - W4. Is a singleton capped at `pod` instead of `none`? Fix: `none` with literal `replicas = 1`.
-- W5. Under a builder ceiling, does the workload's `replicas` still come from a `pick` table, or does a table with non-primitive values exceed the ceiling? *(lib: a package ceiling refuses primitive `pick` values and `atLeast` thresholds above it, and more than one replica under `none` throws)* Fix: collapse it.
+- W5. Under a ceiling, does the workload's `replicas` still come from a `pick` table whose entries above the ceiling differ from the entry at it? Those entries are never used. *(lib: a package ceiling refuses `atLeast` thresholds above it, and more than one replica under `none` throws)* Fix: collapse it.
 - W6. Does `pod` map to 1 on a data plane or an edge-triggered workload? Fix: 2, or a comment saying why 1 meets the level. A leader-elected controller has no replicas option and maps `{ none = 1; pod = 1; node = 2; zone = 2; }`.
 - W7. Do level-derived replicas exceed what the program supports without leader election or HA config? Fix: singleton, or configure HA.
 - W8. Is a single-replica RWO workload on RollingUpdate, or a stateless workload on Recreate without a reason? Fix: Recreate for RWO singletons and for an app that migrates a shared schema on start (old pods fail against it), with a comment; RollingUpdate otherwise.
@@ -236,6 +237,7 @@ when a check fails or the path is not evaluated by default.
 - N10. Does a policy builder copy a Service selector that may be empty, so `matchLabels = { }` selects the whole namespace? Fix: refuse an empty selector.
 - N11. Do clients need egress to pods an operator creates in another namespace (egress proxies, gateways) that the graph cannot see? Fix: a builder on `out` (cdi `out.mkImporterPolicy`) or a stated limit.
 - N12. Does a docs example or fixture put an instance in kube-system (or another environment namespace) with network policy on and no flavour intents, giving the namespace default deny? Fix: its own namespace, or a flavour that declares the intents.
+- N13. Does a package whose controller serves a `loadBalancerClass` publish the class as a plain string or with `builtins.appendContext`? *(lib: only a class from `kix.providedLoadBalancerClass` skips the loadBalancer role check and the external-ingress supplement)* Fix: `out.loadBalancerClass = kix.providedLoadBalancerClass { class = "<class>"; by = self.<controller>; }`, plus a backend policy builder on `out`.
 
 ### Monitoring (Mo)
 

@@ -156,24 +156,48 @@ in
         "1e3"
         "-1"
         "1."
+        "8Ei"
+        "1234567890123456789"
       ]
     )
     || throw "quantity: unparsed=${builtins.toJSON unparsed} results=${builtins.toJSON results}";
 
-  lib-options-typing-parse-gi =
+  # Results stay integers: a value past the signed 64-bit range, or with
+  # more than 18 significant digits, throws instead of becoming a float.
+  # Leading and trailing zeros are not significant. `problem` names the
+  # limit a value exceeds.
+  lib-options-typing-quantity-exact-range =
     let
-      got = map kixlib.parseGi [
-        "50Gi"
-        "500Mi"
-        "x"
-      ];
+      throws = v: !(builtins.tryEval (builtins.deepSeq v true)).success;
+      inherit (import ../../vocab/quantity.nix { inherit lib; }) problem;
+      ei = kixlib.parseQuantity "memory" "7Ei";
+      reasons = {
+        magnitude = problem "cpu" "2Ei";
+        digits = problem "memory" "1234567890123456789";
+        fraction = problem "memory" "0.0000000000000000001";
+        rounding = problem "memory" "7.5Ei";
+      };
     in
-    got == [
-      50
-      0
-      null
-    ]
-    || throw "parseGi: ${builtins.toJSON got}";
+    (
+      ei == 7 * 1024 * 1024 * 1024 * 1024 * 1024 * 1024
+      && builtins.isInt ei
+      && kixlib.parseQuantity "cpu" "9223372036854775m" == 9223372036854775
+      && kixlib.parseQuantity "cpu" "922337203685477580m" == 922337203685477580
+      && kixlib.parseQuantity "memory" "0000000000000000001Gi" == 1024 * 1024 * 1024
+      && kixlib.parseQuantity "memory" "1.500000000000000000000" == 1
+      && kixlib.types.quantity.check "0000000000000000001Gi"
+      && throws (kixlib.parseQuantity "memory" "8Ei")
+      && throws (kixlib.parseQuantity "cpu" "2Ei")
+      && throws (kixlib.parseQuantity "cpu" "9223372036854776")
+      && throws (kixlib.parseQuantity "memory" "0.0000000000000000001")
+      && throws (kixlib.parseQuantity "memory" "1234567890123456789")
+      && problem "memory" "1Gi" == null
+      && lib.hasInfix "largest signed 64-bit integer" reasons.magnitude
+      && lib.hasInfix "18 significant digits" reasons.digits
+      && lib.hasInfix "after the decimal point" reasons.fraction
+      && lib.hasInfix "fewer digits after the decimal point" reasons.rounding
+    )
+    || throw "quantity range: 7Ei = ${builtins.toJSON ei}, reasons = ${builtins.toJSON reasons}";
 
   # Setting one leaf keeps the other defaults; null removes a default and
   # leaves no empty `limits` and no null `claims`.

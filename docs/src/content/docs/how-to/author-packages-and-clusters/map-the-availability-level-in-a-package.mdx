@@ -79,11 +79,10 @@ meta.availability.max = "none";
 Kix lowers the level passed to the package and warns when an instance requests
 more. The ceiling describes a real limitation; it must not hide a replica
 default that the package could map correctly. Under a package ceiling,
-`kix.availability.pick` fails on a table whose values above the ceiling differ
-from its value at the ceiling, and `kix.availability.atLeast` fails on a
-threshold above the ceiling, because the package never sees those levels. If
-the package has such a mapping, the limit belongs on the builder calls of the
-workloads that cannot reach the higher levels.
+`kix.availability.atLeast` fails on a threshold above the ceiling, because the
+package never sees those levels and the test is always false. If the package
+has such a test, the limit belongs on the builder calls of the workloads that
+cannot reach the higher levels.
 
 `none` means the workload runs one pod at a time, so its replica count is 1.
 A Deployment or StatefulSet with more than one replica under a `none` ceiling

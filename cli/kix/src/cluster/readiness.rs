@@ -89,8 +89,8 @@ pub struct ImportTarget {
     /// separated). Empty = identity-only check (resource existence).
     pub expected_keys: Vec<String>,
     /// For `CustomResourceDefinition` imports from a CRD ref marker, the API
-    /// versions the declaration says the CRD serves: `kix.run/crd-served-versions`,
-    /// else `kix.run/crd-version`. Each must be in the live CRD's
+    /// versions the declaration says the CRD serves, from
+    /// `kix.run/crd-served-versions`. Each must be in the live CRD's
     /// `spec.versions` with `served: true`. Empty = no version check.
     pub served_versions: Vec<String>,
 }
@@ -150,7 +150,6 @@ pub fn import_target_from_manifest(manifest: &Value) -> Option<ImportTarget> {
     let served_versions = if import_kind == "CustomResourceDefinition" {
         let listed = annotations
             .get(keys::CRD_SERVED_VERSIONS)
-            .or_else(|| annotations.get(keys::CRD_VERSION))
             .and_then(Value::as_str)
             .unwrap_or("");
         listed
@@ -2270,8 +2269,9 @@ mod tests {
                 }
             })
         };
+        // `crd-version` alone is the default version, not a served list.
         let default_only = import_target_from_manifest(&marker(json!({}))).unwrap();
-        assert_eq!(default_only.served_versions, vec!["v1alpha1"]);
+        assert!(default_only.served_versions.is_empty());
         let listed = import_target_from_manifest(&marker(json!({
             keys::CRD_SERVED_VERSIONS: "v1alpha1,v1beta1"
         })))

@@ -416,8 +416,9 @@ in
         };
 
         # Workers need the public URL too: a Wait node's resume URL is built
-        # where the execution runs.
-        exposureDefaults = lib.optionalAttrs (exposure.url != null) {
+        # where the execution runs. Without a URL Kix can derive, the package
+        # sets none of these and `env` can.
+        exposureDefaults = lib.optionalAttrs (exposure.urlOrNull != null) {
           N8N_HOST = exposure.host;
           N8N_PROTOCOL = exposure.scheme;
           N8N_EDITOR_BASE_URL = "${exposure.url}/";

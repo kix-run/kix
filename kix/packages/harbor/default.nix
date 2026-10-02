@@ -540,23 +540,10 @@ in
           in
           if reloader == null || untracked == [ ] then args else reloader.out.withReloadOn untracked args;
 
-        # Public URL
-        exposure = self.exposure;
-        hostKnown = config.ingress.host != null || (clusterConfig.cluster.domain or null) != null;
-        urlProblem =
-          if !hostKnown then
-            "Set ingress.host or cluster.domain."
-          else if exposure.via == null then
-            "Wire ingressNginx or a gateway so kix.expose routes to Harbor."
-          else
-            "Kix cannot tell whether the gateway's listener terminates TLS.";
-        externalURL =
-          if config.externalURL != null then
-            config.externalURL
-          else if exposure.url != null then
-            exposure.url
-          else
-            throw "${who}: Harbor needs the URL clients reach it on (EXT_ENDPOINT), and Kix cannot derive one. ${urlProblem} Or set externalURL.";
+        # Public URL. Harbor needs one for EXT_ENDPOINT, so it reads
+        # `exposure.url`, which throws with the cause when Kix renders no
+        # route or cannot tell its scheme.
+        externalURL = if config.externalURL != null then config.externalURL else self.exposure.url;
 
         # Database
         dbTls = database.out.tls or null;

@@ -24,12 +24,13 @@ let
   envoyGatewayPackage = import ../../../packages/envoy-gateway;
 
   # A web Deployment and Service exposed through kix.expose. The Deployment
-  # reads the record of the same instance into PUBLIC_URL.
+  # reads the record's `urlField` of the same instance into PUBLIC_URL.
   mkWebPackage =
     {
       exposeArgs ? { },
       extraEntries ? [ ],
       exposurePart ? "exposure",
+      urlField ? "url",
     }:
     {
       meta.version = "test";
@@ -63,7 +64,7 @@ let
                           containerPort = 8080;
                         }
                       ];
-                      env = kix.mkEnvVars { PUBLIC_URL = self.${exposurePart}.url; };
+                      env = kix.mkEnvVars { PUBLIC_URL = self.${exposurePart}.${urlField}; };
                     }
                   ];
                 };
@@ -192,6 +193,7 @@ let
   };
 
   failsWith = args: !(builtins.tryEval (builtins.deepSeq (urlFor args) true)).success;
+  fails = v: !(builtins.tryEval (builtins.deepSeq v true)).success;
 
   # A kix.mkImport gateway: out.gatewayRef and no listeners.
   importedGateway = eval.mkImport {
@@ -319,10 +321,12 @@ in
     in
     (
       r1 == {
+        _type = "kix-exposure";
         via = "ingress";
         host = "web.example.test";
         scheme = "https";
         url = "https://web.example.test";
+        urlOrNull = "https://web.example.test";
       }
       && r2.url == "http://web.example.test"
       && publicUrlEnv withIssuer == "https://web.example.test"
@@ -330,22 +334,38 @@ in
     )
     || throw "record (ingress): ${builtins.toJSON r1} / ${builtins.toJSON r2}";
 
+  # With nothing wired, or no host, there is no route: `urlOrNull` is null
+  # and reading `url` fails, also from a Deployment of the instance.
   lib-expose-domain-version-record-nothing-wired =
     let
-      cluster = mkExposeCluster { };
+      lenient = mkWebPackage { urlField = "urlOrNull"; };
+      cluster = mkExposeCluster { app = lenient; };
       r = recordOf { inherit cluster; };
+      noHost = recordOf {
+        cluster = mkExposeCluster {
+          app = lenient;
+          ingress = true;
+          domain = null;
+        };
+      };
     in
     (
-      r == {
+      removeAttrs r [ "url" ] == {
+        _type = "kix-exposure";
         via = null;
         host = null;
         scheme = null;
-        url = null;
+        urlOrNull = null;
       }
+      && fails r.url
       && publicUrlEnv cluster == null
       && cluster.instances.appns.web.raw.route == null
+      && noHost.via == null
+      && noHost.urlOrNull == null
+      && fails noHost.url
+      && evalFails (mkExposeCluster { })
     )
-    || throw "record with nothing wired: ${builtins.toJSON r}";
+    || throw "record with nothing wired: ${builtins.toJSON (removeAttrs r [ "url" ])}";
 
   lib-expose-domain-version-record-both-wired-fails = failsWith {
     ingress = true;
@@ -480,13 +500,27 @@ in
     let
       r = recordOf {
         cluster = mkExposeCluster {
+          app = mkWebPackage { urlField = "urlOrNull"; };
           gatewayConfig = { };
           gatewayPackage = importedGateway;
         };
       };
     in
-    (r.via == "gateway" && r.host == "web.example.test" && r.scheme == null && r.url == null)
-    || throw "imported gateway: ${builtins.toJSON r}";
+    (
+      r.via == "gateway"
+      && r.host == "web.example.test"
+      && r.scheme == null
+      && r.urlOrNull == null
+      && fails r.url
+      && evalFails (
+        mkExposeCluster {
+          app = mkWebPackage { };
+          gatewayConfig = { };
+          gatewayPackage = importedGateway;
+        }
+      )
+    )
+    || throw "imported gateway: ${builtins.toJSON (removeAttrs r [ "url" ])}";
 
   # envoy-gateway's listeners are typed: a misspelt field or a lower-case
   # protocol fails, and the defaults render the Gateway spec as before
@@ -698,15 +732,24 @@ in
     }";
 
   # The rule finds cluster.local on a cluster with another domain, as whole
-  # labels only, outside CRDs, and stays silent on the default domain.
+  # labels only (also at either end of the string), outside CRDs, and stays
+  # silent on the default domain. The message quotes the first whole-label
+  # hit with its surroundings.
   lib-expose-domain-version-domain-rule =
     let
       crd = configMapWith "a.b.svc.cluster.local" // {
         kind = "CustomResourceDefinition";
       };
+      messageFor = v: (builtins.head (domainRule "corp.test" [ (configMapWith v) ])).message;
+      quoted = v: lib.hasInfix "contains \"${v}\"" (messageFor v);
     in
     (
       builtins.length (domainRule "corp.test" [ (configMapWith "a.b.svc.cluster.local") ]) == 1
+      && builtins.length (domainRule "corp.test" [ (configMapWith "cluster.local") ]) == 1
+      && builtins.length (domainRule "corp.test" [ (configMapWith "cluster.local:53") ]) == 1
+      && quoted "x.svc.corp.test mycluster.local a.svc.cluster.local:53"
+      && quoted "cluster.local"
+      && lib.hasInfix "contains \"line\\na.svc.cluster.local\\n\"" (messageFor "line\na.svc.cluster.local\n")
       && domainRule "corp.test" [ (configMapWith "mycluster.local") ] == [ ]
       && domainRule "corp.test" [ (configMapWith "cluster.localhost") ] == [ ]
       && domainRule "corp.test" [ crd ] == [ ]

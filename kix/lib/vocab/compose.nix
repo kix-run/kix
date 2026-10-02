@@ -84,11 +84,14 @@ let
       throw "${caller}: service '${svc.name or "unknown"}' has no out.port. Specify port explicitly";
 
   # The public route kix.expose renders for an instance, as data:
-  # { via; host; scheme; url; }. `via` is "gateway", "ingress" or null (no
-  # route). `scheme` is null when Kix cannot vouch for it (a gateway without
-  # out.listeners, such as a kix.mkImport). It reads config, clusterConfig,
-  # scope and the exposure deps, never `self`, so any part can read it.
-  # `rawHost` keeps the string context of config.ingress.host for rendering.
+  # { via; host; scheme; url; urlOrNull; }. `via` is "gateway", "ingress"
+  # or null (no route). `scheme` is null when Kix cannot vouch for it (a
+  # gateway without out.listeners, such as a kix.mkImport). `url` throws
+  # when there is no route or no scheme, naming the cause; `urlOrNull` is
+  # null then, for a package that works without a public URL. It reads
+  # config, clusterConfig, scope and the exposure deps, never `self`, so
+  # any part can read it. `rawHost` keeps the string context of
+  # config.ingress.host for rendering.
   exposureOf =
     {
       name,
@@ -152,6 +155,16 @@ let
       portSuffix = lib.optionalString (
         listener != null && listener.port != defaultPort
       ) ":${toString listener.port}";
+
+      urlOrNull = if scheme == null then null else "${scheme}://${host}${portSuffix}";
+      gwRef = gateway.out.gatewayRef;
+      missing =
+        if mode == null then
+          "nothing routes to it: wire a gateway or ingressNginx dependency"
+        else if candidateHost == null then
+          "its route has no host: set ingress.host on the instance or cluster.domain"
+        else
+          "Gateway ${gwRef.namespace}/${gwRef.name} publishes no out.listeners, so Kix cannot tell which listener the HTTPRoute attaches to, or its scheme and port: use a gateway instance that publishes out.listeners";
     in
     {
       inherit
@@ -159,8 +172,13 @@ let
         host
         rawHost
         scheme
+        urlOrNull
         ;
-      url = if scheme == null then null else "${scheme}://${host}${portSuffix}";
+      url =
+        if urlOrNull != null then
+          urlOrNull
+        else
+          throw "kix.expose (${scope.namespaceName}/${name}): the package reads the instance's public URL (exposure.url), but ${missing}. If the package has an option for its URL, set that instead.";
     };
 
   # The Gateway listener an HTTPRoute for `host` from the instance's
@@ -384,20 +402,6 @@ rec {
   #
   #   kix.parseQuantity "memory" "512Mi"   # 536870912
   parseQuantity = quantity.parse;
-
-  # A size in whole GiB, rounded down ("500Mi" gives 0). null when `s` is
-  # not a quantity.
-  parseGi =
-    s:
-    let
-      bytes = quantity.parse "memory" s;
-    in
-    if bytes == null then
-      null
-    else if builtins.isInt bytes then
-      bytes / 1073741824
-    else
-      builtins.floor (bytes / 1073741824);
 
   # The env attrset for `kix.mkEnvVars`: the package's `defaults`, then the
   # instance's `env` (a `kix.options.env` value), then the variables the
@@ -1036,12 +1040,7 @@ rec {
 
   untrackedRef = markers.mkUntrackedRef;
 
-  # True when a string carries a `kix.untrackedRef` marker, so it names an
-  # object Kix does not build.
-  isUntrackedRef =
-    s:
-    builtins.isString s
-    && builtins.any markers.isUntrackedRefPath (builtins.attrNames (builtins.getContext s));
+  providedLoadBalancerClass = markers.mkProvidedLoadBalancerClass;
 
   options = {
     # Image option with repository, tag, and optional digest and pull policy.
@@ -1547,8 +1546,8 @@ rec {
       paths ? null,
       # The Ingress or HTTPRoute part.
       partName ? "route",
-      # A plain record part { via; host; scheme; url; } describing that
-      # route (exposureOf). Set both names on a second kix.expose call.
+      # A record part { via; host; scheme; url; urlOrNull; } describing
+      # that route (exposureOf). Set both names on a second kix.expose call.
       exposurePart ? "exposure",
       defaultAnnotations ? { },
       port ? null,
@@ -1737,12 +1736,16 @@ rec {
         "${partName}Crd" = routeCrd;
       }
       // {
+        # `_type` stops the part walkers (eval/helpers.nix
+        # collectTypedAttrs) at the record, so they do not force `url`.
         ${exposurePart} = {
+          _type = "kix-exposure";
           inherit (info)
             via
             host
             scheme
             url
+            urlOrNull
             ;
         };
 

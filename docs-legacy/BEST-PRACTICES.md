@@ -903,7 +903,9 @@ DOMAIN = self.exposure.url;
 
 The record knows whether a route exists, which host it serves and
 whether TLS is on. A copy of the host logic drifts, and a hard-coded
-`https` is wrong on a cluster without a cluster issuer.
+`https` is wrong on a cluster without a cluster issuer. Reading `url`
+fails evaluation when Kix cannot derive the URL; a package that works
+without one reads `urlOrNull` and says what happens when it is null.
 
 ### 12.13 An option whose default the module system cannot merge
 

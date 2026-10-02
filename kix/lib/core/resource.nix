@@ -276,11 +276,11 @@ rec {
 
       manifestJson = builtins.toJSON rawManifest;
 
-      # Fact tokens and untracked-reference markers carry metadata, not
-      # deployable resources. Exclude them from depends-on: their hashes
-      # cannot be resolved to manifests by the deploy scheduler.
+      # Fact tokens and markers carry metadata, not deployable resources.
+      # Exclude them from depends-on: their hashes cannot be resolved to
+      # manifests by the deploy scheduler.
       implicitCtxPaths = builtins.filter (
-        p: lib.hasPrefix "/nix/store/" p && !facts.isFactPath p && !markers.isUntrackedRefPath p
+        p: lib.hasPrefix "/nix/store/" p && !facts.isFactPath p && !markers.isMarkerPath p
       ) (builtins.attrNames (builtins.getContext manifestJson));
       implicitEntries = map extractStoreHash implicitCtxPaths;
 
@@ -960,8 +960,6 @@ rec {
             ${kixKeys.crdKind} = kind;
             ${kixKeys.crdVersion} = _validatedVersion;
             ${kixKeys.crdScope} = _validatedScope;
-          }
-          // lib.optionalAttrs (_validatedServed != [ _validatedVersion ]) {
             ${kixKeys.crdServedVersions} = builtins.concatStringsSep "," _validatedServed;
           };
           extraRequires = installedByList;

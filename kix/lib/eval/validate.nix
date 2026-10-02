@@ -1085,11 +1085,7 @@ rec {
             {
               group = builtins.concatStringsSep "." (builtins.tail dot);
               kind = anns.${kixKeys.crdKind};
-              served =
-                if anns ? ${kixKeys.crdServedVersions} then
-                  splitList anns.${kixKeys.crdServedVersions}
-                else
-                  [ (anns.${kixKeys.crdVersion} or "") ];
+              served = splitList anns.${kixKeys.crdServedVersions};
               scope = anns.${kixKeys.crdScope} or "Namespaced";
               text = "the CRD ref ${e.r.metadata.name} for ${crdName}";
               inherit e;
@@ -1208,8 +1204,8 @@ rec {
           p: lib.hasPrefix "data" p || lib.hasPrefix "binaryData" p || lib.hasPrefix "stringData" p
         ) (splitList ((r.metadata.annotations or { }).${kixKeys.cedeFields} or ""));
 
-      # { keys = [ ... ]; } when the keys are known, { opaque = true; } for
-      # a Secret ref that lists none, null when nothing is checked.
+      # { keys = [ ... ]; } when the keys are known, { noKeysListed = true; }
+      # for a Secret ref that lists none, null when nothing is checked.
       declaredKeys =
         objKind: ns: name:
         let
@@ -1233,7 +1229,7 @@ rec {
           if refAnns ? ${kixKeys.importSecretKeys} then
             { keys = splitList refAnns.${kixKeys.importSecretKeys}; }
           else
-            { opaque = true; }
+            { noKeysListed = true; }
         else
           null;
 
@@ -1374,7 +1370,7 @@ rec {
           in
           if decl == null then
             [ ]
-          else if decl ? opaque then
+          else if decl ? noKeysListed then
             [
               "${who} reads key '${read.key}' of Secret '${read.obj}' (${read.where}), whose scope.mkSecretRef declares no keys, so the deploy cannot check the Secret holds it. List the keys the pod reads in keys."
             ]

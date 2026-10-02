@@ -12,7 +12,7 @@ let
     getWorkloadSelector
     isService
     ;
-  inherit (import ../../scope/validators.nix { inherit lib; }) hasProviderClass;
+  inherit (import ../../core/markers.nix { inherit lib; }) isProvidedLoadBalancerClass;
 in
 {
   buildWorkloadCnps =
@@ -218,13 +218,14 @@ in
         wNs != null && builtins.elem "${wNs}/${saName}" boundSAKeys;
 
       # A LoadBalancer Service served by a provider in the build (its class
-      # carries context) is reached from that provider's pods, which open
-      # the backend themselves, not from outside the cluster.
+      # comes from kix.providedLoadBalancerClass) is reached from that
+      # provider's pods, which open the backend themselves, not from outside
+      # the cluster.
       needsExternalIngress = builtins.any (
         r:
         isService r
         && (r.rawManifest.spec.type or "") == "LoadBalancer"
-        && !(hasProviderClass (r.rawManifest.spec or { }))
+        && !(isProvidedLoadBalancerClass (r.rawManifest.spec.loadBalancerClass or null))
       ) allPartResources;
 
       apiServerSupplementPolicies =

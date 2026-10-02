@@ -362,6 +362,7 @@ let
         {
           ${kixKeys.crdKind} = "Widget";
           ${kixKeys.crdVersion} = "v1";
+          ${kixKeys.crdServedVersions} = "v1";
           ${kixKeys.crdScope} = "Namespaced";
         }
         // extra
@@ -496,8 +497,8 @@ in
   });
 
   # Two instances in one namespace that reference one CRD render one marker
-  # each, named for the instance and carrying the declared kind, version
-  # and scope.
+  # each, named for the instance and carrying the declared kind, version,
+  # served versions, and scope.
   lib-reference-checks-crdref-markers-per-instance =
     let
       ms = manifests (withApp {
@@ -514,6 +515,8 @@ in
       && (annotationsOf a).${kixKeys.crdKind} == "Widget"
       && (annotationsOf a).${kixKeys.crdVersion} == "v1"
       && (annotationsOf b).${kixKeys.crdVersion} == "v1beta1"
+      && (annotationsOf a).${kixKeys.crdServedVersions} == "v1"
+      && (annotationsOf b).${kixKeys.crdServedVersions} == "v1beta1"
       && (annotationsOf a).${kixKeys.crdScope} == "Namespaced"
       && (annotationsOf a).${kixKeys.importName} == "widgets.example.com"
     )
@@ -1242,7 +1245,7 @@ in
         ];
       };
 
-  lib-reference-checks-key-opaque-ref =
+  lib-reference-checks-key-ref-without-keys =
     expectFailures
       [
         "reads key 'token' of Secret 'ext' (env T of container c), whose scope.mkSecretRef declares no keys"
