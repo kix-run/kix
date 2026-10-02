@@ -36,6 +36,7 @@
 
 let
   name = scope.instanceName;
+  who = "cloudflared ${scope.namespaceName}/${name}";
 in
 {
   meta = {
@@ -45,15 +46,6 @@ in
     lifecycle = "stateless";
     defaultAliases = [ "tunnel" ];
   };
-
-  assertions =
-    { config, ... }:
-    [
-      {
-        assertion = config.token != null || config.tokenSource != null;
-        message = "the tunnel token is not set, so the connector cannot authenticate to Cloudflare. Set tokenSource to a SOPS file with a `token` key, or token to the token itself.";
-      }
-    ];
 
   options = {
     image = kix.options.image {
@@ -107,12 +99,19 @@ in
     }:
     {
       # Tunnel token Secret: inline stringData, or hydrated from a SOPS source.
-      tunnelToken = scope.mkSecret {
-        name = "${name}-token";
-        keys = [ "token" ];
-        stringData = lib.optionalAttrs (config.token != null) { token = config.token; };
-        source = config.tokenSource;
-      };
+      # The check runs before scope.mkSecret, which would otherwise refuse the
+      # valueless key with a message about the package instead of the option.
+      tunnelToken =
+        lib.throwIf (config.token == null && config.tokenSource == null)
+          "${who}: the tunnel token is not set, so the connector cannot authenticate to Cloudflare. Set tokenSource to a SOPS file with a `token` key, or token to the token itself."
+          (
+            scope.mkSecret {
+              name = "${name}-token";
+              keys = [ "token" ];
+              stringData = lib.optionalAttrs (config.token != null) { token = config.token; };
+              source = config.tokenSource;
+            }
+          );
 
       deployment =
         {
