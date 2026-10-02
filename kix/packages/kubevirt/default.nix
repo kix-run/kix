@@ -44,8 +44,11 @@
 # virt-handler pods reach each other for live migration, and every operand
 # and virt-operator's install strategy Job reach DNS and the API server.
 # virt-launcher pods run in the virtual machine's namespace and are the
-# consumer's to allow (out.operandSelectors.virtLauncher). virt-exportproxy,
-# which runs only with the VMExport feature gate, gets no policy.
+# consumer's to allow (out.operandSelectors.virtLauncher). With the VMExport
+# feature gate in `extraSpec`, virt-operator also runs virt-exportproxy,
+# which gets DNS, the API server, ingress from any pod on 8443, and egress
+# to any pod on 8443, where the export server pods in the VirtualMachine
+# namespaces listen. Those export server pods are the consumer's to allow.
 #
 # Monitoring: virt-operator creates its own ServiceMonitor and
 # PrometheusRule when the prometheus-operator CRDs exist, in
@@ -82,76 +85,67 @@
 
 let
   # The upstream release: meta.version, the default image.tag, and the tag
-  # in crds/sources.txt and rbac/sources.txt (checked below).
+  # in crds/sources.txt and rbac/sources.txt (kix-lib test
+  # kubevirt-cdi-sources-match-release).
   release = "v1.5.0";
-  sourceUrls =
-    file:
-    builtins.filter (l: l != "" && !lib.hasPrefix "#" l) (
-      lib.splitString "\n" (builtins.readFile file)
-    );
-  vendoredUrls = sourceUrls ./crds/sources.txt ++ sourceUrls ./rbac/sources.txt;
 
-  # "v1.5.0" -> [ "1" "5" ".0" ]; null when the tag is not a version.
-  versionParts = tag: builtins.match "v?([0-9]+)\\.([0-9]+)(\\..*)?" tag;
-  releaseMinor = lib.take 2 (versionParts release);
-  releaseMinorText = "v${lib.concatStringsSep "." releaseMinor}";
+  # "v1.5.0" -> "v1.5"; null for a tag that is not a vX.Y release.
+  # Upstream tags every release with the leading v.
+  minorOf =
+    tag: lib.mapNullable (m: "v${builtins.head m}") (builtins.match "v([0-9]+\\.[0-9]+)(\\..*)?" tag);
 
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "kubevirt ${ns}/${name}";
 
-  vendoredRole = file: builtins.fromJSON (builtins.readFile file);
+  readJSON = file: builtins.fromJSON (builtins.readFile file);
 
-  # Index digests of the release's images. A digest applies while the image
-  # keeps the release tag.
-  operandDigests = {
-    virt-api = "sha256:f9dd496df05456d47815f0b5861c6764b10c23657a48db886d8219acf5b44e86";
-    virt-controller = "sha256:c09a2c9b12a6a8657b02c557d5e169f8fbe3fb4339e64e6ce913ccf6c92714ab";
-    virt-handler = "sha256:70605363b54f4cc982a80dfdabd01462920bb2c64b028ab3b0c368ddb04e6370";
-    virt-launcher = "sha256:d03a08135f821c4dfc73502b6fc1831a9342a2c97b0dcd5a1d865d2e23b05d49";
-    virt-exportproxy = "sha256:1017c0e7097bf309e7a2e8542656f76c3ee1365ff03d01f563dbe108a98153b1";
-    virt-exportserver = "sha256:10d35daa56ec1981bbbcf898f5200909e044b3ae34a3f790ca82fedc906c52d9";
-    libguestfs-tools = "sha256:360ae79853f55195e9dd1571d8903b6d78a4f5612d6a85d42d8d59d852dc12eb";
-    pr-helper = "sha256:924b86dbb9a4e8d05bbd98a3acb79df642c51a19c6f57a557abff98b03db544c";
-    sidecar-shim = "sha256:3741dc9c9619be64313c5d0f0d6bd4f1453871ed0910165e209ef9aaa3f273f6";
-  };
-
-  # The virt-operator variable each operand image is passed in, and what
-  # runs it.
+  # Each operand image: the index digest of its release tag (a digest
+  # applies while the image keeps that tag), the virt-operator variable it
+  # is passed in, and what runs it.
   operands = {
     virt-api = {
+      digest = "sha256:f9dd496df05456d47815f0b5861c6764b10c23657a48db886d8219acf5b44e86";
       env = "VIRT_API_IMAGE";
       what = "virt-api";
     };
     virt-controller = {
+      digest = "sha256:c09a2c9b12a6a8657b02c557d5e169f8fbe3fb4339e64e6ce913ccf6c92714ab";
       env = "VIRT_CONTROLLER_IMAGE";
       what = "virt-controller";
     };
     virt-handler = {
+      digest = "sha256:70605363b54f4cc982a80dfdabd01462920bb2c64b028ab3b0c368ddb04e6370";
       env = "VIRT_HANDLER_IMAGE";
       what = "virt-handler on every node";
     };
     virt-launcher = {
+      digest = "sha256:d03a08135f821c4dfc73502b6fc1831a9342a2c97b0dcd5a1d865d2e23b05d49";
       env = "VIRT_LAUNCHER_IMAGE";
       what = "the pod of each virtual machine";
     };
     virt-exportproxy = {
+      digest = "sha256:1017c0e7097bf309e7a2e8542656f76c3ee1365ff03d01f563dbe108a98153b1";
       env = "VIRT_EXPORTPROXY_IMAGE";
       what = "virt-exportproxy, with the VMExport feature gate";
     };
     virt-exportserver = {
+      digest = "sha256:10d35daa56ec1981bbbcf898f5200909e044b3ae34a3f790ca82fedc906c52d9";
       env = "VIRT_EXPORTSERVER_IMAGE";
       what = "a VirtualMachineExport's server pod";
     };
     libguestfs-tools = {
+      digest = "sha256:360ae79853f55195e9dd1571d8903b6d78a4f5612d6a85d42d8d59d852dc12eb";
       env = "GS_IMAGE";
       what = "`virtctl guestfs` pods, on demand";
     };
     pr-helper = {
+      digest = "sha256:924b86dbb9a4e8d05bbd98a3acb79df642c51a19c6f57a557abff98b03db544c";
       env = "PR_HELPER_IMAGE";
       what = "the persistent reservation helper, with the PersistentReservation feature gate";
     };
     sidecar-shim = {
+      digest = "sha256:3741dc9c9619be64313c5d0f0d6bd4f1453871ed0910165e209ef9aaa3f273f6";
       env = "SIDECAR_SHIM_IMAGE";
       what = "hook sidecars, on demand";
     };
@@ -192,13 +186,8 @@ in
     { config, ... }:
     [
       {
-        assertion =
-          versionParts config.image.tag != null && lib.take 2 (versionParts config.image.tag) == releaseMinor;
-        message = "image.tag \"${config.image.tag}\" is not a ${releaseMinorText} release, and the CRD and roles under kix/packages/kubevirt/{crds,rbac} are vendored from ${release}. Remove image.tag or set a ${releaseMinorText} tag. To move to another release, change release in kix/packages/kubevirt/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py kubevirt.";
-      }
-      {
-        assertion = vendoredUrls != [ ] && lib.all (lib.hasInfix "/${release}/") vendoredUrls;
-        message = "kix/packages/kubevirt/crds/sources.txt or rbac/sources.txt fetches from a tag other than ${release}, the package's release. Set the tag in every URL to ${release} and run uv run scripts/vendor-crds.py kubevirt.";
+        assertion = minorOf config.image.tag == minorOf release;
+        message = "image.tag \"${config.image.tag}\" is not a ${minorOf release} release (upstream tags look like ${release}), and the CRD and roles under kix/packages/kubevirt/{crds,rbac} are vendored from ${release}. Remove image.tag or set a ${minorOf release} tag. To move to another release, change release in kix/packages/kubevirt/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py kubevirt.";
       }
     ]
     ++ map (n: {
@@ -206,7 +195,7 @@ in
       message = "operandImages.${n}.pullPolicy = \"${
         toString config.operandImages.${n}.pullPolicy
       }\" has no effect: virt-operator gives every operand the KubeVirt resource's imagePullPolicy, which is image.pullPolicy. Remove it.";
-    }) (builtins.attrNames operandDigests);
+    }) (builtins.attrNames operands);
 
   options = {
     image = kix.options.image {
@@ -217,20 +206,19 @@ in
     };
 
     operandImages = lib.mapAttrs (
-      n: digest:
+      n: operand:
       kix.options.image {
         repository = "quay.io/kubevirt/${n}";
         tag = release;
-        inherit digest;
+        inherit (operand) digest;
         tagText = "config.image.tag";
         pullPolicy = null;
-        description = "Image virt-operator uses for ${operands.${n}.what} (${operands.${n}.env}). Listed in out.extraImages. Its repository follows image.repository and its tag image.tag; the KubeVirt resource's imagePullPolicy applies, so pullPolicy must stay null.";
+        description = "Image virt-operator uses for ${operand.what} (${operand.env}). Listed in out.extraImages. Its repository follows image.repository and its tag image.tag; the KubeVirt resource's imagePullPolicy applies, so pullPolicy must stay null.";
       }
-    ) operandDigests;
+    ) operands;
 
-    # Requests from kubevirt-operator.yaml at the release, which sets no
-    # limits. virt-operator held up to 160 MiB on kind with KubeVirt
-    # deployed.
+    # Requests from kubevirt-operator.yaml at the release. Upstream sets no
+    # limits; these are the package's.
     resources = kix.options.resources {
       requests = {
         cpu = "10m";
@@ -252,7 +240,7 @@ in
   config =
     { config, ... }:
     {
-      operandImages = lib.genAttrs (builtins.attrNames operandDigests) (n: {
+      operandImages = lib.genAttrs (builtins.attrNames operands) (n: {
         repository = lib.mkDefault "${dirOf config.image.repository}/${n}";
         tag = lib.mkDefault config.image.tag;
       });
@@ -321,6 +309,23 @@ in
       ];
       consoleServer = [ (tcp 8186) ];
 
+      # virt-operator runs virt-exportproxy only while this gate is in the
+      # KubeVirt resource (pkg/virt-operator/resource/apply/reconcile.go,
+      # exportProxyEnabled).
+      exportEnabled =
+        let
+          gates =
+            lib.attrByPath
+              [
+                "configuration"
+                "developerConfiguration"
+                "featureGates"
+              ]
+              [ ]
+              config.extraSpec;
+        in
+        builtins.isList gates && builtins.elem "VMExport" gates;
+
       mkVirtualMachine =
         consumerScope: args:
         let
@@ -330,31 +335,26 @@ in
           spec =
             args.spec
               or (throw "${who}: out.mkVirtualMachine: ${what} has no spec. Pass spec with runStrategy and template.");
-          accepted = "out.mkVirtualMachine accepts runStrategy \"Always\" or \"Halted\", or running = true or false";
-          refusal =
-            reason:
-            throw "${who}: ${what} ${reason}. ${accepted}: the deploy waits for those to reach Running or Stopped. With Manual the VM waits for a user to start it, and with RerunOnFailure or Once it waits on the guest, so a deploy would wait until it times out. Build such a VM with scope.mkCR kubevirt.out.crds.VirtualMachine { ... }.";
+          accepted = "out.mkVirtualMachine accepts runStrategy \"Always\" or \"Halted\", or running = true or false, and waits for the VM to reach Running or Stopped";
+          refusal = reason: throw "${who}: ${what} ${reason}. ${accepted}.";
           printableStatus =
-            if (spec ? runStrategy) == (spec ? running) then
-              refusal (
-                if spec ? runStrategy then
-                  "sets both runStrategy and running"
-                else
-                  "sets neither runStrategy nor running"
-              )
+            if (spec ? runStrategy) && (spec ? running) then
+              refusal "sets both runStrategy and running, which KubeVirt rejects"
+            else if !(spec ? runStrategy) && !(spec ? running) then
+              refusal "sets neither runStrategy nor running, which KubeVirt rejects"
             else if spec ? running then
               if spec.running == true then
                 "Running"
               else if spec.running == false then
                 "Stopped"
               else
-                refusal "sets running to ${builtins.toJSON spec.running}"
+                refusal "sets running to ${builtins.toJSON spec.running}, which is not a boolean"
             else if spec.runStrategy == "Always" then
               "Running"
             else if spec.runStrategy == "Halted" then
               "Stopped"
             else
-              refusal "sets runStrategy ${builtins.toJSON spec.runStrategy}";
+              refusal "sets runStrategy ${builtins.toJSON spec.runStrategy}. With Manual the VM waits for a user to start it, and with RerunOnFailure or Once it waits on the guest, so a deploy would wait until it times out. Build such a VM with scope.mkCR kubevirt.out.crds.VirtualMachine { ... }";
           dataVolumeCrd =
             if (spec.dataVolumeTemplates or [ ]) == [ ] then
               [ ]
@@ -394,7 +394,7 @@ in
             namespace = ns;
           }
         ];
-        roles."${name}-operator" = (vendoredRole ./rbac/clusterrole-kubevirt-operator.json).rules;
+        roles."${name}-operator" = (readJSON ./rbac/clusterrole-kubevirt-operator.json).rules;
       };
 
       operatorRbac = scope.rbac.mkRoleSet scope {
@@ -405,14 +405,14 @@ in
             namespace = ns;
           }
         ];
-        roles."${name}-operator" = (vendoredRole ./rbac/role-kubevirt-operator.json).rules;
+        roles."${name}-operator" = (readJSON ./rbac/role-kubevirt-operator.json).rules;
       };
 
       # Aggregates into the built-in admin role, so namespace admins can
       # manage KubeVirt resources. Nothing binds it.
       adminClusterRole =
         let
-          upstream = vendoredRole ./rbac/clusterrole-kubevirt.io_operator.json;
+          upstream = readJSON ./rbac/clusterrole-kubevirt.io_operator.json;
         in
         scope.mkClusterResource {
           apiVersion = "rbac.authorization.k8s.io/v1";
@@ -449,16 +449,13 @@ in
           selector.matchLabels = scope.selectorLabels;
           strategy.type = "RollingUpdate";
           template = {
-            metadata = {
-              # Upstream's pod labels. The webhook Service virt-operator
-              # creates selects kubevirt.io, and its metrics Service selects
-              # prometheus.kubevirt.io.
-              labels = scope.selectorLabels // {
-                "kubevirt.io" = "virt-operator";
-                name = "virt-operator";
-                "prometheus.kubevirt.io" = "true";
-              };
-              annotations."openshift.io/required-scc" = "restricted-v2";
+            # Upstream's pod labels. The webhook Service virt-operator
+            # creates selects kubevirt.io, and its metrics Service selects
+            # prometheus.kubevirt.io.
+            metadata.labels = scope.selectorLabels // {
+              "kubevirt.io" = "virt-operator";
+              name = "virt-operator";
+              "prometheus.kubevirt.io" = "true";
             };
             spec = {
               serviceAccount = self.serviceAccount;
@@ -495,10 +492,6 @@ in
                     {
                       name = "VIRT_OPERATOR_IMAGE";
                       value = operatorImage;
-                    }
-                    {
-                      name = "WATCH_NAMESPACE";
-                      valueFrom.fieldRef.fieldPath = "metadata.annotations['olm.targetNamespaces']";
                     }
                   ]
                   ++ lib.mapAttrsToList (n: ref: {
@@ -599,7 +592,7 @@ in
         # The KubeVirt CRD is the only one upstream's bundle ships; the
         # operator installs the rest with full schemas.
         kubeVirts = scope.mkCRD {
-          spec = (builtins.fromJSON (builtins.readFile ./crds/kubevirts.kubevirt.io.json)).spec;
+          spec = (readJSON ./crds/kubevirts.kubevirt.io.json).spec;
           readiness = {
             path = "/status/phase";
             equals = "Deployed";
@@ -665,6 +658,29 @@ in
         strategyJob = operandPolicy "strategy-dumper" (podLabels "virt-operator-strategy-dumper") {
           intents.egress = clusterAccess;
         };
+        # Clients reach the proxy through its Service on 8443; the proxy
+        # forwards to export server pods in the VirtualMachines' namespaces
+        # on 8443.
+        exportProxy =
+          if exportEnabled then
+            operandPolicy "virt-exportproxy" (podLabels "virt-exportproxy") {
+              intents = {
+                ingress = [
+                  {
+                    from = "all-pods";
+                    ports = [ (tcp 8443) ];
+                  }
+                ];
+                egress = clusterAccess ++ [
+                  {
+                    to = "all-pods";
+                    ports = [ (tcp 8443) ];
+                  }
+                ];
+              };
+            }
+          else
+            null;
       };
 
       root = {
