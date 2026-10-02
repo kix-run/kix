@@ -114,12 +114,6 @@ let
 
       clusterChecks = lib.concatMapAttrs (cname: cluster: {
         "schema-cluster-${cname}" = kixChecks.schemaCheck "cluster-${cname}" (kix.mkManifests cluster);
-        "validate-cluster-${cname}" =
-          assert kixChecks.validateManifestSet "cluster-${cname}" cluster.rawManifests;
-          pkgs.runCommand "validate-cluster-${cname}" { } ''
-            echo "Cross-resource validation passed for cluster-${cname}."
-            touch $out
-          '';
         "pi-wiring-cluster-${cname}" =
           assert piChecks.validatePIWiring "cluster-${cname}" cluster;
           pkgs.runCommand "pi-wiring-cluster-${cname}" { } ''

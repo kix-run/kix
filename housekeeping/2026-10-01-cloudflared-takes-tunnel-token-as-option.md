@@ -1,3 +1,3 @@
 # 2026-10-01 · `kix/packages/cloudflared` · cloudflared takes its tunnel token as a string option or a SOPS file path, not as a secret dependency.
 
-The `token` option puts the token in the cluster file and the Nix store, and the package builds the Secret itself from `token` or `tokenSource`. With neither set, the build still renders a Secret that declares the `token` key and holds no data, so the connector starts without a token and the failure shows only at runtime. A required secret dependency (for example `tunnelToken`, key `token`, read through `kix.checkSecretKeys`) would give the deploy an ordering dependency and a build-time key check.
+The `token` option puts the token in the cluster file and the Nix store, and the package builds the Secret itself from `token` or `tokenSource`. A required secret dependency (for example `tunnelToken`, key `token`, read through `kix.checkSecretKeys`) would give the deploy an ordering dependency and a build-time key check.

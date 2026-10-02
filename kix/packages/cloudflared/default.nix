@@ -46,6 +46,15 @@ in
     defaultAliases = [ "tunnel" ];
   };
 
+  assertions =
+    { config, ... }:
+    [
+      {
+        assertion = config.token != null || config.tokenSource != null;
+        message = "the tunnel token is not set, so the connector cannot authenticate to Cloudflare. Set tokenSource to a SOPS file with a `token` key, or token to the token itself.";
+      }
+    ];
+
   options = {
     image = kix.options.image {
       repository = "cloudflare/cloudflared";

@@ -816,13 +816,26 @@ in
           extra ? { },
         }:
         let
-          effectiveKeys =
+          # Keys with a value in the manifest itself.
+          valuedKeys = builtins.attrNames (stringData // (extra.data or { }) // (extra.stringData or { }));
+
+          declaredKeys =
             if keys != null then
               keys
-            else if stringData != { } then
-              builtins.attrNames stringData
+            else if valuedKeys != [ ] then
+              valuedKeys
             else
-              throw "mkSecret \"${name}\": either 'keys' or 'stringData' must be provided";
+              throw "mkSecret \"${name}\" in ${namespaceName}/${instanceName}: either 'keys' or 'stringData' must be provided";
+
+          # Without a SOPS source nothing fills a key at deploy, so a key with
+          # no value here would be missing from the live Secret. Kubernetes
+          # fills a service-account-token Secret itself.
+          unvalued = builtins.filter (k: !(builtins.elem k valuedKeys)) declaredKeys;
+          effectiveKeys =
+            if source != null || type == "kubernetes.io/service-account-token" || unvalued == [ ] then
+              declaredKeys
+            else
+              throw "mkSecret \"${name}\" in ${namespaceName}/${instanceName}: key(s) ${builtins.concatStringsSep ", " unvalued} have no value and there is no SOPS source, so the Secret would be created without them and a pod that reads them would not start. Give the values in stringData, set source to a SOPS file that holds them, or use scope.mkSecretRef when something outside Kix creates this Secret.";
 
           realizedSource =
             if source == null then
@@ -878,6 +891,12 @@ in
         in
         resource // { out = resource.out // secretHelpers; };
 
+      # A Secret something outside Kix creates. `keys` lists the keys pods
+      # read by name; the deploy waits until the live Secret holds each of
+      # them. `keys = [ ]` declares an opaque Secret: the deploy checks only
+      # that it exists, so pods may use it whole (envFrom, a volume without
+      # items), and the cluster build refuses a pod that reads one of its
+      # keys by name (check 22).
       mkSecretRef =
         {
           name,
