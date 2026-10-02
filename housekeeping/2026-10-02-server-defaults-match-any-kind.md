@@ -1,0 +1,3 @@
+# 2026-10-02 · `cli/kix/src/manifest/diff/equivalence.rs` · `SERVER_DEFAULTS` treats core defaults as unset in every kind, custom resources included.
+
+The table matches on the path suffix (`.readinessProbe.failureThreshold` and others), and `equivalent_to_unset` is not told the object's kind. A custom resource field of the same name, set to the core default on one side and absent on the other, reads as unchanged in `kix diff` and in `StoreGraph::synthesize`'s content match, although its operator may default it differently. Kix rarely owns such a field without setting it, so this is unlikely to hide a change.

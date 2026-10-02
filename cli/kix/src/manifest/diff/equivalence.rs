@@ -7,6 +7,13 @@
 //! canonical string form. Each rule here pairs a spelling with the one it is
 //! equal to. A value that differs from the default, or a quantity that
 //! differs in amount, still shows.
+//!
+//! The rules match on the field path alone, not on the object's kind, so
+//! [`SERVER_DEFAULTS`] also applies inside a custom resource with a field of
+//! the same name (a `readinessProbe` an operator defaults differently), and
+//! to the content match `StoreGraph::synthesize` uses to give a manifest its
+//! reference path. Such a field set to the core default on one side and
+//! absent on the other reads as equal.
 
 use serde_json::Value;
 
