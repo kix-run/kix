@@ -38,6 +38,7 @@
 # Not offered: container modes (dind, kubernetes) and `vaultConfig`. A
 # privileged sidecar added through `extraSpec` is not seen by Kix's privilege
 # checks, which do not read pod templates inside custom resources.
+# Escape hatches: `extraSpec`, `env`, `partsOverlays`, `extra`.
 #
 # out.extraImages: the runner image, which only the runner set's pod template
 # names.
@@ -51,15 +52,12 @@
 }:
 
 let
+  # The actions-runner release: meta.version and image.tag.
+  release = "2.337.0";
+
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "arc-runner-set ${ns}/${name}";
-
-  # Labels the controller puts on every runner pod of this scale set.
-  runnerSelector = {
-    "actions.github.com/scale-set-name" = name;
-    "app.kubernetes.io/component" = "runner";
-  };
 
   # Paths of the runner set spec that options and dependencies set.
   locked = [
@@ -83,16 +81,10 @@ let
       "priorityClassName"
     ]
   ];
-
-  # Fields of the `runner` container that options own.
-  ownedRunnerFields = [
-    "image"
-    "env"
-    "resources"
-  ];
 in
 {
   meta = {
+    version = release;
     description = "One GitHub Actions runner scale set (an AutoscalingRunnerSet) for the arc controller";
     owner = "platform";
   };
@@ -117,7 +109,7 @@ in
 
     image = kix.options.image {
       repository = "ghcr.io/actions/actions-runner";
-      tag = "2.337.0";
+      tag = release;
       digest = "sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4";
       description = "Image of the runner container. The controller turns off the runner's self-update, and GitHub stops sending jobs to a runner more than 30 days behind the latest runner release, so keep the tag current. A runner set whose phase is `Outdated` has hit that limit.";
     };
@@ -221,41 +213,25 @@ in
       // lib.optionalAttrs (env != [ ]) { inherit env; }
       // lib.optionalAttrs (config.resources != { }) { inherit (config) resources; };
 
+      problem = import ./checks.nix { inherit lib name; } config;
+
       extra = config.extraSpec;
-      extraTemplateSpec = (extra.template or { }).spec or null;
-      extraContainers =
-        if builtins.isAttrs extraTemplateSpec && extraTemplateSpec ? containers then
-          extraTemplateSpec.containers
-        else
-          [ ];
+      extraContainers = lib.attrByPath [ "template" "spec" "containers" ] [ ] extra;
       extraWithoutContainers =
-        if builtins.isAttrs extraTemplateSpec && extraTemplateSpec ? containers then
+        if lib.hasAttrByPath [ "template" "spec" "containers" ] extra then
           extra
           // {
             template = extra.template // {
-              spec = removeAttrs extraTemplateSpec [ "containers" ];
+              spec = removeAttrs extra.template.spec [ "containers" ];
             };
           }
         else
           extra;
-
-      unnamed = builtins.filter (c: !(builtins.isAttrs c) || !(c ? name)) extraContainers;
       runnerOverride = lib.findFirst (c: c.name == "runner") { } extraContainers;
-      ownedHits = builtins.filter (f: runnerOverride ? ${f}) ownedRunnerFields;
-      containers =
-        if !(builtins.isList extraContainers) then
-          throw "${who}: extraSpec.template.spec.containers must be a list of containers."
-        else if unnamed != [ ] then
-          throw "${who}: extraSpec.template.spec.containers has an entry without a name. Entries are matched by name; name each one."
-        else if ownedHits != [ ] then
-          throw "${who}: extraSpec.template.spec.containers.runner sets ${
-            lib.concatMapStringsSep ", " (f: "`${f}`") ownedHits
-          }, which the ${
-            lib.concatMapStringsSep " and " (f: "`${f}`") ownedHits
-          } option sets; use the option."
-        else
-          [ (lib.recursiveUpdate runner runnerOverride) ]
-          ++ builtins.filter (c: c.name != "runner") extraContainers;
+      containers = [
+        (lib.recursiveUpdate runner runnerOverride)
+      ]
+      ++ builtins.filter (c: c.name != "runner") extraContainers;
 
       baseSpec = {
         inherit (config) githubConfigUrl minRunners maxRunners;
@@ -271,7 +247,11 @@ in
         inherit who locked;
       } baseSpec extraWithoutContainers) { template.spec = { inherit containers; }; };
 
-      parts = arc.out.mkAutoscalingRunnerSet scope { inherit name spec; };
+      parts =
+        if problem != null then
+          throw "${who}: ${problem}"
+        else
+          arc.out.mkAutoscalingRunnerSet scope { inherit name spec; };
 
       runnerRbac = scope.rbac.mkRoleSet scope {
         subjects = [
@@ -299,7 +279,7 @@ in
           let
             netpol = scope.networkPolicyEnforcer.netpol;
           in
-          netpol.mkEndpointSelector runnerSelector
+          netpol.mkEndpointSelector (arc.out.operandSelectors.runner name)
           // {
             egress =
               (netpol.translateIntentRules {
