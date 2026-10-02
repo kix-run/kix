@@ -1,9 +1,7 @@
-# cert-manager startupapicheck: post-install Job that verifies the cert-manager
-# API is responsive (webhook reachable, CRDs registered) before signaling success.
-#
-# Upstream Helm chart runs this as a post-install hook with helm.sh/hook
-# annotations. In kix we model it as a regular Job; rerunning on apply is fine
-# because Job names are stable and the check is idempotent.
+# The API check: a Job running `cmctl check api`, which succeeds once the
+# API server admits cert-manager objects (CRDs served, webhook reachable,
+# CA injected). The CRD handles in crds.nix make every custom resource built
+# from them require this Job, and root.postHooks runs it after the root.
 
 {
   self,
@@ -14,9 +12,10 @@
   ...
 }:
 let
-  common = import ./common.nix { instanceName = scope.instanceName; };
+  common = import ./common.nix { inherit lib; };
   name = scope.instanceName;
-  ns = scope.namespaceName;
+  who = common.who scope;
+  labels = (common.labels name).startupapicheck;
 
   inherit (scope.rbac)
     group
@@ -27,60 +26,62 @@ let
 
   cm = group "cert-manager.io" [ "certificaterequests" ];
 
-  # Helm chart uses a distinct label set for startupapicheck (app=startupapicheck
-  # rather than app=cert-manager). Match it so the diff against helm-rendered
-  # output is clean.
-  startupLabels = {
-    "app" = "startupapicheck";
-    "app.kubernetes.io/name" = "startupapicheck";
-    "app.kubernetes.io/instance" = name;
-    "app.kubernetes.io/component" = "startupapicheck";
+  # `check api` creates a CertificateRequest with dry-run, which the webhook
+  # must admit.
+  apiCheckRoles = mkRoleSet scope {
+    subjects = [
+      {
+        kind = "ServiceAccount";
+        name = self.apiCheckServiceAccount.out.name;
+        namespace = scope.namespaceName;
+      }
+    ];
+    inherit labels;
+    roles."${name}-startupapicheck:create-cert" = grant [
+      (cm.certificaterequests |> allow [ "create" ])
+    ];
   };
-
-  startupSubject = [
-    {
-      kind = "ServiceAccount";
-      name = self.startupapicheckServiceAccount.out.name;
-      namespace = ns;
-    }
-  ];
-
-  startupRoles = mkRoleSet scope {
-    subjects = startupSubject;
-    labels = startupLabels;
-    roles = {
-      "${name}-startupapicheck:create-cert" = grant [
-        (cm.certificaterequests |> allow [ "create" ])
-      ];
-    };
-  };
-
 in
 {
-  startupapicheckServiceAccount = scope.mkResource {
+  apiCheckServiceAccount = scope.mkResource {
     apiVersion = "v1";
     kind = "ServiceAccount";
     name = "${name}-startupapicheck";
-    labels = startupLabels;
+    inherit labels;
     extra.automountServiceAccountToken = true;
   };
 
-  startupapicheckJob = scope.mkJob {
+  apiCheck = scope.mkJob {
     name = "${name}-startupapicheck";
-    labels = startupLabels;
+    inherit labels;
+    # A Job's pod template is immutable, so a new image replaces the Job.
+    annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
+    requires = [
+      self.webhookDeployment
+      self.cainjectorDeployment
+      self.mutatingWebhookConfiguration
+      self.validatingWebhookConfiguration
+      self.crds.certificateRequests
+    ]
+    ++ builtins.attrValues apiCheckRoles;
     spec = {
       backoffLimit = 4;
       template = {
-        metadata.labels = startupLabels;
+        metadata.labels = labels;
         spec = {
           restartPolicy = "OnFailure";
-          serviceAccount = self.startupapicheckServiceAccount;
+          serviceAccount = self.apiCheckServiceAccount;
           enableServiceLinks = false;
           securityContext = common.podSecurityContext;
           containers = [
             {
               name = "cert-manager-startupapicheck";
-              image = kix.image.ref config.startupapicheck.image;
+              image = kix.image.ref (
+                common.checkRelease who config [
+                  "startupapicheck"
+                  "image"
+                ]
+              );
               imagePullPolicy = config.startupapicheck.image.pullPolicy;
               args = [
                 "check"
@@ -89,6 +90,19 @@ in
                 "-v"
               ];
               securityContext = common.containerSecurityContext;
+              # A ResourceQuota on requests or limits in the namespace refuses
+              # a pod that does not set them, and every gated custom resource
+              # waits on this Job. `check api` makes a few API calls and exits.
+              resources = {
+                requests = {
+                  cpu = "10m";
+                  memory = "32Mi";
+                };
+                limits = {
+                  cpu = "100m";
+                  memory = "128Mi";
+                };
+              };
               env = [
                 {
                   name = "POD_NAMESPACE";
@@ -97,12 +111,10 @@ in
               ];
             }
           ];
-          nodeSelector = {
-            "kubernetes.io/os" = "linux";
-          };
+          nodeSelector."kubernetes.io/os" = "linux";
         };
       };
     };
   };
 }
-// startupRoles
+// apiCheckRoles

@@ -6027,11 +6027,11 @@ let
           follows =
             jobImage {
               image = {
-                tag = "v1.18.0";
+                tag = "v1.21.3";
                 pullPolicy = "Always";
               };
             } == {
-              image = "quay.io/jetstack/cert-manager-startupapicheck:v1.18.0";
+              image = "quay.io/jetstack/cert-manager-startupapicheck:v1.21.3";
               imagePullPolicy = "Always";
             };
           own =

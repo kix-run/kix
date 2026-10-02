@@ -220,7 +220,7 @@ let
               else if target == "all-pods" then
                 { toEntities = [ "cluster" ]; }
               else
-                throw "kix: unknown egress intent target '${toString target}'";
+                throw "kix: unknown egress intent target '${toString target}'; the targets are apiserver, world, dns, and all-pods.";
           in
           if target == "dns" then
             baseRule # DNS rule already includes ports
@@ -243,8 +243,13 @@ let
                 { fromEntities = [ "cluster" ]; }
               else if source == "world" then
                 mkExternalIngressRule { entities = rule.entities or [ "world" ]; }
+              # The apiserver calling an admission webhook or an aggregated
+              # API. The entities match apiServerEgressRule's, since a
+              # host-networked apiserver arrives as `host` or `remote-node`.
+              else if source == "apiserver" then
+                { fromEntities = apiServerEgressRule.toEntities; }
               else
-                throw "kix: unknown ingress intent source '${toString source}'";
+                throw "kix: unknown ingress intent source '${toString source}'; the sources are all-pods, world, and apiserver.";
           in
           baseRule
           // lib.optionalAttrs (rule ? ports) {

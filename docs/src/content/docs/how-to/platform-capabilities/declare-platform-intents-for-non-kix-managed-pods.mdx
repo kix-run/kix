@@ -51,12 +51,48 @@ does not affect incoming traffic to these Pods.
 :::
 
 `to` and `from` accept fixed values rather than arbitrary selectors. `to`
-accepts `dns`, `world`, and `apiserver`; `from` accepts `all-pods` and `world`.
-Anything else fails evaluation with `unknown egress intent target` or
-`unknown ingress intent source`.
+accepts `dns`, `world`, `apiserver`, and `all-pods`; `from` accepts
+`all-pods`, `world`, and `apiserver`, which admits the Kubernetes API server calling an admission
+webhook or an aggregated API in the selected Pods. Anything else fails
+evaluation with `unknown egress intent target` or `unknown ingress intent
+source`.
 
 `scope = "clusterwide"` creates a cluster-wide policy. The
 `targetNamespace` label constraint keeps it scoped to the intended namespace.
+
+## Example: ACME HTTP-01 solver pods
+
+cert-manager's controller launches an HTTP-01 solver pod in the namespace of
+each Certificate that an HTTP-01 issuer handles. Kix does not render these
+pods, so the namespace's default deny drops the ingress controller's requests
+to them and the challenge never validates. This intent admits them in every
+namespace:
+
+```nix
+networkPolicy.platformIntents.acme-http01-solvers = {
+  scope = "clusterwide";
+  podSelector."acme.cert-manager.io/http01-solver" = "true";
+  ingress = [
+    {
+      from = "all-pods";
+      ports = [
+        {
+          port = 8089;
+          protocol = "TCP";
+        }
+      ];
+    }
+  ];
+};
+```
+
+The selector is the label cert-manager sets on every solver pod, which the
+cert-manager instance also publishes as `out.operandSelectors.acmesolver`.
+Port 8089 is the port the solver listens on. The intent sets no
+`targetNamespace`, because solver pods run wherever a certificate is
+requested. The ingress controller must also be allowed to send traffic to the
+solver pods; the `ingress-nginx` package declares egress to all pods for its
+backends.
 
 ## Check the generated policy
 
