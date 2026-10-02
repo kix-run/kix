@@ -3,7 +3,8 @@
 # custom resources, optional import activation (eval/cluster.nix
 # activatedImports), the cross-resource checks 18-23 in eval/validate.nix,
 # the instance-of edge for chart custom resources, kix.expose's HTTPRoute
-# CRD ref, and mkSecret's refusal of keys without a value.
+# CRD ref, mkSecret's refusal of keys without a value, and cloudflared's
+# token check, which must run before mkSecret.
 
 {
   lib,
@@ -937,6 +938,28 @@ in
     ms = [ (claim "data" { storageClassName = ""; }) ];
   };
 
+  # A generic ephemeral volume's claim template is a claim too.
+  lib-reference-checks-class-ephemeral-volume =
+    let
+      app = podDeployment "app" {
+        pod.volumes = [
+          {
+            name = "scratch";
+            ephemeral.volumeClaimTemplate.spec.storageClassName = "fast";
+          }
+        ];
+      };
+    in
+    expectFailures [ "Deployment a/app ephemeral volume 'scratch' requests StorageClass 'fast'" ] {
+      ms = [ app ];
+    }
+    && expectClean {
+      ms = [
+        app
+        (storageClass "fast" { })
+      ];
+    };
+
   # --- 21. Custom resources depend on a declaration of their kind ---
 
   lib-reference-checks-cr-without-declaration =
@@ -963,6 +986,44 @@ in
         owners = {
           ${idOf (widget "v1" [ ])} = "a/app";
           ${idOf crd} = "op/operator";
+        };
+      };
+
+  # A CR built beside its own CRD declaration, without the edge, is told to
+  # use that declaration rather than to depend on its own instance.
+  lib-reference-checks-cr-same-instance-declaration =
+    let
+      crd = widgetCrd "Namespaced" [ { name = "v1"; } ];
+    in
+    expectFailures
+      [
+        "Widget a/w (instance a/app) does not depend on CustomResourceDefinition widgets.example.com, which the same instance declares, so the deploy can apply it before the CRD is served. Build it with scope.mkCR from that declaration, or list the declaration in its requires."
+      ]
+      {
+        ms = [
+          crd
+          (widget "v1" [ ])
+        ];
+        owners = {
+          ${idOf (widget "v1" [ ])} = "a/app";
+          ${idOf crd} = "a/app";
+        };
+      };
+
+  # A CRD ref is named once, with its provider in one parenthetical.
+  lib-reference-checks-cr-outside-closure-on-ref =
+    expectFailures
+      [
+        "Widget a/w (instance a/app) does not depend on the CRD ref crd-ref-op-widgets-example-com for widgets.example.com (instance a/op), which declares its kind"
+      ]
+      {
+        ms = [
+          (widgetRefMarker { })
+          (widget "v1" [ ])
+        ];
+        owners = {
+          ${idOf (widget "v1" [ ])} = "a/app";
+          ${idOf (widgetRefMarker { })} = "a/op";
         };
       };
 
@@ -1044,7 +1105,9 @@ in
       listed = widgetRefMarker { ${kixKeys.crdServedVersions} = "v1,v1beta1"; };
     in
     expectFailures
-      [ "uses example.com/v1beta1, but the reference to CustomResourceDefinition widgets.example.com" ]
+      [
+        "uses example.com/v1beta1, but the CRD ref crd-ref-op-widgets-example-com for widgets.example.com"
+      ]
       {
         ms = [
           (widgetRefMarker { })
@@ -1152,6 +1215,26 @@ in
                       path = "x";
                     }
                   ];
+                };
+              }
+            ];
+          })
+        ];
+      };
+
+  # A chart may render `data: null`; the ConfigMap then declares no keys.
+  lib-reference-checks-key-configmap-null-data =
+    expectFailures [ "reads key 'x' of ConfigMap 'cm' (env X of container c), which declares no keys" ]
+      {
+        ms = [
+          (mf "ConfigMap" "a" "cm" { data = null; })
+          (podDeployment "app" {
+            container.env = [
+              {
+                name = "X";
+                valueFrom.configMapKeyRef = {
+                  name = "cm";
+                  key = "x";
                 };
               }
             ];
@@ -1403,6 +1486,16 @@ in
         );
       };
 
+  # Kubernetes treats the beta StorageClass annotation as a default too.
+  lib-reference-checks-two-defaults-beta =
+    expectFailures [ "StorageClasses s1, s2 are all annotated as the default" ]
+      {
+        ms = [
+          (storageClass "s1" { "storageclass.beta.kubernetes.io/is-default-class" = "true"; })
+          (storageClass "s2" { "storageclass.kubernetes.io/is-default-class" = "true"; })
+        ];
+      };
+
   # One default beside a plain class is fine.
   lib-reference-checks-one-default = expectClean {
     ms = [
@@ -1421,31 +1514,53 @@ in
   };
 
   # Two priority-class instances with globalDefault fail the cluster build.
+  # A failing build cannot be read, so the message is checked on the
+  # PriorityClass manifests of two builds that each hold one instance.
   lib-reference-checks-priority-class-instances =
     let
+      instance = name: value: globalDefault: {
+        instances.infra.${name} = {
+          package = import ../../../packages/priority-class;
+          config = { inherit value globalDefault; };
+        };
+      };
       withDefaults =
         second:
         mkCluster [
           baseInstances
-          {
-            instances.infra.high = {
-              package = import ../../../packages/priority-class;
-              config = {
-                value = 1000;
-                globalDefault = true;
-              };
-            };
-            instances.infra.low = {
-              package = import ../../../packages/priority-class;
-              config = {
-                value = 10;
-                globalDefault = second;
-              };
-            };
-          }
+          (instance "high" 1000 true)
+          (instance "low" 10 second)
         ];
+      priorityClassOf =
+        name: value:
+        byName name (
+          ofKind "PriorityClass" (
+            manifests (mkCluster [
+              baseInstances
+              (instance name value true)
+            ])
+          )
+        );
+      high = priorityClassOf "high" 1000;
+      low = priorityClassOf "low" 10;
     in
-    evalFails (withDefaults true) && !(evalFails (withDefaults false));
+    evalFails (withDefaults true)
+    && !(evalFails (withDefaults false))
+    &&
+      expectFailures
+        [
+          "PriorityClasses high (instance infra/high), low (instance infra/low) all set globalDefault: true. The apiserver accepts one; set it on one class."
+        ]
+        {
+          ms = [
+            high
+            low
+          ];
+          owners = {
+            ${idOf high} = "infra/high";
+            ${idOf low} = "infra/low";
+          };
+        };
 
   # --- chart custom resources depend on the chart's CRD ---
 
@@ -1521,12 +1636,27 @@ in
         )
       ];
       raw = cluster.instances.appns.web.raw;
+      # depends-on names a resource by the store hash of its outPath.
+      markerHash =
+        instance:
+        builtins.substring 11 32 (
+          builtins.unsafeDiscardStringContext (
+            toString cluster.instances.appns.${instance}.raw.routeCrd.outPath
+          )
+        );
       ms = manifests cluster;
       markers = builtins.filter (
         m:
         m.kind == "PackageInstance" && lib.hasSuffix "-httproutes-gateway-networking-k8s-io" m.metadata.name
       ) ms;
-      route = byName "web2" (ofKind "HTTPRoute" ms);
+      # mkCR lists the CRD ref under `requires:`.
+      routeDeps =
+        name:
+        map (lib.removePrefix "requires:") (
+          lib.splitString "," (
+            (annotationsOf (byName name (ofKind "HTTPRoute" ms))).${kixKeys.dependsOn} or ""
+          )
+        );
     in
     (
       raw.routeCrd.outPath == raw.adminRouteCrd.outPath
@@ -1535,14 +1665,20 @@ in
           "crd-ref-web-httproutes-gateway-networking-k8s-io"
           "crd-ref-web2-httproutes-gateway-networking-k8s-io"
         ]
-      && route != null
+      && builtins.elem (markerHash "web2") (routeDeps "web2")
+      && !(builtins.elem (markerHash "web") (routeDeps "web2"))
+      && builtins.elem (markerHash "web") (routeDeps "web")
     )
-    || throw "HTTPRoute CRD refs: ${builtins.toJSON (map (m: m.metadata.name) markers)}";
+    || throw "HTTPRoute CRD refs: ${
+      builtins.toJSON (map (m: m.metadata.name) markers)
+    }, web2 route depends on ${builtins.toJSON (routeDeps "web2")}";
 
   # --- mkSecret ---
 
   # A declared key needs a value unless a SOPS source fills it or
-  # Kubernetes does (a service-account-token Secret).
+  # Kubernetes does (a service-account-token Secret). tryEval cannot read a
+  # throw's message, so each refused case has a passing twin that differs
+  # only in the missing value.
   lib-reference-checks-mksecret-values =
     let
       build =
@@ -1566,6 +1702,10 @@ in
     evalFails (build {
       keys = [ "a" ];
     })
+    && builds {
+      keys = [ "a" ];
+      stringData.a = "1";
+    }
     && evalFails (build {
       keys = [
         "a"
@@ -1573,6 +1713,16 @@ in
       ];
       stringData.a = "1";
     })
+    && builds {
+      keys = [
+        "a"
+        "b"
+      ];
+      stringData = {
+        a = "1";
+        b = "2";
+      };
+    }
     && builds { stringData.a = "1"; }
     && builds {
       keys = [ "a" ];
@@ -1586,4 +1736,47 @@ in
       keys = [ "a" ];
       source = ./lib-reference-checks.nix;
     };
+
+  # cloudflared refuses a missing token itself, before scope.mkSecret sees
+  # the valueless key. The stub mkSecret never throws, so the failure is
+  # the package's own check.
+  lib-reference-checks-cloudflared-token-refused-before-secret =
+    let
+      stubScope = {
+        instanceName = "tunnel";
+        namespaceName = "edge";
+        mkSecret = args: {
+          inherit args;
+          out.mkEnv = _: [ ];
+        };
+        mkDeployment = d: d;
+        selectorLabels = { };
+      };
+      pkg = import ../../../packages/cloudflared {
+        scope = stubScope;
+        inherit lib;
+        kix = kixlib;
+        availability = "none";
+      };
+      tokenOf =
+        config:
+        (pkg.build {
+          self = { };
+          scope = stubScope;
+          kix = kixlib;
+          inherit config;
+        }).tunnelToken;
+      builds = config: (builtins.tryEval (builtins.deepSeq (tokenOf config) true)).success;
+    in
+    (
+      !(builds {
+        token = null;
+        tokenSource = null;
+      })
+      && builds {
+        token = "t";
+        tokenSource = null;
+      }
+    )
+    || throw "cloudflared: the token check did not run before scope.mkSecret";
 }
