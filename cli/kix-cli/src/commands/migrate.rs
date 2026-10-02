@@ -207,8 +207,8 @@ fn print_report(report: &migrate::Report) {
     println!("  If this cluster runs the kix operator, upgrade its image and scale");
     println!("  it back up. It watches the new group.");
     println!("  Then deploy. Every resource is applied once, to move its annotations.");
-    println!("  Almost nothing restarts: a package that hashes a ConfigMap into its");
-    println!("  pod template rolls its pods once (valkey, n8n, python-app).");
+    println!("  Almost nothing restarts: a package that hashes a ConfigMap or Secret into");
+    println!("  its pod template rolls its pods once (for example valkey and coredns).");
 }
 
 /// Ask unless `--yes`. Exits 1 on a non-interactive terminal without `--yes`,

@@ -271,13 +271,6 @@ let
     priority-class.config.value = 1000;
     # promtail auto-instantiates loki, which needs a claim.
     promtail.instances = { inherit storage; };
-    python-app = {
-      config.backend.image = {
-        repository = "ghcr.io/example/python-app";
-        tag = "1.0.0";
-      };
-      instances.valkey-password = valkeyPassword;
-    };
     secret.config.stringData.password = "password";
     secret-echo.instances = { inherit credentials; };
     secret-ref.config.keys = [ "password" ];

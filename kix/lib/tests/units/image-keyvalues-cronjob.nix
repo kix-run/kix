@@ -1,6 +1,5 @@
-# Tests for the kix/lib behaviour the python-app rework relies on: the
-# required form of kix.options.image, kix.keyValues, and the CronJob name
-# limit.
+# Tests for both forms of kix.options.image, kix.keyValues, and the CronJob
+# name limit. The workloads come from a minimal package defined below.
 
 {
   lib,
@@ -86,7 +85,7 @@ in
 {
   # With repository and tag the option keeps its default, and the package's
   # digest is dropped when an instance changes the tag.
-  python-app-image-default-form-unchanged =
+  image-keyvalues-cronjob-image-default-form =
     let
       args = {
         repository = "docker.io/library/nginx";
@@ -117,7 +116,7 @@ in
   # field has one: an instance that sets nothing, or only the repository,
   # fails; one that sets both gets them. With only repository declared, an
   # instance supplies the tag. A digest without a tag is refused.
-  python-app-image-required-form =
+  image-keyvalues-cronjob-image-required-form =
     let
       required = imageWith { };
       given = fieldsOf (required [
@@ -148,7 +147,7 @@ in
 
   # A package stamps the rerun annotation with kix.keyValues, and the
   # cross-resource check for kix.run/rerun accepts the value.
-  python-app-keyvalues-rerun =
+  image-keyvalues-cronjob-keyvalues-rerun =
     let
       cluster = clusterWith "Job" "migrate";
       job = byName "migrate" (ofKind "Job" (manifests cluster));
@@ -164,7 +163,7 @@ in
 
   # A CronJob name may be 52 characters, not 53: the CronJob controller
   # appends an 11-character suffix to the Jobs it creates.
-  python-app-cronjob-name-max-52 =
+  image-keyvalues-cronjob-cronjob-name-max-52 =
     let
       nameOf = n: lib.fixedWidthString n "a" "";
     in
