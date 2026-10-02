@@ -12,26 +12,55 @@ Add the `ingress-nginx` package when the cluster should run its own NGINX
 Ingress controller. The package creates the controller workload, Service,
 IngressClass, admission webhook, and their RBAC resources.
 
+:::caution[Legacy controller]
+Upstream ingress-nginx stopped development after v1.15.1, the release this
+package runs. For a new cluster, route traffic through Gateway API instead:
+see [Expose a service with Gateway API](/docs/how-to/platform-capabilities/expose-a-service-with-gateway-api/).
+:::
+
 ## Add the controller instance
 
 Add one instance in a platform namespace:
 
 <Snippet {...ingressControllerInstance} />
 
-The instance name becomes the default IngressClass name, so it has to be a
-legal Kubernetes object name. `ingress-nginx` is lowercase; `ingressNginx`
-is refused at evaluation. Packages that use `kix.expose` still resolve this
-controller, because the package declares `meta.defaultAliases =
-[ "ingressNginx" ]` and that alias is what the dependency matches on.
+The instance name becomes the IngressClass name unless
+`config.ingressClassName` sets another. Both have to be legal Kubernetes object
+names: `ingress-nginx` is lowercase, and `ingressNginx` is refused at
+evaluation. Packages that use `kix.expose` still resolve this controller,
+because the package declares `meta.defaultAliases = [ "ingressNginx" ]` and
+that alias is what the dependency matches on.
+
+IngressClasses are cluster-scoped. Two instances with the same name in
+different namespaces need different class names; set `config.ingressClassName`
+on one of them. Without it, evaluation fails with a duplicate-resource error
+for the IngressClass.
+
+The admission webhook checks every Ingress in the cluster, whatever its class,
+and rejects the write when it cannot reach a controller. While a controller is
+down, no Ingress can be created or changed.
 
 ## Choose how traffic reaches the controller
 
 The controller Service defaults to `ClusterIP`. Keep that default when another
-in-cluster component forwards traffic to ingress-nginx.
+in-cluster component forwards traffic to ingress-nginx. On kind, reach the
+controller through a port-forward and send a host that one of its Ingresses
+serves, such as the `web.example.test` host from [Expose a service with
+Ingress](/docs/how-to/platform-capabilities/expose-a-service-with-ingress/):
+
+```sh
+kubectl -n ingress-system port-forward svc/ingress-nginx 8080:80
+curl -H 'Host: web.example.test' http://localhost:8080/
+```
 
 For a cloud or bare-metal environment with LoadBalancer support, set
-`config.serviceType = "LoadBalancer"` on the instance. Use
-`config.serviceAnnotations` for provider-specific load balancer settings.
+`config.service.spec.type = "LoadBalancer"` on the instance. Use
+`config.service.annotations` for provider-specific load balancer settings, and
+`config.service.spec.externalTrafficPolicy = "Local"` to keep client source
+addresses. With `NodePort`, `config.service.nodePorts.http` and
+`config.service.nodePorts.https` fix the node ports. Other Service fields, such
+as `loadBalancerClass`, go under `config.service.spec` with their Kubernetes
+names.
 
 Evaluation rejects the Service when the cluster declares the `loadBalancer`
 role absent, as the kind flavor does. A managed provider instance satisfies
@@ -40,7 +69,39 @@ balancer already supplied by the platform. If the cluster does not declare the
 role, Kix treats its availability as unknown and emits a trace warning instead
 of rejecting the Service.
 
-Set `config.replicaCount` when the controller should run more than one replica.
+Replicas follow the cluster's availability level; set `config.replicas` to
+choose the count.
+
+## Change NGINX settings
+
+`config.settings` is the data of the controller's ConfigMap, with the keys
+from the upstream ConfigMap reference:
+
+```nix
+config.settings = {
+  proxy-body-size = "50m";
+};
+```
+
+The defaults are upstream's: request bodies up to 1 MiB, `X-Forwarded-*`
+headers not trusted, and snippet annotations refused. Set
+`use-forwarded-headers = "true"` only when a proxy in front of the controller
+sets those headers. Snippet annotations run arbitrary NGINX configuration, so
+they need two keys, `allow-snippet-annotations = "true"` and
+`annotations-risk-level = "Critical"`; evaluation fails when only the first is
+set.
+
+`config.metrics.enabled` (on by default) turns on the controller's Prometheus
+metrics. When the instance's `prometheus` dependency resolves, for example to
+a prometheus-operator instance, the package also adds a metrics Service and a
+ServiceMonitor.
+
+## Make it the default class
+
+Ingresses that Kix renders always name their class. For Ingresses applied
+outside Kix that name no class, set `config.isDefaultClass = true`. A cluster
+may have only one default IngressClass: with two, the API server rejects every
+Ingress that names none.
 
 ## Inspect and deploy
 
