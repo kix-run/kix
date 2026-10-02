@@ -47,6 +47,8 @@
 #
 # Escape hatches: `extraArgs` and `env` on the operator container, and the
 # instance's `partsOverlays` for placement and anything else in the pod spec.
+# `extraArgs` refuses `--kubelet-endpointslice`, which needs EndpointSlice
+# access the vendored ClusterRole does not grant.
 #
 # Limits: one replica (`meta.availability.max = "none"`); the operator has no
 # leader election. One instance per cluster (`meta.conflictsWith`), because

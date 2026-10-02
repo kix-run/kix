@@ -18,7 +18,20 @@ let
 
   httpPort = 8080;
 
-  args = [
+  # The vendored ClusterRole grants no access to discovery.k8s.io
+  # EndpointSlices, which this flag makes the operator write for the
+  # kubelet Service.
+  endpointSliceArgs = builtins.filter (
+    a: builtins.match "--?kubelet-endpointslice(=.*)?" a != null && a != "--kubelet-endpointslice=false"
+  ) config.extraArgs;
+
+  args =
+    if endpointSliceArgs != [ ] then
+      throw "${who}: extraArgs sets \"${builtins.head endpointSliceArgs}\", which makes the operator write EndpointSlices for the kubelet Service, and the package's ClusterRole (the upstream role in rbac/) does not grant access to EndpointSlices. Remove it; the operator keeps the kubelet targets in Endpoints (--kubelet-endpoints, on by default)."
+    else
+      baseArgs;
+
+  baseArgs = [
     "--web.listen-address=:${toString httpPort}"
     "--kubelet-service=${kubeletService.namespace}/${kubeletService.name}"
     "--prometheus-config-reloader=${kix.image.ref config.operandImages.prometheus-config-reloader}"
