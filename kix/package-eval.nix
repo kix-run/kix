@@ -267,9 +267,19 @@ let
     # are built.
     snapshot-controller.instances.prometheus-operator.package = packages.prometheus-operator;
     # Backups to an object storage, so the SGObjectStorage reference, the
-    # backups entries, and archive_timeout are built.
+    # backups entries, and archive_timeout are built; a pooler and a script,
+    # so the SGPoolingConfig and the SGScript are built.
     stackgres-cluster = {
-      config.backups = [ { cronSchedule = "0 1 * * *"; } ];
+      config = {
+        backups = [ { cronSchedule = "0 1 * * *"; } ];
+        pooling = { };
+        scripts = [
+          {
+            name = "init";
+            script = "SELECT 1";
+          }
+        ];
+      };
       instances = {
         s3-credentials = {
           package = packages.secret;
