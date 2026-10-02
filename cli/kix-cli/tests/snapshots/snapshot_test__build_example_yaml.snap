@@ -13257,8 +13257,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
-    kix.run/depends-on: '0hhmwz20qshqx15hyf7shvck2vh232l1,3l9jmh34sh7jrl8s2yrfarv5wad9lgf1,7lh6l4qh4p1x641fwvgd9yc5hmj61rvc,awzwpm53w1kb4ysngrwmj47whaddgkih,gcnjjdvq75wb0wzaaajaxdyi0w3ac1k7,ix70k8hcnkjd56dwb7id24h1pv1zrx4x,k0msj2bmsj58vp45yn9j14xqv1hl12sf,niabbw4x1267qgl923h7inf3j3g9vzyh,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z'
-    kix.run/identity-hash: mvg8is4hqknyy26hrh0ywz9l8k858lma
+    kix.run/depends-on: '0hhmwz20qshqx15hyf7shvck2vh232l1,3l9jmh34sh7jrl8s2yrfarv5wad9lgf1,7lh6l4qh4p1x641fwvgd9yc5hmj61rvc,awzwpm53w1kb4ysngrwmj47whaddgkih,fqrp1kxin2wzcnx17dsxqxswqlhz1svf,hfdzpy3srzw5a11q8wfajprgbcm4lhbr,i823g1y5bnm4d39x8vdib243l5w81jvr,ix70k8hcnkjd56dwb7id24h1pv1zrx4x,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z'
+    kix.run/identity-hash: ah02vv1mmgnvbyyq89a2l9hxc9mm5m1v
     kix.run/package: immich
     kix.run/package-namespace: immich
   labels:
@@ -13280,7 +13280,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/database: k0msj2bmsj58vp45yn9j14xqv1hl12sf
+        checksum/database: i823g1y5bnm4d39x8vdib243l5w81jvr
         checksum/valkey-password: '7lh6l4qh4p1x641fwvgd9yc5hmj61rvc'
       labels:
         app.kubernetes.io/instance: immich
@@ -14035,8 +14035,8 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,gcnjjdvq75wb0wzaaajaxdyi0w3ac1k7,gpdqgn0wncprm0pvnjgasvjgk74a393l,lmf31x0pvg9ywhsg1gv1jjjqchla4rvq
-    kix.run/identity-hash: niabbw4x1267qgl923h7inf3j3g9vzyh
+    kix.run/depends-on: '1m3mxnz57q206c9k1q2zl4iryyl7p6q7,7rg6jp870jd2pyh298d4c917qvqk4cn9,awzwpm53w1kb4ysngrwmj47whaddgkih,fqrp1kxin2wzcnx17dsxqxswqlhz1svf'
+    kix.run/identity-hash: hfdzpy3srzw5a11q8wfajprgbcm4lhbr
     kix.run/lifecycle: stateful
     kix.run/package: immich-db
     kix.run/package-namespace: immich
@@ -14165,19 +14165,107 @@ spec:
         name: tmp
   ttlSecondsAfterFinished: 86400
 ---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  annotations:
+    kix.run/depends-on: mm65yrp340h4r5hkffcskpnagv1fngrx,vj02x4vxyqf0xy0834sc3siril473nmn,requires:gpgc770viyqvwsxca5k1pppb26m1rimb,requires:wsqnhv3pgyba90gh729nk7s0xg60880c,requires:2x5vwc8jz0p3lpx1ky9hnkvh1f8sxaki,requires:yf45xwxqrvkxjj9qa8i62i9cxyw62gqp,requires:qwbmhdcbip18q6gjmbzxnvsq433h643w,requires:pgiw1h58mm2dmc4ydr2jh8f1qz4kkwkz,requires:lk9kdi4lwn9wbjngvq9gp4n9fwjzxkph,requires:5kd6wirwlqsnz73rw163g301xb4jhqaw,requires:4yay32l4ir5vlpf6hx2sj68lnysnj1hb
+    kix.run/identity-hash: '4ywsh1819j9vr8yakjvh2shmx0ggb2ig'
+    kix.run/package: stackgres-operator
+    kix.run/package-namespace: stackgres-system
+    kix.run/rerun: on-change
+  labels:
+    app: stackgres-operator-webhook-check
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: stackgres-operator-webhook-check
+  namespace: stackgres-system
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: stackgres-operator-webhook-check
+    spec:
+      containers:
+      - command:
+        - /bin/bash
+        - '-c'
+        - |
+          set -u
+          check() {
+            for type in mutating validating; do
+              entries=$(kubectl get "${type}webhookconfiguration" stackgres-operator -o 'jsonpath={.webhooks[*].name}') || return 1
+              case " $entries " in
+                *" sgcluster.${type}-webhook.stackgres.io "*) ;;
+                *) echo "${type}webhookconfiguration/stackgres-operator has no SGCluster entry yet"; return 1 ;;
+              esac
+            done
+            version=$(echo '{"apiVersion":"stackgres.io/v1","kind":"SGInstanceProfile","metadata":{"generateName":"stackgres-operator-webhook-check-","namespace":"stackgres-system"},"spec":{"cpu":"1","memory":"1Gi"}}' | kubectl create --dry-run=server -o 'jsonpath={.metadata.annotations.stackgres\.io/operatorVersion}' -f -) || return 1
+            if [ -z "$version" ]; then
+              echo "the dry-run SGInstanceProfile came back without the mutating webhook's annotation"
+              return 1
+            fi
+            echo "the StackGres 1.19.2 admission webhooks are serving (operatorVersion $version)"
+          }
+          deadline=$((SECONDS + 120))
+          until check; do
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "the StackGres admission webhooks did not serve within 120 s; see the logs of deployment/stackgres-operator in stackgres-system"
+              exit 1
+            fi
+            sleep 2
+          done
+        env:
+        - name: HOME
+          value: /tmp
+        image: quay.io/ongres/kubectl:v1.37.1-build-6.56@sha256:8e3f36d49e403423627b450d803c94cf93c8bbebae8f59b11cb5e458bb0c1a39
+        imagePullPolicy: IfNotPresent
+        name: webhook-check
+        resources:
+          limits:
+            cpu: '200m'
+            memory: '128Mi'
+          requests:
+            cpu: '10m'
+            memory: '32Mi'
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts:
+        - mountPath: /tmp
+          name: tmp
+      enableServiceLinks: false
+      restartPolicy: Never
+      securityContext:
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: stackgres-operator-webhook-check
+      volumes:
+      - emptyDir: {}
+        name: tmp
+---
 apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
   annotations:
-    kix.run/built-via: /nix/store/4xbpfk7f187kp10dz04fxnnsr27k0nk9-k8s-activation-example
-    kix.run/depends-on: '01v6b6ffxi608kgm03f4fk294px0lk3z,21rqcfm9p7ra1d6zpqf53s9xpdwfv69d,2hnqf813zj2q2vlpk9j6s8gh4q4kw1ij,35i8mjh56ys8dz6yd89269yy5k86abin,590al7hbiz804ha7f7q5ivm49ds9fxcg,597bi0wj1dzqy570jjarc2vlvgzgji1c,5mv940cjcfv2zf1cm9zjfi61b117n128,5n47j74lzrsijy4r2z12cj7w81mgsnsh,hm8bp2d1pmap3acyx6bc232f9y3xpc3j,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,kk77rzkfz89hrapfkz9s3bzwz3giwbm1,spaidr9skm446shb444f4ghm041yab2c,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
-    kix.run/identity-hash: '6x3bn72jgfgdvyrgfm9wpnb7vj5iyvb6'
+    kix.run/built-via: /nix/store/y36hsg4ni6psih8w53qm7midn0m3ihlm-k8s-activation-example
+    kix.run/depends-on: '2hnqf813zj2q2vlpk9j6s8gh4q4kw1ij,35i8mjh56ys8dz6yd89269yy5k86abin,4dkpcsap25ma1c84m607lm40x7mfbgsz,590al7hbiz804ha7f7q5ivm49ds9fxcg,597bi0wj1dzqy570jjarc2vlvgzgji1c,5mv940cjcfv2zf1cm9zjfi61b117n128,5n47j74lzrsijy4r2z12cj7w81mgsnsh,8wxkazg2w55q6kmb73a9qcfspb1zv32m,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,kk77rzkfz89hrapfkz9s3bzwz3giwbm1,q9002yi61r26iddsgdji6yabcvwnqpaf,r3xf2di6gars6mw1gx8f3v20jrv03wmp,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
+    kix.run/identity-hash: if9d4g7dcxzr3k3gqpa5m8apb5k664cl
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
   labels:
     app.kubernetes.io/managed-by: kix
     kix.run/cluster: example
-  name: example-6x3bn72jgfgd
+  name: example-if9d4g7dcxzr
 spec:
   instances:
     cert-manager:
@@ -14225,8 +14313,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,vwwk50xm18prsh97abrhyl5hhbhc73ca,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: spaidr9skm446shb444f4ghm041yab2c
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,sngkkvbq61pc6qz8x9bvvvvngg4x4m4i,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: q9002yi61r26iddsgdji6yabcvwnqpaf
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/root: immich-server
@@ -14246,8 +14334,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,k0msj2bmsj58vp45yn9j14xqv1hl12sf,niabbw4x1267qgl923h7inf3j3g9vzyh,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: '21rqcfm9p7ra1d6zpqf53s9xpdwfv69d'
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,hfdzpy3srzw5a11q8wfajprgbcm4lhbr,i823g1y5bnm4d39x8vdib243l5w81jvr,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
+    kix.run/identity-hash: '8wxkazg2w55q6kmb73a9qcfspb1zv32m'
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/post-hooks: Job/immich-db-bootstrap-f2457d27ce
@@ -14312,8 +14400,8 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,gcnjjdvq75wb0wzaaajaxdyi0w3ac1k7,gmafss3vpsvk4ghxv2bm8g87a9iy5mnw,gpdqgn0wncprm0pvnjgasvjgk74a393l,ig1cp4dhcb4xj9i3438abndna3bcwbwz,kyya0s98d9q1fxcz2a458jscpz5frd66,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs
-    kix.run/identity-hash: '01v6b6ffxi608kgm03f4fk294px0lk3z'
+    kix.run/depends-on: '1l47qglxa42ixxc817yc39c135vgj2gq,1m3mxnz57q206c9k1q2zl4iryyl7p6q7,awzwpm53w1kb4ysngrwmj47whaddgkih,fqrp1kxin2wzcnx17dsxqxswqlhz1svf,rwvsp2yac3y4n4hlpx80xhjz45ahf0yb,syr6xw76r87ff7amh2mspc88mzkyx1js,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
+    kix.run/identity-hash: r3xf2di6gars6mw1gx8f3v20jrv03wmp
     kix.run/inverse-deps: PackageInstance/postgres
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
@@ -14336,15 +14424,15 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:kyya0s98d9q1fxcz2a458jscpz5frd66
-    kix.run/identity-hash: gpdqgn0wncprm0pvnjgasvjgk74a393l
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1l47qglxa42ixxc817yc39c135vgj2gq
+    kix.run/identity-hash: '1m3mxnz57q206c9k1q2zl4iryyl7p6q7'
     kix.run/import-apiversion: v1
     kix.run/import-kind: Secret
     kix.run/import-name: postgres
     kix.run/import-secret-keys: superuser-username,superuser-password
     kix.run/lifecycle: stateful
     kix.run/mode: import
-    kix.run/package: immich-db
+    kix.run/package: postgres
     kix.run/package-namespace: immich
     kix.run/secret-type: Opaque
   labels:
@@ -14363,14 +14451,14 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:kyya0s98d9q1fxcz2a458jscpz5frd66
-    kix.run/identity-hash: gcnjjdvq75wb0wzaaajaxdyi0w3ac1k7
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs,requires:1l47qglxa42ixxc817yc39c135vgj2gq
+    kix.run/identity-hash: fqrp1kxin2wzcnx17dsxqxswqlhz1svf
     kix.run/import-apiversion: v1
     kix.run/import-kind: Service
     kix.run/import-name: postgres
     kix.run/lifecycle: stateful
     kix.run/mode: import
-    kix.run/package: immich-db
+    kix.run/package: postgres
     kix.run/package-namespace: immich
     kix.run/service-ports: '[{"port":5432,"protocol":"TCP"}]'
     kix.run/service-selector: '{"app":"StackGresCluster","stackgres.io/cluster-name":"postgres"}'
@@ -14854,12 +14942,13 @@ apiVersion: kix.run/v1alpha1
 kind: PackageInstance
 metadata:
   annotations:
-    kix.run/depends-on: '0wk0cmy51wy5gdhqslk8m49mknrmy3n7,3qqzj38yhh1piv9k496s55mw12ysf9dq,864gwyllqppks92dwjn2clwjbdd3mvpw,gpgc770viyqvwsxca5k1pppb26m1rimb,h7hrvfym3j3r8r6b2fnfzk2agb33rzh9,iid4iin5gmzdwjwm0rxh7l2xz6wb9lsm,ky3lkhrrq2yfk5q4r9jb6s65znczyzl6,l1jn9qdpcakpb0fb7hzlbc86ylbn8wjp,mm65yrp340h4r5hkffcskpnagv1fngrx,mxf889q8w3z9faw3n5m1grmg4vdzk5d0,nd1jkr5iscpc8cj36mqhw1kdnvgij4ib,q4jm86n83rxmjnr6vgklafsx7sb5b97n,qwbmhdcbip18q6gjmbzxnvsq433h643w,rcmss1ds0vg6dcy07pk5bl9wqsb4mh1n,wsqnhv3pgyba90gh729nk7s0xg60880c,xj7j42iwwdc5vcqp88nnlfasbjfa15mw,y6whv3i7zp47mslxbiffzczlnpx2x4pp,yzqr73sayxckz46rknv0zhdvhhc8q1mr,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
-    kix.run/identity-hash: hm8bp2d1pmap3acyx6bc232f9y3xpc3j
-    kix.run/inverse-deps: PackageInstance/crd-ref-stackgres-operator-sgbackups-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgclusters-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgdbops-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgdistributedlogs-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sginstanceprofiles-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgobjectstorages-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgpoolconfigs-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgpgconfigs-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgscripts-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgshardedbackups-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgshardedclusters-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgshardeddbops-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgstreams-stackgres-io
+    kix.run/depends-on: '0wk0cmy51wy5gdhqslk8m49mknrmy3n7,3qqzj38yhh1piv9k496s55mw12ysf9dq,4ywsh1819j9vr8yakjvh2shmx0ggb2ig,864gwyllqppks92dwjn2clwjbdd3mvpw,gpgc770viyqvwsxca5k1pppb26m1rimb,h7hrvfym3j3r8r6b2fnfzk2agb33rzh9,iid4iin5gmzdwjwm0rxh7l2xz6wb9lsm,ky3lkhrrq2yfk5q4r9jb6s65znczyzl6,l1jn9qdpcakpb0fb7hzlbc86ylbn8wjp,mm65yrp340h4r5hkffcskpnagv1fngrx,mxf889q8w3z9faw3n5m1grmg4vdzk5d0,nd1jkr5iscpc8cj36mqhw1kdnvgij4ib,q4jm86n83rxmjnr6vgklafsx7sb5b97n,rcmss1ds0vg6dcy07pk5bl9wqsb4mh1n,wsqnhv3pgyba90gh729nk7s0xg60880c,xj7j42iwwdc5vcqp88nnlfasbjfa15mw,y6whv3i7zp47mslxbiffzczlnpx2x4pp,yzqr73sayxckz46rknv0zhdvhhc8q1mr,requires:pk4hih6jm4yj336rlaqk2qycz2k46xvs'
+    kix.run/identity-hash: '4dkpcsap25ma1c84m607lm40x7mfbgsz'
+    kix.run/inverse-deps: PackageInstance/crd-ref-stackgres-operator-sgbackups-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgclusters-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgdbops-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgdistributedlogs-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgobjectstorages-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgpoolconfigs-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgpgconfigs-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgscripts-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgshardedbackups-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgshardedclusters-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgshardeddbops-stackgres-io,PackageInstance/crd-ref-stackgres-operator-sgstreams-stackgres-io
     kix.run/package: _cluster
     kix.run/package-namespace: _cluster
     kix.run/package-requires: Service/stackgres-operator,ClusterRole/stackgres-operator,ClusterRoleBinding/stackgres-operator
+    kix.run/post-hooks: Job/stackgres-operator-webhook-check
     kix.run/root: stackgres-operator
   labels:
     app.kubernetes.io/instance: stackgres-operator
@@ -16010,6 +16099,31 @@ rules:
   - list
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  annotations:
+    kix.run/identity-hash: pgiw1h58mm2dmc4ydr2jh8f1qz4kkwkz
+    kix.run/package: stackgres-operator
+    kix.run/package-namespace: stackgres-system
+  labels:
+    app: stackgres-operator-webhook-check
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: stackgres-operator-webhook-check
+rules:
+- apiGroups:
+  - admissionregistration.k8s.io
+  resourceNames:
+  - stackgres-operator
+  resources:
+  - mutatingwebhookconfigurations
+  - validatingwebhookconfigurations
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   annotations:
@@ -16306,6 +16420,30 @@ subjects:
   namespace: stackgres-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  annotations:
+    kix.run/depends-on: pgiw1h58mm2dmc4ydr2jh8f1qz4kkwkz,vj02x4vxyqf0xy0834sc3siril473nmn
+    kix.run/identity-hash: lk9kdi4lwn9wbjngvq9gp4n9fwjzxkph
+    kix.run/package: stackgres-operator
+    kix.run/package-namespace: stackgres-system
+  labels:
+    app: stackgres-operator-webhook-check
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: stackgres-operator-webhook-check
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: stackgres-operator-webhook-check
+subjects:
+- kind: ServiceAccount
+  name: stackgres-operator-webhook-check
+  namespace: stackgres-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   annotations:
@@ -16438,6 +16576,30 @@ rules:
   - create
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  annotations:
+    kix.run/depends-on: mm65yrp340h4r5hkffcskpnagv1fngrx
+    kix.run/identity-hash: '5kd6wirwlqsnz73rw163g301xb4jhqaw'
+    kix.run/package: stackgres-operator
+    kix.run/package-namespace: stackgres-system
+  labels:
+    app: stackgres-operator-webhook-check
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: stackgres-operator-webhook-check
+  namespace: stackgres-system
+rules:
+- apiGroups:
+  - stackgres.io
+  resources:
+  - sginstanceprofiles
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   annotations:
@@ -16541,12 +16703,37 @@ subjects:
   name: cert-manager
   namespace: cert-manager
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  annotations:
+    kix.run/depends-on: '5kd6wirwlqsnz73rw163g301xb4jhqaw,mm65yrp340h4r5hkffcskpnagv1fngrx,vj02x4vxyqf0xy0834sc3siril473nmn'
+    kix.run/identity-hash: '4yay32l4ir5vlpf6hx2sj68lnysnj1hb'
+    kix.run/package: stackgres-operator
+    kix.run/package-namespace: stackgres-system
+  labels:
+    app: stackgres-operator-webhook-check
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: stackgres-operator-webhook-check
+  namespace: stackgres-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: stackgres-operator-webhook-check
+subjects:
+- kind: ServiceAccount
+  name: stackgres-operator-webhook-check
+  namespace: stackgres-system
+---
 apiVersion: stackgres.io/v1
 kind: SGCluster
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,gmafss3vpsvk4ghxv2bm8g87a9iy5mnw,ig1cp4dhcb4xj9i3438abndna3bcwbwz,pnp59yfhnv6byw601crmpvk6sippsnyr,requires:l1jn9qdpcakpb0fb7hzlbc86ylbn8wjp,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z
-    kix.run/identity-hash: kyya0s98d9q1fxcz2a458jscpz5frd66
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,pnp59yfhnv6byw601crmpvk6sippsnyr,rwvsp2yac3y4n4hlpx80xhjz45ahf0yb,syr6xw76r87ff7amh2mspc88mzkyx1js,requires:4ywsh1819j9vr8yakjvh2shmx0ggb2ig,requires:l1jn9qdpcakpb0fb7hzlbc86ylbn8wjp,requires:q4zbl6p5zm8d373lqlx9amq9lv5xlz0z
+    kix.run/identity-hash: '1l47qglxa42ixxc817yc39c135vgj2gq'
     kix.run/lifecycle: stateful
     kix.run/package: postgres
     kix.run/package-namespace: immich
@@ -16594,8 +16781,8 @@ apiVersion: stackgres.io/v1
 kind: SGInstanceProfile
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:qwbmhdcbip18q6gjmbzxnvsq433h643w
-    kix.run/identity-hash: gmafss3vpsvk4ghxv2bm8g87a9iy5mnw
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:4ywsh1819j9vr8yakjvh2shmx0ggb2ig,requires:qwbmhdcbip18q6gjmbzxnvsq433h643w
+    kix.run/identity-hash: syr6xw76r87ff7amh2mspc88mzkyx1js
     kix.run/lifecycle: stateful
     kix.run/package: postgres
     kix.run/package-namespace: immich
@@ -16614,8 +16801,8 @@ apiVersion: stackgres.io/v1
 kind: SGPostgresConfig
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:864gwyllqppks92dwjn2clwjbdd3mvpw
-    kix.run/identity-hash: ig1cp4dhcb4xj9i3438abndna3bcwbwz
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,requires:4ywsh1819j9vr8yakjvh2shmx0ggb2ig,requires:864gwyllqppks92dwjn2clwjbdd3mvpw
+    kix.run/identity-hash: rwvsp2yac3y4n4hlpx80xhjz45ahf0yb
     kix.run/lifecycle: stateful
     kix.run/package: postgres
     kix.run/package-namespace: immich
@@ -17046,8 +17233,8 @@ kind: Secret
 metadata:
   annotations:
     kix.run/classification: credential
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,gcnjjdvq75wb0wzaaajaxdyi0w3ac1k7
-    kix.run/identity-hash: lmf31x0pvg9ywhsg1gv1jjjqchla4rvq
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,fqrp1kxin2wzcnx17dsxqxswqlhz1svf
+    kix.run/identity-hash: '7rg6jp870jd2pyh298d4c917qvqk4cn9'
     kix.run/lifecycle: stateful
     kix.run/package: immich-db
     kix.run/package-namespace: immich
@@ -17071,8 +17258,8 @@ kind: Secret
 metadata:
   annotations:
     kix.run/classification: credential
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,gcnjjdvq75wb0wzaaajaxdyi0w3ac1k7
-    kix.run/identity-hash: k0msj2bmsj58vp45yn9j14xqv1hl12sf
+    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,fqrp1kxin2wzcnx17dsxqxswqlhz1svf
+    kix.run/identity-hash: i823g1y5bnm4d39x8vdib243l5w81jvr
     kix.run/lifecycle: stateful
     kix.run/package: immich-db
     kix.run/package-namespace: immich
@@ -17149,8 +17336,8 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    kix.run/depends-on: awzwpm53w1kb4ysngrwmj47whaddgkih,mvg8is4hqknyy26hrh0ywz9l8k858lma
-    kix.run/identity-hash: vwwk50xm18prsh97abrhyl5hhbhc73ca
+    kix.run/depends-on: ah02vv1mmgnvbyyq89a2l9hxc9mm5m1v,awzwpm53w1kb4ysngrwmj47whaddgkih
+    kix.run/identity-hash: sngkkvbq61pc6qz8x9bvvvvngg4x4m4i
     kix.run/package: immich
     kix.run/package-namespace: immich
   labels:
@@ -17423,4 +17610,22 @@ metadata:
     app.kubernetes.io/part-of: kix-example
     team: platform
   name: stackgres-operator
+  namespace: stackgres-system
+---
+apiVersion: v1
+automountServiceAccountToken: true
+kind: ServiceAccount
+metadata:
+  annotations:
+    kix.run/depends-on: mm65yrp340h4r5hkffcskpnagv1fngrx
+    kix.run/identity-hash: vj02x4vxyqf0xy0834sc3siril473nmn
+    kix.run/package: stackgres-operator
+    kix.run/package-namespace: stackgres-system
+  labels:
+    app: stackgres-operator-webhook-check
+    app.kubernetes.io/instance: stackgres-operator
+    app.kubernetes.io/managed-by: kix
+    app.kubernetes.io/part-of: kix-example
+    team: platform
+  name: stackgres-operator-webhook-check
   namespace: stackgres-system

@@ -3,31 +3,31 @@ source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
 Cluster: example
-Total resources: 118
+Total resources: 124
 
 Namespaces (5):
-  (cluster-scoped) (45 resources)
+  (cluster-scoped) (47 resources)
   cert-manager (21 resources)
   immich (28 resources)
   kube-system (7 resources)
-  stackgres-system (17 resources)
+  stackgres-system (21 resources)
 
 Resource kinds:
  Kind                            Count 
  PackageInstance                 27    
- ClusterRole                     15    
- ClusterRoleBinding              12    
+ ClusterRole                     16    
+ ClusterRoleBinding              13    
  CustomResourceDefinition        8     
  Deployment                      7     
  Service                         7     
- ServiceAccount                  6     
+ ServiceAccount                  7     
  PodDisruptionBudget             5     
+ Role                            5     
+ RoleBinding                     5     
  Namespace                       4     
- Role                            4     
- RoleBinding                     4     
+ Job                             3     
  Secret                          3     
  ConfigMap                       2     
- Job                             2     
  MutatingWebhookConfiguration    2     
  PersistentVolumeClaim           2     
  ValidatingWebhookConfiguration  2     
@@ -40,7 +40,7 @@ Resource kinds:
 
 Resources:
   (cluster-scoped):
-    Activation/example-6x3bn72jgfgd
+    Activation/example-if9d4g7dcxzr
     ClusterRole/cert-manager-cainjector
     ClusterRole/cert-manager-cluster-view
     ClusterRole/cert-manager-controller-approve:cert-manager-io
@@ -56,6 +56,7 @@ Resources:
     ClusterRole/cert-manager-webhook:subjectaccessreviews
     ClusterRole/coredns
     ClusterRole/stackgres-operator
+    ClusterRole/stackgres-operator-webhook-check
     ClusterRoleBinding/cert-manager-cainjector
     ClusterRoleBinding/cert-manager-controller-approve:cert-manager-io
     ClusterRoleBinding/cert-manager-controller-certificates
@@ -68,6 +69,7 @@ Resources:
     ClusterRoleBinding/cert-manager-webhook:subjectaccessreviews
     ClusterRoleBinding/coredns
     ClusterRoleBinding/stackgres-operator
+    ClusterRoleBinding/stackgres-operator-webhook-check
     CustomResourceDefinition/activations.kix.run
     CustomResourceDefinition/certificaterequests.cert-manager.io
     CustomResourceDefinition/certificates.cert-manager.io
@@ -146,6 +148,7 @@ Resources:
     ServiceAccount/coredns
   stackgres-system:
     Deployment/stackgres-operator
+    Job/stackgres-operator-webhook-check
     PackageInstance/crd-ref-stackgres-operator-sgbackups-stackgres-io
     PackageInstance/crd-ref-stackgres-operator-sgclusters-stackgres-io
     PackageInstance/crd-ref-stackgres-operator-sgdbops-stackgres-io
@@ -160,5 +163,8 @@ Resources:
     PackageInstance/crd-ref-stackgres-operator-sgshardeddbops-stackgres-io
     PackageInstance/crd-ref-stackgres-operator-sgstreams-stackgres-io
     PackageInstance/stackgres-operator
+    Role/stackgres-operator-webhook-check
+    RoleBinding/stackgres-operator-webhook-check
     Service/stackgres-operator
     ServiceAccount/stackgres-operator
+    ServiceAccount/stackgres-operator-webhook-check
