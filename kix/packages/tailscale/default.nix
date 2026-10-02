@@ -124,9 +124,10 @@
 #   out.mkRecorder scope { name; spec; }
 #       Defaults the recorder image and pull policy to
 #       `operandImages.tsrecorder`. The operator reads the S3 credentials
-#       Secret from this instance's namespace (`out.podNamespace`), so the
-#       builder refuses a Secret name without a dependency, and a name from
-#       a Kix resource unless the caller runs in that namespace. Pass
+#       Secret from this instance's namespace (`out.podNamespace`), so a
+#       Recorder that names one is built by an instance in that namespace,
+#       and the builder refuses a Secret name without a dependency. Pass
+#       the `out.name` of a Secret the caller builds or depends on, or
 #       `kix.untrackedRef "<name>"` for a Secret there that Kix does not
 #       build.
 #   out.crds.{Connector,DNSConfig,PeerRelay,ProxyClass,ProxyGroup,
@@ -786,13 +787,9 @@ in
             secretName =
               ((((args.spec or { }).storage or { }).s3 or { }).credentials or { }).secret.name or null;
             # Secret packages resolve only in their own namespace
-            # (meta.scope = "namespace"), so a tracked name passed by a caller
-            # elsewhere names a Secret outside the operator's namespace.
-            otherNamespace =
-              secretName != null
-              && isTracked secretName
-              && !(kix.isUntrackedRef secretName)
-              && consumerScope.namespaceName != ns;
+            # (meta.scope = "namespace"), so a Secret a caller elsewhere
+            # builds or depends on is outside the operator's namespace.
+            otherNamespace = secretName != null && consumerScope.namespaceName != ns;
             container = {
               image = kix.image.ref recorderImage;
             }
@@ -806,7 +803,7 @@ in
             )
             (
               if otherNamespace then
-                throw "${what}: ${field} names a Secret built in namespace ${consumerScope.namespaceName}, but the operator reads it from namespace ${ns}. Call mkRecorder from an instance in ${ns} that builds or depends on the Secret, or pass kix.untrackedRef \"<name>\" for a Secret in ${ns} that Kix does not build."
+                throw "${what}: ${field} names a Secret, which the operator reads from namespace ${ns}, so a Recorder with S3 credentials is built by an instance in ${ns}. Call mkRecorder from an instance in ${ns} and pass the out.name of a Secret it builds or depends on, or kix.untrackedRef \"<name>\" for a Secret there that Kix does not build."
               else
                 self.crds.recorders.out.mkCR consumerScope (
                   args

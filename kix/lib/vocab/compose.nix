@@ -1028,13 +1028,6 @@ rec {
 
   providedLoadBalancerClass = markers.mkProvidedLoadBalancerClass;
 
-  # True when a string carries a `kix.untrackedRef` marker, so it names an
-  # object Kix does not build.
-  isUntrackedRef =
-    s:
-    builtins.isString s
-    && builtins.any markers.isUntrackedRefPath (builtins.attrNames (builtins.getContext s));
-
   options = {
     # Image option with repository, tag, and optional digest and pull policy.
     # A null digest leaves the reference unpinned. A null pullPolicy leaves

@@ -341,7 +341,8 @@ in
     || throw "tailscale refusals: accepted ${builtins.toJSON notFailing}, refused ${builtins.toJSON notPassing}";
 
   # Builder refusals: a plain-string proxyClass or Recorder Secret, a
-  # Recorder Secret built outside the operator's namespace, a
+  # Recorder Secret named by an instance outside the operator's namespace
+  # (built there or from kix.untrackedRef), a
   # kube-apiserver ProxyGroup in auth mode, Ingress fields the package
   # sets, a port the Service lacks (checked without an enforcer), and a
   # Service without a selector.
@@ -367,6 +368,15 @@ in
             extra = tailscale.out.mkRecorder scope {
               name = "extra";
               spec.storage.s3.credentials.secret.name = "s3";
+            };
+          }
+        );
+        untrackedRecorderSecretElsewhere = withParts (
+          { scope, tailscale, ... }:
+          {
+            extra = tailscale.out.mkRecorder scope {
+              name = "extra";
+              spec.storage.s3.credentials.secret.name = untrackedRef "s3";
             };
           }
         );
@@ -702,8 +712,8 @@ in
     || throw "tailscale backend policy names: ${builtins.toJSON (map (m: m.metadata.name) policies)}";
 
   # mkRecorder defaults the recorder image and pull policy, and accepts an
-  # S3 Secret from kix.untrackedRef in any namespace or from a Kix
-  # resource when it runs in the operator's namespace.
+  # S3 Secret from kix.untrackedRef or from a Kix resource when it runs in
+  # the operator's namespace.
   tailscale-recorder =
     let
       recorderPackage = secretName: {
@@ -740,7 +750,7 @@ in
             })
           )
         );
-      untracked = recorderIn "demo" (_: untrackedRef "s3");
+      untracked = recorderIn "tailscale" (_: untrackedRef "s3");
       tracked = recorderIn "tailscale" (self: self.s3.out.name);
     in
     (
