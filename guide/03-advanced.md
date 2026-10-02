@@ -334,7 +334,7 @@ meta.roles = [ "cni" "network-policy-enforcer" ];
 ```
 
 - `networkPolicy.enable = true` requires a declared enforcer instance, else kix throws at cluster eval (missing CNP->CRD->enforcer store-path edge would race the operator at apply time).
-- Environment-installed Cilium: the same `cilium` package. A flavour sets `cluster.roles.cni.binding = "shadowable"` and `cluster.network.environmentCilium`; the instance then writes a HelmChartConfig (RKE2) or only the CRD references.
+- Environment-installed Cilium: the same `cilium` package. A flavour sets `cluster.roles.cni.binding = "shadowable"` and declares the environment's Cilium as the platform import `platform-cilium` (`roles = [ "cni" ]`, `out.helmChartConfig`). The instance takes it as a dependency and writes the HelmChartConfig the import names (RKE2), or only the CRD references when `out.helmChartConfig = null`.
 
 **Capability ownership is two declared invariants** (v2_discussions/128), not fingerprints: a raw PVC is an eval error unless the package holds `meta.unsafe = [ "raw-pvc" ]`, and an annotation under an operator's `meta.annotationDomains` needs a dependency on the declaring package, direct or transitive (`architecture.annotationDomainOwnership`). Consumers get a capability's resources through the owner's `out` (`prometheus.out.mkServiceMonitor`, `storage` through DI).
 

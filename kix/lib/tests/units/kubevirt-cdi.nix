@@ -13,6 +13,7 @@
 
 {
   lib,
+  eval,
   kixKeys,
   mkCluster,
   netpolOn,
@@ -75,9 +76,12 @@ let
       binding = "shadowable";
       provider = "cilium (environment)";
     };
-    cluster.network.environmentCilium.helmChartConfig = null;
     networkPolicy.enable = true;
     instances.net.cilium.package = ciliumPackage;
+    instances.net.platform-cilium.package = eval.mkImport {
+      roles = [ "cni" ];
+      out.helmChartConfig = null;
+    };
   };
 
   # A package's top level, as instance `<ns>/<ns>`.

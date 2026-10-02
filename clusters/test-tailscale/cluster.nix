@@ -43,9 +43,9 @@ kix.buildCluster {
         networkPolicy.enable = true;
         cluster.availability.default = "none";
 
-        # The target installs Cilium; the `cilium` instance uses it and
-        # claims the enforcer role.
-        cluster.network.environmentCilium.helmChartConfig = null;
+        # The target installs Cilium, and the `platform-cilium` import
+        # stands for it; the `cilium` instance uses it and claims the
+        # enforcer role.
         cluster.roles = {
           cni = {
             binding = "shadowable";
@@ -56,6 +56,10 @@ kix.buildCluster {
 
         instances.tailscale = {
           cilium.package = packages.cilium;
+          platform-cilium.package = kix.mkImport {
+            roles = [ "cni" ];
+            out.helmChartConfig = null;
+          };
           # No `kind`: the deploy would look for a Service named coredns in
           # this namespace. The role and the address are all it carries.
           platform-dns.package = kix.mkImport {

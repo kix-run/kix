@@ -550,10 +550,12 @@ The role name doubles as a DI alias automatically, and binding-mode
 conflicts against environment-provided roles (`cluster.roles.<name>.binding`,
 `absent` | `shadowable` | `exclusive`) are refused at eval. When the
 environment provides a role through an implementation a package can drive
-(RKE2's bundled Cilium), the binding stays `shadowable` and a typed cluster
-fact names the implementation (`cluster.network.environmentCilium`); the
-package derives what it emits from the pair, and every other pair is an eval
-error rather than a guess. Everything that
+(RKE2's bundled Cilium), the binding stays `shadowable` and the flavour
+declares the implementation as a platform import claiming the role
+(`kube-system/platform-cilium`, whose `out` names the HelmChartConfig); the
+package takes the import as a dependency and derives what it emits from the
+binding and the import, and every other pair is an eval error rather than a
+guess. Everything that
 isn't a registry role resolves through ordinary aliases — e.g.
 `persistent-volume-claim` declares `meta.defaultAliases = [ "storage" ]`.
 

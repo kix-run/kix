@@ -108,8 +108,11 @@ cluster.flavor.rke2.cni = [ "cilium" ];
 instances.kube-system.cilium.package = packages.cilium;
 ```
 
-The instance does not install a second Cilium. It writes its values into the
-HelmChartConfig `kube-system/rke2-cilium`, which RKE2's helm-controller merges
+The flavour declares RKE2's Cilium as the platform import
+`kube-system/platform-cilium`, and the instance takes it as a dependency. The
+instance does not install a second Cilium. It writes its values into the
+HelmChartConfig `kube-system/rke2-cilium`, which the import names and RKE2's
+helm-controller merges
 into the bundled chart: policy enforcement, operator replicas, and rollouts.
 RKE2's chart uses `kubernetes` IPAM, so the package sets no pool. A cluster
 that wants cluster-pool IPAM sets `values.ipam.mode = "cluster-pool"` and the
@@ -136,13 +139,23 @@ Kix then owns `kube-system/rke2-cilium`, which has two consequences:
 ## When the environment installed Cilium
 
 Where something outside Kix installed and configures Cilium, declare that
-the environment provides it and leave its configuration alone:
+the environment provides it, as a platform import the `cilium` instance
+depends on, and leave its configuration alone:
 
 ```nix
 cluster.roles.cni.binding = "shadowable";
-cluster.network.environmentCilium.helmChartConfig = null;
-instances.cilium-policy.cilium.package = packages.cilium;
+instances.cilium-policy = {
+  cilium.package = packages.cilium;
+  platform-cilium.package = kix.mkImport {
+    roles = [ "cni" ];
+    out.helmChartConfig = null;
+  };
+};
 ```
+
+`out.helmChartConfig = null` says the environment merges no HelmChartConfig
+into its Cilium. Set it to `{ name; namespace; }` when it does, and the
+instance writes its values there, as on RKE2.
 
 Declare the instance in a namespace of its own, not in `kube-system`. With
 network policy on, every namespace Kix manages gets a default-deny policy.

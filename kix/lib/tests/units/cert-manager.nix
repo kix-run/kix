@@ -5,6 +5,7 @@
 
 {
   lib,
+  eval,
   kixKeys,
   mkCluster,
   manifests,
@@ -133,9 +134,12 @@ in
             binding = "shadowable";
             provider = "cilium (environment)";
           };
-          cluster.network.environmentCilium.helmChartConfig = null;
           networkPolicy.enable = true;
           instances.net.cilium.package = ciliumPackage;
+          instances.net.platform-cilium.package = eval.mkImport {
+            roles = [ "cni" ];
+            out.helmChartConfig = null;
+          };
           instances.app.web.package = webPackage;
         }
       ]);

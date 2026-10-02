@@ -61,7 +61,7 @@ declares a platform import in `kube-system` that provides the role.
 | `kubeadm` | absent | shadowable, import | absent | absent | null |
 | `openshift` | exclusive | shadowable, import | absent | absent | null |
 | `ovh` | exclusive | shadowable, import | shadowable, import | shadowable | null |
-| `rke2` | follows `cluster.flavor.rke2.cni` | shadowable, import | absent | absent | exclusive, import |
+| `rke2` | follows `cluster.flavor.rke2.cni` (cilium: shadowable, import) | shadowable, import | absent | absent | exclusive, import |
 | `scaleway` | exclusive | shadowable, import | shadowable, import | shadowable | null |
 | `talos` | exclusive | shadowable, import | absent | absent | null |
 

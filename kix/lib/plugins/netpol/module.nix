@@ -97,9 +97,9 @@ in
       at cluster eval time if no enforcer is resolved: without the
       store-path edge to cilium, CNPs would race the operator at apply
       time. Where the environment installs Cilium, a flavour sets
-      cluster.roles.cni.binding = "shadowable" and
-      cluster.network.environmentCilium, and the `cilium` instance
-      configures or uses that Cilium instead of installing one.
+      cluster.roles.cni.binding = "shadowable" and declares a
+      platform-cilium import, and the `cilium` instance configures or uses
+      that Cilium instead of installing one.
     '';
   };
 
@@ -206,8 +206,8 @@ in
                 "kix: `networkPolicy.enable = true` but no instance declares "
                 + "`meta.roles = [\"network-policy-enforcer\"]`. Declare a `cilium` "
                 + "instance. Where the environment installs Cilium, a flavour sets "
-                + "cluster.roles.cni.binding = \"shadowable\" and "
-                + "cluster.network.environmentCilium (on RKE2: "
+                + "cluster.roles.cni.binding = \"shadowable\" and declares a "
+                + "platform-cilium import (on RKE2: "
                 + "cluster.flavor.rke2.cni = [ \"cilium\" ]), and the instance "
                 + "configures or uses that Cilium instead of installing one."
               )

@@ -1,14 +1,14 @@
 # cilium: Cilium as the cluster's pod network (the `cni` role) and its
 # CiliumNetworkPolicy enforcer (the `network-policy-enforcer` role).
 #
-# Who installs Cilium, the delivery, follows from two cluster facts that a
-# flavour sets, cluster.roles.cni.binding and
-# cluster.network.environmentCilium:
+# Who installs Cilium, the delivery, follows from cluster.roles.cni.binding,
+# which a flavour sets, and the optional `platform-cilium` dependency, a
+# kix.mkImport that stands for a Cilium the environment installed:
 #
-#   binding      environmentCilium                 delivery         emits
-#   "absent"     null                              chart            the upstream chart
-#   "shadowable" { helmChartConfig = { ... }; }    helmChartConfig  one HelmChartConfig
-#   "shadowable" { helmChartConfig = null; }       none             CRD references only
+#   binding      platform-cilium out.helmChartConfig   delivery         emits
+#   "absent"     (no dependency)                       chart            the upstream chart
+#   "shadowable" { name; namespace; }                  helmChartConfig  one HelmChartConfig
+#   "shadowable" null                                  none             CRD references only
 #
 # Every other combination is an evaluation error. In the helmChartConfig
 # delivery the environment's helm-controller merges the HelmChartConfig into
@@ -25,7 +25,18 @@
 # cluster.network.podCidr, which the kind, k3s, and rke2 flavours default.
 # On RKE2 with `cni: cilium` in the server config, set
 # cluster.flavor.rke2.cni = [ "cilium" ] and declare the instance in
-# kube-system.
+# kube-system; the flavour then declares kube-system/platform-cilium. Where
+# another environment installed Cilium and merges no HelmChartConfig:
+#
+#   cluster.roles.cni.binding = "shadowable";
+#   instances.kube-system.platform-cilium.package = kix.mkImport {
+#     roles = [ "cni" ];
+#     out.helmChartConfig = null;
+#   };
+#
+# DI deps:
+#   platform-cilium (optional)  the environment's Cilium, as above. Without
+#                               it the instance installs the chart.
 #
 # Policy enforcement follows networkPolicy.enable: "always" when Kix writes
 # allow rules, "default" otherwise. Under "always" the instance also writes
@@ -116,8 +127,8 @@ in
         Chart delivery: values for the cilium chart. helmChartConfig
         delivery: the values written to the environment's HelmChartConfig,
         which its helm-controller merges over its own chart defaults. Must
-        be empty when cluster.network.environmentCilium.helmChartConfig is
-        null, because the instance then writes no Cilium configuration.
+        be empty when the platform-cilium dependency's out.helmChartConfig
+        is null, because the instance then writes no Cilium configuration.
       '';
     };
 
@@ -148,20 +159,28 @@ in
       config,
       scope,
       clusterConfig,
+      platform-cilium ? null,
       ...
     }:
     let
       who = "cilium ${scope.namespaceName}/${scope.instanceName}";
 
       binding = (clusterConfig.cluster.roles.cni or { }).binding or null;
-      env = clusterConfig.cluster.network.environmentCilium;
       podCidr = clusterConfig.cluster.network.podCidr;
       netpolEnabled = (clusterConfig.networkPolicy or { }).enable or false;
 
+      environmentOut = if platform-cilium == null then { } else platform-cilium.out or { };
+      # A missing key is an error below rather than the none delivery, so a
+      # misspelt key cannot drop the HelmChartConfig.
+      helmChartConfigRef = environmentOut.helmChartConfig or null;
+      isHelmChartConfigRef =
+        v:
+        builtins.isAttrs v && builtins.isString (v.name or null) && builtins.isString (v.namespace or null);
+
       delivery =
-        if env == null then
+        if platform-cilium == null then
           "chart"
-        else if env.helmChartConfig != null then
+        else if helmChartConfigRef != null then
           "helmChartConfig"
         else
           "none";
@@ -236,12 +255,18 @@ in
       checks =
         if binding == null then
           throw "${who}: installs or uses Cilium as the pod network, but cluster.roles.cni.binding is unset, so Kix cannot tell whether the cluster already runs a CNI. Use a flavour, or set cluster.roles.cni.binding = \"absent\" on a cluster created without a CNI (kind with disableDefaultCNI)."
-        else if binding == "shadowable" && env == null then
-          throw "${who}: cluster.roles.cni.binding is \"shadowable\", but cluster.network.environmentCilium is null, so Kix cannot tell whether the environment's CNI is Cilium. If it is, set cluster.network.environmentCilium (on RKE2: cluster.flavor.rke2.cni = [ \"cilium\" ]). If it is another CNI, a cilium instance cannot stand for it: remove the instance, or set the binding to \"exclusive\"."
-        else if delivery == "helmChartConfig" && scope.namespaceName != env.helmChartConfig.namespace then
-          throw "${who}: writes HelmChartConfig ${env.helmChartConfig.name}, which the environment reads only in namespace ${env.helmChartConfig.namespace}. Declare the instance under instances.${env.helmChartConfig.namespace}."
+        else if platform-cilium != null && !(environmentOut ? helmChartConfig) then
+          throw "${who}: dependency platform-cilium has no out.helmChartConfig. Set it to { name; namespace; }, the HelmChartConfig the environment's helm-controller merges into its Cilium chart, or to null if the environment reads none."
+        else if helmChartConfigRef != null && !(isHelmChartConfigRef helmChartConfigRef) then
+          throw "${who}: dependency platform-cilium has out.helmChartConfig = ${builtins.toJSON helmChartConfigRef}; it takes { name; namespace; } as strings, or null."
+        else if platform-cilium != null && binding != "shadowable" then
+          throw "${who}: dependency platform-cilium says the environment installed Cilium, but cluster.roles.cni.binding is ${builtins.toJSON binding}. An environment-installed Cilium is a shadowable cni binding: the environment runs the CNI and this instance configures or uses it. Set cluster.roles.cni.binding = \"shadowable\", or remove the platform-cilium import so the instance installs the chart."
+        else if binding == "shadowable" && platform-cilium == null then
+          throw "${who}: cluster.roles.cni.binding is \"shadowable\", but no platform-cilium dependency says the environment's CNI is Cilium. If it is, declare it: on RKE2 set cluster.flavor.rke2.cni = [ \"cilium\" ]; elsewhere add instances.<namespace>.platform-cilium.package = kix.mkImport { roles = [ \"cni\" ]; out.helmChartConfig = null; }. If an import for the environment's Cilium already exists under another name, point this instance at it with deps.platform-cilium = ref.<namespace>.<instance> instead of adding a second import. If it is another CNI, a cilium instance cannot stand for it: remove the instance, or set the binding to \"exclusive\"."
+        else if delivery == "helmChartConfig" && scope.namespaceName != helmChartConfigRef.namespace then
+          throw "${who}: writes HelmChartConfig ${helmChartConfigRef.name}, which the environment reads only in namespace ${helmChartConfigRef.namespace}. Declare the instance under instances.${helmChartConfigRef.namespace}."
         else if delivery == "none" && config.values != { } then
-          throw "${who}: does not install or configure Cilium: cluster.network.environmentCilium.helmChartConfig is null, so the environment's Cilium keeps its own settings and `values` would be ignored. Remove `values`, or set environmentCilium.helmChartConfig if the environment merges a HelmChartConfig into its Cilium chart (on RKE2: cluster.flavor.rke2.cni = [ \"cilium\" ])."
+          throw "${who}: does not install or configure Cilium: the platform-cilium dependency's out.helmChartConfig is null, so the environment's Cilium keeps its own settings and `values` would be ignored. Remove `values`, or set the import's out.helmChartConfig if the environment merges a HelmChartConfig into its Cilium chart (on RKE2: cluster.flavor.rke2.cni = [ \"cilium\" ])."
         else if !(builtins.elem effectiveEnforcement enforcementModes) then
           throw "${who}: values.policyEnforcementMode is ${builtins.toJSON effectiveEnforcement}; Cilium accepts \"default\", \"always\", or \"never\"."
         else if !(builtins.isBool effectiveAudit) then
@@ -375,7 +400,7 @@ in
       };
 
       helmChartConfig = scope.mkCR helmChartConfigCrd {
-        name = env.helmChartConfig.name;
+        name = helmChartConfigRef.name;
         spec.valuesContent = builtins.toJSON values;
       };
 
