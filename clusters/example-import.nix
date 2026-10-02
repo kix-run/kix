@@ -54,7 +54,6 @@ kix.buildCluster {
               # stackgres-database below checks the ones immich asks for
               # against this list.
               out.extensions = [
-                "vector"
                 "vchord"
                 "uuid-ossp"
                 "cube"

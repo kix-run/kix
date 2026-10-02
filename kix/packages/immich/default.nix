@@ -17,10 +17,13 @@
 #   storage   the photo library: a ReadWriteOnce claim, such as a
 #             persistent-volume-claim instance.
 # Optional dependencies:
-#   machineLearning  an immich-machine-learning instance, or a kix.mkImport
-#                    aliased `machineLearning` whose out sets `fqdn` and
-#                    `port` (no egress is derived to an import). Without it
-#                    the server turns machine learning off.
+#   machineLearning  an immich-machine-learning instance in this namespace,
+#                    or a kix.mkImport aliased `machineLearning` whose out
+#                    sets `fqdn` and `port`. A worker serves only its own
+#                    namespace, so a worker elsewhere is reached through such
+#                    an import, and no egress is derived to an import.
+#                    Without the dependency the server turns machine
+#                    learning off.
 #   prometheus       scrapes the metrics ports while `metrics.enabled`.
 #
 # A minimal instance, in namespace `photos`:
@@ -34,6 +37,18 @@
 #
 # out: the `<instance>-server` Service on port 2283. The public URL is the
 # instance's `exposure` part.
+#
+# Escape hatches: `env` takes any server variable outside the groups the
+# package derives (database, valkey, machine learning, config file, ports,
+# and library path). `settings` is Immich's config file; a non-empty value
+# makes every setting in the admin UI read-only. `partsOverlays` patches
+# the rendered resources.
+#
+# Known limits: the server runs one pod and rolls out with Recreate, so
+# every rollout stops it briefly. The world:443 intent does not open SMTP
+# (465 or 587) for email notifications. A database or valkey password from
+# a secret-ref has no identity hash, so rotating it restarts the server only
+# with reloader.
 
 {
   scope,
@@ -64,7 +79,19 @@ let
   ];
   extensionName = e: if builtins.isString e then e else e.name;
 
-  mlFix = "Wire an immich-machine-learning instance, or a kix.mkImport aliased machineLearning whose out sets fqdn and port, through deps.machineLearning.";
+  # A kix.mkImport stand-in publishes only the `out` fields its author
+  # wrote, so a missing one fails here with the fields that dependency needs.
+  importFields = {
+    database = "out.host, out.port, out.database, and out.credentials";
+    valkey = "out.fqdn and out.port";
+    machineLearning = "out.fqdn and out.port";
+  };
+  depOut =
+    depName: dep: field:
+    dep.out.${field}
+      or (throw "${who}: deps.${depName} publishes no out.${field}. An import standing in for it sets ${importFields.${depName}}.");
+
+  mlFix = "Add an immich-machine-learning instance to this namespace, or a kix.mkImport aliased machineLearning whose out sets fqdn and port.";
 
   # init-chown-data runs as root. When security.nonRoot would fail the
   # build, the build fails here instead, naming the override that lets the
@@ -81,7 +108,7 @@ in
 {
   meta = {
     version = release.version;
-    description = "Immich server: self-hosted photo and video library, serving the API, web UI and background jobs from one Deployment";
+    description = "Immich server: self-hosted photo and video library, serving the API, web UI, and background jobs from one Deployment";
     inherit owner;
     # The library is one ReadWriteOnce claim (`storage`), so the server runs
     # one pod and rolls out with Recreate.
@@ -114,7 +141,7 @@ in
         assertion = false;
         message = "the database needs the postgres extensions ${
           lib.concatMapStringsSep ", " extensionName requiredExtensions
-        }; missing: ${lib.concatStringsSep ", " missing}. Add them to the database instance's extensions; stackgres-database forwards them to its stackgres-cluster.";
+        }; missing: ${lib.concatStringsSep ", " missing}. For a kix.mkImport database, install them on that server and list them in the import's out.extensions. For a stackgres-database, remove the setting that drops them from its extensions.";
       };
 
     storage.warnings =
@@ -157,7 +184,7 @@ in
         Extra environment variables for the server: a string, a `fieldRef`,
         or `kix.untrackedRef` for a Secret managed outside Kix. Credentials
         from a dependency are wired by the package. The package refuses the
-        variables it derives from the database, valkey and machineLearning
+        variables it derives from the database, valkey, and machineLearning
         dependencies, `settings`, and its own ports and library path. Null
         removes `IMMICH_TELEMETRY_INCLUDE`, which the package sets while
         metrics are scraped.
@@ -238,13 +265,15 @@ in
           if mlVersion != null && serverVersion != null && mlVersion != serverVersion then
             throw "${who}: immich-server runs release ${serverVersion} (image.tag ${config.image.tag}) but its machineLearning dependency runs ${mlVersion}. Immich publishes both images under one tag; set image.tag to the same release on both instances."
           else
-            "http://${machineLearning.out.fqdn}:${machineLearning.out.port}";
+            "http://${depOut "machineLearning" machineLearning "fqdn"}:${
+              toString (depOut "machineLearning" machineLearning "port")
+            }";
 
         # The database assertion guarantees vchord whenever the dependency
         # publishes `out.extensions`. A database that publishes none (an
         # external server) gets no setting, and Immich detects the extension.
         vectorExtension = if database.out ? extensions then "vectorchord" else null;
-        dbCreds = database.out.credentials.out;
+        dbCreds = (depOut "database" database "credentials").out;
 
         # With Sentinel on, the valkey Service also routes to read-only
         # replicas, so the server finds the primary through Sentinel. Immich
@@ -283,7 +312,7 @@ in
             throw (
               lib.concatMapStringsSep "\n" (
                 p:
-                "${who}: settings sets ${lib.concatStringsSep "." p}, which follows the optional machineLearning dependency. Remove it from settings and wire an immich-machine-learning instance, or a kix.mkImport aliased machineLearning whose out sets fqdn and port, through deps.machineLearning."
+                "${who}: settings sets ${lib.concatStringsSep "." p}, which follows the optional machineLearning dependency. Remove it from settings. ${mlFix}"
               ) hits
             );
 
@@ -293,9 +322,9 @@ in
           owned = [
             {
               vars = {
-                DB_HOSTNAME = database.out.host;
-                DB_PORT = database.out.port;
-                DB_DATABASE_NAME = database.out.database;
+                DB_HOSTNAME = depOut "database" database "host";
+                DB_PORT = toString (depOut "database" database "port");
+                DB_DATABASE_NAME = depOut "database" database "database";
                 DB_USERNAME = dbCreds.keyRef "username";
                 DB_PASSWORD = dbCreds.keyRef "password";
               }
@@ -333,8 +362,8 @@ in
               else
                 {
                   vars = {
-                    REDIS_HOSTNAME = valkey.out.fqdn;
-                    REDIS_PORT = valkey.out.port;
+                    REDIS_HOSTNAME = depOut "valkey" valkey "fqdn";
+                    REDIS_PORT = toString (depOut "valkey" valkey "port");
                   }
                   // valkeyPassword;
                   names = [
@@ -358,8 +387,8 @@ in
                 {
                   vars.IMMICH_MACHINE_LEARNING_ENABLED = "false";
                   names = [ "IMMICH_MACHINE_LEARNING_URL" ];
-                  from = "the optional machineLearning dependency";
-                  fix = mlFix;
+                  from = "the machineLearning dependency, and none is wired";
+                  fix = "Without one the package turns machine learning off. ${mlFix}";
                 }
             )
             (
@@ -381,8 +410,8 @@ in
                 "IMMICH_API_METRICS_PORT"
                 "IMMICH_MICROSERVICES_METRICS_PORT"
               ];
-              from = "the package, which fixes the server's ports and library path to match its Service, probes, ServiceMonitor and library mount";
-              fix = "Remove the setting from env.";
+              from = "the package";
+              fix = "It fixes the server's ports and library path to match its Service, probes, ServiceMonitor, and library mount; remove the setting from env.";
             }
           ];
         } config.env;
@@ -406,6 +435,7 @@ in
         tmpMount = kix.mount.emptyDir {
           name = "tmp";
           mountPath = "/tmp";
+          sizeLimit = "1Gi";
         };
 
         deployment =
@@ -413,8 +443,8 @@ in
             name = "${name}-server";
             spec = {
               replicas = 1;
-              # The library is ReadWriteOnce: a surge pod scheduled on
-              # another node would fail with Multi-Attach.
+              # The package treats the library as ReadWriteOnce: a surge pod
+              # scheduled on another node would fail with Multi-Attach.
               strategy.type = "Recreate";
               selector.matchLabels = scope.selectorLabels;
               # Immich reads its config file and credentials once at start.

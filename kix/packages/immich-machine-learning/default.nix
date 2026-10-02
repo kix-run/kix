@@ -1,8 +1,13 @@
 # immich-machine-learning: the Immich machine-learning worker, which runs
-# face recognition, smart search, OCR and duplicate detection for
+# face recognition, smart search, OCR, and duplicate detection for
 # immich-server over HTTP. One Deployment and its Service on port 3003. It
-# answers the `machineLearning` dependency of the `immich` package and must
-# run the same release (release.nix).
+# answers the `machineLearning` dependency of an `immich` instance in its own
+# namespace and must run the same release (release.nix). A server in another
+# namespace reaches it only through a kix.mkImport.
+#
+# A minimal instance, beside immich in namespace `photos`:
+#
+#   instances.photos.machine-learning.package = packages.immich-machine-learning;
 #
 # Models download from Hugging Face (and, for OCR, modelscope) on first use
 # into /cache. Without a dependency that cache is an emptyDir per pod. An
@@ -19,8 +24,16 @@
 # ReadWriteOnce, so with `modelCache` the worker runs one pod and rolls out
 # with Recreate. To run several pods, leave it unset.
 #
-# out: the Service's `name`, `fqdn` and `port`, and `version`, the release
+# out: the Service's `name`, `fqdn`, and `port`, and `version`, the release
 # the image tag names (absent for a tag that names none).
+#
+# Escape hatches: `env` takes the worker's `MACHINE_LEARNING_*` settings;
+# `partsOverlays` patches the rendered resources.
+#
+# Known limits: a hardware-variant tag (`-cuda`, `-openvino`, `-rocm`,
+# `-armnn`, `-rknn`) runs unpinned unless `image.digest` is set. The package
+# requests no accelerator; request one in `resources`, and place the pod on
+# a GPU node through `partsOverlays`.
 
 {
   scope,
@@ -37,9 +50,12 @@ in
 {
   meta = {
     version = release.version;
-    description = "Immich machine-learning worker for face recognition, smart search and duplicate detection, called by immich-server over HTTP";
+    description = "Immich machine-learning worker for face recognition, smart search, OCR, and duplicate detection, called by immich-server over HTTP";
     owner = "app-team";
     defaultAliases = [ "machineLearning" ];
+    # A server sends its users' photos to the worker it binds, so only a
+    # server in this namespace may bind this worker.
+    scope = "namespace";
     # Models download on first use from Hugging Face and, for OCR,
     # modelscope.
     network.intents.model-download.egress = [
@@ -88,7 +104,7 @@ in
         string, a `fieldRef`, or `kix.untrackedRef` for a Secret managed
         outside Kix. The package refuses `IMMICH_PORT` and
         `MACHINE_LEARNING_CACHE_FOLDER`, which it fixes to match the
-        Service, probes and /cache mount.
+        Service, probes, and /cache mount.
       '';
     };
   };
@@ -180,8 +196,8 @@ in
                             "IMMICH_PORT"
                             "MACHINE_LEARNING_CACHE_FOLDER"
                           ];
-                          from = "the package, which fixes the worker's port and cache path to match its Service, probes and /cache mount";
-                          fix = "Remove the setting from env.";
+                          from = "the package";
+                          fix = "It fixes the worker's port and cache path to match its Service, probes, and /cache mount; remove the setting from env.";
                         }
                       ];
                     } config.env
@@ -211,6 +227,7 @@ in
           (kix.mount.emptyDir {
             name = "tmp";
             mountPath = "/tmp";
+            sizeLimit = "1Gi";
           })
         ]
         |> scope.mkDeployment;

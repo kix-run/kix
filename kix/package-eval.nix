@@ -210,6 +210,8 @@ let
         tokenPrivateKey = "key";
       };
     };
+    # A Prometheus provider, so the metrics ports and the ServiceMonitor are
+    # built.
     immich.instances = {
       inherit storage;
       valkey-password = valkeyPassword;
@@ -217,6 +219,7 @@ let
         package = packages.stackgres-database;
         config.password = "password";
       };
+      prometheus-operator.package = packages.prometheus-operator;
     };
     loki.instances = { inherit storage; };
     # A class, a pool, and a Prometheus provider, so the StorageClass, the

@@ -1,10 +1,13 @@
 # The Immich release that `immich` and `immich-machine-learning` default to.
 # Upstream publishes immich-server and immich-machine-learning under one tag,
 # and the server calls machine-learning endpoints of its own release, so a
-# bump changes `version`, `tag` and both digests together.
-{
+# bump changes `version` and both digests together.
+let
   version = "3.0.3";
-  tag = "v3.0.3";
+in
+{
+  inherit version;
+  tag = "v${version}";
 
   # Multi-arch index digests of `tag` (`crane digest <repository>:<tag>`).
   digests = {
