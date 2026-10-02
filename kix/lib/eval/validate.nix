@@ -83,8 +83,8 @@ rec {
       splitList = s: builtins.filter (x: x != "") (map lib.trim (lib.splitString "," (toString s)));
 
       # The store hashes a resource's kix.run/depends-on names, with the
-      # `requires:` and `extra:` prefixes removed: every entry orders the
-      # deploy the same way.
+      # `requires:` and `extra:` prefixes removed. Check 21 follows every
+      # entry, whatever its prefix.
       depHashesByHash = lib.mapAttrs (
         _: e:
         map (d: lib.removePrefix "extra:" (lib.removePrefix "requires:" d)) (

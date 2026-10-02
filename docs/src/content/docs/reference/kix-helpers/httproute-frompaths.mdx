@@ -4,11 +4,21 @@ description: "Build one Gateway API HTTPRoute with a separate backend rule for e
 ---
 
 `kix.httpRoute.fromPaths` returns an unsealed Gateway API `HTTPRoute`
-definition. Pass it to `scope.mkResource` to add the instance namespace,
-labels, validation, and dependency metadata.
+definition. Build it with `scope.mkCR` from a CRD reference for HTTPRoute,
+which adds the instance namespace, labels, validation, and dependency
+metadata. The HTTPRoute CRD comes with the Gateway API implementation, so the
+package declares it with `scope.mkCRDRef`; without that dependency the
+cluster build refuses the route (cross-resource check 21).
 
 ```nix
-route = scope.mkResource (kix.httpRoute.fromPaths {
+routeCrd = scope.mkCRDRef {
+  group = "gateway.networking.k8s.io";
+  kind = "HTTPRoute";
+  plural = "httproutes";
+  version = "v1";
+};
+
+route = scope.mkCR self.routeCrd (kix.httpRoute.fromPaths {
   name = scope.instanceName;
   host = "app.example.com";
   parentRef = gateway.out.gatewayRef;
@@ -50,5 +60,6 @@ The helper writes one HTTPRoute rule per path. Gateway API determines rule
 precedence, so list order does not control which matching rule wins.
 
 `kix.expose { paths = ...; }` uses this helper when the package receives a
-Gateway provider. Use it directly when a package needs an HTTPRoute outside
-the standard exposure interface.
+Gateway provider, and adds the CRD reference as the part `<partName>Crd`
+(`routeCrd` by default). Use the helper directly when a package needs an
+HTTPRoute outside the standard exposure interface.

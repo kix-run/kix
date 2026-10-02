@@ -1,4 +1,53 @@
 ---
 title: "`httpRoute.fromService`"
-description: TODO
+description: "Build one Gateway API HTTPRoute that sends a host and path to one Service."
 ---
+
+`kix.httpRoute.fromService` takes route settings and a Service resource, and
+returns an unsealed Gateway API `HTTPRoute` definition with one rule. Build it
+with `scope.mkCR` from a CRD reference for HTTPRoute, which adds the instance
+namespace, labels, validation, and dependency metadata. The HTTPRoute CRD
+comes with the Gateway API implementation, so the package declares it with
+`scope.mkCRDRef`; without that dependency the cluster build refuses the route
+(cross-resource check 21).
+
+```nix
+routeCrd = scope.mkCRDRef {
+  group = "gateway.networking.k8s.io";
+  kind = "HTTPRoute";
+  plural = "httproutes";
+  version = "v1";
+};
+
+route =
+  self.service
+  |> kix.httpRoute.fromService {
+    name = scope.instanceName;
+    host = "app.example.com";
+    parentRef = gateway.out.gatewayRef;
+  }
+  |> scope.mkCR self.routeCrd;
+```
+
+## Arguments
+
+The first argument is a record; the second is the backend Service resource.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `name` | required | HTTPRoute name. |
+| `host` | required | The single entry written to `spec.hostnames`. |
+| `parentRef` | required | Gateway reference with `name` and optional `namespace`. |
+| `path` | `"/"` | HTTP path value of the rule's match. |
+| `pathType` | `"PathPrefix"` | Gateway API path match type, written as given. |
+| `port` | the Service's `out.port` | Numeric backend Service port. Required when the Service exports no `out.port`. |
+| `timeouts` | `null` | Gateway API rule timeouts, such as `{ request = "0s"; }` for a long-lived streaming backend. Omitted when `null`. |
+
+Any other key is copied to the top level of the returned definition, so
+`labels` or `annotations` reach `scope.mkCR`.
+
+`kix.expose { service = ...; }` uses this helper when the package receives a
+Gateway provider, and adds the CRD reference as the part `<partName>Crd`
+(`routeCrd` by default). Use the helper directly when a package needs an
+HTTPRoute outside the standard exposure interface. For several paths to
+different Services, see [`httpRoute.fromPaths`](/docs/reference/kix-helpers/httproute-frompaths/).
