@@ -170,6 +170,7 @@ let
       };
     };
     clickhouse-operator.instances = { inherit credentials; };
+    cluster-issuer.config.spec.selfSigned = { };
     # A real Prometheus provider, so the ServiceMonitor, the alert rules,
     # and the Service's metrics port are built against its builders.
     coredns = {

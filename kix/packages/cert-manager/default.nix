@@ -15,7 +15,7 @@
 #
 #   instances.cert-manager.cert-manager.package = packages.cert-manager;
 #
-# Issuers come from the `cluster-issuers` package. With a `prometheus`
+# Issuers come from the `cluster-issuer` package. With a `prometheus`
 # provider in the cluster, the instance also renders metrics Services, three
 # ServiceMonitors, and its alerts (`metrics.enabled = false` turns them off).
 #
@@ -91,8 +91,8 @@ in
     defaultAliases = [ "certManager" ];
     conflictsWith = [ "cluster:certManager" ];
     # TLS Ingresses carry `cert-manager.io/cluster-issuer`, stamped by the
-    # cluster-issuers package's `out.withCert`. The consumer depends on the
-    # cluster-issuers instance and that instance on this package, and the
+    # cluster-issuer package's `out.withCert`. The consumer depends on the
+    # cluster-issuer instance and that instance on this package, and the
     # annotation-ownership rule follows that chain.
     annotationDomains = [ "cert-manager.io" ];
     # The lowest Kubernetes release cert-manager v1.21 supports.
@@ -320,7 +320,7 @@ in
             };
             # --cluster-resource-namespace is the pod's namespace.
             clusterResourceNamespace = scope.namespaceName;
-            # The cluster-issuers package checks ClusterIssuer specs against
+            # The cluster-issuer package checks ClusterIssuer specs against
             # it at evaluation.
             clusterIssuerSpecSchema =
               (builtins.head clusterIssuerCrd.versions).schema.openAPIV3Schema.properties.spec;
