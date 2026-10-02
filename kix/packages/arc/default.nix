@@ -9,8 +9,8 @@
 #
 # A cluster runs one instance: the CRDs and the ClusterRole are cluster-wide,
 # and runner sets in any namespace find the controller through the `arc`
-# alias. `conflictsWith` names both instances when a second one appears,
-# including one auto-instantiated in another namespace.
+# alias. A second instance, including one auto-instantiated in another
+# namespace, fails evaluation with an error naming both.
 #
 #   instances.arc-systems.arc.package = packages.arc;
 #
@@ -40,12 +40,13 @@
 #                          PodMonitor `<name>-listeners`.
 #
 # Exposes:
-#   out.mkAutoscalingRunnerSet consumerScope { name; spec; labels ? { };
-#                                              annotations ? { }; }
+#   out.mkAutoscalingRunnerSet consumerScope { name; spec; }
 #       The AutoscalingRunnerSet and the three objects the controller expects
 #       beside it; see runner-set.nix.
 #   out.crds.{AutoscalingRunnerSet,AutoscalingListener,EphemeralRunnerSet,
 #             EphemeralRunner}
+#   out.operandSelectors.runner <runner set name>, out.operandSelectors.listener
+#       Labels the controller puts on runner pods and listener pods.
 #
 # root = the controller Deployment.
 
@@ -68,8 +69,13 @@ let
   metricsPort = 8080;
   healthPort = 8081;
 
-  # "0.14.2" -> [ "0" "14" ".2" ]; null when the tag is not a version.
-  versionParts = t: builtins.match "v?([0-9]+)\\.([0-9]+)(\\..*)?" t;
+  # The first two captures are the major and minor version. null for a tag
+  # the controller's parseSemver (apis/actions.github.com/v1alpha1/
+  # version.go) rejects, such as "v0.14.2" or "0.14.x": the tag becomes
+  # every runner set's version label, and the controller deletes a runner
+  # set whose label it cannot parse.
+  versionParts =
+    t: builtins.match "(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\.(0|[1-9][0-9]*)([^0-9].*)?)?" t;
   releaseMinor = lib.take 2 (versionParts release);
   releaseMinorText = lib.concatStringsSep "." releaseMinor;
 
@@ -89,10 +95,15 @@ let
     }
   ];
 
-  # Labels the controller puts on every listener pod (resourcebuilder.go).
+  # Labels the controller puts on every listener pod, and on the runner pods
+  # of the AutoscalingRunnerSet named `setName` (resourcebuilder.go).
   listenerSelector = {
     "app.kubernetes.io/part-of" = "gha-runner-scale-set";
     "app.kubernetes.io/component" = "runner-scale-set-listener";
+  };
+  runnerSelector = setName: {
+    "actions.github.com/scale-set-name" = setName;
+    "app.kubernetes.io/component" = "runner";
   };
 
   # The controller copies an AutoscalingRunnerSet's labels onto the objects
@@ -227,11 +238,19 @@ in
   assertions =
     { config, ... }:
     [
-      {
-        assertion =
-          versionParts config.image.tag != null && lib.take 2 (versionParts config.image.tag) == releaseMinor;
-        message = "image.tag \"${config.image.tag}\" is not a ${releaseMinorText} release, and the CRDs under kix/packages/arc/crds are vendored from ${release}. Remove image.tag or set a ${releaseMinorText} tag. To move to another release, change release in kix/packages/arc/default.nix and run uv run scripts/vendor-crds.py arc.";
-      }
+      (
+        let
+          parts = versionParts config.image.tag;
+        in
+        {
+          assertion = parts != null && lib.take 2 parts == releaseMinor;
+          message =
+            if parts == null then
+              "image.tag \"${config.image.tag}\" is not a version the controller can parse (digits as major.minor.patch, no \"v\" prefix). The tag becomes every runner set's version label, and the controller deletes a runner set whose label it cannot parse. Remove image.tag or set a ${releaseMinorText} tag."
+            else
+              "image.tag \"${config.image.tag}\" is not a ${releaseMinorText} release, and the CRDs under kix/packages/arc/crds are vendored from ${release}. Remove image.tag or set a ${releaseMinorText} tag. To move to another release, change release in kix/packages/arc/default.nix and run uv run scripts/vendor-crds.py arc.";
+        }
+      )
     ];
 
   options = {
@@ -372,7 +391,6 @@ in
         runnerSet = import ./runner-set.nix {
           inherit
             lib
-            kix
             who
             ns
             self
@@ -416,10 +434,7 @@ in
             # listener's own egress is `listenerEgress`.
             factBehavior = {
               endpoint = "terminate";
-              podSelector = cr: {
-                "actions.github.com/scale-set-name" = cr.metadata.name;
-                "app.kubernetes.io/component" = "runner";
-              };
+              podSelector = cr: runnerSelector cr.metadata.name;
             };
           };
           ephemeralRunnerSets = scope.mkCRD { spec = vendored "ephemeralrunnersets"; };
@@ -462,7 +477,9 @@ in
                     (kix.port "metrics" metricsPort)
                     (kix.port "health" healthPort)
                   ];
-                  # Paths and timings from the chart's deployment template.
+                  # Both endpoints are controller-runtime pings (main.go):
+                  # they show the process serves HTTP, not that it holds
+                  # the lease.
                   livenessProbe = {
                     httpGet = {
                       path = "/healthz";
@@ -495,11 +512,9 @@ in
                 }
               ];
               volumes = [
-                # An empty emptyDir is a source, not an absence: kept so the
-                # collapse rule does not render a volume without one.
                 {
                   name = "tmp";
-                  emptyDir = kix.keep { };
+                  emptyDir = { };
                 }
               ];
             };
@@ -568,6 +583,10 @@ in
               EphemeralRunner = self.crds.ephemeralRunners;
             };
             inherit (runnerSet) mkAutoscalingRunnerSet;
+            operandSelectors = {
+              runner = runnerSelector;
+              listener = listenerSelector;
+            };
           };
         };
       }
