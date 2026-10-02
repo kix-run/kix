@@ -1454,6 +1454,7 @@ A CSI driver package (`zfs-localpv`) publishes its class through `out.storageCla
 # package
 build = { self, priorityClass ? null, ... }: {
   deployment = scope.mkDeployment {
+    name = "worker";
     spec.template.spec = { containers = [ … ]; }
       // lib.optionalAttrs (priorityClass != null) { priorityClassName = priorityClass.out.name; };
   };
