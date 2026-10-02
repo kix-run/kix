@@ -374,6 +374,7 @@ Colored diff of the build against the live cluster, or against a directory. Ever
 - Exit code 2 = differences found, 0 = identical.
 - Package-grouped output with resource-level diffs.
 - Warns on PVC modifications.
+- A converged cluster prints no differences. A live object that `kix drift` finds in sync with the manifest it was applied from compares as that manifest, so defaults the server or an operator's webhook added never show. Otherwise the server's spellings count as equal: `null` or `[]` for an absent field, documented defaults such as `fieldRef.apiVersion: v1` or a probe's `failureThreshold: 3`, and quantities with the same amount. A Secret's `stringData` is compared with the decoded live `data`. A Job its TTL removed after the deployed build ran it is not listed as added. The old activation is the cluster's current record.
 
 #### `kix check <CLUSTER>`
 Two steps: eval correctness, then the scorecard report. No schema or deprecated-API tool runs over the rendered manifests.
