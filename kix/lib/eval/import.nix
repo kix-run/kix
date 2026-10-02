@@ -199,6 +199,135 @@ rec {
     in
     scope;
 
+  # Instance-level extraDeps adds dependencies to a kix.mkImport instance's
+  # PackageInstance marker; a managed instance's marker already follows its
+  # resources, which take `requires` and `extraDeps` in their own builders.
+  # Each entry is a resource or a `ref.<namespace>.<instance>` pointer, which
+  # evaluateImportInstance resolves to that instance's `root`. mkResource
+  # takes dependencies only from entries with an outPath and ignores anything
+  # else, so this refuses any other value instead of dropping it.
+  #
+  # buildCluster runs this over every configured instance, active or not,
+  # before it renders anything. It refuses extraDeps on a managed instance,
+  # a malformed entry, a ref to the import itself or to a name that is not an
+  # instance, and a cycle of refs between imports, which would otherwise end
+  # in Nix's own "infinite recursion encountered". Returns null.
+  checkInstanceExtraDeps =
+    { instances, mergedInstances }:
+    let
+      isRef = v: builtins.isAttrs v && (v._type or "") == "kix-ref";
+      isImportCfg = instCfg: (instCfg.package._type or "") == "kix-import";
+
+      describe =
+        v:
+        if builtins.isAttrs v then
+          "an attribute set with keys ${builtins.concatStringsSep ", " (builtins.attrNames v)}"
+        else
+          builtins.typeOf v;
+
+      checkEntry =
+        nsName: instName: entry:
+        let
+          who = "kix: instances.${nsName}.${instName}.extraDeps";
+        in
+        if isRef entry then
+          let
+            refText = "ref.${entry.namespace}.${entry.instanceName}";
+          in
+          if entry.namespace == nsName && entry.instanceName == instName then
+            throw "${who} names ${refText}, the import itself. An import's marker cannot depend on itself."
+          else if !((mergedInstances.${entry.namespace} or { }) ? ${entry.instanceName}) then
+            throw "${who} names ${refText}, which is not an instance. It names a package in availablePackages that nothing auto-instantiated there; declare it under instances.${entry.namespace}.${entry.instanceName}."
+          else
+            null
+        else if builtins.isAttrs entry && (entry._type or "") == "k8s-resource" then
+          null
+        else
+          throw "${who}: each entry is a resource or a ref.<namespace>.<instance> pointer; got ${describe entry}.";
+
+      checkInstance =
+        nsName: instName: instCfg:
+        let
+          entries = instCfg.extraDeps or [ ];
+        in
+        if entries == [ ] then
+          null
+        else if !(isImportCfg instCfg) then
+          throw "kix: instances.${nsName}.${instName} is a managed instance and sets extraDeps. Instance-level extraDeps adds dependencies to a kix.mkImport marker only. Put the dependency on the resource that needs it, as `requires` or `extraDeps` in its scope builder call."
+        else
+          builtins.foldl' (acc: e: builtins.seq (checkEntry nsName instName e) acc) null entries;
+
+      _perInstance = lib.foldlAttrs (
+        acc: nsName: nsInsts:
+        lib.foldlAttrs (
+          acc: instName: instCfg:
+          builtins.seq (checkInstance nsName instName instCfg) acc
+        ) acc nsInsts
+      ) null instances;
+
+      # "<ns>/<instance>" of each import -> the imports its extraDeps refs
+      # name. Refs to managed instances are not followed: whether a managed
+      # instance's marker reads an import's marker depends on its build,
+      # which this static check does not evaluate.
+      importEdges = lib.foldlAttrs (
+        acc: nsName: nsInsts:
+        lib.foldlAttrs (
+          acc: instName: instCfg:
+          if isImportCfg instCfg then
+            acc
+            // {
+              "${nsName}/${instName}" = map (r: "${r.namespace}/${r.instanceName}") (
+                builtins.filter (r: isRef r && isImportCfg mergedInstances.${r.namespace}.${r.instanceName}) (
+                  instCfg.extraDeps or [ ]
+                )
+              );
+            }
+          else
+            acc
+        ) acc nsInsts
+      ) { } instances;
+
+      # Depth-first search from each import. `path` is the chain that led to
+      # `node`; `done` holds nodes already shown to reach no cycle. Returns
+      # { done; cycle; } with cycle null or the looping chain of node names.
+      search =
+        state: path: node:
+        if state.cycle != null || state.done ? ${node} then
+          state
+        else if builtins.elem node path then
+          state
+          // {
+            cycle = lib.drop (lib.lists.findFirstIndex (n: n == node) 0 path) path ++ [ node ];
+          }
+        else
+          let
+            after = builtins.foldl' (s: next: search s (path ++ [ node ]) next) state (
+              importEdges.${node} or [ ]
+            );
+          in
+          if after.cycle != null then
+            after
+          else
+            after
+            // {
+              done = after.done // {
+                ${node} = true;
+              };
+            };
+
+      cycle =
+        (builtins.foldl' (s: node: search s [ ] node) {
+          done = { };
+          cycle = null;
+        } (builtins.attrNames importEdges)).cycle;
+    in
+    builtins.seq _perInstance (
+      if cycle == null then
+        null
+      else
+        throw "kix: the extraDeps refs of these imports form a cycle: ${builtins.concatStringsSep " -> " cycle}. Each import's PackageInstance marker would wait for the next, so none could be deployed. Remove one of the entries."
+    );
+
   evaluateImportInstance =
     {
       instanceName,
@@ -208,6 +337,11 @@ rec {
       clusterLabels,
       clusterConfig ? { },
       clusterCtx ? { },
+      # The cluster's evaluated instances, and nsName -> instName -> bool
+      # saying whether each renders. extraDeps reads `root` from the ones its
+      # `ref` entries name.
+      allInstances,
+      isInstanceActive,
       ...
     }:
     let
@@ -460,7 +594,23 @@ rec {
             }
           ) rawPlatformIntents;
 
-      instanceExtraDeps = (instCfg.extraDeps or [ ]) ++ materializedIntentPolicies;
+      # checkInstanceExtraDeps has already refused malformed entries, so an
+      # entry here is a resource or a `ref`. computeAutoInstances activates
+      # an optional ref target from an import in its demand closure. An
+      # import outside it, one that only an optional build argument of
+      # another instance activated (activatedImports in eval/cluster.nix),
+      # activates nothing, so its ref can name an inactive instance.
+      resolveExtraDep =
+        entry:
+        if (entry._type or "") == "kix-ref" then
+          if isInstanceActive entry.namespace entry.instanceName then
+            allInstances.${entry.namespace}.${entry.instanceName}.root
+          else
+            throw "${who}: extraDeps names ref.${entry.namespace}.${entry.instanceName}, an optional instance that is not active. Kix renders no marker for it, so the import's marker would wait for a resource that is never deployed. An import's refs activate their targets unless the import is itself active only because an optional build argument of another instance resolved to it. Set optional = false on instances.${entry.namespace}.${entry.instanceName}, or remove the entry."
+        else
+          entry;
+
+      instanceExtraDeps = map resolveExtraDep (instCfg.extraDeps or [ ]) ++ materializedIntentPolicies;
 
       markerResource = mkResource {
         apiVersion = kixAnnotations.apiVersion;

@@ -230,7 +230,9 @@ rec {
       # The demands an instance places on optional instances and the shelf.
       # A dependency answered by a mandatory instance places none. One wired
       # with `deps.<arg>` places none by name; if the wiring is a `ref` to an
-      # optional instance, that instance is demanded directly.
+      # optional instance, that instance is demanded directly. So is an
+      # optional instance that a kix.mkImport instance names in its
+      # instance-level extraDeps.
       demandsOf =
         instCfg: ns: instName: origin:
         let
@@ -238,9 +240,13 @@ rec {
           # resolveArg treats a null entry as not wired.
           wired = lib.filterAttrs (_: v: v != null) (instCfg.deps or { });
           required = builtins.filter (d: !(mandatoryKeys ? ${d})) (getRequiredDeps instCfg.package);
-          wiredOptionals = builtins.filter (
-            v: isRef v && (optional.${v.namespace} or { }) ? ${v.instanceName}
-          ) (map (d: wired.${d}) (builtins.filter (d: wired ? ${d}) (getAllDeps instCfg.package)));
+          isOptionalRef = v: isRef v && (optional.${v.namespace} or { }) ? ${v.instanceName};
+          wiredOptionals = builtins.filter isOptionalRef (
+            map (d: wired.${d}) (builtins.filter (d: wired ? ${d}) (getAllDeps instCfg.package))
+          );
+          extraDepOptionals = lib.optionals ((instCfg.package._type or "") == "kix-import") (
+            builtins.filter isOptionalRef (instCfg.extraDeps or [ ])
+          );
         in
         map (d: mkItem d ns requester origin) (builtins.filter (d: !(wired ? ${d})) required)
         ++ map (v: {
@@ -249,7 +255,7 @@ rec {
             ns = v.namespace;
             instName = v.instanceName;
           };
-        }) wiredOptionals;
+        }) (wiredOptionals ++ extraDepOptionals);
 
       describeDemand =
         item:

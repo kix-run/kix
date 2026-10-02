@@ -51,6 +51,9 @@ in
       clusterCtx ? { },
       annotationDomainIndex ? { },
       factBehaviorOverrides ? { },
+      # nsName -> instName -> bool: whether the instance renders. Read by
+      # import instances, whose extraDeps may name another instance.
+      isInstanceActive,
     }@args:
 
     if (instCfg.package._type or "") == "kix-import" then

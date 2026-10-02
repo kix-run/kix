@@ -127,10 +127,15 @@ in
                 type = lib.types.listOf lib.types.raw;
                 default = [ ];
                 description = ''
-                  Additional dependency edges for the instance's PackageInstance
-                  marker. Used to inject ordering constraints that aren't
-                  captured by store-path context (e.g. an import depending on
-                  a managed instance's root resource).
+                  Additional dependencies for a kix.mkImport instance's
+                  PackageInstance marker, for ordering that no value read
+                  from another instance carries. Each entry is a resource or
+                  `ref.<namespace>.<instance>`, which stands for that
+                  instance's PackageInstance marker and activates the
+                  instance when it is optional. Evaluation fails for any
+                  other value, for a ref to the import itself, for a cycle of
+                  refs between imports, and for a non-empty list on a managed
+                  instance, whether or not the instance is active.
                 '';
               };
               platformIntents = lib.mkOption {

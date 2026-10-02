@@ -91,7 +91,7 @@ let
       evaluateInstanceConfig
       ;
     inherit (instance) evaluateInstance;
-    inherit (import_) mkImport;
+    inherit (import_) mkImport checkInstanceExtraDeps;
   };
 
 in

@@ -24,9 +24,11 @@ managed prerequisite:
 
 <Snippet {...explicitImportOrdering} />
 
-The reference has the form `ref.<namespace>.<instance>.root`. It identifies
-the managed instance's `PackageInstance` marker, which is itself ordered after
-the instance's resources.
+The reference has the form `ref.<namespace>.<instance>`. In `extraDeps` it
+stands for that instance's `PackageInstance` marker, which is itself ordered
+after the instance's resources.
+If that instance is optional, the reference activates it, as
+`deps.<arg> = ref.<namespace>.<instance>` does.
 
 `extraDeps` adds an ordering edge to the imported instance's marker. It does
 not modify, deploy, or check the imported Kubernetes resource.
@@ -37,8 +39,10 @@ Evaluate the complete cluster:
 
 <Command {...check} />
 
-A missing namespace or instance in the `ref` path fails evaluation. Fix that
-reference before inspecting the graph.
+Evaluation fails for a missing namespace or instance in the `ref` path, for
+an entry that is neither a resource nor a `ref`, for a `ref` to the import
+itself, and for imports whose `ref`s form a cycle. These checks run whether or
+not the import is active. Fix the entry before inspecting the graph.
 
 ## Verify the order
 
@@ -56,10 +60,10 @@ Use `extraDeps` only when the ordering relationship has no corresponding
 manifest value. Reading a dependency's tracked `out` value already creates an
 edge, so adding another one is unnecessary.
 
-At the cluster instance level, `extraDeps` only affects `kix.mkImport`
-markers. Although the option is available on every instance, managed
-instances ignore it. Package authors should instead set `requires` or
-`extraDeps` on the individual resource that needs the ordering constraint.
+At the cluster instance level, `extraDeps` applies only to `kix.mkImport`
+instances. A managed instance with `extraDeps` fails evaluation. Package
+authors set `requires` or `extraDeps` on the individual resource that needs
+the ordering constraint instead.
 
 This edge does not automatically order packages that consume manually
 declared import outputs. If a consumer must wait for the same prerequisite,
