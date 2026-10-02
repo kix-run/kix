@@ -36,7 +36,16 @@
 # pods run in the DataVolume's namespace and are the consumer's to allow: an
 # HTTP or registry import that pulls in a pod needs DNS, egress to its
 # source, and ingress from cdi-deployment, which out.mkImporterPolicy builds.
-# Imports with `pullMethod = "node"` and blank DataVolumes need neither.
+# Imports with `pullMethod = "node"` and blank DataVolumes need neither. The
+# package publishes no selector or builder for upload server and cloner
+# pods, so uploads and host-assisted clones under an enforcer need a policy
+# the consumer writes from upstream's pod labels.
+#
+# Priority: cdi-operator gives its operands the PriorityClass named in the
+# CDI resource, and without one `kubevirt-cluster-critical` (which the
+# kubevirt package creates) if that class exists when it reconciles, else
+# none. A `priorityClass` dependency (packages.priority-class) names the
+# class and orders the CDI resource after it.
 #
 # Monitoring: cdi-operator creates its own ServiceMonitor and PrometheusRule
 # in this namespace when the prometheus-operator CRDs exist.
@@ -51,12 +60,13 @@
 #       A DataVolume that binds its claim at once, so it completes on a
 #       WaitForFirstConsumer StorageClass without a consumer pod, and that
 #       the deploy waits on until its phase is Succeeded.
-#   out.mkImporterPolicy scope { name ? "cdi-importer"; egress; }
+#   out.mkImporterPolicy scope { name ? "<instance>-cdi-importer"; egress; }
 #       A policy in the caller's namespace for the importer pods CDI starts
 #       there: DNS, the `egress` intent rules (for example
 #       `[ { to = "world"; ports = [ { port = 443; protocol = "TCP"; } ]; } ]`
-#       for a public registry), and ingress from cdi-deployment on 8443. Null
-#       when the namespace has no enforcer.
+#       for a public registry), and ingress from cdi-deployment on 8443. The
+#       default name carries the calling instance's name. Null when the
+#       namespace has no enforcer.
 #   out.operandSelectors.{importer, deployment, uploadProxy}
 #       Pod labels of the importer pods and of the cdi-deployment and
 #       cdi-uploadproxy pods.
@@ -74,49 +84,53 @@
 
 let
   # The upstream release: meta.version, the default image.tag, and the tag
-  # in crds/sources.txt and rbac/sources.txt (checked below).
+  # in crds/sources.txt and rbac/sources.txt (kix-lib test
+  # kubevirt-cdi-sources-match-release).
   release = "v1.62.0";
-  sourceUrls =
-    file:
-    builtins.filter (l: l != "" && !lib.hasPrefix "#" l) (
-      lib.splitString "\n" (builtins.readFile file)
-    );
-  vendoredUrls = sourceUrls ./crds/sources.txt ++ sourceUrls ./rbac/sources.txt;
 
-  # "v1.62.0" -> [ "1" "62" ".0" ]; null when the tag is not a version.
-  versionParts = tag: builtins.match "v?([0-9]+)\\.([0-9]+)(\\..*)?" tag;
-  releaseMinor = lib.take 2 (versionParts release);
-  releaseMinorText = "v${lib.concatStringsSep "." releaseMinor}";
+  # "v1.62.0" -> "v1.62"; null for a tag that is not a vX.Y release.
+  # Upstream tags every release with the leading v.
+  minorOf =
+    tag: lib.mapNullable (m: "v${builtins.head m}") (builtins.match "v([0-9]+\\.[0-9]+)(\\..*)?" tag);
 
   name = scope.instanceName;
   ns = scope.namespaceName;
   who = "cdi ${ns}/${name}";
 
-  rulesOf = file: (builtins.fromJSON (builtins.readFile file)).rules;
+  readJSON = file: builtins.fromJSON (builtins.readFile file);
 
-  # Index digests of the release's images. A digest applies while the image
-  # keeps the release tag.
-  operandDigests = {
-    cdi-apiserver = "sha256:aa5c2e16c67545f449086b4e49a25f9b304a17174985b841d82e8ff618fb809e";
-    cdi-cloner = "sha256:ece16cb37976eb1a075b9b276b9d42d9a5c349dc9f29d1b7d08f0b985e119f07";
-    cdi-controller = "sha256:c4c35dce67ecbca97d3eb854d5468b6e60b06cd90e140fec83bb58ec566abb43";
-    cdi-importer = "sha256:df76770eef8bfc218a6423dea41a0d597b80821cd0434528aaa84951d2242abc";
-    cdi-uploadproxy = "sha256:28d70e20ca6b1435470a7c7dd2bc28d394705b730c7d760ef827addb768ab5b1";
-    cdi-uploadserver = "sha256:de0e6e49f7086c1fc526e339d435dc92c51d51e416e90ae4b988271bf5fafe42";
-  };
-
-  # The cdi-operator variable each operand image is passed in. The oVirt
-  # populator runs the importer image, as upstream's bundle sets it.
-  operandEnv = {
-    cdi-apiserver = [ "APISERVER_IMAGE" ];
-    cdi-cloner = [ "CLONER_IMAGE" ];
-    cdi-controller = [ "CONTROLLER_IMAGE" ];
-    cdi-importer = [
-      "IMPORTER_IMAGE"
-      "OVIRT_POPULATOR_IMAGE"
-    ];
-    cdi-uploadproxy = [ "UPLOAD_PROXY_IMAGE" ];
-    cdi-uploadserver = [ "UPLOAD_SERVER_IMAGE" ];
+  # Each operand image: the index digest of its release tag (a digest
+  # applies while the image keeps that tag) and the cdi-operator variables
+  # it is passed in. The oVirt populator runs the importer image, as
+  # upstream's bundle sets it.
+  operands = {
+    cdi-apiserver = {
+      digest = "sha256:aa5c2e16c67545f449086b4e49a25f9b304a17174985b841d82e8ff618fb809e";
+      env = [ "APISERVER_IMAGE" ];
+    };
+    cdi-cloner = {
+      digest = "sha256:ece16cb37976eb1a075b9b276b9d42d9a5c349dc9f29d1b7d08f0b985e119f07";
+      env = [ "CLONER_IMAGE" ];
+    };
+    cdi-controller = {
+      digest = "sha256:c4c35dce67ecbca97d3eb854d5468b6e60b06cd90e140fec83bb58ec566abb43";
+      env = [ "CONTROLLER_IMAGE" ];
+    };
+    cdi-importer = {
+      digest = "sha256:df76770eef8bfc218a6423dea41a0d597b80821cd0434528aaa84951d2242abc";
+      env = [
+        "IMPORTER_IMAGE"
+        "OVIRT_POPULATOR_IMAGE"
+      ];
+    };
+    cdi-uploadproxy = {
+      digest = "sha256:28d70e20ca6b1435470a7c7dd2bc28d394705b730c7d760ef827addb768ab5b1";
+      env = [ "UPLOAD_PROXY_IMAGE" ];
+    };
+    cdi-uploadserver = {
+      digest = "sha256:de0e6e49f7086c1fc526e339d435dc92c51d51e416e90ae4b988271bf5fafe42";
+      env = [ "UPLOAD_SERVER_IMAGE" ];
+    };
   };
 
   # Labels cdi-operator and cdi-deployment put on the pods they create
@@ -155,13 +169,8 @@ in
     { config, ... }:
     [
       {
-        assertion =
-          versionParts config.image.tag != null && lib.take 2 (versionParts config.image.tag) == releaseMinor;
-        message = "image.tag \"${config.image.tag}\" is not a ${releaseMinorText} release, and the CRD and roles under kix/packages/cdi/{crds,rbac} are vendored from ${release}. Remove image.tag or set a ${releaseMinorText} tag. To move to another release, change release in kix/packages/cdi/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py cdi.";
-      }
-      {
-        assertion = vendoredUrls != [ ] && lib.all (lib.hasInfix "/${release}/") vendoredUrls;
-        message = "kix/packages/cdi/crds/sources.txt or rbac/sources.txt fetches from a tag other than ${release}, the package's release. Set the tag in every URL to ${release} and run uv run scripts/vendor-crds.py cdi.";
+        assertion = minorOf config.image.tag == minorOf release;
+        message = "image.tag \"${config.image.tag}\" is not a ${minorOf release} release (upstream tags look like ${release}), and the CRD and roles under kix/packages/cdi/{crds,rbac} are vendored from ${release}. Remove image.tag or set a ${minorOf release} tag. To move to another release, change release in kix/packages/cdi/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py cdi.";
       }
     ]
     ++ map (n: {
@@ -169,7 +178,7 @@ in
       message = "operandImages.${n}.pullPolicy = \"${
         toString config.operandImages.${n}.pullPolicy
       }\" has no effect: cdi-operator gives every operand the CDI resource's imagePullPolicy, which is image.pullPolicy. Remove it.";
-    }) (builtins.attrNames operandDigests);
+    }) (builtins.attrNames operands);
 
   options = {
     image = kix.options.image {
@@ -180,21 +189,19 @@ in
     };
 
     operandImages = lib.mapAttrs (
-      n: digest:
+      n: operand:
       kix.options.image {
         repository = "quay.io/kubevirt/${n}";
         tag = release;
-        inherit digest;
+        inherit (operand) digest;
         tagText = "config.image.tag";
         pullPolicy = null;
-        description = "Image cdi-operator runs as ${n} (${
-          lib.concatStringsSep ", " operandEnv.${n}
-        }). Listed in out.extraImages. Its repository follows image.repository and its tag image.tag; the CDI resource's imagePullPolicy applies, so pullPolicy must stay null.";
+        description = "Image cdi-operator runs as ${n} (${lib.concatStringsSep ", " operand.env}). Listed in out.extraImages. Its repository follows image.repository and its tag image.tag; the CDI resource's imagePullPolicy applies, so pullPolicy must stay null.";
       }
-    ) operandDigests;
+    ) operands;
 
-    # Requests from cdi-operator.yaml at the release, which sets no limits.
-    # An idle cdi-operator held up to 70 MiB on kind with CDI deployed.
+    # Requests from cdi-operator.yaml at the release. Upstream sets no
+    # limits; these are the package's.
     resources = kix.options.resources {
       requests = {
         cpu = "100m";
@@ -209,21 +216,26 @@ in
     extraSpec = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
-      description = "Fields deep-merged into the CDI resource's spec, such as `config.featureGates`, `cloneStrategyOverride`, `workload`, or `infra.nodeSelector`. The package refuses `infra.apiServerReplicas`, `infra.deploymentReplicas`, and `infra.uploadProxyReplicas`, which follow the instance's availability, and `imagePullPolicy`, which is image.pullPolicy.";
+      description = "Fields deep-merged into the CDI resource's spec, such as `config.featureGates`, `cloneStrategyOverride`, `workload`, or `infra.nodeSelector`. The package refuses `infra.apiServerReplicas`, `infra.deploymentReplicas`, and `infra.uploadProxyReplicas`, which follow the instance's availability, `imagePullPolicy`, which is image.pullPolicy, and, when the instance has a `priorityClass` dependency, `priorityClass`.";
     };
   };
 
   config =
     { config, ... }:
     {
-      operandImages = lib.genAttrs (builtins.attrNames operandDigests) (n: {
+      operandImages = lib.genAttrs (builtins.attrNames operands) (n: {
         repository = lib.mkDefault "${dirOf config.image.repository}/${n}";
         tag = lib.mkDefault config.image.tag;
       });
     };
 
   build =
-    { self, config, ... }:
+    {
+      self,
+      config,
+      priorityClass ? null,
+      ...
+    }:
     let
       pick = kix.availability.pick availability;
       operandRefs = lib.mapAttrs (_: kix.image.ref) config.operandImages;
@@ -246,16 +258,19 @@ in
       }
       // lib.optionalAttrs (config.image.pullPolicy != null) {
         imagePullPolicy = config.image.pullPolicy;
+      }
+      // lib.optionalAttrs (priorityClass != null) {
+        priorityClass = priorityClass.out.name;
       };
 
       operandEnvVars = lib.concatLists (
         lib.mapAttrsToList (
-          n: vars:
+          n: operand:
           map (v: {
             name = v;
             value = operandRefs.${n};
-          }) vars
-        ) operandEnv
+          }) operand.env
+        ) operands
       );
 
       # Policies for the pods cdi-operator runs in this namespace. The spec
@@ -278,7 +293,7 @@ in
       mkImporterPolicy =
         consumerScope:
         {
-          name ? "cdi-importer",
+          name ? "${consumerScope.instanceName}-cdi-importer",
           egress,
         }:
         kix.operandPolicy {
@@ -338,7 +353,7 @@ in
             namespace = ns;
           }
         ];
-        roles."${name}-operator-cluster" = rulesOf ./rbac/clusterrole-cdi-operator-cluster.json;
+        roles."${name}-operator-cluster" = (readJSON ./rbac/clusterrole-cdi-operator-cluster.json).rules;
       };
 
       operatorRbac = scope.rbac.mkRoleSet scope {
@@ -349,7 +364,7 @@ in
             namespace = ns;
           }
         ];
-        roles."${name}-operator" = rulesOf ./rbac/role-cdi-operator.json;
+        roles."${name}-operator" = (readJSON ./rbac/role-cdi-operator.json).rules;
       };
 
       deployment = scope.mkDeployment {
@@ -463,7 +478,8 @@ in
               "uploadProxyReplicas"
             ]
             [ "imagePullPolicy" ]
-          ];
+          ]
+          ++ lib.optional (priorityClass != null) [ "priorityClass" ];
         } baseSpec config.extraSpec;
         requires = [ self.deployment ];
       };
@@ -474,7 +490,7 @@ in
         # Kix ships upstream's list at creation and later deploys apply
         # without the field.
         cdis = scope.mkCRD {
-          spec = (builtins.fromJSON (builtins.readFile ./crds/cdis.cdi.kubevirt.io.json)).spec;
+          spec = (readJSON ./crds/cdis.cdi.kubevirt.io.json).spec;
           ownership.cede = [ "spec.versions" ];
           readiness = {
             path = "/status/phase";
