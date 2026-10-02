@@ -1245,7 +1245,7 @@ in
         ];
       };
 
-  lib-reference-checks-key-opaque-ref =
+  lib-reference-checks-key-ref-without-keys =
     expectFailures
       [
         "reads key 'token' of Secret 'ext' (env T of container c), whose scope.mkSecretRef declares no keys"

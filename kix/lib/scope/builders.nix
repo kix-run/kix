@@ -893,10 +893,10 @@ in
 
       # A Secret something outside Kix creates. `keys` lists the keys pods
       # read by name; the deploy waits until the live Secret holds each of
-      # them. `keys = [ ]` declares an opaque Secret: the deploy checks only
-      # that it exists, so pods may use it whole (envFrom, a volume without
-      # items), and the cluster build refuses a pod that reads one of its
-      # keys by name (check 22).
+      # them. `keys = [ ]` fits only a Secret pods use whole (envFrom, a
+      # volume without items): the deploy checks only that it exists, and
+      # the cluster build refuses a pod that reads one of its keys by name
+      # (check 22).
       mkSecretRef =
         {
           name,

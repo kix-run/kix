@@ -32,7 +32,7 @@ appSecret = scope.mkSecretRef {
 };
 ```
 
-`keys = [ ]` declares an opaque Secret (existence only). Reading one of its keys by name fails cross-resource check 22, so list every key the pod reads.
+List every key a pod reads by name. `keys = [ ]` is allowed only when no pod does: pods use the Secret whole (`envFrom`, a volume without `items`), and the deploy checks only that it exists. A named read of a key of such a ref fails cross-resource check 22.
 
 **Gotcha 1 — the marker must be in the returned attrset, not just `let`.** Package build functions only emit resources that `collectTypedAttrs` finds in the returned attrset. A `mkSecretRef` stashed in a `let` binding will *not* produce a manifest. Always `inherit` the ref in the return attrset:
 

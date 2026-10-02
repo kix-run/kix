@@ -148,7 +148,7 @@ when a check fails or the path is not evaluated by default.
 - S2. Is a credential passed as a Secret name string? Fix: a dep (`secret`/`secret-ref`) read through `out.keyRef`, `out.envFrom`, or `out.volume`.
 - S3. Is a secret dep named `credentials` or another generic name? Fix: a purpose name (`valkeyPassword`, `encryptionKey`, `cloudCredentials`); two packages share a name only when they read the same keys.
 - S4. Is a dep's key checked in `deps.<x>.assertions` or not at all? Remove a key and eval: `keyRef` throws first. Fix: bind once through `kix.checkSecretKeys { who; arg; dep; keys; }` (or `anyOf`) and read through that binding.
-- S5. Does a pod read by name a key of a `keys = [ ]` ref, or does a ref used whole omit keys the deploy should wait for? *(lib: a named read of an opaque ref fails cross-resource check 22)* Fix: declare the keys read.
+- S5. Does a pod read by name a key of a `keys = [ ]` ref, or does a ref used whole omit keys the deploy should wait for? *(lib: a named read of a key of a ref that lists no keys fails cross-resource check 22)* Fix: declare the keys read.
 - S6. Does the package emit a `scope.mkSecret` with inline values for a credential the user should supply? *(lib: a key with no value and no `source` is refused)* Fix: `mkSecretRef` or a required dep.
 - S7. Is a Secret built with `scope.mkResource { kind = "Secret"; }`? Fix: `scope.mkSecret`.
 - S8. Does a required credential, when absent, still deploy? Fix: refuse at eval.
