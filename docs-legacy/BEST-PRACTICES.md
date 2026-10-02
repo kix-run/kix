@@ -112,10 +112,10 @@ reconciler, and no runbook should need to.
 | Custom resource applied before its CRD, or of a kind nothing declares | cross-resource check 21 (depends-on closure, served versions); `kix deploy` checks a CRD ref's versions against the live CRD |
 | Pod reads a Secret or ConfigMap key that is not there | `out.keyRef` at build time; cross-resource check 22 for names written directly |
 | Managed Secret created without its keys | `scope.mkSecret` refuses a key with no value and no SOPS source |
-| Two default StorageClasses, IngressClasses or global-default PriorityClasses | cross-resource check 23 |
+| Two default StorageClasses, IngressClasses, or global-default PriorityClasses | cross-resource check 23 |
 | Instance value discards part of an option default | The option contract (`kix/lib/eval/options.nix`): an untyped or `attrsOf` option with a non-empty attrset default, or a submodule default that disagrees with its fields, fails evaluation (§12.13) |
-| Instance value replaces a config path, env var or flag the package owns | `kix.mergeGuarded`, `kix.mergeEnv`, `kix.guardArgs` refuse it with one message per hit |
-| Package reads a key its secret dependency does not declare | `kix.checkSecretKeys` names the secret, its keys and the missing ones |
+| Instance value replaces a config path, env var, or flag the package owns | `kix.mergeGuarded`, `kix.mergeEnv`, and `kix.guardArgs` refuse it with one message per hit |
+| Package reads a key its secret dependency does not declare | `kix.checkSecretKeys` names the secret, its keys, and the missing ones |
 | More than one replica of a workload that runs one pod at a time | the availability plugin refuses `spec.replicas > 1` under an effective ceiling of `none` |
 | `cluster.local` hard-coded on a cluster with another domain | `architecture.clusterDomainLiteral` (error) |
 | Meaningful empty value deleted (`emptyDir: {}`, empty selectors) | Collapse-rule normalization: literal empties render; only containers that lost every member to null-stripping collapse. `kix.keep` protects constructor-built containers |

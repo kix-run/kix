@@ -828,7 +828,7 @@ instances.media.immich = {
 
 ### config: option values
 
-Primary lever. Fed through `evaluateInstanceConfig` (`kix/lib/eval/resolve.nix`): one `lib.evalModules` over the package's options, its own `config` module, dep injections and the instance config, with `clusterConfig` in `specialArgs`. An instance value merges under the module system's rules: setting one field of a submodule keeps its siblings' defaults, and every package passes the option contract (01-fundamentals.md#the-option-contract), so no default is silently dropped.
+Primary lever. Fed through `evaluateInstanceConfig` (`kix/lib/eval/resolve.nix`): one `lib.evalModules` over the package's options, its own `config` module, dep injections, and the instance config, with `clusterConfig` in `specialArgs`. An instance value merges under the module system's rules: setting one field of a submodule keeps its siblings' defaults, and every package passes the option contract (01-fundamentals.md#the-option-contract), so no default is silently dropped.
 
 ```nix
 instances.immich.storage.config.size = lib.mkForce "200Gi";

@@ -476,7 +476,7 @@ options = {
 
 Bundles today (verify exact fields in `kix/lib/vocab/compose.nix`):
 
-- `kix.options.image { repository ? null, tag ? null, digest ? null, ... }` - repository, tag, digest, pullPolicy and the promotion fields; render with `kix.image.ref config.image`. A null `repository` or `tag` leaves that field required.
+- `kix.options.image { repository ? null, tag ? null, digest ? null, ... }` - repository, tag, digest, pullPolicy, and the promotion fields; render with `kix.image.ref config.image`. A null `repository` or `tag` leaves that field required.
 - `kix.options.resources { requests ? { }, limits ? { } }` - container resources with each default on its field; null removes a default.
 - `kix.options.env` - extra env vars (`attrsOf (null or a string or a valueFrom source)`); render through `kix.mergeEnv`.
 - `kix.options.ingress` - `host` (`nullOr str`, default `null`, "Null = auto-derive from cluster.domain") + `annotations` (`attrsOf str`).

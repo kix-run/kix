@@ -786,7 +786,7 @@ instances.kube-system.platform-dns = {
 - `crds` - a list of `scope.mkCRDRef` argument sets without `installedBy`; each becomes `out.crds.<Kind>` and a CRD marker in the import's namespace.
 - `from = <package fn>` - package's `build` runs under `mkImportScope`, swapping `mkResource`/`mkServiceRef`/`mkSecretRef` for ref constructors that compute `out` without store paths or manifests. Only `out`-relevant code forced (laziness). Deps **not** resolved in import mode: any dep access hits a proxy throwing `imports run without dependency resolution`. Use a raw `out` override, or a mixed import (`from` + `out` for dep-needing fields).
 
-Managed instances shadow imports on shared keys -> a flavor's fallback `platform-dns` import is auto-replaced when the cluster installs its own DNS package. An optional import becomes active, and its marker is emitted, when a declared dependency of an active managed instance resolves to it; give it `kind`, `apiVersion` and `out.name` when the deploy should wait for the object.
+Managed instances shadow imports on shared keys -> a flavor's fallback `platform-dns` import is auto-replaced when the cluster installs its own DNS package. An optional import becomes active, and its marker is emitted, when a declared dependency of an active managed instance resolves to it; give it `kind`, `apiVersion`, and `out.name` when the deploy should wait for the object.
 
 ### Infrastructure DI patterns
 
