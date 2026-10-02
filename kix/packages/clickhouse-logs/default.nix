@@ -1,15 +1,15 @@
-# Pod logs into ClickHouse, shipped by Vector (v2_discussions/149).
+# clickhouse-logs: every pod's logs into ClickHouse, shipped by a Vector
+# agent on every node.
 #
-# A Vector agent on every node tails the kubelet's pod log files, shapes
-# each line into one flat row and inserts it over ClickHouse's HTTP
-# interface. The first consumer of the clickhouse contract
-# (v2_discussions/148), and written only against `clickhouse-database`, so
-# it runs unchanged on the bare single node and on an operator-run cluster.
+# A DaemonSet tails the kubelet's pod log files, shapes each line into one
+# flat row (timestamp, namespace, pod, container, node, stream, message, pod
+# labels), and inserts it over ClickHouse's HTTP interface. It is written
+# only against `clickhouse-database`, so it runs the same on a single
+# ClickHouse node and on an operator-run cluster.
 #
-# The package owns the table. It hands its schema to the database instance
-# it depends on through dep config injection, the same way immich hands
-# stackgres-database its extensions, so the cluster definition declares a
-# `clickhouse-database` instance and nothing about logs:
+# The package owns the table. It hands the schema to the database instance it
+# depends on through dep config injection, so the cluster definition declares
+# a `clickhouse-database` instance and nothing about logs:
 #
 #   instances.logging = {
 #     logs      = { package = packages.clickhouse-logs; };
@@ -27,20 +27,18 @@
 # Exposes:
 #   out.database, out.table   where the rows land
 #   out.metricsUrl            every agent's Prometheus endpoint, through the
-#                             headless metrics Service
+#                             headless metrics Service (root)
 #
-# Escape hatches: `settings` (Vector's own config, merged over the package's
-# by `mergeConfig` in vector-agent.nix; a null removes an unlocked key),
-# `extraArgs`, `env`, and the instance's `partsOverlays`.
+# Escape hatches: `settings` (Vector's own config, merged over the
+# package's; a null removes an unlocked key), `extraArgs`, `env`, and the
+# instance's `partsOverlays` for tolerations, extra volumes and the rest.
 #
 # The agent runs as uid 0 to read the kubelet's log files and mounts host
-# paths, so the package declares the `run-as-root` grant and the
-# `privileged` Pod Security level for its namespace.
+# paths, so the package declares the `run-as-root` grant and the namespace
+# runs at the `privileged` Pod Security level.
 #
 # The Vector agent itself (image, options, pod spec, RBAC, health check)
 # comes from ./vector-agent.nix, which loki-logs shares.
-#
-# root = metrics Service.
 
 {
   scope,
@@ -90,7 +88,6 @@ in
     inherit (vectorAgent) version;
     description = "Pod logs into ClickHouse, shipped by a Vector agent on every node";
     owner = "platform";
-    defaultAliases = [ "clusterLogs" ];
     # The kubelet writes pod logs as root with mode 0640, so the agent reads
     # them as uid 0, with no capabilities and a read-only root filesystem.
     unsafe = [ "run-as-root" ];
@@ -110,7 +107,9 @@ in
       in
       lib.optional (!(builtins.elem "INSERT" privileges || builtins.elem "ALL" privileges)) {
         assertion = false;
-        message = "clickhouse-logs '${name}' inserts rows, and the clickhouse-database instance it resolved to grants its user: ${lib.concatStringsSep ", " privileges}. Add \"INSERT\" to that instance's privileges.";
+        message = "deps.clickhouseDatabase resolved to a clickhouse-database instance whose user has ${
+          if privileges == [ ] then "no privileges" else "only ${lib.concatStringsSep ", " privileges}"
+        }, and the agent inserts rows. Add \"INSERT\" to that instance's privileges.";
       };
   };
 
@@ -133,8 +132,9 @@ in
         `kubernetes_logs` and `internal_metrics`, transform `row`, sinks
         `clickhouse` and `metrics`, and the `credentials` secrets backend. A
         null removes a key the package sets. The package locks `data_dir`,
-        `sources.internal_metrics`, and `sinks.metrics` (probes, metrics
-        Service, and health check), `sinks.clickhouse.type`, `.endpoint`,
+        `sources.internal_metrics.type`, and
+        `sinks.metrics.{type,inputs,address}` (probes, metrics Service, and
+        health check), `sinks.clickhouse.type`, `.endpoint`,
         `.database`, and `.auth` (from `deps.clickhouseDatabase`),
         `sinks.clickhouse.table` (the table this package creates), and
         `secret.credentials` (the mounted password); setting one, or
@@ -245,7 +245,7 @@ in
           apiVersion = "v1";
           kind = "ConfigMap";
           name = "${name}-config";
-          data."vector.yaml" = builtins.toJSON mergedSettings;
+          data.${vectorAgent.configFile} = builtins.toJSON mergedSettings;
         };
 
         serviceAccount = scope.mkResource {
@@ -255,7 +255,7 @@ in
         };
 
         configMount = kix.mount.configMap self.configMap {
-          mountPath = "/etc/vector";
+          mountPath = vectorAgent.configDir;
           readOnly = true;
         };
 
@@ -273,7 +273,6 @@ in
         daemonSet =
           {
             inherit name;
-            labels."app.kubernetes.io/name" = "vector";
             spec = {
               selector.matchLabels = scope.selectorLabels;
               template = {

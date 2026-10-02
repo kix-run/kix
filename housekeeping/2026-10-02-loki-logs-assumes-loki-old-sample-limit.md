@@ -1,0 +1,3 @@
+# 2026-10-02 · `kix/packages/loki-logs` · The agent's six-day file cutoff assumes Loki's default 168h `reject_old_samples_max_age`.
+
+loki-logs sets `sources.kubernetes_logs.ignore_older_secs` to six days so it does not send lines Loki would reject as too old. The value is a literal in `kix/packages/loki-logs/default.nix`. A loki instance that changes `limits_config.reject_old_samples_max_age` through its `settings` is not followed: a shorter limit turns the old lines into 400s that count as sink errors, and a longer one leaves older files unread. The loki package publishes no `out` field with the limit, so the agent cannot read it.

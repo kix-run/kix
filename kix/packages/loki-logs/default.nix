@@ -71,10 +71,11 @@ in
         `kubernetes_logs` and `internal_metrics`, sinks `loki` and `metrics`.
         A null removes a key the package sets, such as one of the
         `sinks.loki.labels`. The package locks `sinks.loki.endpoint`
-        (follows `deps.loki`), and `sinks.loki.type`, `sinks.metrics`,
-        `sources.internal_metrics`, and `data_dir` (they feed the probes, the
-        metrics Service, and the health check); setting one, or replacing a
-        key above it, fails evaluation.
+        (follows `deps.loki`), and `sinks.loki.type`,
+        `sinks.metrics.{type,inputs,address}`,
+        `sources.internal_metrics.type`, and `data_dir` (they feed the
+        probes, the metrics Service, and the health check); setting one, or
+        replacing a key above it, fails evaluation.
       '';
     };
 
@@ -135,7 +136,7 @@ in
           apiVersion = "v1";
           kind = "ConfigMap";
           name = "${name}-config";
-          data."vector.yaml" = builtins.toJSON mergedSettings;
+          data.${vectorAgent.configFile} = builtins.toJSON mergedSettings;
         };
 
         serviceAccount = scope.mkResource {
@@ -145,14 +146,13 @@ in
         };
 
         configMount = kix.mount.configMap self.configMap {
-          mountPath = "/etc/vector";
+          mountPath = vectorAgent.configDir;
           readOnly = true;
         };
 
         daemonSet =
           {
             inherit name;
-            labels."app.kubernetes.io/name" = "vector";
             spec = {
               selector.matchLabels = scope.selectorLabels;
               template = {

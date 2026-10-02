@@ -1,0 +1,3 @@
+# 2026-10-02 · `kix/packages/loki-logs` · A first start on a busy node may send lines Loki rejects, which the health check counts as sink errors.
+
+On first start Vector reads every pod log file under `/var/log/pods` from the beginning. A restarted container's `0.log` and `1.log` carry the same five labels (namespace, pod, container, node, stream), so they form one Loki stream and are read at the same time. Loki rejects a line more than about an hour behind the newest line of its stream with a 400, and Vector counts each rejected batch as a sink error. If that catch-up overlaps the post-deploy probe, the probe sees errors rise and fails the deploy. Not yet tested: it needs a kind run with a container that restarted more than an hour before loki-logs is installed.

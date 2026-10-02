@@ -15,7 +15,11 @@
 let
   version = "0.58.0";
   metricsPort = 9598;
-  configPath = "/etc/vector/vector.yaml";
+  # Each package mounts its ConfigMap at `configDir`, with the merged
+  # settings under the key `configFile`.
+  configDir = "/etc/vector";
+  configFile = "vector.yaml";
+  configPath = "${configDir}/${configFile}";
   dataDir = "/var/lib/vector";
 
   # Vector's config sources (`vector --help`). The package's merged
@@ -39,7 +43,12 @@ let
   ];
 in
 {
-  inherit version metricsPort;
+  inherit
+    version
+    metricsPort
+    configDir
+    configFile
+    ;
 
   options = {
     image = kix.options.image {
@@ -91,12 +100,7 @@ in
   baseConfig = {
     data_dir = dataDir;
     sources = {
-      kubernetes_logs = {
-        type = "kubernetes_logs";
-        # The source's default template: it reads the node name from
-        # VECTOR_SELF_NODE_NAME, which `podSpec` sets.
-        self_node_name = "\${VECTOR_SELF_NODE_NAME}";
-      };
+      kubernetes_logs.type = "kubernetes_logs";
       internal_metrics.type = "internal_metrics";
     };
     sinks.metrics = {
@@ -110,7 +114,10 @@ in
   # `settings` merged over it. `sink` is the component id of the package's
   # backend sink. Its `type` and `endpoint` are locked: the endpoint carries
   # the backend's address, and with it the dependency edge and the derived
-  # egress. `locked` adds the package's own paths. A null in `settings`
+  # egress. The `metrics` sink's `type`, `inputs`, and `address` and the
+  # `internal_metrics` source's `type` are locked because the probes, the
+  # metrics Service, and the health check read them; their other keys stay
+  # open. `locked` adds the package's own paths. A null in `settings`
   # removes an unlocked key.
   mergeConfig =
     {
@@ -128,10 +135,22 @@ in
           [
             "sources"
             "internal_metrics"
+            "type"
           ]
           [
             "sinks"
             "metrics"
+            "type"
+          ]
+          [
+            "sinks"
+            "metrics"
+            "inputs"
+          ]
+          [
+            "sinks"
+            "metrics"
+            "address"
           ]
           [
             "sinks"
@@ -248,11 +267,12 @@ in
         }
         # Read positions. On the node so a restarted agent resumes where it
         # stopped and neither drops nor re-sends what it had already read.
-        # The namespace in the path keeps two instances apart.
+        # Named `<namespace>.<instance>` like the ClusterRole below, so it is
+        # unique to the instance.
         {
           name = "data";
           hostPath = {
-            path = "${dataDir}/${scope.namespaceName}-${name}";
+            path = "${dataDir}/${scope.namespaceName}.${name}";
             type = "DirectoryOrCreate";
           };
         }
@@ -260,8 +280,10 @@ in
     };
 
   # What the kubernetes_logs source watches to put a namespace, labels, and
-  # a node on each line. The role name carries the namespace, so two instances
-  # never share a ClusterRole.
+  # a node on each line. The role name joins the namespace and the instance
+  # with a dot. Neither can contain one (the instance name also names the
+  # metrics Service, an RFC 1035 label), so two instances never share a
+  # ClusterRole.
   rbac =
     {
       scope,
@@ -285,7 +307,7 @@ in
         }
       ];
       labels = scope.selectorLabels;
-      roles.${"${scope.namespaceName}-${name}"} = grant [
+      roles.${"${scope.namespaceName}.${name}"} = grant [
         (core.pods |> watch)
         (core.namespaces |> watch)
         (core.nodes |> watch)
