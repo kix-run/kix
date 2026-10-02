@@ -1,0 +1,3 @@
+# 2026-10-02 · `kix/lib/scope/builders.nix` · Cluster-scoped resources get no metadata.name check, so names the API server rejects pass evaluation.
+
+`sealResource` runs `validators.checkResourceName` on every namespaced resource, but `scopeMkClusterResource` does not call it. An IngressClass, StorageClass, PriorityClass, or webhook configuration named from an option (`Bad_Name`) evaluates cleanly and fails only at deploy. `kix/packages/ingress-nginx` types its `ingressClassName` option with `strMatching` to cover its own case; other packages that name cluster-scoped objects from config do not.
