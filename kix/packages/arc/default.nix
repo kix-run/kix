@@ -551,7 +551,10 @@ in
                 podMetricsEndpoints = [
                   (
                     {
-                      port = "metrics";
+                      # The listener pods are the controller's, so Kix cannot
+                      # resolve their port name; the scrape egress rule needs
+                      # the number set by --listener-metrics-addr.
+                      portNumber = metricsPort;
                       path = "/metrics";
                     }
                     // lib.optionalAttrs (config.metrics.interval != null) { inherit (config.metrics) interval; }

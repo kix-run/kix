@@ -440,8 +440,9 @@ in
     || throw "arc extra args and env: ${builtins.toJSON { inherit (manager) args env; }}";
 
   # With a prometheus provider: the metrics Service, ServiceMonitor `arc`,
-  # and PodMonitor `arc-listeners` selecting the listener labels. With
-  # metrics.enabled = false, none of them.
+  # and PodMonitor `arc-listeners` selecting the listener labels on the port
+  # number, which the derived scrape egress needs. With metrics.enabled =
+  # false, none of them.
   arc-metrics =
     let
       withPrometheus =
@@ -459,6 +460,7 @@ in
       && byName "arc" (ofKind "ServiceMonitor" on) != null
       && podMonitor.spec.selector.matchLabels == arcRaw.root.out.operandSelectors.listener
       && podMonitor.spec.namespaceSelector.matchNames == [ "arc-systems" ]
+      && (builtins.head podMonitor.spec.podMetricsEndpoints).portNumber == 8080
       && byName "arc-metrics" (ofKind "Service" off) == null
       && ofKind "ServiceMonitor" off == [ ]
       && ofKind "PodMonitor" off == [ ]

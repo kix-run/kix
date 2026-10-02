@@ -5,7 +5,7 @@
 # Prometheus, Alertmanager, kube-state-metrics, and node-exporter (on the host
 # network) in `monitoring-system`, reloader in `reloader`, and a one-instance
 # StackGres cluster in `data`, whose PodMonitor scrapes the exporter sidecar
-# of operator-created pods on the named port `pgexporter`. Cilium is
+# of operator-created pods on port 9187 (`portNumber`). Cilium is
 # installed by Kix with `networkPolicy.enable`. Every target in Prometheus's
 # `/api/v1/targets` should be up, and Alertmanager should be discovered.
 #

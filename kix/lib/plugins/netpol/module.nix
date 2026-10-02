@@ -13,6 +13,14 @@ let
 
   enforcerRole = "network-policy-enforcer";
 
+  # The directions default deny and the derived policies cover, from the
+  # typed `directions` option. The plugin's policy builders take this record;
+  # `kix.operandPolicy` reads the option through `scope.networkPolicyDirections`.
+  enforced = {
+    ingress = cfg.directions != "egress";
+    egress = cfg.directions != "ingress";
+  };
+
   resolveEnforcerOut =
     {
       cluster,
@@ -98,7 +106,7 @@ in
             edges
             ;
           wSelector = ctx.selector;
-          networkConfig = cfg;
+          inherit enforced;
           networkPolicyEnforcer = resolveEnforcerOut { inherit (ctx) cluster instanceName namespaceName; };
           packageIntents = (ctx.packageMeta.network or { }).intents or { };
         };
@@ -118,7 +126,7 @@ in
             allPartResources
             packageMeta
             ;
-          networkConfig = cfg;
+          inherit enforced;
           networkPolicyEnforcer = resolveEnforcerOut { inherit (ctx) cluster instanceName namespaceName; };
         };
       in
@@ -140,7 +148,7 @@ in
               derive.generateDefaultDeny {
                 namespaceName = nsName;
                 nsResource = ctx.nsResources.${nsName};
-                directions = cfg.directions;
+                inherit enforced;
                 networkPolicyEnforcer = enforcerOut;
               }
             ) ctx.realNsNames
@@ -159,12 +167,14 @@ in
               egressPolicies = [ ];
               ingressPolicies = [ ];
               warnings = [ ];
+              errors = [ ];
             }
           else
             scrape.derive {
               inherit (ctx) resources nsResources realNsNames;
               enforcerApi = enforcerOut.netpol;
-              inherit (cfg) directions defaultDeny;
+              inherit enforced;
+              inherit (cfg) defaultDeny;
               extraPolicies = platformIntentPolicies;
             };
       in
@@ -191,6 +201,15 @@ in
               )
             else
               null
+          )
+          (
+            if scrapePolicies.errors == [ ] then
+              null
+            else
+              throw (
+                "kix netpol: networkPolicy.defaultDeny is on, and Kix cannot derive these scrape paths:\n"
+                + lib.concatMapStringsSep "\n" (e: "- ${e}") scrapePolicies.errors
+              )
           )
           (
             if enforcerOut == null then

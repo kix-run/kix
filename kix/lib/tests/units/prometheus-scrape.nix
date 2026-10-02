@@ -16,6 +16,7 @@
   byName,
   containerBase,
   kixKeys,
+  evalFails,
   ...
 }:
 
@@ -24,8 +25,8 @@ let
 
   # A Deployment with a named metrics port behind a Service whose
   # targetPort is that name, a ServiceMonitor over the Service, and a
-  # PodMonitor over pods an operator would create (no Kix workload carries
-  # their labels).
+  # PodMonitor with a port number over pods an operator would create (no Kix
+  # workload carries their labels).
   scraped = {
     meta.version = "test";
     build =
@@ -88,7 +89,7 @@ let
           name = "operand";
           spec = {
             selector.matchLabels.app = "operand";
-            podMetricsEndpoints = [ { port = "pgexporter"; } ];
+            podMetricsEndpoints = [ { portNumber = 9187; } ];
           };
         };
         root = {
@@ -159,6 +160,80 @@ let
       {
         podMonitor = prometheus.out.mkPodMonitor scope { inherit name spec; };
         root = self.podMonitor;
+      };
+  };
+
+  # A Deployment whose pods carry `tier=api` beside the Service selector, a
+  # ServiceMonitor over the Service, and an ingress policy with
+  # `endpointSelector` that admits only the pods' peers.
+  tiered = endpointSelector: {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        kix,
+        prometheus,
+        ...
+      }:
+      let
+        podLabels = scope.selectorLabels // {
+          tier = "api";
+        };
+      in
+      {
+        deployment = scope.mkDeployment {
+          name = "api";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata.labels = podLabels;
+              spec.containers = [
+                (
+                  {
+                    name = "api";
+                    image = "example/api:1";
+                    ports = [ { containerPort = 8081; } ];
+                  }
+                  // containerBase
+                )
+              ];
+            };
+          };
+        };
+        service = scope.mkResource {
+          apiVersion = "v1";
+          kind = "Service";
+          name = "api";
+          labels = scope.selectorLabels;
+          spec = {
+            selector = scope.selectorLabels;
+            ports = [ { port = 8081; } ];
+          };
+        };
+        serviceMonitor = prometheus.out.mkServiceMonitor scope {
+          name = "api";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            endpoints = [ { targetPort = 8081; } ];
+          };
+        };
+        peers = kix.operandPolicy {
+          inherit scope;
+          name = "api-peers";
+          spec = {
+            inherit endpointSelector;
+            ingress = [ { fromEndpoints = [ { matchLabels = podLabels; } ]; } ];
+          };
+        };
+        root = {
+          resource = self.deployment;
+          requires = [
+            self.service
+            self.serviceMonitor
+            self.peers
+          ];
+        };
       };
   };
 
@@ -309,10 +384,41 @@ let
       extra
     ];
 
+  matchExpressionsPods = {
+    instances.watch.expr.package = podMonitorOnly "expr" {
+      selector.matchExpressions = [
+        {
+          key = "app";
+          operator = "In";
+          values = [ "expr" ];
+        }
+      ];
+      podMetricsEndpoints = [ { portNumber = 9090; } ];
+    };
+  };
+
+  unnamedServer = {
+    cluster.factBehavior."monitoring.coreos.com/Prometheus".endpoint = "conduct";
+  };
+
+  noDefaultDeny = {
+    networkPolicy.defaultDeny = false;
+  };
+
+  # PodMonitor `watch/named` over pods an operator would create, scraped on
+  # a port name that no Kix container declares.
+  namedPortPods = {
+    instances.watch.named.package = podMonitorOnly "named" {
+      selector.matchLabels.app = "named";
+      podMetricsEndpoints = [ { port = "pgexporter"; } ];
+    };
+  };
+
   cnpsOf = cluster: ofKind "CiliumNetworkPolicy" (manifests cluster);
   # Target ingress policies end in a hash of the server and the target.
   byPrefix =
-    prefix: ms: lib.findFirst (m: builtins.match "${prefix}-[0-9a-f]{8}" m.metadata.name != null) null ms;
+    prefix: ms:
+    lib.findFirst (m: builtins.match "${prefix}-[0-9a-f]{8}" m.metadata.name != null) null ms;
   allByPrefix =
     prefix: ms: builtins.filter (m: builtins.match "${prefix}-[0-9a-f]{8}" m.metadata.name != null) ms;
   warningsOf = cluster: cluster.diagnostics.warnings;
@@ -444,24 +550,45 @@ in
     || throw "web ingress: ${show p}";
 
   # The PodMonitor's pods are not Kix workloads, so the port name stays a
-  # name: the ingress rule keeps it and the egress rule drops the ports.
-  prometheus-scrape-unresolved-port-name =
+  # name. Without default deny the target gets no egress rule (a rule
+  # without ports would admit every port) and a warning.
+  prometheus-scrape-unresolved-port-name-gets-no-egress =
     let
-      cluster = clusterWith { };
-      egress = serviceRuleFor cluster "app" "operand";
-      ingress = byPrefix "monitoring-prometheus-server-scrape-pods-operand" (cnpsOf cluster);
+      cluster = clusterWith {
+        extra = noDefaultDeny // namedPortPods;
+      };
     in
     (
-      egress.ports == [ ]
-      &&
-        (builtins.head ingress.spec.ingress).ports == [
-          {
-            port = "pgexporter";
-            protocol = "TCP";
-          }
-        ]
+      serviceRuleFor cluster "app" "named" == null
+      && serviceRuleFor cluster "app" "operand" != null
+      && hasWarning "target watch/pods-named has port pgexporter, a name no Kix container declares" cluster
     )
-    || throw "operand rules: egress ${show egress}; ingress ${show ingress}";
+    || throw "named port: rules ${show (egressRules cluster)}; warnings ${show (warningsOf cluster)}";
+
+  # Under default deny the same target fails evaluation.
+  prometheus-scrape-unresolved-port-name-fails-under-default-deny = evalFails (clusterWith {
+    extra = namedPortPods;
+  });
+
+  # The target ingress rule keeps the name, which the receiving pod
+  # resolves.
+  prometheus-scrape-unresolved-port-name-ingress-keeps-name =
+    let
+      ingress = byPrefix "monitoring-prometheus-server-scrape-pods-named" (
+        cnpsOf (clusterWith {
+          extra = namedPortPods // {
+            networkPolicy.directions = "ingress";
+          };
+        })
+      );
+    in
+    (builtins.head ingress.spec.ingress).ports == [
+      {
+        port = "pgexporter";
+        protocol = "TCP";
+      }
+    ]
+    || throw "named port ingress: ${show ingress}";
 
   # node-exporter runs on the host network: a host rule on its port and no
   # ingress policy.
@@ -572,7 +699,9 @@ in
   # and the operand pods have one only when operand-peers is present.
   prometheus-scrape-no-default-deny-only-isolated-targets =
     let
-      withoutPeers = cnpsOf (clusterWith { extra.networkPolicy.defaultDeny = false; });
+      withoutPeers = cnpsOf (clusterWith {
+        extra.networkPolicy.defaultDeny = false;
+      });
       withPeers = cnpsOf (clusterWith {
         extra = {
           networkPolicy.defaultDeny = false;
@@ -591,6 +720,35 @@ in
     )
     || throw "defaultDeny = false: ${show (map (m: m.metadata.name) withPeers)}";
 
+  # Without default deny, isolation is read from the labels of the pods
+  # behind the target, not from the Service selector. A policy selecting
+  # `tier=api`, which only the pods carry, isolates them, so the target gets
+  # scrape ingress; a policy selecting pods without `tier` matches the
+  # Service selector but not the pods, so the target gets none.
+  prometheus-scrape-isolation-reads-pod-labels =
+    let
+      apiIngress =
+        endpointSelector:
+        byPrefix "monitoring-prometheus-server-scrape-svc-api" (
+          cnpsOf (clusterWith {
+            extra = noDefaultDeny // {
+              instances.apps.tiered.package = tiered endpointSelector;
+            };
+          })
+        );
+      byExtraLabel = apiIngress { matchLabels.tier = "api"; };
+      byMissingLabel = apiIngress {
+        matchExpressions = [
+          {
+            key = "tier";
+            operator = "DoesNotExist";
+          }
+        ];
+      };
+    in
+    (byExtraLabel != null && byMissingLabel == null)
+    || throw "isolation: by extra label ${show byExtraLabel}; by missing label ${show byMissingLabel}";
+
   # `namespaceSelector.any` covers every Kix namespace: the monitor's own,
   # which has no workload, and one that holds only custom resources.
   prometheus-scrape-any-namespace =
@@ -600,7 +758,7 @@ in
           watch.listeners.package = podMonitorOnly "listeners" {
             namespaceSelector.any = true;
             selector.matchLabels.app = "listener";
-            podMetricsEndpoints = [ { port = "metrics"; } ];
+            podMetricsEndpoints = [ { portNumber = 8080; } ];
           };
           runners.cr.package = crOnly;
         };
@@ -609,7 +767,11 @@ in
         allByPrefix "monitoring-prometheus-server-scrape-pods-listeners" cnps
       );
     in
-    (builtins.elem "watch" namespaces && builtins.elem "runners" namespaces && builtins.elem "apps" namespaces)
+    (
+      builtins.elem "watch" namespaces
+      && builtins.elem "runners" namespaces
+      && builtins.elem "apps" namespaces
+    )
     || throw "any: ingress namespaces ${show namespaces}";
 
   # Prometheus `c` in `a-b` and `b-c` in `a` join to the same readable name;
@@ -637,16 +799,7 @@ in
   prometheus-scrape-warns-on-match-expressions =
     let
       cluster = clusterWith {
-        extra.instances.watch.expr.package = podMonitorOnly "expr" {
-          selector.matchExpressions = [
-            {
-              key = "app";
-              operator = "In";
-              values = [ "expr" ];
-            }
-          ];
-          podMetricsEndpoints = [ { port = "metrics"; } ];
-        };
+        extra = noDefaultDeny // matchExpressionsPods;
       };
     in
     (
@@ -655,11 +808,19 @@ in
     )
     || throw "matchExpressions warning: ${show (warningsOf cluster)}";
 
+  prometheus-scrape-match-expressions-fails-under-default-deny = evalFails (clusterWith {
+    extra = matchExpressionsPods;
+  });
+
   # A host rule without ports would open every node port, so the target
   # gets none and a warning instead.
   prometheus-scrape-host-network-without-port-number =
     let
-      cluster = clusterWith { extra.instances.apps.hostexp.package = hostExporter; };
+      cluster = clusterWith {
+        extra = noDefaultDeny // {
+          instances.apps.hostexp.package = hostExporter;
+        };
+      };
       hostRules = rulesOf "host-network-egress" (egressRules cluster);
     in
     (
@@ -668,12 +829,18 @@ in
     )
     || throw "portless host target: rules ${show hostRules}; warnings ${show (warningsOf cluster)}";
 
+  prometheus-scrape-host-network-without-port-number-fails-under-default-deny =
+    evalFails
+      (clusterWith {
+        extra.instances.apps.hostexp.package = hostExporter;
+      });
+
   # A Prometheus CRD without a podSelector (here through the cluster
   # override) gives no scrape policy and a warning.
   prometheus-scrape-warns-without-pod-selector =
     let
       cluster = clusterWith {
-        extra.cluster.factBehavior."monitoring.coreos.com/Prometheus".endpoint = "conduct";
+        extra = noDefaultDeny // unnamedServer;
       };
     in
     (
@@ -681,6 +848,10 @@ in
       && hasWarning "Prometheus monitoring/prometheus-server: the Prometheus CRD declares no factBehavior.podSelector" cluster
     )
     || throw "no podSelector: ${show (warningsOf cluster)}";
+
+  prometheus-scrape-without-pod-selector-fails-under-default-deny = evalFails (clusterWith {
+    extra = unnamedServer;
+  });
 
   # The CRD's `endpoint = "terminate"` gives a remote-write URL built from a
   # dependency's address an operand egress from the server pods and an
@@ -698,18 +869,17 @@ in
       ) cnps;
       egress = lib.findFirst (p: p.metadata.name == "writer-prometheus-writer-egress") null crOperand;
       ingress = lib.findFirst (
-        p:
-        p.metadata.namespace == "sink"
-        && lib.hasPrefix "writer-prometheus-writer-to-" p.metadata.name
+        p: p.metadata.namespace == "sink" && lib.hasPrefix "writer-prometheus-writer-to-" p.metadata.name
       ) null cnps;
       serviceRule = lib.findFirst (r: r.stubRule == "service-egress") null egress.spec.egress;
     in
     (
       egress != null
-      && egress.spec.endpointSelector.matchLabels == {
-        "app.kubernetes.io/name" = "prometheus";
-        "operator.prometheus.io/name" = "writer";
-      }
+      &&
+        egress.spec.endpointSelector.matchLabels == {
+          "app.kubernetes.io/name" = "prometheus";
+          "operator.prometheus.io/name" = "writer";
+        }
       && serviceRule.namespace == "sink"
       && ingress != null
       && (builtins.head ingress.spec.ingress).callerNamespace == "monitoring"

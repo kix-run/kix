@@ -25,7 +25,7 @@ in
       wSelector,
       hostNetwork,
       edges,
-      networkConfig,
+      enforced,
       packageIntents ? { },
       networkPolicyEnforcer ? null,
     }:
@@ -36,10 +36,6 @@ in
         else
           let
             enforcerApi = networkPolicyEnforcer.netpol;
-
-            directions = networkConfig.directions or "both";
-            doEgress = directions == "both" || directions == "egress";
-            doIngress = directions == "both" || directions == "ingress";
 
             intentRules =
               if packageIntents != { } then
@@ -83,7 +79,7 @@ in
             serviceDeps = builtins.filter (s: s != null) (map (e: e.service) edges);
 
             egressCnp =
-              if !doEgress then
+              if !enforced.egress then
                 null
               else
                 enforcerApi.mkPolicy {
@@ -102,7 +98,7 @@ in
                 };
 
             ingressCnp =
-              if !doIngress || ingressRules == [ ] then
+              if !enforced.ingress || ingressRules == [ ] then
                 null
               else
                 enforcerApi.mkPolicy {
@@ -121,7 +117,7 @@ in
                 };
 
             callerIngressCnps =
-              if !doIngress then
+              if !enforced.ingress then
                 [ ]
               else
                 map (
@@ -170,17 +166,13 @@ in
       emit,
       instanceName,
       allPartResources,
-      networkConfig,
+      enforced,
       packageMeta,
       networkPolicyEnforcer ? null,
     }:
     let
       # left lazy: self-enforcer instances arrive with a null enforcer but must still produce warnings
       enforcerApi = networkPolicyEnforcer.netpol;
-
-      directions = networkConfig.directions or "both";
-      doEgress = directions == "both" || directions == "egress";
-      doIngress = directions == "both" || directions == "ingress";
 
       workloads = builtins.filter isWorkload allPartResources;
 
@@ -236,7 +228,7 @@ in
       ) allPartResources;
 
       apiServerSupplementPolicies =
-        if !doEgress then
+        if !enforced.egress then
           [ ]
         else
           builtins.concatMap (
@@ -268,7 +260,7 @@ in
           ) workloads;
 
       externalIngressSupplementPolicies =
-        if !doIngress || !needsExternalIngress then
+        if !enforced.ingress || !needsExternalIngress then
           [ ]
         else
           builtins.concatMap (
@@ -341,7 +333,7 @@ in
           }) r.absorbedEndpointFacts;
 
           egressCnp =
-            if !doEgress then
+            if !enforced.egress then
               [ ]
             else
               [
@@ -374,7 +366,7 @@ in
               ];
 
           callerIngressCnps =
-            if !doIngress then
+            if !enforced.ingress then
               [ ]
             else
               map (
@@ -424,13 +416,11 @@ in
     {
       namespaceName,
       nsResource,
-      directions,
+      enforced,
       networkPolicyEnforcer ? null,
     }:
     let
       enforcerApi = networkPolicyEnforcer.netpol;
-      denyIngress = directions == "both" || directions == "ingress";
-      denyEgress = directions == "both" || directions == "egress";
     in
     enforcerApi.mkPolicy {
       mkResource = core.mkResource;
@@ -443,7 +433,8 @@ in
           "app.kubernetes.io/managed-by" = "kix";
         };
         spec = enforcerApi.mkDefaultDenySpec {
-          inherit denyIngress denyEgress;
+          denyIngress = enforced.ingress;
+          denyEgress = enforced.egress;
         };
       };
     };

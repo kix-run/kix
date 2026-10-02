@@ -552,7 +552,7 @@ rec {
       spec,
     }:
     let
-      directions = scope.networkPolicyDirections or "both";
+      directions = scope.networkPolicyDirections;
       sections = {
         ingress = [
           "ingress"
