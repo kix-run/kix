@@ -1,4 +1,4 @@
-# An nginx echo backend put on the tailnet both ways the tailscale package
+# An nginx backend put on the tailnet both ways the tailscale package
 # offers: an Ingress from `out.mkIngress`, and a LoadBalancer Service with
 # `out.loadBalancerClass` opened to the proxies by `out.mkBackendPolicy`.
 # Under default deny each path works only through its `*-from-tailscale`
@@ -13,7 +13,7 @@ in
 {
   meta = {
     version = "1.30.5";
-    description = "Echo backend reached over the tailnet";
+    description = "nginx backend reached over the tailnet";
     owner = "platform";
   };
 
@@ -33,7 +33,7 @@ in
             containers = [
               {
                 name = "nginx";
-                # echo-server's image; nginx serves its default page on 8080.
+                # echo-server's image, which serves nginx's default page on 8080.
                 image = "docker.io/nginxinc/nginx-unprivileged:1.30.5-alpine@sha256:ed04ec1ff34502c339ee5c3ae3f855442398edc1d05591e2b98981dcbbd20b1e";
                 ports = [ (kix.port "http" port) ];
                 readinessProbe.httpGet = {

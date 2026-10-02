@@ -1,17 +1,19 @@
 # tailscale: the Tailscale Kubernetes operator, which puts Services and
-# Ingresses on a tailnet and runs subnet routers, egress proxies and API
+# Ingresses on a tailnet and runs subnet routers, egress proxies, and API
 # server proxies from tailscale.com custom resources.
 #
 # The package renders the operator, its RBAC, the eight tailscale.com custom
 # resource definitions, IngressClass `tailscale`, and the network policies
 # for the pods the operator creates. The operator creates its proxies, the
-# DNSConfig nameserver and Recorder pods in this instance's namespace; the
+# DNSConfig nameserver, and Recorder pods in this instance's namespace; the
 # proxies run privileged.
 #
-# The operator serves the IngressClass `tailscale` and the
-# loadBalancerClass `tailscale` by those literal names, and the custom
-# resource definitions are cluster-wide, so a cluster runs one instance:
-# `conflictsWith` refuses a second one by alias and `annotationDomains`
+# A cluster runs one instance: the custom resource definitions are
+# cluster-wide, the operator serves loadBalancerClass `tailscale` by that
+# literal name (cmd/k8s-operator/svc.go), and its DNS-record handler for
+# Ingresses matches the class name `tailscale` literally
+# (dnsRecordsReconcilerIngressHandler in cmd/k8s-operator/operator.go).
+# `conflictsWith` refuses a second instance by alias and `annotationDomains`
 # whatever its aliases. The proxies' ServiceAccount is named `proxies`
 # because the operator's proxy template names it.
 #
@@ -20,7 +22,7 @@
 #   - In the tailnet policy file, add the tags `tag:k8s-operator` and
 #     `tag:k8s`, with `tag:k8s-operator` an owner of `tag:k8s`.
 #   - Create an OAuth client with write scope on General/Services,
-#     Devices/Core and Keys/Auth Keys, tagged `tag:k8s-operator`.
+#     Devices/Core, and Keys/Auth Keys, tagged `tag:k8s-operator`.
 #   - Store its ID and secret under the keys `client_id` and
 #     `client_secret` in a Secret in this namespace, and wire it as
 #     `oauthCredentials`. A Secret created outside Kix:
@@ -44,13 +46,34 @@
 #
 # Network policy: the operator reaches Tailscale's control plane and DERP
 # relays on TCP 443 and STUN on UDP 3478. With an enforcer, the package
-# opens egress for the proxies (DNS, the API server, the cluster and the
+# opens egress for the proxies (DNS, the API server, the cluster, and the
 # internet), ingress from the cluster for egress proxies and the DNSConfig
 # nameserver, and egress for Recorders. Proxies get no ingress from outside
 # the cluster: they open their tailnet connections, the enforcer admits the
 # replies, and a peer that cannot reach a proxy directly goes through DERP.
 # A backend a proxy forwards to needs `out.mkBackendPolicy` (or
 # `out.mkIngress`, which includes it).
+#
+# Known limits:
+#   - No workload identity federation: `env.CLIENT_ID` is refused and the
+#     operator gets no `serviceaccounts/token` permission, so a Tailnet
+#     resource that authenticates that way does not work.
+#   - No API server proxy in auth mode: `env.APISERVER_PROXY` is refused,
+#     and out.mkProxyGroup builds a `kube-apiserver` ProxyGroup only with
+#     `spec.kubeAPIServer.mode = "noauth"`.
+#   - Not usable as the `ingress` dependency of `kix.expose`: a tailscale
+#     Ingress takes its machine name from `tls[0].hosts[0]`, and the tailnet
+#     name, and so the URL, is not in the build. Use out.mkIngress.
+#   - The `proxies` ServiceAccount may read and change every Secret in this
+#     namespace (upstream's proxy Role), including the OAuth client and any
+#     Recorder S3 credentials. Keep other Secrets out of this namespace.
+#   - Under default deny, a pod that calls an egress proxy (an ExternalName
+#     Service the operator points at a proxy) gets no derived egress to the
+#     proxy pod in this namespace, and no builder here opens it. The
+#     client's package has to allow that egress itself.
+#   - `labels."tailscale.com/proxy-class"` on an Ingress or Service and the
+#     `tailscale.com/proxy-group` annotation take plain names. Kix neither
+#     checks them nor orders the object after that ProxyClass or ProxyGroup.
 #
 # Escape hatches: `env` for the operator's own variables (owned ones are
 # refused with the option that sets them); `partsOverlays`; full custom
@@ -67,22 +90,26 @@
 #           loadBalancerClass = tailscale.out.loadBalancerClass; ... }; };
 #         tailnetPolicy = tailscale.out.mkBackendPolicy scope { service = self.service; };
 #
-#   out.mkBackendPolicy scope { service; port ? null; }
-#       A policy in the caller's namespace that admits the proxies to the
-#       Service's pods on the pod ports behind `port` (every port when null).
-#       Null when the namespace has no enforcer.
+#   out.mkBackendPolicy scope { service; port ? null; name ? service.name; }
+#       A policy `<name>-from-tailscale` in the caller's namespace that
+#       admits the proxies to the Service's pods on the pod port behind
+#       `port` (a Service port number or name; every port when null).
+#       Null when the namespace has no enforcer. Refuses a Service without
+#       a selector. A second policy on the same Service needs its own
+#       `name`.
 #   out.mkIngress scope { name; service; port ? null; hostname ? name;
 #                         annotations ? { }; labels ? { }; spec ? { }; }
 #       `{ ingress; policy; }`. Assign it to one part, which becomes a
 #       folder of the two (a null policy is dropped). The Ingress
 #       has class `tailscale`, `tls.hosts = [ hostname ]`, which makes the
 #       machine `<hostname>.<tailnet>.ts.net`, and `service` as its default
-#       backend. `spec` adds `rules[].http.paths`; a Service other than
-#       `service` in those paths needs its own `mkBackendPolicy`. `labels`
-#       carries `tailscale.com/proxy-class`, `annotations`
-#       `tailscale.com/funnel` and `tailscale.com/proxy-group`. Refuses a
-#       dotted hostname, `spec.tls`, `spec.ingressClassName` and
-#       `spec.rules[].host`.
+#       backend. `spec` adds `rules[].http.paths`. The policy,
+#       `<name>-ingress-from-tailscale`, covers the default backend and
+#       every path to `service`; a path to another Service needs its own
+#       `mkBackendPolicy`. `labels` carries `tailscale.com/proxy-class`,
+#       `annotations` `tailscale.com/funnel` and `tailscale.com/proxy-group`.
+#       Refuses a dotted hostname, `spec.tls`, `spec.ingressClassName`,
+#       `spec.defaultBackend`, and `spec.rules[].host`.
 #   out.mkConnector, out.mkProxyGroup scope { name; spec; }
 #       Refuse a `spec.proxyClass` without a dependency: pass
 #       `<ProxyClass>.out.name`, or `kix.untrackedRef "<name>"` for one Kix
@@ -96,9 +123,12 @@
 #       `operandImages.k8s-nameserver`.
 #   out.mkRecorder scope { name; spec; }
 #       Defaults the recorder image and pull policy to
-#       `operandImages.tsrecorder`. Refuses an S3 credentials Secret name
-#       without a dependency; that Secret must live in this instance's
-#       namespace (`out.podNamespace`).
+#       `operandImages.tsrecorder`. The operator reads the S3 credentials
+#       Secret from this instance's namespace (`out.podNamespace`), so the
+#       builder refuses a Secret name without a dependency, and a name from
+#       a Kix resource unless the caller runs in that namespace. Pass
+#       `kix.untrackedRef "<name>"` for a Secret there that Kix does not
+#       build.
 #   out.crds.{Connector,DNSConfig,PeerRelay,ProxyClass,ProxyGroup,
 #             ProxyGroupPolicy,Recorder,Tailnet}
 #       For `scope.mkCR`. A ProxyClass:
@@ -122,12 +152,10 @@
 }:
 let
   # The upstream release: meta.version, image.tag, the CRD tag in
-  # crds/sources.txt (checked below), and the rules in rbac.nix.
+  # crds/sources.txt (checked by the tailscale-sources lib test), and the
+  # rules in rbac.nix.
   release = "1.102.4";
   tag = "v${release}";
-  sourceUrls = builtins.filter (l: l != "" && !lib.hasPrefix "#" l) (
-    lib.splitString "\n" (builtins.readFile ./crds/sources.txt)
-  );
 
   name = scope.instanceName;
   ns = scope.namespaceName;
@@ -191,24 +219,44 @@ let
   # from `kix.untrackedRef`.
   isTracked = v: builtins.isString v && builtins.hasContext v;
   trackedFix = "pass <resource>.out.name, which also orders the custom resource after it, or kix.untrackedRef \"<name>\" for an object Kix does not build.";
+
+  # The prefix of an error raised by a builder in `out`, naming the
+  # instance that called it.
+  callSite =
+    builder: consumerScope: subject:
+    "${who}: ${builder} ${subject}, called by ${consumerScope.namespaceName}/${consumerScope.instanceName}";
+
+  # Part folders drop entries keyed `root` or `meta`, so a ProxyClass or
+  # Connector under either key would never be applied.
+  reservedKeys = option: builder: keys: {
+    assertion =
+      !(builtins.any (k: builtins.elem k keys) [
+        "root"
+        "meta"
+      ]);
+    message = "${option} has an entry named root or meta. Kix drops parts with those names, so that object would not be applied. Use another name, or build it with ${builder} in a part of your own.";
+  };
 in
 {
   meta = {
     version = release;
-    description = "Tailscale Kubernetes operator: exposes Services and Ingresses on a tailnet and runs subnet routers, egress and API server proxies from tailscale.com resources";
+    description = "Tailscale Kubernetes operator: exposes Services and Ingresses on a tailnet and runs subnet routers, egress proxies, and API server proxies from tailscale.com resources";
     owner = "platform";
     defaultAliases = [ "tailscale" ];
     # One instance per cluster; see the header.
     conflictsWith = [ "cluster:tailscale" ];
     annotationDomains = [ "tailscale.com" ];
     # The proxy pods the operator creates in this namespace run privileged
-    # (upstream's proxy template).
+    # (upstream's proxy template). The operator's own pod does not; the
+    # grant is declared so that `architecture.unsafeGrants` lists it.
     podSecurity = "privileged";
+    unsafe = [ "privileged" ];
     # The operator has no leader election, and two pods would share one
     # tailnet state Secret.
     availability.max = "none";
-    # Control plane, API and DERP on TCP 443, STUN on UDP 3478. APISERVER_PROXY
-    # is refused, so the operator's own node carries no proxied traffic.
+    # Control plane, API, and DERP on TCP 443, STUN on UDP 3478.
+    # APISERVER_PROXY is refused, so the operator's own node carries no
+    # proxied traffic.
     network.intents.tailnet.egress = [
       {
         to = "world";
@@ -224,6 +272,8 @@ in
         ];
       }
     ];
+    # Six of the vendored CRDs carry x-kubernetes-validations rules.
+    k8s.minVersion = "1.25";
   };
 
   assertions =
@@ -246,10 +296,10 @@ in
           versionParts config.image.tag != null && lib.take 2 (versionParts config.image.tag) == releaseMinor;
         message = "image.tag \"${config.image.tag}\" is not a ${releaseMinorText} release, and the CRDs under kix/packages/tailscale/crds and the rules in kix/packages/tailscale/rbac.nix come from ${release}. Remove image.tag or set a v${releaseMinorText} tag. To move to another release, change release in kix/packages/tailscale/default.nix and the tag in crds/sources.txt, run uv run scripts/vendor-crds.py tailscale, and compare rbac.nix with that release's operator-rbac.yaml and proxy-rbac.yaml.";
       }
-      {
-        assertion = sourceUrls != [ ] && lib.all (lib.hasInfix "/${tag}/") sourceUrls;
-        message = "kix/packages/tailscale/crds/sources.txt fetches CRDs from a tag other than ${tag}, the package's release. Set the tag in every URL to ${tag} and run uv run scripts/vendor-crds.py tailscale.";
-      }
+      (reservedKeys "proxyClasses" "scope.mkCR tailscale.out.crds.ProxyClass" (
+        builtins.attrNames config.proxyClasses
+      ))
+      (reservedKeys "connectors" "tailscale.out.mkConnector" (builtins.attrNames config.connectors))
     ]
     ++ map (n: {
       assertion = config.operandImages.${n}.pullPolicy == null;
@@ -414,7 +464,7 @@ in
           }
           {
             vars.OPERATOR_INGRESS_CLASS_NAME = self.ingressClass.out.name;
-            from = "the IngressClass this package creates; the operator serves only the class tailscale";
+            from = "the IngressClass this package creates, which must be named tailscale because the operator's DNS-record handler for Ingresses matches that name literally";
             fix = "Remove it and use tailscale.out.ingressClass.";
           }
           {
@@ -508,72 +558,110 @@ in
           ingress = [ ({ from = "all-pods"; } // lib.optionalAttrs (ports != null) { inherit ports; }) ];
         };
 
-        # Every Service port of `service`, or the one equal to `port`.
+        # The Service ports that `refs` name, each by port number or port
+        # name; every port when `refs` is null. `what` prefixes the error.
         servicePorts =
-          what: service: port:
+          what: service: refs:
           let
             declared = service.rawManifest.spec.ports or [ ];
-            matched = builtins.filter (p: (p.port or null) == port) declared;
+            pick =
+              ref:
+              let
+                matched = builtins.filter (p: (p.port or null) == ref || (p.name or null) == ref) declared;
+              in
+              if matched == [ ] then
+                throw "${what}: Service ${service.name} has no port ${toString ref}; its ports are ${
+                  builtins.toJSON (map (p: p.port or null) declared)
+                }."
+              else
+                matched;
           in
-          if port == null then
-            declared
-          else if matched == [ ] then
-            throw "${who}: ${what}: Service ${service.name} has no port ${toString port}; its ports are ${
-              builtins.toJSON (map (p: p.port or null) declared)
-            }."
+          if refs == null then declared else lib.unique (builtins.concatMap pick refs);
+
+        # A policy over the pods of a Service without a selector would select
+        # every pod in the namespace.
+        selectorOf =
+          what: service:
+          let
+            selector = service.rawManifest.spec.selector or null;
+          in
+          if selector == null || selector == { } then
+            throw "${what}: Service ${service.name} has no selector, so a policy over its pods would admit the proxies to every pod in its namespace. Pass a Service that selects its backend pods."
           else
-            matched;
+            selector;
+
+        # The checks run with or without an enforcer, so a build does not
+        # start failing when network policy is turned on.
+        backendPolicy =
+          what: consumerScope:
+          {
+            service,
+            refs,
+            policyName,
+          }:
+          let
+            selector = selectorOf what service;
+            ports = servicePorts what service refs;
+            enforcer = consumerScope.networkPolicyEnforcer;
+          in
+          builtins.seq selector (
+            builtins.deepSeq ports (
+              if enforcer == null then
+                null
+              else
+                enforcer.netpol.mkPolicy {
+                  mkResource = consumerScope.mkResource;
+                  extraArgs = {
+                    name = "${policyName}-from-tailscale";
+                    labels = {
+                      ${kix.keys.derived} = "true";
+                      ${kix.keys.policyType} = "ingress-controller";
+                    };
+                    spec = {
+                      endpointSelector.matchLabels = selector;
+                      ingress = [
+                        (enforcer.netpol.mkCallerIngressRule {
+                          callerSelector = managedLabels;
+                          callerNamespace = ns;
+                          inherit ports;
+                        })
+                      ];
+                    };
+                    # The selector above carries no context, so without this
+                    # the policy is a part no dependency reaches.
+                    extraDeps = [ service ];
+                  };
+                }
+            )
+          );
 
         mkBackendPolicy =
           consumerScope:
           {
             service,
             port ? null,
+            name ? service.name,
           }:
-          let
-            ports = servicePorts "mkBackendPolicy" service port;
-          in
-          if consumerScope.networkPolicyEnforcer == null then
-            null
-          else
-            consumerScope.networkPolicyEnforcer.netpol.mkPolicy {
-              mkResource = consumerScope.mkResource;
-              extraArgs = {
-                name = "${service.name}-from-tailscale";
-                labels = {
-                  ${kix.keys.derived} = "true";
-                  ${kix.keys.policyType} = "ingress-controller";
-                };
-                spec = {
-                  endpointSelector.matchLabels = service.rawManifest.spec.selector or { };
-                  ingress = [
-                    (consumerScope.networkPolicyEnforcer.netpol.mkCallerIngressRule {
-                      callerSelector = managedLabels;
-                      callerNamespace = ns;
-                      inherit ports;
-                    })
-                  ];
-                };
-                # The selector above carries no context, so without this the
-                # policy is a part no dependency reaches.
-                extraDeps = [ service ];
-              };
-            };
+          backendPolicy (callSite "mkBackendPolicy" consumerScope service.name) consumerScope {
+            inherit service;
+            refs = if port == null then null else [ port ];
+            policyName = name;
+          };
 
-        # The Service port an Ingress backend names.
+        # The Service port number of an Ingress's default backend.
         backendPort =
-          service: port:
+          what: service: port:
           let
             declared = service.rawManifest.spec.ports or [ ];
           in
           if port != null then
-            port
+            (builtins.head (servicePorts what service [ port ])).port
           else if service ? out.port then
             builtins.fromJSON (builtins.unsafeDiscardStringContext service.out.port)
           else if builtins.length declared == 1 then
             (builtins.head declared).port
           else
-            throw "${who}: mkIngress: Service ${service.name} has ${toString (builtins.length declared)} ports; pass port.";
+            throw "${what}: Service ${service.name} has ${toString (builtins.length declared)} ports; pass port.";
 
         mkIngress =
           consumerScope:
@@ -587,7 +675,7 @@ in
             spec ? { },
           }:
           let
-            what = "mkIngress ${consumerScope.namespaceName}/${name}";
+            what = callSite "mkIngress" consumerScope name;
             ruleHosts = builtins.filter (h: h != null) (map (r: r.host or null) (spec.rules or [ ]));
             refusal =
               if lib.hasInfix "." hostname then
@@ -602,9 +690,29 @@ in
                 "spec sets defaultBackend, which the package sets from service and port; remove it."
               else
                 null;
+            defaultPort = backendPort what service port;
+            serviceName = builtins.unsafeDiscardStringContext service.name;
+            # Service ports of the paths that route to `service`, by number
+            # or by name.
+            pathPorts = builtins.concatMap (
+              path:
+              let
+                backend = (path.backend or { }).service or null;
+                portRef = (backend.port or { }).number or ((backend.port or { }).name or null);
+              in
+              if
+                backend == null
+                || builtins.unsafeDiscardStringContext (toString (backend.name or "")) != serviceName
+              then
+                [ ]
+              else if portRef == null then
+                throw "${what}: a path to Service ${serviceName} names no port; set backend.service.port.number or .name."
+              else
+                [ portRef ]
+            ) (builtins.concatMap (rule: (rule.http or { }).paths or [ ]) (spec.rules or [ ]));
           in
           if refusal != null then
-            throw "${who}: ${what}: ${refusal}"
+            throw "${what}: ${refusal}"
           else
             {
               ingress = consumerScope.mkResource {
@@ -620,39 +728,51 @@ in
                   tls = [ { hosts = [ hostname ]; } ];
                   defaultBackend.service = {
                     name = service.out.name;
-                    port.number = backendPort service port;
+                    port.number = defaultPort;
                   };
                 };
               };
-              policy = mkBackendPolicy consumerScope { inherit service port; };
+              # Named after the Ingress, so a Service can sit behind several
+              # Ingresses and an out.mkBackendPolicy of its own.
+              policy = backendPolicy what consumerScope {
+                inherit service;
+                refs = [ defaultPort ] ++ pathPorts;
+                policyName = "${name}-ingress";
+              };
             };
 
-        # Builders for kinds whose spec names a ProxyClass.
+        # Refuses a reference given as a plain string, which names an object
+        # without ordering this custom resource after it.
         refuseUntracked =
-          kind: consumerScope: args: field: value:
+          what: field: value: fix:
           if value != null && !(isTracked value) then
-            throw "${who}: ${kind} ${args.name or "?"} in ${consumerScope.namespaceName}: ${field} = \"${value}\" is a plain string; ${trackedFix}"
+            throw "${what}: ${field} = \"${value}\" is a plain string; ${fix}"
           else
             null;
 
         crBuilder =
-          part: kind: check: consumerScope: args:
+          part: check: consumerScope: args:
           builtins.seq (check consumerScope args) (self.crds.${part}.out.mkCR consumerScope args);
 
         proxyClassCheck =
-          kind: consumerScope: args:
-          refuseUntracked kind consumerScope args "spec.proxyClass" ((args.spec or { }).proxyClass or null);
+          builder: consumerScope: args:
+          let
+            what = callSite builder consumerScope (args.name or "?");
+            proxyClass = (args.spec or { }).proxyClass or null;
+          in
+          refuseUntracked what "spec.proxyClass" proxyClass trackedFix;
 
         proxyGroupCheck =
           consumerScope: args:
           let
             spec = args.spec or { };
+            what = callSite "mkProxyGroup" consumerScope (args.name or "?");
           in
-          builtins.seq (proxyClassCheck "ProxyGroup" consumerScope args) (
+          builtins.seq (proxyClassCheck "mkProxyGroup" consumerScope args) (
             if
               (spec.type or null) == "kube-apiserver" && ((spec.kubeAPIServer or { }).mode or "auth") != "noauth"
             then
-              throw "${who}: ProxyGroup ${args.name or "?"}: a kube-apiserver ProxyGroup runs in auth mode unless kubeAPIServer.mode is set. Auth mode needs the kube-apiserver-auth-proxy ServiceAccount and impersonation RBAC, which this package does not create. Set spec.kubeAPIServer.mode = \"noauth\"."
+              throw "${what}: a kube-apiserver ProxyGroup runs in auth mode unless kubeAPIServer.mode is set. Auth mode needs the kube-apiserver-auth-proxy ServiceAccount and impersonation RBAC, which this package does not create. Set spec.kubeAPIServer.mode = \"noauth\"."
             else
               null
           );
@@ -661,8 +781,18 @@ in
         mkRecorder =
           consumerScope: args:
           let
+            what = callSite "mkRecorder" consumerScope (args.name or "?");
+            field = "spec.storage.s3.credentials.secret.name";
             secretName =
               ((((args.spec or { }).storage or { }).s3 or { }).credentials or { }).secret.name or null;
+            # Secret packages resolve only in their own namespace
+            # (meta.scope = "namespace"), so a tracked name passed by a caller
+            # elsewhere names a Secret outside the operator's namespace.
+            otherNamespace =
+              secretName != null
+              && isTracked secretName
+              && !(kix.isUntrackedRef secretName)
+              && consumerScope.namespaceName != ns;
             container = {
               image = kix.image.ref recorderImage;
             }
@@ -671,14 +801,19 @@ in
             };
           in
           builtins.seq
-            (refuseUntracked "Recorder" consumerScope args "spec.storage.s3.credentials.secret.name" secretName)
+            (refuseUntracked what field secretName
+              "the operator reads it from namespace ${ns}. Pass kix.untrackedRef \"<name>\" for a Secret there that Kix does not build, or call mkRecorder from an instance in ${ns} and pass the out.name of a Secret it builds or depends on."
+            )
             (
-              self.crds.recorders.out.mkCR consumerScope (
-                args
-                // {
-                  spec = lib.recursiveUpdate { statefulSet.pod.container = container; } (args.spec or { });
-                }
-              )
+              if otherNamespace then
+                throw "${what}: ${field} names a Secret built in namespace ${consumerScope.namespaceName}, but the operator reads it from namespace ${ns}. Call mkRecorder from an instance in ${ns} that builds or depends on the Secret, or pass kix.untrackedRef \"<name>\" for a Secret in ${ns} that Kix does not build."
+              else
+                self.crds.recorders.out.mkCR consumerScope (
+                  args
+                  // {
+                    spec = lib.recursiveUpdate { statefulSet.pod.container = container; } (args.spec or { });
+                  }
+                )
             );
 
         nameserverImage = config.operandImages.k8s-nameserver;
@@ -761,7 +896,10 @@ in
           };
         };
 
-        # The operator compares Ingress classes with the literal name.
+        # The Ingress reconcilers read the class name from
+        # OPERATOR_INGRESS_CLASS_NAME, but dnsRecordsReconcilerIngressHandler
+        # in cmd/k8s-operator/operator.go matches the literal `tailscale`, so
+        # any other name loses the DNS records of Ingress proxies.
         ingressClass = scope.mkClusterResource {
           apiVersion = "networking.k8s.io/v1";
           kind = "IngressClass";
@@ -782,6 +920,7 @@ in
             template.spec = {
               serviceAccount = self.serviceAccount;
               nodeSelector."kubernetes.io/os" = "linux";
+              terminationGracePeriodSeconds = 30;
               securityContext = {
                 runAsNonRoot = true;
                 runAsUser = 65532;
@@ -995,8 +1134,8 @@ in
               mkRecorder
               mkDNSConfig
               ;
-            mkConnector = crBuilder "connectors" "Connector" (proxyClassCheck "Connector");
-            mkProxyGroup = crBuilder "proxyGroups" "ProxyGroup" proxyGroupCheck;
+            mkConnector = crBuilder "connectors" (proxyClassCheck "mkConnector");
+            mkProxyGroup = crBuilder "proxyGroups" proxyGroupCheck;
 
             # Includes the nameserver and recorder images before any
             # DNSConfig or Recorder exists, so a mirror can hold them.

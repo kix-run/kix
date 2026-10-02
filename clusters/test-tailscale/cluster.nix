@@ -2,12 +2,14 @@
 # on the tailnet, under Cilium default-deny.
 #
 # The `tailscale` namespace holds the operator and its OAuth Secret, which
-# is created outside Kix. `tailnet-demo` holds `consumer.nix`, an echo
+# is created outside Kix. `tailnet-demo` holds `consumer.nix`, an nginx
 # backend reached through an Ingress from `out.mkIngress` and through a
 # LoadBalancer Service with `out.loadBalancerClass`. Each gets a
 # `*-from-tailscale` policy and no ingress from outside the cluster.
 #
-# Build:  nix build .#cluster-tailscale --extra-experimental-features pipe-operators
+# Commands run from the repository root. Build:
+#
+#   nix build ./clusters#cluster-tailscale --extra-experimental-features pipe-operators
 #
 # Deploy on a kind cluster that runs Cilium, after creating the Secret:
 #
@@ -74,7 +76,7 @@ kix.buildCluster {
           };
         };
 
-        instances.tailnet-demo.echo.package = import ./consumer.nix;
+        instances.tailnet-demo.web.package = import ./consumer.nix;
       }
     )
   ];

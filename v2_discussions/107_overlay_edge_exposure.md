@@ -136,7 +136,7 @@ Zero new fields for the operator to write. The "single list" ask is satisfied by
 3. **Add port-shape dispatch** in `kix.expose`: HTTP-shaped → existing path; else → loadBalancer path.
 4. **Optional `tlsTermination` lint**: warning when `clusterIssuer` wired against `out.tlsTermination = "upstream"`.
 5. **Ship `kix/packages/tailscale/`**: done, with the `out` above. No `ingressClassName` and no `gatewayRef`.
-6. **Wire `ludo/cluster.nix`** — `ingress = self.tailscaleOperator`, `loadBalancer = self.tailscaleOperator`. Drop `clusterIssuer` for ludo (tailscale-only edge).
+6. **Wire `ludo/cluster.nix`**: the tailscale package cannot fill the `ingress` slot (open question 2). Until step 2 gives `kix.expose` a `loadBalancer` slot, ludo's packages put their Services on the tailnet themselves, with `out.mkIngress`, or with `out.loadBalancerClass` and `out.mkBackendPolicy`. Drop `clusterIssuer` for ludo (tailscale-only edge).
 7. **Add `cluster.out.exposures` + `kix exposures` CLI** — derived view, no new declarations.
 8. **Firezone controller** — build small operator (Go or Rust), package as `kix/packages/firezone-resource/`, ship alongside upstream firezone helm chart for the gateway. Tracked separately; not a ludo-D-day blocker.
 

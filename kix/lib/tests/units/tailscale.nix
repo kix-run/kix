@@ -1,5 +1,6 @@
 # Tests for kix/packages/tailscale (refusals, the operator Deployment, the
-# custom resource builders, out.mkIngress and out.mkBackendPolicy) and for
+# custom resource builders, out.mkIngress, out.mkBackendPolicy, and the
+# CRD source tag) and for
 # Services whose loadBalancerClass carries a dependency: checkLoadBalancer
 # skips the loadBalancer role for them, and derived policy gives them no
 # ingress from outside the cluster. The operator runs in namespace
@@ -20,6 +21,7 @@
 let
   tailscalePackage = import ../../../packages/tailscale;
   secretPackage = import ../../../packages/secret;
+  inherit (import ../../vocab { inherit lib; }) untrackedRef;
 
   nameserverDigest = "sha256:3676e2277ad16da948caee7952b2a27859a66b905edd981e1bb58b2626bc92a4";
 
@@ -199,7 +201,8 @@ let
     );
 
   # A one-Service package for the loadBalancerClass tests. `class` is
-  # "provider" (tailscale's out.loadBalancerClass) or a raw string.
+  # "provider" (tailscale's out.loadBalancerClass), "untracked" (the class
+  # wrapped in kix.untrackedRef), or a raw string.
   mkLbPackage = class: {
     meta = {
       version = "test";
@@ -239,7 +242,13 @@ let
           name = "lb";
           spec = {
             type = "LoadBalancer";
-            loadBalancerClass = if class == "provider" then tailscale.out.loadBalancerClass else class;
+            loadBalancerClass =
+              if class == "provider" then
+                tailscale.out.loadBalancerClass
+              else if class == "untracked" then
+                untrackedRef "tailscale"
+              else
+                class;
             selector = scope.selectorLabels;
             ports = [
               {
@@ -290,6 +299,18 @@ in
         operandPullPolicy = clusterWith { config.operandImages.tailscale.pullPolicy = "Always"; };
         missingClientSecret = clusterWith { credentials.client_id = "id"; };
         otherRelease = clusterWith { config.image.tag = "v1.84.0"; };
+        clientIdEnv = clusterWith { config.env.CLIENT_ID = "x"; };
+        apiServerProxyEnv = clusterWith { config.env.APISERVER_PROXY = "true"; };
+        priorityClassEnv = clusterWith { config.env.PROXY_PRIORITY_CLASS_NAME = "x"; };
+        proxyClassRoot = clusterWith {
+          config = {
+            proxyClasses.root = { };
+            defaultProxyClass = "root";
+          };
+        };
+        connectorMeta = clusterWith {
+          config.connectors.meta.subnetRouter.advertiseRoutes = [ "10.0.0.0/8" ];
+        };
       };
       passing = {
         declaredDefault = clusterWith {
@@ -316,13 +337,111 @@ in
     (notFailing == [ ] && notPassing == [ ])
     || throw "tailscale refusals: accepted ${builtins.toJSON notFailing}, refused ${builtins.toJSON notPassing}";
 
-  # Builder refusals: a plain-string proxyClass, a kube-apiserver
-  # ProxyGroup in auth mode, an Ingress rule with a host, and a dotted
-  # hostname.
+  # Builder refusals: a plain-string proxyClass or Recorder Secret, a
+  # Recorder Secret built outside the operator's namespace, a
+  # kube-apiserver ProxyGroup in auth mode, Ingress fields the package
+  # sets, a port the Service lacks (checked without an enforcer), and a
+  # Service without a selector.
   tailscale-builder-refusals =
     let
       withParts = extraParts: clusterWith { consumer = mkConsumer { inherit extraParts; }; };
       cases = {
+        untrackedProxyGroup = withParts (
+          { scope, tailscale, ... }:
+          {
+            extra = tailscale.out.mkProxyGroup scope {
+              name = "extra";
+              spec = {
+                type = "egress";
+                proxyClass = "small";
+              };
+            };
+          }
+        );
+        untrackedRecorderSecret = withParts (
+          { scope, tailscale, ... }:
+          {
+            extra = tailscale.out.mkRecorder scope {
+              name = "extra";
+              spec.storage.s3.credentials.secret.name = "s3";
+            };
+          }
+        );
+        recorderSecretElsewhere = withParts (
+          {
+            self,
+            scope,
+            tailscale,
+            ...
+          }:
+          {
+            s3 = scope.mkSecret {
+              name = "s3";
+              stringData.AWS_ACCESS_KEY_ID = "x";
+            };
+            extra = tailscale.out.mkRecorder scope {
+              name = "extra";
+              spec.storage.s3.credentials.secret.name = self.s3.out.name;
+            };
+          }
+        );
+        ingressTls = clusterWith { consumer = mkConsumer { ingressSpec.tls = [ ]; }; };
+        ingressClassName = clusterWith {
+          consumer = mkConsumer { ingressSpec.ingressClassName = "other"; };
+        };
+        ingressDefaultBackend = clusterWith {
+          consumer = mkConsumer { ingressSpec.defaultBackend.service.name = "web"; };
+        };
+        ingressMissingPort = withParts (
+          {
+            self,
+            scope,
+            tailscale,
+            ...
+          }:
+          {
+            extra = tailscale.out.mkIngress scope {
+              name = "extra";
+              service = self.service;
+              port = 81;
+            };
+          }
+        );
+        pathMissingPort = clusterWith {
+          consumer = mkConsumer {
+            ingressSpec.rules = [
+              {
+                http.paths = [
+                  {
+                    path = "/";
+                    pathType = "Prefix";
+                    backend.service = {
+                      name = "web";
+                      port.number = 81;
+                    };
+                  }
+                ];
+              }
+            ];
+          };
+        };
+        selectorlessService = withParts (
+          {
+            self,
+            scope,
+            tailscale,
+            ...
+          }:
+          {
+            bare = scope.mkResource {
+              apiVersion = "v1";
+              kind = "Service";
+              name = "bare";
+              spec.ports = [ { port = 80; } ];
+            };
+            extra = tailscale.out.mkBackendPolicy scope { service = self.bare; };
+          }
+        );
         untrackedConnector = withParts (
           { scope, tailscale, ... }:
           {
@@ -379,6 +498,7 @@ in
     (
       podSpec.securityContext.runAsNonRoot
       && podSpec.securityContext.runAsUser == 65532
+      && podSpec.terminationGracePeriodSeconds == 30
       && container.securityContext.readOnlyRootFilesystem
       && oauth.secret.secretName == "oauth-credentials"
       &&
@@ -453,10 +573,11 @@ in
     )
     || throw "tailscale dnsconfig: ${builtins.toJSON (imageOf cluster)}, moved ${builtins.toJSON (imageOf moved)}";
 
-  # mkIngress sets the class, the TLS host and the default backend and
+  # mkIngress sets the class, the TLS host, and the default backend and
   # keeps the caller's paths; its policy is null without an enforcer. With
-  # one, both backends get a policy from the proxies on the pod port
-  # behind the chosen Service port.
+  # one, the Ingress policy admits the proxies on the pod port behind the
+  # default backend and behind every path to the same Service, and the
+  # LoadBalancer Service gets its own policy.
   tailscale-ingress =
     let
       paths = [
@@ -469,16 +590,22 @@ in
           };
         }
       ];
-      c = clusterWith { consumer = mkConsumer { ingressSpec.rules = [ { http.paths = paths; } ]; }; };
-      ingress = byName "web" (ofKind "Ingress" (manifests c));
-      enforced = manifests (clusterWith {
+      withPaths = clusterWith {
+        consumer = mkConsumer { ingressSpec.rules = [ { http.paths = paths; } ]; };
+      };
+      ingress = byName "web" (ofKind "Ingress" (manifests withPaths));
+      policiesOf = c: ofKind "CiliumNetworkPolicy" (manifests c);
+      enforced = policiesOf (clusterWith {
         modules = [ netpolOn ];
       });
-      policy = name: byName name (ofKind "CiliumNetworkPolicy" enforced);
-      rule = builtins.head (policy "web-from-tailscale").spec.ingress;
-      policies = builtins.filter (m: m.metadata.namespace or null == "demo") (
-        ofKind "CiliumNetworkPolicy" (manifests c)
-      );
+      enforcedPaths = policiesOf (clusterWith {
+        consumer = mkConsumer { ingressSpec.rules = [ { http.paths = paths; } ]; };
+        modules = [ netpolOn ];
+      });
+      ruleOf = ps: name: builtins.head (byName name ps).spec.ingress;
+      rule = ruleOf enforced "web-ingress-from-tailscale";
+      targetPorts = ps: name: map (p: p.targetPort) (ruleOf ps name).ports;
+      unenforced = builtins.filter (m: m.metadata.namespace or null == "demo") (policiesOf withPaths);
     in
     (
       ingress.spec.ingressClassName == "tailscale"
@@ -489,16 +616,156 @@ in
           port.number = 80;
         }
       && (builtins.head ingress.spec.rules).http.paths == paths
-      && policies == [ ]
+      && unenforced == [ ]
       && rule.callerSelector == { "tailscale.com/managed" = "true"; }
       && rule.callerNamespace == "tailscale"
-      && map (p: p.targetPort) rule.ports == [ 8080 ]
-      && policy "web-lb-from-tailscale" != null
+      && targetPorts enforced "web-ingress-from-tailscale" == [ 8080 ]
       &&
-        (policy "web-from-tailscale").spec.endpointSelector.matchLabels == (find "Service" "web")
-        .spec.selector
+        targetPorts enforcedPaths "web-ingress-from-tailscale" == [
+          8080
+          9090
+        ]
+      && byName "web-lb-from-tailscale" enforced != null
+      &&
+        (byName "web-ingress-from-tailscale" enforced).spec.endpointSelector.matchLabels
+        == (find "Service" "web").spec.selector
     )
     || throw "tailscale ingress: ${builtins.toJSON ingress}, rule ${builtins.toJSON rule}";
+
+  # One Service behind two Ingresses and two out.mkBackendPolicy calls gets
+  # four policies with distinct names; a path that names the Service port
+  # by name selects that port.
+  tailscale-backend-policy-names =
+    let
+      consumer = mkConsumer {
+        extraParts =
+          {
+            self,
+            scope,
+            tailscale,
+            ...
+          }:
+          {
+            adminIngress = tailscale.out.mkIngress scope {
+              name = "admin";
+              service = self.service;
+              port = 9000;
+              spec.rules = [
+                {
+                  http.paths = [
+                    {
+                      path = "/";
+                      pathType = "Prefix";
+                      backend.service = {
+                        name = self.service.out.name;
+                        port.name = "http";
+                      };
+                    }
+                  ];
+                }
+              ];
+            };
+            adminPolicy = tailscale.out.mkBackendPolicy scope {
+              service = self.service;
+              port = "admin";
+            };
+            httpPolicy = tailscale.out.mkBackendPolicy scope {
+              service = self.service;
+              port = 80;
+              name = "web-http";
+            };
+          };
+      };
+      policies = builtins.filter (m: m.metadata.namespace or null == "demo") (
+        ofKind "CiliumNetworkPolicy" (
+          manifests (clusterWith {
+            inherit consumer;
+            modules = [ netpolOn ];
+          })
+        )
+      );
+      portsOf = name: map (p: p.targetPort) (builtins.head (byName name policies).spec.ingress).ports;
+    in
+    (
+      portsOf "web-ingress-from-tailscale" == [ 8080 ]
+      &&
+        portsOf "admin-ingress-from-tailscale" == [
+          9090
+          8080
+        ]
+      && portsOf "web-from-tailscale" == [ 9090 ]
+      && portsOf "web-http-from-tailscale" == [ 8080 ]
+    )
+    || throw "tailscale backend policy names: ${builtins.toJSON (map (m: m.metadata.name) policies)}";
+
+  # mkRecorder defaults the recorder image and pull policy, and accepts an
+  # S3 Secret from kix.untrackedRef in any namespace or from a Kix
+  # resource when it runs in the operator's namespace.
+  tailscale-recorder =
+    let
+      recorderPackage = secretName: {
+        meta = {
+          version = "test";
+          description = "Recorder";
+          owner = "test";
+        };
+        build =
+          {
+            self,
+            scope,
+            tailscale,
+            ...
+          }:
+          {
+            s3 = scope.mkSecret {
+              name = "s3";
+              stringData.AWS_ACCESS_KEY_ID = "x";
+            };
+            recorder = tailscale.out.mkRecorder scope {
+              name = "rec";
+              spec.storage.s3.credentials.secret.name = secretName self;
+            };
+            root = self.recorder;
+          };
+      };
+      recorderIn =
+        ns: secretName:
+        byName "rec" (
+          ofKind "Recorder" (
+            manifests (clusterWith {
+              modules = [ { instances.${ns}.recorder.package = recorderPackage secretName; } ];
+            })
+          )
+        );
+      untracked = recorderIn "demo" (_: untrackedRef "s3");
+      tracked = recorderIn "tailscale" (self: self.s3.out.name);
+    in
+    (
+      untracked.spec.statefulSet.pod.container == {
+        image = "docker.io/tailscale/tsrecorder:v1.102.4@sha256:47b602ddee9e97d2060fb017496f7758551e7e619ebfd984e94fb8541f581aea";
+        imagePullPolicy = "IfNotPresent";
+      }
+      && untracked.spec.storage.s3.credentials.secret.name == "s3"
+      && tracked.spec.storage.s3.credentials.secret.name == "s3"
+    )
+    || throw "tailscale recorder: ${builtins.toJSON untracked}";
+
+  # Every URL in crds/sources.txt fetches from the tag of the package's
+  # release, so the vendored CRDs match meta.version.
+  tailscale-sources =
+    let
+      version =
+        (tailscalePackage {
+          inherit lib;
+          scope = { };
+          kix = { };
+        }).meta.version;
+      urls = builtins.filter (l: l != "" && !lib.hasPrefix "#" l) (
+        lib.splitString "\n" (builtins.readFile ../../../packages/tailscale/crds/sources.txt)
+      );
+    in
+    (builtins.length urls == 8 && builtins.all (lib.hasInfix "/v${version}/") urls)
+    || throw "tailscale sources: crds/sources.txt does not fetch every CRD from v${version}: ${builtins.toJSON urls}";
 
   # metricsService renders only with a prometheus provider; the operand
   # policies render only with an enforcer.
@@ -525,16 +792,18 @@ in
     || throw "tailscale gated parts: ${builtins.toJSON (map (m: m.metadata.name) operandPolicies)}";
 
   # With the loadBalancer role absent, a Service whose class comes from
-  # tailscale builds and a raw class still fails.
+  # tailscale builds, and a raw class or one from kix.untrackedRef still
+  # fails.
   tailscale-load-balancer-role =
     (
       !(evalFails (lbCluster "provider" [ noLoadBalancer ]))
       && evalFails (lbCluster "tailscale" [ noLoadBalancer ])
+      && evalFails (lbCluster "untracked" [ noLoadBalancer ])
     )
-    || throw "tailscale load balancer role: provider class refused, or raw class accepted";
+    || throw "tailscale load balancer role: provider class refused, or raw or untracked class accepted";
 
   # Derived policy gives a LoadBalancer Service's pods ingress from outside
-  # the cluster only when its class is a raw string.
+  # the cluster unless its class comes from a provider's `out`.
   tailscale-external-ingress =
     let
       supplements =
@@ -545,6 +814,6 @@ in
           && (m.metadata.labels or { }).${kixKeys.policyType} or null == "external-ingress-supplement"
         ) (ofKind "CiliumNetworkPolicy" (manifests (lbCluster class [ netpolOn ])));
     in
-    (supplements "provider" == [ ] && supplements "other" != [ ])
+    (supplements "provider" == [ ] && supplements "other" != [ ] && supplements "untracked" != [ ])
     || throw "tailscale external ingress: provider ${builtins.toJSON (supplements "provider")}";
 }
