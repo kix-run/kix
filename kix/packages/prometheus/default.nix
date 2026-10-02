@@ -279,7 +279,8 @@ in
                 };
                 targetPort = lib.mkOption {
                   type = lib.types.either lib.types.int lib.types.str;
-                  default = "grpc";
+                  default = 10901;
+                  description = "The sidecar's gRPC port on the server pods. The operator fixes it at 10901. Network policy egress needs a number: Kix did not build the pods, so it cannot resolve a port name.";
                 };
                 httpPortName = lib.mkOption {
                   type = lib.types.str;
@@ -291,7 +292,8 @@ in
                 };
                 targetHttpPort = lib.mkOption {
                   type = lib.types.either lib.types.int lib.types.str;
-                  default = "http";
+                  default = 10902;
+                  description = "The sidecar's HTTP port on the server pods, which the Thanos ServiceMonitor scrapes. The operator fixes it at 10902. Network policy egress needs a number: Kix did not build the pods, so it cannot resolve a port name.";
                 };
                 nodePort = lib.mkOption {
                   type = lib.types.nullOr lib.types.int;
@@ -348,7 +350,8 @@ in
                 };
                 targetPort = lib.mkOption {
                   type = lib.types.either lib.types.int lib.types.str;
-                  default = "grpc";
+                  default = 10901;
+                  description = "The sidecar's gRPC port on the server pods. The operator fixes it at 10901. Network policy egress needs a number: Kix did not build the pods, so it cannot resolve a port name.";
                 };
                 httpPortName = lib.mkOption {
                   type = lib.types.str;
@@ -360,7 +363,8 @@ in
                 };
                 targetHttpPort = lib.mkOption {
                   type = lib.types.either lib.types.int lib.types.str;
-                  default = "http";
+                  default = 10902;
+                  description = "The sidecar's HTTP port on the server pods, which the Thanos ServiceMonitor scrapes. The operator fixes it at 10902. Network policy egress needs a number: Kix did not build the pods, so it cannot resolve a port name.";
                 };
                 nodePort = lib.mkOption {
                   type = lib.types.int;

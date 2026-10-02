@@ -361,7 +361,10 @@ in
         who = "infisical-operator infisical/infisical-operator";
         clusterConfig = {
           clusterDomain = "cluster.test";
-          networkPolicy.enable = true;
+          networkPolicy = {
+            enable = true;
+            enforced.egress = true;
+          };
         };
         address = external;
         namespace = "infisical";

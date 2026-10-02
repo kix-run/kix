@@ -744,7 +744,10 @@ in
                 podMetricsEndpoints = [
                   (
                     {
-                      port = "pgexporter";
+                      # The operator's exporter sidecar listens on 9187 (port
+                      # name pgexporter). The scrape egress rule needs the
+                      # number, because Kix does not see the operator's pods.
+                      portNumber = 9187;
                     }
                     // lib.optionalAttrs (config.metrics.interval != null) { inherit (config.metrics) interval; }
                   )

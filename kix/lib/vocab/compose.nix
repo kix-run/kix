@@ -528,7 +528,7 @@ rec {
   # `scope.forService dep` for a policy in a dependency's namespace.
   #
   # The `ingress`/`ingressDeny` or `egress`/`egressDeny` sections of a
-  # direction the cluster does not enforce (`scope.networkPolicyDirections`)
+  # direction the cluster does not enforce (`scope.networkPolicyEnforced`)
   # are dropped: such a section would isolate the pods in a direction that
   # default deny leaves open, and allow only what the section lists.
   #
@@ -552,7 +552,7 @@ rec {
       spec,
     }:
     let
-      directions = scope.networkPolicyDirections or "both";
+      enforced = scope.networkPolicyEnforced;
       sections = {
         ingress = [
           "ingress"
@@ -564,12 +564,8 @@ rec {
         ];
       };
       unenforced =
-        if directions == "ingress" then
-          sections.egress
-        else if directions == "egress" then
-          sections.ingress
-        else
-          [ ];
+        lib.optionals (!enforced.ingress) sections.ingress
+        ++ lib.optionals (!enforced.egress) sections.egress;
       enforcedSpec = removeAttrs spec unenforced;
       hasSection = s: builtins.any (k: s ? ${k}) (sections.ingress ++ sections.egress);
     in

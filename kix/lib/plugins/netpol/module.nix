@@ -13,6 +13,8 @@ let
 
   enforcerRole = "network-policy-enforcer";
 
+  inherit (cfg) enforced;
+
   resolveEnforcerOut =
     {
       cluster,
@@ -30,43 +32,61 @@ let
 in
 {
   options.networkPolicy = lib.mkOption {
-    type = lib.types.submodule {
-      options = {
-        enable = lib.mkOption {
-          type = lib.types.bool;
-          default = false;
-          description = "Generate CiliumNetworkPolicies from DI graph.";
+    type = lib.types.submodule (
+      { config, ... }:
+      {
+        options = {
+          enable = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Generate CiliumNetworkPolicies from DI graph.";
+          };
+          defaultDeny = lib.mkOption {
+            type = lib.types.bool;
+            default = true;
+            description = "Generate deny-all CiliumNetworkPolicy per namespace.";
+          };
+          directions = lib.mkOption {
+            type = lib.types.enum [
+              "ingress"
+              "egress"
+              "both"
+            ];
+            default = "both";
+            description = "Which policy directions to generate.";
+          };
+          enforced = lib.mkOption {
+            type = lib.types.attrsOf lib.types.bool;
+            readOnly = true;
+            internal = true;
+            default = {
+              ingress = config.directions != "egress";
+              egress = config.directions != "ingress";
+            };
+            description = ''
+              `directions` as `{ ingress; egress; }`, the directions default
+              deny and every derived policy cover. The netpol plugin's policy
+              builders take it, and `kix.operandPolicy` reads it through
+              `scope.networkPolicyEnforced`.
+            '';
+          };
+          platformIntents = lib.mkOption {
+            type = lib.types.attrsOf lib.types.anything;
+            default = { };
+            description = ''
+              Platform connectivity intents for non-kix-managed pods (e.g.
+              CoreDNS, local-path-provisioner in kind). Each intent declares
+              enforcer-agnostic connectivity requirements; the enforcer
+              materializes them into native policy CRs. Set by flavors.
+              Also used for a Kix workload whose egress depends on its
+              configuration, when the package's error or description asks
+              for one (infisical-operator `address`, coredns `servers`).
+              See v2_discussions/archive/92_declarative_network_policy_intents.md.
+            '';
+          };
         };
-        defaultDeny = lib.mkOption {
-          type = lib.types.bool;
-          default = true;
-          description = "Generate deny-all CiliumNetworkPolicy per namespace.";
-        };
-        directions = lib.mkOption {
-          type = lib.types.enum [
-            "ingress"
-            "egress"
-            "both"
-          ];
-          default = "both";
-          description = "Which policy directions to generate.";
-        };
-        platformIntents = lib.mkOption {
-          type = lib.types.attrsOf lib.types.anything;
-          default = { };
-          description = ''
-            Platform connectivity intents for non-kix-managed pods (e.g.
-            CoreDNS, local-path-provisioner in kind). Each intent declares
-            enforcer-agnostic connectivity requirements; the enforcer
-            materializes them into native policy CRs. Set by flavors.
-            Also used for a Kix workload whose egress depends on its
-            configuration, when the package's error or description asks
-            for one (infisical-operator `address`, coredns `servers`).
-            See v2_discussions/archive/92_declarative_network_policy_intents.md.
-          '';
-        };
-      };
-    };
+      }
+    );
     default = { };
     description = ''
       CiliumNetworkPolicy generation from DI graph. See v2_discussions/37
@@ -98,7 +118,7 @@ in
             edges
             ;
           wSelector = ctx.selector;
-          networkConfig = cfg;
+          inherit enforced;
           networkPolicyEnforcer = resolveEnforcerOut { inherit (ctx) cluster instanceName namespaceName; };
           packageIntents = (ctx.packageMeta.network or { }).intents or { };
         };
@@ -118,7 +138,7 @@ in
             allPartResources
             packageMeta
             ;
-          networkConfig = cfg;
+          inherit enforced;
           networkPolicyEnforcer = resolveEnforcerOut { inherit (ctx) cluster instanceName namespaceName; };
         };
       in
@@ -140,7 +160,7 @@ in
               derive.generateDefaultDeny {
                 namespaceName = nsName;
                 nsResource = ctx.nsResources.${nsName};
-                directions = cfg.directions;
+                inherit enforced;
                 networkPolicyEnforcer = enforcerOut;
               }
             ) ctx.realNsNames
@@ -159,12 +179,14 @@ in
               egressPolicies = [ ];
               ingressPolicies = [ ];
               warnings = [ ];
+              errors = [ ];
             }
           else
             scrape.derive {
               inherit (ctx) resources nsResources realNsNames;
               enforcerApi = enforcerOut.netpol;
-              inherit (cfg) directions defaultDeny;
+              inherit enforced;
+              inherit (cfg) defaultDeny;
               extraPolicies = platformIntentPolicies;
             };
       in
@@ -191,6 +213,15 @@ in
               )
             else
               null
+          )
+          (
+            if scrapePolicies.errors == [ ] then
+              null
+            else
+              throw (
+                "kix netpol: networkPolicy.defaultDeny is on, and Kix cannot derive these scrape paths:\n"
+                + lib.concatMapStringsSep "\n" (e: "- ${e}") scrapePolicies.errors
+              )
           )
           (
             if enforcerOut == null then
