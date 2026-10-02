@@ -73,6 +73,19 @@ rec {
         with `scope.rbac`.
       '';
     };
+    "lossy-option-defaults" = {
+      description = "may declare options whose default an instance value that sets part of the option discards";
+      rationale = ''
+        Instance evaluation refuses a package whose options break the
+        option contract (eval/options.nix): an untyped or `attrsOf` option
+        with a non-empty attrset default, or a submodule default its fields
+        do not repeat. The module system replaces such a default as a whole,
+        so an instance that sets one key loses the others. The grant keeps
+        a package that has not been retyped yet usable; its instances must
+        set each such option in full. Legitimate holders: none. A holder
+        should be retyped with submodules and `kix.options.*`.
+      '';
+    };
   };
 
   grantNames = builtins.attrNames registry;

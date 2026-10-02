@@ -765,4 +765,75 @@ in
     in
     (claim.spec.storageClassName == "fast" && claim.spec.resources.requests.storage == "10737418240")
     || throw "grafana claim: ${builtins.toJSON claim}";
+
+  # A collection option keeps no default keys once an instance sets it: the
+  # instance value replaces the package's `lib.mkDefault` as a whole.
+  lib-options-typing-instance-value-replaces-collection-default =
+    let
+      cfg = eval.evaluateInstanceConfig {
+        packageOptions.issuers = lib.mkOption {
+          type = lib.types.attrsOf (
+            lib.types.submodule { options.kind = lib.mkOption { type = lib.types.str; }; }
+          );
+          default = { };
+        };
+        packageConfig.issuers = lib.mkDefault {
+          production.kind = "acme";
+          staging.kind = "acme";
+        };
+        instCfg.config.imports = [ { issuers.local.kind = "selfSigned"; } ];
+      };
+    in
+    cfg.issuers == { local.kind = "selfSigned"; } || throw "issuers: ${builtins.toJSON cfg.issuers}";
+
+  # A package whose `settings` default an instance value would partly
+  # discard (Rule 1), rendered into a ConfigMap. `grants` is its meta.unsafe.
+  lib-options-typing-build-enforces-contract =
+    let
+      lossyPackage = grants: {
+        meta = {
+          version = "test";
+          unsafe = grants;
+        };
+        options.settings = lib.mkOption {
+          type = t.anything;
+          default = {
+            a = "1";
+            b = "2";
+          };
+        };
+        build =
+          {
+            self,
+            scope,
+            config,
+            ...
+          }:
+          {
+            root = self.cm;
+            cm = scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "settings";
+              data = config.settings;
+            };
+          };
+      };
+      build =
+        grants:
+        mkCluster [
+          {
+            instances.appns.app = {
+              package = lossyPackage grants;
+              config.settings.a = "3";
+            };
+          }
+        ];
+      refused = builtins.tryEval (builtins.deepSeq (manifests (build [ ])) true);
+      granted = lib.findFirst (m: m.kind == "ConfigMap") null (
+        manifests (build [ "lossy-option-defaults" ])
+      );
+    in
+    (!refused.success && granted.data == { a = "3"; })
+    || throw "contract: refused=${builtins.toJSON refused.success} granted=${builtins.toJSON granted}";
 }

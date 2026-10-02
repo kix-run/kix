@@ -21,6 +21,9 @@ in
     version = "2.10.0-cf";
     description = "Caddy reverse proxy";
     owner = "app-team";
+    # Its options are not retyped yet
+    # (housekeeping/2026-10-01-caddy-exempted-from-option-contract.md).
+    unsafe = [ "lossy-option-defaults" ];
     network = {
       # Entities for auto-derived external ingress (LoadBalancer Service).
       externalIngressEntities = [ "all" ];
