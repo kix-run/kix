@@ -270,6 +270,19 @@ pub async fn discover_resources(client: &Client) -> Result<Vec<(ApiResource, Sco
     }
 }
 
+/// One discovery walk, for a caller that retries on its own: a listed group
+/// version that answers 404 is left out and logged at debug, with no wait.
+/// Any other failure is returned.
+pub async fn discover_resources_once(
+    client: &Client,
+) -> Result<Vec<(ApiResource, Scope)>, FetchError> {
+    let pass = discovery_pass(client).await?;
+    if !pass.missing.is_empty() {
+        tracing::debug!(missing = ?pass.missing, "group versions answered 404");
+    }
+    Ok(pass.resources)
+}
+
 /// One discovery walk. `missing` holds the path of every listed group
 /// version that answered 404; their resources are absent from `resources`.
 #[derive(Default)]

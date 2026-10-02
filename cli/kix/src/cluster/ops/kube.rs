@@ -251,10 +251,13 @@ impl KubeOps {
     }
 
     /// The cached entry for `kind`, refreshing discovery on a miss up to
-    /// `REFRESH_ATTEMPTS` times with backoff (under 4 s of waiting). With a
-    /// `group`, each refresh fetches that group alone and falls back to a
-    /// full walk only when the group fetch fails; without one, each refresh
-    /// is a full walk. Refreshes merge into the cache.
+    /// `REFRESH_ATTEMPTS` times with backoff (under 4 s of waiting between
+    /// requests). With a `group`, each refresh fetches that group alone and
+    /// falls back to a full walk only when the group fetch fails; without
+    /// one, each refresh is a full walk. A full walk here is a single pass
+    /// ([`fetch::discover_resources_once`]), so an unrelated group version
+    /// that answers 404 does not add [`fetch::DISCOVERY_SETTLE`] to each
+    /// attempt. Refreshes merge into the cache.
     async fn refresh_until_found(
         &self,
         kind: &str,
@@ -279,7 +282,7 @@ impl KubeOps {
             };
             let fresh = match targeted {
                 Some(new) => Some(new),
-                None => fetch::discover_resources(&self.client).await.ok(),
+                None => fetch::discover_resources_once(&self.client).await.ok(),
             };
             if let Some(new) = fresh {
                 let mut d = self.discovery.write().await;
@@ -867,5 +870,25 @@ mod discovery_tests {
             name: "absent".into(),
         };
         assert_eq!(ops(&api).get_live(&rid).await, Ok(None));
+    }
+
+    /// A miss for a kind whose group answers is resolved at once when an
+    /// unrelated listed group version keeps answering 404.
+    #[tokio::test(start_paused = true)]
+    async fn get_live_does_not_wait_on_an_unrelated_group_version_that_404s() {
+        let api = FakeApi::new([]);
+        api.fail_next(
+            &format!("/apis/{}/v1alpha1", crate::manifest::keys::DOMAIN),
+            u32::MAX,
+            404,
+        );
+        let rid = ResourceId {
+            kind: "ClusterRole".into(),
+            namespace: CLUSTER_SCOPED.into(),
+            name: "absent".into(),
+        };
+        let start = tokio::time::Instant::now();
+        assert_eq!(ops(&api).get_live(&rid).await, Ok(None));
+        assert_eq!(start.elapsed(), Duration::ZERO);
     }
 }

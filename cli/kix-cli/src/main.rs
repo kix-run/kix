@@ -26,24 +26,35 @@ fn validate_cluster_name(name: &str) -> miette::Result<()> {
     Ok(())
 }
 
+/// The tracing filter for the verbosity flags, when `KIX_LOG` is unset.
+///
+/// Without `-v`, `kube_client::client` is held to errors. It logs a warning
+/// with the body of every error response that is not JSON, such as the
+/// plain-text `404 page not found` a group version answers while discovery
+/// settles, and then returns the error, which kix reports or retries itself.
+/// `kube_client::client::tls` keeps its warning that certificate checks are
+/// off.
+fn default_filter(verbose: u8, quiet: bool) -> &'static str {
+    if quiet {
+        return "error";
+    }
+    match verbose {
+        0 => "warn,kube_client::client=error,kube_client::client::tls=warn",
+        1 => "kix=info",
+        2 => "kix=debug",
+        _ => "debug",
+    }
+}
+
 /// Initialize tracing subscriber based on verbosity flags.
 ///
 /// KIX_LOG env var overrides the verbose-derived filter (like RUST_LOG).
 fn init_tracing(verbose: u8, quiet: bool) {
     use tracing_subscriber::EnvFilter;
 
-    let filter = if let Ok(env_filter) = std::env::var("KIX_LOG") {
-        EnvFilter::new(env_filter)
-    } else if quiet {
-        EnvFilter::new("error")
-    } else {
-        match verbose {
-            0 => EnvFilter::new("warn"),
-            1 => EnvFilter::new("kix=info"),
-            2 => EnvFilter::new("kix=debug"),
-            _ => EnvFilter::new("debug"),
-        }
-    };
+    let filter = std::env::var("KIX_LOG")
+        .map(EnvFilter::new)
+        .unwrap_or_else(|_| EnvFilter::new(default_filter(verbose, quiet)));
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -109,5 +120,49 @@ fn main() -> miette::Result<()> {
         Command::Snapshot(args) => commands::snapshot::run(args, &mut ctx),
         Command::Compliance(args) => commands::compliance::run(args, &mut ctx),
         Command::Completions(_) | Command::Drift(_) | Command::Pin(_) => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tracing_filter_tests {
+    use super::default_filter;
+    use std::sync::{Arc, Mutex};
+
+    /// The lines the default filter lets through for `emit`.
+    fn logged(emit: impl FnOnce()) -> String {
+        let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let sink = buf.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new(default_filter(0, false)))
+            .with_writer(move || Sink(sink.clone()))
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, emit);
+        String::from_utf8(buf.lock().unwrap().clone()).unwrap()
+    }
+
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_default_filter_drops_kube_client_error_body_warnings() {
+        let out = logged(|| {
+            tracing::warn!(target: "kube_client::client", "Unsuccessful data error parse: 404 page not found");
+            tracing::warn!(target: "kube_client::client::tls", "Server cert bypassed");
+            tracing::warn!(target: "kube_client::config", "impersonating user");
+            tracing::warn!(target: "kix::cluster", "a kix warning");
+        });
+        assert!(!out.contains("404 page not found"), "{out}");
+        assert!(out.contains("Server cert bypassed"), "{out}");
+        assert!(out.contains("impersonating user"), "{out}");
+        assert!(out.contains("a kix warning"), "{out}");
     }
 }
