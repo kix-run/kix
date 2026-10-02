@@ -116,11 +116,6 @@ in
         type = lib.types.bool;
         default = true;
       };
-      replicas = lib.mkOption {
-        type = lib.types.int;
-        default = 1;
-        description = "Number of Grafana replicas. Use 1 for most setups; persistence.enabled must be false (or RWX storage) for >1.";
-      };
       rootUrl = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
@@ -288,7 +283,6 @@ in
             package = packages.grafana;
             config = {
               rootUrl = grafanaRootUrl;
-              replicas = cfg.grafana.replicas;
               datasources = cfg.grafana.extraDatasources;
             };
           };
