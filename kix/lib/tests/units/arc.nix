@@ -195,13 +195,11 @@ in
       unparsable =
         tag:
         !(check tag).assertion
-        && lib.hasPrefix "image.tag \"${tag}\" is not a version the controller can parse" (check tag)
-        .message;
+        && lib.hasPrefix "image.tag \"${tag}\" is not a version the controller can parse" (check tag).message;
       otherMinor =
         tag:
         !(check tag).assertion
-        && lib.hasPrefix "image.tag \"${tag}\" is not a 0.14 release, and the CRDs under kix/packages/arc/crds are vendored from 0.14.2." (check tag)
-        .message;
+        && lib.hasPrefix "image.tag \"${tag}\" is not a 0.14 release, and the CRDs under kix/packages/arc/crds are vendored from 0.14.2." (check tag).message;
     in
     (
       builtins.all accepted [
@@ -263,31 +261,19 @@ in
     (
       refusal { } == null
       && refusal { name = lib.fixedWidthString 45 "a" ""; } == null
-      &&
-        refuses
-          "spec.template.spec.serviceAccountName is set. The runner pods use the ServiceAccount linux-runner"
-          {
-            change.template.spec.serviceAccountName = "x";
-          }
-      &&
-        refuses
-          "the name has 46 characters. The controller names the listener <name>-<hash of up to 8 characters>-listener, which must fit in 63 characters"
-          {
-            name = lib.fixedWidthString 46 "a" "";
-          }
+      && refuses "spec.template.spec.serviceAccountName is set. The runner pods use the ServiceAccount linux-runner" {
+        change.template.spec.serviceAccountName = "x";
+      }
+      && refuses "the name has 46 characters. The controller names the listener <name>-<hash of up to 8 characters>-listener, which must fit in 63 characters" {
+        name = lib.fixedWidthString 46 "a" "";
+      }
       && refuses "spec.githubConfigUrl is missing or not a string." { drop = [ "githubConfigUrl" ]; }
-      &&
-        refuses
-          "spec.githubConfigUrl must be http(s)://<host>/ followed by <org>, <org>/<repo>, or enterprises/<name>; got \"https://github.com/a/b/c\"."
-          {
-            change.githubConfigUrl = "https://github.com/a/b/c";
-          }
-      &&
-        refuses
-          "spec.githubConfigSecret is missing or not a string. Pass the out.name of a Secret in arc-runners."
-          {
-            drop = [ "githubConfigSecret" ];
-          }
+      && refuses "spec.githubConfigUrl must be http(s)://<host>/ followed by <org>, <org>/<repo>, or enterprises/<name>; got \"https://github.com/a/b/c\"." {
+        change.githubConfigUrl = "https://github.com/a/b/c";
+      }
+      && refuses "spec.githubConfigSecret is missing or not a string. Pass the out.name of a Secret in arc-runners." {
+        drop = [ "githubConfigSecret" ];
+      }
       && refuses "spec.minRunners (3) is greater than spec.maxRunners (2)." { change.minRunners = 3; }
       && refuses "spec.template.spec.containers has no container named runner." {
         change.template.spec.containers = [ { name = "job"; } ];
@@ -321,50 +307,35 @@ in
     (
       problem { } == null
       && problem { extraSpec.minRunners = 1; } == null
-      &&
-        problem (containers [
-          {
-            name = "runner";
-            command = [ ];
-          }
-        ]) == null
+      && problem (containers [
+        {
+          name = "runner";
+          command = [ ];
+        }
+      ]) == null
       && refuses "minRunners (3) is greater than maxRunners (2)." { minRunners = 3; }
       && refuses "githubConfigUrl must be http(s)://<host>/" { githubConfigUrl = "github.com/x"; }
       && refuses "extraSpec sets githubConfigSecret. It is the Secret of deps.githubConfigSecret" {
         extraSpec.githubConfigSecret = "x";
       }
-      &&
-        refuses
-          "extraSpec sets template.spec.serviceAccountName. The runner pods use the ServiceAccount linux-runner"
-          {
-            extraSpec.template.spec.serviceAccountName = "x";
-          }
-      &&
-        refuses
-          "extraSpec sets template.spec.automountServiceAccountToken. The token is mounted when `rules` is set"
-          {
-            extraSpec.template.spec.automountServiceAccountToken = true;
-          }
-      &&
-        refuses
-          "extraSpec sets template.spec.priorityClassName. It is the PriorityClass of deps.priorityClass"
-          {
-            extraSpec.template.spec.priorityClassName = "x";
-          }
-      && refuses "extraSpec.template.spec.containers must be a list" {
-        extraSpec.template.spec.containers = { };
+      && refuses "extraSpec sets template.spec.serviceAccountName. The runner pods use the ServiceAccount linux-runner" {
+        extraSpec.template.spec.serviceAccountName = "x";
       }
-      && refuses "extraSpec.template.spec.containers has an entry without a name." (containers [
-        { image = "x"; }
-      ])
+      && refuses "extraSpec sets template.spec.automountServiceAccountToken. The token is mounted when `rules` is set" {
+        extraSpec.template.spec.automountServiceAccountToken = true;
+      }
+      && refuses "extraSpec sets template.spec.priorityClassName. It is the PriorityClass of deps.priorityClass" {
+        extraSpec.template.spec.priorityClassName = "x";
+      }
+      && refuses "extraSpec.template.spec.containers must be a list" { extraSpec.template.spec.containers = { }; }
+      && refuses "extraSpec.template.spec.containers has an entry without a name." (containers [ { image = "x"; } ])
       &&
         problem (containers [
           {
             name = "runner";
             image = "x";
           }
-        ])
-        == "extraSpec.template.spec.containers.runner sets `image`, which the `image` option sets; use the option."
+        ]) == "extraSpec.template.spec.containers.runner sets `image`, which the `image` option sets; use the option."
       &&
         problem (containers [
           {
@@ -372,14 +343,9 @@ in
             image = "x";
             env = [ ];
           }
-        ])
-        == "extraSpec.template.spec.containers.runner sets `image` and `env`, which the `image` and `env` options set; use the options."
+        ]) == "extraSpec.template.spec.containers.runner sets `image` and `env`, which the `image` and `env` options set; use the options."
     )
-    || throw "arc runner set option refusals: ${
-      builtins.toJSON (problem {
-        minRunners = 3;
-      })
-    }";
+    || throw "arc runner set option refusals: ${builtins.toJSON (problem { minRunners = 3; })}";
 
   # The refusals a whole build reaches: arc-runner-set's checks run before
   # the builder, kix.mergeGuarded guards option-owned extraSpec paths,
@@ -520,11 +486,10 @@ in
     in
     (
       podSpec.priorityClassName == "runner-priority"
-      &&
-        map (c: c.name) podSpec.containers == [
-          "runner"
-          "sidecar"
-        ]
+      && map (c: c.name) podSpec.containers == [
+        "runner"
+        "sidecar"
+      ]
       && runner.command == [ ]
       && lib.hasPrefix "ghcr.io/actions/actions-runner:2.337.0@sha256:" runner.image
     )
