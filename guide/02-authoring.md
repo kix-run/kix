@@ -110,10 +110,10 @@ Both carry the Service's store-path context (both create a working DAG edge). Al
 Service fronting a workload reads the workload's `out.selector`:
 
 ```nix
-# kix/packages/coredns/default.nix
-self.metricsService = scope.mkResource {
-  apiVersion = "v1"; kind = "Service"; name = "...";
-  spec.selector = self.deployment.out.selector;
+# kix/packages/victoria-metrics-operator/operator.nix
+operatorService = scope.mkResource {
+  apiVersion = "v1"; kind = "Service"; name = name;
+  spec.selector = self.operatorDeployment.out.selector;
 };
 ```
 
@@ -133,14 +133,14 @@ spec.selector = self.deployment.rawSelector;
 `out.identityHash` forces a pod restart when config changes. Stamp the ConfigMap's `identityHash` into the pod template annotations; content change -> hash change -> template change -> K8s rolls the workload.
 
 ```nix
-# kix/packages/python-app/backend.nix
+# kix/packages/valkey/default.nix
 template = {
-  metadata = {
-    labels = selectorLabels compName;
-  } // lib.optionalAttrs config.useConfigMap {
-    annotations = {
-      "checksum/config" = self.configmap.out.identityHash;
-    };
+  metadata.annotations = {
+    "checksum/configMap" = self.configMap.out.identityHash;
+  }
+  # A secret-ref has no identityHash.
+  // lib.optionalAttrs (password.out ? identityHash) {
+    "checksum/valkeyPassword" = password.out.identityHash;
   };
   spec = ...;
 };
@@ -216,7 +216,7 @@ deployment =
   {
     inherit name;
     spec = {
-      replicas = config.replicaCount;
+      replicas = config.replicas;
       selector.matchLabels = scope.selectorLabels;
       template.spec = {
         containers = [
@@ -344,27 +344,39 @@ service =
 | `port name containerPort` | `{ name; containerPort; protocol = "TCP"; }`. Override protocol by merging. |
 | `mkEnvVars attrs` | `{ KEY = "value"; }` -> `[{ name; value; }]`. Null values filtered (works with `lib.optionalAttrs` / conditional `null`). |
 | `mkEnv attrs raw` | Same as `mkEnvVars`, then appends list of raw K8s env entries (e.g. `valueFrom.secretKeyRef`). Canonical way to mix named values + secret refs. |
-| `parseGi s` | K8s quantity string (`Ti`/`Gi`/`Mi`) -> number of GiB, or `null` if unrecognized. Strips Nix string context first (works on `out.*` DAG-context values). |
+| `parseQuantity resource q` | Kubernetes quantity -> millicores when `resource` is `"cpu"`, bytes otherwise, rounded down; `null` when `q` is not a quantity. Same grammar as `kix.types.quantity`. Strips Nix string context first (works on `out.*` DAG-context values). |
+| `parseGi s` | `parseQuantity "memory"` in whole GiB, rounded down (`"500Mi"` -> 0); `null` when not a quantity. |
+| `mergeEnv { who; owned ? [ ]; defaults ? { }; } env` | `defaults // env // <every owned group's vars>`, for `mkEnvVars`. `owned` is a list of `{ vars ? { }; names ? [ ]; from; fix; }`; a key in `env` that a group owns throws, also when its value is null. `defaults` may be overridden or removed with null. |
+| `guardArgs { who; option ? "extraArgs"; owned; } args` | Returns `args` unless one sets an owned flag (`owned` maps flag -> reason and fix); `--flag` and `--flag=value` both match, and a one-letter flag also matches `-c<value>`. |
+| `checkSecretKeys { who; arg; dep; keys ? [ ]; anyOf ? null; }` | Returns `dep` once it declares every key the package reads; read the secret through the result so the check runs before any `keyRef`. |
 
 ```nix
 ports = [ (kix.port "http" 2283) ]
-++ lib.optionals config.metrics.enabled [ (kix.port "metrics-api" 8081) ];
+++ lib.optionals hasMetrics [ (kix.port "metrics-api" 8081) ];
 # UDP: (kix.port "dns" 53) // { protocol = "UDP"; }
 ```
 
 ```nix
-env =
-  kix.mkEnv
+env = kix.mkEnvVars (kix.mergeEnv {
+  inherit who;
+  defaults = lib.optionalAttrs hasMetrics { IMMICH_TELEMETRY_INCLUDE = "all"; };
+  owned = [
     {
-      DB_HOSTNAME = database.out.host;
-      REDIS_HOSTNAME = valkey.out.fqdn;
-      IMMICH_MACHINE_LEARNING_URL = mlUrl;   # null is dropped
+      vars = {
+        DB_HOSTNAME = database.out.host;
+        DB_DATABASE_NAME = database.out.database;
+        DB_USERNAME = database.out.credentials.out.keyRef "username";
+        DB_PASSWORD = database.out.credentials.out.keyRef "password";
+      };
+      names = [ "DB_URL" ];
+      from = "the database dependency";
+      fix = "Wire a different database through deps.database.";
     }
-    (database.out.credentials.out.mkEnv {
-      DB_USERNAME = "username";
-      DB_PASSWORD = "password";
-    });
+  ];
+} config.env);
 ```
+
+A key in `env` that a group owns throws, also when its value is null; `defaults` may be overridden or removed with null.
 
 ```nix
 storage.warnings =
@@ -410,6 +422,9 @@ ingress =
 `httpRoute.fromService` (Gateway API, `gateway.networking.k8s.io/v1`) consumed keys: `name`, `host`, `parentRef` (`{ name; namespace?; }`, the Gateway ref), `path` (default `"/"`), `pathType` (default `"PathPrefix"`), `port`. Note: Gateway `pathType` default is `PathPrefix`; Ingress is `Prefix`.
 
 ```nix
+routeCrd = scope.mkCRDRef {
+  group = "gateway.networking.k8s.io"; kind = "HTTPRoute"; plural = "httproutes"; version = "v1";
+};
 route =
   self.service
   |> kix.httpRoute.fromService {
@@ -417,8 +432,10 @@ route =
        host = "example.com";
        parentRef = gateway.out.gatewayRef;
      }
-  |> scope.mkResource;
+  |> scope.mkCR self.routeCrd;
 ```
+
+- An HTTPRoute is a custom resource, so it is built with `scope.mkCR` from a CRD ref; the route then depends on the Gateway API CRD, and `kix deploy` waits for it (cross-resource check 21 refuses a custom resource with no such dependency).
 
 - In app packages, prefer `kix.expose` (below) - it picks the right one by present infra dep.
 
@@ -473,7 +490,7 @@ Returns a **build-entry function** for the package `build` *list*. Declares own 
 - neither -> part is `null` (no exposure).
 - **both** -> `throw` (wire exactly one in cluster definition).
 
-Config args (first attrset): `service` (part name in `self`, single-backend), `paths` (list of `{ path, pathType?, service, port? }`, multi-backend, Ingress only, mutually exclusive with `service`), `partName` (default `"ingress"`), `defaultAnnotations` (Ingress mode), `port` (override auto-derived), TLS-secret selectors `tlsSecretName` / `tlsSecret` / `tlsSecretPart`. One of `service`/`paths` required, mutually exclusive (both `throw`).
+Config args (first attrset): `service` (part name in `self`, single-backend), `paths` (list of `{ path, pathType?, service, port? }`, multi-backend, mutually exclusive with `service`), `partName` (default `"route"`, the Ingress or HTTPRoute part), `exposurePart` (default `"exposure"`, the record part), `defaultAnnotations` (Ingress mode), `port` (override auto-derived). One of `service`/`paths` required, mutually exclusive (both `throw`). A package that calls `kix.expose` twice sets `partName` and `exposurePart` on the second call; two build entries that return the same part name are an evaluation error.
 
 ```nix
 build = [
@@ -491,14 +508,14 @@ build = [
 
 - Host: from `config.ingress.host`, else `"${name}.${clusterConfig.cluster.domain}"`; if neither, no exposure. Annotations merge `defaultAnnotations // config.ingress.annotations`. Use `options.ingress = kix.options.ingress;` for standard `ingress.host` + `ingress.annotations` (see `01-fundamentals.md#options--config`).
 
-#### TLS secret rules (Ingress mode)
+#### TLS (Ingress mode)
 
-- TLS secret name source, priority order:
-  1. `tlsSecret` (a resource; enables cross-namespace check)
-  2. `tlsSecretName` (string; must be DI-tracked, i.e. `someSecret.out.name` or `kix.untrackedRef "..."`; raw literal `throw`s)
-  3. auto-derived `"${name}-tls"`
-- `tlsSecretPart` names a part in `self`, resolved lazily (avoids forward refs).
-- `tlsSecret` whose namespace differs from the Ingress namespace -> `throw` (controllers only read TLS secrets from the Ingress's own namespace).
+- Ingress mode enables TLS when a `clusterIssuer` dependency is resolved: the issuer's `out.withCert` annotates the Ingress, and Kix adds a TLS entry for the host with the Secret `<instance>-tls` in the instance's namespace.
+- Gateway mode leaves TLS to the Gateway listener. The HTTPRoute is built with `scope.mkCR` from a CRD ref part `<partName>Crd` (`routeCrd`), so the deploy waits for the Gateway API CRDs.
+
+#### The public URL (`self.exposure`)
+
+`self.exposure` is a record of the route the call rendered: `{ via; host; scheme; url; }`. `url` is `<scheme>://<host>`, with `:<port>` when the port is not the scheme's default, and null when no route is rendered or the scheme is unknown. In Ingress mode the scheme is `https` when a `clusterIssuer` is wired. In Gateway mode it comes from the listener the HTTPRoute attaches to (protocol, `hostname`, `allowedRoutes.namespaces.from`); no matching listener fails evaluation, and a gateway without `out.listeners` (a `kix.mkImport`) gives `url = null`. Read `self.exposure.url` (vaultwarden's `DOMAIN`, harbor's `EXT_ENDPOINT`); never re-derive it from `ingress.host`.
 
 ### `monitor` - DI-driven ServiceMonitor / PrometheusRule build entry
 
@@ -509,8 +526,9 @@ Config args:
 - `service` - part name to monitor
 - `port` - default `"metrics"`; string -> `port`, int -> `targetPort`
 - `path` - default `"/metrics"`
+- `scheme` - default `"http"`; `tlsConfig` - default none. Both set the primary endpoint's.
 - `alerts` - attrset `alertName -> { expr, for?, severity?, description?, summary?, runbook_url?, labels?, annotations? }`; `severity` default `"warning"`
-- `extraEndpoints`, `extraLabels`
+- `extraEndpoints` (each merged over `{ scheme = "http"; path = "/metrics"; }` and the instance's `metrics.interval`), `extraLabels`
 - scrape interval from `config.metrics.interval`
 
 ```nix
@@ -533,14 +551,13 @@ build = [
 
 #### Hand-roll instead when
 
-- `kix.monitor` covers single-service ServiceMonitor. Multi-endpoint cases (e.g. Immich: `metrics-api` + `metrics-ms` with custom selector) call `prometheus.out.mkServiceMonitor scope { ... }` directly in the main build function. Same builder; `kix.monitor` is the packaged shortcut.
+- `kix.monitor` takes `extraEndpoints` for a Service with several metrics ports (immich: `metrics-api` and `metrics-ms`); each extra endpoint gets `scheme = "http"`, `path = "/metrics"` and the instance's `metrics.interval`. Call `prometheus.out.mkServiceMonitor` directly only for a selector or endpoint shape `kix.monitor` does not build.
 
 ### Gotchas
 
 - Forgetting final `|> scope.mkResource` / `|> scope.mkDeployment`. `fromX` / `withMounts` return plain attrsets; nothing registered in DAG until sealed.
 - Passing the workload/service *attrset* instead of sealed *resource* to `fromWorkload` / `fromService`. They read `out.*` + `rawManifest` (post-seal only). Pipe `self.deployment` / `self.service`.
 - Expecting `kix.mount.*` to return `{ volume, volumeMount }`. It returns one mount object; `withMounts` splits.
-- Raw-string `tlsSecretName` in `kix.expose` - must be DI-tracked or `kix.untrackedRef`-wrapped.
 - Wiring both `gateway` and `ingressNginx` to the same instance - `expose` fails fast; choose one.
 
 ## Dependency injection
@@ -549,20 +566,22 @@ Deps = named args of the `build` function, discovered by introspection, resolved
 
 ### Deps are build-function args
 
-Deps = the `build` function's args minus system args. From `python-app/default.nix`:
+Deps = the `build` function's args minus system args. From `valkey/default.nix`:
 
 ```nix
-build =
-  {
-    self,
-    config,
-    clusterConfig,
-    postgres ? null,
-    valkey ? null,
-    ingressNginx ? null,
-    clusterIssuer ? null,
-  }:
-  ...
+build = [
+  (
+    {
+      self,
+      config,
+      valkeyPassword,
+      storageClasses ? null,
+      prometheus ? null,
+      ...
+    }:
+    ...
+  )
+];
 ```
 
 `discoverBuildDeps` (`kix/lib/eval/resolve.nix`) reads `builtins.functionArgs build`, strips system arg names, treats the rest as deps:
@@ -571,7 +590,7 @@ build =
 systemBuildArgNames = [ "self" "config" "clusterConfig" "scope" "lib" "kix" "deps" ];
 ```
 
-- `python-app` deps: `postgres`, `valkey`, `ingressNginx`, `clusterIssuer`.
+- `valkey` deps: `valkeyPassword` (required), `storageClasses` and `prometheus` (optional).
 - No separate dependency list. Arg name = resolution key.
 
 ### Required vs optional
@@ -601,11 +620,13 @@ depEnv =
 
 1. **Explicit override** (`deps.<argName> = ...` on the instance, see `03-advanced.md#overrides`) -> returned directly (`direct = true`).
 2. Same namespace, exactly one match -> use it.
-3. Same namespace, multiple matches -> throw `ambiguous auto-resolution ... multiple matches`.
+3. Same namespace, multiple matches -> throw `dependency '<arg>' matches multiple instances in namespace '<ns>'`.
 4. No same-ns match, exactly one cluster-wide match -> use it (cross-namespace).
-5. Multiple cluster-wide matches -> throw `ambiguous ... specify explicitly`.
+5. Multiple cluster-wide matches -> throw `dependency '<arg>' matches instances in multiple namespaces`.
 6. No match, dep has Nix default -> `{ found = false; }`; Nix supplies default (`null` for optionals).
-7. No match, no default -> throw `no '<argName>' found in cluster for namespace '<ns>'`.
+7. No match, no default -> throw `dependency '<arg>' was not found for namespace '<ns>'`.
+
+Before the ladder, candidates in another namespace whose package declares `meta.scope = "namespace"` are dropped, and managed instances shadow imports on a shared key. Every error starts with the requesting instance, `<ns>/<inst>: `, marked `(auto-instantiated)` when the shelf created it.
 
 Candidate set = **resolution index**, built by `buildResolutionIndex` from static `_meta` (no inner fixpoint forced). Each instance contributes its name **and aliases** as keys:
 
@@ -697,21 +718,28 @@ build = [
 Per-dep metadata, co-located in a top-level `deps` attrset. Separate from build args (which still define the dep set); only adds diagnostics + config injection. From `immich/default.nix`:
 
 ```nix
+let
+  requiredExtensions = [ { name = "vchord"; version = "0.5.3"; } "uuid-ossp" "cube" "earthdistance" "unaccent" "pg_trgm" ];
+  extensionName = e: if builtins.isString e then e else e.name;
+in
 deps = {
-  database.config = { extensions = [ { name = "vchord"; version = "0.5.3"; } "uuid-ossp" ... ]; };
-
+  database.config.extensions = requiredExtensions;
   database.assertions = dep:
-    let extensions = dep.out.extensions or null; ... in
-    lib.optional (extensions != null && missing != [ ]) {
+    let
+      published = map extensionName (dep.out.extensions or [ ]);
+      missing = builtins.filter (e: !(builtins.elem e published)) (map extensionName requiredExtensions);
+    in
+    lib.optional (dep.out ? extensions && missing != [ ]) {
       assertion = false;
-      message = "immich requires the following postgres extensions ...";
+      message = "the database needs the postgres extensions ...; missing: ....";
     };
-
   storage.warnings = dep:
     lib.optional (kix.parseGi (dep.out.size or "0") < 50)
       "library storage is ${dep.out.size or "unknown"}, recommended minimum is 50Gi ...";
 };
 ```
+
+One let-binding feeds both the injected config and the check. An assertion message starts with the constraint; the lib prefixes the instance.
 
 - `.assertions` / `.warnings` = functions of the resolved dep instance (`dep`, with `out`), evaluated against the bound dep. Diagnostics attributed to the consumer.
 
@@ -746,18 +774,19 @@ instances.kube-system.platform-dns = {
   package = kix.mkImport {
     kind = "Deployment";
     apiVersion = "apps/v1";
-    out = { name = "coredns"; fqdn = "kube-dns.kube-system.svc.cluster.local"; };
+    out = { name = "coredns"; fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}"; };
   };
   aliases = [ "dns" ];
 };
 ```
 
-`mkImport` takes `{ from ? null, out ? {}, kind ? null, apiVersion ? null }`:
+`mkImport` takes `{ from ? null, out ? {}, kind ? null, apiVersion ? null, roles ? [ ], crds ? [ ] }`:
 
 - `out` only - `out` surface supplied verbatim (example above).
+- `crds` - a list of `scope.mkCRDRef` argument sets without `installedBy`; each becomes `out.crds.<Kind>` and a CRD marker in the import's namespace.
 - `from = <package fn>` - package's `build` runs under `mkImportScope`, swapping `mkResource`/`mkServiceRef`/`mkSecretRef` for ref constructors that compute `out` without store paths or manifests. Only `out`-relevant code forced (laziness). Deps **not** resolved in import mode: any dep access hits a proxy throwing `imports run without dependency resolution`. Use a raw `out` override, or a mixed import (`from` + `out` for dep-needing fields).
 
-Managed instances shadow imports on shared keys -> a flavor's fallback `platform-dns` import is auto-replaced when the cluster installs its own DNS package.
+Managed instances shadow imports on shared keys -> a flavor's fallback `platform-dns` import is auto-replaced when the cluster installs its own DNS package. An optional import becomes active, and its marker is emitted, when a declared dependency of an active managed instance resolves to it; give it `kind`, `apiVersion` and `out.name` when the deploy should wait for the object.
 
 ### Infrastructure DI patterns
 
@@ -775,6 +804,6 @@ Managed instances shadow imports on shared keys -> a flavor's fallback `platform
 - **Ambiguity throws, does not pick.** Two same-ns matches (or two cluster-wide with none local) = hard error. Disambiguate with alias, namespace, or explicit `deps.<name>` override.
 - **Missing required dep is fatal.** No default + no candidate + no auto-instantiation candidate -> throws `no '<argName>' found in cluster`. Make optional (`? null`) only if the package truly handles absence.
 - **Phase 1 never sees deps.** Top-level function-package code (outside `build`) runs with system args only. Dep-needing code must live inside a `build` entry.
-- **Cross-namespace restricted by `meta.scope`.** Depending on an instance in another namespace declaring `meta.scope = "namespace"` throws cross-namespace error (`instance.nix` `_crossNsCheck`). See `03-advanced.md#networking--package-meta`.
+- **Cross-namespace restricted by `meta.scope`.** Automatic resolution never picks an instance that declares `meta.scope = "namespace"` for a consumer in another namespace; an explicit `deps.<x> = ref.<ns>.<instance>` to one throws the cross-namespace error (`instance.nix` `_crossNsCheck`). See `03-advanced.md#networking--package-meta`.
 - **Optionality AND-ed across list entries.** One entry required + another optional -> required overall. Give every entry naming the dep the same default for optional.
 - **Imports can't touch deps.** `mkImport { from = ...; }` reading a dep throws. Provide the dep-derived field via an `out` override.

@@ -203,7 +203,7 @@ Direct resource (most common):
 
 ```nix
 root = self.service;     # echo-server: service is the entry point
-root = self.deployment;  # reloader: deployment is the entry point
+root = { resource = self.deployment; out = { inherit withReloadOn; }; };  # reloader: the Deployment plus an out transformer
 ```
 
 Structured form with explicit forward requirements and post-deploy hooks:
@@ -228,29 +228,30 @@ Two collection passes over the "parts" attrset (the whole `build` return):
 
 1. Typed resources gathered for deployment by `collectTypedAttrs` (`kix/lib/eval/helpers.nix`): walks nested attrsets up to 3 levels deep, stops at any `_type` boundary, excludes `root` and `meta`. Group resources in plain sub-attrsets (folders) and they still get collected.
 2. Consumer view (`mkPackageView` in `kix/lib/eval/view.nix`): what other packages see when depending on this one. Three layers, merged with collision detection:
-   - **folders** - plain attrsets in `parts` (no `_type`, excluding `root`) surfaced as nested groups.
+   - **folders** - plain attrsets in `parts` (no `_type`, excluding `root`) surfaced as nested groups. A known folder (`crds`, `secrets`) whose name `root.out` also defines is left out, so `out.crds` and a `crds` folder can coexist; emission reads parts, so its resources are still emitted.
    - **autoKeys** - everything from the root resource's `out` (`name`, `fqdn`, `selector`, ...) copied to the top of the view, so consumers write `pg.fqdn` not `pg.out.fqdn`.
    - **system** - evaluator plumbing: `_type = "k8s-instance"`, `root`, `out`, `raw` (full parts attrset), `_meta` (instanceName, namespace, aliases, packageMeta, config).
 
 - `_type` leaf marker distinguishes resource from folder: with `_type` = typed leaf (collection stops); plain attrset without `_type` = folder to descend into.
-- Two "known", content-checked folders: `secrets` and `crds` (`knownFolders`). Resource *directly* on `parts.secrets` (instead of `parts.secrets.someName`) throws; wrong `_type` inside emits a trace warning.
+- Two "known", content-checked folders: `secrets` and `crds` (`knownFolders`). Resource *directly* on `parts.secrets` (instead of `parts.secrets.someName`) throws; wrong `_type` inside emits a trace warning. If `root.out` defines the same key (`out.crds`, `out.secrets`), the view shows `root.out`'s value instead of the folder; the folder's resources are still emitted.
 
 #### Spreading extra resources with `//`
 
-`build` returns a plain attrset, so compute a group separately and merge it in. `reloader` builds its RBAC set in the `let` and spreads it:
+`build` returns a plain attrset, so compute a group separately and merge it in. `reloader` merges its RBAC sets after the parts:
 
 ```nix
-build = { self, config, clusterConfig }:
-  let
-    clusterRoles = mkClusterRoleSet scope { /* ... */ };
-  in
-  {
-    serviceAccount = scope.mkResource { /* ... */ };
-    deployment = { /* ... */ } |> scope.mkDeployment;
-    service = if config.service.enabled then /* ... */ else null;
-    root = self.deployment;
-  }
-  // clusterRoles;
+build = [
+  ({ self, config, prometheus ? null, ... }:
+    {
+      serviceAccount = scope.mkResource { /* ... */ };
+      deployment = { /* ... */ } |> scope.mkDeployment;
+      service = if config.metrics.enabled && prometheus != null then /* ... */ else null;
+      root = { resource = self.deployment; out = { inherit withReloadOn; }; };
+    }
+    // mkClusterRoleSet scope { /* ... */ }
+    // mkRoleSet scope { /* ... */ })
+  (kix.monitor { service = "service"; port = "http"; })
+];
 ```
 
 - Resources set to `null` (e.g. optional `service`) are filtered out during collection; conditional/modal parts are fine.
@@ -267,73 +268,80 @@ build = { self, config, clusterConfig }:
 
 ### Complete minimal example: reloader
 
-`kix/packages/reloader/default.nix` - self-contained, no DI deps, just config and RBAC. Abridged skeleton:
+`kix/packages/reloader/default.nix`: one Deployment with derived RBAC, an optional `prometheus` dependency, and an `out` transformer. Abridged skeleton:
 
 ```nix
-{ scope, lib, kix }:
+{ scope, lib, kix, availability }:
 let
   name = scope.instanceName;
-  reloaderSelectorLabels = { app = "${name}-reloader"; release = name; };
-  inherit (scope.rbac) core group grant watch allow emit mkClusterRoleSet;
+  who = "reloader ${scope.namespaceName}/${name}";
 in
 {
-  meta = { version = "v1.3.0"; };
-
-  options = {
-    replicaCount = lib.mkOption { type = lib.types.int; default = 1; };
-    image = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = { repository = "ghcr.io/stakater/reloader"; tag = "v1.3.0"; pullPolicy = "IfNotPresent"; };
-    };
-    # ...
+  meta = {
+    version = "v1.4.22";
+    defaultAliases = [ "reloader" ];
+    conflictsWith = [ "cluster:reloader" ];
+    annotationDomains = [ "reloader.stakater.com" "secret.reloader.stakater.com" /* ... */ ];
   };
 
-  build = { self, config, clusterConfig }:
-    let
-      clusterRoles = mkClusterRoleSet scope {
-        subjects = [ { kind = "ServiceAccount"; name = self.serviceAccount.out.name; namespace = scope.namespaceName; } ];
-        roles = { /* grant/watch/allow/emit rules */ };
-      };
-    in
-    {
-      serviceAccount = scope.mkResource {
-        apiVersion = "v1"; kind = "ServiceAccount"; name = "${name}-reloader";
-      };
+  options = {
+    image = kix.options.image { repository = "ghcr.io/stakater/reloader"; tag = "v1.4.22"; digest = "sha256:..."; };
+    resources = kix.options.resources { requests = { cpu = "10m"; memory = "64Mi"; }; /* ... */ };
+    extraArgs = lib.mkOption { type = lib.types.listOf lib.types.str; default = [ ]; };
+    env = kix.options.env;
+    metrics = kix.options.monitor;
+  };
 
-      deployment = {
-        name = "${name}-reloader";
-        spec = {
-          replicas = config.replicaCount;
-          selector.matchLabels = reloaderSelectorLabels;
-          template.spec = {
-            serviceAccountName = self.serviceAccount.out.name;
-            containers = [ {
-              name = "${name}-reloader";
-              image = "${config.image.repository}:${config.image.tag}";
-              ports = [ (kix.port "http" 9090) ];
-              # ...
-            } ];
+  build = [
+    ({ self, config, prometheus ? null, ... }:
+      let
+        args = [ "--log-format=json" "--enable-ha=true" /* ... */ ]
+          ++ kix.guardArgs { inherit who; owned = { /* flag = reason */ }; } config.extraArgs;
+        withReloadOn = refs: buildArgs: /* adds secret.reloader.stakater.com/reload */;
+      in
+      {
+        serviceAccount = scope.mkResource { apiVersion = "v1"; kind = "ServiceAccount"; inherit name; };
+
+        deployment = {
+          inherit name;
+          spec = {
+            replicas = kix.availability.pick availability { none = 1; pod = 1; node = 2; zone = 2; };
+            selector.matchLabels = scope.selectorLabels;
+            template.spec = {
+              serviceAccount = self.serviceAccount;
+              containers = [ {
+                name = "reloader";
+                image = kix.image.ref config.image;
+                inherit args;
+                ports = [ (kix.port "http" 9090) ];
+                # ...
+              } ];
+            };
           };
-        };
-      } |> scope.mkDeployment;
+        } |> scope.mkDeployment;
 
-      service = if config.service.enabled then
-        self.deployment |> kix.service.fromWorkload { name = "${name}-reloader"; } |> scope.mkResource
-      else null;
+        service = if config.metrics.enabled && prometheus != null then
+          self.deployment |> kix.service.fromWorkload { inherit name; } |> scope.mkResource
+        else null;
 
-      root = self.deployment;
-    }
-    // clusterRoles;
+        root = { resource = self.deployment; out = { inherit withReloadOn; }; };
+      }
+      # secrets watch, apps workloads patch, events; a Role in each
+      # namespace instead when extraArgs sets --namespaces
+      // mkClusterRoleSet scope { /* ... */ }
+      // mkRoleSet scope { /* leader-election Lease */ })
+    (kix.monitor { service = "service"; port = "http"; alerts = { /* ... */ }; })
+  ];
 }
 ```
 
 Notes:
 
-- Outer function takes `{ scope, lib, kix }`; `build` takes `{ self, config, clusterConfig }` (no extra args, no DI deps).
-- `self.serviceAccount.out.name` referenced from Deployment's `serviceAccountName`: reads the name AND records the deploy edge (SA before Deployment).
-- `service` conditional - `null` when disabled, filtered out automatically.
-- ClusterRole/Binding set computed in `let`, spread with `// clusterRoles`. They reference the ServiceAccount, so reachable as inverse deps, not flagged as orphans.
-- `root = self.deployment` makes the Deployment the entry point.
+- The outer function takes `availability` because the replica count is `kix.availability.pick`; there is no replica option on a leader-elected controller.
+- `serviceAccount = self.serviceAccount` sets `serviceAccountName` and records the dependency (ServiceAccount before Deployment).
+- `service` is `null` unless metrics are on and a `prometheus` dependency resolves; null parts are filtered out.
+- The RBAC sets are merged with `//`. They reference the ServiceAccount, so they are reachable as inverse dependencies, not orphans.
+- `root.out.withReloadOn` is what consumers read (`reloader.out.withReloadOn`).
 
 ### Gotchas / common mistakes
 
@@ -354,7 +362,7 @@ Package `options` + cluster instance `config` merge into the single `config` att
 Two scopes reach `build` as two separate args (both optional; request by name only if used, see 02-authoring.md#dependency-injection):
 
 - **`config`** - this instance's settings. Package `options` evaluated against instance `config` block. Per-instance, package-local.
-- **`clusterConfig`** - whole cluster module's evaluated config (options in `kix/lib/modules.nix`): `clusterDomain`, `cluster.capabilities.*`, `k8sVersion`, `global`, `networkPolicy`, `scorecard`. Shared across all instances.
+- **`clusterConfig`** - whole cluster module's evaluated config (options in `kix/lib/modules.nix`): `clusterDomain`, `cluster.domain`, `cluster.capabilities.*`, `cluster.network.*`, `k8sVersion`, `networkPolicy`, `scorecard`. Shared across all instances. Package and instance `config` modules receive it as a module argument too, so a default can derive from a cluster fact: `config = { clusterConfig, ... }: { zone = lib.mkDefault clusterConfig.clusterDomain; };`.
 
 ```nix
 build =
@@ -362,7 +370,7 @@ build =
     self,
     config,         # this instance's typed options, merged with cluster config
     clusterConfig,  # cluster-wide module config (domain, capabilities, ...)
-    postgres ? null,
+    database ? null,
     ...
   }:
   ...
@@ -372,26 +380,28 @@ build =
 
 - Declared with `lib.mkOption` (NixOS-module style). `options` is a top-level package key (alongside `meta`, `deps`, `build`).
 - Every option needs `type` and (almost always) `default`. Defaults are what `build` sees when cluster sets nothing.
-- Keep option keys K8s-shaped (`image`, `replicaCount`, `resources`, `ingress.host`), not invented spec keys. See DSL design principles.
+- Keep option keys K8s-shaped (`image`, `replicas`, `resources`, `ingress.host`), not invented spec keys. See DSL design principles.
 
 Example from `immich`:
 
 ```nix
 options = {
-  replicaCount = lib.mkOption {
-    type = lib.types.int;
-    default = 1;
+  image = kix.options.image {
+    repository = "ghcr.io/immich-app/immich-server";
+    inherit (release) tag;
+    digest = release.digests.server;
   };
-  env = lib.mkOption {
-    type = lib.types.attrsOf lib.types.str;
+  resources = kix.options.resources {
+    requests = { cpu = "250m"; memory = "1Gi"; };
+    limits = { cpu = "4"; memory = "4Gi"; };
+  };
+  env = kix.options.env;          # rendered through kix.mergeEnv
+  settings = lib.mkOption {
+    type = lib.types.attrsOf lib.types.anything;
     default = { };
-    description = "Extra environment variables for the server container";
+    description = "Immich's configuration file. Empty leaves every setting to the admin UI.";
   };
-  configuration = lib.mkOption {
-    type = lib.types.nullOr lib.types.anything;
-    default = null;
-    description = "Immich config (immich-config.yaml content as attrset). Null to disable.";
-  };
+  metrics = kix.options.monitor;
   ingress = kix.options.ingress;
 };
 ```
@@ -415,38 +425,42 @@ immich-db = {
 `evaluateInstanceConfig` (`kix/lib/eval/resolve.nix`) runs `lib.evalModules` with, in order:
 
 1. `{ options = packageOptions; }` - package's option declarations.
-2. `{ config = clusterConfig.global or { }; }` - cluster-wide `global` as a config layer.
+2. the package's own `config` module (its `lib.mkDefault`s run at priority 1250, between an instance's `mkDefault` and the declared default).
 3. dep config injections (see Dep config injection below + chapter 12).
 4. instance's own `config` modules.
+
+`clusterConfig` is in `specialArgs`, so every one of these modules can take it as an argument. Module errors name the option as `instances.<ns>.<inst>.config.<option>` and the file that set it.
 
 - Instance config is a `deferredModule`: multiple cluster modules can contribute config to the same instance, merged via NixOS module system.
 - Use `lib.mkDefault` / `lib.mkForce` for priority when two sources set the same field.
 
-#### `anything`-typed deep-merge caveat
+#### The option contract
 
-- `lib.types.anything` does NOT deep-merge a user value with a nested default. Setting `backend.image` would drop the sibling `backend.hpa` default under plain module eval.
-- Fix: `evaluateInstanceConfig` collects each option's `default` and runs a final `lib.recursiveUpdate optionDefaults evaluated`, restoring nested defaults under `anything`-typed blocks.
-- This is why `python-app` declares `backend = lib.mkOption { type = lib.types.anything; default = { enabled = true; image = {...}; hpa = {...}; ... }; }` and a cluster can override just `backend.replicaCount` without losing the rest.
+- An instance value replaces an option's default under the module system's own rules: `anything` and `attrsOf` replace a whole attrset default, and a submodule's own default is discarded when any field is set. Kix adds no merge of its own.
+- So a package may not declare a default that a partial instance value would discard. `checkOptionContract` (`kix/lib/eval/options.nix`) refuses, at evaluation: an untyped option (`anything`, `attrs`, `attrsOf anything`, ...) with a non-empty attrset default; an `attrsOf` option with a non-empty default; a submodule whose own default sets a key its field does not default to.
+- Remedies: put defaults on submodule fields (`kix.options.resources` for container resources); for `attrsOf` entries an instance adds to, default to `{ }` and set each entry in the package's `config` with `lib.mkDefault`; when the instance should replace the value as a whole, default to null and apply the package's value in the build. Give the option a `defaultText` naming the package's value in the last two cases.
 
 ### Option type patterns
 
 **Scalar / structured** - precise types where shape is fixed:
 
 ```nix
-replicaCount = lib.mkOption { type = lib.types.int; default = 1; };
-environment  = lib.mkOption { type = lib.types.str; default = "production"; };
+replicas    = lib.mkOption { type = lib.types.ints.positive; default = kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 3; }; };
+environment = lib.mkOption { type = lib.types.str; default = "production"; };
+size        = lib.mkOption { type = kix.types.quantity; default = "10Gi"; };
 ```
 
-**`anything`-typed config blocks** - whole nested tree with rich default, for large/open-ended shapes (`python-app` `backend`, `frontend`, `redis`, `ingress`, `hooks`). Deep-merge (above) makes it ergonomic; cost is no type checking inside the block.
+**Submodule config blocks** - a nested shape with a default on each field (`lib.types.submodule`). An instance that sets one field keeps the defaults of its siblings, and every field is type-checked.
 
-**`attrsOf anything` for dynamic sub-services** - cluster declares an arbitrary number of named sub-resources. `python-app` workers:
+**`attrsOf (submodule ...)` for named sub-resources** - the cluster declares any number of named entries, each type-checked. `mayastor` `diskPools`:
 
 ```nix
-cronWorkers  = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
-queueWorkers = lib.mkOption { type = lib.types.attrsOf lib.types.anything; default = { }; };
+diskPools = lib.mkOption { type = lib.types.attrsOf poolType; default = { }; };
 ```
 
-Build iterates with `lib.concatMapAttrs` to materialize one Deployment (+ optional Service/HPA) per entry.
+Build iterates over the entries (`lib.mapAttrsToList`) to build one resource per entry.
+
+**Escape hatches**, by what the package builds: `values` (Helm chart, `lib.recursiveUpdate` over the package's values), `extraSpec` (a resource or CR `spec`, through `kix.mergeGuarded`), `settings` (the program's own config file, through `kix.mergeGuarded`), `extraArgs` (`listOf str`, appended through `kix.guardArgs`), `env` (`kix.options.env`, rendered through `kix.mergeEnv`). Anything else goes through instance `partsOverlays`.
 
 ### Shared option bundles: `kix.options`
 
@@ -460,10 +474,16 @@ options = {
 };
 ```
 
-Bundles today (verify exact fields in `kix/lib/compose.nix`):
+Bundles today (verify exact fields in `kix/lib/vocab/compose.nix`):
 
+- `kix.options.image { repository ? null, tag ? null, digest ? null, ... }` - repository, tag, digest, pullPolicy and the promotion fields; render with `kix.image.ref config.image`. A null `repository` or `tag` leaves that field required.
+- `kix.options.resources { requests ? { }, limits ? { } }` - container resources with each default on its field; null removes a default.
+- `kix.options.env` - extra env vars (`attrsOf (null or a string or a valueFrom source)`); render through `kix.mergeEnv`.
 - `kix.options.ingress` - `host` (`nullOr str`, default `null`, "Null = auto-derive from cluster.domain") + `annotations` (`attrsOf str`).
 - `kix.options.monitor` - `enabled` (`bool`, default `true`) + `interval` (`nullOr str`, scrape interval).
+- `kix.options.healthCheck` - `enabled` (`bool`, default `false`) + `retryFor` (seconds); read by `kix.healthCheck`.
+
+Toggles are named `enabled`.
 
 Pair with `kix.expose` / `kix.monitor` build entries, which read `config.ingress.host` / `config.ingress.annotations` and `config.metrics.enabled` / `config.metrics.interval` (see 02-authoring.md#composition-helpers-kix). Use the bundle so option names line up with those helpers.
 
@@ -475,29 +495,25 @@ Evaluated cluster module (schema in `kix/lib/modules.nix`). Common reads:
 # Top-level DNS domain (declared in the schema, default "cluster.local"), for FQDNs:
 dnsDomain = clusterConfig.clusterDomain or "cluster.local";
 
-# Public/ingress hostname base. NOTE: `cluster.domain` is NOT a declared option
-# (see the Gotcha below), so today this reads null. vaultwarden / firezone /
-# kix.expose all use this exact path:
-publicDomain = clusterConfig.cluster.domain or null;
+# Public base domain (`cluster.domain`, default null), from which kix.expose
+# derives `<instance>.<domain>`:
+publicDomain = clusterConfig.cluster.domain;
 ```
 
 Other queried fields:
 
 - `clusterConfig.cluster.capabilities.*` (e.g. `loadBalancer`, `persistentStorage`, `multiNode`, `gpu`) for conditional logic.
 - `clusterConfig.k8sVersion` for version-gated behavior.
-- `clusterConfig.global` for cluster-wide values.
 - Always read with `or` defaults; not every cluster sets every field.
 
 `networkPolicy`, `scorecard`, `cluster.capabilities` are consumed by eval machinery in `kix/lib/eval/instance.nix`, not usually by `build`. Prefer DI (take a dependency) over branching on a capability name where a dep exists. See `TODO` notes in `kix/lib/modules.nix` - several capabilities slated to become DI deps.
 
 ### Dep config injection (preview)
 
-A dependency can push config onto its consumer. In `immich`, `deps` declares `database.config.extensions = [...]`, which `evaluateInstanceConfig` feeds in as an injection module (priority equal to instance config; `listOf` types concatenate, scalars error on conflict). Auto-configures immich's stackgres database without cluster-side wiring. Full mechanics + `mkLocked` (block injection into a field) in 03-advanced.md#overrides.
+A consumer can push config onto its dependency. In `immich`, `deps` declares `database.config.extensions = [...]`, which `evaluateInstanceConfig` feeds in as an injection module (priority equal to instance config; `listOf` types concatenate, scalars error on conflict). Auto-configures immich's stackgres database without cluster-side wiring. Full mechanics + `mkLocked` (block injection into a field) in 03-advanced.md#overrides.
 
 ### Gotchas
 
 - **Defaults reach build even when an option is untouched.** `build` always sees a fully-defaulted `config`; no `config.x or default` needed for declared options. Use `or` only for keys NOT declared (e.g. optional sub-keys inside an `anything` block).
-- **`anything` blocks are not type-checked.** A typo inside a `backend = { ... }` override is silently accepted, surfaces only as a wrong/missing manifest field. Trade for deep-merge ergonomics is lost validation.
-- **`clusterConfig.cluster.domain` is a latent gap.** `kix/lib/modules.nix` declares `clusterDomain` at top level (default `"cluster.local"`, for FQDN construction) but does NOT declare `cluster.domain`. Yet `vaultwarden`, `firezone`, `kix.expose` read `clusterConfig.cluster.domain or null` for the user-facing ingress hostname base. Undeclared, so reading yields `null` today (`or null` guard catches the missing attr); a cluster that tries to SET `cluster.domain` makes `evalModules` throw `The option 'cluster.domain' does not exist`. Hostname path is dormant until the schema grows a `cluster.domain` option. Don't rely on it carrying a value.
-- **`global` keys must be declared by every package, or eval throws.** Cluster `global` values merge into every instance's module eval via `{ config = clusterConfig.global or { }; }`. An unmatched config key against declared options is a hard error in the NixOS module system: a `global.foo` that some package does not declare as an option makes THAT instance's config eval throw `The option 'foo' does not exist` (not a silent no-op). `global` is a typed config layer (key must be a declared option on the consuming package), not a free-form bag.
+- **`anything` blocks are not type-checked.** A typo inside an `anything` value is silently accepted and surfaces only as a wrong or missing manifest field. Prefer a submodule; keep `anything` for a program config the package passes through (`settings`).
 - **Don't invent spec keys.** Options should map to real K8s fields or genuine behavioral toggles. Custom options that rewrite manifest semantics diverge from K8s and confuse users + diff tooling.
