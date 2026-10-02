@@ -1168,12 +1168,12 @@ The enforcer is auto-discovered: any package with `meta.roles ∋ "network-polic
 ```nix
 networkPolicy = {
   enable = true;
-  defaultDeny = true;                    # per-namespace
-  directions = [ "ingress" "egress" ];   # which directions to deny by default
+  defaultDeny = true;     # a deny-all policy in every Kix namespace
+  directions = "both";    # "both", "ingress", or "egress"
 };
 ```
 
-`namespaces.<ns>.networkPolicies.{directions, defaultDeny}` allows per-namespace overrides.
+`directions` is the one setting for which directions Kix enforces: default deny, the derived workload, instance, and scrape policies, and `kix.operandPolicy` (through `scope.networkPolicyDirections`) all read it, and none of them emits a section for a direction outside it. `namespaces.<ns>.networkPolicies.<name>` adds a Kubernetes NetworkPolicy `<ns>-<name>` with that spec.
 
 **Pod Security Standards.** A package whose pods need a level declares it: `meta.podSecurity = "privileged"` (kubevirt's virt-handler). The namespace gets `pod-security.kubernetes.io/enforce` at the most permissive level any of its instances needs, and nothing when none declares one. `namespaces.<ns>.podSecurity` sets the level by hand; setting it stricter than an instance in that namespace needs is an eval error naming the instance, rather than a pod the apiserver refuses with a message naming the pod.
 
@@ -1219,15 +1219,16 @@ The netpol cluster processor derives the path from each Prometheus server to wha
 For each Prometheus CR it emits `<name>-scrape-egress` in the server's namespace, selecting the server pods, with one rule per target, and `<ns>-<name>-scrape-<target>-<hash>` in each target's namespace, admitting the server pods on the target's pod ports. The hash covers the server's namespace and name and the target, so names stay distinct where the readable parts join ambiguously (Prometheus `c` in `a-b` and `b-c` in `a`) and for same-named PodMonitors in different namespaces. The server pods are named by the Prometheus CRD's `factBehavior.podSelector`, which the prometheus-operator package declares; the prometheus package opens DNS and the API server for them with `kix.operandPolicy`. Targets resolve against what Kix built:
 
 - A Service port's `targetPort` gives the pod port; a named port is resolved through the container ports of the Kix workloads behind the Service selector.
-- A named port that no Kix workload declares (pods an operator creates) stays a name. The target's ingress rule keeps it, and the egress rule to those pods has no port list, because Cilium drops egress on a named port.
-- A target whose Kix workloads run on the host network (node-exporter) gets an egress rule to the `host` and `remote-node` entities on its port (`netpol.mkHostNetworkEgressRule`) and no ingress policy.
-- A host-network target whose port is a name no Kix container declares gets no egress rule and a warning, because a host rule without ports would admit every port on every node.
+- A named port that no Kix workload declares (pods an operator creates) stays a name. The target's ingress rule keeps it, because the receiving pod resolves it. Cilium drops egress on a named port, and a rule without ports would admit every port, so the egress rule carries only the target's numeric ports, and a target with none gets no egress rule. Give such a monitor endpoint the number: `portNumber` on a PodMonitor endpoint (stackgres-cluster and arc do), or a numeric `targetPort`.
+- A target whose Kix workloads run on the host network (node-exporter) gets an egress rule to the `host` and `remote-node` entities on its port (`netpol.mkHostNetworkEgressRule`) and no ingress policy. A host-network target whose port is a name no Kix container declares gets no egress rule.
 - A target Kix did not build gets an egress rule for the selector its Service names. That covers pod-network platform pods such as kube-dns. Kix derives nothing for the kubelet, the API server, or control-plane static pods on the host network; the server reaches them only through its API server rule, which admits every port on `host` and `remote-node` (housekeeping/2026-10-01-apiserver-egress-rule-allows-every-host-port.md).
 - `namespaceSelector.any` covers every Kix namespace, including one that holds only custom resources whose operator creates the pods.
-- A PodMonitor whose selector uses `matchExpressions` gets no policy and a warning; Kix builds policy selectors from `matchLabels`.
-- A Prometheus CR whose CRD declares no `factBehavior.podSelector` gets no policy and a warning naming the `cluster.factBehavior` override.
+- A PodMonitor whose selector uses `matchExpressions` gets no policy; Kix builds policy selectors from `matchLabels`.
+- A Prometheus CR whose CRD declares no `factBehavior.podSelector` gets no policy; the message names the `cluster.factBehavior` override.
 
-`networkPolicy.directions` limits the output: under `"egress"` no target ingress is emitted, and under `"ingress"` no server egress is emitted, and `kix.operandPolicy` drops the egress section of the prometheus package's server policy, so the server pods keep open egress. With `networkPolicy.defaultDeny = false` a target ingress policy would be the first ingress policy on its pods and close them to every other client, so it is emitted only for pods another Kix policy (derived, operand, or platform intent) already isolates for ingress.
+The last three cases, and a target port that is a name no Kix container declares, are scrape paths Kix cannot derive. With `networkPolicy.defaultDeny` on they fail evaluation, one line per path, because the scrape would be dropped (or, for a host-network target, would depend on the server's API server rule). Without default deny they are warnings.
+
+`networkPolicy.directions` limits the output: under `"egress"` no target ingress is emitted, and under `"ingress"` no server egress is emitted, and `kix.operandPolicy` drops the egress section of the prometheus package's server policy, so the server pods keep open egress. With `networkPolicy.defaultDeny = false` a target ingress policy would be the first ingress policy on its pods and close them to every other client, so it is emitted only when another Kix policy (derived, operand, or platform intent) already isolates every pod behind the target for ingress. The check matches each policy's selector against the labels of the pods Kix built behind the target, which can carry more than the Service selector; pods Kix did not build are known by the target's selector alone. When the policy isolates only some of the pods, the target gets no scrape ingress and a warning.
 
 Not covered: monitors outside Kix, `additionalScrapeConfigs`, ScrapeConfig and Probe objects, remote write to a URL that is not a dependency's output, and VictoriaMetrics' VMAgent with its own scrape kinds.
 

@@ -287,8 +287,10 @@ metrics port with an intent. Kix derives no rule for host-network targets it
 did not build (the kubelet, control-plane static pods); the server reaches
 them only because its API server rule admits every port on the nodes
 (HANDBOOK §16.8). Scrape configs outside the monitor objects get no rule.
-Select PodMonitor pods with `matchLabels`; a selector with
-`matchExpressions` gets a warning and no policy.
+Select PodMonitor pods with `matchLabels`, and give a monitor over pods an
+operator creates a port number: Kix cannot derive a path from a
+`matchExpressions` selector or from a port name it cannot resolve, and under
+default deny either one fails evaluation.
 
 ### 6.3 Wiring (DI) > module system > meta
 
