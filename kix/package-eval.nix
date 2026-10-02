@@ -232,6 +232,17 @@ let
       };
       instances.prometheus-operator.package = packages.prometheus-operator;
     };
+    metabase.instances = {
+      database = {
+        package = packages.stackgres-database;
+        config.password = "password";
+      };
+      encryption-key = {
+        package = packages.secret;
+        aliases = [ "encryptionKey" ];
+        config.stringData.key = "0123456789abcdef";
+      };
+    };
     n8n.instances.valkey-password = valkeyPassword;
     persistent-volume-claim.config.size = "1Gi";
     priority-class.config.value = 1000;
