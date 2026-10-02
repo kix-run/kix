@@ -72,10 +72,13 @@
 #
 # Moving to another release: replace versions.properties with
 # versions-<major.minor>.properties from stackgres-k8s/src/common/src/main/resources
-# at the new tag, set `release` in release.nix and the image digest below
-# (`crane digest quay.io/stackgres/operator:<release>`), compare kinds.nix
-# with the chart's crds/ and the RBAC below with its operator-cluster-role.yaml,
-# then run the stackgres eval checks (every-package-evaluates, ludo-kind).
+# at the new tag, set `release` in release.nix and the digest of `image`
+# below (`crane digest quay.io/stackgres/operator:<release>`), set the tag of
+# `webhookCheck.image` to the newest kubectl entry in versions.properties and
+# its digest (`crane digest quay.io/ongres/kubectl:v<entry>`), compare
+# kinds.nix with the chart's crds/ and the RBAC below with its
+# operator-cluster-role.yaml, then run the stackgres eval checks
+# (every-package-evaluates, ludo-kind).
 
 {
   scope,
@@ -234,7 +237,7 @@ in
       repository = "quay.io/ongres/kubectl";
       tag = "v1.37.1-build-6.56";
       digest = "sha256:8e3f36d49e403423627b450d803c94cf93c8bbebae8f59b11cb5e458bb0c1a39";
-      description = "Image of the webhook-check Job, StackGres's kubectl image. It needs bash and kubectl. Its repository follows the registry prefix of `image.repository` and its pull policy follows `image.pullPolicy`.";
+      description = "Image of the webhook-check Job, StackGres's kubectl image. It needs bash and kubectl. The declared tag is the newest kubectl entry in versions.properties. Its repository follows the registry prefix of `image.repository` and its pull policy follows `image.pullPolicy`.";
     };
 
     env = kix.options.env // {
@@ -408,8 +411,10 @@ in
       checkProfile = builtins.toJSON {
         apiVersion = "${group}/${kinds.SGInstanceProfile.version}";
         kind = "SGInstanceProfile";
+        # The API server generates the name. A fixed name fails the dry-run
+        # with AlreadyExists when an SGInstanceProfile of that name exists.
         metadata = {
-          name = checkName;
+          generateName = "${checkName}-";
           namespace = ns;
         };
         spec = {
