@@ -135,8 +135,8 @@ let
 
   # Labels cdi-operator and cdi-deployment put on the pods they create
   # (pkg/operator/resources/namespaced and pkg/controller/import-controller.go
-  # at the release). cdi-deployment's pods carry `cdi.kubevirt.io` with an
-  # empty value.
+  # at the release). cdi-operator labels each operand pod with
+  # `cdi.kubevirt.io=<deployment name>`, read from a running v1.62.0 install.
   operandSelectors = {
     importer = {
       app = "containerized-data-importer";
@@ -144,7 +144,7 @@ let
     };
     deployment = {
       app = "containerized-data-importer";
-      "cdi.kubevirt.io" = "";
+      "cdi.kubevirt.io" = "cdi-deployment";
     };
     uploadProxy."cdi.kubevirt.io" = "cdi-uploadproxy";
     apiServer."cdi.kubevirt.io" = "cdi-apiserver";

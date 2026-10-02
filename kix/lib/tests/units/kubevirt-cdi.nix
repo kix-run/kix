@@ -687,7 +687,7 @@ in
           };
           deployment = {
             app = "containerized-data-importer";
-            "cdi.kubevirt.io" = "";
+            "cdi.kubevirt.io" = "cdi-deployment";
           };
           uploadProxy."cdi.kubevirt.io" = "cdi-uploadproxy";
         }
@@ -780,7 +780,7 @@ in
       &&
         selectorOf on "cdi-cdi-deployment" == {
           app = "containerized-data-importer";
-          "cdi.kubevirt.io" = "";
+          "cdi.kubevirt.io" = "cdi-deployment";
         }
     )
     || throw "operand policies: missing with enforcer ${builtins.toJSON missing}, present without ${builtins.toJSON present}";
