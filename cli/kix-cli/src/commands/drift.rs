@@ -4,7 +4,7 @@
 
 use miette::{IntoDiagnostic, Result, miette};
 
-use kix::cluster::drift::{self, DriftReport, DriftVerdict, ForeignOwner};
+use kix::cluster::drift::{self, DriftReport, DriftVerdict, ForeignOwner, UnrecordedScale};
 use kix::cluster::fetch;
 
 use crate::cli::{DriftArgs, GlobalArgs, OutputFormat};
@@ -94,7 +94,10 @@ fn print_text(reports: &[DriftReport], quiet: bool, name_clusters: bool) {
                     output::yellow("no managedFields. Check cannot run"),
                 );
             }
-            DriftVerdict::Drifted { foreign } => {
+            DriftVerdict::Drifted {
+                foreign,
+                unrecorded_scale,
+            } => {
                 println!(
                     "  {} {:<50} {}",
                     output::red("✗"),
@@ -104,7 +107,9 @@ fn print_text(reports: &[DriftReport], quiet: bool, name_clusters: bool) {
                 for owner in foreign {
                     print_owner(owner);
                 }
-                if foreign.is_empty() {
+                if let Some(scale) = unrecorded_scale {
+                    println!("      {}", output::yellow(&scale_line(scale)));
+                } else if foreign.is_empty() {
                     println!(
                         "      {}",
                         output::dim(
@@ -163,6 +168,22 @@ fn print_owner(owner: &ForeignOwner) {
     }
 }
 
+/// One line for a replicas change that Kubernetes recorded no owner for.
+fn scale_line(scale: &UnrecordedScale) -> String {
+    if scale.deployed == scale.live {
+        format!(
+            "{} is back at {} but no longer owned by Kix: a write through /scale took it, \
+             and Kubernetes records no owner for that write",
+            scale.path, scale.live
+        )
+    } else {
+        format!(
+            "{} changed from {} to {} through /scale; Kubernetes records no owner for that write",
+            scale.path, scale.deployed, scale.live
+        )
+    }
+}
+
 /// The clusters a report names beside an object.
 fn owners_label(clusters: &[String]) -> String {
     if clusters.is_empty() {
@@ -180,11 +201,14 @@ fn print_json(reports: &[DriftReport]) -> Result<()> {
     let items: Vec<serde_json::Value> = reports
         .iter()
         .map(|r| {
-            let (verdict, foreign) = match &r.verdict {
-                DriftVerdict::InSync => ("in-sync", vec![]),
-                DriftVerdict::Unstamped => ("unstamped", vec![]),
-                DriftVerdict::NoFieldset => ("no-fieldset", vec![]),
-                DriftVerdict::Drifted { foreign } => ("drifted", foreign.clone()),
+            let (verdict, foreign, scale) = match &r.verdict {
+                DriftVerdict::InSync => ("in-sync", vec![], None),
+                DriftVerdict::Unstamped => ("unstamped", vec![], None),
+                DriftVerdict::NoFieldset => ("no-fieldset", vec![], None),
+                DriftVerdict::Drifted {
+                    foreign,
+                    unrecorded_scale,
+                } => ("drifted", foreign.clone(), unrecorded_scale.as_ref()),
             };
             serde_json::json!({
                 "kind": r.rid.kind,
@@ -199,6 +223,11 @@ fn print_json(reports: &[DriftReport]) -> Result<()> {
                     "time": o.time,
                     "paths": o.paths,
                 })).collect::<Vec<_>>(),
+                "unrecordedScale": scale.map(|s| serde_json::json!({
+                    "path": s.path,
+                    "deployed": s.deployed,
+                    "live": s.live,
+                })),
             })
         })
         .collect();
@@ -213,4 +242,34 @@ fn print_json(reports: &[DriftReport]) -> Result<()> {
     let out = serde_json::json!({ "resources": items, "summary": summary });
     println!("{}", serde_json::to_string_pretty(&out).into_diagnostic()?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scale(deployed: i64, live: i64) -> UnrecordedScale {
+        UnrecordedScale {
+            path: "spec.replicas".to_string(),
+            deployed,
+            live,
+        }
+    }
+
+    #[test]
+    fn scale_line_names_both_values_when_they_differ() {
+        assert_eq!(
+            scale_line(&scale(2, 0)),
+            "spec.replicas changed from 2 to 0 through /scale; Kubernetes records no owner for that write"
+        );
+    }
+
+    #[test]
+    fn scale_line_says_the_value_is_back_when_it_matches() {
+        assert_eq!(
+            scale_line(&scale(2, 2)),
+            "spec.replicas is back at 2 but no longer owned by Kix: a write through /scale took it, \
+             and Kubernetes records no owner for that write"
+        );
+    }
 }

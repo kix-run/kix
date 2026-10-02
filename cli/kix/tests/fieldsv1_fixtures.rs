@@ -365,9 +365,15 @@ fn check_object_drifted_with_attribution() {
         .insert(keys::APPLIED_HASH.to_string(), stamped_hash);
 
     let report = drift::check_object(&obj);
-    let DriftVerdict::Drifted { foreign } = report.verdict else {
+    let DriftVerdict::Drifted {
+        foreign,
+        unrecorded_scale,
+    } = report.verdict
+    else {
         panic!("expected Drifted, got {:?}", report.verdict);
     };
+    // kubectl owns spec.replicas, so the write is recorded, not inferred.
+    assert_eq!(unrecorded_scale, None);
 
     // kubectl-patch took the image — attributed with a field path.
     let patcher = foreign
@@ -390,6 +396,8 @@ fn check_object_drifted_with_attribution() {
         .expect("scale-subresource writer attributed");
     assert_eq!(scaler.manager, "kubectl");
     assert!(scaler.paths.contains(&"spec.replicas".to_string()));
+    // The apiserver records a /scale entry without a time.
+    assert_eq!(scaler.time, None);
 
     // Status writers and kix itself are never attributed.
     assert!(
@@ -398,4 +406,111 @@ fn check_object_drifted_with_attribution() {
             .all(|o| o.subresource.as_deref() != Some("status"))
     );
     assert!(foreign.iter().all(|o| o.manager != "kix"));
+}
+
+// -- /scale writes Kubernetes records no owner for -------------------------
+//
+// These objects are derived from the recorded `deployment.json` (kix owns
+// `spec.replicas` = 2) by the changes the apiserver's ScaleHandler makes
+// (k8s.io/apimachinery v0.36.1, util/managedfields/scalehandler.go). Scaling
+// to 0 removes `replicas` from the Scale object, so no writer gains it and
+// Kix's `Apply` entry loses it. Scaling back up finds no owner to map onto
+// the Scale object, and the field manager skips tracking an update of an
+// object with no managedFields (internal/skipnonapplied.go). Both leave
+// `spec.replicas` with no owner and add no entry.
+
+/// `deployment.json` stamped as Kix applied it, then scaled through /scale
+/// to `live` replicas without a recorded owner.
+fn scaled_without_owner(live: i64) -> DynamicObject {
+    let mut obj = deployment();
+    let stamp = fieldsv1::applied_content_hash(&obj).unwrap();
+    obj.metadata
+        .annotations
+        .as_mut()
+        .unwrap()
+        .insert(keys::APPLIED_HASH.to_string(), stamp);
+    release_replicas(&mut obj);
+    obj.data["spec"]["replicas"] = serde_json::json!(live);
+    obj
+}
+
+/// Drop `spec.replicas` from Kix's `Apply` entry.
+fn release_replicas(obj: &mut DynamicObject) {
+    let entries = obj.metadata.managed_fields.as_mut().unwrap();
+    let kix_entry = entries
+        .iter_mut()
+        .find(|e| e.manager.as_deref() == Some("kix") && e.operation.as_deref() == Some("Apply"))
+        .unwrap();
+    kix_entry
+        .fields_v1
+        .as_mut()
+        .unwrap()
+        .0
+        .pointer_mut("/f:spec")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("f:replicas")
+        .expect("kix owned spec.replicas in the fixture");
+}
+
+fn unrecorded_scale(obj: &DynamicObject) -> Option<drift::UnrecordedScale> {
+    match drift::check_object(obj).verdict {
+        DriftVerdict::Drifted {
+            foreign,
+            unrecorded_scale,
+        } => {
+            assert!(
+                foreign
+                    .iter()
+                    .all(|o| o.subresource.as_deref() != Some("scale")),
+                "no /scale entry is recorded in these objects: {foreign:?}"
+            );
+            unrecorded_scale
+        }
+        other => panic!("expected Drifted, got {other:?}"),
+    }
+}
+
+#[test]
+fn scale_to_zero_without_owner_names_both_values() {
+    let scale = unrecorded_scale(&scaled_without_owner(0)).expect("attributed");
+    assert_eq!(scale.path, "spec.replicas");
+    assert_eq!((scale.deployed, scale.live), (2, 0));
+}
+
+#[test]
+fn scale_back_to_deployed_value_without_owner_is_attributed() {
+    let scale = unrecorded_scale(&scaled_without_owner(2)).expect("attributed");
+    assert_eq!((scale.deployed, scale.live), (2, 2));
+}
+
+#[test]
+fn unrecorded_scale_with_another_change_is_not_attributed() {
+    let mut obj = scaled_without_owner(0);
+    obj.data["spec"]["template"]["spec"]["containers"][0]["image"] = serde_json::json!("nginx:9");
+    assert_eq!(unrecorded_scale(&obj), None);
+}
+
+#[test]
+fn unowned_replicas_kix_never_applied_is_not_attributed() {
+    // Kix applied no replicas (the stamp has none), and an image change with
+    // no recorded owner drifted the object.
+    let mut obj = deployment();
+    release_replicas(&mut obj);
+    let stamp = fieldsv1::applied_content_hash(&obj).unwrap();
+    obj.metadata
+        .annotations
+        .as_mut()
+        .unwrap()
+        .insert(keys::APPLIED_HASH.to_string(), stamp);
+    obj.data["spec"]["template"]["spec"]["containers"][0]["image"] = serde_json::json!("nginx:9");
+    assert_eq!(unrecorded_scale(&obj), None);
+}
+
+#[test]
+fn unrecorded_scale_is_limited_to_kinds_that_serve_scale() {
+    let mut obj = scaled_without_owner(0);
+    obj.data["kind"] = serde_json::json!("DaemonSet");
+    assert_eq!(unrecorded_scale(&obj), None);
 }
