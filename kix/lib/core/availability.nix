@@ -15,8 +15,8 @@
 #
 # Pure: no module system, no scope. `resolve` is called once per instance
 # by eval/instance.nix; `pick`, `atLeast` and `spreadConstraints` are what
-# packages see as `kix.availability`, with `pick` and `atLeast` replaced by
-# their `underCeiling` forms for an instance whose package declares
+# packages see as `kix.availability`, with `atLeast` replaced by its
+# `underCeiling` form for an instance whose package declares
 # meta.availability.max.
 { lib }:
 
@@ -91,59 +91,16 @@ let
 
   # `pick` and `atLeast` as handed to a package whose meta.availability.max
   # is `ceiling` ("ns/inst" in `where`). `resolve` caps the level at the
-  # ceiling, so the package never sees a higher level. A table whose values
-  # above the ceiling differ from its value at the ceiling, and an `atLeast`
-  # threshold above the ceiling, describe behaviour that cannot happen;
-  # both throw. Only primitive values are compared; lists, attrsets and
-  # functions are skipped, because `==` on two functions is always false.
-  # The table's completeness is checked first. The comparison then
-  # evaluates the entries above the ceiling and the entry at the ceiling.
-  # An entry that throws is not compared; any other evaluation error, such
-  # as a missing attribute, still stops the build.
+  # ceiling, so the package never sees a higher level and `pick` is
+  # unchanged. An `atLeast` threshold above the ceiling is always false, so
+  # it throws.
   underCeiling =
     { ceiling, where }:
-    let
-      quoted = ls: lib.concatMapStringsSep ", " (l: "\"${l}\"") ls;
-      above = builtins.filter (l: rank l > rank ceiling) levels;
-      isPrimitive =
-        v:
-        builtins.elem (builtins.typeOf v) [
-          "int"
-          "float"
-          "string"
-          "bool"
-          "null"
-        ];
-    in
     if ceiling == null then
       { inherit pick atLeast; }
     else
       {
-        pick =
-          level: table:
-          let
-            differs =
-              l:
-              let
-                probe = builtins.tryEval (isPrimitive table.${l} && table.${l} != table.${ceiling});
-              in
-              probe.success && probe.value;
-            dead = builtins.filter differs above;
-          in
-          builtins.seq (checkPickTable table) (
-            if dead != [ ] then
-              throw (
-                "[${where}] kix.availability.pick: meta.availability.max is \"${ceiling}\", so this package "
-                + "never sees a level above \"${ceiling}\", and the table's values for ${quoted dead} differ "
-                + "from its value for \"${ceiling}\" and are never used. If only some workloads cannot reach "
-                + "the higher levels, or the limit depends on configuration, put availability.max on their "
-                + "builder calls (scope.mkDeployment { availability.max = \"${ceiling}\"; ... }) and remove "
-                + "meta.availability.max. A chart package keeps the package ceiling and uses the value for "
-                + "\"${ceiling}\" directly."
-              )
-            else
-              table.${level}
-          );
+        inherit pick;
         atLeast =
           min: level:
           if rank min > rank ceiling then

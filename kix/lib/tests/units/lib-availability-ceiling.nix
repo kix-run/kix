@@ -1,9 +1,9 @@
 # Tests for availability ceilings: the replica guard under a `none` ceiling
 # (plugins/availability), ceiling validation (core/availability.nix
 # checkCeiling and ceilingOfMeta, scope/builders.nix workloadCeilingOf), the
-# effective ceiling a sealed workload records, and the dead-mapping guard on
-# `kix.availability.pick` and `atLeast` under a package ceiling
-# (core/availability.nix underCeiling).
+# effective ceiling a sealed workload records, and `kix.availability.pick`
+# and `atLeast` under a package ceiling (core/availability.nix
+# underCeiling).
 
 {
   lib,
@@ -114,13 +114,6 @@ let
         { instances.appns.web.package = mkLevelPackage args; }
       ]
     );
-
-  constantTable = {
-    none = 1;
-    pod = 1;
-    node = 1;
-    zone = 1;
-  };
 in
 {
   # A builder ceiling of `none` refuses two replicas whether or not it caps
@@ -334,13 +327,12 @@ in
       }
     }";
 
-  # Under meta.availability.max = "none" the package only sees "none", so a
-  # `pick` table that differs above it fails, at every level. A constant
-  # table builds. A package without a package ceiling may keep the table
-  # beside a workload with a builder ceiling of `none`. An incomplete table,
-  # or a value that is not an attrset, fails with the completeness `throw`.
-  # An entry above the ceiling that throws is not compared.
-  lib-availability-ceiling-package-none-dead-pick =
+  # Under meta.availability.max = "none" the package only sees "none", so
+  # `pick` reads the table's `none` entry whatever the other entries hold.
+  # A package without a package ceiling may keep the table beside a
+  # workload with a builder ceiling of `none`. An incomplete table, or a
+  # value that is not an attrset, fails with the completeness `throw`.
+  lib-availability-ceiling-package-none-pick =
     let
       twoWorkloads =
         { kix, availability, ... }:
@@ -399,17 +391,10 @@ in
         zone = 3;
       };
     in
-    (evalFails (levelPackageAt [ multiZone ] { metaExtra.availability.max = "none"; }))
-    && (evalFails (levelPackageAt [ singleNode ] { metaExtra.availability.max = "none"; }))
-    && !(evalFails (
-      levelPackageAt [ multiZone ] {
-        metaExtra.availability.max = "none";
-        table = constantTable;
-      }
-    ))
+    !(evalFails (levelPackageAt [ multiZone ] { metaExtra.availability.max = "none"; }))
+    && !(evalFails (levelPackageAt [ singleNode ] { metaExtra.availability.max = "none"; }))
     && replicasOf [ multiZone ] { package = twoWorkloads; } == 3
-    && fails (underNone.pick "none" table)
-    && underNone.pick "none" constantTable == 1
+    && underNone.pick "none" table == 1
     && fails (
       underNone.pick "none" {
         none = 1;
@@ -424,11 +409,9 @@ in
       }
     )
     && fails (underNone.pick "none" 3)
-    && underNone.pick "none" (constantTable // { pod = throw "unused"; }) == 1
-    # A function value is not compared, so a table of builders passes.
-    && (underNone.pick "none" (lib.genAttrs availabilityLib.levels (l: _: l))) null == "none"
+    && underNone.pick "none" (table // { pod = throw "unused"; }) == 1
     && unbounded.pick "zone" table == 3
-    || throw "a dead pick table under the package ceiling none was accepted, or a valid table was refused";
+    || throw "pick under the package ceiling none refused a complete table, or accepted an incomplete one";
 
   # Under meta.availability.max = "pod", `atLeast "node"` is always false
   # and fails; `atLeast "pod"` still answers. The build function takes
