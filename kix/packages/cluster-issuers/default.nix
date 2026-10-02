@@ -70,8 +70,8 @@
       certManager,
     }:
     let
-      mkCert = certManager.out.mkCertificate scope;
-      mkIssuerCR = certManager.out.mkClusterIssuer scope;
+      mkCert = scope.mkCR certManager.out.crds.Certificate;
+      mkIssuerCR = scope.mkCR certManager.out.crds.ClusterIssuer;
 
       mkAcmeIssuer =
         name: issuerCfg:

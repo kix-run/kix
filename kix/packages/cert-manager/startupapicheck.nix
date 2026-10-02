@@ -14,6 +14,7 @@
 let
   common = import ./common.nix { inherit lib; };
   name = scope.instanceName;
+  who = common.who scope;
   labels = (common.labels name).startupapicheck;
 
   inherit (scope.rbac)
@@ -75,7 +76,12 @@ in
           containers = [
             {
               name = "cert-manager-startupapicheck";
-              image = kix.image.ref config.startupapicheck.image;
+              image = kix.image.ref (
+                common.checkRelease who config [
+                  "startupapicheck"
+                  "image"
+                ]
+              );
               imagePullPolicy = config.startupapicheck.image.pullPolicy;
               args = [
                 "check"
@@ -84,6 +90,19 @@ in
                 "-v"
               ];
               securityContext = common.containerSecurityContext;
+              # A ResourceQuota on requests or limits in the namespace refuses
+              # a pod that does not set them, and every gated custom resource
+              # waits on this Job. `check api` makes a few API calls and exits.
+              resources = {
+                requests = {
+                  cpu = "10m";
+                  memory = "32Mi";
+                };
+                limits = {
+                  cpu = "100m";
+                  memory = "128Mi";
+                };
+              };
               env = [
                 {
                   name = "POD_NAMESPACE";

@@ -5,8 +5,10 @@
 # failurePolicy Fail and refuses writes until cainjector has injected its CA
 # into the webhook configuration. Each handle's `cr` and `mkCR` therefore add
 # the API-check Job (startupapicheck.nix) to the custom resource's requires.
-# Certificate, Issuer, and ClusterIssuer also declare their Ready condition,
-# so a deploy waits for them and reports cert-manager's message on failure.
+# Certificate, CertificateRequest, Issuer, and ClusterIssuer also declare
+# their Ready condition, so a deploy waits for them and reports
+# cert-manager's message on failure. Order and Challenge report a
+# `status.state` and no conditions.
 
 { self, scope, ... }:
 let
@@ -38,7 +40,10 @@ in
       }
     );
     certificateRequests = gate (
-      scope.mkCRD { spec = vendored "certificaterequests.cert-manager.io.json"; }
+      scope.mkCRD {
+        spec = vendored "certificaterequests.cert-manager.io.json";
+        readiness = ready;
+      }
     );
     challenges = gate (scope.mkCRD { spec = vendored "challenges.acme.cert-manager.io.json"; });
     clusterIssuers = gate (

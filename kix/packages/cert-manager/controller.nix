@@ -19,6 +19,12 @@ let
   ns = scope.namespaceName;
   who = common.who scope;
   metricsOn = config.metrics.enabled && prometheus != null;
+  acmesolverImage = kix.image.ref (
+    common.checkRelease who config [
+      "operandImages"
+      "acmesolver"
+    ]
+  );
 
   inherit (scope.rbac)
     group
@@ -101,7 +107,6 @@ let
       ];
 
       "${name}-controller-orders" = grant [
-        # orders + challenges: get, list, watch (grant merges same apiGroup+verbs)
         (
           [
             acme.orders
@@ -109,7 +114,6 @@ let
           ]
           |> watch
         )
-        # orders, orders/status: update, patch (grant merges same apiGroup+verbs)
         (
           acme.orders
           |> allow [
@@ -124,7 +128,6 @@ let
             "patch"
           ]
         )
-        # challenges: create, delete
         (
           acme.challenges
           |> allow [
@@ -333,7 +336,7 @@ in
       scope.mkResource {
         apiVersion = "v1";
         kind = "Service";
-        name = common.controllerServiceName name;
+        inherit name;
         inherit labels;
         spec = {
           type = "ClusterIP";
@@ -374,14 +377,13 @@ in
           containers = [
             {
               name = "cert-manager-controller";
-              image = builtins.seq (common.checkRelease who config.image.tag) (kix.image.ref config.image);
+              image = kix.image.ref (common.checkRelease who config [ "image" ]);
               imagePullPolicy = config.image.pullPolicy;
               args = [
                 "--v=2"
                 "--cluster-resource-namespace=$(POD_NAMESPACE)"
                 "--leader-election-namespace=${ns}"
-                "--acme-http01-solver-image=${kix.image.ref config.operandImages.acmesolver}"
-                "--max-concurrent-challenges=60"
+                "--acme-http01-solver-image=${acmesolverImage}"
               ]
               ++ kix.guardArgs {
                 inherit who;

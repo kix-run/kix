@@ -191,7 +191,12 @@ in
           containers = [
             {
               name = "cert-manager-cainjector";
-              image = kix.image.ref config.cainjector.image;
+              image = kix.image.ref (
+                common.checkRelease who config [
+                  "cainjector"
+                  "image"
+                ]
+              );
               imagePullPolicy = config.cainjector.image.pullPolicy;
               args = [
                 "--v=2"

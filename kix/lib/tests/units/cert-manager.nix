@@ -36,9 +36,9 @@ let
       ++ modules
     );
 
-  deploymentOf =
-    cluster: name:
-    builtins.head (byName name (ofKind "Deployment" (manifests cluster))).spec.template.spec.containers;
+  deploymentOfAll =
+    cluster: name: (byName name (ofKind "Deployment" (manifests cluster))).spec.template.spec.containers;
+  deploymentOf = cluster: name: builtins.head (deploymentOfAll cluster name);
 
   # Renders a ServiceMonitor or PrometheusRule from the builder's arguments.
   prometheusStub = {
@@ -75,8 +75,8 @@ let
       };
   };
 
-  # A consumer that builds a Certificate through out.crds and a
-  # ClusterIssuer through out.mkClusterIssuer.
+  # A consumer that builds a ClusterIssuer, a Certificate, and a
+  # CertificateRequest through out.crds.
   consumerPackage = {
     meta.version = "test";
     build =
@@ -87,9 +87,20 @@ let
         ...
       }:
       {
-        issuer = certManager.out.mkClusterIssuer scope {
+        issuer = scope.mkCR certManager.out.crds.ClusterIssuer {
           name = "probe";
           spec.selfSigned = { };
+        };
+        request = scope.mkCR certManager.out.crds.CertificateRequest {
+          name = "probe";
+          spec = {
+            request = "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURSBSRVFVRVNULS0tLS0K";
+            issuerRef = {
+              name = self.issuer.out.name;
+              kind = "ClusterIssuer";
+              group = "cert-manager.io";
+            };
+          };
         };
         cert = scope.mkCR certManager.out.crds.Certificate {
           name = "probe";
@@ -105,7 +116,10 @@ let
         };
         root = {
           resource = self.cert;
-          requires = [ self.issuer ];
+          requires = [
+            self.issuer
+            self.request
+          ];
         };
       };
   };
@@ -219,7 +233,8 @@ in
     || throw "controller env: ${builtins.toJSON env}";
 
   # A tag of the vendored minor release renders on every image without a
-  # digest; another minor release fails.
+  # digest; another minor release fails, on the controller's tag and on each
+  # follower's own tag.
   cert-manager-release-check =
     let
       cluster = clusterWith { config.image.tag = "v1.21.3"; };
@@ -240,11 +255,26 @@ in
       && evalFails (clusterWith {
         config.image.tag = "latest";
       })
+      && builtins.elem "quay.io/jetstack/cert-manager-webhook:v1.21.3" (
+        map (c: c.image) (deploymentOfAll (clusterWith { config.webhook.image.tag = "v1.21.3"; }) "cert-manager-webhook")
+      )
+      && evalFails (clusterWith {
+        config.webhook.image.tag = "v1.22.0";
+      })
+      && evalFails (clusterWith {
+        config.cainjector.image.tag = "v1.16.0";
+      })
+      && evalFails (clusterWith {
+        config.startupapicheck.image.tag = "v1.20.0";
+      })
+      && evalFails (clusterWith {
+        config.operandImages.acmesolver.tag = "v1.19.0";
+      })
     )
     || throw "release check: images ${builtins.toJSON images}";
 
-  # Custom resources built through out.crds and out.mk* declare readiness
-  # and require the API-check Job.
+  # Custom resources built through out.crds declare readiness and require
+  # the API-check Job.
   cert-manager-crd-handles-gated =
     let
       cluster = clusterWith {
@@ -265,11 +295,13 @@ in
           };
       cert = byName "probe" (ofKind "Certificate" ms);
       issuer = byName "probe" (ofKind "ClusterIssuer" ms);
+      request = byName "probe" (ofKind "CertificateRequest" ms);
       kinds = builtins.attrNames cluster.instances.cert-manager.cert-manager.out.crds;
     in
     (
       gated cert
       && gated issuer
+      && gated request
       &&
         kinds == [
           "Certificate"
@@ -280,10 +312,20 @@ in
           "Order"
         ]
     )
-    || throw "gated handles: ${builtins.toJSON { inherit cert issuer kinds; }}";
+    || throw "gated handles: ${
+      builtins.toJSON {
+        inherit
+          cert
+          issuer
+          request
+          kinds
+          ;
+      }
+    }";
 
-  # Without a prometheus provider there are no metrics Services, ports or
-  # monitors; with one there are three of each and one alert rule.
+  # Without a prometheus provider there are no metrics Services, ports, or
+  # monitors; with one there are three of each and one PrometheusRule whose
+  # alerts select the controller Service.
   cert-manager-metrics-gated =
     let
       count = kind: ms: builtins.length (ofKind kind ms);
@@ -297,6 +339,7 @@ in
       });
       webhookPorts = ms: map (p: p.name) (byName "cert-manager-webhook" (ofKind "Service" ms)).spec.ports;
       rule = builtins.head (ofKind "PrometheusRule" withProm);
+      alertRules = (builtins.head rule.spec.groups).rules;
     in
     (
       count "Service" without == 1
@@ -310,8 +353,12 @@ in
         ]
       && count "ServiceMonitor" withProm == 3
       && count "PrometheusRule" withProm == 1
-      && lib.hasInfix ''namespace="cert-manager",service="cert-manager"'' (builtins.head (builtins.head rule.spec.groups)
-      .rules).expr
+      && map (r: r.alert) alertRules == [
+        "CertManagerAbsent"
+        "CertManagerCertificateNotReady"
+        "CertManagerCertificateRenewalOverdue"
+      ]
+      && builtins.all (r: lib.hasInfix ''namespace="cert-manager",service="cert-manager"'' r.expr) alertRules
       && count "Service" disabled == 1
       && count "ServiceMonitor" disabled == 0
     )

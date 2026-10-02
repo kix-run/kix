@@ -167,7 +167,12 @@ in
           containers = [
             {
               name = "cert-manager-webhook";
-              image = kix.image.ref config.webhook.image;
+              image = kix.image.ref (
+                common.checkRelease who config [
+                  "webhook"
+                  "image"
+                ]
+              );
               imagePullPolicy = config.webhook.image.pullPolicy;
               args = [
                 "--v=2"
@@ -181,17 +186,16 @@ in
               ++ kix.guardArgs {
                 inherit who;
                 option = "webhook.extraArgs";
-                owned =
-                  let
-                    derived = "the CA injection annotation, the dynamic-serving Role and the webhook Service name derive from it; remove it.";
-                  in
-                  {
-                    "--secure-port" =
-                      "the containerPort, Service and network policy use it; set webhook.securePort instead.";
-                    "--dynamic-serving-ca-secret-name" = derived;
-                    "--dynamic-serving-ca-secret-namespace" = derived;
-                    "--dynamic-serving-dns-names" = derived;
-                  };
+                owned = {
+                  "--secure-port" =
+                    "the containerPort and the Service's targetPort use it; set webhook.securePort instead.";
+                  "--dynamic-serving-ca-secret-name" =
+                    "the CA injection annotation and the dynamic-serving Role name the same Secret; remove it.";
+                  "--dynamic-serving-ca-secret-namespace" =
+                    "the CA injection annotation and the dynamic-serving Role expect the CA Secret in the instance's namespace; remove it.";
+                  "--dynamic-serving-dns-names" =
+                    "the package sets the webhook Service's names, which the API server uses to reach the webhook; remove it.";
+                };
               } config.webhook.extraArgs;
               ports = [
                 {

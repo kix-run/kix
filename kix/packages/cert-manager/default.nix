@@ -1,37 +1,49 @@
 # cert-manager: X.509 certificate issuance and renewal for Kubernetes.
 #
 # Components:
-#   controller   reconciles Certificates, Issuers, ClusterIssuers, ACME
-#                Orders, and Challenges, and creates Certificates for
-#                annotated Ingresses and Gateways (controller.nix)
+#   controller   reconciles Certificates, CertificateRequests, Issuers,
+#                ClusterIssuers, ACME Orders, and Challenges, and creates
+#                Certificates for annotated Ingresses and Gateways
+#                (controller.nix)
 #   webhook      validates and mutates cert-manager objects (webhook.nix)
 #   cainjector   copies the webhook's CA into its configurations and into
 #                any object annotated for injection (cainjector.nix)
 #   API check    a Job that succeeds once the API server admits
 #                cert-manager objects (startupapicheck.nix)
 #
+# The package needs no dependencies and no config:
+#
+#   instances.cert-manager.cert-manager.package = packages.cert-manager;
+#
+# Issuers come from the `cluster-issuers` package. With a `prometheus`
+# provider in the cluster, the instance also renders metrics Services, three
+# ServiceMonitors, and its alerts (`metrics.enabled = false` turns them off).
+#
 # The six CRDs are vendored from the release (crds.nix). The webhook
 # refuses writes until cainjector has injected its CA, so every custom
-# resource built from `out.crds.<Kind>` or `out.mk<Kind>` requires the API
-# check, and Certificate, Issuer, and ClusterIssuer wait for Ready=True at
-# deploy. ACME DNS-01 issuance can take longer than `kix deploy`'s default
-# timeout; raise `--timeout` on clusters that issue through ACME.
+# resource built from `out.crds.<Kind>` requires the API check, and
+# Certificate, CertificateRequest, Issuer, and ClusterIssuer wait for
+# Ready=True at deploy. ACME DNS-01 issuance can take longer than
+# `kix deploy`'s default timeout; raise `--timeout` on clusters that issue
+# through ACME.
 #
 # One instance per cluster: the CRDs, webhook configurations, and
-# ClusterRoles are cluster-scoped (`meta.conflictsWith`). Issuers come from
-# the `cluster-issuers` package.
+# ClusterRoles are cluster-scoped (`meta.conflictsWith`).
 #
 # DI deps:
 #   prometheus (optional)  metrics Services, three ServiceMonitors, and the
-#                          certificate alerts.
+#                          alerts.
 #
 # Network policy: the intents below open egress to issuer endpoints outside
 # the cluster on 443, 80, and 53, and admit the API server to the webhook.
-# They apply to every workload of the instance. Under an enforcer the ACME
-# HTTP-01 solver pods the controller launches get no policy and stay
-# unreachable, so HTTP-01 issuance needs a `networkPolicy.platformIntents`
-# entry for pods labelled `acme.cert-manager.io/http01-solver=true` on port
-# 8089.
+# They apply to every workload of the instance. An issuer on another port
+# (Vault on 8200, a private ACME server) needs its own policy. Under an
+# enforcer the ACME HTTP-01 solver pods the controller launches get no
+# policy and stay unreachable, so HTTP-01 issuance needs a
+# `networkPolicy.platformIntents` entry for the pods
+# `out.operandSelectors.acmesolver` selects, on port 8089. Prometheus
+# scrapes are also dropped under an enforcer, so CertManagerAbsent fires
+# there.
 #
 # Escape hatches: `extraArgs`, `webhook.extraArgs`, and
 # `cainjector.extraArgs`; the controller's `env`; the instance's
@@ -40,12 +52,12 @@
 # Exposes:
 #   out.crds.{Certificate,Issuer,ClusterIssuer,CertificateRequest,Order,Challenge}
 #       For `scope.mkCR`; each custom resource requires the API check.
-#   out.mkCertificate, out.mkIssuer, out.mkClusterIssuer
-#       `consumerScope -> { name; spec; ... } -> resource`, the same builders.
 #   out.clusterResourceNamespace
 #       The namespace the controller reads ClusterIssuer Secrets from.
 #   out.clusterIssuerSpecSchema
 #       The ClusterIssuer CRD's `spec` schema.
+#   out.operandSelectors.acmesolver
+#       The labels of the ACME HTTP-01 solver pods.
 #   out.extraImages
 #       The ACME HTTP-01 solver image.
 
@@ -67,7 +79,7 @@ let
         Flags appended to the ${component} container's arguments${examples}. A
         repeated scalar flag such as `--v` takes the last value; list and map
         flags such as `--feature-gates` accumulate. A flag the package
-        derives is refused, with the option to set instead.
+        derives is refused, and the error says what to do instead.
       '';
     };
 in
@@ -79,8 +91,8 @@ in
     defaultAliases = [ "certManager" ];
     conflictsWith = [ "cluster:certManager" ];
     # TLS Ingresses carry `cert-manager.io/cluster-issuer`, stamped by the
-    # cluster-issuer's `out.withCert`. The consumer depends on the
-    # cluster-issuer and the cluster-issuer on this package, and the
+    # cluster-issuers package's `out.withCert`. The consumer depends on the
+    # cluster-issuers instance and that instance on this package, and the
     # annotation-ownership rule follows that chain.
     annotationDomains = [ "cert-manager.io" ];
     # The lowest Kubernetes release cert-manager v1.21 supports.
@@ -126,10 +138,12 @@ in
       digest = "sha256:70f532fd9cfde0b09d55687200942399d89838bc2d5d5b45152eb799a15912b8";
       description = "Image of the controller. Its major.minor must match the vendored CRDs and RBAC; the other images follow its tag.";
     };
-    # The chart sets no resources and its values.yaml suggests requests of
-    # 10m and 32Mi; cert-manager's best-practice guide asks for limits sized
-    # to the cluster and publishes no figures. Each component held under
-    # 30 MiB on an idle kind cluster.
+    # Each component held under 30 MiB on an idle kind cluster. The
+    # controller and cainjector requests of 64Mi leave room for their
+    # informer caches, which grow with the cluster; the webhook keeps no
+    # cache.
+    # cert-manager's best-practice guide asks for limits sized to the
+    # cluster and publishes no figures.
     resources = kix.options.resources {
       requests = {
         cpu = "10m";
@@ -185,7 +199,7 @@ in
         default = 10250;
         description = ''
           Port the webhook serves admission requests on. It sets
-          `--secure-port`, the containerPort and the Service's targetPort.
+          `--secure-port`, the containerPort, and the Service's targetPort.
           Change it where the kubelet holds 10250 on the pod network, as on
           EKS Fargate.
         '';
@@ -304,15 +318,15 @@ in
               Order = self.crds.orders;
               Challenge = self.crds.challenges;
             };
-            mkCertificate = self.crds.certificates.out.mkCR;
-            mkIssuer = self.crds.issuers.out.mkCR;
-            mkClusterIssuer = self.crds.clusterIssuers.out.mkCR;
             # --cluster-resource-namespace is the pod's namespace.
             clusterResourceNamespace = scope.namespaceName;
-            # cluster-issuers checks ClusterIssuer specs against it at
-            # evaluation.
+            # The cluster-issuers package checks ClusterIssuer specs against
+            # it at evaluation.
             clusterIssuerSpecSchema =
               (builtins.head clusterIssuerCrd.versions).schema.openAPIV3Schema.properties.spec;
+            # The controller labels the HTTP-01 solver pods it launches in a
+            # Certificate's namespace with this set.
+            operandSelectors.acmesolver."acme.cert-manager.io/http01-solver" = "true";
             extraImages = [ (kix.image.ref config.operandImages.acmesolver) ];
           };
         };
@@ -333,7 +347,9 @@ in
         ...
       }@args:
       let
-        selector = ''namespace="${scope.namespaceName}",service="${common.controllerServiceName scope.instanceName}"'';
+        # Evaluated only when the rules render, which is also the only case
+        # where controllerService exists.
+        selector = ''namespace="${scope.namespaceName}",service="${self.controllerService.out.name}"'';
       in
       kix.monitor {
         service = "controllerService";
@@ -341,12 +357,22 @@ in
         monitorPart = "controllerMonitor";
         rulesPart = "controllerAlerts";
         alerts = {
+          # Fires when the controller target is down or missing. The
+          # certificate series below vanish with it, so neither of the other
+          # alerts can fire then.
+          CertManagerAbsent = {
+            expr = "absent(up{${selector}} == 1)";
+            "for" = "10m";
+            severity = "critical";
+            summary = "The cert-manager controller has not been scraped for 10 minutes";
+            description = "Prometheus has no reachable cert-manager controller target in namespace ${scope.namespaceName}. While the controller is down, certificates are not renewed. Check Deployment ${scope.namespaceName}/${self.controllerDeployment.out.name} and its Prometheus target.";
+          };
           CertManagerCertificateRenewalOverdue = {
-            expr = "time() - certmanager_certificate_renewal_timestamp_seconds{${selector}} > 3600";
+            expr = "time() - certmanager_certificate_renewal_timestamp_seconds{${selector}} > 0";
             "for" = "1h";
             severity = "warning";
             summary = "A certificate is more than an hour past its renewal time";
-            description = "Certificate {{ $labels.exported_namespace }}/{{ $labels.name }} was due for renewal over an hour ago. Run kubectl describe certificate on it and check its CertificateRequests and Orders.";
+            description = "Certificate {{ $labels.exported_namespace }}/{{ $labels.name }} has been past its renewal time for over an hour. Run kubectl describe certificate on it and check its CertificateRequests and Orders.";
           };
           CertManagerCertificateNotReady = {
             expr = ''certmanager_certificate_ready_status{${selector},condition="False"} == 1'';
