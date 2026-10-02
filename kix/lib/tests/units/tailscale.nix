@@ -250,6 +250,10 @@ let
                 untrackedRef "tailscale"
               else if class == "context" then
                 builtins.appendContext "tailscale" (builtins.getContext self.deployment.out.name)
+              else if class == "suffixed" then
+                "${tailscale.out.loadBalancerClass}-internal"
+              else if class == "replaced" then
+                builtins.replaceStrings [ "tailscale" ] [ "metallb" ] tailscale.out.loadBalancerClass
               else
                 class;
             selector = scope.selectorLabels;
@@ -807,7 +811,8 @@ in
   # With the loadBalancer role absent, a Service whose class comes from
   # tailscale builds, and the class adds the operator Deployment to its
   # depends-on and no entry for the marker. A raw class, one from
-  # kix.untrackedRef, or one with other context still fails.
+  # kix.untrackedRef, one with other context, or a string derived from the
+  # provider's class (which keeps its marker) still fails.
   tailscale-load-balancer-role =
     let
       cluster = lbCluster "provider" [ noLoadBalancer ];
@@ -821,6 +826,8 @@ in
       && evalFails (lbCluster "tailscale" [ noLoadBalancer ])
       && evalFails (lbCluster "untracked" [ noLoadBalancer ])
       && evalFails (lbCluster "context" [ noLoadBalancer ])
+      && evalFails (lbCluster "suffixed" [ noLoadBalancer ])
+      && evalFails (lbCluster "replaced" [ noLoadBalancer ])
     )
     || throw "tailscale load balancer role: provider class refused or its depends-on is ${builtins.toJSON (serviceDeps cluster)}, or a class without the provider marker accepted";
 
@@ -834,7 +841,9 @@ in
       };
     in
     (
-      throws (providedLoadBalancerClass { class = "x"; })
+      throws (providedLoadBalancerClass {
+        class = "x";
+      })
       && throws (providedLoadBalancerClass {
         class = "x";
         by = "operator";
@@ -868,6 +877,8 @@ in
       && supplements "other" != [ ]
       && supplements "untracked" != [ ]
       && supplements "context" != [ ]
+      && supplements "suffixed" != [ ]
+      && supplements "replaced" != [ ]
     )
     || throw "tailscale external ingress: provider ${builtins.toJSON (supplements "provider")}";
 }

@@ -163,7 +163,7 @@ rec {
   # the build: `class` with a marker, and with the context of `by`, the
   # provider resource that serves it, so a Service naming the class depends
   # on that resource. The loadBalancer role check (scope/validators.nix
-  # checkLoadBalancer) skips a Service whose class carries the marker, and
+  # checkLoadBalancer) skips a Service whose class is this value, and
   # derived network policy gives that Service no ingress from outside the
   # cluster (plugins/netpol/derive.nix).
   #   kix.providedLoadBalancerClass { class = "tailscale"; by = self.deployment; }
@@ -198,11 +198,16 @@ rec {
 
   isLoadBalancerClassPath = p: lib.hasPrefix loadBalancerClassName (pathName p);
 
-  # Whether a string carries a load-balancer-class marker.
+  # Whether a string carries a load-balancer-class marker for its own value.
+  # Context survives string operations, so `"${class}-internal"` keeps the
+  # marker for `class`; comparing the marker's content with the string
+  # refuses such a derived value.
   isProvidedLoadBalancerClass =
     s:
     builtins.isString s
-    && builtins.any isLoadBalancerClassPath (builtins.attrNames (builtins.getContext s));
+    && builtins.any (
+      p: isLoadBalancerClassPath p && builtins.readFile p == builtins.unsafeDiscardStringContext s
+    ) (builtins.attrNames (builtins.getContext s));
 
   # Whether a context path is a marker rather than a resource.
   isMarkerPath = p: isUntrackedRefPath p || isLoadBalancerClassPath p;
