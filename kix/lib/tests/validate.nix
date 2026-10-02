@@ -34,6 +34,16 @@ let
     validate.crossResourceFailures {
       manifests = ms;
       identityHashes = map idOf ms;
+      owners = map (_: null) ms;
+    };
+
+  # Failures with externalNames set as well.
+  failuresWith =
+    { manifests, externalNames }:
+    validate.crossResourceFailures {
+      inherit manifests externalNames;
+      identityHashes = map idOf manifests;
+      owners = map (_: null) manifests;
     };
 
   # A manifest with the labels every kix resource carries.
@@ -941,7 +951,7 @@ in
   # A name declared external resolves whatever its kind.
   e01-external-names-resolve =
     let
-      fs = validate.crossResourceFailures {
+      fs = failuresWith {
         manifests = base "a" ++ [
           (deployment "a" "api" { spec.template.spec.serviceAccountName = "provided"; })
         ];
@@ -955,7 +965,7 @@ in
   # The set is keyed by namespace: marked in `b` does not excuse `a`.
   e01b-external-names-are-namespaced =
     let
-      fs = validate.crossResourceFailures {
+      fs = failuresWith {
         manifests = base "a" ++ [
           (deployment "a" "api" { spec.template.spec.serviceAccountName = "provided"; })
         ];

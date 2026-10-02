@@ -43,11 +43,11 @@ rec {
   crossResourceFailures =
     {
       manifests,
-      # Lists aligned with `manifests`. A null list, or a null entry, leaves
-      # that resource out of dependency walks (check 21 then finds no
-      # declaration it depends on) and unnamed in messages.
-      identityHashes ? null,
-      owners ? null,
+      # Lists aligned with `manifests`. A null entry leaves that resource out
+      # of dependency walks (check 21 then finds no declaration it depends
+      # on) and unnamed in messages.
+      identityHashes,
+      owners,
       externalNames ? { },
     }:
     let
@@ -57,8 +57,8 @@ rec {
 
       entries = lib.imap0 (i: r: {
         inherit r;
-        hash = if identityHashes == null then null else builtins.elemAt identityHashes i;
-        owner = if owners == null then null else builtins.elemAt owners i;
+        hash = builtins.elemAt identityHashes i;
+        owner = builtins.elemAt owners i;
       }) resources;
 
       byHash = builtins.listToAttrs (
@@ -920,6 +920,9 @@ rec {
       # A pod that mounts a claim that does not exist stays Pending.
 
       safeList = v: if builtins.isList v then v else [ ];
+      # A chart may render `data: null`; Nix's `or` handles missing
+      # attributes only.
+      attrNamesOf = v: if builtins.isAttrs v then builtins.attrNames v else [ ];
 
       claimFailures = builtins.concatMap (
         w:
@@ -941,9 +944,10 @@ rec {
       ) workloads;
 
       # --- 20. StorageClass references ---
-      # A claim that names a StorageClass nobody creates stays Pending.
-      # Classes in operator custom resources (an SGCluster's, a VMCluster's)
-      # are not read here.
+      # A claim that names a StorageClass nobody creates stays Pending. Read
+      # from PersistentVolumeClaims, StatefulSet volumeClaimTemplates, and
+      # generic ephemeral volumes. Classes in operator custom resources (an
+      # SGCluster's, a VMCluster's) are not read here.
 
       persistentVolumeClasses = builtins.listToAttrs (
         builtins.concatMap (
@@ -987,7 +991,23 @@ rec {
               (nsOf sts)
               (t.spec.storageClassName or null)
           ) (safeList (sts.spec.volumeClaimTemplates or [ ]))
-        ) (builtins.filter (r: r.kind == "StatefulSet") resources);
+        ) (builtins.filter (r: r.kind == "StatefulSet") resources)
+        ++ builtins.concatMap (
+          w:
+          builtins.concatMap (
+            vol:
+            let
+              t = vol.ephemeral.volumeClaimTemplate or null;
+            in
+            if t == null then
+              [ ]
+            else
+              storageClassFailure
+                "${w.kind} ${nsOf w}/${w.metadata.name} ephemeral volume '${vol.name or "unnamed"}'"
+                (nsOf w)
+                (t.spec.storageClassName or null)
+          ) (safeList ((getPodSpec w).volumes or [ ]))
+        ) workloads;
 
       # --- 21. Custom resources depend on a declaration of their kind ---
       # The apiserver rejects an object whose kind it does not serve, and
@@ -1071,7 +1091,7 @@ rec {
                 else
                   [ (anns.${kixKeys.crdVersion} or "") ];
               scope = anns.${kixKeys.crdScope} or "Namespaced";
-              text = "the reference to CustomResourceDefinition ${crdName} (${e.r.metadata.name})";
+              text = "the CRD ref ${e.r.metadata.name} for ${crdName}";
               inherit e;
             }
           ]
@@ -1138,19 +1158,25 @@ rec {
           [
             "${describe r} (${apiVersion}${
               lib.optionalString (e.owner != null) ", instance ${e.owner}"
-            }) has no CustomResourceDefinition in the cluster build, so the apiserver would reject it at apply. Take the package that installs the CRD as a dependency and build the resource with its builder (scope.mkCR dep.out.crds.<Kind>, or dep.out.mk<Kind> where it exists), vendor the CRD (crd-vendoring skill), or declare a CRD installed outside Kix with scope.mkCRDRef { group = \"${group}\"; kind = \"${r.kind}\"; version = \"${version}\"; ... } and build with scope.mkCR. ${chartSentence}"
+            }) has no CustomResourceDefinition in the cluster build, so the apiserver would reject it at apply. Take the package that installs the CRD as a dependency and build the resource with its builder (scope.mkCR dep.out.crds.<Kind>, or dep.out.mk<Kind> where it exists), vendor the CRD as JSON and build it with scope.mkCRD (scripts/vendor-crds.py fetches upstream CRDs), or declare a CRD installed outside Kix with scope.mkCRDRef { group = \"${group}\"; kind = \"${r.kind}\"; version = \"${version}\"; ... } and build with scope.mkCR. ${chartSentence}"
           ]
         else if reachable == [ ] then
           let
+            own = builtins.filter (d: e.owner != null && d.e.owner == e.owner) matching;
             d = builtins.head matching;
           in
-          [
-            "${describe r}${instanceClause e.owner} does not depend on ${d.text}${provider d}, which declares its kind, so the deploy can apply it before the CRD is served. Take ${
-              if d.e.owner == null then "that instance" else d.e.owner
-            } as a dependency${
-              lib.optionalString (e.owner != null) " of ${e.owner}"
-            } and build the resource with its builder, which adds the dependency. ${chartSentence}"
-          ]
+          if own != [ ] then
+            [
+              "${describe r}${instanceClause e.owner} does not depend on ${(builtins.head own).text}, which the same instance declares, so the deploy can apply it before the CRD is served. Build it with scope.mkCR from that declaration, or list the declaration in its requires."
+            ]
+          else
+            [
+              "${describe r}${instanceClause e.owner} does not depend on ${d.text}${provider d}, which declares its kind, so the deploy can apply it before the CRD is served. Take ${
+                if d.e.owner == null then "that instance" else d.e.owner
+              } as a dependency${
+                lib.optionalString (e.owner != null) " of ${e.owner}"
+              } and build the resource with its builder, which adds the dependency. ${chartSentence}"
+            ]
         else if builtins.any (d: builtins.elem version d.served) reachable then
           [ ]
         else
@@ -1200,7 +1226,7 @@ rec {
             if anns ? ${kixKeys.secretKeys} then { keys = splitList anns.${kixKeys.secretKeys}; } else null
           else
             {
-              keys = builtins.attrNames (r.data or { }) ++ builtins.attrNames (r.binaryData or { });
+              keys = attrNamesOf (r.data or null) ++ attrNamesOf (r.binaryData or null);
             }
         else if objKind == "Secret" && importIds ? ${id} then
           if refAnns ? ${kixKeys.importSecretKeys} then
@@ -1373,7 +1399,10 @@ rec {
       defaultFailures =
         let
           owned = e: "${e.r.metadata.name or "unnamed"}${instanceClause e.owner}";
-          annotated = key: e: ((e.r.metadata.annotations or { }).${key} or null) == "true";
+          # Kubernetes still treats a StorageClass with the beta annotation
+          # as a default (IsDefaultAnnotation in pkg/apis/storage/util).
+          annotated =
+            keys: e: builtins.any (key: ((e.r.metadata.annotations or { }).${key} or null) == "true") keys;
           check =
             kind: isDefault: text:
             let
@@ -1388,11 +1417,17 @@ rec {
           names:
           "PriorityClasses ${names} all set globalDefault: true. The apiserver accepts one; set it on one class."
         )
-        ++ check "StorageClass" (annotated "storageclass.kubernetes.io/is-default-class") (
-          names:
-          "StorageClasses ${names} are all annotated as the default. Kubernetes gives a claim with no class the newest one, which here depends on apply order; annotate one."
-        )
-        ++ check "IngressClass" (annotated "ingressclass.kubernetes.io/is-default-class") (
+        ++
+          check "StorageClass"
+            (annotated [
+              "storageclass.kubernetes.io/is-default-class"
+              "storageclass.beta.kubernetes.io/is-default-class"
+            ])
+            (
+              names:
+              "StorageClasses ${names} are all annotated as the default. Kubernetes gives a claim with no class the newest one, which here depends on apply order; annotate one."
+            )
+        ++ check "IngressClass" (annotated [ "ingressclass.kubernetes.io/is-default-class" ]) (
           names:
           "IngressClasses ${names} are all annotated as the default. Kubernetes gives an Ingress with no class the newest one, which here depends on apply order; annotate one."
         );

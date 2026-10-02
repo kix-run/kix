@@ -38,10 +38,10 @@ failing and a passing case for each check.
 | 17 | A workload's `priorityClassName` names a PriorityClass in the build. | `system-cluster-critical`, `system-node-critical` |
 | 18 | A resource of a namespaced kind sets `metadata.namespace`. | kinds whose scope Kix does not know (see below) |
 | 19 | A workload's `volumes[].persistentVolumeClaim.claimName` names a PersistentVolumeClaim in its namespace. | |
-| 20 | The `storageClassName` of a PersistentVolumeClaim, or of a StatefulSet's `volumeClaimTemplates`, names a StorageClass in the build or imported, or a PersistentVolume in the build carries it. | unset and `""`; classes inside operator custom resources (an SGCluster's, a VMCluster's) |
+| 20 | The `storageClassName` of a PersistentVolumeClaim, of a StatefulSet's `volumeClaimTemplates`, or of a generic ephemeral volume's `volumeClaimTemplate`, names a StorageClass in the build or imported, or a PersistentVolume in the build carries it. | unset and `""`; classes inside operator custom resources (an SGCluster's, a VMCluster's) |
 | 21 | A resource outside the built-in API groups depends, through `kix.run/depends-on`, on a declaration of its group and kind that serves its version (see below). | built-in groups |
 | 22 | A key a container reads by name exists in its Secret or ConfigMap: `env[].valueFrom.secretKeyRef`/`configMapKeyRef`, `items[].key` of a Secret, ConfigMap or projected volume, and the first segment of a `subPath` into a Secret or ConfigMap volume without `items` (see below). | `optional: true`; whole use (`envFrom`, a volume without `items`) |
-| 23 | At most one PriorityClass sets `globalDefault: true`, at most one StorageClass carries `storageclass.kubernetes.io/is-default-class: "true"`, and at most one IngressClass carries `ingressclass.kubernetes.io/is-default-class: "true"`. | |
+| 23 | At most one PriorityClass sets `globalDefault: true`, at most one StorageClass carries `storageclass.kubernetes.io/is-default-class: "true"` (or the beta `storageclass.beta.kubernetes.io/is-default-class`, which Kubernetes still honours), and at most one IngressClass carries `ingressclass.kubernetes.io/is-default-class: "true"`. | |
 
 ## Check 18 and the deploy-time check
 
@@ -87,7 +87,7 @@ The failure names the resource, the instance that built it, and the
 declaration and its instance when one exists:
 
 ```text
-- [validate] ServiceMonitor apps/web (instance apps/web) does not depend on the reference to CustomResourceDefinition servicemonitors.monitoring.coreos.com (crd-ref-prometheus-operator-servicemonitors-monitoring-coreos-com) (instance monitoring/prometheus-operator), which declares its kind, so the deploy can apply it before the CRD is served. ...
+- [validate] ServiceMonitor apps/web (instance apps/web) does not depend on the CRD ref crd-ref-prometheus-operator-servicemonitors-monitoring-coreos-com for servicemonitors.monitoring.coreos.com (instance monitoring/prometheus-operator), which declares its kind, so the deploy can apply it before the CRD is served. ...
 ```
 
 ## Check 22: named keys
