@@ -46,63 +46,6 @@ kix.buildCluster {
           };
         };
 
-        cache = {
-          valkey = {
-            package = packages.valkey;
-
-            config = {
-              sentinel = {
-                enabled = true;
-                quorum = 2;
-                primarySet = "myprimary";
-                downAfterMilliseconds = 60000;
-                failoverTimeout = 180000;
-                parallelSyncs = 1;
-                image = {
-                  repository = "docker.io/bitnami/valkey-sentinel";
-                  tag = "8.1.1-debian-12-r0";
-                  pullPolicy = "IfNotPresent";
-                };
-                resources = {
-                  requests = {
-                    cpu = "100m";
-                    memory = "128Mi";
-                    ephemeral-storage = "50Mi";
-                  };
-                  limits = {
-                    cpu = "150m";
-                    memory = "192Mi";
-                    ephemeral-storage = "2Gi";
-                  };
-                };
-              };
-              metrics = {
-                enabled = true;
-                image = {
-                  repository = "docker.io/bitnami/redis-exporter";
-                  tag = "1.70.0-debian-12-r2";
-                  pullPolicy = "IfNotPresent";
-                };
-                resources = {
-                  requests = {
-                    cpu = "100m";
-                    memory = "128Mi";
-                    ephemeral-storage = "50Mi";
-                  };
-                  limits = {
-                    cpu = "150m";
-                    memory = "192Mi";
-                    ephemeral-storage = "2Gi";
-                  };
-                };
-              };
-              auth = {
-                enabled = false;
-              };
-            };
-          };
-        };
-
         cert-manager = {
           cert-manager = {
             package = packages.cert-manager;
@@ -148,6 +91,56 @@ kix.buildCluster {
             package = packages."persistent-volume-claim";
             config = {
               size = "500Gi";
+            };
+          };
+
+          # immich reads the password through a secretKeyRef, so valkey and
+          # its password live in immich's namespace. The inline password is
+          # for development only; outside it, use a SOPS `source` with
+          # keys = [ "password" ], or a secret-ref.
+          valkey-password = {
+            package = packages.secret;
+            aliases = [ "valkeyPassword" ];
+            config.stringData.password = "valkey-dev-password";
+          };
+
+          valkey = {
+            package = packages.valkey;
+
+            config = {
+              replicas = 3;
+              sentinel = {
+                enabled = true;
+                quorum = 2;
+                primarySettings = {
+                  down-after-milliseconds = 60000;
+                  failover-timeout = 180000;
+                };
+                resources = {
+                  requests = {
+                    cpu = "100m";
+                    memory = "128Mi";
+                    ephemeral-storage = "50Mi";
+                  };
+                  limits = {
+                    cpu = "150m";
+                    memory = "192Mi";
+                    ephemeral-storage = "2Gi";
+                  };
+                };
+              };
+              metrics.resources = {
+                requests = {
+                  cpu = "100m";
+                  memory = "128Mi";
+                  ephemeral-storage = "50Mi";
+                };
+                limits = {
+                  cpu = "150m";
+                  memory = "192Mi";
+                  ephemeral-storage = "2Gi";
+                };
+              };
             };
           };
 

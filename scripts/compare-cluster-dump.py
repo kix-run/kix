@@ -269,7 +269,7 @@ def _is_runtime_resource(doc: dict) -> bool:
     # ---------------------------------------------------------------
     # K8s creates PVCs from StatefulSet volumeClaimTemplates automatically.
     # Their names follow the pattern: {vctName}-{stsName}-{ordinal}
-    # (e.g. data-loki-write-0, valkey-data-valkey-shopfront-prod-node-2).
+    # (e.g. data-loki-write-0, data-valkey-2).
     #
     # We require TWO conditions to avoid false positives:
     # 1. Name ends with -{digit} (the StatefulSet ordinal suffix)

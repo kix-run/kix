@@ -80,21 +80,24 @@ kix.buildCluster {
         };
 
         cache = {
+          # Created outside Kix, as an existing Secret would be.
+          valkey-auth = {
+            package = packages.secret-ref;
+            aliases = [ "valkeyPassword" ];
+            config.keys = [ "password" ];
+          };
+
           valkey = {
             package = packages.valkey;
 
             config = {
+              replicas = 3;
               sentinel = {
                 enabled = true;
                 quorum = 2;
-                primarySet = "myprimary";
-                downAfterMilliseconds = 60000;
-                failoverTimeout = 180000;
-                parallelSyncs = 1;
-                image = {
-                  repository = "docker.io/bitnami/valkey-sentinel";
-                  tag = "8.1.1-debian-12-r0";
-                  pullPolicy = "IfNotPresent";
+                primarySettings = {
+                  down-after-milliseconds = 60000;
+                  failover-timeout = 180000;
                 };
                 resources = {
                   requests = {
@@ -109,33 +112,22 @@ kix.buildCluster {
                   };
                 };
               };
-              metrics = {
-                enabled = true;
-                image = {
-                  repository = "docker.io/bitnami/redis-exporter";
-                  tag = "1.70.0-debian-12-r2";
-                  pullPolicy = "IfNotPresent";
+              settings = {
+                maxmemory-policy = "allkeys-lru";
+                save = [ "900 1" ];
+              };
+              metrics.resources = {
+                requests = {
+                  cpu = "100m";
+                  memory = "128Mi";
+                  ephemeral-storage = "50Mi";
                 };
-                resources = {
-                  requests = {
-                    cpu = "100m";
-                    memory = "128Mi";
-                    ephemeral-storage = "50Mi";
-                  };
-                  limits = {
-                    cpu = "150m";
-                    memory = "192Mi";
-                    ephemeral-storage = "2Gi";
-                  };
+                limits = {
+                  cpu = "150m";
+                  memory = "192Mi";
+                  ephemeral-storage = "2Gi";
                 };
               };
-              auth = {
-                enabled = true;
-                existingSecret = "valkey-auth";
-                existingSecretPasswordKey = "valkey-password";
-                sentinel = true;
-              };
-              replicaCount = 3;
             };
           };
         };

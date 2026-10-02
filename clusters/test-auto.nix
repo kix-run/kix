@@ -92,6 +92,12 @@ kix.buildCluster {
         test-app = {
           package = testAppPackage;
         };
+        # Required by the auto-instantiated valkey, which lands in `app`.
+        valkey-password = {
+          package = packages.secret;
+          aliases = [ "valkeyPassword" ];
+          config.stringData.password = "test-password";
+        };
       };
 
       # Optional instance that nobody needs — should NOT produce resources.

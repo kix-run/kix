@@ -56,16 +56,14 @@ in
   # So n8n asks its valkey for one standalone pod. That costs no redundancy
   # n8n has, since its main instance is already a single pod.
   deps.valkey = {
-    config = {
-      sentinel.enabled = false;
-      replicaCount = 1;
-    };
+    # Without Sentinel, valkey's replicas default to 1.
+    config.sentinel.enabled = false;
     # Catches a valkey the injection above does not reach, such as an import.
     assertions =
       dep:
       lib.optional (dep.out ? sentinelPort) {
         assertion = false;
-        message = "n8n '${name}' needs a standalone valkey with one pod: n8n 1.74 has no Sentinel client, so its queue writes would reach read-only replicas through the valkey Service. Set sentinel.enabled = false and replicaCount = 1 on the valkey instance.";
+        message = "n8n '${name}' needs a standalone valkey with one pod: n8n 1.74 has no Sentinel client, so its queue writes would reach read-only replicas through the valkey Service. Set sentinel.enabled = false on the valkey instance.";
       };
   };
 

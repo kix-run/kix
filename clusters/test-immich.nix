@@ -8,6 +8,7 @@
 # extensions are all picked up via auto-instantiation + dep config
 # injection — immich declares it needs `vector`, the database forwards
 # that to postgres, and the operator installs it on the postgres image.
+# valkey's password is declared, since a secret has no safe default.
 #
 # Build:  nix build .#cluster-immich --extra-experimental-features pipe-operators
 
@@ -69,6 +70,14 @@ kix.buildCluster {
             user = "immich";
             password = "immich-dev-password";
           };
+        };
+
+        # The auto-instantiated valkey lands in this namespace and requires
+        # its password here.
+        valkey-password = {
+          package = packages.secret;
+          aliases = [ "valkeyPassword" ];
+          config.stringData.password = "valkey-dev-password";
         };
       };
 

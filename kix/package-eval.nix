@@ -106,7 +106,6 @@ let
     rule = "architecture.clusterDomainLiteral";
     reason = "housekeeping/2026-10-01-packages-render-cluster-local.md";
   };
-  domainLiteralViaValkey = domainLiteral;
   domainLiteralViaLoki = domainLiteral;
 
   # Error-severity scorecard rules each package fails, with the file that
@@ -119,24 +118,14 @@ let
         reason = "kix/packages/clickhouse-logs/default.nix";
       }
     ];
-    harbor = [ domainLiteralViaValkey ];
-    immich = [ domainLiteralViaValkey ];
     loki = [
       lokiLabels
       domainLiteral
     ];
-    n8n = [ domainLiteralViaValkey ];
     # The labels and domain findings come from the auto-instantiated loki.
     promtail = [
       lokiLabels
       domainLiteralViaLoki
-    ];
-    redis = [
-      {
-        rule = "architecture.distinctSameKindLabels";
-        reason = "housekeeping/2026-09-27-redis-services-share-labels.md";
-      }
-      domainLiteral
     ];
     smartctl-exporter = [
       {
@@ -145,7 +134,6 @@ let
       }
     ];
     tailscale = [ nonRoot ];
-    valkey = [ domainLiteral ];
   };
 
   # What a package needs beyond its defaults. `config` is the instance
@@ -226,6 +214,7 @@ let
     harbor = {
       instances = {
         inherit storage;
+        valkey-password = valkeyPassword;
         database = {
           package = packages.stackgres-database;
           config.password = "password";
@@ -246,17 +235,22 @@ let
     };
     immich.instances = {
       inherit storage;
+      valkey-password = valkeyPassword;
       database = {
         package = packages.stackgres-database;
         config.password = "password";
       };
     };
+    n8n.instances.valkey-password = valkeyPassword;
     persistent-volume-claim.config.size = "1Gi";
     posthog-proxy.config.host = "posthog.example.com";
     priority-classes.config.classes.default.value = 1000;
-    python-app.config.backend.image = {
-      repository = "ghcr.io/example/python-app";
-      tag = "1.0.0";
+    python-app = {
+      config.backend.image = {
+        repository = "ghcr.io/example/python-app";
+        tag = "1.0.0";
+      };
+      instances.valkey-password = valkeyPassword;
     };
     secret.config.stringData.password = "password";
     secret-echo.instances = { inherit credentials; };
@@ -275,6 +269,7 @@ let
       reclaimPolicy = "Retain";
       volumeBindingMode = "WaitForFirstConsumer";
     };
+    valkey.instances.valkey-password = valkeyPassword;
     vaultwarden.instances = { inherit storage; };
     velero = {
       config.backupStorageLocation.objectStorage.bucket = "backups";
@@ -316,9 +311,7 @@ let
   };
 
   # Packages whose source writes cluster.local outside a comment.
-  sourceDomainLiteralExceptions = [
-    "valkey"
-  ];
+  sourceDomainLiteralExceptions = [ ];
 
   # Packages whose meta.version is not a version, with the reason.
   versionExceptions = { };
