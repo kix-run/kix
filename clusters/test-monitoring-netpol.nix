@@ -3,8 +3,10 @@
 # The smallest kind cluster that exercises the scrape policies of the netpol
 # plugin (kix/lib/plugins/netpol/scrape.nix): the monitoring module's
 # Prometheus, Alertmanager, kube-state-metrics, and node-exporter (on the host
-# network) in `monitoring-system`, and reloader in `reloader`, with Cilium
-# installed by Kix and `networkPolicy.enable`. Every target in Prometheus's
+# network) in `monitoring-system`, reloader in `reloader`, and a one-instance
+# StackGres cluster in `data`, whose PodMonitor scrapes the exporter sidecar
+# of operator-created pods on the named port `pgexporter`. Cilium is
+# installed by Kix with `networkPolicy.enable`. Every target in Prometheus's
 # `/api/v1/targets` should be up, and Alertmanager should be discovered.
 #
 # Bring up: kind create cluster --name kix-monitoring-netpol --config <config>
@@ -35,6 +37,14 @@ kix.buildCluster {
       monitoring.grafana.enabled = false;
 
       instances.reloader.reloader.package = packages.reloader;
+
+      instances.stackgres-system.stackgres-operator.package = packages.stackgres-operator;
+      instances.data.pg = {
+        package = packages.stackgres-cluster;
+        # kind has one node and the pods anti-affine, so a second instance
+        # never schedules.
+        config.instances = 1;
+      };
     }
   ];
 }
