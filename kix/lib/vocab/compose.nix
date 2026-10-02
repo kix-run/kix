@@ -527,9 +527,15 @@ rec {
   # `endpointSelector`). `scope` decides the policy's namespace; pass
   # `scope.forService dep` for a policy in a dependency's namespace.
   #
+  # The `ingress`/`ingressDeny` or `egress`/`egressDeny` sections of a
+  # direction the cluster does not enforce (`scope.networkPolicyDirections`)
+  # are dropped: such a section would isolate the pods in a direction that
+  # default deny leaves open, and allow only what the section lists.
+  #
   # Null when the scope has no enforcer (network policy off, no provider,
-  # or the enforcer's own instance), so callers filter nulls before adding
-  # the policy to `root.requires`.
+  # or the enforcer's own instance) or when every section of `spec` was
+  # dropped, so callers filter nulls before adding the policy to
+  # `root.requires`.
   #
   #   peerIngress = kix.operandPolicy {
   #     inherit scope;
@@ -545,13 +551,36 @@ rec {
       name,
       spec,
     }:
-    if scope.networkPolicyEnforcer == null then
+    let
+      directions = scope.networkPolicyDirections or "both";
+      sections = {
+        ingress = [
+          "ingress"
+          "ingressDeny"
+        ];
+        egress = [
+          "egress"
+          "egressDeny"
+        ];
+      };
+      unenforced =
+        if directions == "ingress" then
+          sections.egress
+        else if directions == "egress" then
+          sections.ingress
+        else
+          [ ];
+      enforcedSpec = removeAttrs spec unenforced;
+      hasSection = s: builtins.any (k: s ? ${k}) (sections.ingress ++ sections.egress);
+    in
+    if scope.networkPolicyEnforcer == null || (hasSection spec && !hasSection enforcedSpec) then
       null
     else
       scope.networkPolicyEnforcer.netpol.mkPolicy {
         mkResource = scope.mkResource;
         extraArgs = {
-          inherit name spec;
+          inherit name;
+          spec = enforcedSpec;
           labels = {
             ${kixKeys.derived} = "true";
             ${kixKeys.policyType} = "operator-managed-workload";

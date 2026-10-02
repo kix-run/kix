@@ -158,12 +158,14 @@ in
             {
               egressPolicies = [ ];
               ingressPolicies = [ ];
+              warnings = [ ];
             }
           else
             scrape.derive {
-              inherit (ctx) resources nsResources;
+              inherit (ctx) resources nsResources realNsNames;
               enforcerApi = enforcerOut.netpol;
-              inherit (cfg) directions;
+              inherit (cfg) directions defaultDeny;
+              extraPolicies = platformIntentPolicies;
             };
       in
       {
@@ -174,6 +176,7 @@ in
           ++ platformIntentPolicies
           ++ scrapePolicies.egressPolicies
           ++ scrapePolicies.ingressPolicies;
+        inherit (scrapePolicies) warnings;
         checks = [
           (
             if provider == null then

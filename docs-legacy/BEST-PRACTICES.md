@@ -282,9 +282,12 @@ ROADMAP.
 Under default deny the scrape path is derived like any other edge: the
 netpol plugin joins each Prometheus with the monitors it selects and opens
 the server's egress and each target's ingress. A package never opens its
-metrics port with an intent. What Kix cannot see stays closed: targets on the
-host network that Kix did not build, and scrape configs outside the monitor
-objects.
+metrics port with an intent. Kix derives no rule for host-network targets it
+did not build (the kubelet, control-plane static pods); the server reaches
+them only because its API server rule admits every port on the nodes
+(HANDBOOK §16.8). Scrape configs outside the monitor objects get no rule.
+Select PodMonitor pods with `matchLabels`; a selector with
+`matchExpressions` gets a warning and no policy.
 
 ### 6.3 Wiring (DI) > module system > meta
 
