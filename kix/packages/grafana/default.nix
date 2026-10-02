@@ -1148,10 +1148,9 @@ in
 
       # ── Deployment ──────────────────────────────────────────────────────
 
-      # One pod: the package wires no alerting HA (ha_peers or
-      # ha_redis_address), and the default SQLite database and data claim
-      # take one writer. A partsOverlays entry that rebuilds this Deployment
-      # without availability.max can run more once those are configured.
+      # A partsOverlays entry that rebuilds this Deployment without
+      # availability.max can run more pods once the limits in the header are
+      # addressed.
       deployment =
         {
           inherit name;

@@ -10,6 +10,9 @@
 #   out.mkPrometheus        create Prometheus CRs (used by packages/prometheus)
 #   out.mkAlertmanager      create Alertmanager CRs (used by packages/alertmanager)
 #   out.mkProbe             create Probe CRs
+#
+# Limits: one replica (`meta.availability.max = "none"`); the operator has no
+# leader election.
 
 {
   scope,
