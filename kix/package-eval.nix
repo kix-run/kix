@@ -261,6 +261,9 @@ let
     secret.config.stringData.password = "password";
     secret-echo.instances = { inherit credentials; };
     secret-ref.config.keys = [ "password" ];
+    # A Prometheus provider, so the metrics Service and the ServiceMonitor
+    # are built.
+    snapshot-controller.instances.prometheus-operator.package = packages.prometheus-operator;
     stackgres-database.config.password = "password";
     stackgres-object-storage.config = {
       bucket = "backups";
@@ -287,6 +290,28 @@ let
           config.stringData.repository-password = "password";
         };
       };
+    };
+    # Every node option set, and a snapshot controller so the snapshotter
+    # sidecar and the VolumeSnapshotClass are built.
+    zfs-localpv = {
+      config = {
+        storageClasses.zfs.parameters.poolname = "tank/k8s";
+        volumeSnapshotClasses.zfs = { };
+        node = {
+          kubeletDir = "/var/lib/k0s/kubelet";
+          encrKeysDir = "/home/keys";
+          zfsBin = "/run/current-system/sw/bin/zfs";
+          nodeSelector."example.com/zfs-pool" = "true";
+          tolerations = [
+            {
+              key = "example.com/storage";
+              operator = "Exists";
+              effect = "NoSchedule";
+            }
+          ];
+        };
+      };
+      instances.snapshot-controller.package = packages.snapshot-controller;
     };
   };
 
