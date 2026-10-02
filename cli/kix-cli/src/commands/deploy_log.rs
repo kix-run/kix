@@ -68,6 +68,11 @@ impl DeployObserver for LineObserver {
                         Some(NodeDetail::Rerun { reason }) => {
                             println!("{label}> rerun: {reason}");
                         }
+                        Some(NodeDetail::PendingRestart { stale, message }) => {
+                            println!(
+                                "{label}> ready, {stale} pods pending manual restart (OnDelete): {message}"
+                            );
+                        }
                         _ => {
                             println!("{label}> ready");
                         }
@@ -407,6 +412,12 @@ fn json_detail(detail: &NodeDetail) -> serde_json::Value {
         NodeDetail::SecretHydrationFailed(msg) => json!({ "secret_hydration_failed": msg }),
         NodeDetail::RecreatedInPlace { reason } => json!({ "recreated_in_place": reason }),
         NodeDetail::Rerun { reason } => json!({ "rerun": reason }),
+        NodeDetail::PendingRestart { stale, message } => json!({
+            "pending_restart": {
+                "stale": stale,
+                "message": message,
+            },
+        }),
     }
 }
 
@@ -429,6 +440,23 @@ mod tests {
             name: name.into(),
             namespace: "app".into(),
         }
+    }
+
+    #[test]
+    fn pending_restart_detail_json() {
+        let detail = NodeDetail::PendingRestart {
+            stale: 2,
+            message: "2 pods run the previous template".into(),
+        };
+        assert_eq!(
+            json_detail(&detail),
+            json!({
+                "pending_restart": {
+                    "stale": 2,
+                    "message": "2 pods run the previous template",
+                },
+            })
+        );
     }
 
     /// Under warn-only, a kept orphan is not counted or listed with the

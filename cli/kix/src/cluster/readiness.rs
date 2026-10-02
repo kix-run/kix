@@ -563,6 +563,10 @@ impl TerminalReason {
 pub enum ReadinessResult {
     /// Resource is ready.
     Ready,
+    /// An `OnDelete` DaemonSet is ready, but `stale` of its pods still run
+    /// the previous pod template. The controller replaces a pod only when it
+    /// is deleted, so the deploy reports this instead of waiting.
+    ReadyPendingRestart { stale: i64, message: String },
     /// Timed out waiting for readiness.
     TimedOut { elapsed: Duration, message: String },
     /// The poll loop observed a cancellation request and bailed before
@@ -1172,6 +1176,16 @@ pub async fn wait_for_ready(
         }
 
         if check_readiness(&obj, kind) {
+            if kind == "DaemonSet"
+                && let Some(stale) = daemonset_pending_restart(&obj.data)
+            {
+                return Ok(ReadinessResult::ReadyPendingRestart {
+                    stale,
+                    message: format!(
+                        "{stale} pods run the previous template; delete them one node at a time after volume rebuilds finish"
+                    ),
+                });
+            }
             // A CRD that reports Established=True can still be invisible to
             // the apiserver's discovery endpoint for a few hundred ms (and
             // longer across HA replicas). Probe discovery before declaring
@@ -1383,12 +1397,44 @@ fn check_daemonset_ready(generation: Option<i64>, data: &Value) -> bool {
         .pointer("/status/numberReady")
         .and_then(Value::as_i64)
         .unwrap_or(0);
+    // Under OnDelete the controller replaces a pod only when someone
+    // deletes it, so pods on the previous template are not waited for;
+    // `daemonset_pending_restart` reports them.
+    if is_on_delete(data) {
+        return ready >= desired;
+    }
+
     let updated = data
         .pointer("/status/updatedNumberScheduled")
         .and_then(Value::as_i64)
         .unwrap_or(0);
 
     ready >= desired && updated >= desired
+}
+
+fn is_on_delete(data: &Value) -> bool {
+    data.pointer("/spec/updateStrategy/type")
+        .and_then(Value::as_str)
+        == Some("OnDelete")
+}
+
+/// The number of pods of an `OnDelete` DaemonSet that still run a previous
+/// pod template, or `None` when there are none or the DaemonSet rolls its
+/// pods itself.
+pub fn daemonset_pending_restart(data: &Value) -> Option<i64> {
+    if !is_on_delete(data) {
+        return None;
+    }
+    let desired = data
+        .pointer("/status/desiredNumberScheduled")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let updated = data
+        .pointer("/status/updatedNumberScheduled")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let stale = desired - updated;
+    (stale > 0).then_some(stale)
 }
 
 /// Job: status.succeeded >= 1
@@ -1880,6 +1926,66 @@ mod tests {
             }),
         );
         assert!(!check_readiness(&ds, "DaemonSet"));
+    }
+
+    fn on_delete_ds(desired: i64, ready: i64, updated: i64) -> DynamicObject {
+        make_obj_gen(
+            2,
+            json!({
+                "spec": {"updateStrategy": {"type": "OnDelete"}},
+                "status": {
+                    "observedGeneration": 2,
+                    "desiredNumberScheduled": desired,
+                    "numberReady": ready,
+                    "updatedNumberScheduled": updated,
+                }
+            }),
+        )
+    }
+
+    #[test]
+    fn on_delete_daemonset_with_stale_pods_is_ready_and_pending_restart() {
+        let ds = on_delete_ds(3, 3, 1);
+        assert!(check_readiness(&ds, "DaemonSet"));
+        assert_eq!(daemonset_pending_restart(&ds.data), Some(2));
+    }
+
+    #[test]
+    fn on_delete_daemonset_fully_updated_has_no_pending_restart() {
+        let ds = on_delete_ds(3, 3, 3);
+        assert!(check_readiness(&ds, "DaemonSet"));
+        assert_eq!(daemonset_pending_restart(&ds.data), None);
+    }
+
+    #[test]
+    fn on_delete_daemonset_waits_for_ready_pods() {
+        let ds = on_delete_ds(3, 2, 1);
+        assert!(!check_readiness(&ds, "DaemonSet"));
+    }
+
+    #[test]
+    fn on_delete_daemonset_matching_no_node_is_ready() {
+        let ds = on_delete_ds(0, 0, 0);
+        assert!(check_readiness(&ds, "DaemonSet"));
+        assert_eq!(daemonset_pending_restart(&ds.data), None);
+    }
+
+    #[test]
+    fn rolling_update_daemonset_waits_for_updated_pods() {
+        let ds = make_obj_gen(
+            2,
+            json!({
+                "spec": {"updateStrategy": {"type": "RollingUpdate"}},
+                "status": {
+                    "observedGeneration": 2,
+                    "desiredNumberScheduled": 3,
+                    "numberReady": 3,
+                    "updatedNumberScheduled": 1,
+                }
+            }),
+        );
+        assert!(!check_readiness(&ds, "DaemonSet"));
+        assert_eq!(daemonset_pending_restart(&ds.data), None);
     }
 
     #[test]
