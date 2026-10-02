@@ -1085,11 +1085,7 @@ rec {
             {
               group = builtins.concatStringsSep "." (builtins.tail dot);
               kind = anns.${kixKeys.crdKind};
-              served =
-                if anns ? ${kixKeys.crdServedVersions} then
-                  splitList anns.${kixKeys.crdServedVersions}
-                else
-                  [ (anns.${kixKeys.crdVersion} or "") ];
+              served = splitList anns.${kixKeys.crdServedVersions};
               scope = anns.${kixKeys.crdScope} or "Namespaced";
               text = "the CRD ref ${e.r.metadata.name} for ${crdName}";
               inherit e;

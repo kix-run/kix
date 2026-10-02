@@ -489,7 +489,7 @@ All kix-managed resources receive:
 - `kix.run/package` — Package instance name.
 - `kix.run/package-namespace` — Package namespace.
 - `kix.run/mode` — "import" for external resources.
-- `kix.run/crd-kind`, `kix.run/crd-version`, `kix.run/crd-scope`: on CRD ref markers, the kind, default version, and scope the declaration names; `kix.run/crd-served-versions` only when `servedVersions` lists more than `version`.
+- `kix.run/crd-kind`, `kix.run/crd-version`, `kix.run/crd-served-versions`, `kix.run/crd-scope`: on CRD ref markers, the kind, default version, served versions (comma separated), and scope the declaration names.
 - `app.kubernetes.io/managed-by: kix` label.
 - `kix.run/cluster` label.
 

@@ -70,11 +70,10 @@ rec {
     importFqdn = key "import-fqdn";
     importSecretKeys = key "import-secret-keys";
     # On CRD ref markers only (scope.mkCRDRef, mkImport crds): the kind, the
-    # default API version (the declaration's `version`) and the scope
-    # (`Namespaced` or `Cluster`) of the referenced CRD. `crd-served-versions`
-    # (comma separated) is stamped only when the declaration's
-    # `servedVersions` lists more than `version`; without it the served list
-    # is `crd-version` alone. Check 21 and the deploy read both.
+    # default API version (the declaration's `version`), every version the
+    # declaration says the CRD serves (`servedVersions`, comma separated,
+    # `version` among them), and the scope (`Namespaced` or `Cluster`) of the
+    # referenced CRD. Check 21 and the deploy read them.
     crdKind = key "crd-kind";
     crdVersion = key "crd-version";
     crdServedVersions = key "crd-served-versions";
