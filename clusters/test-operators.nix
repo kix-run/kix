@@ -31,7 +31,7 @@ kix.buildCluster {
         cdi = { };
         kubevirt = { };
         infisical = { };
-        openebs = { };
+        storage = { };
       };
 
       instances = {
@@ -46,15 +46,16 @@ kix.buildCluster {
         cdi.cdi.package = packages.cdi;
         kubevirt.kubevirt.package = packages.kubevirt;
         infisical.infisical-operator.package = packages.infisical-operator;
-        openebs.openebs = {
-          package = packages.openebs;
-          # Mayastor's node agents need a real host: csi-node writes nvme_core
-          # parameters into sysfs, which kind mounts read-only, and
-          # agent-ha-node mounts /run/udev, which kind nodes lack. The upstream
-          # topology switch confines both to nodes labelled
-          # openebs.io/csi-node=mayastor, so here they schedule nowhere, as
-          # io-engine already does, and the control plane is what is judged.
-          config.mayastor.csiNode.topology.nodeSelector = true;
+        storage.snapshot-controller.package = packages.snapshot-controller;
+        # kind nodes have no ZFS pool, so the node plugin starts but
+        # provisions nothing; the controller, the registration, and the
+        # classes are what is judged.
+        storage.zfs-localpv = {
+          package = packages.zfs-localpv;
+          config = {
+            storageClasses.zfs.parameters.poolname = "zfspv-pool";
+            volumeSnapshotClasses.zfs = { };
+          };
         };
       };
     }

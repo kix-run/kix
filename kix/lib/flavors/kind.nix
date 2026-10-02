@@ -40,6 +40,9 @@
     dns.binding = lib.mkDefault "shadowable";
     storageClasses.binding = lib.mkDefault "shadowable";
     loadBalancer.binding = lib.mkDefault "absent";
+    # kind ships no snapshot CRDs or controller; a snapshot-controller
+    # instance provides them.
+    snapshotController.binding = lib.mkDefault "absent";
   };
 
   cluster.capabilities = {
