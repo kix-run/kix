@@ -56,9 +56,10 @@ update.
 
 The spec is checked against the ClusterIssuer CRD that the cert-manager
 package vendors. A field the CRD does not define, a missing required field
-such as `acme.server`, a spec with no issuer type or two, and a solver that
+such as `acme.server`, a value of the wrong type (such as `solvers` written
+without list brackets), a spec with no issuer type or two, and a solver that
 sets both `http01` and `dns01` or two DNS providers each fail the build with
-the spec path and the accepted values.
+the spec path and the accepted values. A field set to `null` is left out.
 
 external-dns reads its Cloudflare token from a Secret in its own namespace.
 Give that Secret the same key, so one source feeds both.
@@ -106,16 +107,19 @@ example cluster has both, which is why its consumer of the import sets
 The spec accepts an `http01` solver, and the build warns when the cluster
 enforces network policy. cert-manager creates the HTTP-01 solver pods at
 runtime in each Certificate's namespace, and Kix's derived policy does not
-admit the ingress controller to them, so the challenge never completes. Use a
-DNS-01 solver, or admit the solver pods on TCP 8089 with a platform intent as
-in [Declare platform intents for non-Kix-managed pods](/docs/how-to/platform-capabilities/declare-platform-intents-for-non-kix-managed-pods/).
+admit the ingress controller to them, so the challenge does not complete
+unless something else admits that traffic. Use a DNS-01 solver, or admit the
+solver pods on TCP 8089 with a platform intent as in
+[Declare platform intents for non-Kix-managed pods](/docs/how-to/platform-capabilities/declare-platform-intents-for-non-kix-managed-pods/).
+The warning does not read platform intents, so it remains after you add one.
 
 ## References Kix does not track
 
 Kix fills and checks only Secret key selectors and the ACME account key.
 `ca.secretName`, `venafi.*.credentialsRef.name`,
-`vault.auth.kubernetes.serviceAccountRef.name`, and anything inside a webhook
-solver's `config` pass through as written. Kix does not check that those
+`vault.auth.kubernetes.serviceAccountRef.name`, the HTTP-01 solver's Ingress,
+IngressClass, and Gateway references, and anything inside a webhook solver's
+`config` pass through as written. Kix does not check that those
 objects exist.
 
 ## Check and deploy
@@ -128,9 +132,13 @@ Deploy cert-manager, its CRDs, and the ClusterIssuers:
 
 <Command commands={["kix deploy doc-how-tos"]} />
 
-A deploy waits for each ClusterIssuer to report `Ready`. ACME registration
-and DNS-01 issuance can take longer than the default readiness timeout of 180
-seconds; raise it with `--timeout` on clusters that issue through ACME:
+A deploy waits for each ClusterIssuer, and each Certificate built from
+`certManager.out.crds.Certificate`, to report `Ready`. An ACME ClusterIssuer
+reports `Ready` once cert-manager has registered its account. Kix does not
+wait for the Certificates that cert-manager creates from Ingress annotations.
+ACME registration and DNS-01 issuance of the Certificates Kix waits for can
+take longer than the default readiness timeout of 180 seconds; raise it with
+`--timeout` on clusters that issue through ACME:
 
 <Command commands={["kix deploy doc-how-tos --timeout 15m"]} />
 

@@ -3,11 +3,12 @@
 # default, the refusals checked against cert-manager's vendored CRD schema,
 # the namespace rule, the HTTP-01 warning under an enforcer, and
 # `out.withCert`. cert-manager runs as instance `cert-manager` in namespace
-# `cert-manager`. `evalFails` cannot read a message; the messages are checked
-# by evaluating the failing clusters directly.
+# `cert-manager`. The refusal tests see only that evaluation fails, not which
+# message it fails with.
 
 {
   lib,
+  eval,
   kixKeys,
   mkCluster,
   manifests,
@@ -102,8 +103,8 @@ let
   hasHttp01Warning = ws: builtins.any (lib.hasInfix "uses an HTTP-01 solver") ws;
 in
 {
-  # (a) The spec renders as given, named after the instance.
-  cluster-issuers-self-signed =
+  # The spec renders as given, named after the instance.
+  cluster-issuer-self-signed =
     let
       m = issuerOf "selfsigned" (mkCluster [
         certManager
@@ -113,9 +114,9 @@ in
     (m != null && m.spec == { selfSigned = { }; } && m.apiVersion == "cert-manager.io/v1")
     || throw "expected ClusterIssuer selfsigned with spec { selfSigned = { }; }, got ${builtins.toJSON m}";
 
-  # (b) An explicit issuerCredentials fills the selector's name, and the
+  # An explicit issuerCredentials fills the selector's name, and the
   # ClusterIssuer depends on the secret-ref marker.
-  cluster-issuers-dns01-explicit-credentials =
+  cluster-issuer-dns01-explicit-credentials =
     let
       # depends-on entries name a resource by its store path hash.
       marker = builtins.substring 11 32 (
@@ -128,15 +129,15 @@ in
     )
     || throw "expected apiTokenSecretRef ${builtins.toJSON tokenRef} and a dependency on the secret-ref, got ${builtins.toJSON (issuerOf "letsencrypt" explicitCluster)}";
 
-  # (c) A secret-ref aliased `issuerCredentials` in the same namespace
+  # A secret-ref aliased `issuerCredentials` in the same namespace
   # resolves without an explicit dependency.
-  cluster-issuers-dns01-alias-credentials =
+  cluster-issuer-dns01-alias-credentials =
     tokenRefOf aliasCluster == tokenRef
     || throw "expected apiTokenSecretRef ${builtins.toJSON tokenRef}, got ${builtins.toJSON (tokenRefOf aliasCluster)}";
 
-  # (d) The ACME account key defaults to <instance>-acme-account-key; a
+  # The ACME account key defaults to <instance>-acme-account-key; a
   # user-set `key` on it is kept and not treated as a credential selector.
-  cluster-issuers-account-key-default =
+  cluster-issuer-account-key-default =
     let
       ref =
         (specOf "letsencrypt" (
@@ -159,9 +160,9 @@ in
     )
     || throw "unexpected privateKeySecretRef: ${builtins.toJSON ref}";
 
-  # (e) A name marked with kix.untrackedRef is kept without a credentials
+  # A name marked with kix.untrackedRef is kept without a credentials
   # dependency.
-  cluster-issuers-untracked-name-kept =
+  cluster-issuer-untracked-name-kept =
     let
       cluster = mkCluster [
         certManager
@@ -179,9 +180,9 @@ in
     (builtins.unsafeDiscardStringContext got.name == "external-token" && got.key == "token")
     || throw "expected the untracked name to be kept, got ${builtins.toJSON got}";
 
-  # (f) A Secret aliased `issuerCredentials` in another namespace is not a
+  # A Secret aliased `issuerCredentials` in another namespace is not a
   # candidate, so a self-signed issuer in cert-manager's namespace builds.
-  cluster-issuers-foreign-credentials-ignored =
+  cluster-issuer-foreign-credentials-ignored =
     let
       cluster = mkCluster [
         certManager
@@ -197,12 +198,15 @@ in
     in
     issuerOf "selfsigned" cluster != null || throw "expected the self-signed issuer to build";
 
-  # (g) Refusals: schema S (an unknown selector field, an unknown top-level
-  # field, a missing acme.server), E1 (no type, two types), E2 (no
-  # credentials), E3 (a literal Secret name), E4a (an undeclared key), E4b
-  # (a selector with neither name nor key), E7 (http01 and dns01 in one
-  # solver), and E8 (two DNS providers in one solver).
-  cluster-issuers-refusals =
+  # Each spec fails the build: an unknown selector field, an unknown
+  # top-level field, a missing acme.server, a value of the wrong type
+  # (solvers as an attribute set, a numeric server, a numeric key), no
+  # issuer type (also when the only one is null), two issuer types, a
+  # literal Secret name, a key the credentials Secret does not declare, a
+  # selector with neither name nor key, a solver with both http01 and
+  # dns01, and a dns01 solver with two providers. A DNS-01 issuer with no
+  # credentials dependency fails as well.
+  cluster-issuer-refusals =
     let
       cases = {
         unknownSelectorField = acmeSpec [ (cloudflare // { selector.dnsZone = [ "example.com" ]; }) ];
@@ -211,7 +215,15 @@ in
           issuer = { };
         };
         missingServer.acme = removeAttrs (acme [ cloudflare ]) [ "server" ];
+        solversAsAttrs.acme = acme [ cloudflare ] // {
+          solvers = cloudflare;
+        };
+        numericServer.acme = acme [ cloudflare ] // {
+          server = 5;
+        };
+        numericKey = acmeSpec [ { dns01.cloudflare.apiTokenSecretRef.key = 5; } ];
         noType = { };
+        nullType.selfSigned = null;
         twoTypes = {
           selfSigned = { };
           acme = acme [ cloudflare ];
@@ -245,17 +257,18 @@ in
       builtins.toJSON (passed ++ lib.optional (!noCredentials) "noCredentials")
     }";
 
-  # (h) E5: an issuer outside cert-manager's namespace fails.
-  cluster-issuers-namespace-refused =
+  # An issuer outside cert-manager's namespace fails.
+  cluster-issuer-namespace-refused =
     evalFails (mkCluster [
       certManager
       (issuer "other" "selfsigned" { selfSigned = { }; } { })
     ])
     || throw "expected an issuer in namespace other to fail";
 
-  # (i) E5 with E2: the issuer in `other` finds no credentials, because the
-  # namespace-scoped secret-ref in cert-manager is not a candidate there.
-  cluster-issuers-namespace-refused-without-credentials =
+  # A DNS-01 issuer outside cert-manager's namespace fails, and finds no
+  # credentials, because the namespace-scoped secret-ref in cert-manager is
+  # not a candidate there.
+  cluster-issuer-namespace-refused-without-credentials =
     evalFails (mkCluster [
       certManager
       (credentials "cert-manager" [ "api-token" ] { aliases = [ "issuerCredentials" ]; })
@@ -263,8 +276,8 @@ in
     ])
     || throw "expected a DNS-01 issuer in namespace other to fail";
 
-  # (j) An explicit cross-namespace issuerCredentials fails in the lib.
-  cluster-issuers-cross-namespace-credentials-refused =
+  # An explicit cross-namespace issuerCredentials fails in the lib.
+  cluster-issuer-cross-namespace-credentials-refused =
     evalFails (mkCluster [
       certManager
       (credentials "cert-manager" [ "api-token" ] { })
@@ -277,8 +290,8 @@ in
     ])
     || throw "expected an explicit cross-namespace issuerCredentials to fail";
 
-  # (k) An HTTP-01 solver warns when an enforcer is present, and only then.
-  cluster-issuers-http01-warns-under-enforcer =
+  # An HTTP-01 solver warns when an enforcer is present, and only then.
+  cluster-issuer-http01-warns-under-enforcer =
     let
       withEnforcer = warningsOf [
         netpolOn
@@ -289,8 +302,41 @@ in
     (hasHttp01Warning withEnforcer && !(hasHttp01Warning without))
     || throw "expected the HTTP-01 warning only under an enforcer; with: ${builtins.toJSON withEnforcer}; without: ${builtins.toJSON without}";
 
-  # (l) withCert adds the cluster-issuer annotation and keeps the others.
-  cluster-issuers-with-cert =
+  # A certManager dependency answered by a kix.mkImport fails the build.
+  cluster-issuer-imported-cert-manager-refused =
+    evalFails (mkCluster [
+      {
+        instances.cert-manager.cm = {
+          package = eval.mkImport { };
+          aliases = [ "certManager" ];
+        };
+      }
+      (issuer "cert-manager" "selfsigned" { selfSigned = { }; } { })
+    ])
+    || throw "expected an issuer whose certManager is an import to fail";
+
+  # A field set to null is not rendered, and the null ACME account key is
+  # filled as if it were absent.
+  cluster-issuer-null-fields-dropped =
+    let
+      spec = specOf "letsencrypt" (
+        wiredCluster { aliases = [ "issuerCredentials" ]; } {
+          config.spec = {
+            acme = acme [ cloudflare ] // {
+              privateKeySecretRef = null;
+            };
+            selfSigned = null;
+          };
+        }
+      );
+    in
+    (
+      !(spec ? selfSigned) && spec.acme.privateKeySecretRef == { name = "letsencrypt-acme-account-key"; }
+    )
+    || throw "expected null fields to be dropped, got ${builtins.toJSON spec}";
+
+  # withCert adds the cluster-issuer annotation and keeps the others.
+  cluster-issuer-with-cert =
     let
       consumer =
         { scope, ... }:

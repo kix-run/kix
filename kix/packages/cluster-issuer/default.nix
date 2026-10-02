@@ -2,9 +2,16 @@
 #
 # `spec` is the ClusterIssuer's `spec` as cert-manager documents it. The
 # package checks it at evaluation against the ClusterIssuer CRD that the wired
-# cert-manager vendors (`certManager.out.clusterIssuerSpecSchema`): an unknown
-# field, a missing required field, a spec with no issuer type or two, and an
-# ACME solver with no challenge or DNS provider or two all fail the build.
+# cert-manager vendors (`certManager.out.clusterIssuerSpecSchema`). These fail
+# the build: a field the CRD does not define, a missing required field, a
+# value of the wrong type (such as `solvers` written as an attribute set), a
+# spec with no issuer type or two, an ACME solver that sets neither or both of
+# `http01` and `dns01`, and a `dns01` solver with no provider or two. A field
+# set to null counts as absent and is not rendered.
+#
+# The option is the whole spec. Metadata the package does not set, such as
+# labels and annotations on the ClusterIssuer, goes through the instance's
+# `partsOverlays.issuer`.
 #
 # An instance lives in cert-manager's cluster resource namespace
 # (`certManager.out.clusterResourceNamespace`). cert-manager reads a
@@ -34,15 +41,19 @@
 #     `dns01.cloudflare.apiTokenSecretRef`). A selector that leaves `name`
 #     out gets the issuerCredentials Secret's tracked name, after its `key`
 #     is checked against the keys that Secret declares. A literal `name` is
-#     refused; `kix.untrackedRef` opts out of the check.
+#     refused. A name that carries Kix context, from `kix.untrackedRef` or
+#     another Secret's `out.name`, is kept as written and its key is not
+#     checked.
 #
 # Not tracked: `ca.secretName`, `venafi.*.credentialsRef.name`,
-# `vault.auth.kubernetes.serviceAccountRef.name`, and anything inside a
+# `vault.auth.kubernetes.serviceAccountRef.name`, the HTTP-01 solver's
+# Ingress, IngressClass, and Gateway references, and anything inside a
 # webhook solver's `config` (a free-form object in the CRD).
 #
 # HTTP-01 solvers are accepted, and warn when a network policy enforcer is
 # present: cert-manager creates the solver pods at runtime, and no derived
-# policy admits the ingress controller to them.
+# policy admits the ingress controller to them. The warning does not read
+# `networkPolicy.platformIntents`, so it stays after an intent admits them.
 #
 # out:
 #   out.name       the ClusterIssuer's name.
@@ -86,13 +97,98 @@ let
       }) solvers
     );
 
-  # Messages for every field the schema does not define and every required
-  # field the value leaves out or sets to null, below `path`. Types are left
-  # to the API server. A Secret key selector's required `name` is not
+  # Removes attributes set to null, except inside free-form subtrees, so the
+  # checks and the rendered ClusterIssuer treat them as absent.
+  dropNulls =
+    schema: value:
+    if isPreserved schema then
+      value
+    else if builtins.isAttrs value then
+      lib.mapAttrs (
+        k:
+        dropNulls (
+          schema.properties.${k} or (
+            if builtins.isAttrs (schema.additionalProperties or null) then schema.additionalProperties else { }
+          )
+        )
+      ) (lib.filterAttrs (_: v: v != null) value)
+    else if builtins.isList value then
+      map (dropNulls (schema.items or { })) value
+    else
+      value;
+
+  describeValue =
+    v:
+    if builtins.isAttrs v then
+      "an attribute set"
+    else if builtins.isList v then
+      "a list"
+    else if builtins.isString v then
+      "a string"
+    else if builtins.isInt v then
+      "an integer"
+    else if builtins.isFloat v then
+      "a float"
+    else if builtins.isBool v then
+      "a boolean"
+    else if v == null then
+      "null"
+    else
+      builtins.typeOf v;
+
+  # The CRD's JSON schema types, in the Nix terms a cluster file uses. A
+  # node with neither `type` nor `x-kubernetes-int-or-string` accepts any
+  # value.
+  schemaTypes = {
+    object = {
+      text = "an attribute set";
+      matches = builtins.isAttrs;
+    };
+    array = {
+      text = "a list";
+      matches = builtins.isList;
+    };
+    string = {
+      text = "a string";
+      matches = builtins.isString;
+    };
+    integer = {
+      text = "an integer";
+      matches = builtins.isInt;
+    };
+    number = {
+      text = "a number";
+      matches = v: builtins.isInt v || builtins.isFloat v;
+    };
+    boolean = {
+      text = "a boolean";
+      matches = builtins.isBool;
+    };
+  };
+  expectedType =
+    schema:
+    if schema."x-kubernetes-int-or-string" or false then
+      {
+        text = "an integer or a string";
+        matches = v: builtins.isInt v || builtins.isString v;
+      }
+    else
+      schemaTypes.${schema.type or ""} or null;
+
+  # Messages for every value whose type the schema does not allow, every
+  # field the schema does not define, and every required field the value
+  # leaves out, below `path`. A Secret key selector's required `name` is not
   # reported here: the fill step either sets it or reports why it could not.
   schemaErrors =
     path: schema: value:
-    if isPreserved schema then
+    let
+      expected = expectedType schema;
+    in
+    if expected != null && !(expected.matches value) then
+      [
+        "${path} is ${describeValue value}, and the ClusterIssuer CRD expects ${expected.text}."
+      ]
+    else if isPreserved schema then
       [ ]
     else if builtins.isAttrs value && schema ? properties then
       let
@@ -150,7 +246,9 @@ in
       type: `acme`, `ca`, `selfSigned`, `vault`, or `venafi`. A self-signed
       issuer is `{ selfSigned = { }; }`.
 
-      Fields the vendored ClusterIssuer CRD does not define fail the build.
+      Fields the vendored ClusterIssuer CRD does not define, and values of a
+      type it does not allow, fail the build. A field set to null is left
+      out.
       `acme.privateKeySecretRef.name` defaults to
       `<instance>-acme-account-key`, a Secret cert-manager creates.
 
@@ -168,13 +266,15 @@ in
     { config, ... }:
     let
       http01Paths = map (s: s.path) (
-        builtins.filter (s: builtins.isAttrs s.solver && s.solver ? http01) (solversOf config.spec)
+        builtins.filter (s: builtins.isAttrs s.solver && (s.solver.http01 or null) != null) (
+          solversOf config.spec
+        )
       );
     in
     lib.optionals (scope.networkPolicyEnforcer != null) (
       map (
         path:
-        "${path} uses an HTTP-01 solver. cert-manager creates the solver pods at runtime in each Certificate's namespace, and Kix's derived network policy does not admit the ingress controller to them on port 8089, so the challenge will not complete while policy is enforced. Use a dns01 solver, or add a networkPolicy.platformIntents entry that admits ingress from all-pods on TCP 8089 to pods labelled acme.cert-manager.io/http01-solver=true."
+        "${path} uses an HTTP-01 solver. cert-manager creates the solver pods at runtime in each Certificate's namespace, and Kix's derived network policy does not admit the ingress controller to them on TCP 8089. While policy is enforced, the challenge completes only if a networkPolicy.platformIntents entry admits ingress from all-pods on TCP 8089 to pods labelled acme.cert-manager.io/http01-solver=true. Kix does not read platform intents for this warning, so it stays after such an entry is added. A dns01 solver needs no intent."
       ) http01Paths
     );
 
@@ -187,8 +287,19 @@ in
       ...
     }:
     let
-      schema = certManager.out.clusterIssuerSpecSchema;
-      cmNs = certManager.out.clusterResourceNamespace;
+      # A `kix.mkImport` answering certManager has none of these.
+      cmOut =
+        let
+          out = certManager.out or { };
+        in
+        if
+          out ? clusterIssuerSpecSchema && out ? clusterResourceNamespace && (out.crds or { }) ? ClusterIssuer
+        then
+          out
+        else
+          throw "${who}: deps.certManager resolved to an instance whose out has no clusterIssuerSpecSchema, clusterResourceNamespace, or crds.ClusterIssuer, such as a kix.mkImport. This package needs the cert-manager package. For a cert-manager installed outside Kix, declare the existing ClusterIssuer as a kix.mkImport { out.withCert = ...; } instance with aliases = [ \"clusterIssuer\" ] instead.";
+      schema = cmOut.clusterIssuerSpecSchema;
+      cmNs = cmOut.clusterResourceNamespace;
       issuerTypes = builtins.attrNames schema.properties;
       dns01Schema = schema.properties.acme.properties.solvers.items.properties.dns01;
       dnsProviders = builtins.attrNames (
@@ -226,15 +337,19 @@ in
         errors = [ message ];
       };
 
+      # A `name` or `key` that is not a string is left as written; the
+      # schema check reports its type.
       fillSelector =
         path: sel:
         if sel ? name then
-          if builtins.isString sel.name && builtins.hasContext sel.name then
+          if !(builtins.isString sel.name) || builtins.hasContext sel.name then
             ok sel
           else
-            bad sel "${path}.name is the literal \"${toString sel.name}\". Leave name out and wire the Secret as issuerCredentials, so Kix can check its keys, or write name = kix.untrackedRef \"${toString sel.name}\" to opt out explicitly."
+            bad sel "${path}.name is the literal \"${sel.name}\". Leave name out and wire the Secret as issuerCredentials, so Kix can check its keys, or write name = kix.untrackedRef \"${sel.name}\" to opt out explicitly."
         else if !(sel ? key) then
           bad sel "${path} leaves name out but sets no key. Set key to the Secret key that holds the credential."
+        else if !(builtins.isString sel.key) then
+          ok sel
         else if issuerCredentials == null then
           bad sel "${path} names key \"${sel.key}\" but no issuerCredentials dependency is wired. Add a secret or secret-ref instance in namespace \"${cmNs}\" that declares \"${sel.key}\", and set deps.issuerCredentials = ref.${cmNs}.<that instance>. The issuer and its credentials both live in \"${cmNs}\", because cert-manager reads ClusterIssuer Secrets only from there."
         else if !(builtins.elem sel.key credKeys) then
@@ -277,18 +392,19 @@ in
         else
           ok value;
 
-      filled = fill "spec" schema (withAccountKey config.spec);
+      spec = dropNulls schema config.spec;
+      filled = fill "spec" schema (withAccountKey spec);
 
       namespaceErrors =
         lib.optional (ns != cmNs)
           "cluster-issuer instances live in cert-manager's cluster resource namespace \"${cmNs}\", where cert-manager reads issuer Secrets and where instance names are unique so two ClusterIssuers cannot share a name. Move this instance, and any issuerCredentials instance, from \"${ns}\" to \"${cmNs}\".";
 
-      setTypes = builtins.filter (k: builtins.elem k issuerTypes) (builtins.attrNames config.spec);
+      setTypes = builtins.filter (k: builtins.elem k issuerTypes) (builtins.attrNames spec);
       typeErrors =
         lib.optional (builtins.length setTypes != 1)
           "a ClusterIssuer needs exactly one issuer type, and spec has ${listOrNone setTypes}. Set one of: ${lib.concatStringsSep ", " issuerTypes}.";
 
-      solvers = solversOf config.spec;
+      solvers = solversOf spec;
 
       challengeErrors = lib.concatMap (
         { path, solver }:
@@ -329,7 +445,7 @@ in
           true
         else
           throw (
-            "${who}: the ClusterIssuer spec has ${toString (builtins.length errors)} problem(s):\n"
+            "${who}: ${toString (builtins.length errors)} problem(s):\n"
             + lib.concatMapStringsSep "\n" (e: "- ${e}") errors
           );
     in
@@ -337,7 +453,7 @@ in
       # The check is forced with the resource, so neither the manifest nor
       # `out` can be read from a spec that failed it.
       issuer = builtins.seq checked (
-        scope.mkCR certManager.out.crds.ClusterIssuer {
+        scope.mkCR cmOut.crds.ClusterIssuer {
           name = scope.instanceName;
           spec = filled.value;
         }
