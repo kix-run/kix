@@ -1,3 +1,5 @@
 # 2026-10-02 · `kix/packages/ingress-nginx` · The admission Jobs carry `ttlSecondsAfterFinished: 600`, so Kubernetes deletes Jobs that Kix still tracks.
 
 Ten minutes after a deploy the two certgen Jobs (`ingress-nginx-admission-create`, `-patch`) are gone. `kix diff` then lists both as added, and the next `kix deploy` warns "could not record activation on unchanged resource ... jobs.batch ... not found" for each (W6 kind run K2). A `kix deploy --reconcile` would recreate them and rerun certgen. The TTL comes from the upstream chart; `kix.healthCheck` probe Jobs get the same treatment, which the lib documents as recreated by an operator reconcile.
+
+- Hit again 2026-10-02 in the W6 ludo-kind-tls kind run (K3): both warnings on every deploy after the first ten minutes.
