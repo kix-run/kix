@@ -32,6 +32,7 @@ kix.buildCluster {
         kubevirt = { };
         infisical = { };
         storage = { };
+        mayastor = { };
       };
 
       instances = {
@@ -56,6 +57,14 @@ kix.buildCluster {
             storageClasses.zfs.parameters.poolname = "zfspv-pool";
             volumeSnapshotClasses.zfs = { };
           };
+        };
+        mayastor.mayastor = {
+          package = packages.mayastor;
+          # No node carries this label, so csi-node and agent-ha-node
+          # schedule nowhere and the run judges the control plane and etcd.
+          # The kubelet sets openebs.io/csi-node once csi-node registers, so
+          # that label would not keep them off.
+          config.csiNode.nodeSelector."kix.run/test-schedule" = "never";
         };
       };
     }
