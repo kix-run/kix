@@ -94,13 +94,6 @@ let
   # Error-severity scorecard rules each package fails, with the file that
   # records why. A housekeeping file may cover several packages.
   knownFailures = {
-    clickhouse-logs = [
-      {
-        rule = "security.nonRoot";
-        # The Vector agent runs as root to read pod logs.
-        reason = "kix/packages/clickhouse-logs/default.nix";
-      }
-    ];
     smartctl-exporter = [
       {
         rule = "architecture.monitorSelectorMatchesService";
@@ -225,6 +218,8 @@ let
       prometheus-operator.package = packages.prometheus-operator;
     };
     loki.instances = { inherit storage; };
+    # loki-logs auto-instantiates loki, which needs a claim.
+    loki-logs.instances = { inherit storage; };
     # A class, a pool, and a Prometheus provider, so the StorageClass, the
     # DiskPool and its CRD reference, and the io-engine metrics Service,
     # ServiceMonitor, and alerts are built.
@@ -269,8 +264,6 @@ let
     };
     persistent-volume-claim.config.size = "1Gi";
     priority-class.config.value = 1000;
-    # promtail auto-instantiates loki, which needs a claim.
-    promtail.instances = { inherit storage; };
     secret.config.stringData.password = "password";
     secret-echo.instances = { inherit credentials; };
     secret-ref.config.keys = [ "password" ];

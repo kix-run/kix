@@ -44,6 +44,9 @@ in
     unsafe = [
       "host-network"
     ];
+    # Host network, host PID namespace, and hostPath mounts, which the
+    # baseline Pod Security level forbids.
+    podSecurity = "privileged";
   };
 
   options = {

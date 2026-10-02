@@ -21,6 +21,12 @@
 # `loki-storage` to the same namespace, and Grafana gets a Loki datasource
 # from it. Tune Loki through its own options:
 #   instances.monitoring-system.loki.config.settings.limits_config.retention_period = "720h";
+# `monitoring.lokiLogs.enabled` (on with Loki) adds the loki-logs agent,
+# which ships every pod's logs to that Loki.
+#
+# node-exporter and loki-logs mount host paths, so the namespace runs at the
+# `privileged` Pod Security level. For a restricted monitoring namespace,
+# turn both off and declare those agents in a namespace of their own.
 
 {
   config,
@@ -37,9 +43,9 @@ let
   # The module's `kix` argument carries only `mkImport`, so the quantity
   # type comes from its file rather than `kix.types.quantity`.
   quantity = import ../vocab/quantity.nix { inherit lib; };
-  # Name of the PriorityClass the log shipper runs at. The instance below
-  # creates it; the log shipper names it, and the build fails if a workload
-  # names a class nothing creates.
+  # Instance name of the log shipper's PriorityClass. The instance below
+  # creates the class, and loki-logs reads its name through
+  # deps.priorityClass, which also orders the DaemonSet after it.
   logShipperPriorityClass = "monitoring-log-shipper";
 in
 {
@@ -179,10 +185,11 @@ in
       };
     };
 
-    promtail.enabled = lib.mkOption {
+    lokiLogs.enabled = lib.mkOption {
       type = lib.types.bool;
       default = cfg.loki.enabled;
       defaultText = "monitoring.loki.enabled";
+      description = "Ship every pod's logs to this module's Loki with the loki-logs Vector agent.";
     };
   };
 
@@ -286,7 +293,7 @@ in
             };
           };
 
-          ${logShipperPriorityClass} = lib.mkIf cfg.promtail.enabled {
+          ${logShipperPriorityClass} = lib.mkIf cfg.lokiLogs.enabled {
             package = packages.priority-class;
             config = {
               value = 1000000;
@@ -311,9 +318,14 @@ in
             deps.storage = ref.${ns}.loki-storage;
           };
 
-          promtail = lib.mkIf cfg.promtail.enabled {
-            package = packages.promtail;
-            config.priorityClassName = logShipperPriorityClass;
+          loki-logs = lib.mkIf cfg.lokiLogs.enabled {
+            package = packages.loki-logs;
+            deps.loki =
+              if cfg.loki.enabled then
+                ref.${ns}.loki
+              else
+                throw "monitoring.lokiLogs.enabled is true but monitoring.loki.enabled is false, so there is no Loki to ship to. Enable monitoring.loki, or turn lokiLogs off and declare a loki-logs instance with deps.loki pointing at your Loki.";
+            deps.priorityClass = ref.${ns}.${logShipperPriorityClass};
           };
         };
       in

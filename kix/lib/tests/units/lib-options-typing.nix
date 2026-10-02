@@ -737,13 +737,13 @@ in
         "grafana"
         "kube-state-metrics"
         "loki"
+        "loki-logs"
         "node-exporter"
         "persistent-volume-claim"
         "priority-class"
         "prometheus"
         "prometheus-default-rules"
         "prometheus-operator"
-        "promtail"
       ] pkg;
       claim = lib.findFirst (m: m.kind == "PersistentVolumeClaim") null (
         manifests (mkCluster [
