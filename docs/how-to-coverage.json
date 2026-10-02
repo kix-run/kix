@@ -613,7 +613,7 @@
         "how-to/package-monitoring/check",
         "how-to/package-monitoring/packages"
       ],
-      "unverifiedNixBlocks": 1
+      "unverifiedNixBlocks": 2
     },
     {
       "page": "package-task-guides/install-the-victoriametrics-ha-monitoring-stack",
