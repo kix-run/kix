@@ -129,8 +129,8 @@ Deploy cert-manager, its CRDs, and the ClusterIssuers:
 <Command commands={["kix deploy doc-how-tos"]} />
 
 A deploy waits for each ClusterIssuer to report `Ready`. ACME registration
-and DNS-01 issuance can take longer than the default readiness timeout; raise
-it with `--timeout` on clusters that issue through ACME:
+and DNS-01 issuance can take longer than the default readiness timeout of 180
+seconds; raise it with `--timeout` on clusters that issue through ACME:
 
 <Command commands={["kix deploy doc-how-tos --timeout 15m"]} />
 
