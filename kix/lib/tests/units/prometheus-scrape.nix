@@ -529,7 +529,7 @@ in
       cluster = clusterWith {
         extra.instances.monitoring.alertmanager.package = pkg "alertmanager";
       };
-      ingress = byPrefix "monitoring-prometheus-server-scrape-svc-alertmanager-operated" (cnpsOf cluster);
+      ingress = byPrefix "monitoring-prometheus-server-scrape-svc-alertmanager" (cnpsOf cluster);
     in
     (
       ingress != null
