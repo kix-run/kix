@@ -1043,7 +1043,7 @@ Set at the top level of the cluster module (or under `config.*` in module form).
 | `cluster.roles` | `attrsOf submodule` | flavor-set | Environment role bindings per registry role: `{ binding = "absent" | "shadowable" | "exclusive"; provider? }` (§15) |
 | `cluster.capabilities.*` | various | flavor-set | 8 substrate axioms — see §15 |
 | `cluster.maintenance` | submodule | `{}` | `{ enable, reason?, until? }` — maintenance window marker |
-| `cluster.network` | submodule | – | `{ podCidr, serviceCidr, dnsUpstream, environmentCilium }`. `podCidr` is the cilium package's IPAM pool in chart delivery with cluster-pool IPAM (the kind, k3s, and rke2 flavours set their defaults); `dnsUpstream` is read by the coredns package's forward plugin (empty means /etc/resolv.conf); `environmentCilium` (set by a flavour, requires a shadowable `cni` binding) says the environment installed Cilium |
+| `cluster.network` | submodule | – | `{ podCidr, serviceCidr, dnsUpstream }`. `podCidr` is the cilium package's IPAM pool in chart delivery with cluster-pool IPAM (the kind, k3s, and rke2 flavours set their defaults); `dnsUpstream` is read by the coredns package's forward plugin (empty means /etc/resolv.conf). An environment-installed Cilium is the `platform-cilium` import (§16.3) |
 | `cluster.nodes` | attrset | `{}` | Static node inventory: `{ nodeName: { roles, cpu?, memory?, labels, taints? } }` |
 | `scorecard` | submodule | on, full rule set, capped at warning | `{ enable, rules, maxSeverity, ruleDefaults, ruleOverrides, knownAnnotationDomains }` (§17) |
 | `networkPolicy` | submodule | `{}` | `{ enable, defaultDeny, directions, platformIntents }` (§16) |
@@ -1126,10 +1126,11 @@ modules = [
 ];
 ```
 
-The instance writes HelmChartConfig kube-system/rke2-cilium instead of installing a second Cilium; RKE2's chart uses `kubernetes` IPAM, so a cluster that wants cluster-pool sets `values.ipam.mode` and the pool together.
+The flavour declares the platform import `kube-system/platform-cilium` with `out.helmChartConfig = { name = "rke2-cilium"; namespace = "kube-system"; }`, and the instance, which takes it as its `platform-cilium` dependency, writes HelmChartConfig kube-system/rke2-cilium instead of installing a second Cilium; RKE2's chart uses `kubernetes` IPAM, so a cluster that wants cluster-pool sets `values.ipam.mode` and the pool together.
 
 **Platform imports.** Flavors declare `optional = true` instances for platform-managed services:
 - `platform-dns` (alias `dns`): all flavors.
+- `platform-cilium` (role `cni`): RKE2 when `cluster.flavor.rke2.cni` names cilium. Its `out.helmChartConfig` names the HelmChartConfig a `cilium` instance writes.
 - `platform-storage` (role `storageClasses`): kind, k3s, GKE, GKE Autopilot, AKS, Scaleway, and OVH, the flavors whose provider creates the StorageClass on every new cluster. The import names the class (`kind = "StorageClass"`, `apiVersion = "storage.k8s.io/v1"`, and `out.name`), so the deploy waits for it once the import is active. EKS, kubeadm, RKE2, Talos, and OpenShift bind `storageClasses` `absent`.
 
 An optional import becomes active when a dependency of an active managed instance resolves to it, and its marker is then emitted. If a cluster installs its own `coredns` or `storage-classes` instance, the explicit instance wins: it claims the role, and DI prefers a managed provider over an import, so the import stays inactive. Under network policy, coredns runs in `kube-system`. A `storage-classes` class annotated `storageclass.kubernetes.io/is-default-class` is refused where the flavor imports a default class.
@@ -1161,7 +1162,7 @@ A host-network pod gets no derived edge. Its traffic reaches other pods as from 
 
 ### 16.3 Cluster-side wiring
 
-The enforcer is auto-discovered: any package with `meta.roles ∋ "network-policy-enforcer"` becomes the cluster's enforcer. `kix/packages/cilium` is the one shipped enforcer. It exposes `out.crds.CiliumNetworkPolicy` and `out.crds.CiliumClusterwideNetworkPolicy`, and `out.netpol.mkPolicy` builds every generated CNP through the first, so the CNP → CRD reference → enforcer edge is wired transitively. The instance installs the chart (cni binding `absent`), configures an environment's bundled Cilium through a HelmChartConfig (RKE2: `cluster.flavor.rke2.cni = [ "cilium" ]`), or only uses a Cilium the environment installed (`cluster.network.environmentCilium.helmChartConfig = null`). Cilium as an enforcer beside another CNI is not supported: the package always claims `cni`.
+The enforcer is auto-discovered: any package with `meta.roles ∋ "network-policy-enforcer"` becomes the cluster's enforcer. `kix/packages/cilium` is the one shipped enforcer. It exposes `out.crds.CiliumNetworkPolicy` and `out.crds.CiliumClusterwideNetworkPolicy`, and `out.netpol.mkPolicy` builds every generated CNP through the first, so the CNP → CRD reference → enforcer edge is wired transitively. The instance installs the chart (cni binding `absent`), or, with a shadowable `cni` binding, takes the environment's Cilium as its optional `platform-cilium` dependency: a `kix.mkImport { roles = [ "cni" ]; out.helmChartConfig = ...; }`. When the import's `out.helmChartConfig` is `{ name; namespace; }` the instance writes its values into that HelmChartConfig, which the environment merges into its bundled chart; the rke2 flavour declares `kube-system/platform-cilium` naming `kube-system/rke2-cilium` when `cluster.flavor.rke2.cni = [ "cilium" ]`. When it is `null` the instance only uses the environment's Cilium. A shadowable binding without the import, the import on another binding, and an import without `out.helmChartConfig` are evaluation errors. Cilium as an enforcer beside another CNI is not supported: the package always claims `cni`.
 
 ### 16.4 Default-deny
 
