@@ -1011,7 +1011,7 @@ instances.<namespace>.<instanceName> = {
   config         = { ... };              # deferredModule — multiple modules merge
   deps           = { explicit = ref; };  # override DI resolution; collisions are errors
   partsOverlays  = [ (scope: self: base: ...) ];
-  extraDeps      = [ ... ];
+  extraDeps      = [ ref.apps.contract ];  # kix.mkImport instances only; resources or refs
   platformIntents = { ... };             # network connectivity intents (import-instance pods)
   version        = "1.2.3";
   labelStyle     = "kix" | "helm";
@@ -1721,6 +1721,25 @@ resource `out`; extras a managed package adds to `root.out` are absent
 valkey has no `out.authSecret`, for example, so n8n sends no password to it
 and takes one from `env.QUEUE_BULL_REDIS_PASSWORD` as a `secretKeyRef` named
 with `kix.untrackedRef`.
+
+An import's marker can depend on something no value connects it to. List it in
+the instance's `extraDeps`, as a resource or as `ref.<ns>.<inst>`, which
+stands for that instance's PackageInstance marker:
+
+```nix
+{ ref, ... }: {
+  instances.legacy.legacy-api = {
+    package = kix.mkImport { kind = "Service"; apiVersion = "v1"; out.name = "legacy-api"; };
+    extraDeps = [ ref.apps.legacy-api-contract ];
+  };
+}
+```
+
+Evaluation fails for an entry that is neither a resource nor a `ref`, for a
+`ref` to the import itself, and for a `ref` to an optional instance that
+nothing activates, whose marker is never rendered. The option applies only to
+imports; a managed instance with `extraDeps` fails evaluation, and its
+resources take `requires` or `extraDeps` in their builders instead.
 
 ## 24. Manifest stamping
 
