@@ -3,46 +3,44 @@ source: kix-cli/tests/snapshot_test.rs
 expression: stdout
 ---
 Cluster: example
-Total resources: 129
+Total resources: 118
 
-Namespaces (6):
-  (cluster-scoped) (48 resources)
-  cache (11 resources)
-  cert-manager (25 resources)
-  immich (20 resources)
-  kube-system (8 resources)
+Namespaces (5):
+  (cluster-scoped) (45 resources)
+  cert-manager (21 resources)
+  immich (28 resources)
+  kube-system (7 resources)
   stackgres-system (17 resources)
 
 Resource kinds:
  Kind                            Count 
- PackageInstance                 26    
+ PackageInstance                 27    
  ClusterRole                     15    
  ClusterRoleBinding              12    
- Service                         11    
  CustomResourceDefinition        8     
  Deployment                      7     
- ServiceAccount                  7     
- PodDisruptionBudget             6     
- Namespace                       5     
- Role                            5     
- RoleBinding                     5     
- ConfigMap                       4     
- StorageClass                    3     
+ Service                         7     
+ ServiceAccount                  6     
+ PodDisruptionBudget             5     
+ Namespace                       4     
+ Role                            4     
+ RoleBinding                     4     
+ Secret                          3     
+ ConfigMap                       2     
  Job                             2     
  MutatingWebhookConfiguration    2     
- Secret                          2     
+ PersistentVolumeClaim           2     
  ValidatingWebhookConfiguration  2     
  Activation                      1     
- NetworkPolicy                   1     
- PersistentVolumeClaim           1     
  SGCluster                       1     
  SGInstanceProfile               1     
  SGPostgresConfig                1     
  StatefulSet                     1     
+ StorageClass                    1     
 
 Resources:
   (cluster-scoped):
-    Activation/example-rn7x9w4ffxlk
+    Activation/example-6x3bn72jgfgd
     ClusterRole/cert-manager-cainjector
     ClusterRole/cert-manager-cluster-view
     ClusterRole/cert-manager-controller-approve:cert-manager-io
@@ -80,28 +78,13 @@ Resources:
     CustomResourceDefinition/packageinstances.kix.run
     MutatingWebhookConfiguration/cert-manager-webhook
     MutatingWebhookConfiguration/stackgres-operator
-    Namespace/cache
     Namespace/cert-manager
     Namespace/immich
     Namespace/kube-system
     Namespace/stackgres-system
-    StorageClass/lbs1-pool1-2x
-    StorageClass/localzfs
-    StorageClass/localzfs-retain
+    StorageClass/local-path
     ValidatingWebhookConfiguration/cert-manager-webhook
     ValidatingWebhookConfiguration/stackgres-operator
-  cache:
-    ConfigMap/valkey-configuration
-    ConfigMap/valkey-health
-    ConfigMap/valkey-scripts
-    NetworkPolicy/valkey
-    PackageInstance/valkey
-    PodDisruptionBudget/valkey-node
-    Service/valkey
-    Service/valkey-headless
-    Service/valkey-metrics
-    ServiceAccount/valkey
-    StatefulSet/valkey-node
   cert-manager:
     Deployment/cert-manager
     Deployment/cert-manager-cainjector
@@ -113,42 +96,46 @@ Resources:
     PodDisruptionBudget/cert-manager-webhook
     Role/cert-manager-cainjector:leaderelection
     Role/cert-manager-startupapicheck:create-cert
-    Role/cert-manager-tokenrequest
     Role/cert-manager-webhook:dynamic-serving
     Role/cert-manager:leaderelection
     RoleBinding/cert-manager-cainjector:leaderelection
-    RoleBinding/cert-manager-cert-manager-tokenrequest
     RoleBinding/cert-manager-startupapicheck:create-cert
     RoleBinding/cert-manager-webhook:dynamic-serving
     RoleBinding/cert-manager:leaderelection
-    Service/cert-manager
-    Service/cert-manager-cainjector
     Service/cert-manager-webhook
     ServiceAccount/cert-manager
     ServiceAccount/cert-manager-cainjector
     ServiceAccount/cert-manager-startupapicheck
     ServiceAccount/cert-manager-webhook
   immich:
+    ConfigMap/valkey-config
     Deployment/immich-server
     Deployment/machine-learning
-    Job/immich-db-bootstrap-55078afb92
+    Job/immich-db-bootstrap-f2457d27ce
     PackageInstance/immich
     PackageInstance/immich-db
     PackageInstance/machine-learning
+    PackageInstance/ml-cache
     PackageInstance/postgres
-    PackageInstance/secret-ref-immich-db-postgres
     PackageInstance/secret-ref-postgres-postgres
     PackageInstance/service-ref-postgres-postgres
     PackageInstance/storage
+    PackageInstance/valkey
+    PackageInstance/valkey-password
+    PersistentVolumeClaim/ml-cache
     PersistentVolumeClaim/storage
-    PodDisruptionBudget/machine-learning
+    PodDisruptionBudget/valkey
     SGCluster/postgres
     SGInstanceProfile/postgres-profile
-    SGPostgresConfig/postgres-pg16-config
+    SGPostgresConfig/postgres-pg17-config
     Secret/immich-db-bootstrap-password
     Secret/immich-db-credentials
+    Secret/valkey-password
     Service/immich-server
     Service/machine-learning
+    Service/valkey
+    Service/valkey-headless
+    StatefulSet/valkey
   kube-system:
     ConfigMap/coredns
     Deployment/coredns
@@ -156,23 +143,22 @@ Resources:
     PackageInstance/storage-classes
     PodDisruptionBudget/coredns
     Service/coredns
-    Service/coredns-metrics
     ServiceAccount/coredns
   stackgres-system:
     Deployment/stackgres-operator
-    PackageInstance/crd-ref-sgbackups-stackgres-io
-    PackageInstance/crd-ref-sgclusters-stackgres-io
-    PackageInstance/crd-ref-sgdbops-stackgres-io
-    PackageInstance/crd-ref-sgdistributedlogs-stackgres-io
-    PackageInstance/crd-ref-sginstanceprofiles-stackgres-io
-    PackageInstance/crd-ref-sgobjectstorages-stackgres-io
-    PackageInstance/crd-ref-sgpgconfigs-stackgres-io
-    PackageInstance/crd-ref-sgpoolconfigs-stackgres-io
-    PackageInstance/crd-ref-sgscripts-stackgres-io
-    PackageInstance/crd-ref-sgshardedbackups-stackgres-io
-    PackageInstance/crd-ref-sgshardedclusters-stackgres-io
-    PackageInstance/crd-ref-sgshardeddbops-stackgres-io
-    PackageInstance/crd-ref-sgstreams-stackgres-io
+    PackageInstance/crd-ref-stackgres-operator-sgbackups-stackgres-io
+    PackageInstance/crd-ref-stackgres-operator-sgclusters-stackgres-io
+    PackageInstance/crd-ref-stackgres-operator-sgdbops-stackgres-io
+    PackageInstance/crd-ref-stackgres-operator-sgdistributedlogs-stackgres-io
+    PackageInstance/crd-ref-stackgres-operator-sginstanceprofiles-stackgres-io
+    PackageInstance/crd-ref-stackgres-operator-sgobjectstorages-stackgres-io
+    PackageInstance/crd-ref-stackgres-operator-sgpgconfigs-stackgres-io
+    PackageInstance/crd-ref-stackgres-operator-sgpoolconfigs-stackgres-io
+    PackageInstance/crd-ref-stackgres-operator-sgscripts-stackgres-io
+    PackageInstance/crd-ref-stackgres-operator-sgshardedbackups-stackgres-io
+    PackageInstance/crd-ref-stackgres-operator-sgshardedclusters-stackgres-io
+    PackageInstance/crd-ref-stackgres-operator-sgshardeddbops-stackgres-io
+    PackageInstance/crd-ref-stackgres-operator-sgstreams-stackgres-io
     PackageInstance/stackgres-operator
     Service/stackgres-operator
     ServiceAccount/stackgres-operator
