@@ -1,0 +1,3 @@
+# 2026-10-02 · `cli/kix/src/cluster/scheduler.rs` · `kix deploy` stops the whole run when API rediscovery after a CRD apply gets a 404.
+
+On a fresh kind cluster, `kix deploy tailscale --flake ./clusters` applied and saw Established for the eight tailscale.com CRDs, then failed with "API rediscovery failed after CRD apply: could not discover the resource types supported by the Kubernetes API: ApiError: \"404 page not found\"" and cancelled the 26 remaining resources. The new group/version was not yet in discovery when the CLI asked; a retry of the rediscovery would likely have passed. Related: `2026-09-27-deploy-discovery-fails-on-one-unavailable-apiservice.md`.
