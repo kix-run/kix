@@ -1,0 +1,3 @@
+# 2026-10-01 · `kix/lib/rules/architecture.nix` `annotationDomainOwnership` · The annotation-domain index matches a domain exactly, so an operator must list every subdomain it reads.
+
+Reloader reads `reloader.stakater.com`, `secret.reloader.stakater.com`, `secrets.exclude.reloader.stakater.com`, and `deployment.reloader.stakater.com`, and `kix/packages/reloader/default.nix` lists all four in `meta.annotationDomains`. Declaring `reloader.stakater.com` alone leaves `secret.reloader.stakater.com/reload` with the "no package declares" warning. A package that forgets one subdomain gets that warning on every consumer, and the duplicate-declarer check in `kix/lib/eval/hooks.nix` does not see two operators that claim a parent and a child domain.
