@@ -179,10 +179,15 @@ the location to be `Available`:
 backup = velero.out.mkBackup scope {
   name = "before-migration";
   spec.includedNamespaces = [ scope.namespaceName ];
+  requires = [ self.deployment ];
 };
 ```
 
-`velero.out.mkSchedule` takes the same arguments. For another kind, such as
+`velero.out.mkSchedule` takes the same arguments. List at least one resource
+of the calling instance in `requires`, such as the workload it backs up. The
+location the builder waits for belongs to the velero instance, and
+`nix flake check` refuses a resource that references nothing in its own
+instance. For another kind, such as
 a Restore or a second backup location, build the resource in Velero's
 namespace with `(scope.forService velero).mkCR velero.out.crds.Restore { ... }`.
 A resource built in any other namespace is never processed, and the deploy
