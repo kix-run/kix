@@ -52,6 +52,10 @@ Kix evaluates four sources together:
 3. configuration injected by dependent packages; and
 4. the instance's `config` modules.
 
+Each of these modules can take `clusterConfig` as a module argument, for
+example `config = { clusterConfig, ... }: { zone = lib.mkDefault
+clusterConfig.clusterDomain; };`.
+
 A `lib.mkDefault` in the package's own `config` takes precedence over an
 option declaration's `default`, while an instance value or dependency
 injection takes precedence over that package default. Standard Nix module
@@ -59,6 +63,47 @@ types, merge rules, `lib.mkForce`, and validation still apply.
 
 The resulting values are passed to each build entry as `config`. Setting an
 undeclared option is an evaluation error.
+
+## Option contract
+
+A package option's default must survive an instance that sets only part of
+the option. The module system replaces an attribute-set default as a whole
+as soon as any definition exists, so Kix refuses three declarations whose
+defaults an instance would partly discard:
+
+| Rule | Declaration | What an instance loses |
+|---|---|---|
+| 1 | An untyped option (`anything`, `unspecified`, `raw`, `attrs`, or `attrsOf` of one of those) with a non-empty attribute-set default | Every default key once it sets any key, and misspelled keys are accepted |
+| 2 | An `attrsOf` or `lazyAttrsOf` of any other type with a non-empty default | Every package entry once it sets one key |
+| 3 | A submodule whose own `default` sets a key that the field does not default to the same value | That key once it sets any field |
+
+`nullOr`, `uniq`, and `unique` are looked through, and each branch of an
+`either` or `oneOf` is checked. Submodule fields are checked to a depth of
+six. List defaults are not checked, because every Nix merge replaces a list.
+
+Evaluation fails with one bullet per violating option, each naming the file
+and line of the declaration:
+
+```text
+package options of instance <namespace>/<instance> break the option contract (docs: reference/package-schema/options, "Option contract"):
+  - <file>:<line>: option `hpa` has type `anything` and a non-empty default (keys: maxReplicas, minReplicas). ...
+```
+
+Each rule has a remedy that keeps the package's values:
+
+- Declare the option as a submodule whose fields carry their own defaults.
+  For container resources, use `kix.options.resources`. For a submodule
+  (rule 3), put each value on its field's `default` and give the option the
+  default `{ }`.
+- For a typed collection (rule 2) whose entries should stay unless
+  overridden, default the option to `{ }` and set each entry in the
+  package's `config` with `lib.mkDefault`.
+- When an instance should replace the value as a whole, such as a selector
+  or a program's configuration file, default the option to `null` and apply
+  the package's value in the build when it is null.
+
+With the second and third remedies, give the option a `defaultText` that
+names the package's value, so the generated reference shows it.
 
 ## Related
 

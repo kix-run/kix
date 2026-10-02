@@ -17,6 +17,7 @@ The architecture rule set lives in `kix.rules.architecture`.
 | `architecture.monitorSelectorMatchesService` | cluster | `error` | A ServiceMonitor or VMServiceScrape selects exactly one compatible Service. |
 | `architecture.externalMonitorTargets` | manifest | `info` | Audits monitors marked as targeting a Service outside Kix. |
 | `architecture.fqdnWithoutContext` | manifest | `warning` | A workload's cluster Service address carries context from a Service or ServiceRef. |
+| `architecture.clusterDomainLiteral` | cluster | `error` | On a cluster whose `clusterDomain` is not `cluster.local`, no rendered string names `cluster.local`. |
 
 ## Annotation domains
 
@@ -66,6 +67,17 @@ outside Kix's complete view, or carries
 fragment in workloads. A literal address cannot contribute deployment or
 network-policy information, so the rule asks for the Service or ServiceRef's
 `out.fqdn` value, or a managed Service's `out.url` helper.
+
+`clusterDomainLiteral` applies when `clusterDomain` is set to a domain
+other than `cluster.local`. It reports each resource, except
+CustomResourceDefinitions, with a string that names `cluster.local` as
+whole DNS labels, since such an address does not resolve on that cluster.
+The configured domain itself is not a hit, so `east.cluster.local` passes.
+Build addresses from a Service's `out.fqdn` or `out.url`, or read
+`clusterConfig.clusterDomain`; pass the domain to a Helm chart's
+cluster-domain value. During a domain migration where CoreDNS serves both
+domains, override the rule with
+`scorecard.ruleOverrides.byRule."architecture.clusterDomainLiteral"`.
 
 :::note[Severity and build failures]
 The table shows each rule's declared severity. Findings are capped by

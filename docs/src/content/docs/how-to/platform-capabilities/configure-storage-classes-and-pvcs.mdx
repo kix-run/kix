@@ -59,7 +59,7 @@ claim sets its own `storageClassName`.
 
 The annotation also makes the class the cluster default, so Kix refuses it on
 a flavor whose environment already has a default class. Annotate at most one
-class: with two, a consumer that names no class fails the build.
+class: two classes annotated default in one build fail the build.
 
 ### Use a CSI driver package's classes
 

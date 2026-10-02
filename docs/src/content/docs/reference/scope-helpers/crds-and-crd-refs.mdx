@@ -79,6 +79,8 @@ Kix does not install the CRD, so it cannot read the served versions from a
 spec. A missing `version` fails the build. Check the versions on a live
 cluster with
 `kubectl get crd <plural>.<group> -o jsonpath='{.spec.versions[?(@.served==true)].name}'`.
+`kix deploy` checks the declared versions against the live CRD once it is
+Established.
 
 The reference renders a PackageInstance marker named
 `crd-ref-<instance>-<plural>-<group with dots as dashes>` in the package's

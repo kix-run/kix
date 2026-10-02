@@ -465,7 +465,7 @@
           "06-service-dep"
         ];
         allowFailure = true;
-        stdoutGrep = "error: dependency 'backend' was not found";
+        stdoutGrep = "error: .*dependency 'backend' was not found";
       }
     ];
   }
