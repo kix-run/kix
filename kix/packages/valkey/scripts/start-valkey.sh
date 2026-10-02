@@ -5,6 +5,10 @@
 set -eu
 . /opt/valkey/lib.sh
 
+if [ -z "$REDISCLI_AUTH" ]; then
+    echo "valkey: key password of the valkeyPassword secret is empty, and requirepass \"\" would turn authentication off; set a password" >&2
+    exit 1
+fi
 password=$(conf_quote "$REDISCLI_AUTH")
 conf=/run/valkey/valkey.conf
 umask 077

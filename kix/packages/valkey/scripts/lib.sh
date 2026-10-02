@@ -14,11 +14,13 @@ peer() {
 }
 SELF=${HEADLESS_FQDN:+$(peer "$ordinal")}
 
-# A config-file string: double quotes, with backslash and double quote
-# escaped, as valkey.conf and sentinel.conf parse them. Write it with
-# printf: dash's echo expands backslash escapes.
+# A config-file string holding $1 byte for byte: double quotes around a
+# \xHH escape per byte, which valkey.conf and sentinel.conf decode. Line
+# breaks, quotes, and a trailing newline from a Secret written with echo
+# stay part of the value, as they do for clients reading the same Secret.
+# Write it with printf: dash's echo expands backslash escapes.
 conf_quote() {
-    printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"]/\\&/g')"
+    printf '"%s"' "$(printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n' | sed 's/../\\x&/g')"
 }
 
 # Prints "host port" of the primary as the first Sentinel of another pod
@@ -62,17 +64,16 @@ local_sentinel_primary() {
         SENTINEL get-primary-addr-by-name "$PRIMARY_SET" 2>/dev/null | head -n 1
 }
 
-# Waits up to $1 seconds until the local Sentinel reports a primary other
-# than this pod.
+# Waits until the local Sentinel reports a primary other than this pod.
+# Gives up once the clock passes $1 (seconds since the epoch); the last
+# check can end up to 4s later.
 wait_primary_moved() {
-    n=0
-    while [ "$n" -lt "$1" ]; do
+    while [ "$(date +%s)" -lt "$1" ]; do
         current=$(local_sentinel_primary)
         if [ -n "$current" ] && [ "$current" != "$SELF" ]; then
             return 0
         fi
         sleep 1
-        n=$((n + 1))
     done
     return 1
 }

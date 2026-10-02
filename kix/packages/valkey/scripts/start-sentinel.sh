@@ -2,11 +2,14 @@
 # Writes sentinel.conf into the writable /sentinel volume (Sentinel rewrites
 # its own config as state changes) and starts Sentinel on it.
 #
-# Sentinel's default user may only discover the primary, so a client that
-# reaches port 26379 without the password cannot reconfigure it. The
-# sentinel-admin user, with the instance password, runs every command; the
-# Sentinels use it with each other and the preStop hook uses it to fail
-# over.
+# Sentinel's default user may read Sentinel's state (the primary, its
+# replicas, and the other Sentinels) and nothing else, so a client that
+# reaches port 26379 without the password can discover the primary but
+# cannot reconfigure Sentinel. Client libraries ask in different ways:
+# redis-py lists every primary with SENTINEL MASTERS, others ask for one
+# address. The sentinel-admin user, with the instance password, runs every
+# command; the Sentinels use it with each other and the preStop hook uses
+# it to fail over.
 set -eu
 . /opt/valkey/lib.sh
 
@@ -32,7 +35,7 @@ umask 077
     echo "sentinel announce-ip $SELF"
     echo "sentinel announce-port $SENTINEL_PORT"
     echo "sentinel myid $myid"
-    echo "user default on nopass allchannels -@all +ping +auth +hello +client|setname +client|getname +client|setinfo +role +info +subscribe +psubscribe +unsubscribe +punsubscribe +sentinel|get-primary-addr-by-name +sentinel|get-master-addr-by-name +sentinel|sentinels +sentinel|replicas +sentinel|slaves"
+    echo "user default on nopass allchannels -@all +ping +auth +hello +client|setname +client|getname +client|setinfo +role +info +subscribe +psubscribe +unsubscribe +punsubscribe +sentinel|get-primary-addr-by-name +sentinel|get-master-addr-by-name +sentinel|primaries +sentinel|masters +sentinel|primary +sentinel|master +sentinel|sentinels +sentinel|replicas +sentinel|slaves"
     echo "user sentinel-admin on #$password_hash ~* &* +@all"
     echo "sentinel sentinel-user sentinel-admin"
     printf 'sentinel sentinel-pass %s\n' "$password"

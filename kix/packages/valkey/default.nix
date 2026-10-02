@@ -1,49 +1,18 @@
-# valkey: Valkey, a Redis-compatible data store, on the official image.
+# valkey: Valkey, a Redis-compatible data store, as one StatefulSet on the
+# official image. Below availability level "node" it runs one standalone
+# pod; from "node" up, three pods, each with a Sentinel sidecar, fail over
+# automatically. Pod 0 is the primary on a first start and after every pod
+# has stopped, because Sentinel state lives in an emptyDir.
 #
-# One StatefulSet in both topologies. Below availability level "node" it
-# runs one standalone pod. From "node" up `sentinel.enabled` defaults on:
-# three pods, each with a Sentinel sidecar, one primary and two replicas,
-# and automatic failover. Pod 0 is the primary on a first start and after
-# every pod has stopped, because Sentinel state lives in an emptyDir.
-# Scaling down leaves the removed replicas in Sentinel's state until
-# `SENTINEL RESET`.
+# Required dependency `valkeyPassword`: a `secret` or `secret-ref` in this
+# namespace, aliased `valkeyPassword`, with key `password`. Auth is always
+# on.
 #
-# Required dependency: `valkeyPassword`, a `secret` or `secret-ref` in this
-# namespace with key `password`. Auth is always on.
-#
-#   instances.cache.valkey-password = {
-#     package = packages.secret;
-#     aliases = [ "valkeyPassword" ];
-#     config = { keys = [ "password" ]; source = ./secrets/valkey.yaml; };
-#   };
-#   instances.cache.valkey.package = packages.valkey;
-#
-# DI deps:
-#   valkeyPassword (required)  requirepass, primaryauth, Sentinel's admin
-#                              user; exported as `out.authSecret`
-#   storageClasses (optional)  the volume's class when
-#                              `storage.storageClassName` is null; with
-#                              neither, the cluster default
-#   prometheus (optional)      exporter sidecar, metrics Service,
-#                              ServiceMonitor and alerts, with
-#                              `metrics.enabled`
-#
-# out: `name`, `fqdn` and `port` of the Service that selects every pod;
-# with Sentinel also `sentinelPort` and `primarySet`. `authSecret` and
-# `authPasswordKey` give the password: read it as
-# `valkey.out.authSecret.out.keyRef valkey.out.authPasswordKey`.
-#
-# Consumers run in valkey's namespace, since Kubernetes resolves a
-# `secretKeyRef` only in the pod's own namespace (`meta.scope`). With
-# Sentinel on, the Service also reaches replicas: a client that writes asks
-# Sentinel (`out.sentinelPort`, `out.primarySet`) for the primary and sends
-# Sentinel no AUTH, since Sentinel's default user takes no password.
-#
-# Escape hatches: `settings` (valkey.conf directives),
-# `sentinel.primarySettings`, the instance's `partsOverlays` (placement,
-# priorityClassName) and resource-level `extra`.
-#
-# root = the Service `<instance>`.
+# out: `name`, `fqdn`, `port`, and the password as `authSecret` and
+# `authPasswordKey`; with Sentinel also `sentinelPort` and `primarySet`.
+# Consumers run in this namespace (`meta.scope`). With Sentinel the Service
+# also reaches replicas, so a client that writes asks Sentinel for the
+# primary, without AUTH.
 
 {
   scope,
@@ -66,69 +35,8 @@ let
   # The name Sentinel monitors the primary under, published as
   # `out.primarySet`.
   primarySet = "primary";
-  # Literal, because the alerts select the series by it.
-  metricsServiceName = "${name}-metrics";
 
-  # Directives the package writes, with the reason shown when `settings`
-  # sets one.
-  reservedSettings = {
-    port = "the Services and probes use port ${toString ports.valkey}";
-    requirepass = "the password comes from the valkeyPassword dependency";
-    primaryauth = "the password comes from the valkeyPassword dependency";
-    masterauth = "the password comes from the valkeyPassword dependency";
-    replicaof = "the start script points replicas at the primary Sentinel reports";
-    slaveof = "the start script points replicas at the primary Sentinel reports";
-    replica-announce-ip = "the start script announces the pod's stable DNS name and port";
-    replica-announce-port = "the start script announces the pod's stable DNS name and port";
-    dir = "the data volume is mounted at /data";
-    include = "it would read a file outside the configuration the package renders";
-    daemonize = "the container's process must stay in the foreground";
-    user = "it bypasses the password from the valkeyPassword dependency";
-    aclfile = "it bypasses the password from the valkeyPassword dependency";
-  };
-  reservedPrimarySettings = {
-    monitor = "the start script monitors the primary it finds";
-    auth-pass = "the password comes from the valkeyPassword dependency";
-    auth-user = "Sentinel authenticates as the default user with the valkeyPassword password";
-    known-replica = "Sentinel discovers replicas itself";
-    known-sentinel = "Sentinel discovers its peers itself";
-    config-epoch = "Sentinel keeps it in its own state";
-    leader-epoch = "Sentinel keeps it in its own state";
-  };
-
-  # Refusals for one map of directives, one line each.
-  refusals =
-    option: reserved: settings:
-    builtins.concatMap (
-      key:
-      let
-        lower = lib.toLower key;
-      in
-      if reserved ? ${lower} then
-        [ "${who}: ${option}.${key} is set by the package: ${reserved.${lower}}. Remove it." ]
-      else if lower != key then
-        [
-          "${who}: ${option}.${key} is not lower case. Valkey matches directive names case-insensitively, so write it as ${option}.${lower}."
-        ]
-      else
-        [ ]
-    ) (builtins.attrNames settings);
-
-  # One config line per value: a bool as yes/no, a list as one line per
-  # element.
-  renderDirective =
-    prefix: value:
-    if builtins.isBool value then
-      [ "${prefix} ${if value then "yes" else "no"}" ]
-    else if builtins.isList value then
-      map (v: "${prefix} ${v}") value
-    else
-      [ "${prefix} ${toString value}" ];
-
-  renderLines = lines: lib.concatStringsSep "\n" lines + "\n";
-
-  # Built-ins first, then the instance's map; null drops a key.
-  overlay = builtIns: settings: lib.filterAttrs (_: v: v != null) (builtIns // settings);
+  conf = import ./conf.nix { inherit lib kix; };
 
   hardening = {
     allowPrivilegeEscalation = false;
@@ -172,7 +80,7 @@ in
       # must still reach the quorum.
       {
         assertion = !config.sentinel.enabled || config.replicas >= 3;
-        message = "replicas is ${toString config.replicas} with Sentinel on; a failover needs a quorum of Sentinels after the primary's pod is lost, which takes at least 3 pods. Set replicas = 3 or more.";
+        message = "replicas is ${toString config.replicas} with Sentinel on; a failover needs a quorum of Sentinels after the primary's pod is lost, which takes at least 3 pods. Set replicas = 3 or more, or sentinel.enabled = false for one standalone pod.";
       }
       {
         assertion = !config.sentinel.enabled || config.sentinel.quorum <= config.replicas - 1;
@@ -191,7 +99,7 @@ in
     replicas = lib.mkOption {
       type = lib.types.ints.positive;
       defaultText = lib.literalMD "3 with Sentinel, else 1";
-      description = "Pods of the StatefulSet. Standalone Valkey runs one; with Sentinel, one is the primary and the others replicate it.";
+      description = "Pods of the StatefulSet. Standalone Valkey runs one; with Sentinel, one is the primary and the others replicate it. After a scale-down, Sentinel lists the removed replicas until `SENTINEL RESET primary` runs on each Sentinel.";
     };
 
     sentinel = {
@@ -211,7 +119,7 @@ in
           lib.types.nullOr (
             lib.types.oneOf [
               lib.types.int
-              lib.types.str
+              conf.lineStr
             ]
           )
         );
@@ -223,7 +131,8 @@ in
           Sentinel settings for the monitored primary, rendered as
           `sentinel <key> primary <value>`. They apply over the built-ins
           `down-after-milliseconds = 3000`, `failover-timeout = 10000`, and
-          `parallel-syncs = 1`; null drops one. Keys are lower case.
+          `parallel-syncs = 1`; null drops one. Keys are lower case, and
+          values have no line breaks.
         '';
       };
       resources = kix.options.resources {
@@ -242,10 +151,10 @@ in
       type = lib.types.attrsOf (
         lib.types.nullOr (
           lib.types.oneOf [
-            lib.types.str
+            conf.lineStr
             lib.types.int
             lib.types.bool
-            (lib.types.listOf lib.types.str)
+            (lib.types.listOf conf.lineStr)
           ]
         )
       );
@@ -261,9 +170,10 @@ in
         valkey.conf directives over the built-ins `appendonly = "yes"` and
         `maxmemory`, which is 70% of `resources.limits.memory` when that is
         set. A bool renders yes or no, a list one line per element, and null
-        drops a built-in. Keys are lower case. The directives the package
-        owns (port, the password, replication, `dir`, `include`, `user`,
-        `aclfile`, `daemonize`) are refused.
+        drops a built-in. Keys are lower case, and values have no line
+        breaks. The directives the package owns (`port`, `bind`, the
+        password and replication user, replication, `dir`, `include`,
+        `user`, `aclfile`, `daemonize`, `rename-command`) are refused.
       '';
     };
 
@@ -293,6 +203,23 @@ in
     };
 
     metrics = kix.options.monitor // {
+      enabled = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Run the redis_exporter sidecar, a metrics Service, a
+          ServiceMonitor, and alerts when the cluster has a prometheus
+          provider. The sidecar is part of the pod template, so adding the
+          first prometheus provider, or turning this off, restarts every
+          pod; a standalone instance is down while its pod restarts.
+        '';
+      };
+      extraArgs = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "--include-system-metrics" ];
+        description = "Flags appended to the exporter's command line. The package owns the flags for the address, credentials, listen address, and metrics path.";
+      };
       image = kix.options.image {
         repository = "docker.io/oliver006/redis_exporter";
         tag = "v1.93.0";
@@ -348,44 +275,32 @@ in
           else
             null;
 
-        # maxmemory counts the dataset only. Replication and client buffers,
-        # and the pages the AOF rewrite fork copies on write, share the
-        # container's memory limit, so the dataset gets 70% of it. Valkey's
-        # default maxmemory-policy, noeviction, then fails writes when the
-        # dataset is full instead of the kernel killing the pod.
-        memoryLimit = config.resources.limits.memory or null;
-        maxmemory =
-          if memoryLimit == null then
-            null
-          else
-            toString (builtins.floor (kix.parseQuantity "memory" memoryLimit * 7 / 10));
+        maxmemory = conf.maxmemoryFor (config.resources.limits.memory or null);
 
-        valkeyDirectives = overlay (
+        valkeyDirectives = conf.overlay (
           {
             appendonly = "yes";
           }
           // lib.optionalAttrs (maxmemory != null) { inherit maxmemory; }
         ) config.settings;
 
-        primaryDirectives = overlay {
+        primaryDirectives = conf.overlay {
           down-after-milliseconds = 3000;
           failover-timeout = 10000;
           parallel-syncs = 1;
         } config.sentinel.primarySettings;
 
         refused =
-          refusals "settings" reservedSettings config.settings
-          ++ refusals "sentinel.primarySettings" reservedPrimarySettings config.sentinel.primarySettings;
+          conf.refusals who "settings" (conf.reservedSettings ports.valkey) config.settings
+          ++
+            conf.refusals who "sentinel.primarySettings" conf.reservedPrimarySettings
+              config.sentinel.primarySettings;
 
         valkeyConf = lib.throwIf (refused != [ ]) (lib.concatStringsSep "\n" refused) (
-          renderLines (lib.concatLists (lib.mapAttrsToList renderDirective valkeyDirectives))
+          conf.render lib.id valkeyDirectives
         );
 
-        sentinelConf = renderLines (
-          lib.concatLists (
-            lib.mapAttrsToList (k: renderDirective "sentinel ${k} ${primarySet}") primaryDirectives
-          )
-        );
+        sentinelConf = conf.render (k: "sentinel ${k} ${primarySet}") primaryDirectives;
 
         podName.valueFrom.fieldRef.fieldPath = "metadata.name";
 
@@ -493,6 +408,29 @@ in
           ];
         };
 
+        # redis_exporter parses flags with Go's flag package, which takes
+        # both `-flag` and `--flag`.
+        exporterOwned =
+          lib.concatMapAttrs
+            (flag: reason: {
+              "-${flag}" = reason;
+              "--${flag}" = reason;
+            })
+            {
+              "redis.addr" = "the exporter reads the local valkey-server; remove it.";
+              "redis.user" = "the exporter authenticates with the valkeyPassword password; remove it.";
+              "redis.password" = "the exporter authenticates with the valkeyPassword password; remove it.";
+              "redis.password-file" = "the exporter authenticates with the valkeyPassword password; remove it.";
+              "web.listen-address" =
+                "the metrics Service and probes use port ${toString ports.metrics}; remove it.";
+              "web.telemetry-path" = "the ServiceMonitor scrapes /metrics; remove it.";
+            };
+        exporterArgs = kix.guardArgs {
+          inherit who;
+          option = "metrics.extraArgs";
+          owned = exporterOwned;
+        } config.metrics.extraArgs;
+
         metricsContainer = {
           name = "metrics";
           image = kix.image.ref config.metrics.image;
@@ -512,7 +450,8 @@ in
             port = ports.metrics;
           };
           securityContext = hardening;
-        };
+        }
+        // lib.optionalAttrs (exporterArgs != [ ]) { args = exporterArgs; };
 
         valkeyPort = {
           name = "valkey";
@@ -549,8 +488,6 @@ in
         statefulSet =
           {
             inherit name;
-            # Standalone Valkey never runs a second pod.
-            ${if sentinel then null else "availability"}.max = "none";
             spec = {
               headlessService = self.headlessService;
               replicas = if sentinel then config.replicas else 1;
@@ -564,15 +501,17 @@ in
                 metadata.annotations = {
                   "checksum/configMap" = self.configMap.out.identityHash;
                 }
-                # A secret-ref has no hash; reloader's withReloadOn rolls the
-                # pods when that Secret changes.
+                # A secret-ref has no identityHash. To restart the pods when
+                # that Secret changes, the cluster applies reloader's
+                # withReloadOn to this instance.
                 // lib.optionalAttrs (password.out ? identityHash) {
                   "checksum/valkeyPassword" = password.out.identityHash;
                 };
                 spec = {
                   automountServiceAccountToken = false;
-                  # Service links would add VALKEY_PORT and similar variables
-                  # for a Service named `valkey`, clashing with the scripts'.
+                  # The scripts read only the variables the package sets;
+                  # service links would add several for every Service in the
+                  # namespace.
                   enableServiceLinks = false;
                   terminationGracePeriodSeconds = 30;
                   # The image's `valkey` user.
@@ -603,6 +542,8 @@ in
               ];
             };
           }
+          # Standalone Valkey never runs a second pod.
+          // lib.optionalAttrs (!sentinel) { availability.max = "none"; }
           |> kix.withMountsOn "valkey" [
             configMount
             # The runtime valkey.conf, which holds the password.
@@ -680,7 +621,7 @@ in
           if scrape then
             self.statefulSet
             |> kix.service.fromWorkload {
-              name = metricsServiceName;
+              name = "${name}-metrics";
               labels."app.kubernetes.io/component" = "metrics";
               ports = [
                 {
@@ -701,7 +642,8 @@ in
             authSecret = password;
             authPasswordKey = "password";
           };
-          # Nothing else in the instance reads these parts.
+          # Parts the root Service does not reference itself; `requires`
+          # keeps them in the build.
           requires = builtins.filter (r: r != null) [
             self.headlessService
             self.metricsService
@@ -712,11 +654,12 @@ in
       }
     )
 
-    # kix.monitor reads `scope`, `lib` and `prometheus` from the arguments
+    # kix.monitor reads `scope`, `lib`, and `prometheus` from the arguments
     # it is called with, so they are declared here for the build to pass
-    # them.
+    # them. It renders the alerts only when the metrics Service exists.
     (
       {
+        self,
         config,
         scope,
         lib,
@@ -728,7 +671,7 @@ in
         port = "metrics";
         alerts =
           let
-            sel = ''namespace="${scope.namespaceName}", service="${metricsServiceName}"'';
+            sel = ''namespace="${scope.namespaceName}", service="${self.metricsService.out.name}"'';
             instance = "Valkey ${scope.namespaceName}/${name}";
           in
           {
@@ -744,7 +687,7 @@ in
               "for" = "5m";
               severity = "critical";
               summary = "${instance} reports no metrics";
-              description = "No ${instance} exporter has been scraped for 5 minutes; its pods are Pending or gone.";
+              description = "No ${instance} exporter has been scraped for 5 minutes: its pods are Pending or gone, or Prometheus cannot reach them.";
             };
             ValkeyRejectedConnections = {
               expr = "increase(redis_rejected_connections_total{${sel}}[5m]) > 0";
@@ -763,14 +706,16 @@ in
           }
           // lib.optionalAttrs config.sentinel.enabled {
             ValkeyReplicasMissing = {
-              expr = "max(redis_connected_slaves{${sel}}) < ${toString (config.replicas - 1)}";
+              expr = "max by (namespace, service) (redis_connected_slaves{${sel}}) < ${toString (config.replicas - 1)}";
               "for" = "5m";
               severity = "warning";
               summary = "${instance} has fewer replicas than pods";
               description = "The primary has {{ $value }} connected replicas, below the ${toString (config.replicas - 1)} the StatefulSet runs.";
             };
+            # count() over no series is empty, so absent() supplies a zero,
+            # with the namespace and service labels, when no pod is primary.
             ValkeyPrimaryCount = {
-              expr = ''count(redis_instance_info{${sel}, role="master"}) != 1'';
+              expr = ''(count by (namespace, service) (redis_instance_info{${sel}, role="master"}) or absent(redis_instance_info{${sel}, role="master"}) * 0) != 1'';
               "for" = "2m";
               severity = "critical";
               summary = "${instance} does not have exactly one primary";

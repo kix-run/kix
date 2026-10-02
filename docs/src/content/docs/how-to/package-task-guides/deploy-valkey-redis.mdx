@@ -27,7 +27,9 @@ declares the key `password`. The inline password in the example is for local
 development. For a deployed environment, give the secret a SOPS `source` with
 `keys = [ "password" ]`, or point a `secret-ref` instance at a Secret managed
 outside Kix. When the password of a `secret-ref` changes, the pods do not
-restart on their own; use reloader's `withReloadOn` to roll them.
+restart on their own; use reloader's `withReloadOn` to roll them. The password
+is used byte for byte, so a trailing newline in the Secret is part of it, and
+clients must send it too. An empty password stops the pod from starting.
 
 Each pod gets a claim of `storage.size` (8 GiB unless set). The claim's class
 is `storage.storageClassName` when set, else the class of the cluster's
@@ -57,8 +59,14 @@ instances.cache.valkey.config = {
 `maxmemory` defaults to 70% of `resources.limits.memory`, leaving room for
 replication buffers and the copy-on-write pages of an AOF rewrite. With the
 default `noeviction` policy, writes fail once the dataset is full. Directives
-the package sets itself, such as `port`, the password, and replication, are
-refused.
+the package sets itself or relies on, such as `port`, `bind`, the password,
+replication, and `rename-command`, are refused, and so is a value with a line
+break.
+
+When the cluster has a `prometheus` provider, each pod also runs a
+redis_exporter sidecar, and the instance gets a ServiceMonitor and alerts.
+The sidecar is part of the pod template, so adding the first provider, or
+setting `metrics.enabled = false`, restarts every pod.
 
 ## Connect an application
 
@@ -78,9 +86,11 @@ offer a Valkey instance to a consumer in another namespace, and an explicit
 With Sentinel on, the Service also routes to replicas, which refuse writes. A
 client that writes asks Sentinel at `out.fqdn` and `out.sentinelPort` for the
 primary of `out.primarySet`. It sends Sentinel no password: Sentinel's default
-user takes none and may only discover the primary, and an AUTH with a
-password is an error. Only the `sentinel-admin` user, with the instance
-password, can reconfigure Sentinel.
+user takes none, and an AUTH with a password is an error. That user may read
+Sentinel's state, which covers the discovery calls of common clients
+(`SENTINEL GET-PRIMARY-ADDR-BY-NAME`, `SENTINEL MASTERS`, `SENTINEL
+REPLICAS`, `SENTINEL SENTINELS`), and may not change it. Only the
+`sentinel-admin` user, with the instance password, can reconfigure Sentinel.
 
 A package whose client cannot use Sentinel asks for a standalone Valkey and
 refuses one that runs Sentinel anyway, such as an import:
