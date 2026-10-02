@@ -78,8 +78,8 @@ let
     masterauth = "the password comes from the valkeyPassword dependency";
     replicaof = "the start script points replicas at the primary Sentinel reports";
     slaveof = "the start script points replicas at the primary Sentinel reports";
-    replica-announce-ip = "the start script announces the pod's stable DNS name";
-    replica-announce-port = "the start script announces the pod's stable DNS name";
+    replica-announce-ip = "the start script announces the pod's stable DNS name and port";
+    replica-announce-port = "the start script announces the pod's stable DNS name and port";
     dir = "the data volume is mounted at /data";
     include = "it would read a file outside the configuration the package renders";
     daemonize = "the container's process must stay in the foreground";
