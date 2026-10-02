@@ -256,6 +256,31 @@ fn pick_current<T>(
     candidates.into_iter().next().map(|(value, _, _)| value)
 }
 
+/// The current record among `records`, chosen as [`find_active`] chooses:
+/// phase Active or Degraded, the most recently deployed first.
+pub fn current_record<'a>(
+    records: impl IntoIterator<Item = &'a DynamicObject>,
+) -> Option<&'a DynamicObject> {
+    pick_current(
+        records
+            .into_iter()
+            .filter(|r| is_current_phase(read_phase(r)))
+            .map(|r| {
+                (
+                    r,
+                    parsed_deployed_at(r),
+                    r.metadata.name.clone().unwrap_or_default(),
+                )
+            })
+            .collect(),
+    )
+}
+
+/// Whether a record in this phase describes what the cluster runs.
+fn is_current_phase(phase: &str) -> bool {
+    phase == PHASE_ACTIVE || phase == PHASE_DEGRADED
+}
+
 /// Find the current Active activation for a given cluster.
 ///
 /// Returns None if no current activation exists (first deploy).
@@ -278,8 +303,7 @@ pub async fn find_active(
 
     let mut candidates = Vec::new();
     for item in &items {
-        let phase = read_phase(item);
-        if phase != PHASE_ACTIVE && phase != PHASE_DEGRADED {
+        if !is_current_phase(read_phase(item)) {
             continue;
         }
         let name = item.metadata.name.clone().unwrap_or_default();
@@ -1743,6 +1767,32 @@ mod phase_tests {
         );
 
         assert_eq!(pick_current(Vec::<(&str, _, String)>::new()), None);
+    }
+
+    /// Superseded and Failed records stay on the cluster beside the current
+    /// one; the current one is chosen by phase, then by deploy time.
+    #[test]
+    fn current_record_skips_records_that_are_not_current() {
+        let record = |name: &str, phase: &str, deployed_at: &str| DynamicObject {
+            metadata: kube::api::ObjectMeta {
+                name: Some(name.into()),
+                annotations: Some(
+                    [(keys::DEPLOYED_AT.to_string(), deployed_at.to_string())].into(),
+                ),
+                ..Default::default()
+            },
+            types: None,
+            data: json!({"status": {"phase": phase}}),
+        };
+        let records = [
+            record("c-new-failed", PHASE_FAILED, "2026-09-09T12:00:00Z"),
+            record("c-old", PHASE_SUPERSEDED, "2026-09-09T08:00:00Z"),
+            record("c-live", PHASE_ACTIVE, "2026-09-09T10:00:00Z"),
+            record("c-older", PHASE_SUPERSEDED, "2026-09-09T09:00:00Z"),
+        ];
+        let current = current_record(&records).and_then(|r| r.metadata.name.as_deref());
+        assert_eq!(current, Some("c-live"));
+        assert!(current_record(&records[..2]).is_none());
     }
 }
 

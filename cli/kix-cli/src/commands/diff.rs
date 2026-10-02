@@ -5,11 +5,13 @@ use std::path::{Path, PathBuf};
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
+use kix::cluster::activation;
 use kix::cluster::apply::ApplyError;
 use kix::cluster::fetch;
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use kix::eval::build_cluster_activation_with_status;
 use kix::eval::store_graph::{StoreGraph, store_hash};
+use kix::manifest::lifecycle::{self, Lifecycle};
 use kix::manifest::serialize::load_manifests_from_dir;
 use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
@@ -221,7 +223,7 @@ async fn fetch_live_manifests(
     let mut namespaceless = kix::cluster::apply::namespaceless(&discovery, &in_build);
     namespaceless.sort();
     let tenancy = &sweep.tenancy;
-    let (elsewhere, compared): (Vec<_>, Vec<_>) = sweep.managed.into_iter().partition(|obj| {
+    let (elsewhere, mut compared): (Vec<_>, Vec<_>) = sweep.managed.into_iter().partition(|obj| {
         !in_build.contains(&ResourceId::from_value(&fetch::to_manifest_value(obj)))
             && !tenancy.still_deployed_by_others(obj).is_empty()
     });
@@ -231,6 +233,21 @@ async fn fetch_live_manifests(
             elsewhere.len()
         );
     }
+
+    // The cluster keeps Superseded and Failed records beside the current one.
+    // Only the current one says which build the cluster runs.
+    let current = activation::current_record(
+        compared
+            .iter()
+            .filter(|obj| lifecycle::lifecycle_of_live(obj) == Lifecycle::Record),
+    )
+    .cloned();
+    compared.retain(|obj| {
+        lifecycle::lifecycle_of_live(obj) != Lifecycle::Record
+            || current
+                .as_ref()
+                .is_some_and(|c| c.metadata.name == obj.metadata.name)
+    });
 
     // Only the fields kix's server-side apply owns, so server defaults and
     // kix's own bookkeeping never enter the comparison. An object nothing
