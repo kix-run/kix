@@ -20,6 +20,7 @@
   evaluateInstanceConfig,
   evaluateInstance,
   mkImport,
+  checkExtraDeps,
 }:
 
 {
@@ -94,6 +95,13 @@
           ) acc (instCfg.deps or { })
         ) acc nsInsts
       ) null cfg.instances;
+
+      # Runs over inactive instances too, so a misplaced or malformed entry
+      # fails before anything activates the instance.
+      _extraDepsCheck = checkExtraDeps {
+        instances = cfg.instances;
+        inherit mergedInstances;
+      };
 
       allNsNames = lib.unique (builtins.attrNames cfg.namespaces ++ builtins.attrNames mergedInstances);
 
@@ -178,19 +186,14 @@
         ) nsInsts
       ) mergedInstances;
 
-      isImport =
-        nsName: instName:
-        (((mergedInstances.${nsName} or { }).${instName} or { }).package._type or "") == "kix-import";
-
       # Resolve dependencies, roles, and annotation domains against active
-      # managed instances and all platform imports. Inactive optional managed
-      # instances emit no resources and must not satisfy a dependency. An
-      # inactive optional import answers one, and its marker is still not
-      # emitted: only a demand in computeAutoInstances activates it.
-      isResolvable = nsName: instName: isImport nsName instName || isActive nsName instName;
-
+      # instances only. An inactive optional instance emits nothing, and an
+      # inactive optional import emits no marker, so the deploy would never
+      # check the resource a consumer read from it. Only a demand in
+      # computeAutoInstances activates an optional instance or import, and
+      # isActive reads that result, not these resolutions.
       resolvableInstances = lib.mapAttrs (
-        nsName: nsInsts: lib.filterAttrs (instName: _: isResolvable nsName instName) nsInsts
+        nsName: nsInsts: lib.filterAttrs (instName: _: isActive nsName instName) nsInsts
       ) mergedInstances;
 
       staticMeta = lib.mapAttrs (
@@ -211,6 +214,9 @@
               };
               isImport = (instCfg.package._type or "") == "kix-import";
               scope = packageMeta.scope or "cluster";
+              # Null for a declared instance; the requesters that pulled an
+              # auto-instantiated one in, for refusal messages.
+              autoInstantiatedFor = instCfg._autoInstantiatedFor or null;
             };
           }
         ) nsInsts
@@ -227,7 +233,7 @@
       _rolesValidation = builtins.deepSeq rolesIndexAll null;
 
       rolesIndex = lib.mapAttrs (
-        nsName: nsInsts: lib.filterAttrs (instName: _: isResolvable nsName instName) nsInsts
+        nsName: nsInsts: lib.filterAttrs (instName: _: isActive nsName instName) nsInsts
       ) rolesIndexAll;
 
       # Map annotation domains to declarers. Force the index below so duplicate
@@ -299,9 +305,31 @@
         inherit rolesIndex;
       };
 
+      # Every key (instance name or alias) of an inactive optional instance.
+      # evaluateInstance reads it for the implicit `dns` edge: an optional
+      # platform-dns import says the environment runs DNS, so a workload
+      # that finds no active DNS provider gets no edge and no warning.
+      inactiveOptionalKeys = builtins.listToAttrs (
+        builtins.concatMap (
+          nsName:
+          builtins.concatMap (
+            instName:
+            lib.optionals (!(isActive nsName instName)) (
+              map (k: lib.nameValuePair k true) (
+                [ instName ]
+                ++ meta.effectiveAliases {
+                  instanceAliases = mergedInstances.${nsName}.${instName}.aliases or [ ];
+                  packageMeta = peekedMetas.${nsName}.${instName};
+                }
+              )
+            )
+          ) (builtins.attrNames mergedInstances.${nsName})
+        ) (builtins.attrNames mergedInstances)
+      );
+
       clusterCtx = {
         config = cfg;
-        inherit findRoleProvider;
+        inherit findRoleProvider inactiveOptionalKeys;
       };
 
       workloadInterceptors = hooks.collectHooks cfg "workloadInterceptors";
@@ -696,10 +724,35 @@
           );
           shared = lib.filterAttrs (_: os: builtins.length os > 1) owners;
         in
-        lib.mapAttrsToList (id: os: {
-          assertion = false;
-          message = "kix: cluster-scoped ${id} is rendered by ${toString (builtins.length os)} instances: ${builtins.concatStringsSep ", " os}. Kubernetes holds one object under that name, so they would apply it over each other. Keep one of these instances, or give the object a name that differs per instance.";
-        }) shared;
+        lib.mapAttrsToList (
+          id: os:
+          let
+            requestersOf =
+              o:
+              let
+                parts = lib.splitString "/" o;
+              in
+              mergedInstances.${builtins.head parts}.${builtins.elemAt parts 1}._autoInstantiatedFor or null;
+            label =
+              o:
+              let
+                rs = requestersOf o;
+              in
+              if rs == null then o else "${o} (auto-instantiated for ${builtins.concatStringsSep ", " rs})";
+            anyAuto = builtins.any (o: requestersOf o != null) os;
+          in
+          {
+            assertion = false;
+            message =
+              "kix: cluster-scoped ${id} is rendered by ${toString (builtins.length os)} instances: ${builtins.concatStringsSep ", " (map label os)}. Kubernetes holds one object under that name, so they would apply it over each other. "
+              + (
+                if anyAuto then
+                  "Auto-instantiation places a package in each namespace that requires it. Declare the package once, under instances.<namespace>.<name>, and every consumer resolves to it."
+                else
+                  "Keep one of these instances, or give the object a name that differs per instance."
+              );
+          }
+        ) shared;
 
       # Store path -> "<ns>/<instance>" of the active instance whose parts
       # produced it. Namespace objects, cluster hooks and the Activation have
@@ -873,44 +926,46 @@
 
     in
     builtins.seq _refTargetsCheck (
-      builtins.seq _rolesValidation (
-        builtins.seq _roleBindingsCheck (
-          builtins.seq _annotationDomainsCheck (
-            builtins.seq _clusterHookChecksRun (
-              builtins.seq clusterDiagnostics.emitExtraWarnings (
-                builtins.seq clusterDiagnostics.assertionCheck {
-                  _type = "k8s-cluster-v2";
-                  inherit name;
+      builtins.seq _extraDepsCheck (
+        builtins.seq _rolesValidation (
+          builtins.seq _roleBindingsCheck (
+            builtins.seq _annotationDomainsCheck (
+              builtins.seq _clusterHookChecksRun (
+                builtins.seq clusterDiagnostics.emitExtraWarnings (
+                  builtins.seq clusterDiagnostics.assertionCheck {
+                    _type = "k8s-cluster-v2";
+                    inherit name;
 
-                  inherit clusterInstances;
-                  instances = clusterInstances;
+                    inherit clusterInstances;
+                    instances = clusterInstances;
 
-                  namespaces = nsResources;
+                    namespaces = nsResources;
 
-                  inherit
-                    activation
-                    packageIndex
-                    info
-                    extraImages
-                    ;
+                    inherit
+                      activation
+                      packageIndex
+                      info
+                      extraImages
+                      ;
 
-                  diagnostics = {
-                    warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
-                    inherit (clusterDiagnostics) assertions failedAssertions;
-                  };
-
-                  out = {
-                    maintenance = {
-                      enable = cfg.cluster.maintenance.enable or false;
-                      reason = cfg.cluster.maintenance.reason or null;
-                      until = cfg.cluster.maintenance.until or null;
+                    diagnostics = {
+                      warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
+                      inherit (clusterDiagnostics) assertions failedAssertions;
                     };
-                  };
 
-                  inherit scorecardReport;
+                    out = {
+                      maintenance = {
+                        enable = cfg.cluster.maintenance.enable or false;
+                        reason = cfg.cluster.maintenance.reason or null;
+                        until = cfg.cluster.maintenance.until or null;
+                      };
+                    };
 
-                  rawManifests = rawManifestList;
-                }
+                    inherit scorecardReport;
+
+                    rawManifests = rawManifestList;
+                  }
+                )
               )
             )
           )

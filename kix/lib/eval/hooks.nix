@@ -42,6 +42,7 @@ rec {
           (peekedMetas.${nsName}.${instName}).roles or [ ]
         );
         isImport = (instCfg.package._type or "") == "kix-import";
+        autoInstantiatedFor = instCfg._autoInstantiatedFor or null;
       }) nsInsts
     ) instances;
 
@@ -135,6 +136,7 @@ rec {
               ns = nsName;
               inst = instName;
               inherit (entry) isImport;
+              autoInstantiatedFor = entry.autoInstantiatedFor or null;
             }
           ]
         else
@@ -160,7 +162,17 @@ rec {
       imports = builtins.filter (c: c.isImport) candidates;
       binding = (clusterRoles.${role} or { }).binding or null;
       envProvider = (clusterRoles.${role} or { }).provider or null;
-      fmt = cs: builtins.concatStringsSep ", " (map (c: "${c.ns}/${c.inst}") cs);
+      fmt =
+        cs:
+        builtins.concatStringsSep ", " (
+          map (
+            c:
+            "${c.ns}/${c.inst}"
+            + lib.optionalString (
+              c.autoInstantiatedFor != null
+            ) " (auto-instantiated for ${builtins.concatStringsSep ", " c.autoInstantiatedFor})"
+          ) cs
+        );
     in
     builtins.seq _known (
       if managed != [ ] && binding == "exclusive" then

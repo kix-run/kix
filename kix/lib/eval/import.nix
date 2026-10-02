@@ -199,6 +199,59 @@ rec {
     in
     scope;
 
+  # Checks every declared instance's extraDeps, active or not, without
+  # evaluating any instance: a non-empty list on a managed instance, an
+  # entry that is neither a resource nor a ref, and a ref to the import
+  # itself or to a name that is not an instance. Whether a ref's target is
+  # active is checked when the import's marker is built.
+  checkExtraDeps =
+    { instances, mergedInstances }:
+    let
+      describe =
+        v:
+        if builtins.isAttrs v then
+          "an attribute set with keys ${builtins.concatStringsSep ", " (builtins.attrNames v)}"
+        else
+          builtins.typeOf v;
+
+      checkEntry =
+        who: nsName: instName: entry:
+        if builtins.isAttrs entry && (entry._type or "") == "kix-ref" then
+          let
+            refText = "ref.${entry.namespace}.${entry.instanceName}";
+          in
+          if entry.namespace == nsName && entry.instanceName == instName then
+            throw "${who} names ${refText}, the import itself. An import's marker cannot depend on itself."
+          else if !((mergedInstances.${entry.namespace} or { }) ? ${entry.instanceName}) then
+            throw "${who} names ${refText}, which is not an instance. It names a package in availablePackages that nothing auto-instantiated there; declare it under instances.${entry.namespace}.${entry.instanceName}."
+          else
+            null
+        else if builtins.isAttrs entry && (entry._type or "") == "k8s-resource" then
+          null
+        else
+          throw "${who}: each entry is a resource or a ref.<namespace>.<instance> pointer; got ${describe entry}.";
+
+      checkInstance =
+        nsName: instName: instCfg:
+        let
+          entries = instCfg.extraDeps or [ ];
+          who = "kix: instances.${nsName}.${instName}.extraDeps";
+        in
+        if entries == [ ] then
+          null
+        else if (instCfg.package._type or "") != "kix-import" then
+          throw "${who} is set on a managed instance. Instance-level extraDeps adds dependencies to a kix.mkImport marker only. Put the dependency on the resource that needs it, as `requires` or `extraDeps` in its scope builder call."
+        else
+          builtins.foldl' (acc: e: builtins.seq (checkEntry who nsName instName e) acc) null entries;
+    in
+    lib.foldlAttrs (
+      acc: nsName: nsInsts:
+      lib.foldlAttrs (
+        acc: instName: instCfg:
+        builtins.seq (checkInstance nsName instName instCfg) acc
+      ) acc nsInsts
+    ) null instances;
+
   evaluateImportInstance =
     {
       instanceName,
@@ -464,34 +517,19 @@ rec {
             }
           ) rawPlatformIntents;
 
-      # An instance-level extraDeps entry is a resource or a
-      # `ref.<namespace>.<instance>` pointer, which stands for that instance's
-      # PackageInstance marker (its `root`). mkResource takes dependencies
-      # only from entries with an outPath and ignores anything else, so any
-      # other value fails here. A ref does not activate an optional instance.
+      # checkExtraDeps has refused malformed entries, so an entry here is a
+      # resource or a `ref.<namespace>.<instance>` pointer to another
+      # instance, which stands for that instance's PackageInstance marker
+      # (its `root`). A ref does not activate an optional instance.
       resolveExtraDep =
         entry:
-        if builtins.isAttrs entry && (entry._type or "") == "kix-ref" then
-          let
-            refText = "ref.${entry.namespace}.${entry.instanceName}";
-          in
-          if entry.namespace == namespaceName && entry.instanceName == instanceName then
-            throw "${who}: extraDeps names ${refText}, the import itself. An import's marker cannot depend on itself."
-          else if !((allInstances.${entry.namespace} or { }) ? ${entry.instanceName}) then
-            throw "${who}: extraDeps names ${refText}, which is not an instance. It names a package in availablePackages that nothing auto-instantiated there; declare it under instances.${entry.namespace}.${entry.instanceName}."
-          else if !(isInstanceActive entry.namespace entry.instanceName) then
-            throw "${who}: extraDeps names ${refText}, an optional instance that is not active. Kix renders no marker for it, so the import's marker would wait for a resource that is never deployed. An extraDeps ref does not activate its target. Set optional = false on instances.${entry.namespace}.${entry.instanceName}, or remove the entry."
-          else
+        if (entry._type or "") == "kix-ref" then
+          if isInstanceActive entry.namespace entry.instanceName then
             allInstances.${entry.namespace}.${entry.instanceName}.root
-        else if builtins.isAttrs entry && (entry._type or "") == "k8s-resource" then
-          entry
+          else
+            throw "${who}: extraDeps names ref.${entry.namespace}.${entry.instanceName}, an optional instance that is not active. Kix renders no marker for it, so the import's marker would wait for a resource that is never deployed. An extraDeps ref does not activate its target. Set optional = false on instances.${entry.namespace}.${entry.instanceName}, or remove the entry."
         else
-          throw "${who}: each extraDeps entry is a resource or a ref.<namespace>.<instance> pointer; got ${
-            if builtins.isAttrs entry then
-              "an attribute set with keys ${builtins.concatStringsSep ", " (builtins.attrNames entry)}"
-            else
-              builtins.typeOf entry
-          }.";
+          entry;
 
       instanceExtraDeps = map resolveExtraDep (instCfg.extraDeps or [ ]) ++ materializedIntentPolicies;
 

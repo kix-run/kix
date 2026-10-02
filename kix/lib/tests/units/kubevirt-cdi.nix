@@ -608,9 +608,10 @@ in
       ];
     in
     (
-      got.kubevirt
-      == [ "conflicts with 'kubevirt' (cluster-wide). Conflicting instances: kubevirt2/kubevirt2" ]
-      && got.cdi == [ "conflicts with 'cdi' (cluster-wide). Conflicting instances: cdi2/cdi2" ]
+      got.kubevirt == [
+        "kubevirt/kubevirt conflicts with 'kubevirt' (cluster-wide). Conflicting instances: kubevirt2/kubevirt2"
+      ]
+      && got.cdi == [ "cdi/cdi conflicts with 'cdi' (cluster-wide). Conflicting instances: cdi2/cdi2" ]
       && evalFails kv2
       && evalFails cdi2
     )

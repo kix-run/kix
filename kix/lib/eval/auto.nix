@@ -101,10 +101,13 @@ rec {
       shelfByNs
     ];
 
-  # Instances pulled from availablePackages to satisfy demands. Only a
-  # required dependency places a demand. An optional dependency resolves
-  # against existing instances and imports, and is null otherwise; it never
-  # pulls a shelf package.
+  # Instances pulled from availablePackages to satisfy demands, and the
+  # optional instances the demands activate. Only a required dependency
+  # places a demand. An optional dependency resolves against active
+  # instances and is null otherwise; it never pulls a shelf package or
+  # activates an optional instance. A shelf package that runs once per
+  # cluster (onePerClusterReason) and would be placed in more than one
+  # namespace is refused.
   computeAutoInstances =
     {
       explicitInstances,
@@ -207,52 +210,44 @@ rec {
       # Key to every optional instance that answers it; pickOptional chooses.
       optionalByKey = builtins.zipAttrsWith (_: opts: opts) optionalByKeyList;
 
-      # A shelf package that runs once per cluster: its meta.conflictsWith
-      # lists `cluster:<key>` for a key it answers, or it claims a role,
-      # which hooks.checkRoleBindings allows one managed provider of. A
-      # package with meta.scope = "namespace" is excluded, because a
-      # requester in another namespace cannot resolve to it.
-      onePerCluster =
+      # Why a shelf package runs once per cluster, or null: its
+      # meta.conflictsWith lists `cluster:<key>` for a key it answers, or it
+      # claims a role, which hooks.findRoleProvider allows one managed
+      # provider of. A package with meta.scope = "namespace" is excluded,
+      # because a requester in another namespace cannot resolve to it.
+      onePerClusterReason =
         name:
         let
           packageMeta = meta.peekPackageMeta {
             package = normalizedAvail.${name}.package;
             inherit kixlib;
           };
+          conflictKeys = builtins.filter (
+            k: builtins.elem "cluster:${k}" (packageMeta.conflictsWith or [ ])
+          ) (shelfKeys name);
+          quoted = xs: builtins.concatStringsSep ", " (map builtins.toJSON xs);
         in
-        (packageMeta.scope or "cluster") != "namespace"
-        && (
-          (packageMeta.roles or [ ]) != [ ]
-          || builtins.any (k: builtins.elem "cluster:${k}" (packageMeta.conflictsWith or [ ])) (
-            shelfKeys name
-          )
-        );
+        if (packageMeta.scope or "cluster") == "namespace" then
+          null
+        else if conflictKeys != [ ] then
+          "meta.conflictsWith ${quoted (map (k: "cluster:${k}") conflictKeys)}"
+        else if (packageMeta.roles or [ ]) != [ ] then
+          "meta.roles ${quoted packageMeta.roles}"
+        else
+          null;
 
-      # The demand key, which genericClosure deduplicates on. A demand is
-      # keyed by its requesting namespace, so each namespace gets its own
-      # copy of a shelf package, except for a role-named dependency and a
-      # dependency that one onePerCluster shelf package answers: those are
-      # keyed cluster-wide, so the first demand places the instance and a
-      # requester in another namespace resolves to it in phase 1. A key with
-      # several shelf claimants keeps the namespace key; pickShelf refuses
-      # it. `requester` (`<ns>/<inst>`) names the first demand for the
-      # refusal messages and does not take part in deduplication.
-      mkItem =
-        depName: requesterNs: requester:
-        let
-          claimants = availableByKey.${depName} or [ ];
-          shelf = if builtins.length claimants == 1 then builtins.head claimants else null;
-        in
-        {
-          key =
-            if builtins.elem depName roles.roleNames then
-              "role:${depName}"
-            else if shelf != null && onePerCluster shelf then
-              "cluster:${shelf}"
-            else
-              "${depName}@${requesterNs}";
-          inherit depName requesterNs requester;
-        };
+      # The demand key, which genericClosure deduplicates on. A role-named
+      # dependency is keyed by the role, so consumers in several namespaces
+      # share one provider. Any other demand is keyed by its requesting
+      # namespace, so it activates that namespace's optional instance or
+      # places a shelf package there. `requester` (`<ns>/<inst>`) names the
+      # first demand for the refusal messages and does not take part in
+      # deduplication.
+      mkItem = depName: requesterNs: requester: {
+        key =
+          if builtins.elem depName roles.roleNames then "role:${depName}" else "${depName}@${requesterNs}";
+        inherit depName requesterNs requester;
+      };
 
       # The demands an instance places on optional instances and the shelf.
       # A dependency answered by a mandatory instance places none. One wired
@@ -413,6 +408,7 @@ rec {
           [
             {
               inherit ns;
+              inherit (item) depName requester;
               instName = canonicalName;
               instCfg = {
                 package = avPkg.package;
@@ -436,6 +432,15 @@ rec {
           [ ]
       ) closure;
 
+      placementsByName = builtins.groupBy (p: p.instName) autoInstanceList;
+
+      # Every requester of the instance at `<ns>/<inst>`, for the refusals
+      # that name an auto-instantiated instance (meta.nix conflictsWith,
+      # hooks.findRoleProvider, sharedClusterObjectAssertions).
+      requestersOf = builtins.mapAttrs (_: ps: lib.unique (map (p: p.requester) ps)) (
+        builtins.groupBy (p: "${p.ns}/${p.instName}") autoInstanceList
+      );
+
       autoInstances = builtins.foldl' (
         acc: item:
         let
@@ -444,9 +449,52 @@ rec {
         acc
         // {
           ${item.ns} =
-            existing // (if existing ? ${item.instName} then { } else { ${item.instName} = item.instCfg; });
+            existing
+            // (
+              if existing ? ${item.instName} then
+                { }
+              else
+                {
+                  ${item.instName} = item.instCfg // {
+                    _autoInstantiatedFor = requestersOf."${item.ns}/${item.instName}";
+                  };
+                }
+            );
         }
       ) { } autoInstanceList;
+
+      labelRequester =
+        r:
+        let
+          parts = lib.splitString "/" r;
+          declared = (explicitInstances.${builtins.head parts} or { }) ? ${builtins.elemAt parts 1};
+        in
+        if declared then r else "${r} (auto-instantiated)";
+
+      # A shelf package that runs once per cluster and that the closure
+      # places in more than one namespace. A fixed availablePackages
+      # namespace or autoNamespace places every copy in one namespace, so
+      # only a package that floats to its requesters can spread.
+      spreadRefusals = builtins.concatMap (
+        name:
+        let
+          ps = placementsByName.${name};
+          namespaces = lib.unique (map (p: p.ns) ps);
+          reason = onePerClusterReason name;
+        in
+        lib.optional (builtins.length namespaces > 1 && reason != null) (
+          builtins.concatStringsSep "\n" (
+            [
+              "kix: ${name} runs once per cluster (${reason}), but auto-instantiation would place it in ${toString (builtins.length namespaces)} namespaces:"
+            ]
+            ++ map (p: "  ${p.ns}/${name}, for dependency '${p.depName}' of ${labelRequester p.requester}") ps
+            ++ [
+              "Declare it once, and every consumer resolves to it:"
+              "  instances.<namespace>.${name}.package = packages.${name};"
+            ]
+          )
+        )
+      ) (builtins.attrNames placementsByName);
 
       traceMsg =
         let
@@ -468,7 +516,10 @@ rec {
             ""
         );
     in
-    (if traceMsg != "" then builtins.trace "[kix] ${traceMsg}" else lib.id) {
-      inherit autoInstances activatedOptionals;
-    };
+    if spreadRefusals != [ ] then
+      throw (builtins.concatStringsSep "\n" spreadRefusals)
+    else
+      (if traceMsg != "" then builtins.trace "[kix] ${traceMsg}" else lib.id) {
+        inherit autoInstances activatedOptionals;
+      };
 }

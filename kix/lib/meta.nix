@@ -220,10 +220,21 @@ rec {
             else
               builtins.filter (c: c.namespace == namespaceName && !(isSelf c)) candidates;
           scope = if isClusterWide then "(cluster-wide)" else "in namespace '${namespaceName}'";
-          instances = builtins.concatStringsSep ", " (map (c: "${c.namespace}/${c.instName}") matching);
+          # A null autoInstantiatedFor marks a declared instance.
+          isAuto = c: (c.meta.autoInstantiatedFor or null) != null;
+          label =
+            c:
+            "${c.namespace}/${c.instName}"
+            + lib.optionalString (isAuto c) " (auto-instantiated for ${builtins.concatStringsSep ", " c.meta.autoInstantiatedFor})";
+          instances = builtins.concatStringsSep ", " (map label matching);
+          autoAdvice = lib.optionalString (builtins.any isAuto matching) (
+            ". An auto-instantiated instance is created for a required dependency that no declared instance answers. "
+            + "Make ${namespaceName}/${instanceName} answer '${name}' (instances.${namespaceName}.${instanceName}.aliases), "
+            + "or bind the consumers to it with deps.<arg> = ref.${namespaceName}.${instanceName}."
+          );
         in
         lib.optional (matching != [ ]) (
-          fail "conflicts with '${name}' ${scope}. Conflicting instances: ${instances}"
+          fail "${namespaceName}/${instanceName} conflicts with '${name}' ${scope}. Conflicting instances: ${instances}${autoAdvice}"
         )
       ) (packageMeta.conflictsWith or [ ]);
 

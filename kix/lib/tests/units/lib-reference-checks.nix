@@ -1,7 +1,7 @@
 # Tests for CRD reference declarations (scope.mkCRDRef: required version,
 # per-instance markers, the crd-* annotations), served-version checks on
 # custom resources, optional import activation (a demand in eval/auto.nix
-# activates an optional import; a resolution alone does not), the
+# activates an optional import; an inactive one answers no dependency), the
 # cross-resource checks 18-23 in eval/validate.nix,
 # the instance-of edge for chart custom resources, kix.expose's HTTPRoute
 # CRD ref, mkSecret's refusal of keys without a value, and cloudflared's
@@ -713,13 +713,14 @@ in
     )
     || throw "required dependency did not activate the import: ${whoOf ms}, marker ${builtins.toJSON marker}";
 
-  # An optional dependency places no demand. It resolves to the optional
-  # import, which stays inactive and emits no marker.
+  # An optional dependency places no demand, and an inactive optional
+  # import does not answer it: the dependency is null and no marker is
+  # emitted, so the consumer reads nothing the deploy would not check.
   lib-reference-checks-optional-dep-leaves-import-inactive =
     let
       ms = activationCluster [ { instances.appns.consumer.package = xConsumer { optional = true; }; } ];
     in
-    (whoOf ms == "import" && importMarker ms == null)
+    (whoOf ms == "none" && importMarker ms == null)
     || throw "optional dependency: ${whoOf ms}, import marker ${builtins.toJSON (importMarker ms)}";
 
   # Nothing resolves to the import, so it stays inactive.
@@ -847,9 +848,9 @@ in
     || throw "ref wiring: ${whoOf ms}, import marker ${builtins.toJSON (importMarker ms)}";
 
   # The only managed candidate has meta.scope = "namespace" and sits in
-  # another namespace, so resolution skips it and the import answers. The
-  # dependency is optional, so the import stays inactive.
-  lib-reference-checks-foreign-namespaced-candidate-resolves-to-import =
+  # another namespace, so resolution skips it. The import is optional and
+  # the dependency places no demand, so nothing answers it.
+  lib-reference-checks-foreign-namespaced-candidate-skipped =
     let
       ms = activationCluster [
         {
@@ -861,7 +862,7 @@ in
         }
       ];
     in
-    (whoOf ms == "import" && importMarker ms == null)
+    (whoOf ms == "none" && importMarker ms == null)
     || throw "foreign namespace-scoped candidate: ${whoOf ms}, import marker ${builtins.toJSON (importMarker ms)}";
 
   # --- 19. PersistentVolumeClaim references ---

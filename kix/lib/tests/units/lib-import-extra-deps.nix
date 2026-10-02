@@ -1,9 +1,10 @@
 # Tests for instance-level extraDeps. On a kix.mkImport instance a
 # `ref.<namespace>.<instance>` entry becomes an edge to that instance's
 # PackageInstance marker (eval/import.nix resolveExtraDep). A ref to an
-# optional instance that is not active, an entry that is neither a resource
-# nor a ref, a ref to the import itself, and extraDeps on an active managed
-# instance fail evaluation.
+# optional instance that is not active fails evaluation. An entry that is
+# neither a resource nor a ref, a ref to the import itself, and extraDeps on
+# a managed instance fail whether or not the instance is active
+# (eval/import.nix checkExtraDeps).
 
 {
   lib,
@@ -240,9 +241,28 @@ in
     evalFails (withImportExtraDeps (ref: [ ref.legacy.legacy-api ]))
     || throw "an import ordered after its own marker evaluated";
 
+  # The entry check runs on an import nothing activates as well.
+  lib-import-extra-deps-inactive-import-bad-entry-fails =
+    let
+      cluster =
+        entries:
+        mkCluster [
+          baseInstances
+          {
+            instances.legacy.legacy-api = {
+              package = legacyImport;
+              optional = true;
+              extraDeps = entries;
+            };
+          }
+        ];
+    in
+    (evaluates (cluster [ ]) && evalFails (cluster [ "oops" ]))
+    || throw "a malformed extraDeps entry on an inactive import evaluated";
+
   # A managed instance's marker already follows its resources; the option
-  # would be ignored there, so it fails. The same cluster without extraDeps
-  # is the control.
+  # would be ignored there, so it fails, whether the instance is active or
+  # not. The same clusters without extraDeps are the control.
   lib-import-extra-deps-on-managed-instance-fails =
     let
       cluster =
@@ -262,6 +282,15 @@ in
         ];
       withExtraDeps = ref: { extraDeps = [ ref.apps.contract ]; };
     in
-    (evaluates (cluster (_: { })) && evalFails (cluster withExtraDeps))
+    (
+      evaluates (cluster (_: { }))
+      && evaluates (
+        cluster (_: {
+          optional = true;
+        })
+      )
+      && evalFails (cluster withExtraDeps)
+      && evalFails (cluster (ref: withExtraDeps ref // { optional = true; }))
+    )
     || throw "extraDeps on a managed instance evaluated";
 }

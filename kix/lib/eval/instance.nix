@@ -106,8 +106,10 @@ in
         };
         # Missing DNS prevents Kix from ordering workloads after a DNS provider.
         # This remains a warning until diagnostics support severity levels.
+        # An inactive optional instance answering `dns`, such as a flavour's
+        # platform-dns import, declares DNS without ordering on it.
         _dnsResolutionCheck =
-          if !_dnsResolution.found then
+          if !_dnsResolution.found && !((clusterCtx.inactiveOptionalKeys or { }) ? dns) then
             builtins.trace "[kix] warning: no DNS instance (alias 'dns') was found. Kix will not wait for DNS to be ready before deploying workloads. Add a DNS provider or import if this ordering is required" null
           else
             null;
@@ -273,15 +275,6 @@ in
             _: _: depInfo:
             throw "instance '${instanceName}' (namespace '${namespaceName}') depends on '${depInfo.resolution.instanceName}' (namespace '${depInfo.resolution.namespace}') which declares meta.scope = \"namespace\" and can only be used within its own namespace"
           ) null crossNsDeps;
-
-        # Instance-level extraDeps adds dependencies to a kix.mkImport marker
-        # (eval/import.nix). Nothing reads it for a managed instance, whose
-        # resources take `requires` and `extraDeps` in their own builders.
-        _extraDepsCheck =
-          if (instCfg.extraDeps or [ ]) == [ ] then
-            null
-          else
-            throw "${where}: extraDeps is set on a managed instance. Instance-level extraDeps adds dependencies to a kix.mkImport marker only. Put the dependency on the resource that needs it, as `requires` or `extraDeps` in its scope builder call.";
 
         metaResult = meta.checkMetaStatic {
           inherit
@@ -838,36 +831,34 @@ in
 
       in
       builtins.seq _crossNsCheck (
-        builtins.seq _extraDepsCheck (
-          builtins.seq _dnsResolutionCheck (
-            builtins.seq diagnostics.emitWarnings (
-              builtins.seq diagnostics.emitAssertionWarnings (
-                let
-                  view' = mkPackageView {
-                    inherit
-                      parts
-                      instanceName
-                      namespaceName
-                      packageMeta
-                      packageInstance
-                      evaluatedConfig
-                      ;
-                    rootOut = (rootRes.out or { }) // packageOut;
-                    aliases = instCfg.aliases or [ ];
-                  };
-                in
-                view'
-                // {
-                  _depLinks = directDepLinks;
-                  _hookResources = _scopeInjectedResources ++ processorResources;
-                  _scorecardFindings = scorecardFindings;
-                  _diagnostics = {
-                    warnings = diagnostics.allWarnings;
-                    assertions = diagnostics.allAssertions;
-                    inherit (diagnostics) failedAssertions;
-                  };
-                }
-              )
+        builtins.seq _dnsResolutionCheck (
+          builtins.seq diagnostics.emitWarnings (
+            builtins.seq diagnostics.emitAssertionWarnings (
+              let
+                view' = mkPackageView {
+                  inherit
+                    parts
+                    instanceName
+                    namespaceName
+                    packageMeta
+                    packageInstance
+                    evaluatedConfig
+                    ;
+                  rootOut = (rootRes.out or { }) // packageOut;
+                  aliases = instCfg.aliases or [ ];
+                };
+              in
+              view'
+              // {
+                _depLinks = directDepLinks;
+                _hookResources = _scopeInjectedResources ++ processorResources;
+                _scorecardFindings = scorecardFindings;
+                _diagnostics = {
+                  warnings = diagnostics.allWarnings;
+                  assertions = diagnostics.allAssertions;
+                  inherit (diagnostics) failedAssertions;
+                };
+              }
             )
           )
         )

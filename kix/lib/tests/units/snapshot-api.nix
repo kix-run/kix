@@ -322,8 +322,9 @@ in
 
   # A required dependency activates an optional import with crds, which
   # then emits its markers; without the consumer it stays inactive and emits
-  # none. An optional dependency places no demand, so the import stays
-  # inactive and the consumer's custom resources fail the CRD check.
+  # none. An optional dependency places no demand, and the inactive import
+  # does not answer it, so the consumer gets null and builds no custom
+  # resources.
   snapshot-api-optional-import-activates =
     let
       clusterOf =
@@ -338,16 +339,20 @@ in
         })
       );
       withoutConsumer = manifests (clusterOf null);
-      optionalConsumer = clusterOf (snapshotConsumer {
-        optional = true;
-      });
+      optionalConsumer = manifests (
+        clusterOf (snapshotConsumer {
+          optional = true;
+        })
+      );
     in
     (
       hasMarker classMarkerName withConsumer
       && hasMarker snapshotMarkerName withConsumer
       && byName "fast" (ofKind "VolumeSnapshotClass" withConsumer) != null
       && !(hasMarker classMarkerName withoutConsumer)
-      && !(builtins.tryEval (builtins.deepSeq (manifests optionalConsumer) true)).success
+      && !(hasMarker classMarkerName optionalConsumer)
+      && byName "snapshot-consumer" (ofKind "ConfigMap" optionalConsumer) != null
+      && ofKind "VolumeSnapshotClass" optionalConsumer == [ ]
     )
     || throw "optional import activation: markers with consumer ${
       builtins.toJSON (map (m: m.metadata.name) (markersOf withConsumer))
