@@ -382,9 +382,10 @@ in
       );
 
       # The pod selectors of the isolating policies that apply in a
-      # namespace, and the labels they are matched against. A cluster-wide
-      # policy names the namespace with Cilium's
-      # `k8s:io.kubernetes.pod.namespace` label, if at all.
+      # namespace. A cluster-wide policy names the namespace with Cilium's
+      # `k8s:io.kubernetes.pod.namespace` label, if at all, so
+      # `withNamespace` adds that label to the pod labels a selector is
+      # matched against.
       isolatingSelectorsIn =
         namespace:
         builtins.concatMap (
