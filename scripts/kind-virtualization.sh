@@ -43,11 +43,18 @@ need kind; need kubectl; need nix; need docker; need jq
 deploy_pid=""
 monitor_pids=()
 # The drop watchers run `kubectl exec` inside subshells; killing a subshell
-# leaves its kubectl running, so they are matched by command line.
+# leaves its kubectl running, so they are matched by command line. A watcher
+# exits once its stream closes and it has written the lines still buffered,
+# which takes one `cilium-dbg identity get` per identity; the checks read the
+# logs after that, or after 60 seconds.
 stop_watchers() {
-  for pid in "${monitor_pids[@]}"; do kill "$pid" 2>/dev/null || true; done
-  monitor_pids=()
   pkill -f -- "--context $CTX -n kube-system exec .* cilium-dbg monitor" 2>/dev/null || true
+  local deadline=$((SECONDS + 60))
+  for pid in "${monitor_pids[@]}"; do
+    while kill -0 "$pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do sleep 1; done
+    kill "$pid" 2>/dev/null || true
+  done
+  monitor_pids=()
 }
 # The cluster is deleted on every exit, failed or not, unless --keep.
 cleanup() {
@@ -89,11 +96,13 @@ $NIX run .#kix -- deploy virtualization --flake ./clusters --context "$CTX" -y -
 deploy_pid=$!
 echo "deploy log: $OUT/deploy-1.log"
 
-# The namespace of a numeric Cilium identity, or nothing.
+# The namespace of a numeric Cilium identity, or nothing. A virt-launcher
+# pod's identity gets the suffix /virt-launcher: its traffic is the guest's.
 namespace_of() {
   { k -n kube-system exec "$1" -c cilium-agent -- cilium-dbg identity get "$2" -o json 2>/dev/null |
-    jq -r '(if type == "array" then .[0] else . end) | .labels[]?
-      | select(startswith("k8s:io.kubernetes.pod.namespace=")) | sub("^[^=]*="; "")'; } || true
+    jq -r '(if type == "array" then .[0] else . end) | .labels // [] |
+      (map(select(startswith("k8s:io.kubernetes.pod.namespace=")) | sub("^[^=]*="; "")) | join(""))
+      + (if index("k8s:kubevirt.io=virt-launcher") then "/virt-launcher" else "" end)'; } || true
 }
 
 # Follows one agent's drops from the moment the agent answers, which is
@@ -205,9 +214,15 @@ fi
 
 stop_watchers
 for log in "$OUT"/drops-*.log; do
-  check "drop monitor ran: $log" grep -q 'Listening for events' "$log"
+  # The monitor of Cilium 1.19 starts with "Press Ctrl-C to quit" and does not
+  # print "Listening for events".
+  check "drop monitor ran: $log" grep -q -e 'Listening for events' -e 'Press Ctrl-C to quit' "$log"
   echo "      $(grep -c 'Policy denied' "$log" || true) policy drops in $log"
 done
+# A guest's own traffic, such as cirros asking 169.254.169.254 for metadata,
+# meets vm-demo's default-deny; it is counted but does not fail the run.
+guest_drops=$(cat "$OUT"/drops-*.log | grep 'Policy denied' | grep -c '/virt-launcher' || true)
+echo "      $guest_drops policy drops of virtual machine guest traffic"
 fixture_drops=$(cat "$OUT"/drops-*.log | grep 'Policy denied' | grep -E '\|namespaces:.* (kubevirt|cdi|vm-demo)( |$)' || true)
 if [ -z "$fixture_drops" ]; then
   echo "ok:   no policy drops for kubevirt, cdi, or vm-demo pods"
