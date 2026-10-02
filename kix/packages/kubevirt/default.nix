@@ -1,13 +1,77 @@
-# KubeVirt package.
+# kubevirt: KubeVirt, which runs virtual machines as pods.
 #
-# Deploys the virt-operator which manages KubeVirt components (virt-api,
-# virt-controller, virt-handler) via the KubeVirt custom resource.
+# The package renders virt-operator, its roles (rbac/*.json, vendored from
+# upstream's operator bundle), the KubeVirt custom resource definition, the
+# PriorityClass `kubevirt-cluster-critical`, and a KubeVirt resource.
+# virt-operator then runs virt-api and virt-controller in this namespace and
+# virt-handler on every node, and installs the CRDs of its own kinds
+# (VirtualMachine, VirtualMachineInstance, and the rest). The deploy waits
+# for the KubeVirt resource to reach phase Deployed.
 #
-# Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Role,
-#            RoleBinding, PriorityClass, Deployment (virt-operator),
-#            KubeVirt CR, the kubevirts.kubevirt.io CRD.
+# A cluster runs one instance: the KubeVirt CRD, the PriorityClass, the
+# admin ClusterRole `kubevirt.io:operator`, and the CRDs and webhooks
+# virt-operator installs are cluster-wide, so `conflictsWith` refuses a
+# second instance. virt-handler runs privileged, as root, in the host PID
+# namespace, so the namespace is labelled for the privileged Pod Security
+# level.
 #
-# root = Deployment (virt-operator)
+# Nodes need /dev/kvm. On nodes without it, set
+# `extraSpec.configuration.developerConfiguration.useEmulation = true`, or
+# virtual machines stay ErrorUnschedulable and a deploy that builds one
+# waits until it times out.
+#
+# Minimal instance:
+#
+#   instances.kubevirt.kubevirt.package = packages.kubevirt;
+#
+# A consumer takes `kubevirt` as a dependency and builds virtual machines
+# with out.mkVirtualMachine. A disk the VM imports belongs in its
+# `dataVolumeTemplates`, which needs a `cdi` instance in the cluster;
+# clusters/test-virtualization.nix has the full example.
+#
+#   vm = kubevirt.out.mkVirtualMachine scope {
+#     name = "demo";
+#     spec = {
+#       runStrategy = "Always";
+#       dataVolumeTemplates = [ { metadata.name = "demo-disk"; spec = { ... }; } ];
+#       template.spec = { domain = { ... }; volumes = [ ... ]; };
+#     };
+#   };
+#
+# Network policy: with an enforcer, the API server reaches virt-operator's
+# admission webhook on 8444 and virt-api (an aggregated API and admission
+# webhooks) on 8443. virt-api reaches virt-handler's console server on 8186,
+# virt-handler pods reach each other for live migration, and every operand
+# and virt-operator's install strategy Job reach DNS and the API server.
+# virt-launcher pods run in the virtual machine's namespace and are the
+# consumer's to allow (out.operandSelectors.virtLauncher). virt-exportproxy,
+# which runs only with the VMExport feature gate, gets no policy.
+#
+# Monitoring: virt-operator creates its own ServiceMonitor and
+# PrometheusRule when the prometheus-operator CRDs exist, in
+# `monitorNamespace` (this namespace by default). Setting
+# `extraSpec.monitorNamespace` and `extraSpec.monitorAccount` puts them in a
+# Prometheus's namespace, outside the Kix graph.
+#
+# Escape hatches: `extraSpec`, deep-merged into the KubeVirt resource's
+# spec; `partsOverlays`; `scope.mkCR kubevirt.out.crds.VirtualMachine` for a
+# VirtualMachine out.mkVirtualMachine refuses.
+#
+# Exposes:
+#   out.crds.VirtualMachine
+#   out.mkVirtualMachine scope { name; spec; annotations ? { }; requires ? [ ]; ... }
+#       A VirtualMachine the deploy waits on: until printableStatus is
+#       Running for runStrategy "Always" or running = true, and Stopped for
+#       "Halted" or running = false. Any other run strategy is refused,
+#       because the VM's state then depends on a user or the guest. With
+#       `dataVolumeTemplates`, the VM also waits for the DataVolume CRD of
+#       the cluster's `cdi` instance, and is refused without one.
+#   out.operandSelectors.virtLauncher
+#       Pod labels of the virt-launcher pods that run each VM.
+#   out.extraImages
+#       Every image virt-operator runs, digest-pinned.
+#
+# root = the virt-operator Deployment.
 
 {
   scope,
@@ -17,1669 +81,352 @@
 }:
 
 let
+  # The upstream release: meta.version, the default image.tag, and the tag
+  # in crds/sources.txt and rbac/sources.txt (checked below).
+  release = "v1.5.0";
+  sourceUrls =
+    file:
+    builtins.filter (l: l != "" && !lib.hasPrefix "#" l) (
+      lib.splitString "\n" (builtins.readFile file)
+    );
+  vendoredUrls = sourceUrls ./crds/sources.txt ++ sourceUrls ./rbac/sources.txt;
+
+  # "v1.5.0" -> [ "1" "5" ".0" ]; null when the tag is not a version.
+  versionParts = tag: builtins.match "v?([0-9]+)\\.([0-9]+)(\\..*)?" tag;
+  releaseMinor = lib.take 2 (versionParts release);
+  releaseMinorText = "v${lib.concatStringsSep "." releaseMinor}";
+
   name = scope.instanceName;
+  ns = scope.namespaceName;
+  who = "kubevirt ${ns}/${name}";
 
-  # Common label for all kubevirt resources
-  kubevirtLabels = {
-    "kubevirt.io" = "";
+  vendoredRole = file: builtins.fromJSON (builtins.readFile file);
+
+  # Index digests of the release's images. A digest applies while the image
+  # keeps the release tag.
+  operandDigests = {
+    virt-api = "sha256:f9dd496df05456d47815f0b5861c6764b10c23657a48db886d8219acf5b44e86";
+    virt-controller = "sha256:c09a2c9b12a6a8657b02c557d5e169f8fbe3fb4339e64e6ce913ccf6c92714ab";
+    virt-handler = "sha256:70605363b54f4cc982a80dfdabd01462920bb2c64b028ab3b0c368ddb04e6370";
+    virt-launcher = "sha256:d03a08135f821c4dfc73502b6fc1831a9342a2c97b0dcd5a1d865d2e23b05d49";
+    virt-exportproxy = "sha256:1017c0e7097bf309e7a2e8542656f76c3ee1365ff03d01f563dbe108a98153b1";
+    virt-exportserver = "sha256:10d35daa56ec1981bbbcf898f5200909e044b3ae34a3f790ca82fedc906c52d9";
+    libguestfs-tools = "sha256:360ae79853f55195e9dd1571d8903b6d78a4f5612d6a85d42d8d59d852dc12eb";
+    pr-helper = "sha256:924b86dbb9a4e8d05bbd98a3acb79df642c51a19c6f57a557abff98b03db544c";
+    sidecar-shim = "sha256:3741dc9c9619be64313c5d0f0d6bd4f1453871ed0910165e209ef9aaa3f273f6";
   };
 
-  # Labels for operator deployment selector
-  operatorLabels = {
-    "kubevirt.io" = "virt-operator";
-  };
-
-  # Labels used for the operator's pod template
-  podLabels = operatorLabels // {
-    "name" = "virt-operator";
-    "prometheus.kubevirt.io" = "true";
-  };
-
-  metricsProbe = {
-    httpGet = {
-      path = "/metrics";
-      port = 8443;
-      scheme = "HTTPS";
+  # The virt-operator variable each operand image is passed in, and what
+  # runs it.
+  operands = {
+    virt-api = {
+      env = "VIRT_API_IMAGE";
+      what = "virt-api";
     };
-    initialDelaySeconds = 5;
-    periodSeconds = 10;
-    timeoutSeconds = 10;
+    virt-controller = {
+      env = "VIRT_CONTROLLER_IMAGE";
+      what = "virt-controller";
+    };
+    virt-handler = {
+      env = "VIRT_HANDLER_IMAGE";
+      what = "virt-handler on every node";
+    };
+    virt-launcher = {
+      env = "VIRT_LAUNCHER_IMAGE";
+      what = "the pod of each virtual machine";
+    };
+    virt-exportproxy = {
+      env = "VIRT_EXPORTPROXY_IMAGE";
+      what = "virt-exportproxy, with the VMExport feature gate";
+    };
+    virt-exportserver = {
+      env = "VIRT_EXPORTSERVER_IMAGE";
+      what = "a VirtualMachineExport's server pod";
+    };
+    libguestfs-tools = {
+      env = "GS_IMAGE";
+      what = "`virtctl guestfs` pods, on demand";
+    };
+    pr-helper = {
+      env = "PR_HELPER_IMAGE";
+      what = "the persistent reservation helper, with the PersistentReservation feature gate";
+    };
+    sidecar-shim = {
+      env = "SIDECAR_SHIM_IMAGE";
+      what = "hook sidecars, on demand";
+    };
+  };
+
+  # Labels virt-operator puts on the pods it runs
+  # (pkg/virt-operator/resource/generate/components and strategy_job.go at
+  # the release).
+  podLabels = component: { "kubevirt.io" = component; };
+
+  tcp = port: {
+    inherit port;
+    protocol = "TCP";
   };
 in
 {
   meta = {
-    version = "v1.5.0";
-    description = "KubeVirt, for running virtual machines on Kubernetes: the virt-operator and a KubeVirt resource";
+    version = release;
+    description = "KubeVirt, for running virtual machines on Kubernetes: virt-operator and a KubeVirt resource";
     owner = "platform";
-    # virt-handler runs a privileged pod on every node. Upstream labels
-    # its namespace `pod-security.kubernetes.io/enforce: privileged`.
+    defaultAliases = [ "kubevirt" ];
+    # One instance per cluster; see the header.
+    conflictsWith = [ "cluster:kubevirt" ];
+    # virt-operator runs virt-handler on every node, privileged, as root, in
+    # the host PID namespace. Upstream labels its namespace the same way.
     podSecurity = "privileged";
+    # The API server calls virt-operator's admission webhook, which the
+    # operator serves on 8444 behind the Service it creates.
+    network.intents.webhook.ingress = [
+      {
+        from = "apiserver";
+        ports = [ (tcp 8444) ];
+      }
+    ];
   };
+
+  assertions =
+    { config, ... }:
+    [
+      {
+        assertion =
+          versionParts config.image.tag != null && lib.take 2 (versionParts config.image.tag) == releaseMinor;
+        message = "image.tag \"${config.image.tag}\" is not a ${releaseMinorText} release, and the CRD and roles under kix/packages/kubevirt/{crds,rbac} are vendored from ${release}. Remove image.tag or set a ${releaseMinorText} tag. To move to another release, change release in kix/packages/kubevirt/default.nix and the tag in crds/sources.txt and rbac/sources.txt, then run uv run scripts/vendor-crds.py kubevirt.";
+      }
+      {
+        assertion = vendoredUrls != [ ] && lib.all (lib.hasInfix "/${release}/") vendoredUrls;
+        message = "kix/packages/kubevirt/crds/sources.txt or rbac/sources.txt fetches from a tag other than ${release}, the package's release. Set the tag in every URL to ${release} and run uv run scripts/vendor-crds.py kubevirt.";
+      }
+    ]
+    ++ map (n: {
+      assertion = config.operandImages.${n}.pullPolicy == null;
+      message = "operandImages.${n}.pullPolicy = \"${
+        toString config.operandImages.${n}.pullPolicy
+      }\" has no effect: virt-operator gives every operand the KubeVirt resource's imagePullPolicy, which is image.pullPolicy. Remove it.";
+    }) (builtins.attrNames operandDigests);
 
   options = {
     image = kix.options.image {
       repository = "quay.io/kubevirt/virt-operator";
-      tag = "v1.5.0";
+      tag = release;
+      digest = "sha256:1591b45d3f35b857cb13921429b83e8da4e21a35aa54e1c88290baf996c05a2d";
+      description = "Image of virt-operator. Its major.minor must match the vendored CRD and roles. Each operand image defaults to this repository's registry and path with its own name (quay.io/kubevirt/<name>) and to this tag, and every operand uses this image's pullPolicy.";
     };
-    replicaCount = lib.mkOption {
-      type = lib.types.int;
-      # virt-operator holds a leader election lease, so a restart is not
-      # user-visible; from "node" up a standby survives a lost node.
-      default = kix.availability.pick availability {
-        none = 1;
-        pod = 1;
-        node = 2;
-        zone = 2;
+
+    operandImages = lib.mapAttrs (
+      n: digest:
+      kix.options.image {
+        repository = "quay.io/kubevirt/${n}";
+        tag = release;
+        inherit digest;
+        tagText = "config.image.tag";
+        pullPolicy = null;
+        description = "Image virt-operator uses for ${operands.${n}.what} (${operands.${n}.env}). Listed in out.extraImages. Its repository follows image.repository and its tag image.tag; the KubeVirt resource's imagePullPolicy applies, so pullPolicy must stay null.";
+      }
+    ) operandDigests;
+
+    # Requests from kubevirt-operator.yaml at the release, which sets no
+    # limits. virt-operator held up to 160 MiB on kind with KubeVirt
+    # deployed.
+    resources = kix.options.resources {
+      requests = {
+        cpu = "10m";
+        memory = "450Mi";
       };
-      description = ''
-        Number of virt-operator replicas. Defaults from the cluster's
-        availability level (v2_discussions/145).
-      '';
-    };
-    # Requests from kubevirt-operator.yaml (v1.5.0), which sets no
-    # limits. virt-operator held up to 160 MiB on kind with KubeVirt deployed.
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "10m";
-          memory = "450Mi";
-        };
-        limits = {
-          cpu = "1";
-          memory = "1Gi";
-        };
+      limits = {
+        cpu = "1";
+        memory = "1Gi";
       };
     };
-    featureGates = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ "ExperimentalVirtiofsSupport" ];
-    };
-    configuration = lib.mkOption {
+
+    extraSpec = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
-      default = { }; # KubeVirt CR spec.configuration overrides
+      default = { };
+      description = "Fields deep-merged into the KubeVirt resource's spec, such as `configuration.developerConfiguration.featureGates`, `configuration.developerConfiguration.useEmulation` (for nodes without /dev/kvm), `workloads`, or `monitorNamespace` and `monitorAccount`. The package refuses `infra.replicas`, which follows the instance's availability, `imagePullPolicy`, which is image.pullPolicy, and `imageRegistry` and `imageTag`, which image and operandImages set.";
     };
   };
+
+  config =
+    { config, ... }:
+    {
+      operandImages = lib.genAttrs (builtins.attrNames operandDigests) (n: {
+        repository = lib.mkDefault "${dirOf config.image.repository}/${n}";
+        tag = lib.mkDefault config.image.tag;
+      });
+    };
 
   build =
     {
       self,
       config,
-      clusterConfig,
+      cdi ? null,
+      ...
     }:
-    {
+    let
+      pick = kix.availability.pick availability;
+      operandRefs = lib.mapAttrs (_: kix.image.ref) config.operandImages;
 
-      # --- ServiceAccount ---
+      # virt-operator reads the operand tag from the text after
+      # `virt-operator:` in this variable, so `repo:tag@digest` would give
+      # every operand the tag `tag@digest`. With `repo@digest` it takes
+      # KUBEVIRT_VERSION as the tag (pkg/virt-operator/util/config.go), and
+      # the strategy Job runs the value as its image.
+      operatorImage =
+        if kix.image.isPinned config.image then
+          "${config.image.repository}@${config.image.digest}"
+        else
+          "${config.image.repository}:${config.image.tag}";
+
+      # Without infra.replicas, virt-operator runs two virt-controller
+      # replicas and max(2, nodes / 10) virt-api replicas, so the package
+      # sets it only at `none`. virt-operator logs an AdvancedFeatureUse
+      # event when it is set.
+      baseSpec = {
+        monitorNamespace = ns;
+      }
+      // lib.optionalAttrs (availability == "none") { infra.replicas = 1; }
+      // lib.optionalAttrs (config.image.pullPolicy != null) {
+        imagePullPolicy = config.image.pullPolicy;
+      };
+
+      # Policies for the pods virt-operator runs in this namespace. The spec
+      # is read only when an enforcer exists.
+      operandPolicy =
+        suffix: selector:
+        {
+          intents,
+          extra ? _: { },
+        }:
+        kix.operandPolicy {
+          inherit scope;
+          name = "${name}-${suffix}";
+          spec =
+            let
+              netpol = scope.networkPolicyEnforcer.netpol;
+              translated = netpol.translateIntentRules { intents.operand = intents; };
+              more = extra netpol;
+              egress = translated.egressRules ++ more.egress or [ ];
+              ingress = translated.ingressRules ++ more.ingress or [ ];
+            in
+            netpol.mkEndpointSelector selector
+            // lib.optionalAttrs (egress != [ ]) { inherit egress; }
+            // lib.optionalAttrs (ingress != [ ]) { inherit ingress; };
+        };
+      clusterAccess = [
+        { to = "dns"; }
+        { to = "apiserver"; }
+      ];
+      consoleServer = [ (tcp 8186) ];
+
+      mkVirtualMachine =
+        consumerScope: args:
+        let
+          vmName = args.name or "<unnamed>";
+          consumer = "${consumerScope.namespaceName or "?"}/${consumerScope.instanceName or "?"}";
+          what = "VirtualMachine \"${vmName}\" in ${consumer}";
+          spec =
+            args.spec
+              or (throw "${who}: out.mkVirtualMachine: ${what} has no spec. Pass spec with runStrategy and template.");
+          accepted = "out.mkVirtualMachine accepts runStrategy \"Always\" or \"Halted\", or running = true or false";
+          refusal =
+            reason:
+            throw "${who}: ${what} ${reason}. ${accepted}: the deploy waits for those to reach Running or Stopped. With Manual the VM waits for a user to start it, and with RerunOnFailure or Once it waits on the guest, so a deploy would wait until it times out. Build such a VM with scope.mkCR kubevirt.out.crds.VirtualMachine { ... }.";
+          printableStatus =
+            if (spec ? runStrategy) == (spec ? running) then
+              refusal (
+                if spec ? runStrategy then
+                  "sets both runStrategy and running"
+                else
+                  "sets neither runStrategy nor running"
+              )
+            else if spec ? running then
+              if spec.running == true then
+                "Running"
+              else if spec.running == false then
+                "Stopped"
+              else
+                refusal "sets running to ${builtins.toJSON spec.running}"
+            else if spec.runStrategy == "Always" then
+              "Running"
+            else if spec.runStrategy == "Halted" then
+              "Stopped"
+            else
+              refusal "sets runStrategy ${builtins.toJSON spec.runStrategy}";
+          dataVolumeCrd =
+            if (spec.dataVolumeTemplates or [ ]) == [ ] then
+              [ ]
+            else if cdi == null then
+              throw "${who}: ${what} has dataVolumeTemplates, and the cluster has no cdi instance to import them. Add a cdi instance (instances.cdi.cdi.package = packages.cdi)."
+            else
+              [ cdi.out.crds.DataVolume ];
+        in
+        self.crds.virtualMachines.out.mkCR consumerScope (
+          args
+          // {
+            requires = (args.requires or [ ]) ++ dataVolumeCrd;
+            annotations = (args.annotations or { }) // {
+              ${kix.keys.readiness} = builtins.toJSON {
+                path = "/status/printableStatus";
+                equals = printableStatus;
+              };
+            };
+          }
+        );
+    in
+    {
+      # The install strategy Job virt-operator starts runs as
+      # `kubevirt-operator` (pkg/virt-operator/strategy_job.go), and virt-api
+      # trusts that name, so the ServiceAccount keeps it.
       serviceAccount = scope.mkResource {
         apiVersion = "v1";
         kind = "ServiceAccount";
-        name = "${name}-operator";
-        labels = kubevirtLabels;
+        name = "kubevirt-operator";
       };
 
-      # --- ClusterRole ---
-      clusterRole = scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRole";
-        name = "${name}-operator";
-        labels = kubevirtLabels;
-        extra.rules = [
-          # Core: serviceaccounts, services, endpoints, pods/exec
-          {
-            apiGroups = [ "" ];
-            resources = [
-              "serviceaccounts"
-              "services"
-              "endpoints"
-              "pods/exec"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "delete"
-              "patch"
-            ];
-          }
-          # Core: configmaps (patch, delete)
-          {
-            apiGroups = [ "" ];
-            resources = [ "configmaps" ];
-            verbs = [
-              "patch"
-              "delete"
-            ];
-          }
-          # Core: namespaces (get, list, watch, patch)
-          {
-            apiGroups = [ "" ];
-            resources = [ "namespaces" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "patch"
-            ];
-          }
-          # Core: pods (get, list, delete, patch)
-          {
-            apiGroups = [ "" ];
-            resources = [ "pods" ];
-            verbs = [
-              "get"
-              "list"
-              "delete"
-              "patch"
-            ];
-          }
-          # Core: persistentvolumeclaims (get)
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumeclaims" ];
-            verbs = [ "get" ];
-          }
-          # Core: configmaps (get, list, watch)
-          {
-            apiGroups = [ "" ];
-            resources = [ "configmaps" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Core: limitranges
-          {
-            apiGroups = [ "" ];
-            resources = [ "limitranges" ];
-            verbs = [
-              "watch"
-              "list"
-            ];
-          }
-          # Core: namespaces (get, list, watch)
-          {
-            apiGroups = [ "" ];
-            resources = [ "namespaces" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Core: namespaces (get, list, watch, patch)
-          {
-            apiGroups = [ "" ];
-            resources = [ "namespaces" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "patch"
-            ];
-          }
-          # Core: pods, configmaps, endpoints, services (full)
-          {
-            apiGroups = [ "" ];
-            resources = [
-              "pods"
-              "configmaps"
-              "endpoints"
-              "services"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "delete"
-              "update"
-              "create"
-              "patch"
-            ];
-          }
-          # Core: events
-          {
-            apiGroups = [ "" ];
-            resources = [ "events" ];
-            verbs = [
-              "update"
-              "create"
-              "patch"
-            ];
-          }
-          # Core: secrets (create)
-          {
-            apiGroups = [ "" ];
-            resources = [ "secrets" ];
-            verbs = [ "create" ];
-          }
-          # Core: pods/finalizers
-          {
-            apiGroups = [ "" ];
-            resources = [ "pods/finalizers" ];
-            verbs = [ "update" ];
-          }
-          # Core: pods/eviction
-          {
-            apiGroups = [ "" ];
-            resources = [ "pods/eviction" ];
-            verbs = [ "create" ];
-          }
-          # Core: pods/status
-          {
-            apiGroups = [ "" ];
-            resources = [ "pods/status" ];
-            verbs = [ "patch" ];
-          }
-          # Core: nodes
-          {
-            apiGroups = [ "" ];
-            resources = [ "nodes" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-              "patch"
-            ];
-          }
-          # Core: persistentvolumeclaims (full)
-          {
-            apiGroups = [ "" ];
-            resources = [ "persistentvolumeclaims" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "delete"
-              "patch"
-            ];
-          }
-          # Core: namespaces (get)
-          {
-            apiGroups = [ "" ];
-            resources = [ "namespaces" ];
-            verbs = [ "get" ];
-          }
-          # Core: resourcequotas
-          {
-            apiGroups = [ "" ];
-            resources = [ "resourcequotas" ];
-            verbs = [
-              "list"
-              "watch"
-            ];
-          }
-          # Core: nodes (patch, list, watch, get)
-          {
-            apiGroups = [ "" ];
-            resources = [ "nodes" ];
-            verbs = [
-              "patch"
-              "list"
-              "watch"
-              "get"
-            ];
-          }
-          # Core: configmaps (get, list, watch)
-          {
-            apiGroups = [ "" ];
-            resources = [ "configmaps" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Core: events (create, patch)
-          {
-            apiGroups = [ "" ];
-            resources = [ "events" ];
-            verbs = [
-              "create"
-              "patch"
-            ];
-          }
-          # Admission webhooks
-          {
-            apiGroups = [ "admissionregistration.k8s.io" ];
-            resources = [
-              "validatingwebhookconfigurations"
-              "mutatingwebhookconfigurations"
-              "validatingadmissionpolicybindings"
-              "validatingadmissionpolicies"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "delete"
-              "update"
-              "patch"
-            ];
-          }
-          # CRDs (get, list, watch, create, delete, patch)
-          {
-            apiGroups = [ "apiextensions.k8s.io" ];
-            resources = [ "customresourcedefinitions" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "delete"
-              "patch"
-            ];
-          }
-          # CRDs (get, list, watch)
-          {
-            apiGroups = [ "apiextensions.k8s.io" ];
-            resources = [ "customresourcedefinitions" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # CRDs (get, list, watch)
-          {
-            apiGroups = [ "apiextensions.k8s.io" ];
-            resources = [ "customresourcedefinitions" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # CRDs (get, list, watch)
-          {
-            apiGroups = [ "apiextensions.k8s.io" ];
-            resources = [ "customresourcedefinitions" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # API services
-          {
-            apiGroups = [ "apiregistration.k8s.io" ];
-            resources = [ "apiservices" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "delete"
-              "update"
-              "patch"
-            ];
-          }
-          # Apps: controllerrevisions (watch, list, create, delete, patch)
-          {
-            apiGroups = [ "apps" ];
-            resources = [ "controllerrevisions" ];
-            verbs = [
-              "watch"
-              "list"
-              "create"
-              "delete"
-              "patch"
-            ];
-          }
-          # Apps: deployments, daemonsets
-          {
-            apiGroups = [ "apps" ];
-            resources = [
-              "deployments"
-              "daemonsets"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "delete"
-              "patch"
-            ];
-          }
-          # Apps: controllerrevisions (create, list, get)
-          {
-            apiGroups = [ "apps" ];
-            resources = [ "controllerrevisions" ];
-            verbs = [
-              "create"
-              "list"
-              "get"
-            ];
-          }
-          # Apps: daemonsets (list)
-          {
-            apiGroups = [ "apps" ];
-            resources = [ "daemonsets" ];
-            verbs = [ "list" ];
-          }
-          # Apps: controllerrevisions (watch, list, create, delete, get, update)
-          {
-            apiGroups = [ "apps" ];
-            resources = [ "controllerrevisions" ];
-            verbs = [
-              "watch"
-              "list"
-              "create"
-              "delete"
-              "get"
-              "update"
-            ];
-          }
-          # Authentication: tokenreviews
-          {
-            apiGroups = [ "authentication.k8s.io" ];
-            resources = [ "tokenreviews" ];
-            verbs = [ "create" ];
-          }
-          # Authorization: subjectaccessreviews
-          {
-            apiGroups = [ "authorization.k8s.io" ];
-            resources = [ "subjectaccessreviews" ];
-            verbs = [ "create" ];
-          }
-          # Authorization: subjectaccessreviews
-          {
-            apiGroups = [ "authorization.k8s.io" ];
-            resources = [ "subjectaccessreviews" ];
-            verbs = [ "create" ];
-          }
-          # Batch: jobs (get, list, watch, create, delete, patch)
-          {
-            apiGroups = [ "batch" ];
-            resources = [ "jobs" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "delete"
-              "patch"
-            ];
-          }
-          # Batch: jobs (create, get, delete)
-          {
-            apiGroups = [ "batch" ];
-            resources = [ "jobs" ];
-            verbs = [
-              "create"
-              "get"
-              "delete"
-            ];
-          }
-          # CDI: datasources, datavolumes (get, list, watch)
-          {
-            apiGroups = [ "cdi.kubevirt.io" ];
-            resources = [
-              "datasources"
-              "datavolumes"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # CDI: wildcard
-          {
-            apiGroups = [ "cdi.kubevirt.io" ];
-            resources = [ "*" ];
-            verbs = [ "*" ];
-          }
-          # Clone: virtualmachineclones (status, finalizers)
-          {
-            apiGroups = [ "clone.kubevirt.io" ];
-            resources = [
-              "virtualmachineclones"
-              "virtualmachineclones/status"
-              "virtualmachineclones/finalizers"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-              "patch"
-              "delete"
-            ];
-          }
-          # Clone: virtualmachineclones (full + deletecollection)
-          {
-            apiGroups = [ "clone.kubevirt.io" ];
-            resources = [ "virtualmachineclones" ];
-            verbs = [
-              "get"
-              "delete"
-              "create"
-              "update"
-              "patch"
-              "list"
-              "watch"
-              "deletecollection"
-            ];
-          }
-          # Clone: virtualmachineclones (no deletecollection)
-          {
-            apiGroups = [ "clone.kubevirt.io" ];
-            resources = [ "virtualmachineclones" ];
-            verbs = [
-              "get"
-              "delete"
-              "create"
-              "update"
-              "patch"
-              "list"
-              "watch"
-            ];
-          }
-          # Clone: virtualmachineclones (get, list, watch)
-          {
-            apiGroups = [ "clone.kubevirt.io" ];
-            resources = [ "virtualmachineclones" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Export: virtualmachineexports (status, finalizers)
-          {
-            apiGroups = [ "export.kubevirt.io" ];
-            resources = [
-              "virtualmachineexports"
-              "virtualmachineexports/status"
-              "virtualmachineexports/finalizers"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "delete"
-              "patch"
-            ];
-          }
-          # Export: virtualmachineexports (get, list, watch)
-          {
-            apiGroups = [ "export.kubevirt.io" ];
-            resources = [ "virtualmachineexports" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Export: virtualmachineexports (full + deletecollection)
-          {
-            apiGroups = [ "export.kubevirt.io" ];
-            resources = [ "virtualmachineexports" ];
-            verbs = [
-              "get"
-              "delete"
-              "create"
-              "update"
-              "patch"
-              "list"
-              "watch"
-              "deletecollection"
-            ];
-          }
-          # Export: virtualmachineexports (no deletecollection)
-          {
-            apiGroups = [ "export.kubevirt.io" ];
-            resources = [ "virtualmachineexports" ];
-            verbs = [
-              "get"
-              "delete"
-              "create"
-              "update"
-              "patch"
-              "list"
-              "watch"
-            ];
-          }
-          # Export: virtualmachineexports (get, list, watch)
-          {
-            apiGroups = [ "export.kubevirt.io" ];
-            resources = [ "virtualmachineexports" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Instancetype: all types (get, list, watch)
-          {
-            apiGroups = [ "instancetype.kubevirt.io" ];
-            resources = [
-              "virtualmachineinstancetypes"
-              "virtualmachineclusterinstancetypes"
-              "virtualmachinepreferences"
-              "virtualmachineclusterpreferences"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Instancetype: all types (get, list, watch)
-          {
-            apiGroups = [ "instancetype.kubevirt.io" ];
-            resources = [
-              "virtualmachineinstancetypes"
-              "virtualmachineclusterinstancetypes"
-              "virtualmachinepreferences"
-              "virtualmachineclusterpreferences"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Instancetype: all types (full + deletecollection)
-          {
-            apiGroups = [ "instancetype.kubevirt.io" ];
-            resources = [
-              "virtualmachineinstancetypes"
-              "virtualmachineclusterinstancetypes"
-              "virtualmachinepreferences"
-              "virtualmachineclusterpreferences"
-            ];
-            verbs = [
-              "get"
-              "delete"
-              "create"
-              "update"
-              "patch"
-              "list"
-              "watch"
-              "deletecollection"
-            ];
-          }
-          # Instancetype: all types (no deletecollection)
-          {
-            apiGroups = [ "instancetype.kubevirt.io" ];
-            resources = [
-              "virtualmachineinstancetypes"
-              "virtualmachineclusterinstancetypes"
-              "virtualmachinepreferences"
-              "virtualmachineclusterpreferences"
-            ];
-            verbs = [
-              "get"
-              "delete"
-              "create"
-              "update"
-              "patch"
-              "list"
-              "watch"
-            ];
-          }
-          # Instancetype: all types (get, list, watch)
-          {
-            apiGroups = [ "instancetype.kubevirt.io" ];
-            resources = [
-              "virtualmachineinstancetypes"
-              "virtualmachineclusterinstancetypes"
-              "virtualmachinepreferences"
-              "virtualmachineclusterpreferences"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Instancetype: cluster types only (get, list, watch)
-          {
-            apiGroups = [ "instancetype.kubevirt.io" ];
-            resources = [
-              "virtualmachineclusterinstancetypes"
-              "virtualmachineclusterpreferences"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # k8s.cni.cncf.io: network-attachment-definitions
-          {
-            apiGroups = [ "k8s.cni.cncf.io" ];
-            resources = [ "network-attachment-definitions" ];
-            verbs = [ "get" ];
-          }
-          # KubeVirt: kubevirts (get, list, watch, patch, update)
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "kubevirts" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "patch"
-              "update"
-              "patch"
-            ];
-          }
-          # KubeVirt: virtualmachines, virtualmachineinstances
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [
-              "virtualmachines"
-              "virtualmachineinstances"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "patch"
-              "update"
-            ];
-          }
-          # KubeVirt: virtualmachines/status
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "virtualmachines/status" ];
-            verbs = [ "patch" ];
-          }
-          # KubeVirt: virtualmachineinstancemigrations
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "virtualmachineinstancemigrations" ];
-            verbs = [
-              "create"
-              "get"
-              "list"
-              "watch"
-              "patch"
-            ];
-          }
-          # KubeVirt: virtualmachineinstancepresets
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "virtualmachineinstancepresets" ];
-            verbs = [
-              "watch"
-              "list"
-            ];
-          }
-          # KubeVirt: kubevirts (get, list, watch)
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "kubevirts" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # KubeVirt: wildcard
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "*" ];
-            verbs = [ "*" ];
-          }
-          # KubeVirt: finalizers
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [
-              "virtualmachines/finalizers"
-              "virtualmachineinstances/finalizers"
-            ];
-            verbs = [ "update" ];
-          }
-          # KubeVirt: virtualmachineinstances (update, list, watch)
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "virtualmachineinstances" ];
-            verbs = [
-              "update"
-              "list"
-              "watch"
-            ];
-          }
-          # KubeVirt: kubevirts (get, list, watch)
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "kubevirts" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # KubeVirt: kubevirts (list, watch)
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "kubevirts" ];
-            verbs = [
-              "list"
-              "watch"
-            ];
-          }
-          # KubeVirt: kubevirts (get, list)
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "kubevirts" ];
-            verbs = [
-              "get"
-              "list"
-            ];
-          }
-          # KubeVirt: VMs, VMIs, presets, replicasets (full + deletecollection)
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [
-              "virtualmachines"
-              "virtualmachineinstances"
-              "virtualmachineinstancepresets"
-              "virtualmachineinstancereplicasets"
-            ];
-            verbs = [
-              "get"
-              "delete"
-              "create"
-              "update"
-              "patch"
-              "list"
-              "watch"
-              "deletecollection"
-            ];
-          }
-          # KubeVirt: virtualmachineinstancemigrations (get, list, watch)
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "virtualmachineinstancemigrations" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # KubeVirt: VMs, VMIs, presets, replicasets (no deletecollection)
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [
-              "virtualmachines"
-              "virtualmachineinstances"
-              "virtualmachineinstancepresets"
-              "virtualmachineinstancereplicasets"
-            ];
-            verbs = [
-              "get"
-              "delete"
-              "create"
-              "update"
-              "patch"
-              "list"
-              "watch"
-            ];
-          }
-          # KubeVirt: virtualmachineinstancemigrations (get, list, watch)
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "virtualmachineinstancemigrations" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # KubeVirt: kubevirts (get, list)
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "kubevirts" ];
-            verbs = [
-              "get"
-              "list"
-            ];
-          }
-          # KubeVirt: kubevirts (get, list)
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "kubevirts" ];
-            verbs = [
-              "get"
-              "list"
-            ];
-          }
-          # KubeVirt: all main resources (get, list, watch)
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [
-              "virtualmachines"
-              "virtualmachineinstances"
-              "virtualmachineinstancepresets"
-              "virtualmachineinstancereplicasets"
-              "virtualmachineinstancemigrations"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # KubeVirt: virtualmachineinstancemigrations (full + deletecollection)
-          {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "virtualmachineinstancemigrations" ];
-            verbs = [
-              "get"
-              "delete"
-              "create"
-              "update"
-              "patch"
-              "list"
-              "watch"
-              "deletecollection"
-            ];
-          }
-          # Migrations: migrationpolicies
-          {
-            apiGroups = [ "migrations.kubevirt.io" ];
-            resources = [ "migrationpolicies" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Migrations: migrationpolicies
-          {
-            apiGroups = [ "migrations.kubevirt.io" ];
-            resources = [ "migrationpolicies" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Migrations: migrationpolicies
-          {
-            apiGroups = [ "migrations.kubevirt.io" ];
-            resources = [ "migrationpolicies" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Migrations: migrationpolicies
-          {
-            apiGroups = [ "migrations.kubevirt.io" ];
-            resources = [ "migrationpolicies" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Migrations: migrationpolicies
-          {
-            apiGroups = [ "migrations.kubevirt.io" ];
-            resources = [ "migrationpolicies" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Migrations: migrationpolicies
-          {
-            apiGroups = [ "migrations.kubevirt.io" ];
-            resources = [ "migrationpolicies" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Monitoring: servicemonitors, prometheusrules
-          {
-            apiGroups = [ "monitoring.coreos.com" ];
-            resources = [
-              "servicemonitors"
-              "prometheusrules"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "delete"
-              "update"
-              "patch"
-            ];
-          }
-          # Policy: poddisruptionbudgets
-          {
-            apiGroups = [ "policy" ];
-            resources = [ "poddisruptionbudgets" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "delete"
-              "create"
-              "patch"
-            ];
-          }
-          # Pool: virtualmachinepools (status, finalizers, scale)
-          {
-            apiGroups = [ "pool.kubevirt.io" ];
-            resources = [
-              "virtualmachinepools"
-              "virtualmachinepools/finalizers"
-              "virtualmachinepools/status"
-              "virtualmachinepools/scale"
-            ];
-            verbs = [
-              "watch"
-              "list"
-              "create"
-              "delete"
-              "update"
-              "patch"
-              "get"
-            ];
-          }
-          # Pool: virtualmachinepools (full + deletecollection)
-          {
-            apiGroups = [ "pool.kubevirt.io" ];
-            resources = [ "virtualmachinepools" ];
-            verbs = [
-              "get"
-              "delete"
-              "create"
-              "update"
-              "patch"
-              "list"
-              "watch"
-              "deletecollection"
-            ];
-          }
-          # Pool: virtualmachinepools (no deletecollection)
-          {
-            apiGroups = [ "pool.kubevirt.io" ];
-            resources = [ "virtualmachinepools" ];
-            verbs = [
-              "get"
-              "delete"
-              "create"
-              "update"
-              "patch"
-              "list"
-              "watch"
-            ];
-          }
-          # Pool: virtualmachinepools (get, list, watch)
-          {
-            apiGroups = [ "pool.kubevirt.io" ];
-            resources = [ "virtualmachinepools" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # RBAC
-          {
-            apiGroups = [ "rbac.authorization.k8s.io" ];
-            resources = [
-              "clusterroles"
-              "clusterrolebindings"
-              "roles"
-              "rolebindings"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "delete"
-              "patch"
-              "update"
-            ];
-          }
-          # Security: securitycontextconstraints (create, get, list, watch)
-          {
-            apiGroups = [ "security.openshift.io" ];
-            resources = [ "securitycontextconstraints" ];
-            verbs = [
-              "create"
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Security: securitycontextconstraints (resourceNames: privileged)
-          {
-            apiGroups = [ "security.openshift.io" ];
-            resourceNames = [ "privileged" ];
-            resources = [ "securitycontextconstraints" ];
-            verbs = [
-              "get"
-              "patch"
-              "update"
-            ];
-          }
-          # Security: securitycontextconstraints (resourceNames: kubevirt-handler, kubevirt-controller)
-          {
-            apiGroups = [ "security.openshift.io" ];
-            resourceNames = [
-              "kubevirt-handler"
-              "kubevirt-controller"
-            ];
-            resources = [ "securitycontextconstraints" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "update"
-              "delete"
-            ];
-          }
-          # Snapshot: virtualmachinesnapshots, restores, contents (get, list, watch)
-          {
-            apiGroups = [ "snapshot.kubevirt.io" ];
-            resources = [
-              "virtualmachinesnapshots"
-              "virtualmachinerestores"
-              "virtualmachinesnapshotcontents"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Snapshot: all with status/finalizers
-          {
-            apiGroups = [ "snapshot.kubevirt.io" ];
-            resources = [
-              "virtualmachinesnapshots"
-              "virtualmachinesnapshots/status"
-              "virtualmachinesnapshots/finalizers"
-              "virtualmachinesnapshotcontents"
-              "virtualmachinesnapshotcontents/status"
-              "virtualmachinesnapshotcontents/finalizers"
-              "virtualmachinerestores"
-              "virtualmachinerestores/status"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "delete"
-              "patch"
-            ];
-          }
-          # Snapshot: main resources (full + deletecollection)
-          {
-            apiGroups = [ "snapshot.kubevirt.io" ];
-            resources = [
-              "virtualmachinesnapshots"
-              "virtualmachinesnapshotcontents"
-              "virtualmachinerestores"
-            ];
-            verbs = [
-              "get"
-              "delete"
-              "create"
-              "update"
-              "patch"
-              "list"
-              "watch"
-              "deletecollection"
-            ];
-          }
-          # Snapshot: main resources (no deletecollection)
-          {
-            apiGroups = [ "snapshot.kubevirt.io" ];
-            resources = [
-              "virtualmachinesnapshots"
-              "virtualmachinesnapshotcontents"
-              "virtualmachinerestores"
-            ];
-            verbs = [
-              "get"
-              "delete"
-              "create"
-              "update"
-              "patch"
-              "list"
-              "watch"
-            ];
-          }
-          # Snapshot: main resources (get, list, watch)
-          {
-            apiGroups = [ "snapshot.kubevirt.io" ];
-            resources = [
-              "virtualmachinesnapshots"
-              "virtualmachinesnapshotcontents"
-              "virtualmachinerestores"
-            ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Snapshot storage: volumesnapshotclasses
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshotclasses" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Snapshot storage: volumesnapshots
-          {
-            apiGroups = [ "snapshot.storage.k8s.io" ];
-            resources = [ "volumesnapshots" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "delete"
-            ];
-          }
-          # Storage: storageclasses
-          {
-            apiGroups = [ "storage.k8s.io" ];
-            resources = [ "storageclasses" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # Subresources: stop, addvolume, removevolume, freeze, unfreeze, reset, softreboot, sev
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [
-              "virtualmachines/stop"
-              "virtualmachineinstances/addvolume"
-              "virtualmachineinstances/removevolume"
-              "virtualmachineinstances/freeze"
-              "virtualmachineinstances/unfreeze"
-              "virtualmachineinstances/reset"
-              "virtualmachineinstances/softreboot"
-              "virtualmachineinstances/sev/setupsession"
-              "virtualmachineinstances/sev/injectlaunchsecret"
-            ];
-            verbs = [ "update" ];
-          }
-          # Subresources: version, guestfs
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [
-              "version"
-              "guestfs"
-            ];
-            verbs = [
-              "get"
-              "list"
-            ];
-          }
-          # Subresources: console, vnc, portforward, guestosinfo, etc (get)
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [
-              "virtualmachineinstances/console"
-              "virtualmachineinstances/vnc"
-              "virtualmachineinstances/vnc/screenshot"
-              "virtualmachineinstances/portforward"
-              "virtualmachineinstances/guestosinfo"
-              "virtualmachineinstances/filesystemlist"
-              "virtualmachineinstances/userlist"
-              "virtualmachineinstances/sev/fetchcertchain"
-              "virtualmachineinstances/sev/querylaunchmeasurement"
-              "virtualmachineinstances/usbredir"
-            ];
-            verbs = [ "get" ];
-          }
-          # Subresources: pause, unpause, addvolume, removevolume, freeze, unfreeze, softreboot, reset, sev
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [
-              "virtualmachineinstances/pause"
-              "virtualmachineinstances/unpause"
-              "virtualmachineinstances/addvolume"
-              "virtualmachineinstances/removevolume"
-              "virtualmachineinstances/freeze"
-              "virtualmachineinstances/unfreeze"
-              "virtualmachineinstances/softreboot"
-              "virtualmachineinstances/reset"
-              "virtualmachineinstances/sev/setupsession"
-              "virtualmachineinstances/sev/injectlaunchsecret"
-            ];
-            verbs = [ "update" ];
-          }
-          # Subresources: expand-spec, portforward (get)
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [
-              "virtualmachines/expand-spec"
-              "virtualmachines/portforward"
-            ];
-            verbs = [ "get" ];
-          }
-          # Subresources: start, stop, restart, addvolume, removevolume, memorydump (update)
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [
-              "virtualmachines/start"
-              "virtualmachines/stop"
-              "virtualmachines/restart"
-              "virtualmachines/addvolume"
-              "virtualmachines/removevolume"
-              "virtualmachines/memorydump"
-            ];
-            verbs = [ "update" ];
-          }
-          # Subresources: expand-vm-spec (update)
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [ "expand-vm-spec" ];
-            verbs = [ "update" ];
-          }
-          # Subresources: console, vnc, portforward, guestosinfo, etc (get), duplicate
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [
-              "virtualmachineinstances/console"
-              "virtualmachineinstances/vnc"
-              "virtualmachineinstances/vnc/screenshot"
-              "virtualmachineinstances/portforward"
-              "virtualmachineinstances/guestosinfo"
-              "virtualmachineinstances/filesystemlist"
-              "virtualmachineinstances/userlist"
-              "virtualmachineinstances/sev/fetchcertchain"
-              "virtualmachineinstances/sev/querylaunchmeasurement"
-              "virtualmachineinstances/usbredir"
-            ];
-            verbs = [ "get" ];
-          }
-          # Subresources: pause, unpause, addvolume, removevolume, freeze, unfreeze, softreboot, reset, sev (duplicate)
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [
-              "virtualmachineinstances/pause"
-              "virtualmachineinstances/unpause"
-              "virtualmachineinstances/addvolume"
-              "virtualmachineinstances/removevolume"
-              "virtualmachineinstances/freeze"
-              "virtualmachineinstances/unfreeze"
-              "virtualmachineinstances/softreboot"
-              "virtualmachineinstances/reset"
-              "virtualmachineinstances/sev/setupsession"
-              "virtualmachineinstances/sev/injectlaunchsecret"
-            ];
-            verbs = [ "update" ];
-          }
-          # Subresources: expand-spec, portforward (get), duplicate
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [
-              "virtualmachines/expand-spec"
-              "virtualmachines/portforward"
-            ];
-            verbs = [ "get" ];
-          }
-          # Subresources: start, stop, restart, addvolume, removevolume, memorydump (update), duplicate
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [
-              "virtualmachines/start"
-              "virtualmachines/stop"
-              "virtualmachines/restart"
-              "virtualmachines/addvolume"
-              "virtualmachines/removevolume"
-              "virtualmachines/memorydump"
-            ];
-            verbs = [ "update" ];
-          }
-          # Subresources: expand-vm-spec (update), duplicate
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [ "expand-vm-spec" ];
-            verbs = [ "update" ];
-          }
-          # Subresources: expand-spec, guestosinfo, filesystemlist, userlist, sev (get)
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [
-              "virtualmachines/expand-spec"
-              "virtualmachineinstances/guestosinfo"
-              "virtualmachineinstances/filesystemlist"
-              "virtualmachineinstances/userlist"
-              "virtualmachineinstances/sev/fetchcertchain"
-              "virtualmachineinstances/sev/querylaunchmeasurement"
-            ];
-            verbs = [ "get" ];
-          }
-          # Subresources: expand-vm-spec (update)
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [ "expand-vm-spec" ];
-            verbs = [ "update" ];
-          }
-          # Subresources: virtualmachines/migrate (update)
-          {
-            apiGroups = [ "subresources.kubevirt.io" ];
-            resources = [ "virtualmachines/migrate" ];
-            verbs = [ "update" ];
+      clusterRbac = scope.rbac.mkClusterRoleSet scope {
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = self.serviceAccount.out.name;
+            namespace = ns;
           }
         ];
+        roles."${name}-operator" = (vendoredRole ./rbac/clusterrole-kubevirt-operator.json).rules;
       };
 
-      # --- ClusterRole (aggregated to admin) ---
-      # Upstream's second ClusterRole. Nothing binds it to the operator; it
-      # aggregates into the built-in admin role so cluster admins can manage
-      # KubeVirt CRs with kubectl. Fixed name, as upstream, because the
-      # aggregation is what gives it its meaning.
-      adminClusterRole = scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRole";
-        name = "kubevirt.io:operator";
-        labels = kubevirtLabels // {
-          "operator.kubevirt.io" = "";
-          "rbac.authorization.k8s.io/aggregate-to-admin" = "true";
-        };
-        extra.rules = [
+      operatorRbac = scope.rbac.mkRoleSet scope {
+        subjects = [
           {
-            apiGroups = [ "kubevirt.io" ];
-            resources = [ "kubevirts" ];
-            verbs = [
-              "get"
-              "delete"
-              "create"
-              "update"
-              "patch"
-              "list"
-              "watch"
-              "deletecollection"
-            ];
+            kind = "ServiceAccount";
+            name = self.serviceAccount.out.name;
+            namespace = ns;
           }
         ];
+        roles."${name}-operator" = (vendoredRole ./rbac/role-kubevirt-operator.json).rules;
       };
 
-      # --- ClusterRoleBinding ---
-      clusterRoleBinding = scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRoleBinding";
-        name = "${name}-operator";
-        labels = kubevirtLabels;
-        extra = {
-          roleRef = {
-            apiGroup = "rbac.authorization.k8s.io";
-            kind = "ClusterRole";
-            name = self.clusterRole.out.name;
-          };
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = self.serviceAccount.out.name;
-              namespace = scope.namespaceName;
-            }
-          ];
+      # Aggregates into the built-in admin role, so namespace admins can
+      # manage KubeVirt resources. Nothing binds it.
+      adminClusterRole =
+        let
+          upstream = vendoredRole ./rbac/clusterrole-kubevirt.io_operator.json;
+        in
+        scope.mkClusterResource {
+          apiVersion = "rbac.authorization.k8s.io/v1";
+          kind = "ClusterRole";
+          inherit (upstream.metadata) name labels;
+          extra.rules = upstream.rules;
         };
-      };
 
-      # --- Role (namespace-scoped) ---
-      # virt-operator does its leader election and its certificate rotation
-      # inside its own namespace, so these rights are namespaced rather than
-      # cluster-wide. Mirrors the upstream v1.5.0 kubevirt-operator Role.
-      role = scope.mkResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "Role";
-        name = "${name}-operator";
-        labels = kubevirtLabels;
-        extra.rules = [
-          # The certificate secrets the operator mints and rotates. Upstream
-          # names them explicitly rather than granting write on every secret.
-          {
-            apiGroups = [ "" ];
-            resources = [ "secrets" ];
-            resourceNames = [
-              "kubevirt-ca"
-              "kubevirt-export-ca"
-              "kubevirt-virt-handler-certs"
-              "kubevirt-virt-handler-server-certs"
-              "kubevirt-operator-certs"
-              "kubevirt-virt-api-certs"
-              "kubevirt-controller-certs"
-              "kubevirt-exportproxy-certs"
-            ];
-            verbs = [
-              "create"
-              "get"
-              "list"
-              "watch"
-              "patch"
-              "delete"
-            ];
-          }
-          # Read access to every secret in the namespace: the operator lists
-          # them to find what it has already issued.
-          {
-            apiGroups = [ "" ];
-            resources = [ "secrets" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          {
-            apiGroups = [ "" ];
-            resources = [ "configmaps" ];
-            verbs = [
-              "create"
-              "get"
-              "list"
-              "watch"
-              "patch"
-              "delete"
-            ];
-          }
-          # Leader election between the operator replicas.
-          {
-            apiGroups = [ "coordination.k8s.io" ];
-            resources = [ "leases" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-              "create"
-              "update"
-              "patch"
-              "delete"
-            ];
-          }
-          {
-            apiGroups = [ "networking.k8s.io" ];
-            resources = [ "ingresses" ];
-            verbs = [
-              "get"
-              "list"
-              "watch"
-            ];
-          }
-          # OpenShift routes for the export proxy. Harmless on plain
-          # Kubernetes, where the group is simply not served.
-          {
-            apiGroups = [ "route.openshift.io" ];
-            resources = [ "routes" ];
-            verbs = [
-              "create"
-              "get"
-              "list"
-              "watch"
-              "patch"
-              "delete"
-            ];
-          }
-          {
-            apiGroups = [ "route.openshift.io" ];
-            resources = [ "routes/custom-host" ];
-            verbs = [ "create" ];
-          }
-        ];
-      };
-
-      # --- RoleBinding ---
-      roleBinding = scope.mkResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "RoleBinding";
-        name = "${name}-operator";
-        labels = kubevirtLabels;
-        extra = {
-          roleRef = {
-            apiGroup = "rbac.authorization.k8s.io";
-            kind = "Role";
-            name = self.role.out.name;
-          };
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = self.serviceAccount.out.name;
-              namespace = scope.namespaceName;
-            }
-          ];
-        };
-      };
-
-      # --- PriorityClass (cluster-critical for kubevirt components) ---
-      # The pod template asks for this class; nothing else in the cluster
-      # creates it, so the package owns it and the Deployment orders after it.
+      # virt-operator writes this name into the pod specs of virt-api,
+      # virt-controller, and virt-handler, and nothing else creates it.
       priorityClass = scope.mkClusterResource {
         apiVersion = "scheduling.k8s.io/v1";
         kind = "PriorityClass";
         name = "kubevirt-cluster-critical";
-        labels = kubevirtLabels;
         extra = {
           value = 1000000000;
           globalDefault = false;
@@ -1687,23 +434,31 @@ in
         };
       };
 
-      # --- Deployment (virt-operator) ---
       deployment = scope.mkDeployment {
-        name = "virt-operator";
-        labels = operatorLabels;
+        name = "${name}-operator";
+        requires = builtins.attrValues self.clusterRbac ++ builtins.attrValues self.operatorRbac;
         spec = {
-          replicas = config.replicaCount;
-          selector.matchLabels = operatorLabels;
-          strategy = {
-            type = "RollingUpdate";
+          # virt-operator holds a leader election lease, so a replacement pod
+          # covers "pod" and a standby on another node covers "node".
+          replicas = pick {
+            none = 1;
+            pod = 1;
+            node = 2;
+            zone = 2;
           };
+          selector.matchLabels = scope.selectorLabels;
+          strategy.type = "RollingUpdate";
           template = {
             metadata = {
-              name = "virt-operator";
-              labels = podLabels;
-              annotations = {
-                "openshift.io/required-scc" = "restricted-v2";
+              # Upstream's pod labels. The webhook Service virt-operator
+              # creates selects kubevirt.io, and its metrics Service selects
+              # prometheus.kubevirt.io.
+              labels = scope.selectorLabels // {
+                "kubevirt.io" = "virt-operator";
+                name = "virt-operator";
+                "prometheus.kubevirt.io" = "true";
               };
+              annotations."openshift.io/required-scc" = "restricted-v2";
             };
             spec = {
               serviceAccount = self.serviceAccount;
@@ -1712,9 +467,7 @@ in
                 runAsNonRoot = true;
                 seccompProfile.type = "RuntimeDefault";
               };
-              nodeSelector = {
-                "kubernetes.io/os" = "linux";
-              };
+              nodeSelector."kubernetes.io/os" = "linux";
               priorityClassName = self.priorityClass.out.name;
               tolerations = [
                 {
@@ -1740,36 +493,44 @@ in
                       value = config.image.tag;
                     }
                     {
-                      # virt-operator takes everything after `virt-operator:`
-                      # as the tag for every operand image and as the target
-                      # version, so this carries no digest. The container's
-                      # own `image` above keeps the pin.
                       name = "VIRT_OPERATOR_IMAGE";
-                      value = "${config.image.repository}:${config.image.tag}";
+                      value = operatorImage;
                     }
                     {
                       name = "WATCH_NAMESPACE";
                       valueFrom.fieldRef.fieldPath = "metadata.annotations['olm.targetNamespaces']";
                     }
-                  ];
+                  ]
+                  ++ lib.mapAttrsToList (n: ref: {
+                    name = operands.${n}.env;
+                    value = ref;
+                  }) operandRefs;
                   ports = [
-                    {
-                      name = "metrics";
-                      containerPort = 8443;
-                      protocol = "TCP";
-                    }
-                    {
-                      name = "webhooks";
-                      containerPort = 8444;
-                      protocol = "TCP";
-                    }
+                    (kix.port "metrics" 8443)
+                    (kix.port "webhooks" 8444)
                   ];
-                  # kubevirt-operator.yaml (v1.5.0) has this readiness probe
-                  # only; virt-operator serves no other health endpoint, so
-                  # the liveness probe uses the same one.
-                  readinessProbe = metricsProbe;
-                  livenessProbe = metricsProbe // {
+                  # kubevirt-operator.yaml has this readiness probe only;
+                  # virt-operator serves no other health endpoint, so the
+                  # liveness probe uses the same one.
+                  readinessProbe = {
+                    httpGet = {
+                      path = "/metrics";
+                      port = 8443;
+                      scheme = "HTTPS";
+                    };
+                    initialDelaySeconds = 5;
+                    periodSeconds = 10;
+                    timeoutSeconds = 10;
+                  };
+                  livenessProbe = {
+                    httpGet = {
+                      path = "/metrics";
+                      port = 8443;
+                      scheme = "HTTPS";
+                    };
                     initialDelaySeconds = 15;
+                    periodSeconds = 10;
+                    timeoutSeconds = 10;
                   };
                   resources = config.resources;
                   securityContext = {
@@ -1795,7 +556,8 @@ in
                 {
                   name = "kubevirt-operator-certs";
                   secret = {
-                    # virt-operator creates this Secret at runtime; its Role grants create on the name.
+                    # virt-operator creates this Secret at runtime; its Role
+                    # grants create on the name.
                     secretName = kix.untrackedRef {
                       name = "kubevirt-operator-certs";
                       by = "self";
@@ -1813,56 +575,113 @@ in
         };
       };
 
-      # --- KubeVirt CR ---
-      # This custom resource tells the virt-operator to deploy virt-api,
-      # virt-controller, and virt-handler.
-      kubevirtCR = scope.mkResource {
-        apiVersion = "kubevirt.io/v1";
-        kind = "KubeVirt";
-        name = name;
-        spec = {
-          imagePullPolicy = config.image.pullPolicy;
-          configuration = {
-            developerConfiguration = {
-              featureGates = config.featureGates;
-            };
-          }
-          // config.configuration;
-        };
+      kubevirtCR = scope.mkCR self.crds.kubeVirts {
+        inherit name;
+        spec = kix.mergeGuarded {
+          inherit who;
+          locked = [
+            [
+              "infra"
+              "replicas"
+            ]
+            [ "imagePullPolicy" ]
+            [ "imageRegistry" ]
+            [ "imageTag" ]
+          ];
+        } baseSpec config.extraSpec;
         requires = [
-          self.crds.kubeVirt
           self.deployment
+          self.priorityClass
         ];
       };
 
-      # --- CRDs ---
-      # Upstream ships exactly one CRD with the operator manifest: the
-      # KubeVirt CR the operator watches. virt-operator installs the rest
-      # (VirtualMachine, VirtualMachineInstance, the snapshot and export
-      # kinds) itself, with full schemas, once it is running. kix must not
-      # ship stubs for those: server-side apply would keep overwriting the
-      # operator's schemas with an empty one.
-      #
-      # Vendored from upstream kubevirt-operator.yaml v1.5.0.
       crds = {
-        kubeVirt = scope.mkCRD {
+        # The KubeVirt CRD is the only one upstream's bundle ships; the
+        # operator installs the rest with full schemas.
+        kubeVirts = scope.mkCRD {
           spec = (builtins.fromJSON (builtins.readFile ./crds/kubevirts.kubevirt.io.json)).spec;
+          readiness = {
+            path = "/status/phase";
+            equals = "Deployed";
+          };
+        };
+
+        # virt-operator installs the VirtualMachine CRD once the KubeVirt
+        # resource exists. Readiness is stamped per VM by
+        # out.mkVirtualMachine.
+        virtualMachines = scope.mkCRDRef {
+          group = "kubevirt.io";
+          kind = "VirtualMachine";
+          plural = "virtualmachines";
+          version = "v1";
+          installedBy = self.kubevirtCR;
         };
       };
 
-      # --- Entry point ---
+      # Null without an enforcer.
+      operandPolicies = {
+        virtApi = operandPolicy "virt-api" (podLabels "virt-api") {
+          intents = {
+            ingress = [
+              {
+                from = "apiserver";
+                ports = [ (tcp 8443) ];
+              }
+            ];
+            egress = clusterAccess;
+          };
+          extra = netpol: {
+            egress = [
+              (netpol.mkServiceEgressRule {
+                selector = podLabels "virt-handler";
+                namespace = ns;
+                sourceNamespace = ns;
+                ports = consoleServer;
+              })
+            ];
+          };
+        };
+        virtController = operandPolicy "virt-controller" (podLabels "virt-controller") {
+          intents.egress = clusterAccess;
+        };
+        virtHandler = operandPolicy "virt-handler" (podLabels "virt-handler") {
+          intents.egress = clusterAccess;
+          extra =
+            netpol:
+            let
+              peers = netpol.mkSelfRules { selector = podLabels "virt-handler"; };
+            in
+            {
+              inherit (peers) egress;
+              ingress = peers.ingress ++ [
+                (netpol.mkCallerIngressRule {
+                  callerSelector = podLabels "virt-api";
+                  callerNamespace = ns;
+                  ports = consoleServer;
+                })
+              ];
+            };
+        };
+        strategyJob = operandPolicy "strategy-dumper" (podLabels "virt-operator-strategy-dumper") {
+          intents.egress = clusterAccess;
+        };
+      };
+
       root = {
         resource = self.deployment;
         requires = [
-          self.serviceAccount
-          self.clusterRole
           self.adminClusterRole
-          self.clusterRoleBinding
-          self.role
-          self.roleBinding
           self.kubevirtCR
-          self.crds.kubeVirt
-        ];
+          self.crds.virtualMachines
+        ]
+        ++ builtins.filter (p: p != null) (builtins.attrValues self.operandPolicies);
+
+        out = {
+          crds.VirtualMachine = self.crds.virtualMachines;
+          inherit mkVirtualMachine;
+          operandSelectors.virtLauncher = podLabels "virt-launcher";
+          extraImages = builtins.attrValues operandRefs;
+        };
       };
     };
 }
