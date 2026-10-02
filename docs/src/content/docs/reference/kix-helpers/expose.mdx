@@ -89,7 +89,8 @@ The `exposure` part is a record of the route this call renders:
 | `via` | `"gateway"`, `"ingress"`, or `null` when no route is rendered |
 | `host` | The route's host, or `null` |
 | `scheme` | `"https"` or `"http"`, or `null` when Kix cannot tell |
-| `url` | `<scheme>://<host>`, with `:<port>` when the port is not the scheme's default; `null` when `scheme` is null |
+| `url` | `<scheme>://<host>`, with `:<port>` when the port is not the scheme's default. Reading it when `scheme` is null is an evaluation error that names the instance and the cause: no route, no host, or a Gateway without listeners |
+| `urlOrNull` | `url`, or `null` when `scheme` is null, for a package that works without a public URL |
 
 In Ingress mode the scheme is `https` when a `clusterIssuer` is wired and
 `http` otherwise.
@@ -108,7 +109,12 @@ chosen only when no other qualifies, and Kix warns that it assumed the
 application's namespace matches.
 
 A Gateway that does not publish its listeners, such as one declared with
-`kix.mkImport`, gives `scheme = null` and `url = null`.
+`kix.mkImport`, gives `scheme = null`, so reading `url` fails.
+
+A package that needs its public URL reads `url`, so an instance without a
+route fails evaluation instead of starting with a wrong address. A package
+that works without one, such as Metabase, which then records the URL of
+the first administrator's request, reads `urlOrNull` and handles null.
 
 TLS that terminates outside Kix, for example at cloudflared or at a load
 balancer in front of ingress-nginx, is not visible to Kix, so the record

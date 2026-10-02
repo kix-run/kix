@@ -514,7 +514,7 @@ build = [
 
 #### The public URL (`self.exposure`)
 
-`self.exposure` is a record of the route the call rendered: `{ via; host; scheme; url; }`. `url` is `<scheme>://<host>`, with `:<port>` when the port is not the scheme's default, and null when no route is rendered or the scheme is unknown. In Ingress mode the scheme is `https` when a `clusterIssuer` is wired. In Gateway mode it comes from the listener the HTTPRoute attaches to (protocol, `hostname`, `allowedRoutes.namespaces.from`); no matching listener fails evaluation, and a gateway without `out.listeners` (a `kix.mkImport`) gives `url = null`. Read `self.exposure.url` (vaultwarden's `DOMAIN`, harbor's `EXT_ENDPOINT`); never re-derive it from `ingress.host`.
+`self.exposure` is a record of the route the call rendered: `{ via; host; scheme; url; urlOrNull; }`. `url` is `<scheme>://<host>`, with `:<port>` when the port is not the scheme's default; reading it when no route is rendered or the scheme is unknown fails evaluation, naming the cause. `urlOrNull` is the same value or null, for a package that works without a URL. In Ingress mode the scheme is `https` when a `clusterIssuer` is wired. In Gateway mode it comes from the listener the HTTPRoute attaches to (protocol, `hostname`, `allowedRoutes.namespaces.from`); no matching listener fails evaluation, and a gateway without `out.listeners` (a `kix.mkImport`) gives `scheme = null`. Read `self.exposure.url` (vaultwarden's `DOMAIN`, harbor's `EXT_ENDPOINT`); never re-derive it from `ingress.host`.
 
 ### `monitor` - DI-driven ServiceMonitor / PrometheusRule build entry
 

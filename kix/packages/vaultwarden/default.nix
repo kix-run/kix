@@ -81,7 +81,7 @@ in
     domain = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Public URL (e.g. https://vault.example.com). Default: the URL kix.expose routes (exposure.url). Set it when TLS terminates outside Kix, for example behind cloudflared.";
+      description = "Public URL (e.g. https://vault.example.com), which invitation links and WebAuthn need. Default: the URL kix.expose routes (exposure.url); evaluation fails when Kix cannot derive one. Set it when TLS terminates outside Kix, for example behind cloudflared.";
     };
     env = kix.options.env // {
       description = "Extra Vaultwarden environment variables (Vaultwarden's `.env.template` lists them). A value is a string, a `fieldRef` source, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. The package sets SIGNUPS_ALLOWED = \"false\", INVITATIONS_ALLOWED = \"true\", and SHOW_PASSWORD_HINT = \"false\"; a value here replaces them and null removes them. ADMIN_TOKEN turns on the admin panel; give it the token's Argon2 hash, from a Secret. The package owns the database, address, and data folder variables.";

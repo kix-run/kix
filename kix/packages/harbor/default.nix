@@ -553,8 +553,8 @@ in
         externalURL =
           if config.externalURL != null then
             config.externalURL
-          else if exposure.url != null then
-            exposure.url
+          else if exposure.urlOrNull != null then
+            exposure.urlOrNull
           else
             throw "${who}: Harbor needs the URL clients reach it on (EXT_ENDPOINT), and Kix cannot derive one. ${urlProblem} Or set externalURL.";
 

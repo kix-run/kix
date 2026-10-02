@@ -141,6 +141,7 @@ when a check fails or the path is not evaluated by default.
 - D25. Does an `out` field exist only under a toggle, so a consumer's read fails with a missing attribute? Fix: always publish it (null when off), or state the condition in the header.
 - D26. Does a package read a dependency's resource by a fixed name that nothing in the pod spec names (velero's repository Secret)? A dependency view has no `outPath`, so it cannot go in `requires`. Fix: emit a `scope.mkSecretRef` for that name and have the workloads require it.
 - D27. Does a public `out.mk*` builder that creates a resource in the caller's scope derive its default name from the provider instead of the caller's `instanceName`? Fix: the caller's name. Errors it raises name the consumer resource from the arguments it receives (P9).
+- D28. Does the package read `self.exposure.urlOrNull` although it cannot work without a public URL, or `url` although it can? *(lib: reading `url` without a route or scheme throws)* Fix: `url` when the URL is required; `urlOrNull` with a comment saying what the program does without one.
 
 ### Secrets (S)
 

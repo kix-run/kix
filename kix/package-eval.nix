@@ -339,12 +339,16 @@ let
       };
     };
     valkey.instances.valkey-password = valkeyPassword;
-    vaultwarden.instances = {
-      inherit storage;
-      database = {
-        package = packages.stackgres-database;
-        config.password = "password";
+    # Nothing routes to the instance here, so the URL comes from `domain`.
+    vaultwarden = {
+      instances = {
+        inherit storage;
+        database = {
+          package = packages.stackgres-database;
+          config.password = "password";
+        };
       };
+      config.domain = "https://vault.example.com";
     };
     velero = {
       config.backupStorageLocation.objectStorage.bucket = "backups";
