@@ -75,7 +75,6 @@
           name = "premium-rwo";
         };
       };
-      optional = true;
     };
   };
 }

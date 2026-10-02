@@ -72,7 +72,6 @@
           name = "csi-cinder-high-speed";
         };
       };
-      optional = true;
     };
   };
 }

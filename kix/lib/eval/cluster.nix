@@ -20,7 +20,6 @@
   evaluateInstanceConfig,
   evaluateInstance,
   mkImport,
-  checkInstanceExtraDeps,
 }:
 
 {
@@ -95,13 +94,6 @@
           ) acc (instCfg.deps or { })
         ) acc nsInsts
       ) null cfg.instances;
-
-      # Runs over inactive instances too, and before anything renders an
-      # import marker, so a cycle of extraDeps refs gets a Kix message.
-      _extraDepsCheck = checkInstanceExtraDeps {
-        instances = cfg.instances;
-        inherit mergedInstances;
-      };
 
       allNsNames = lib.unique (builtins.attrNames cfg.namespaces ++ builtins.attrNames mergedInstances);
 
@@ -193,9 +185,8 @@
       # Resolve dependencies, roles, and annotation domains against active
       # managed instances and all platform imports. Inactive optional managed
       # instances emit no resources and must not satisfy a dependency. An
-      # optional import answers one and becomes active by doing so
-      # (activatedImports). isImport is tested first: isActive on an import
-      # reads the resolutions, which read this index.
+      # inactive optional import answers one, and its marker is still not
+      # emitted: only a demand in computeAutoInstances activates it.
       isResolvable = nsName: instName: isImport nsName instName || isActive nsName instName;
 
       resolvableInstances = lib.mapAttrs (
@@ -430,56 +421,13 @@
         ) mergedInstances
       );
 
-      # Optional imports that a dependency of an active managed instance
-      # resolved to, keyed "<ns>/<instance>" as activatedOptionals is. The
-      # import's marker is then emitted, and the deploy checks the resource
-      # it names when the import gives a kind. A dependency wired with a
-      # value other than a `ref` is
-      # skipped: phase 1 resolves it through the index, but the build binds
-      # the value instead.
-      activatedImports = builtins.listToAttrs (
-        builtins.concatMap (
-          nsName:
-          builtins.concatMap (
-            instName:
-            let
-              instCfg = mergedInstances.${nsName}.${instName};
-              boundDirectly =
-                argName:
-                let
-                  v = (instCfg.deps or { }).${argName} or null;
-                in
-                v != null && !(builtins.isAttrs v && (v._type or "") == "kix-ref");
-              targets = lib.filterAttrs (
-                argName: t:
-                t.found
-                && !(t.direct or false)
-                && !(boundDirectly argName)
-                && isImport t.namespace t.instanceName
-                && (mergedInstances.${t.namespace}.${t.instanceName}.optional or false)
-              ) phase1Instances.${nsName}.${instName}.resolvedTargets;
-            in
-            if isImport nsName instName || !(isActive nsName instName) then
-              [ ]
-            else
-              lib.mapAttrsToList (_: t: {
-                name = "${t.namespace}/${t.instanceName}";
-                value = true;
-              }) targets
-          ) (builtins.attrNames mergedInstances.${nsName})
-        ) (builtins.attrNames mergedInstances)
-      );
-
       isActive =
         nsName: instName:
         let
           instCfg = mergedInstances.${nsName}.${instName};
           isOptional = instCfg.optional or false;
-          key = "${nsName}/${instName}";
-          isActivated =
-            autoResult.activatedOptionals ? ${key} || (isImport nsName instName && activatedImports ? ${key});
         in
-        !isOptional || isActivated;
+        !isOptional || autoResult.activatedOptionals ? "${nsName}/${instName}";
 
       allInstancesList = builtins.concatMap (
         nsName:
@@ -881,46 +829,44 @@
 
     in
     builtins.seq _refTargetsCheck (
-      builtins.seq _extraDepsCheck (
-        builtins.seq _rolesValidation (
-          builtins.seq _roleBindingsCheck (
-            builtins.seq _annotationDomainsCheck (
-              builtins.seq _clusterHookChecksRun (
-                builtins.seq clusterDiagnostics.emitExtraWarnings (
-                  builtins.seq clusterDiagnostics.assertionCheck {
-                    _type = "k8s-cluster-v2";
-                    inherit name;
+      builtins.seq _rolesValidation (
+        builtins.seq _roleBindingsCheck (
+          builtins.seq _annotationDomainsCheck (
+            builtins.seq _clusterHookChecksRun (
+              builtins.seq clusterDiagnostics.emitExtraWarnings (
+                builtins.seq clusterDiagnostics.assertionCheck {
+                  _type = "k8s-cluster-v2";
+                  inherit name;
 
-                    inherit clusterInstances;
-                    instances = clusterInstances;
+                  inherit clusterInstances;
+                  instances = clusterInstances;
 
-                    namespaces = nsResources;
+                  namespaces = nsResources;
 
-                    inherit
-                      activation
-                      packageIndex
-                      info
-                      extraImages
-                      ;
+                  inherit
+                    activation
+                    packageIndex
+                    info
+                    extraImages
+                    ;
 
-                    diagnostics = {
-                      warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
-                      inherit (clusterDiagnostics) assertions failedAssertions;
+                  diagnostics = {
+                    warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
+                    inherit (clusterDiagnostics) assertions failedAssertions;
+                  };
+
+                  out = {
+                    maintenance = {
+                      enable = cfg.cluster.maintenance.enable or false;
+                      reason = cfg.cluster.maintenance.reason or null;
+                      until = cfg.cluster.maintenance.until or null;
                     };
+                  };
 
-                    out = {
-                      maintenance = {
-                        enable = cfg.cluster.maintenance.enable or false;
-                        reason = cfg.cluster.maintenance.reason or null;
-                        until = cfg.cluster.maintenance.until or null;
-                      };
-                    };
+                  inherit scorecardReport;
 
-                    inherit scorecardReport;
-
-                    rawManifests = rawManifestList;
-                  }
-                )
+                  rawManifests = rawManifestList;
+                }
               )
             )
           )

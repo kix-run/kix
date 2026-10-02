@@ -1,7 +1,8 @@
 # Tests for CRD reference declarations (scope.mkCRDRef: required version,
 # per-instance markers, the crd-* annotations), served-version checks on
-# custom resources, optional import activation (eval/cluster.nix
-# activatedImports), the cross-resource checks 18-23 in eval/validate.nix,
+# custom resources, optional import activation (a demand in eval/auto.nix
+# activates an optional import; a resolution alone does not), the
+# cross-resource checks 18-23 in eval/validate.nix,
 # the instance-of edge for chart custom resources, kix.expose's HTTPRoute
 # CRD ref, mkSecret's refusal of keys without a value, and cloudflared's
 # token check, which must run before mkSecret.
@@ -697,11 +698,11 @@ in
 
   # --- optional import activation ---
 
-  # An optional dependency that resolves to an optional import activates
-  # it: the marker names the StorageClass the deploy waits for.
-  lib-reference-checks-optional-dep-activates-import =
+  # A required dependency that resolves to an optional import activates it:
+  # the marker names the StorageClass the deploy waits for.
+  lib-reference-checks-required-dep-activates-import =
     let
-      ms = activationCluster [ { instances.appns.consumer.package = xConsumer { optional = true; }; } ];
+      ms = activationCluster [ { instances.appns.consumer.package = xConsumer { optional = false; }; } ];
       marker = importMarker ms;
     in
     (
@@ -710,7 +711,16 @@ in
       && (annotationsOf marker).${kixKeys.importKind} == "StorageClass"
       && (annotationsOf marker).${kixKeys.importName} == "import-sc"
     )
-    || throw "optional dependency did not activate the import: ${whoOf ms}, marker ${builtins.toJSON marker}";
+    || throw "required dependency did not activate the import: ${whoOf ms}, marker ${builtins.toJSON marker}";
+
+  # An optional dependency places no demand. It resolves to the optional
+  # import, which stays inactive and emits no marker.
+  lib-reference-checks-optional-dep-leaves-import-inactive =
+    let
+      ms = activationCluster [ { instances.appns.consumer.package = xConsumer { optional = true; }; } ];
+    in
+    (whoOf ms == "import" && importMarker ms == null)
+    || throw "optional dependency: ${whoOf ms}, import marker ${builtins.toJSON (importMarker ms)}";
 
   # Nothing resolves to the import, so it stays inactive.
   lib-reference-checks-unused-import-stays-inactive =
@@ -837,8 +847,9 @@ in
     || throw "ref wiring: ${whoOf ms}, import marker ${builtins.toJSON (importMarker ms)}";
 
   # The only managed candidate has meta.scope = "namespace" and sits in
-  # another namespace, so resolution skips it and the import answers.
-  lib-reference-checks-foreign-namespaced-candidate-activates-import =
+  # another namespace, so resolution skips it and the import answers. The
+  # dependency is optional, so the import stays inactive.
+  lib-reference-checks-foreign-namespaced-candidate-resolves-to-import =
     let
       ms = activationCluster [
         {
@@ -850,7 +861,7 @@ in
         }
       ];
     in
-    (whoOf ms == "import" && importMarker ms != null)
+    (whoOf ms == "import" && importMarker ms == null)
     || throw "foreign namespace-scoped candidate: ${whoOf ms}, import marker ${builtins.toJSON (importMarker ms)}";
 
   # --- 19. PersistentVolumeClaim references ---
