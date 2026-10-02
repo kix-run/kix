@@ -63,6 +63,7 @@
         tailscale = ./test-tailscale/cluster.nix;
         mayastor = ./test-mayastor.nix;
         virtualization = ./test-virtualization.nix;
+        metabase = ./test-metabase.nix;
       };
     };
 }
