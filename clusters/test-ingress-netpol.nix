@@ -40,10 +40,10 @@ kix.buildCluster {
         # reaching one pod, and its claim is ReadWriteOnce.
         cluster.availability.default = "none";
 
-        # Cilium is installed by the target. The `cilium` instance uses
-        # it (no chart, no HelmChartConfig), claims the enforcer role and
-        # emits the CRD references the generated policies wait on.
-        cluster.network.environmentCilium.helmChartConfig = null;
+        # Cilium is installed by the target, and the `platform-cilium`
+        # import below stands for it. The `cilium` instance uses it (no
+        # chart, no HelmChartConfig), claims the enforcer role and emits the
+        # CRD references the generated policies wait on.
         cluster.roles = {
           cni = {
             binding = "shadowable";
@@ -58,6 +58,10 @@ kix.buildCluster {
         instances.ingress-system = {
           cilium = {
             package = packages.cilium;
+          };
+          platform-cilium.package = kix.mkImport {
+            roles = [ "cni" ];
+            out.helmChartConfig = null;
           };
           # `kind`, `apiVersion` and `out.name` make the deploy wait for the
           # StorageClass, and let the claims that name it resolve in the

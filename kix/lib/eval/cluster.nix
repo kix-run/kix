@@ -304,7 +304,6 @@
       # when no consumer requests the role.
       _roleBindingsCheck = hooks.checkRoleBindings {
         clusterRoles = cfg.cluster.roles;
-        inherit (cfg.cluster.network) environmentCilium;
         inherit rolesIndex;
       };
 

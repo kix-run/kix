@@ -36,7 +36,7 @@ rec {
     };
 
     cni = {
-      description = "Pod network owner. No out contract yet. The role exists for binding-mode conflicts: an exclusive environment CNI (kindnet on stock kind) refuses a managed one at eval instead of breaking the cluster at deploy. Under shadowable the environment installed the CNI (cluster.network.environmentCilium) and the claimant uses it.";
+      description = "Pod network owner. No out contract yet. The role exists for binding-mode conflicts: an exclusive environment CNI (kindnet on stock kind) refuses a managed one at eval instead of breaking the cluster at deploy. Under shadowable the environment installed the CNI, usually declared as a platform import claiming this role (rke2: platform-cilium), and a claimant such as the cilium package configures or uses it.";
       outContract = [ ];
     };
 

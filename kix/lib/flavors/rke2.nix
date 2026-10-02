@@ -7,9 +7,11 @@
 #
 # The cni role follows cluster.flavor.rke2.cni, which must match the `cni`
 # list of RKE2's server config. canal, calico, and flannel own the role
-# exclusively. With cilium, RKE2 installs its bundled Cilium chart and a
-# `cilium` instance in kube-system configures it through the HelmChartConfig
-# kube-system/rke2-cilium. With none, the role is vacant for a managed CNI.
+# exclusively. With cilium, RKE2 installs its bundled Cilium chart, the
+# flavour declares it as the platform import kube-system/platform-cilium,
+# and a `cilium` instance in kube-system configures it through the
+# HelmChartConfig kube-system/rke2-cilium that the import names. With none,
+# the role is vacant for a managed CNI.
 #
 # Platform intents: when networkPolicy.enable = true, declares connectivity
 # for the pods RKE2's bundled charts run in kube-system, so the
@@ -22,7 +24,8 @@
 # cluster.network.podCidr defaults to RKE2's cluster-cidr, 10.42.0.0/16.
 #
 # Platform imports: DNS (coredns), the VolumeSnapshot API
-# (rke2-snapshot-controller). No default storage.
+# (rke2-snapshot-controller), and Cilium when cni names it. No default
+# storage.
 
 {
   config,
@@ -93,7 +96,8 @@ in
     description = ''
       The `cni` list of RKE2's server config. Kix cannot read it, so it must
       match. Kix reads it to bind the cni role: canal, calico, and flannel
-      are exclusive; cilium is shadowable with RKE2's HelmChartConfig
+      are exclusive; cilium is shadowable and declares the import
+      kube-system/platform-cilium, naming RKE2's HelmChartConfig
       kube-system/rke2-cilium, so a `cilium` instance configures RKE2's
       bundled Cilium; none leaves the role vacant for a managed CNI. multus
       may precede the primary CNI.
@@ -140,15 +144,6 @@ in
       };
     };
 
-    cluster.network.environmentCilium = lib.mkIf (primary == "cilium") (
-      lib.mkDefault {
-        helmChartConfig = {
-          name = "rke2-cilium";
-          namespace = "kube-system";
-        };
-      }
-    );
-
     cluster.capabilities = {
       managedControlPlane = lib.mkDefault false;
       nodeAutoscaling = lib.mkDefault false;
@@ -166,6 +161,19 @@ in
           out = {
             name = "coredns";
             fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
+          };
+        };
+        optional = true;
+      };
+
+      # The `cilium` package reads out.helmChartConfig to write its values
+      # into RKE2's bundled chart.
+      platform-cilium = lib.mkIf (primary == "cilium") {
+        package = kix.mkImport {
+          roles = [ "cni" ];
+          out.helmChartConfig = {
+            name = "rke2-cilium";
+            namespace = "kube-system";
           };
         };
         optional = true;

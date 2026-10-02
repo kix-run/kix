@@ -1,11 +1,13 @@
-# Tests for the cilium package's deliveries, the environmentCilium cluster
-# fact, and the rke2 flavour's cni list and platform intents. None renders
+# Tests for the cilium package's deliveries, the platform-cilium import it
+# takes as a dependency, and the rke2 flavour's cni list and platform
+# intents. None renders
 # the cilium chart: chart-delivery tests use a Helm stub whose importChart
 # emits the values it receives as one ConfigMap.
 
 {
   lib,
   k8s,
+  eval,
   mkCluster,
   manifests,
   ofKind,
@@ -93,7 +95,8 @@ let
     cluster:
     builtins.fromJSON (byName "cilium-values" (ofKind "ConfigMap" (manifests cluster))).data.values;
 
-  # Reads the cluster facts the cilium package derives its delivery from.
+  # Reads the cluster facts the cilium package derives its delivery from:
+  # the cni binding and the out of the platform-cilium dependency.
   factsProbe = {
     meta.version = "test";
     build =
@@ -101,6 +104,7 @@ let
         self,
         scope,
         clusterConfig,
+        platform-cilium ? null,
         ...
       }:
       {
@@ -111,7 +115,7 @@ let
           data = {
             binding = builtins.toJSON (clusterConfig.cluster.roles.cni.binding or null);
             provider = builtins.toJSON (clusterConfig.cluster.roles.cni.provider or null);
-            environmentCilium = builtins.toJSON clusterConfig.cluster.network.environmentCilium;
+            platformCilium = builtins.toJSON (if platform-cilium == null then null else platform-cilium.out);
           };
         };
         root = self.cm;
@@ -163,8 +167,16 @@ let
       extra
     ];
 
+  # A platform import for an environment-installed Cilium.
+  platformCilium =
+    out:
+    eval.mkImport {
+      roles = [ "cni" ];
+      inherit out;
+    };
+
   # An environment that installed Cilium and exposes no HelmChartConfig.
-  environmentCiliumCluster =
+  platformCiliumCluster =
     {
       netpol ? false,
       config ? { },
@@ -176,12 +188,12 @@ let
           binding = "shadowable";
           provider = "cilium (environment)";
         };
-        cluster.network.environmentCilium.helmChartConfig = null;
         networkPolicy.enable = netpol;
         instances.net.cilium = {
           package = ciliumPackage;
           inherit config;
         };
+        instances.net.platform-cilium.package = platformCilium { helmChartConfig = null; };
       }
       extra
     ];
@@ -192,8 +204,9 @@ let
       .spec.valuesContent;
 in
 {
-  # The rke2 cni list sets the cni binding and, for cilium, the
-  # environment's HelmChartConfig. Invalid lists fail evaluation.
+  # The rke2 cni list sets the cni binding and, for cilium, declares the
+  # platform-cilium import naming the environment's HelmChartConfig.
+  # Invalid lists fail evaluation.
   cilium-flavour-rke2-cni-list =
     let
       cilium = rke2Facts [ "cilium" ];
@@ -215,14 +228,14 @@ in
     in
     (
       cilium.binding == "shadowable"
-      && cilium.environmentCilium == rke2HelmChartConfig
+      && cilium.platformCilium == rke2HelmChartConfig
       && multusCilium.binding == "shadowable"
-      && multusCilium.environmentCilium == rke2HelmChartConfig
+      && multusCilium.platformCilium == rke2HelmChartConfig
       && none.binding == "absent"
-      && none.environmentCilium == null
+      && none.platformCilium == null
       && default.binding == "exclusive"
       && default.provider == "canal"
-      && default.environmentCilium == null
+      && default.platformCilium == null
       && invalid [
         "cilium"
         "canal"
@@ -247,36 +260,58 @@ in
       }
     }";
 
-  # environmentCilium on a binding other than shadowable fails evaluation,
-  # whether or not a cilium instance exists.
-  cilium-environment-requires-shadowable =
+  # A platform-cilium dependency on a cni binding other than shadowable
+  # fails evaluation. Control: the shadowable binding builds.
+  cilium-platform-import-requires-shadowable =
     let
       withBinding =
         binding:
         mkCluster [
           {
-            cluster.roles.cni = {
+            cluster.roles.cni = lib.optionalAttrs (binding != null) {
               inherit binding;
               provider = "test";
             };
-            cluster.network.environmentCilium.helmChartConfig = null;
-            instances.probe.facts.package = factsProbe;
+            instances.net.cilium.package = ciliumPackage;
+            instances.net.platform-cilium.package = platformCilium { helmChartConfig = null; };
           }
         ];
-      withoutBinding = mkCluster [
-        {
-          cluster.network.environmentCilium.helmChartConfig = null;
-          instances.probe.facts.package = factsProbe;
-        }
-      ];
     in
     (
       evalFails (withBinding "absent")
       && evalFails (withBinding "exclusive")
-      && evalFails withoutBinding
+      && evalFails (withBinding null)
       && !(evalFails (withBinding "shadowable"))
     )
-    || throw "environmentCilium was accepted on a binding other than shadowable";
+    || throw "platform-cilium was accepted on a binding other than shadowable";
+
+  # The import's out must name the HelmChartConfig or say there is none with
+  # null; a missing or malformed out.helmChartConfig fails evaluation instead
+  # of selecting the none delivery.
+  cilium-platform-import-out-checked =
+    let
+      withOut =
+        out:
+        platformCiliumCluster {
+          extra.instances.net.platform-cilium.package = lib.mkForce (platformCilium out);
+        };
+    in
+    (
+      evalFails (withOut { })
+      && evalFails (withOut {
+        helmchartconfig = null;
+      })
+      && evalFails (withOut {
+        helmChartConfig.name = "rke2-cilium";
+      })
+      && evalFails (withOut {
+        helmChartConfig = "rke2-cilium";
+      })
+      && !(evalFails (withOut {
+        helmChartConfig = null;
+      }))
+    )
+    || throw "platform-cilium out.helmChartConfig: refusal or control wrong";
 
   # Under the rke2 flavour with cni = [ "cilium" ], the instance writes
   # exactly HelmChartConfig kube-system/rke2-cilium and the CRD-reference
@@ -336,11 +371,11 @@ in
     )
     || throw "helmChartConfig values merge: ${builtins.toJSON values}";
 
-  # With environmentCilium.helmChartConfig = null the instance writes no
+  # With the import's out.helmChartConfig = null the instance writes no
   # Cilium configuration, and refuses `values`.
   cilium-none-delivery =
     let
-      ms = manifests (environmentCiliumCluster {
+      ms = manifests (platformCiliumCluster {
         netpol = true;
       });
       markers = builtins.filter (n: lib.hasPrefix "crd-ref-cilium-" n) (
@@ -352,7 +387,7 @@ in
       && ofKind "DaemonSet" ms == [ ]
       && !(hasName "cilium-cluster-dns-egress" ms)
       && builtins.length markers == 2
-      && evalFails (environmentCiliumCluster {
+      && evalFails (platformCiliumCluster {
         config.values.policyAuditMode = true;
       })
     )
@@ -368,7 +403,7 @@ in
   # CiliumNetworkPolicy.
   cilium-clusterwide-intent-is-ccnp =
     let
-      ms = manifests (environmentCiliumCluster {
+      ms = manifests (platformCiliumCluster {
         netpol = true;
         extra = {
           namespaces.agents = { };
@@ -403,29 +438,28 @@ in
     )
     || throw "platform intents: ${builtins.toJSON { inherit wide narrow; }}";
 
-  # A shadowable cni binding without environmentCilium cannot say whether
-  # the environment's CNI is Cilium. Control: the same cluster with
-  # environmentCilium set builds.
-  cilium-shadowable-without-environment =
+  # A shadowable cni binding without a platform-cilium import cannot say
+  # whether the environment's CNI is Cilium. Control: the same cluster with
+  # the import builds.
+  cilium-shadowable-without-platform-import =
     let
-      withEnvironment =
-        environment:
+      withImport =
+        withIt:
         mkCluster [
           {
             cluster.roles.cni.binding = "shadowable";
             cluster.network.podCidr = "10.244.0.0/16";
-            cluster.network.environmentCilium = environment;
-            instances.net.cilium.package = ciliumPackage;
+            instances.net = {
+              cilium.package = ciliumPackage;
+            }
+            // lib.optionalAttrs withIt {
+              platform-cilium.package = platformCilium { helmChartConfig = null; };
+            };
           }
         ];
     in
-    (
-      evalFails (withEnvironment null)
-      && !(evalFails (withEnvironment {
-        helmChartConfig = null;
-      }))
-    )
-    || throw "shadowable without environmentCilium: refusal or control wrong";
+    (evalFails (withImport false) && !(evalFails (withImport true)))
+    || throw "shadowable without platform-cilium: refusal or control wrong";
 
   # Without a cni binding Kix cannot tell whether a CNI is already
   # running. The refusal comes before the chart would be rendered.
