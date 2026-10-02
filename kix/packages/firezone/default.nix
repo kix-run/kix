@@ -151,19 +151,19 @@ in
             description = "`SECRET_KEY_BASE`.";
           };
           liveViewSigningSalt = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "`LIVE_VIEW_SIGNING_SALT`.";
+            type = lib.types.str;
+            default = "";
+            description = "`LIVE_VIEW_SIGNING_SALT`, empty when unset.";
           };
           cookieSigningSalt = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "`COOKIE_SIGNING_SALT`.";
+            type = lib.types.str;
+            default = "";
+            description = "`COOKIE_SIGNING_SALT`, empty when unset.";
           };
           cookieEncryptionSalt = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "`COOKIE_ENCRYPTION_SALT`.";
+            type = lib.types.str;
+            default = "";
+            description = "`COOKIE_ENCRYPTION_SALT`, empty when unset.";
           };
           databaseEncryptionKey = lib.mkOption {
             type = lib.types.nullOr lib.types.str;
