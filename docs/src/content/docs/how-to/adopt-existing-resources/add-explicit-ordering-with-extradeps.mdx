@@ -27,6 +27,8 @@ managed prerequisite:
 The reference has the form `ref.<namespace>.<instance>`. In `extraDeps` it
 stands for that instance's `PackageInstance` marker, which is itself ordered
 after the instance's resources.
+If that instance is optional, the reference activates it, as
+`deps.<arg> = ref.<namespace>.<instance>` does.
 
 `extraDeps` adds an ordering edge to the imported instance's marker. It does
 not modify, deploy, or check the imported Kubernetes resource.
@@ -38,9 +40,9 @@ Evaluate the complete cluster:
 <Command {...check} />
 
 Evaluation fails for a missing namespace or instance in the `ref` path, for
-an entry that is neither a resource nor a `ref`, and for a `ref` to an
-optional instance that nothing activates. Fix the entry before inspecting the
-graph.
+an entry that is neither a resource nor a `ref`, for a `ref` to the import
+itself, and for imports whose `ref`s form a cycle. These checks run whether or
+not the import is active. Fix the entry before inspecting the graph.
 
 ## Verify the order
 

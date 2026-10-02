@@ -363,8 +363,8 @@ Rule of thumb:
 | `labelStyle` | `enum { kix, helm }` | Switch label scheme, for adopting a Helm-installed workload whose selector labels are immutable. |
 | `selectorLabels` | `attrsOf str` | Override auto-generated selector labels. Escape hatch for *immutable* selectors on pre-existing StatefulSets. |
 | `partsOverlays` | `listOf (scope → self → base → attrset)` | Post-build resource transforms. Run after the package's `build` inside the same fixpoint — full access to `scope`. Can rewrite `root`, extend `out` with builders, add parts. Multiple modules concatenate. |
-| `extraDeps` | `listOf raw` | On a `kix.mkImport` instance only: dependencies for its marker that no value carries. Entries are resources or `ref.<ns>.<inst>` (that instance's PackageInstance marker). A managed instance with `extraDeps` fails evaluation. |
-| `optional` | `bool` | Pre-configure but only deploy if a non-optional instance transitively depends on this. |
+| `extraDeps` | `listOf raw` | On a `kix.mkImport` instance only: dependencies for its marker that no value carries. Entries are resources or `ref.<ns>.<inst>` (that instance's PackageInstance marker; an optional target is activated, as by `deps`). A managed instance with `extraDeps`, a malformed entry, and a cycle of refs between imports fail evaluation. |
+| `optional` | `bool` | Pre-configure but only deploy if a non-optional instance transitively depends on this, through a build argument, `deps`, or an import's `extraDeps`. |
 
 **Cluster-level channels:**
 

@@ -1735,11 +1735,16 @@ stands for that instance's PackageInstance marker:
 }
 ```
 
-Evaluation fails for an entry that is neither a resource nor a `ref`, for a
-`ref` to the import itself, and for a `ref` to an optional instance that
-nothing activates, whose marker is never rendered. The option applies only to
-imports; a managed instance with `extraDeps` fails evaluation, and its
-resources take `requires` or `extraDeps` in their builders instead.
+A `ref` to an optional instance activates it, as `deps.<arg> = ref.<ns>.<inst>`
+does, when the import is itself active. An import that only an optional build
+argument of another instance resolved to activates nothing, so its `ref` to an
+optional instance that nothing else activates fails evaluation.
+
+Evaluation also fails, whether or not the instance is active, for an entry
+that is neither a resource nor a `ref`, for a `ref` to the import itself, and
+for imports whose `ref`s form a cycle. The option applies only to imports; a
+managed instance with `extraDeps` fails evaluation, and its resources take
+`requires` or `extraDeps` in their builders instead.
 
 ## 24. Manifest stamping
 
