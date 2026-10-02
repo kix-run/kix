@@ -1,14 +1,14 @@
-# clusters/test-immich.nix — Immich with auto-instantiation.
+# clusters/test-immich.nix: Immich with auto-instantiation.
 #
-# Only immich, its storage PVC, the per-app database (which needs an
-# explicit dev password) and storage-classes are declared. storage-classes
-# is declared because the cluster has no flavor to provide a class, and an
-# optional dependency does not auto-instantiate it. valkey, the
-# stackgres-cluster postgres backend, and the database's required
-# extensions are all picked up via auto-instantiation + dep config
-# injection — immich declares it needs `vector`, the database forwards
-# that to postgres, and the operator installs it on the postgres image.
-# valkey's password is declared, since a secret has no safe default.
+# Only immich, its storage claim, its postgres cluster, the per-app database
+# (which needs an explicit dev password), valkey's password, and
+# storage-classes are declared. storage-classes is declared because the
+# cluster has no flavor to provide a class, and an optional dependency does
+# not auto-instantiate it. valkey and the extensions immich needs (vchord,
+# uuid-ossp, cube, earthdistance, unaccent, pg_trgm) arrive through
+# auto-instantiation and dependency config injection: immich adds them to
+# the database, which forwards them to its postgres cluster, and the
+# operator installs them on the postgres image.
 #
 # Build:  nix build .#cluster-immich --extra-experimental-features pipe-operators
 
@@ -28,7 +28,7 @@ kix.buildCluster {
         };
       };
 
-      # Operator is cluster-scoped — declare once to avoid duplicate CRDs.
+      # The operator is cluster-scoped: declare it once to avoid duplicate CRDs.
       instances.stackgres-system.stackgres-operator = {
         package = packages.stackgres-operator;
       };
@@ -46,22 +46,17 @@ kix.buildCluster {
           };
         };
 
-        # Per-app postgres cluster. Declared so the database in this
-        # namespace doesn't reach across namespaces to firezone's
-        # postgres via cluster-wide DI resolution. Notably: NO `extensions`
-        # config — the vector extension comes via dep config injection
-        # (immich → immich-db → immich-pg) at build time.
+        # Per-app postgres cluster, declared so the database in this
+        # namespace does not resolve to firezone's postgres. It sets no
+        # `extensions`: immich's arrive through immich-db.
         immich-pg = {
           package = packages.stackgres-cluster;
           aliases = [ "postgres" ];
         };
 
-        # Per-app database + role. The only thing we have to set is the
-        # dev password — extensions and the underlying postgres backend
-        # are wired automatically:
-        #   immich.deps.database.config.extensions = [ "vector" ]
-        #     → stackgres-database forwards to its postgres dep (immich-pg)
-        #     → operator installs the extension on the postgres image
+        # Per-app database and role. Only the dev password is set here;
+        # immich adds its extensions to `extensions`, and stackgres-database
+        # forwards them to immich-pg.
         immich-db = {
           package = packages.stackgres-database;
           aliases = [ "database" ];
@@ -81,7 +76,7 @@ kix.buildCluster {
         };
       };
 
-      # Firezone VPN — shares the postgres instance from immich namespace.
+      # Firezone VPN, with its own postgres cluster.
       instances.firezone = {
         firezone-db = {
           package = packages.stackgres-cluster;
