@@ -29,7 +29,9 @@
 # another namespace leaves the existing volumes' records behind, and the
 # driver no longer manages those volumes.
 #
-# The binary fixes the CSIDriver name, so a cluster runs one instance.
+# A cluster runs one instance: the zfs.openebs.io CRDs are cluster-scoped,
+# and the package pins the driver name zfs.csi.openebs.io by refusing
+# `--name`.
 #
 # Snapshots: the optional `snapshotController` dependency provides the
 # VolumeSnapshot API (a `snapshot-controller` instance, or the environment
@@ -39,11 +41,11 @@
 #
 # This package does not claim the `storageClasses` role. A consumer names
 # the instance, `deps.storageClasses = ref.<namespace>.<instance>`, and gets
-# out.storageClassName; an instance that lists `storageClasses` in its
-# `aliases` serves every consumer that names no provider.
+# out.storageClassName. An instance with
+# `aliases = [ "storageClasses" "zfsLocalPv" ]` serves every consumer that
+# names no provider; `zfsLocalPv` keeps the one-instance check, which
+# matches on that alias.
 #
-# out.provisioner: the CSIDriver name. out.storageClasses and
-# out.volumeSnapshotClasses: the rendered classes by key.
 # out.storageClassName: the class annotated
 # storageclass.kubernetes.io/is-default-class, else the only class; reading
 # it throws otherwise.
@@ -153,21 +155,22 @@ in
     version = release;
     description = "OpenEBS LocalPV-ZFS CSI driver: PersistentVolumes as ZFS datasets or zvols on each node's existing pool";
     owner = "platform";
-    # The node plugin runs zfs on the host through `chroot /host`, mounts
+    # The node plugin runs zfs on the host through `chroot /host` and mounts
     # volumes into the kubelet's pod directory with Bidirectional
-    # propagation, and runs on the host network as upstream deploys it.
+    # propagation.
     unsafe = [
       "privileged"
-      "host-network"
       "run-as-root"
     ];
     podSecurity = "privileged";
     defaultAliases = [ "zfsLocalPv" ];
-    # The binary fixes the CSIDriver name and the CRDs are cluster-scoped,
-    # so a cluster runs one instance. An instance that sets its own
-    # `aliases` keeps this check only if it lists zfsLocalPv.
+    # The CRDs are cluster-scoped and the package pins the driver name, so a
+    # cluster runs one instance. An instance that sets its own `aliases`
+    # keeps this check only if it lists zfsLocalPv.
     conflictsWith = [ "cluster:zfsLocalPv" ];
-    k8s.minVersion = "1.23";
+    # csi-provisioner's --enable-capacity writes storage.k8s.io/v1
+    # CSIStorageCapacity objects, which Kubernetes serves from 1.24.
+    k8s.minVersion = "1.24";
   };
 
   options = {
@@ -183,6 +186,7 @@ in
         repository = "registry.k8s.io/sig-storage/csi-provisioner";
         tag = "v5.2.0";
         digest = "sha256:d5e46da8aff7d73d6f00c761dae94472bcda6e78f4f17b3802dc89d44de0111b";
+        description = "Image of csi-provisioner, the controller sidecar that creates volumes and publishes pool capacity.";
       };
       resources = sidecarResources;
     };
@@ -192,6 +196,7 @@ in
         repository = "registry.k8s.io/sig-storage/csi-resizer";
         tag = "v1.13.2";
         digest = "sha256:8ddd178ba5d08973f1607f9b84619b58320948de494b31c9d7cd5375b316d6d4";
+        description = "Image of csi-resizer, the controller sidecar that expands volumes.";
       };
       resources = sidecarResources;
     };
@@ -211,6 +216,7 @@ in
         repository = "registry.k8s.io/sig-storage/csi-node-driver-registrar";
         tag = "v2.13.0";
         digest = "sha256:d7138bcc3aa5f267403d45ad4292c95397e421ea17a0035888850f424c7de25d";
+        description = "Image of node-driver-registrar, the node sidecar that registers the driver with the kubelet.";
       };
       resources = sidecarResources;
     };
@@ -338,15 +344,17 @@ in
         description = "The kubelet's root directory on the host (upstream `zfsNode.kubeletDir`). k0s and microk8s use another path.";
       };
       encrKeysDir = lib.mkOption {
-        type = absolutePath;
-        default = "/home/keys";
-        description = "Host directory mounted at /home/keys in the node plugin, for datasets encrypted with `keylocation=file:///home/keys/...` (upstream `zfsNode.encrKeysDir`).";
+        type = lib.types.nullOr absolutePath;
+        default = null;
+        example = "/home/keys";
+        description = "Host directory mounted at /home/keys in the node plugin, for datasets encrypted with `keylocation=file:///home/keys/...` (upstream `zfsNode.encrKeysDir`, whose chart default is /home/keys). Null mounts nothing.";
       };
       zfsBin = lib.mkOption {
-        type = lib.types.str;
+        # The value goes into the wrapper script's command line.
+        type = lib.types.strMatching "(/[A-Za-z0-9._+-]+)+|[A-Za-z0-9_][A-Za-z0-9._+-]*";
         default = "zfs";
         example = "/run/current-system/sw/bin/zfs";
-        description = "The zfs binary run under `chroot /host` when neither /sbin/zfs nor /usr/sbin/zfs exists on the host (upstream `zfs.bin`).";
+        description = "The zfs binary run under `chroot /host` when neither /sbin/zfs nor /usr/sbin/zfs exists on the host (upstream `zfs.bin`): an absolute path, or a command name looked up on the host's PATH.";
       };
       nodeSelector = lib.mkOption {
         type = lib.types.attrsOf lib.types.str;
@@ -366,6 +374,24 @@ in
     let
       vscNames = builtins.attrNames config.volumeSnapshotClasses;
       defaults = defaultVscs config.volumeSnapshotClasses;
+
+      # The apiserver rejects these combinations when the DaemonSet is
+      # applied.
+      tolerationProblems =
+        i: t:
+        let
+          at = "config.node.tolerations.${toString i}";
+        in
+        lib.optional ((t.key == null || t.key == "") && t.operator != "Exists")
+          "${at} has no key and operator ${t.operator}; a toleration without a key must use operator Exists. Set key, or set operator = \"Exists\"."
+        ++
+          lib.optional (t.operator == "Exists" && t.value != null)
+            "${at} sets value with operator Exists, which matches any value. Remove value, or set operator = \"Equal\"."
+        ++
+          lib.optional (t.tolerationSeconds != null && t.effect != "NoExecute")
+            "${at} sets tolerationSeconds with effect ${
+              if t.effect == null then "null" else t.effect
+            }; tolerationSeconds applies only to effect NoExecute. Set effect = \"NoExecute\", or remove tolerationSeconds.";
     in
     map
       (message: {
@@ -374,10 +400,17 @@ in
       })
       (
         lib.optional (vscNames != [ ] && (deps.snapshotController or null) == null)
-          "volumeSnapshotClasses defines ${lib.concatStringsSep ", " vscNames}, but nothing provides the snapshotController role, so the VolumeSnapshotClass kind has no owner. Add a snapshot-controller instance; on a cluster whose environment runs the controller, use a flavour or an import that provides the role (HANDBOOK §23); or remove volumeSnapshotClasses."
+          "volumeSnapshotClasses defines ${lib.concatStringsSep ", " vscNames}, but nothing provides the snapshotController role, so the VolumeSnapshotClass kind has no owner. Add a snapshot-controller instance; on a cluster whose environment runs the controller, use its flavour (rke2 provides the role) or a kix.mkImport with roles = [ \"snapshotController\" ] and its crds; or remove volumeSnapshotClasses."
         ++
           lib.optional (builtins.length defaults > 1)
             "config.volumeSnapshotClasses.${builtins.elemAt defaults 0} and config.volumeSnapshotClasses.${builtins.elemAt defaults 1} are both annotated ${vscDefaultAnnotation}=\"true\". A VolumeSnapshot that names no class then fails, because the snapshot controller does not choose between two defaults for one driver. Keep the annotation on one class."
+        # Each class becomes a part named by its key, and kix does not render
+        # parts named root or meta.
+        ++ map (
+          n:
+          "config.volumeSnapshotClasses.${n}: kix drops parts named root or meta, so this VolumeSnapshotClass would not be rendered. Rename it."
+        ) (builtins.filter (n: n == "root" || n == "meta") vscNames)
+        ++ lib.concatLists (lib.imap0 tolerationProblems config.node.tolerations)
       );
 
   build =
@@ -455,8 +488,22 @@ in
       ];
 
       fieldRef = path: { valueFrom.fieldRef.fieldPath = path; };
-      namespaceVar.OPENEBS_NAMESPACE = fieldRef "metadata.namespace";
-      ownedVars = "the package: the plugin's flags read them, and OPENEBS_NAMESPACE is where the driver keeps its ZFS records";
+
+      # One group per variable, so a refusal explains the variable it names
+      # and points at the option that set it.
+      ownedEnv =
+        option:
+        lib.mapAttrsToList (
+          var: owned: {
+            vars.${var} = owned.value;
+            inherit (owned) from;
+            fix = "Remove it from ${option}.";
+          }
+        );
+      namespaceVar.OPENEBS_NAMESPACE = {
+        value = fieldRef "metadata.namespace";
+        from = "the pod's namespace, where the driver keeps its ZFS records";
+      };
 
       # The sidecars elect a leader among the controller replicas, each with
       # its own Lease in the pod's namespace. The controller plugin runs
@@ -563,7 +610,7 @@ in
           elif [ -x /host/usr/sbin/zfs ]; then
             chroot /host /usr/sbin/zfs "$@"
           else
-            chroot /host "${config.node.zfsBin}" "$@"
+            chroot /host ${lib.escapeShellArg config.node.zfsBin} "$@"
           fi
         '';
       };
@@ -648,16 +695,19 @@ in
                       OPENEBS_IO_ENABLE_ANALYTICS = "false";
                       OPENEBS_IO_ENABLE_BACKUP_GC = "false";
                     };
-                    owned = [
-                      {
-                        vars = namespaceVar // {
-                          OPENEBS_CSI_ENDPOINT = "unix://${socketDir}/csi.sock";
-                          OPENEBS_CONTROLLER_DRIVER = "controller";
+                    owned = ownedEnv "controller.env" (
+                      namespaceVar
+                      // {
+                        OPENEBS_CSI_ENDPOINT = {
+                          value = "unix://${socketDir}/csi.sock";
+                          from = "the package; the plugin's --endpoint flag reads it, and the sidecars connect to the same socket";
                         };
-                        from = ownedVars;
-                        fix = "Remove it.";
+                        OPENEBS_CONTROLLER_DRIVER = {
+                          value = "controller";
+                          from = "the package; the plugin's --plugin flag reads it to select the controller code path";
+                        };
                       }
-                    ];
+                    );
                   } config.controller.env
                 );
                 resources = config.controller.resources;
@@ -689,18 +739,10 @@ in
         requires = crds ++ [ self.csiDriver ];
         spec = {
           selector.matchLabels = component "node";
-          # Upstream's strategy: every node plugin restarts at once. Mounted
-          # volumes stay mounted while it is down; only new mounts and
-          # unmounts wait.
-          updateStrategy = {
-            type = "RollingUpdate";
-            rollingUpdate.maxUnavailable = "100%";
-          };
           template = {
             metadata.annotations."checksum/zfs-wrapper" = self.zfsWrapper.out.identityHash;
             spec = {
               serviceAccount = self.nodeServiceAccount;
-              hostNetwork = true;
               priorityClassName = "system-node-critical";
               terminationGracePeriodSeconds = 30;
               containers = [
@@ -712,7 +754,22 @@ in
                     "--v=2"
                     "--csi-address=/plugin/csi.sock"
                     "--kubelet-registration-path=${pluginDir}/csi.sock"
+                    "--http-endpoint=:9809"
                   ];
+                  ports = [ (kix.port "healthz" 9809) ];
+                  # /healthz fails while the registration socket is missing.
+                  livenessProbe = {
+                    httpGet = {
+                      path = "/healthz";
+                      port = "healthz";
+                    };
+                    initialDelaySeconds = 5;
+                    timeoutSeconds = 5;
+                  };
+                  readinessProbe.httpGet = {
+                    path = "/healthz";
+                    port = "healthz";
+                  };
                   resources = config.nodeDriverRegistrar.resources;
                   volumeMounts = [
                     {
@@ -755,17 +812,23 @@ in
                     kix.mergeEnv {
                       inherit who;
                       defaults.ALLOWED_TOPOLOGIES = "All";
-                      owned = [
-                        {
-                          vars = namespaceVar // {
-                            OPENEBS_NODE_NAME = fieldRef "spec.nodeName";
-                            OPENEBS_CSI_ENDPOINT = "unix:///plugin/csi.sock";
-                            OPENEBS_NODE_DRIVER = "agent";
+                      owned = ownedEnv "node.env" (
+                        namespaceVar
+                        // {
+                          OPENEBS_NODE_NAME = {
+                            value = fieldRef "spec.nodeName";
+                            from = "the pod's node name; --nodename passes it to the plugin as its node ID";
                           };
-                          from = ownedVars;
-                          fix = "Remove it.";
+                          OPENEBS_CSI_ENDPOINT = {
+                            value = "unix:///plugin/csi.sock";
+                            from = "the package; the plugin's --endpoint flag reads it, and the registrar and the kubelet connect to the same socket";
+                          };
+                          OPENEBS_NODE_DRIVER = {
+                            value = "agent";
+                            from = "the package; the plugin's --plugin flag reads it to select the node code path";
+                          };
                         }
-                      ];
+                      );
                     } config.node.env
                   );
                   resources = config.node.resources;
@@ -782,10 +845,12 @@ in
                       name = "device-dir";
                       mountPath = "/dev";
                     }
-                    {
-                      name = "encr-keys";
-                      mountPath = "/home/keys";
-                    }
+                  ]
+                  ++ lib.optional (config.node.encrKeysDir != null) {
+                    name = "encr-keys";
+                    mountPath = "/home/keys";
+                  }
+                  ++ [
                     {
                       name = "zfs-wrapper";
                       mountPath = "/sbin/zfs";
@@ -812,7 +877,6 @@ in
               volumes = [
                 ({ name = "device-dir"; } // hostPath "/dev" "Directory")
                 ({ name = "host-root"; } // hostPath "/" "Directory")
-                ({ name = "encr-keys"; } // hostPath config.node.encrKeysDir "DirectoryOrCreate")
                 ({ name = "registration-dir"; } // hostPath "${kubeletDir}/plugins_registry" "DirectoryOrCreate")
                 ({ name = "plugin-dir"; } // hostPath pluginDir "DirectoryOrCreate")
                 ({ name = "pods-mount-dir"; } // hostPath kubeletDir "Directory")
@@ -823,7 +887,10 @@ in
                     defaultMode = 365; # 0555
                   };
                 }
-              ];
+              ]
+              ++ lib.optional (config.node.encrKeysDir != null) (
+                { name = "encr-keys"; } // hostPath config.node.encrKeysDir "DirectoryOrCreate"
+              );
             }
             // lib.optionalAttrs (config.node.nodeSelector != { }) { inherit (config.node) nodeSelector; }
             // lib.optionalAttrs (config.node.tolerations != [ ]) {
@@ -858,12 +925,7 @@ in
         ]
         ++ builtins.attrValues self.classes
         ++ builtins.attrValues self.snapshotClasses;
-        out = {
-          provisioner = self.csiDriver.out.name;
-          storageClasses = self.classes;
-          inherit (sc) storageClassName;
-          volumeSnapshotClasses = self.snapshotClasses;
-        };
+        out = { inherit (sc) storageClassName; };
       };
     }
     // mkClusterRoleSet scope {
