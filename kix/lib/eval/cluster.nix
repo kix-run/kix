@@ -20,6 +20,7 @@
   evaluateInstanceConfig,
   evaluateInstance,
   mkImport,
+  checkInstanceExtraDeps,
 }:
 
 {
@@ -94,6 +95,13 @@
           ) acc (instCfg.deps or { })
         ) acc nsInsts
       ) null cfg.instances;
+
+      # Runs over inactive instances too, and before anything renders an
+      # import marker, so a cycle of extraDeps refs gets a Kix message.
+      _extraDepsCheck = checkInstanceExtraDeps {
+        instances = cfg.instances;
+        inherit mergedInstances;
+      };
 
       allNsNames = lib.unique (builtins.attrNames cfg.namespaces ++ builtins.attrNames mergedInstances);
 
@@ -870,44 +878,46 @@
 
     in
     builtins.seq _refTargetsCheck (
-      builtins.seq _rolesValidation (
-        builtins.seq _roleBindingsCheck (
-          builtins.seq _annotationDomainsCheck (
-            builtins.seq _clusterHookChecksRun (
-              builtins.seq clusterDiagnostics.emitExtraWarnings (
-                builtins.seq clusterDiagnostics.assertionCheck {
-                  _type = "k8s-cluster-v2";
-                  inherit name;
+      builtins.seq _extraDepsCheck (
+        builtins.seq _rolesValidation (
+          builtins.seq _roleBindingsCheck (
+            builtins.seq _annotationDomainsCheck (
+              builtins.seq _clusterHookChecksRun (
+                builtins.seq clusterDiagnostics.emitExtraWarnings (
+                  builtins.seq clusterDiagnostics.assertionCheck {
+                    _type = "k8s-cluster-v2";
+                    inherit name;
 
-                  inherit clusterInstances;
-                  instances = clusterInstances;
+                    inherit clusterInstances;
+                    instances = clusterInstances;
 
-                  namespaces = nsResources;
+                    namespaces = nsResources;
 
-                  inherit
-                    activation
-                    packageIndex
-                    info
-                    extraImages
-                    ;
+                    inherit
+                      activation
+                      packageIndex
+                      info
+                      extraImages
+                      ;
 
-                  diagnostics = {
-                    warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
-                    inherit (clusterDiagnostics) assertions failedAssertions;
-                  };
-
-                  out = {
-                    maintenance = {
-                      enable = cfg.cluster.maintenance.enable or false;
-                      reason = cfg.cluster.maintenance.reason or null;
-                      until = cfg.cluster.maintenance.until or null;
+                    diagnostics = {
+                      warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
+                      inherit (clusterDiagnostics) assertions failedAssertions;
                     };
-                  };
 
-                  inherit scorecardReport;
+                    out = {
+                      maintenance = {
+                        enable = cfg.cluster.maintenance.enable or false;
+                        reason = cfg.cluster.maintenance.reason or null;
+                        until = cfg.cluster.maintenance.until or null;
+                      };
+                    };
 
-                  rawManifests = rawManifestList;
-                }
+                    inherit scorecardReport;
+
+                    rawManifests = rawManifestList;
+                  }
+                )
               )
             )
           )
