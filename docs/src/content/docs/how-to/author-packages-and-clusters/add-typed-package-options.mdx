@@ -109,7 +109,8 @@ names. Setting `environment = "staging"` produces this error:
 
 <Command {...invalidEnvironment} />
 
-The error names the option and the rejected definition. Restore an allowed
+The error names the option and the rejected definition. It also names the
+instance and the file that set the value. Restore an allowed
 value and check the cluster again:
 
 <Command {...check} />

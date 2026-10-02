@@ -69,6 +69,15 @@ rec {
     importName = key "import-name";
     importFqdn = key "import-fqdn";
     importSecretKeys = key "import-secret-keys";
+    # On CRD ref markers only (scope.mkCRDRef, mkImport crds): the kind, the
+    # default API version (the declaration's `version`), every version the
+    # declaration says the CRD serves (`servedVersions`, comma separated,
+    # `version` among them), and the scope (`Namespaced` or `Cluster`) of the
+    # referenced CRD. Check 21 and the deploy read them.
+    crdKind = key "crd-kind";
+    crdVersion = key "crd-version";
+    crdServedVersions = key "crd-served-versions";
+    crdScope = key "crd-scope";
     serviceSelector = key "service-selector";
     servicePorts = key "service-ports";
     serviceLabels = key "service-labels";

@@ -15,11 +15,36 @@
 # to fail. Its cluster downgrades those rules to warnings so the rest of the
 # package is still checked, and the check fails when a listed rule produces
 # no finding, so an entry is removed once the package is fixed.
+#
+# Each cluster uses a clusterDomain other than cluster.local, so the
+# `architecture.clusterDomainLiteral` rule sees addresses a package spells
+# out instead of deriving. Two static checks cover what never renders: the package's source
+# must not contain `cluster.local` outside comments, and `meta.version`
+# must parse as a version (kix/lib/core/version.nix).
+# `sourceDomainLiteralExceptions` and `versionExceptions` list the packages
+# known to fail them; like `knownFailures`, a listed package that passes
+# fails the check until its entry is removed.
+#
+# Every package's options must satisfy the option contract
+# (kix/lib/eval/options.nix). Instance evaluation does not check it, so
+# this file is where it is enforced: once per package and availability
+# level (`kix.checkPackageOptions`), before any synthetic cluster is
+# evaluated.
+#
+# Every package is evaluated twice: on the kind flavour alone (availability
+# "none") and with three availability zones declared ("zone"). Replica
+# counts depend on the level, and a builder ceiling (`availability.max` on
+# one workload) can leave them level-dependent, so a package can pass at
+# "none" and fail the replica guard under a `none` ceiling at "zone".
 
 { kix, lib }:
 
 let
   piChecks = import ./pi-checks.nix { inherit lib; };
+  versions = import ./lib/core/version.nix { inherit lib; };
+
+  # The clusterDomain of every synthetic cluster.
+  evalClusterDomain = "eval.kix.test";
 
   packages =
     let
@@ -34,13 +59,10 @@ let
     ) dirs;
 
   # Auto-instantiation refuses a key that two shelf packages answer, so the
-  # shelf keeps one implementation per contested required key:
-  # prometheus-operator for `prometheusOperator` (kube-prometheus-stack's
-  # `out` lacks mkAlertmanager and mkPrometheus), and the single-node
-  # clickhouse for `clickhouse`. Both removed packages are still evaluated
-  # as their own instance.
+  # shelf keeps one implementation per contested required key: the
+  # single-node clickhouse for `clickhouse`. clickhouse-cluster is still
+  # evaluated as its own instance.
   availablePackages = removeAttrs packages [
-    "kube-prometheus-stack"
     "clickhouse-cluster"
   ];
 
@@ -56,53 +78,37 @@ let
     };
   };
 
-  nonRoot = {
-    rule = "security.nonRoot";
-    reason = "housekeeping/2026-09-27-five-packages-fail-non-root-rule.md";
+  # A claim for packages that take a `storage` dependency. Its alias comes
+  # from the package's `defaultAliases`.
+  storage = {
+    package = packages.persistent-volume-claim;
+    config.size = "1Gi";
   };
-  lokiLabels = {
-    rule = "architecture.distinctSameKindLabels";
-    reason = "housekeeping/2026-09-27-loki-chart-services-share-labels.md";
+
+  # A `valkeyPassword` secret for packages that connect to valkey.
+  valkeyPassword = {
+    package = packages.secret;
+    aliases = [ "valkeyPassword" ];
+    config.stringData.password = "password";
   };
 
   # Error-severity scorecard rules each package fails, with the file that
   # records why. A housekeeping file may cover several packages.
-  knownFailures = {
-    clickhouse-logs = [
-      {
-        rule = "security.nonRoot";
-        # The Vector agent runs as root to read pod logs.
-        reason = "kix/packages/clickhouse-logs/default.nix";
-      }
-    ];
-    loki = [ lokiLabels ];
-    # The labels finding comes from the auto-instantiated loki.
-    promtail = [ lokiLabels ];
-    redis = [
-      {
-        rule = "architecture.distinctSameKindLabels";
-        reason = "housekeeping/2026-09-27-redis-services-share-labels.md";
-      }
-    ];
-    smartctl-exporter = [
-      {
-        rule = "architecture.monitorSelectorMatchesService";
-        reason = "housekeeping/2026-09-27-smartctl-exporter-monitor-selects-helm-labels.md";
-      }
-    ];
-    tailscale = [ nonRoot ];
-  };
+  knownFailures = { };
 
   # What a package needs beyond its defaults. `config` is the instance
   # config, `instances` are added to the package's namespace, and `module`
   # is a cluster module that takes the namespace name.
   settings = {
-    arc-runner-set.config.values = {
-      githubConfigUrl = "https://github.com/example/example";
-      githubConfigSecret = "arc-github";
-      controllerServiceAccount = {
-        name = "arc-gha-rs-controller";
-        namespace = "arc-systems";
+    arc-runner-set = {
+      config = {
+        githubConfigUrl = "https://github.com/example/example";
+        maxRunners = 2;
+      };
+      instances.github-config = {
+        package = packages.secret-ref;
+        aliases = [ "githubConfigSecret" ];
+        config.keys = [ "github_token" ];
       };
     };
     caddy.module = _: {
@@ -117,37 +123,43 @@ let
         provider = null;
       };
     };
-    cilium-rke2 = {
-      config = {
-        internalCidr = "10.44.0.0/14";
-        clusterNodes.node1 = {
-          role = "server";
-          ip = "192.0.2.1";
-          hostNumber = 1;
-        };
-      };
-      module = _: {
-        cluster.roles.cni = {
-          binding = "absent";
-          provider = null;
-        };
-      };
-    };
-    clickhouse.instances = { inherit credentials; };
+    clickhouse.instances = { inherit credentials storage; };
     clickhouse-cluster.instances = { inherit credentials; };
     clickhouse-database = {
       config.password = "password";
-      instances = { inherit credentials; };
+      instances = { inherit credentials storage; };
     };
     clickhouse-keeper.instances = { inherit credentials; };
     clickhouse-logs.instances = {
-      inherit credentials;
+      inherit credentials storage;
       clickhouse-database = {
         package = packages.clickhouse-database;
         config.password = "password";
       };
     };
     clickhouse-operator.instances = { inherit credentials; };
+    cloudflared.config.token = "eval-only";
+    cluster-issuer.config.spec.selfSigned = { };
+    # A real Prometheus provider, so the ServiceMonitor, the alert rules,
+    # and the Service's metrics port are built against its builders.
+    coredns = {
+      config.clusterIP = "10.96.0.53";
+      instances.prometheus-operator.package = packages.prometheus-operator;
+    };
+    external-dns = {
+      config = {
+        provider = "cloudflare";
+        policy = "upsert-only";
+        txtOwnerId = "package-eval";
+        secretEnv.CF_API_TOKEN = "api-token";
+      };
+      instances.provider-credentials = {
+        package = packages.secret;
+        aliases = [ "providerCredentials" ];
+        config.stringData.api-token = "token";
+      };
+    };
+    filebrowser.instances = { inherit storage; };
     firezone.config = {
       domain = "firezone.example.com";
       admin = {
@@ -155,58 +167,340 @@ let
         password = "password";
       };
       wireguard.privateKey = "key";
+      # The three salts are optional; clusters/test-immich.nix sets them.
       secrets = {
         guardianSecretKey = "guardian";
         secretKeyBase = "base";
         databaseEncryptionKey = "encryption";
-        liveViewSigningSalt = "live-view";
-        cookieSigningSalt = "cookie";
-        cookieEncryptionSalt = "cookie-encryption";
       };
     };
+    # The administrator's login, and a Prometheus provider, so the
+    # ServiceMonitor is built.
+    grafana.instances = {
+      grafana-admin = {
+        package = packages.secret;
+        aliases = [ "grafanaAdmin" ];
+        config.stringData = {
+          admin-user = "admin";
+          admin-password = "password";
+        };
+      };
+      prometheus-operator.package = packages.prometheus-operator;
+    };
     harbor = {
-      instances.database = {
+      instances = {
+        inherit storage;
+        valkey-password = valkeyPassword;
+        database = {
+          package = packages.stackgres-database;
+          config.password = "password";
+        };
+        harbor-secrets = {
+          package = packages.secret;
+          aliases = [ "harborSecrets" ];
+          config.stringData = {
+            adminPassword = "admin";
+            secretKey = "0123456789abcdef";
+            coreSecret = "core";
+            jobserviceSecret = "jobservice";
+            csrfKey = "0123456789abcdef0123456789abcdef";
+            registryHttpSecret = "registry-http";
+            registryPassword = "registry";
+            tokenPrivateKey = "key";
+          };
+        };
+      };
+      config.externalURL = "https://harbor.example.com";
+    };
+    # A Prometheus provider, so the metrics ports and the ServiceMonitor are
+    # built.
+    immich.instances = {
+      inherit storage;
+      valkey-password = valkeyPassword;
+      database = {
         package = packages.stackgres-database;
         config.password = "password";
       };
-      config.externalURL = "https://harbor.example.com";
-      config.secrets.values = {
-        adminPassword = "admin";
-        secretKey = "0123456789abcdef";
-        coreSecret = "core";
-        jobserviceSecret = "jobservice";
-        csrfKey = "0123456789abcdef0123456789abcdef";
-        registryHttpSecret = "registry-http";
-        registryPassword = "registry";
-        registryHtpasswd = "harbor_registry_user:hash";
-        tokenPrivateKey = "key";
+      prometheus-operator.package = packages.prometheus-operator;
+    };
+    loki.instances = { inherit storage; };
+    # loki-logs auto-instantiates loki, which needs a claim.
+    loki-logs.instances = { inherit storage; };
+    # A class, a pool, and a Prometheus provider, so the StorageClass, the
+    # DiskPool and its CRD reference, and the io-engine metrics Service,
+    # ServiceMonitor, and alerts are built.
+    mayastor = {
+      config = {
+        storageClasses.mayastor-1.parameters.repl = "1";
+        diskPools.pool-1 = {
+          node = "node-1";
+          disks = [ "/dev/disk/by-id/example" ];
+        };
+      };
+      instances.prometheus-operator.package = packages.prometheus-operator;
+    };
+    metabase.instances = {
+      database = {
+        package = packages.stackgres-database;
+        config.password = "password";
+      };
+      encryption-key = {
+        package = packages.secret;
+        aliases = [ "encryptionKey" ];
+        config.stringData.key = "0123456789abcdef";
       };
     };
-    immich.instances.database = {
-      package = packages.stackgres-database;
-      config.password = "password";
+    # metrics.enabled with a prometheus provider renders the ServiceMonitor
+    # and N8N_METRICS.
+    n8n = {
+      config.metrics.enabled = true;
+      instances = {
+        prometheus-operator.package = packages.prometheus-operator;
+        valkey-password = valkeyPassword;
+        database = {
+          package = packages.stackgres-database;
+          config.password = "password";
+        };
+        n8n-encryption-key = {
+          package = packages.secret;
+          aliases = [ "encryptionKey" ];
+          config.stringData.key = "0123456789abcdef0123456789abcdef";
+        };
+      };
     };
-    posthog-proxy.config.host = "posthog.example.com";
-    priority-classes.config.classes.default.value = 1000;
-    python-app.config.backend.image = {
-      repository = "ghcr.io/example/python-app";
-      tag = "1.0.0";
-    };
+    persistent-volume-claim.config.size = "1Gi";
+    priority-class.config.value = 1000;
     secret.config.stringData.password = "password";
     secret-echo.instances = { inherit credentials; };
     secret-ref.config.keys = [ "password" ];
+    # A Prometheus provider, so the metrics Service and the ServiceMonitor
+    # are built.
+    snapshot-controller.instances.prometheus-operator.package = packages.prometheus-operator;
+    # Backups to an object storage, so the SGObjectStorage reference, the
+    # backups entries, and archive_timeout are built; a pooler and a script,
+    # so the SGPoolingConfig and the SGScript are built.
+    stackgres-cluster = {
+      config = {
+        backups = [ { cronSchedule = "0 1 * * *"; } ];
+        pooling = { };
+        scripts = [
+          {
+            name = "init";
+            script = "SELECT 1";
+          }
+        ];
+      };
+      instances = {
+        s3-credentials = {
+          package = packages.secret;
+          aliases = [ "storageCredentials" ];
+          config.stringData = {
+            accessKeyId = "id";
+            secretAccessKey = "key";
+          };
+        };
+        stackgres-object-storage = {
+          package = packages.stackgres-object-storage;
+          config = {
+            type = "s3Compatible";
+            bucket = "backups";
+          };
+        };
+      };
+    };
     stackgres-database.config.password = "password";
-    stackgres-object-storage.config = {
-      bucket = "backups";
-      credentialsSecretName = "backup-credentials";
+    stackgres-object-storage = {
+      config = {
+        type = "s3Compatible";
+        bucket = "backups";
+      };
+      instances.s3-credentials = {
+        package = packages.secret;
+        aliases = [ "storageCredentials" ];
+        config.stringData = {
+          accessKeyId = "id";
+          secretAccessKey = "key";
+        };
+      };
+    };
+    # No default annotation: the kind flavour already has a default class.
+    storage-classes.config.classes.local-path-retain = {
+      provisioner = "rancher.io/local-path";
+      reclaimPolicy = "Retain";
+      volumeBindingMode = "WaitForFirstConsumer";
+    };
+    tailscale.instances.oauth-credentials = {
+      package = packages.secret;
+      aliases = [ "oauthCredentials" ];
+      config.stringData = {
+        client_id = "id";
+        client_secret = "secret";
+      };
+    };
+    valkey.instances.valkey-password = valkeyPassword;
+    # Nothing routes to the instance here, so the URL comes from `domain`.
+    vaultwarden = {
+      instances = {
+        inherit storage;
+        database = {
+          package = packages.stackgres-database;
+          config.password = "password";
+        };
+      };
+      config.domain = "https://vault.example.com";
+    };
+    velero = {
+      config.backupStorageLocation.objectStorage.bucket = "backups";
+      instances = {
+        velero-cloud-credentials = {
+          package = packages.secret;
+          aliases = [ "cloudCredentials" ];
+          config.stringData.cloud = "[default]\naws_access_key_id = key\naws_secret_access_key = secret\n";
+        };
+        velero-repo-credentials = {
+          package = packages.secret;
+          aliases = [ "repositoryPassword" ];
+          config.stringData.repository-password = "password";
+        };
+      };
+    };
+    # Every node option set, and a snapshot controller so the snapshotter
+    # sidecar and the VolumeSnapshotClass are built.
+    zfs-localpv = {
+      config = {
+        storageClasses.zfs.parameters.poolname = "tank/k8s";
+        volumeSnapshotClasses.zfs = { };
+        node = {
+          kubeletDir = "/var/lib/k0s/kubelet";
+          encrKeysDir = "/home/keys";
+          zfsBin = "/run/current-system/sw/bin/zfs";
+          nodeSelector."example.com/zfs-pool" = "true";
+          tolerations = [
+            {
+              key = "example.com/storage";
+              operator = "Exists";
+              effect = "NoSchedule";
+            }
+          ];
+        };
+      };
+      instances.snapshot-controller.package = packages.snapshot-controller;
     };
   };
+
+  # Packages whose source writes cluster.local outside a comment.
+  sourceDomainLiteralExceptions = [ ];
+
+  # Packages whose meta.version is not a version, with the reason.
+  versionExceptions = { };
 
   # Packages that cannot be evaluated on their own, with the reason.
   skip = { };
 
-  evaluatePackage =
+  # Every `.nix` file of a package outside `crds/`, scanned line by line. A
+  # line whose first non-space character is `#` is skipped. Two limits: a
+  # trailing comment (`x = 1; # svc.cluster.local`) is a hit, and a `#` line
+  # inside a `''` string is skipped (the clusterDomainLiteral rule covers
+  # strings that render).
+  sourceDomainLiterals =
+    name:
+    let
+      dir = ./packages + "/${name}";
+      nixFiles =
+        rel:
+        lib.concatLists (
+          lib.mapAttrsToList (
+            entry: type:
+            let
+              path = if rel == "" then entry else "${rel}/${entry}";
+            in
+            if type == "directory" && !(rel == "" && entry == "crds") then
+              nixFiles path
+            else if type == "regular" && lib.hasSuffix ".nix" entry then
+              [ path ]
+            else
+              [ ]
+          ) (builtins.readDir (if rel == "" then dir else dir + "/${rel}"))
+        );
+      hitsIn =
+        file:
+        lib.concatLists (
+          lib.imap1 (
+            i: line:
+            lib.optional (
+              !(lib.hasPrefix "#" (lib.trimWith { start = true; } line)) && lib.hasInfix "cluster.local" line
+            ) "kix/packages/${name}/${file}:${toString i}"
+          ) (lib.splitString "\n" (builtins.readFile (dir + "/${file}")))
+        );
+    in
+    builtins.concatMap hitsIn (nixFiles "");
+
+  checkSource =
+    name:
+    let
+      hits = sourceDomainLiterals name;
+      excepted = builtins.elem name sourceDomainLiteralExceptions;
+    in
+    if excepted then
+      lib.assertMsg (hits != [ ])
+        "${name} no longer writes cluster.local in its source; remove it from sourceDomainLiteralExceptions in kix/package-eval.nix"
+    else
+      lib.assertMsg (hits == [ ]) (
+        lib.concatMapStringsSep "\n" (
+          h:
+          "${h} contains \"cluster.local\". Build in-cluster addresses from a Service's out.fqdn or out.url, or read clusterConfig.clusterDomain; in option text write <clusterDomain>."
+        ) hits
+      );
+
+  checkVersion =
     name: package:
+    let
+      version =
+        (kix.peekPackageMeta {
+          inherit package;
+          inherit (kix) kixlib;
+        }).version or null;
+      ok = version == null || versions.isVersion version;
+    in
+    if versionExceptions ? ${name} then
+      lib.assertMsg (!ok)
+        "kix/packages/${name}: meta.version ${builtins.toJSON version} is a version now; remove it from versionExceptions in kix/package-eval.nix and update ${versionExceptions.${name}}"
+    else
+      lib.assertMsg ok "kix/packages/${name}: meta.version ${builtins.toJSON version} is not a version. Use the upstream release the package targets, e.g. \"1.19.6\" or \"v1.19.6\".";
+
+  checkOptions =
+    name: package:
+    kix.checkPackageOptions {
+      inherit package;
+      who = "kix/packages/${name}";
+      scope = {
+        instanceName = name;
+        namespaceName = name;
+      };
+    };
+
+  # True when every package in `packages` passes the option contract;
+  # throws with the violations otherwise.
+  checkOptionContracts = packages: builtins.deepSeq (lib.mapAttrsToList checkOptions packages) true;
+
+  # The availability levels every package is evaluated at, as cluster
+  # modules added after the kind flavour.
+  levelModules = {
+    none = { };
+    zone = {
+      cluster.capabilities = {
+        multiNode = true;
+        availabilityZones = [
+          "a"
+          "b"
+          "c"
+        ];
+      };
+    };
+  };
+
+  evaluatePackage =
+    level: name: package:
     let
       s = settings.${name} or { };
       failures = knownFailures.${name} or [ ];
@@ -214,7 +508,9 @@ let
         name = "package-${name}";
         modules = [
           kix.flavors.kind
+          levelModules.${level}
           {
+            clusterDomain = evalClusterDomain;
             scorecard.maxSeverity = "error";
             # By rule rather than by namespace, because a cluster-level rule
             # such as `architecture.monitorSelectorMatchesService` is not
@@ -237,41 +533,70 @@ let
         ];
       };
     in
-    builtins.addErrorContext "while evaluating kix/packages/${name} in its synthetic cluster" (
-      builtins.deepSeq cluster.rawManifests (
-        builtins.seq (piChecks.validatePIWiring "package-${name}" cluster) (
-          builtins.deepSeq cluster.scorecardReport (
-            builtins.foldl' (
-              acc: f:
-              assert lib.assertMsg (cluster.scorecardReport.summary.byRule ? ${f.rule})
-                "${name} no longer fails ${f.rule}; remove it from knownFailures in kix/package-eval.nix ${
-                  if lib.hasPrefix "housekeeping/" f.reason then
-                    "and update or delete ${f.reason}"
-                  else
-                    "and the exception described in ${f.reason}"
-                }";
-              acc
-            ) name failures
+    assert checkSource name;
+    assert checkVersion name package;
+    builtins.addErrorContext
+      "while evaluating kix/packages/${name} in its synthetic cluster at availability \"${level}\""
+      (
+        builtins.deepSeq cluster.rawManifests (
+          builtins.seq (piChecks.validatePIWiring "package-${name}" cluster) (
+            builtins.deepSeq cluster.scorecardReport (
+              builtins.foldl' (
+                acc: f:
+                assert lib.assertMsg (cluster.scorecardReport.summary.byRule ? ${f.rule})
+                  "${name} no longer fails ${f.rule}; remove it from knownFailures in kix/package-eval.nix ${
+                    if lib.hasPrefix "housekeeping/" f.reason then
+                      "and update or delete ${f.reason}"
+                    else
+                      "and the exception described in ${f.reason}"
+                  }";
+                acc
+              ) name failures
+            )
           )
         )
-      )
-    );
+      );
 
   strayKeys = lib.filter (key: !(packages ? ${key})) (
-    builtins.attrNames settings ++ builtins.attrNames knownFailures ++ builtins.attrNames skip
+    builtins.attrNames settings
+    ++ builtins.attrNames knownFailures
+    ++ builtins.attrNames skip
+    ++ sourceDomainLiteralExceptions
+    ++ builtins.attrNames versionExceptions
   );
 
-  evaluated = lib.mapAttrsToList evaluatePackage (removeAttrs packages (builtins.attrNames skip));
+  levels = builtins.attrNames levelModules;
+
+  evaluated = lib.concatMap (
+    level: lib.mapAttrsToList (evaluatePackage level) (removeAttrs packages (builtins.attrNames skip))
+  ) levels;
 in
 {
-  inherit packages knownFailures skip;
+  inherit
+    packages
+    knownFailures
+    skip
+    sourceDomainLiteralExceptions
+    versionExceptions
+    levels
+    ;
 
-  # One package, for finding the failure when `names` throws.
-  evaluate = name: evaluatePackage name packages.${name};
+  # One package at one level ("none" or "zone"), for finding the failure
+  # when `names` throws.
+  evaluate = level: name: evaluatePackage level name packages.${name};
 
-  # Forcing this evaluates every package that is not skipped.
+  # The option contract of one package: null when its options pass, a
+  # throw listing each violation otherwise.
+  checkOptionContract = name: checkOptions name packages.${name};
+
+  inherit checkOptionContracts;
+
+  # Forcing this checks the option contract of every package, then
+  # evaluates every package that is not skipped, at every level. Each
+  # package name appears once per level.
   names =
     assert lib.assertMsg (strayKeys == [ ])
-      "kix/package-eval.nix: `settings`, `knownFailures` or `skip` names ${lib.concatStringsSep ", " strayKeys}, which is not a directory under kix/packages/";
+      "kix/package-eval.nix: `settings`, `knownFailures`, `skip`, `sourceDomainLiteralExceptions` or `versionExceptions` names ${lib.concatStringsSep ", " strayKeys}, which is not a directory under kix/packages/";
+    assert checkOptionContracts packages;
     builtins.deepSeq evaluated evaluated;
 }

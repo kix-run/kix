@@ -73,17 +73,14 @@ in
       };
     };
 
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "100m";
-          memory = "256Mi";
-        };
-        limits = {
-          cpu = "1";
-          memory = "512Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "100m";
+        memory = "256Mi";
+      };
+      limits = {
+        cpu = "1";
+        memory = "512Mi";
       };
     };
 
@@ -170,24 +167,14 @@ in
       netpol = if scope.networkPolicyEnforcer == null then null else scope.networkPolicyEnforcer.netpol;
       mkOperandPolicy =
         suffix: spec:
-        if netpol == null then
-          null
-        else
-          netpol.mkPolicy {
-            mkResource = scope.mkResource;
-            extraArgs = {
-              name = "${name}-keeper-${suffix}";
-              labels = {
-                ${kix.keys.derived} = "true";
-                ${kix.keys.policyType} = "operator-managed-workload";
-              };
-              spec = {
-                endpointSelector.matchLabels = podSelector;
-              }
-              // spec;
-              extraDeps = [ ];
-            };
-          };
+        kix.operandPolicy {
+          inherit scope;
+          name = "${name}-keeper-${suffix}";
+          spec = {
+            endpointSelector.matchLabels = podSelector;
+          }
+          // spec;
+        };
     in
     {
       keeper = clickhouseOperator.out.mkKeeperInstallation scope {

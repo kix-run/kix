@@ -3,13 +3,27 @@
 # Pre-installs: flannel CNI, local-path StorageClass, servicelb, traefik.
 # Flannel does not enforce NetworkPolicy. To replace it with Cilium, run
 # k3s with `--flannel-backend=none --disable-network-policy` and override
-# `cluster.roles.cni.binding = "absent"` (see ludo/cluster.nix).
+# `cluster.roles.cni.binding = "absent"` (see ludo/cluster.nix). The
+# cilium package takes its IPAM pool from cluster.network.podCidr, which
+# defaults here to k3s's cluster-cidr.
 #
-# Platform imports: DNS (coredns, bundled), storage (local-path).
+# Platform imports: DNS (coredns, bundled), storage (local-path). k3s
+# creates the local-path StorageClass on every new cluster
+# (https://docs.k3s.io/storage). A server started with
+# `--disable local-storage` has no such class, and the import below is then
+# wrong for that cluster.
 
-{ lib, kix, ... }:
+{
+  config,
+  lib,
+  kix,
+  ...
+}:
 {
   cluster.provider = lib.mkDefault "k3s";
+
+  # k3s's default --cluster-cidr.
+  cluster.network.podCidr = lib.mkDefault "10.42.0.0/16";
 
   cluster.roles = {
     cni = {
@@ -40,7 +54,7 @@
         roles = [ "dns" ];
         out = {
           name = "coredns";
-          fqdn = "kube-dns.kube-system.svc.cluster.local";
+          fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
         };
       };
       optional = true;
@@ -48,12 +62,14 @@
 
     platform-storage = {
       package = kix.mkImport {
+        kind = "StorageClass";
+        apiVersion = "storage.k8s.io/v1";
         roles = [ "storageClasses" ];
         out = {
           storageClassName = "local-path";
+          name = "local-path";
         };
       };
-      optional = true;
     };
   };
 }

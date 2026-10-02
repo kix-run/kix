@@ -103,6 +103,10 @@ class CrdsIn(unittest.TestCase):
         with self.assertRaisesRegex(v.VendorError, "not YAML"):
             v.crds_in("kind: [unterminated\n")
 
+    def test_bare_equals_is_a_string(self):
+        doc = v.documents_in("enum:\n- '!='\n- =\n- =~\n", "s")
+        self.assertEqual(doc, [{"enum": ["!=", "=", "=~"]}])
+
 
 class FetchCrds(unittest.TestCase):
     def test_only_filters_and_sorts(self):
@@ -123,6 +127,60 @@ class FetchCrds(unittest.TestCase):
             v.fetch_crds("https://x", {"a.g", "b.g"})
 
 
+def role(kind: str, name: str) -> dict:
+    return {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": kind,
+        "metadata": {"name": name},
+        "rules": [{"apiGroups": [""], "resources": ["pods"], "verbs": ["get"]}],
+    }
+
+
+BUNDLE = "\n---\n".join(
+    json.dumps(d)
+    for d in [
+        role("ClusterRole", "op"),
+        role("Role", "op"),
+        role("ClusterRole", "x.io:admin"),
+        {"kind": "ServiceAccount", "metadata": {"name": "op"}},
+    ]
+)
+
+
+class RolesIn(unittest.TestCase):
+    def test_selects_by_kind_and_name(self):
+        found = v.roles_in(BUNDLE, {"Role/op", "ClusterRole/x.io:admin"})
+        self.assertEqual(
+            [(r["kind"], r["metadata"]["name"]) for r in found],
+            [("ClusterRole", "x.io:admin"), ("Role", "op")],
+        )
+
+    def test_missing_selector(self):
+        with self.assertRaisesRegex(v.VendorError, "does not contain Role/other"):
+            v.roles_in(BUNDLE, {"Role/op", "Role/other"})
+
+    def test_refuses_other_kinds(self):
+        with self.assertRaisesRegex(v.VendorError, "not ClusterRole/name or Role/name"):
+            v.roles_in(BUNDLE, {"ServiceAccount/op"})
+
+    def test_selector_without_name(self):
+        with self.assertRaisesRegex(v.VendorError, "not ClusterRole/name or Role/name"):
+            v.roles_in(BUNDLE, {"ClusterRole"})
+
+    def test_no_selectors_is_refused(self):
+        with self.assertRaisesRegex(v.VendorError, "as Kind/name"):
+            v.roles_in(BUNDLE, set())
+
+    def test_file_names(self):
+        self.assertEqual(
+            v.file_name(role("ClusterRole", "x.io:admin")),
+            "clusterrole-x.io_admin.json",
+        )
+        self.assertEqual(v.file_name(role("Role", "op")), "role-op.json")
+        with self.assertRaisesRegex(v.VendorError, "no file name mapping"):
+            v.file_name(role("Role", "Op/1"))
+
+
 class Render(unittest.TestCase):
     def test_sorted_and_newline_terminated(self):
         out = v.render(
@@ -135,7 +193,9 @@ class Render(unittest.TestCase):
         self.assertTrue(out.endswith("}\n"))
         self.assertLess(out.index('"apiVersion"'), out.index('"kind"'))
         self.assertEqual(
-            v.file_name({"metadata": {"name": "widgets.example.io"}}),
+            v.file_name(
+                {"kind": v.CRD_KIND, "metadata": {"name": "widgets.example.io"}}
+            ),
             "widgets.example.io.json",
         )
 
@@ -170,6 +230,34 @@ class Reconcile(unittest.TestCase):
         _package, lines, ok = self.driver.process(self.dir, check=True)
         self.assertFalse(ok)
         self.assertTrue(lines[0].lstrip().startswith("ERROR"))
+
+    def test_rbac_directory(self):
+        rbac = pathlib.Path(self.tmp.name) / "rbac"
+        rbac.mkdir()
+        (rbac / "sources.txt").write_text(
+            "https://x/bundle.yaml ClusterRole/x.io:admin Role/op\n"
+        )
+        with mock.patch.object(self.driver, "fetch", return_value=BUNDLE.encode()):
+            package, _lines, ok = self.driver.process(rbac, check=False)
+        self.assertTrue(ok)
+        self.assertEqual(package.split("/")[-1], "rbac")
+        self.assertEqual(
+            sorted(p.name for p in rbac.glob("*.json")),
+            ["clusterrole-x.io_admin.json", "role-op.json"],
+        )
+
+    def test_discover_skips_rbac_without_sources(self):
+        packages = pathlib.Path(self.tmp.name) / "packages"
+        for d in ("a/crds", "a/rbac", "b/rbac"):
+            (packages / d).mkdir(parents=True)
+        (packages / "a/crds/update.py").write_text("")
+        (packages / "a/rbac/update.py").write_text("")
+        (packages / "b/rbac/sources.txt").write_text("")
+        self.driver.PACKAGES = packages
+        found = [str(d.relative_to(packages)) for d in self.driver.discover([])]
+        self.assertEqual(found, ["a/crds", "b/rbac"])
+        with self.assertRaises(SystemExit):
+            self.driver.discover(["c"])
 
     def test_update_py_escape_hatch(self):
         (self.dir / "update.py").write_text(

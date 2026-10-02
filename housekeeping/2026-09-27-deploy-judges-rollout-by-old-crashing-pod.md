@@ -8,4 +8,5 @@ Ready within a minute and the next deploy passed. Readiness reads pods of the
 outgoing ReplicaSet, so a deploy that fixes a crash loop reports the crash
 loop it just fixed and cancels everything downstream.
 - Hit again 2026-09-28 while redeploying openebs to kind, on
-  `openebs-localpv-provisioner` and then `openebs-obs-callhome`.
+  `openebs-localpv-provisioner` and then `openebs-obs-callhome`, both in
+  the openebs package, since deleted.

@@ -3,7 +3,11 @@
   k8s,
   rbac,
   kixlib,
+  helpers,
   evaluateInstanceConfig,
+  buildEntriesOf,
+  discoverBuildDeps,
+  systemArgNames,
 }:
 
 let
@@ -30,6 +34,11 @@ rec {
       # a managed instance with the same role shadows it). The role name is
       # also the import's DI alias, so no instance-level `aliases` are needed.
       roles ? [ ],
+      # CustomResourceDefinitions the environment installs, each given as
+      # scope.mkCRDRef's arguments without `installedBy`. Each entry becomes
+      # `out.crds.<kind>`, a handle consumers pass to scope.mkCR, and a CRD
+      # marker the deploy waits for while the import is active.
+      crds ? [ ],
     }:
     {
       _type = "kix-import";
@@ -38,6 +47,7 @@ rec {
         out
         kind
         apiVersion
+        crds
         ;
       meta = {
         inherit roles;
@@ -50,7 +60,7 @@ rec {
       namespaceName,
       namespaceResource,
       clusterLabels ? { },
-      clusterDomain ? "cluster.local",
+      clusterDomain,
     }:
     let
       selectorLabels = {
@@ -66,6 +76,7 @@ rec {
         mkImportResource (
           removeAttrs args [ "labels" ]
           // {
+            inherit clusterDomain;
             namespace = ns;
             labels =
               clusterLabels
@@ -188,6 +199,59 @@ rec {
     in
     scope;
 
+  # Checks every declared instance's extraDeps, active or not, without
+  # evaluating any instance: a non-empty list on a managed instance, an
+  # entry that is neither a resource nor a ref, and a ref to the import
+  # itself or to a name that is not an instance. Whether a ref's target is
+  # active is checked when the import's marker is built.
+  checkExtraDeps =
+    { instances, mergedInstances }:
+    let
+      describe =
+        v:
+        if builtins.isAttrs v then
+          "an attribute set with keys ${builtins.concatStringsSep ", " (builtins.attrNames v)}"
+        else
+          builtins.typeOf v;
+
+      checkEntry =
+        who: nsName: instName: entry:
+        if builtins.isAttrs entry && (entry._type or "") == "kix-ref" then
+          let
+            refText = "ref.${entry.namespace}.${entry.instanceName}";
+          in
+          if entry.namespace == nsName && entry.instanceName == instName then
+            throw "${who} names ${refText}, the import itself. An import's marker cannot depend on itself."
+          else if !((mergedInstances.${entry.namespace} or { }) ? ${entry.instanceName}) then
+            throw "${who} names ${refText}, which is not an instance. It names a package in availablePackages that nothing auto-instantiated there; declare it under instances.${entry.namespace}.${entry.instanceName}."
+          else
+            null
+        else if builtins.isAttrs entry && (entry._type or "") == "k8s-resource" then
+          null
+        else
+          throw "${who}: each entry is a resource or a ref.<namespace>.<instance> pointer; got ${describe entry}.";
+
+      checkInstance =
+        nsName: instName: instCfg:
+        let
+          entries = instCfg.extraDeps or [ ];
+          who = "kix: instances.${nsName}.${instName}.extraDeps";
+        in
+        if entries == [ ] then
+          null
+        else if (instCfg.package._type or "") != "kix-import" then
+          throw "${who} is set on a managed instance. Instance-level extraDeps adds dependencies to a kix.mkImport marker only. Put the dependency on the resource that needs it, as `requires` or `extraDeps` in its scope builder call."
+        else
+          builtins.foldl' (acc: e: builtins.seq (checkEntry who nsName instName e) acc) null entries;
+    in
+    lib.foldlAttrs (
+      acc: nsName: nsInsts:
+      lib.foldlAttrs (
+        acc: instName: instCfg:
+        builtins.seq (checkInstance nsName instName instCfg) acc
+      ) acc nsInsts
+    ) null instances;
+
   evaluateImportInstance =
     {
       instanceName,
@@ -197,6 +261,10 @@ rec {
       clusterLabels,
       clusterConfig ? { },
       clusterCtx ? { },
+      # The cluster's evaluated instances and whether each renders; extraDeps
+      # reads `root` from the ones its `ref` entries name.
+      allInstances,
+      isInstanceActive,
       ...
     }:
     let
@@ -206,7 +274,7 @@ rec {
         if importDef.from != null then
           let
             importScope = mkImportScope {
-              clusterDomain = clusterConfig.clusterDomain or "cluster.local";
+              inherit (clusterConfig) clusterDomain;
               inherit
                 instanceName
                 namespaceName
@@ -216,14 +284,7 @@ rec {
             };
 
             fnArgs = builtins.functionArgs importDef.from;
-            depArgNames = builtins.attrNames (
-              removeAttrs fnArgs [
-                "scope"
-                "lib"
-                "kix"
-                "availability"
-              ]
-            );
+            depArgNames = builtins.attrNames (removeAttrs fnArgs systemArgNames);
             mkDepProxy =
               depName:
               builtins.throw "Import instance '${instanceName}': package accessed dependency '${depName}', but imports run without dependency resolution. Either use a raw 'out' override (mkImport { out = { ... }; }) or use a mixed import (mkImport { from = ...; out = { fieldThatNeedsDep = \"value\"; }; }).";
@@ -250,41 +311,45 @@ rec {
               packageOptions = raw.options or { };
               packageConfig = raw.config or { };
               packageConfigFile = "package config of ${namespaceName}/${instanceName}";
-              inherit instCfg clusterConfig;
+              inherit
+                instCfg
+                clusterConfig
+                namespaceName
+                instanceName
+                ;
             };
 
-            buildEntries =
-              if builtins.isList raw.build then
-                map (entry: if builtins.isPath entry then import entry else entry) raw.build
-              else
-                [ raw.build ];
-            allBuildArgs = builtins.foldl' (acc: fn: acc // builtins.functionArgs fn) { } buildEntries;
-            depArgNames' = builtins.attrNames (
-              removeAttrs allBuildArgs [
-                "self"
-                "config"
-                "clusterConfig"
-                "scope"
-                "lib"
-                "kix"
-                "deps"
-              ]
-            );
-            nullBuildDeps = builtins.listToAttrs (
-              map (name: {
-                inherit name;
-                value = mkDepProxy name;
-              }) depArgNames'
-            );
-            parts = lib.fix (
-              self:
-              raw.build (
+            # Build entries run as they do for a managed instance, with the
+            # import scope, availability "none", no resolved `deps`, and a
+            # throwing proxy for each dependency an entry asks for by name.
+            # Part overlays do not apply.
+            buildDepProxies = lib.mapAttrs (name: _: mkDepProxy name) (discoverBuildDeps raw.build);
+            callBuildFn =
+              self: fn:
+              let
+                args = builtins.functionArgs fn;
+              in
+              fn (
                 {
                   inherit self clusterConfig;
                   config = evaluatedConfig;
                 }
-                // nullBuildDeps
-              )
+                // lib.optionalAttrs (args ? scope) { scope = importScope; }
+                // lib.optionalAttrs (args ? lib) { inherit lib; }
+                // lib.optionalAttrs (args ? kix) { kix = kixlib; }
+                // lib.optionalAttrs (args ? deps) { deps = { }; }
+                // lib.optionalAttrs (args ? availability) { availability = "none"; }
+                // lib.intersectAttrs args buildDepProxies
+              );
+            parts = lib.fix (
+              self:
+              builtins.foldl' (
+                acc: fn:
+                helpers.mergeCollide
+                  "Import instance '${instanceName}': two build entries define the same part. Duplicated part"
+                  acc
+                  (callBuildFn self fn)
+              ) { } (buildEntriesOf raw.build)
             );
 
             rawRoot =
@@ -324,6 +389,82 @@ rec {
                 apiVersion = importDef.apiVersion;
               };
           };
+
+      # Markers for the CRDs the import declares, built with the import's
+      # namespace and labels.
+      crdHandleArgs = [
+        "group"
+        "kind"
+        "plural"
+        "version"
+        "servedVersions"
+        "crdScope"
+        "factBehavior"
+        "readiness"
+      ];
+      who = "Import instance '${namespaceName}/${instanceName}'";
+      checkCrdEntry =
+        entry:
+        let
+          unknown = builtins.attrNames (removeAttrs entry crdHandleArgs);
+          missing = builtins.filter (k: !(entry ? ${k})) [
+            "group"
+            "kind"
+            "plural"
+          ];
+        in
+        if !builtins.isAttrs entry then
+          throw "${who}: each mkImport crds entry is an attribute set of scope.mkCRDRef arguments; got ${builtins.typeOf entry}."
+        else if missing != [ ] then
+          throw "${who}: a mkImport crds entry is missing ${builtins.concatStringsSep ", " missing}. Give group, kind, plural and version as the CustomResourceDefinition declares them."
+        else if unknown != [ ] then
+          throw "${who}: mkImport crds entry ${entry.group}/${entry.kind} has unknown keys ${builtins.concatStringsSep ", " unknown}. Accepted keys: ${builtins.concatStringsSep ", " crdHandleArgs}. The environment installs an import's CRDs, so installedBy does not apply."
+        else
+          entry;
+      mkCrdHandle = k8s.mkCRDRefHandle {
+        mkResource =
+          args:
+          mkResource (
+            args
+            // {
+              namespace = namespaceResource;
+              labels = clusterLabels // {
+                "app.kubernetes.io/instance" = instanceName;
+                "app.kubernetes.io/managed-by" = "kix";
+              };
+            }
+          );
+        inherit instanceName namespaceName;
+        site = "mkImport crds";
+      };
+
+      crdEntries =
+        let
+          entries =
+            if builtins.isList importDef.crds then
+              map checkCrdEntry importDef.crds
+            else
+              throw "${who}: mkImport crds is a list of scope.mkCRDRef argument sets; got ${builtins.typeOf importDef.crds}.";
+          kinds = map (e: e.kind) entries;
+          repeated = lib.unique (builtins.filter (k: lib.count (x: x == k) kinds > 1) kinds);
+        in
+        if repeated == [ ] then
+          entries
+        else
+          throw "${who}: mkImport crds declares ${builtins.concatStringsSep ", " repeated} more than once. out.crds holds one handle per kind; keep one entry for each.";
+      crdHandleList = map (entry: {
+        inherit (entry) kind;
+        handle = mkCrdHandle entry;
+      }) crdEntries;
+      crdHandles = builtins.foldl' (
+        acc: h:
+        helpers.mergeCollide
+          "${who}: mkImport crds declares a kind the package's out.crds already has. Kind"
+          acc
+          { ${h.kind} = h.handle; }
+      ) (derived.out.crds or { }) crdHandleList;
+
+      out = derived.out // lib.optionalAttrs (crdEntries != [ ]) { crds = crdHandles; };
 
       networkConfig = clusterConfig.networkPolicy or { enable = false; };
       rawPlatformIntents = instCfg.platformIntents or { };
@@ -375,7 +516,21 @@ rec {
             }
           ) rawPlatformIntents;
 
-      instanceExtraDeps = (instCfg.extraDeps or [ ]) ++ materializedIntentPolicies;
+      # checkExtraDeps has refused malformed entries, so an entry here is a
+      # resource or a `ref.<namespace>.<instance>` pointer to another
+      # instance, which stands for that instance's PackageInstance marker
+      # (its `root`). A ref does not activate an optional instance.
+      resolveExtraDep =
+        entry:
+        if (entry._type or "") == "kix-ref" then
+          if isInstanceActive entry.namespace entry.instanceName then
+            allInstances.${entry.namespace}.${entry.instanceName}.root
+          else
+            throw "${who}: extraDeps names ref.${entry.namespace}.${entry.instanceName}, an optional instance that is not active. Kix renders no marker for it, so the import's marker would wait for a resource that is never deployed. An extraDeps ref does not activate its target. Set optional = false on instances.${entry.namespace}.${entry.instanceName}, or remove the entry."
+        else
+          entry;
+
+      instanceExtraDeps = map resolveExtraDep (instCfg.extraDeps or [ ]) ++ materializedIntentPolicies;
 
       markerResource = mkResource {
         apiVersion = kixAnnotations.apiVersion;
@@ -413,9 +568,9 @@ rec {
       _type = "k8s-instance";
       _isImport = true;
       _packageInstance = markerResource;
-      _hookResources = materializedIntentPolicies;
+      _hookResources = materializedIntentPolicies ++ map (h: h.handle) crdHandleList;
       root = markerResource;
-      out = derived.out;
+      inherit out;
       _meta = {
         inherit instanceName namespaceName;
         namespace = namespaceName;

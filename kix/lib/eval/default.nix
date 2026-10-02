@@ -28,14 +28,26 @@ let
       ;
   };
   resolve = import ./resolve.nix { inherit lib kixlib; };
+  optionContract = import ./options.nix { inherit lib; };
+  packageOptions = import ./package-options.nix {
+    inherit lib kixlib meta;
+    inherit (resolve) callPackagePhase1;
+    inherit (optionContract) optionContractViolations;
+  };
   import_ = import ./import.nix {
     inherit
       lib
       k8s
       rbac
       kixlib
+      helpers
       ;
-    inherit (resolve) evaluateInstanceConfig;
+    inherit (resolve)
+      evaluateInstanceConfig
+      buildEntriesOf
+      discoverBuildDeps
+      systemArgNames
+      ;
   };
   namespaceMod = import ./namespace.nix { inherit lib k8s; };
   auto = import ./auto.nix {
@@ -79,11 +91,12 @@ let
       callPackagePhase1
       discoverBuildDeps
       resolveDepTargets
+      describeRequester
       buildConfigInjections
       evaluateInstanceConfig
       ;
     inherit (instance) evaluateInstance;
-    inherit (import_) mkImport;
+    inherit (import_) mkImport checkExtraDeps;
   };
 
 in
@@ -99,15 +112,21 @@ in
 
   inherit (namespaceMod) mkNamespace;
 
-  inherit (auto) normalizeAvailablePackages getRequiredDeps computeAutoInstances;
+  inherit (auto)
+    normalizeAvailablePackages
+    getRequiredDeps
+    computeAutoInstances
+    ;
 
   inherit (resolve)
     buildResolutionIndex
     resolveArg
-    extractDeferredValues
+    describeRequester
+    extractDeferredDefs
     evaluateInstanceConfig
     packageDefaultPriority
     callPackagePhase1
+    buildEntriesOf
     discoverBuildDeps
     resolveDeclaredDeps
     resolveDepTargets
@@ -120,4 +139,8 @@ in
   inherit (instance) evaluateInstance;
 
   inherit (cluster) buildCluster;
+
+  inherit (optionContract) optionContractViolations checkOptionContract;
+
+  inherit (packageOptions) packageOptionViolations checkPackageOptions;
 }

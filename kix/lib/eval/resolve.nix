@@ -55,6 +55,17 @@ rec {
       inherit byKey;
     };
 
+  # How resolution errors name the instance whose dependency failed:
+  # "<ns>/<instance>", marked when auto-instantiation created it, since the
+  # cluster file then has no entry for it.
+  describeRequester =
+    namespaceName: instanceName: instCfg:
+    "${namespaceName}/${instanceName}${
+      lib.optionalString (instCfg._autoInstantiated or false) " (auto-instantiated)"
+    }";
+
+  # `requester` (from `describeRequester`) prefixes every error, so a failure
+  # names the instance that asked for the dependency.
   resolveArg =
     {
       argName,
@@ -62,7 +73,11 @@ rec {
       requesterNamespace,
       hasDefault,
       explicitOverride,
+      requester ? null,
     }:
+    let
+      prefix = lib.optionalString (requester != null) "${requester}: ";
+    in
     if explicitOverride != null then
       # `deps.x = ref.a.b` names an instance and resolves like the index
       # would have, so every check an auto-resolved dep gets applies to it.
@@ -82,7 +97,15 @@ rec {
 
     else
       let
-        candidates = resolutionIndex.byKey.${argName} or [ ];
+        # An instance with meta.scope = "namespace" serves only its own
+        # namespace, so it is never a candidate for a requester elsewhere.
+        # Filtering before the managed-over-import preference lets an import
+        # elsewhere answer when the only managed candidates are such instances.
+        allCandidates = resolutionIndex.byKey.${argName} or [ ];
+        isForeignNamespaced =
+          c: c.namespace != requesterNamespace && (c.meta.scope or "cluster") == "namespace";
+        candidates = builtins.filter (c: !isForeignNamespaced c) allCandidates;
+        skipped = builtins.filter isForeignNamespaced allCandidates;
 
         managed = builtins.filter (c: !(c.meta.isImport or false)) candidates;
         effectiveCandidates = if managed != [ ] then managed else candidates;
@@ -102,7 +125,9 @@ rec {
         }
 
       else if builtins.length sameNs > 1 then
-        throw "dependency '${argName}' matches multiple instances in namespace '${requesterNamespace}'. Set deps.${argName} explicitly to the intended instance."
+        throw "${prefix}dependency '${argName}' matches multiple instances in namespace '${requesterNamespace}': ${
+          builtins.concatStringsSep ", " (map (c: c.instName) sameNs)
+        }. Set deps.${argName} explicitly to the intended instance."
 
       else if sameNs == [ ] && builtins.length otherNs == 1 then
         let
@@ -116,30 +141,43 @@ rec {
         }
 
       else if builtins.length otherNs > 1 then
-        throw "dependency '${argName}' matches instances in multiple namespaces. Set deps.${argName} explicitly to the intended instance."
+        throw "${prefix}dependency '${argName}' matches instances in multiple namespaces: ${
+          builtins.concatStringsSep ", " (map (c: "${c.namespace}/${c.instName}") otherNs)
+        }. Set deps.${argName} explicitly to the intended instance."
 
       else if hasDefault then
         { found = false; }
 
       else
-        throw "dependency '${argName}' was not found for namespace '${requesterNamespace}'. Add an instance with that name or alias, or set deps.${argName} explicitly.";
+        throw "${prefix}dependency '${argName}' was not found for namespace '${requesterNamespace}'.${
+          lib.optionalString (skipped != [ ])
+            " Instances in other namespaces (${
+               builtins.concatStringsSep ", " (map (c: "${c.namespace}/${c.instName}") skipped)
+             }) declare meta.scope = \"namespace\" and serve only their own namespace."
+        } Add an instance with that name or alias, or set deps.${argName} explicitly.";
 
-  extractDeferredValues =
+  # The definitions of an instance's `config` (a deferredModule value), as
+  # `{ file; value; }`. deferredModule wraps each definition in
+  # `{ _file; imports; }`; `file` is the innermost `_file`, or null.
+  extractDeferredDefs =
     deferredConfig:
     let
       modules = deferredConfig.imports or [ ];
       extractOne =
-        m:
+        file: m:
         if builtins.isAttrs m && m ? _file && m ? imports then
-          builtins.concatMap extractOne m.imports
-        else if builtins.isAttrs m then
-          [ m ]
-        else if builtins.isFunction m then
-          [ m ]
+          builtins.concatMap (extractOne m._file) m.imports
+        else if builtins.isAttrs m || builtins.isFunction m then
+          [
+            {
+              inherit file;
+              value = m;
+            }
+          ]
         else
           [ ];
     in
-    builtins.concatMap extractOne modules;
+    builtins.concatMap (extractOne null) modules;
 
   # Priority of a `lib.mkDefault` in a package's own `config`. It sits
   # between `lib.mkDefault` (1000) and an option's declared default (1500),
@@ -182,7 +220,14 @@ rec {
   # module function such as `{ config, lib, ... }: { ... }`. It is one more
   # module beside `packageOptions`, so a package can default one option
   # from another with `lib.mkDefault` (see `packageDefaultPriority`).
-  # `packageConfigFile` names that module in module-system errors.
+  # `packageConfigFile` names that module in module-system errors. With
+  # `namespaceName` and `instanceName`, option errors name the option as
+  # `instances.<ns>.<instance>.config.<option>`. Every module, the package's
+  # and the instance's, can take `clusterConfig` as a module argument, so a
+  # default can derive from a cluster fact such as `clusterDomain`.
+  # `packageOptions` is not checked against the option contract here;
+  # package CI checks it once per package (eval/options.nix,
+  # kix/package-eval.nix).
   evaluateInstanceConfig =
     {
       packageOptions,
@@ -191,10 +236,15 @@ rec {
       instCfg,
       clusterConfig ? { },
       configInjections ? [ ],
+      namespaceName ? null,
+      instanceName ? null,
     }:
     let
       deferredConfig = instCfg.config;
-      configValues = extractDeferredValues deferredConfig;
+      configDefs = extractDeferredDefs deferredConfig;
+      configValues = map (d: d.value) configDefs;
+      named = namespaceName != null && instanceName != null;
+      instanceText = if named then "${namespaceName}/${instanceName}" else "this instance";
 
       findLockedInAttrs =
         attrs:
@@ -233,11 +283,35 @@ rec {
       unwrapLockedAttrs =
         attrs: if builtins.isAttrs attrs then lib.mapAttrs (_: unwrapLocked) attrs else attrs;
 
+      # Each module carries the file that defined it, so a module-system
+      # error names the file that set the value.
       wrappedModules = map (
-        v: if builtins.isFunction v then v else { config = unwrapLockedAttrs v; }
-      ) configValues;
+        d:
+        let
+          file =
+            if d.file != null then
+              toString d.file
+            else if named then
+              "instances.${namespaceName}.${instanceName}.config"
+            else
+              "instance config";
+        in
+        if builtins.isFunction d.value then
+          {
+            _file = file;
+            imports = [ d.value ];
+          }
+        else
+          {
+            _file = file;
+            config = unwrapLockedAttrs d.value;
+          }
+      ) configDefs;
 
-      injectionModules = map (injection: { config = injection.config; }) configInjections;
+      injectionModules = map (injection: {
+        _file = "config injected into ${instanceText} by ${injection.source or "a dependency"}";
+        config = injection.config;
+      }) configInjections;
 
       # The package's `config` is always wrapped as a module's `config`, so
       # a package option named `config`, `options` or `imports` is set
@@ -257,6 +331,13 @@ rec {
       evaluated =
         removeAttrs
           (lib.evalModules {
+            prefix = lib.optionals named [
+              "instances"
+              namespaceName
+              instanceName
+              "config"
+            ];
+            specialArgs = { inherit clusterConfig; };
             modules = [
               { options = packageOptions; }
               packageConfigModule
@@ -265,42 +346,20 @@ rec {
             ++ wrappedModules;
           }).config
           [ "_module" ];
-
-      optionDefaults = lib.filterAttrs (_: v: v != null) (
-        lib.mapAttrs (_: opt: if opt ? default then opt.default else null) packageOptions
-      );
-
-      # The post-eval recursive merge preserves nested defaults for
-      # types.anything options. Do not reintroduce those defaults when the
-      # instance explicitly used mkForce on the whole option.
-      forcedOptionNames = lib.unique (
-        builtins.concatMap (
-          value:
-          if builtins.isAttrs value then
-            builtins.attrNames (
-              lib.filterAttrs (
-                _: optionValue:
-                builtins.isAttrs optionValue
-                && (optionValue._type or "") == "override"
-                && (optionValue.priority or null) == (lib.mkForce null).priority
-              ) value
-            )
-          else
-            [ ]
-        ) configValues
-      );
-      mergeableDefaults = removeAttrs optionDefaults forcedOptionNames;
     in
-    builtins.seq _lockedCheck (lib.recursiveUpdate mergeableDefaults evaluated);
+    builtins.seq _lockedCheck evaluated;
 
   # `availability` is the instance's resolved level (core/availability.nix),
   # a plain string a package may take as an argument so its option defaults
-  # can read it.
+  # can read it. `kix` is the helper set the package receives; eval/instance.nix
+  # passes one whose `availability.pick` and `atLeast` know the package
+  # ceiling.
   normalizePackage =
     {
       package,
       scope,
       availability ? "none",
+      kix ? kixlib,
     }:
     if builtins.isAttrs package && package ? build then
       package
@@ -314,20 +373,25 @@ rec {
         {
           inherit scope lib;
         }
-        // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
+        // lib.optionalAttrs (fnArgs ? kix) { inherit kix; }
         // lib.optionalAttrs (fnArgs ? availability) { inherit availability; }
       );
 
   callPackagePhase1 = normalizePackage;
 
+  # A package's `build` as a list of functions. `build` is one function or a
+  # list whose entries are functions or paths to files that evaluate to one.
+  buildEntriesOf =
+    rawBuild:
+    if builtins.isList rawBuild then
+      map (entry: if builtins.isPath entry then import entry else entry) rawBuild
+    else
+      [ rawBuild ];
+
   discoverBuildDeps =
     rawBuild:
     let
-      buildEntries =
-        if builtins.isList rawBuild then
-          map (entry: if builtins.isPath entry then import entry else entry) rawBuild
-        else
-          [ rawBuild ];
+      buildEntries = buildEntriesOf rawBuild;
       allBuildArgs = builtins.foldl' (
         acc: fn:
         let
@@ -347,6 +411,7 @@ rec {
       namespace,
       explicitOverrides,
       allInstances,
+      requester ? null,
     }:
     builtins.foldl' (
       acc: argName:
@@ -355,7 +420,12 @@ rec {
         isOptional = depSpec.optional or false;
         explicitOverride = explicitOverrides.${argName} or null;
         resolution = resolveArg {
-          inherit argName resolutionIndex explicitOverride;
+          inherit
+            argName
+            resolutionIndex
+            explicitOverride
+            requester
+            ;
           requesterNamespace = namespace;
           hasDefault = isOptional;
         };
@@ -379,6 +449,7 @@ rec {
       resolutionIndex,
       namespace,
       explicitOverrides,
+      requester ? null,
     }:
     lib.mapAttrs (
       argName: depSpec:
@@ -386,7 +457,12 @@ rec {
         isOptional = depSpec.optional or false;
         explicitOverride = explicitOverrides.${argName} or null;
         resolution = resolveArg {
-          inherit argName resolutionIndex explicitOverride;
+          inherit
+            argName
+            resolutionIndex
+            explicitOverride
+            requester
+            ;
           requesterNamespace = namespace;
           hasDefault = isOptional;
         };

@@ -1,57 +1,83 @@
 ---
 title: "Configure storage classes and PVCs"
-description: "Provide a default StorageClass through dependency injection and configure PVC instances that consume it."
+description: "Give a cluster the StorageClasses its claims use, and configure PVC instances that consume them."
 ---
 
 import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
-import managedStorageClassPackage from '/src/snippets/clusters/test-doc-how-tos/managedStorageClassPackage.json';
-import shadowPlatformStorage from '/src/snippets/clusters/test-doc-how-tos/shadowPlatformStorage.json';
+import storageClassesInstance from '/src/snippets/clusters/example/storageClassesInstance.json';
 import configuredPersistentVolumeClaim from '/src/snippets/clusters/test-doc-how-tos/configuredPersistentVolumeClaim.json';
+import importedStorageClass from '/src/snippets/clusters/example-import/importedStorageClass.json';
 
-Kix models storage in two layers. A cluster-level provider exports the default
-StorageClass name, and namespace-scoped `persistent-volume-claim` instances
-request volumes from that class. Application packages consume the claims
-through a `storage` dependency.
+Kix models storage in two layers. A cluster-level `storageClasses` provider
+exports `out.storageClassName`, the class a claim gets when it names none, and
+namespace-scoped `persistent-volume-claim` instances request volumes. Application
+packages consume the claims through a `storage` dependency.
 
 ## Decide whether the flavor is sufficient
 
-Provider flavors such as GKE, EKS, and kind expose their platform default as a
-`storageClasses` import. If that class has the provisioner, binding mode,
-reclaim policy, and access modes you need, use it directly and create only the
-PVC instance below.
+The kind, k3s, GKE, GKE Autopilot, AKS, OVH, and Scaleway flavors import the
+environment's default StorageClass as a `storageClasses` provider. If that
+class has the provisioner, binding mode, reclaim policy, and access modes you
+need, use it directly and create only the PVC instance below.
 
-Add a managed provider when the cluster must create its own StorageClass or
-use a different default.
+The rke2, kubeadm, talos, openshift, and EKS flavors import no class. On those
+clusters, and on a cluster with no flavor, a claim that names no class fails
+the build until you add a provider or set the claim's class.
 
-## Define a StorageClass provider
+## Add StorageClasses
 
-Create a package that renders the StorageClass, claims the `storageClasses`
-role, and exports `out.storageClassName`:
+The `storage-classes` package creates StorageClasses for CSI drivers that
+already run in the cluster and provides the `storageClasses` role:
 
-<Snippet {...managedStorageClassPackage} />
+<Snippet {...storageClassesInstance} />
 
-Choose the `provisioner`, `parameters`, `reclaimPolicy`,
-`volumeBindingMode`, and `allowVolumeExpansion` values supported by the CSI
-driver installed in the target cluster. Creating a StorageClass does not
-install its provisioner.
+Each entry of `config.classes` is one StorageClass, keyed by its name. The
+fields are the StorageClass v1 fields: `provisioner`, `parameters`,
+`reclaimPolicy`, `volumeBindingMode`, `allowVolumeExpansion`,
+`mountOptions`, `allowedTopologies`, `labels`, and `annotations`. Use the
+values the installed driver supports. Creating a StorageClass does not install
+its provisioner; `rancher.io/local-path` works only where
+local-path-provisioner runs.
 
-The example uses `kubernetes.io/no-provisioner` only to demonstrate the Kix
-contract. A claim using it needs a matching statically provisioned volume.
+The apiserver refuses changes to `provisioner`, `parameters`,
+`reclaimPolicy`, and `volumeBindingMode`. Changing one means deleting and
+recreating the class.
 
-## Add the provider
+On a flavor that imports a default class, the `storage-classes` instance
+replaces the import for Kix consumers. The environment's class stays the
+cluster default for claims Kix does not create. See
+[Shadow a flavor-provided import with a managed package](/docs/how-to/adopt-existing-resources/shadow-a-flavor-provided-import-with-a-managed-package/).
 
-Add one managed provider to the cluster:
+### Choose the class consumers get
 
-<Snippet {...shadowPlatformStorage} />
+`out.storageClassName` is the only class when the instance has one. With
+several classes, it is the class annotated
+`storageclass.kubernetes.io/is-default-class = "true"`. With several classes
+and no annotation, a consumer that names no class fails the build, and each
+claim sets its own `storageClassName`.
 
-Because the package claims the `storageClasses` role, consumers resolve it by
-that name. On a flavor with a shadowable platform storage import, the managed
-provider takes precedence.
+The annotation also makes the class the cluster default, so Kix refuses it on
+a flavor whose environment already has a default class. Annotate at most one
+class: two classes annotated default in one build fail the build.
 
-Kix rejects multiple managed providers for the same role. To offer several
-classes, render them from one provider and choose which name it exports as the
-default.
+### Use a CSI driver package's classes
+
+A CSI driver package that Kix installs renders its own classes and does not
+claim the role. Give its instance `aliases = [ "storageClasses" ]` to make it
+the cluster's provider, or wire one consumer with
+`deps.storageClasses = ref.<namespace>.<instance>`.
+
+### Import a class Kix does not manage
+
+When the environment has a class and the flavor does not import it, declare
+the import yourself so claims can use it:
+
+<Snippet {...importedStorageClass} />
+
+`kind`, `apiVersion`, and `out.name` identify the imported StorageClass.
+`out.storageClassName` is the class claims that name none get; set both to
+the class's name.
 
 ## Configure a PVC
 
@@ -59,14 +85,14 @@ Create a `persistent-volume-claim` instance in the application's namespace:
 
 <Snippet {...configuredPersistentVolumeClaim} />
 
-With `storageClassName` omitted, the package reads the name exported by the
-`storageClasses` provider. Set `config.storageClassName` when this particular
-claim should use a non-default class. An explicit value takes precedence over
+`size` is required. With `storageClassName` omitted, the package reads the
+class from the `storageClasses` provider. Set `config.storageClassName` when
+this claim should use another class. An explicit value takes precedence over
 the dependency.
 
-Select only access modes supported by the provider. `ReadWriteOnce` is common
-for block storage; `ReadWriteMany` requires a provider that supports shared
-mounts.
+Select only access modes the provider supports. `ReadWriteOnce` is common for
+block storage; `ReadWriteMany` requires a provider that supports shared
+mounts, and Kix does not check that it does.
 
 ## Check the rendered resources
 

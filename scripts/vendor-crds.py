@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vendor upstream CRDs into the kix packages that ship them.
+"""Vendor upstream CRDs and operator RBAC into the kix packages that ship them.
 
 Every package that owns CRDs keeps them under `<pkg>/crds/`, one JSON file
 per CRD named `<metadata.name>.json`, next to a `sources.txt` listing the
@@ -7,6 +7,11 @@ public URLs they come from (one per line, optionally followed by the CRD
 names to take from that document). A package whose upstream is not a public
 URL ships `crds/update.py` instead, exposing `crds() -> list[dict]` and
 saying in a comment why the URL list did not fit.
+
+A package that grants an operator upstream's own roles keeps them under
+`<pkg>/rbac/`, one JSON file per ClusterRole or Role named
+`<kind>-<name>.json`, from a `sources.txt` whose every URL names the roles
+to take as `Kind/name`.
 
     uv run scripts/vendor-crds.py                # refresh every package
     uv run scripts/vendor-crds.py velero arc     # just these
@@ -29,10 +34,12 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from vendor_crds import (
     VendorError,
+    fetch,
     fetch_crds,
     file_name,
     parse_sources,
     render,
+    roles_in,
 )
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -40,40 +47,50 @@ PACKAGES = REPO / "kix" / "packages"
 
 
 def discover(names: list[str]) -> list[pathlib.Path]:
-    """The `crds/` directories to process, all of them or the named packages."""
-    if names:
-        dirs = [PACKAGES / name / "crds" for name in names]
-        for directory in dirs:
-            if not directory.is_dir():
-                sys.exit(f"{directory.relative_to(REPO)}: no such directory")
-        return dirs
-    return sorted(
+    """The `crds/` and `rbac/` directories to process, all of them or the
+    named packages'. Only `crds/` may use an `update.py` in place of a
+    `sources.txt`."""
+    dirs = sorted(
         d
-        for d in PACKAGES.glob("*/crds")
-        if (d / "sources.txt").exists() or (d / "update.py").exists()
+        for d in [*PACKAGES.glob("*/crds"), *PACKAGES.glob("*/rbac")]
+        if (d / "sources.txt").exists()
+        or (d.name == "crds" and (d / "update.py").exists())
     )
+    if names:
+        dirs = [d for d in dirs if d.parent.name in names]
+        if missing := sorted(set(names) - {d.parent.name for d in dirs}):
+            sys.exit(f"no crds/ or rbac/ sources in: {', '.join(missing)}")
+    return dirs
 
 
 def wanted(directory: pathlib.Path) -> dict[str, str]:
-    """`file name -> rendered content` for one package, from its sources."""
+    """`file name -> rendered content` for one directory, from its sources."""
     script = directory / "update.py"
-    if script.exists():
+    if directory.name == "rbac":
+        objects = [
+            role
+            for url, selectors in parse_sources(directory / "sources.txt")
+            for role in roles_in(fetch(url), selectors, source=url)
+        ]
+    elif script.exists():
         spec = importlib.util.spec_from_file_location(
             f"crds_{directory.parent.name}", script
         )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)  # type: ignore[union-attr]
-        crds = module.crds()
+        objects = module.crds()
     else:
-        crds = []
-        for url, only in parse_sources(directory / "sources.txt"):
-            crds.extend(fetch_crds(url, only))
+        objects = [
+            crd
+            for url, only in parse_sources(directory / "sources.txt")
+            for crd in fetch_crds(url, only)
+        ]
     out: dict[str, str] = {}
-    for crd in crds:
-        name = file_name(crd)
+    for obj in objects:
+        name = file_name(obj)
         if name in out:
-            raise VendorError(f"{crd['metadata']['name']} is produced twice")
-        out[name] = render(crd)
+            raise VendorError(f"{obj['metadata']['name']} is produced twice")
+        out[name] = render(obj)
     return out
 
 
@@ -104,6 +121,8 @@ def reconcile(directory: pathlib.Path, files: dict[str, str], check: bool) -> li
 
 def process(directory: pathlib.Path, check: bool) -> tuple[str, list[str], bool]:
     package = directory.parent.name
+    if directory.name != "crds":
+        package = f"{package}/{directory.name}"
     try:
         lines = reconcile(directory, wanted(directory), check)
     except VendorError as error:
@@ -120,7 +139,9 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
-        "packages", nargs="*", help="package names; default is every package with crds/"
+        "packages",
+        nargs="*",
+        help="package names; default is every package with crds/ or rbac/",
     )
     parser.add_argument(
         "--check", action="store_true", help="exit non-zero if any file would change"
@@ -133,7 +154,7 @@ def main() -> int:
     directories = discover(args.packages)
     if not directories:
         sys.exit(
-            "no package under kix/packages has a crds/sources.txt or crds/update.py"
+            "no package under kix/packages has a sources.txt or update.py under crds/ or rbac/"
         )
 
     failed: list[str] = []

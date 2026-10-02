@@ -1,7 +1,9 @@
 # kind flavor for local development and CI.
 #
-# Pre-installs kindnet CNI and a local, ephemeral StorageClass whose
-# volumes do not survive container restarts). No LoadBalancer support.
+# Pre-installs kindnet CNI and a local, ephemeral StorageClass `standard`
+# (local-path-provisioner, annotated as the default; the node image's
+# manifest is pkg/build/nodeimage/const_storage.go in kubernetes-sigs/kind),
+# whose volumes do not survive container restarts. No LoadBalancer support.
 #
 # Role bindings (v2_discussions/127): kindnet owns the pod network
 # exclusively. Deploying a managed CNI on stock kind breaks the cluster,
@@ -27,6 +29,9 @@
 {
   cluster.provider = lib.mkDefault "kind";
 
+  # kind's default networking.podSubnet.
+  cluster.network.podCidr = lib.mkDefault "10.244.0.0/16";
+
   cluster.roles = {
     cni = {
       binding = lib.mkDefault "exclusive";
@@ -35,6 +40,9 @@
     dns.binding = lib.mkDefault "shadowable";
     storageClasses.binding = lib.mkDefault "shadowable";
     loadBalancer.binding = lib.mkDefault "absent";
+    # kind ships no snapshot CRDs or controller; a snapshot-controller
+    # instance provides them.
+    snapshotController.binding = lib.mkDefault "absent";
   };
 
   cluster.capabilities = {
@@ -55,7 +63,7 @@
         roles = [ "dns" ];
         out = {
           name = "coredns";
-          fqdn = "kube-dns.kube-system.svc.cluster.local";
+          fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
         };
       };
 
@@ -118,14 +126,16 @@
 
     platform-storage = {
       package = kix.mkImport {
+        kind = "StorageClass";
+        apiVersion = "storage.k8s.io/v1";
         roles = [ "storageClasses" ];
         out = {
           # Ephemeral: backed by the docker container FS, does not survive
           # container restarts.
           storageClassName = "standard";
+          name = "standard";
         };
       };
-      optional = true;
     };
   };
 

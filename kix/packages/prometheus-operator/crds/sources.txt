@@ -1,0 +1,5 @@
+# prometheus-operator release asset at `release` in default.nix. The
+# stripped-down bundle carries the same schemas as the full CRDs without the
+# field descriptions, which keeps the Prometheus CRD well under the size the
+# apiserver accepts in one object.
+https://github.com/prometheus-operator/prometheus-operator/releases/download/v0.92.1/stripped-down-crds.yaml

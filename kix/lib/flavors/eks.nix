@@ -3,12 +3,22 @@
 # Managed control plane. aws-vpc-cni gives pods real VPC IPs, and the cni
 # role is environment-owned (exclusive). LoadBalancer works via the in-tree
 # cloud provider (CLBs) or the AWS Load Balancer Controller addon (NLB/ALB),
-# so the role is shadowable. EBS CSI driver addon provides persistent
-# storage with RWO access; RWX needs EFS. No ingress controller is included.
+# so the role is shadowable. No ingress controller is included.
 #
-# Platform imports: DNS (coredns, managed by EKS), storage (gp3 via EBS CSI).
+# Storage: EKS creates no StorageClass a cluster can rely on. The EBS CSI
+# driver is an add-on (https://docs.aws.amazon.com/eks/latest/userguide/ebs-csi.html),
+# no gp3 class exists until somebody creates one, and EKS Auto Mode creates
+# none. The storageClasses role is therefore vacant: a cluster declares its
+# class as a managed instance or as its own import.
+#
+# Platform imports: DNS (coredns, managed by EKS).
 
-{ lib, kix, ... }:
+{
+  config,
+  lib,
+  kix,
+  ...
+}:
 {
   cluster.provider = lib.mkDefault "eks";
 
@@ -18,7 +28,7 @@
       provider = lib.mkDefault "aws-vpc-cni";
     };
     dns.binding = lib.mkDefault "shadowable";
-    storageClasses.binding = lib.mkDefault "shadowable";
+    storageClasses.binding = lib.mkDefault "absent";
     loadBalancer = {
       binding = lib.mkDefault "shadowable";
       provider = lib.mkDefault "aws-cloud-provider";
@@ -41,17 +51,7 @@
         roles = [ "dns" ];
         out = {
           name = "coredns";
-          fqdn = "kube-dns.kube-system.svc.cluster.local";
-        };
-      };
-      optional = true;
-    };
-
-    platform-storage = {
-      package = kix.mkImport {
-        roles = [ "storageClasses" ];
-        out = {
-          storageClassName = "gp3";
+          fqdn = "kube-dns.kube-system.svc.${config.clusterDomain}";
         };
       };
       optional = true;

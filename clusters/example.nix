@@ -1,4 +1,4 @@
-# clusters/example.nix — Example cluster: coredns + valkey + cert-manager.
+# clusters/example.nix: an example cluster with coredns, valkey, cert-manager, and immich.
 #
 # Namespace-scoped instances with DI resolution.
 #
@@ -24,86 +24,24 @@ kix.buildCluster {
 
       instances = {
         kube-system = {
+          # region:storageClassesInstance
+          # rancher.io/local-path exists only where local-path-provisioner is
+          # installed; name your cluster's CSI driver here.
           storage-classes = {
             package = packages.storage-classes;
-            aliases = [ "storageClasses" ];
+            config.classes.local-path = {
+              provisioner = "rancher.io/local-path";
+              volumeBindingMode = "WaitForFirstConsumer";
+            };
           };
+          # endregion:storageClassesInstance
 
           coredns = {
             package = packages.coredns;
 
             config = {
-              replicaCount = 2;
-              prometheus = {
-                service = {
-                  enabled = true;
-                  annotations = {
-                    "prometheus.io/scrape" = "true";
-                    "prometheus.io/port" = "9153";
-                  };
-                };
-                monitor = {
-                  enabled = true;
-                  interval = null;
-                };
-              };
-            };
-          };
-        };
-
-        cache = {
-          valkey = {
-            package = packages.valkey;
-
-            config = {
-              sentinel = {
-                enabled = true;
-                quorum = 2;
-                primarySet = "myprimary";
-                downAfterMilliseconds = 60000;
-                failoverTimeout = 180000;
-                parallelSyncs = 1;
-                image = {
-                  repository = "docker.io/bitnami/valkey-sentinel";
-                  tag = "8.1.1-debian-12-r0";
-                  pullPolicy = "IfNotPresent";
-                };
-                resources = {
-                  requests = {
-                    cpu = "100m";
-                    memory = "128Mi";
-                    ephemeral-storage = "50Mi";
-                  };
-                  limits = {
-                    cpu = "150m";
-                    memory = "192Mi";
-                    ephemeral-storage = "2Gi";
-                  };
-                };
-              };
-              metrics = {
-                enabled = true;
-                image = {
-                  repository = "docker.io/bitnami/redis-exporter";
-                  tag = "1.70.0-debian-12-r2";
-                  pullPolicy = "IfNotPresent";
-                };
-                resources = {
-                  requests = {
-                    cpu = "100m";
-                    memory = "128Mi";
-                    ephemeral-storage = "50Mi";
-                  };
-                  limits = {
-                    cpu = "150m";
-                    memory = "192Mi";
-                    ephemeral-storage = "2Gi";
-                  };
-                };
-              };
-              auth = {
-                enabled = false;
-              };
+              replicas = 2;
+              clusterIP = "10.96.0.10";
             };
           };
         };
@@ -124,27 +62,17 @@ kix.buildCluster {
         immich = {
           postgres = {
             package = packages."stackgres-cluster";
-
-            config = {
-              extensions = [
-                {
-                  name = "vector";
-                  publisher = "tensorchord";
-                  version = "0.3.0";
-                }
-              ];
-            };
           };
 
-          # Per-app database + role on the postgres cluster above.
-          # Resolved via the `database` alias by the immich package.
+          # Per-app database + role on the postgres cluster above, resolved
+          # through the `database` alias. immich adds the extensions it needs
+          # to this instance, which forwards them to the postgres cluster.
           immich-db = {
             package = packages."stackgres-database";
             aliases = [ "database" ];
             config = {
               database = "immich";
               user = "immich";
-              extensions = [ "vector" ];
               password = "immich-dev-password";
             };
           };
@@ -156,12 +84,70 @@ kix.buildCluster {
             };
           };
 
+          # immich reads the password through a secretKeyRef, so valkey and
+          # its password live in immich's namespace. The inline password is
+          # for development only; outside it, use a SOPS `source` with
+          # keys = [ "password" ], or a secret-ref.
+          valkey-password = {
+            package = packages.secret;
+            aliases = [ "valkeyPassword" ];
+            config.stringData.password = "valkey-dev-password";
+          };
+
+          valkey = {
+            package = packages.valkey;
+
+            config = {
+              replicas = 3;
+              sentinel = {
+                enabled = true;
+                quorum = 2;
+                primarySettings = {
+                  down-after-milliseconds = 60000;
+                  failover-timeout = 180000;
+                };
+                resources = {
+                  requests = {
+                    cpu = "100m";
+                    memory = "128Mi";
+                    ephemeral-storage = "50Mi";
+                  };
+                  limits = {
+                    cpu = "150m";
+                    memory = "192Mi";
+                    ephemeral-storage = "2Gi";
+                  };
+                };
+              };
+              metrics.resources = {
+                requests = {
+                  cpu = "100m";
+                  memory = "128Mi";
+                  ephemeral-storage = "50Mi";
+                };
+                limits = {
+                  cpu = "150m";
+                  memory = "192Mi";
+                  ephemeral-storage = "2Gi";
+                };
+              };
+            };
+          };
+
           immich = {
             package = packages.immich;
           };
 
           machine-learning = {
             package = packages."immich-machine-learning";
+          };
+
+          # Keeps the downloaded models across restarts; the worker then runs
+          # one pod.
+          ml-cache = {
+            package = packages."persistent-volume-claim";
+            aliases = [ "modelCache" ];
+            config.size = "10Gi";
           };
         };
       };

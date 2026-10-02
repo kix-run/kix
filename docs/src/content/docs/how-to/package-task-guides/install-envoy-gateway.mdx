@@ -48,8 +48,14 @@ an instance with the listeners your applications need:
 
 The default `controllerName` is
 `gateway.envoyproxy.io/gatewayclass-controller`, which matches Envoy Gateway.
-The example permits routes from every namespace. Restrict
-`allowedRoutes.namespaces` if only selected namespaces should attach routes.
+`listeners` takes Gateway API `Listener` fields with their upstream names
+(`name`, `port`, `protocol`, `hostname`, `tls`, `allowedRoutes`); a
+misspelt field fails evaluation. The example permits routes from every
+namespace. Restrict `allowedRoutes.namespaces` if only selected
+namespaces should attach routes. `kix.expose` reads these listeners to
+pick each application's URL scheme and port, and fails when no listener
+accepts an application's host and namespace. An HTTPS listener without
+`tls.certificateRefs` is not rendered.
 
 On kind, configure Envoy Gateway to expose its data plane through a `NodePort`
 Service:

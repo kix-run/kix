@@ -1,0 +1,3 @@
+# 2026-10-02 · `kix/packages/*` · Each package that vendors CRDs writes its own check that `image.tag` matches the release, and the copies disagree.
+
+kubevirt and cdi (`minorOf`), infisical-operator (`versionParts`), and snapshot-controller (`minorOf`) each match `image.tag` against `release` with their own regex and message. kubevirt and cdi require the leading `v` that upstream tags carry; infisical-operator and snapshot-controller accept `1.2.3`, which renders an image tag upstream does not publish and fails as ImagePullBackOff instead of at evaluation. A fix to one copy does not reach the others.

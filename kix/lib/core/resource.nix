@@ -276,11 +276,11 @@ rec {
 
       manifestJson = builtins.toJSON rawManifest;
 
-      # Fact tokens and untracked-reference markers carry metadata, not
-      # deployable resources. Exclude them from depends-on: their hashes
-      # cannot be resolved to manifests by the deploy scheduler.
+      # Fact tokens and markers carry metadata, not deployable resources.
+      # Exclude them from depends-on: their hashes cannot be resolved to
+      # manifests by the deploy scheduler.
       implicitCtxPaths = builtins.filter (
-        p: lib.hasPrefix "/nix/store/" p && !facts.isFactPath p && !markers.isUntrackedRefPath p
+        p: lib.hasPrefix "/nix/store/" p && !facts.isFactPath p && !markers.isMarkerPath p
       ) (builtins.attrNames (builtins.getContext manifestJson));
       implicitEntries = map extractStoreHash implicitCtxPaths;
 
@@ -750,7 +750,20 @@ rec {
       group,
       kind,
       version,
+      # Versions the CRD serves. `cr` refuses any other, so a wrong version
+      # fails the build instead of every apply of the custom resource.
+      servedVersions,
+      # The declaration the kind comes from, such as
+      # "scope.mkCRDRef in ns/instance". Unserved-version errors name it.
+      declaredBy,
+      # Appended to the unserved-version message when the declaration, not
+      # the custom resource, may be what is wrong. Null when the served
+      # versions come from a CustomResourceDefinition spec.
+      unservedFix ? null,
       crdScope,
+      # Appended to every CR's `requires` after the CRD (a chart's workloads,
+      # any of which can be the CRD's webhook).
+      extraRequires ? [ ],
       # Validated behavior to pass to each CR for endpoint fact handling.
       factBehavior ? null,
       # Stamp kix.run/readiness on each CR for the CLI to evaluate at deploy.
@@ -769,16 +782,29 @@ rec {
       _validatedReadiness = validateReadiness "mkCRDBuilders" "${group}/${kind}" readiness;
 
       # A CR can override the default version, normally the CRD's storage
-      # version. The caller must choose a served version; this helper does not
-      # have the served-version list to validate it. Retain the CRD dependency
-      # and behavior declarations with either version.
-      cr =
-        args:
+      # version, with another served one. `consumer` is "ns/instance" when
+      # the CR is built through mkCR, null when through `cr` directly.
+      checkServed =
+        consumer: args: v:
+        if builtins.elem v servedVersions then
+          v
+        else
+          throw (
+            "${crKind} ${builtins.toJSON (args.name or null)}"
+            + lib.optionalString (consumer != null) " in ${consumer}"
+            + ": version \"${v}\" is not one that ${declaredBy} lists as served for ${group}/${crKind} ("
+            + builtins.concatStringsSep ", " servedVersions
+            + "). Set version on the custom resource to one of these, or leave it unset for ${version}."
+            + lib.optionalString (unservedFix != null) " ${unservedFix}"
+          );
+
+      crFor =
+        consumer: args:
         removeAttrs args [ "version" ]
         // {
-          apiVersion = "${group}/${args.version or version}";
+          apiVersion = "${group}/${checkServed consumer args (args.version or version)}";
           kind = crKind;
-          requires = (args.requires or [ ]) ++ [ crdOrRef ];
+          requires = (args.requires or [ ]) ++ [ crdOrRef ] ++ extraRequires;
         }
         // lib.optionalAttrs (factBehavior != null) { inherit factBehavior; }
         // lib.optionalAttrs (_validatedReadiness != null) {
@@ -787,10 +813,17 @@ rec {
           };
         };
 
+      cr = crFor null;
+
       mkCR =
         consumerScope: args:
         let
-          enriched = cr args;
+          consumer =
+            if consumerScope ? namespaceName && consumerScope ? instanceName then
+              "${consumerScope.namespaceName}/${consumerScope.instanceName}"
+            else
+              null;
+          enriched = crFor consumer args;
         in
         if crdScope == "Cluster" then
           consumerScope.mkClusterResource enriched
@@ -799,6 +832,155 @@ rec {
     in
     {
       inherit cr mkCR;
+    };
+
+  # A PackageInstance in import mode: a placeholder for an object Kix does
+  # not create, which the deploy waits for. `mkResource` is the caller's
+  # builder; it supplies the namespace and the labels.
+  mkImportMarker =
+    { mkResource, namespaceName }:
+    {
+      markerName,
+      importKind,
+      importApiVersion,
+      importName,
+      extraAnnotations ? { },
+      extraRequires ? [ ],
+    }:
+    mkResource {
+      apiVersion = kixAnnotations.apiVersion;
+      kind = "PackageInstance";
+      name = markerName;
+      annotations = {
+        ${kixKeys.mode} = "import";
+        ${kixKeys.importKind} = importKind;
+        ${kixKeys.importApiVersion} = importApiVersion;
+        ${kixKeys.importName} = importName;
+      }
+      // extraAnnotations;
+      requires = [ kixCRDs.packageInstance ] ++ extraRequires;
+      extra.spec = {
+        instanceName = markerName;
+        namespaceName = namespaceName;
+        mode = "import";
+      };
+    };
+
+  # A handle for a CRD that something other than Kix installs: an import
+  # marker for the CustomResourceDefinition plus the `cr`/`mkCR` builders.
+  # scope.mkCRDRef and `kix.mkImport { crds }` both build it, with their own
+  # `mkResource`, so a CR built from either handle requires the same kind of
+  # marker. `site` names the declaration in error messages.
+  mkCRDRefHandle =
+    {
+      mkResource,
+      instanceName,
+      namespaceName,
+      site ? "scope.mkCRDRef",
+    }:
+    {
+      group,
+      kind,
+      plural,
+      # The API version custom resources of this kind use by default.
+      # Required: Kix does not install the CRD, so it cannot read the
+      # version from a spec.
+      version ? null,
+      # Every API version the CRD serves for this kind that custom resources
+      # may name. Must include `version`. Defaults to `[ version ]`.
+      servedVersions ? null,
+      crdScope ? "Namespaced",
+      installedBy ? null,
+      # Endpoint handling for this kind's controller. mkCR passes it to
+      # each custom resource seal.
+      factBehavior ? null,
+      # Readiness condition stamped on each CR as kix.run/readiness and
+      # validated while evaluating the declaring instance.
+      readiness ? null,
+    }:
+    let
+      declaration = "${site} in ${namespaceName}/${instanceName}";
+      who = "${site} ${group}/${kind} in ${namespaceName}/${instanceName}";
+      isApiVersion = v: builtins.isString v && builtins.match "[a-z]([-a-z0-9]*[a-z0-9])?" v != null;
+      _validatedVersion =
+        if version == null then
+          throw "${who}: set version to the API version the CustomResourceDefinition serves for this kind (for example \"v1\" or \"v1beta1\"). Kix does not install this CRD, so it cannot read the version, and a wrong one fails every apply of this kind."
+        else if !(isApiVersion version) then
+          throw "${who}: version ${builtins.toJSON version} is not an API version. Kubernetes API versions are lowercase RFC 1035 labels, such as \"v1\" or \"v1beta1\"."
+        else
+          version;
+      _validatedServed =
+        let
+          listed = if servedVersions == null then [ _validatedVersion ] else servedVersions;
+          invalid = builtins.filter (v: !(isApiVersion v)) listed;
+        in
+        if !(builtins.isList listed) then
+          throw "${who}: servedVersions is a list of API versions, such as [ \"v1\" \"v1beta1\" ]; got ${builtins.typeOf listed}."
+        else if invalid != [ ] then
+          throw "${who}: servedVersions entries ${builtins.toJSON invalid} are not API versions. Kubernetes API versions are lowercase RFC 1035 labels, such as \"v1\" or \"v1beta1\"."
+        else if !(builtins.elem _validatedVersion listed) then
+          throw "${who}: servedVersions ${builtins.toJSON listed} does not include version \"${_validatedVersion}\". Add it, or set version to one of the listed versions."
+        else
+          lib.unique listed;
+      _validatedScope =
+        if crdScope == "Namespaced" || crdScope == "Cluster" then
+          crdScope
+        else
+          throw "${who}: crdScope is ${builtins.toJSON crdScope}; use \"Namespaced\" or \"Cluster\", as the CustomResourceDefinition's spec.scope says.";
+      _validatedReadiness = validateReadiness declaration "${group}/${kind}" readiness;
+      _validatedBehavior =
+        if factBehavior != null then
+          facts.validateBehavior declaration "${group}/${kind}" factBehavior
+        else
+          null;
+      crdName = "${plural}.${group}";
+      groupSlug = builtins.replaceStrings [ "." ] [ "-" ] group;
+      # Per instance, as secret and service refs are: two instances in one
+      # namespace that reference the same CRD get two markers, and each
+      # marker names the instance that declared it.
+      markerName = "crd-ref-${instanceName}-${plural}-${groupSlug}";
+
+      installedByList =
+        if installedBy == null then
+          [ ]
+        else if builtins.isList installedBy then
+          installedBy
+        else
+          [ installedBy ];
+
+      _validated = builtins.seq _validatedServed (builtins.seq _validatedScope _validatedReadiness);
+
+      marker = builtins.seq _validated (
+        mkImportMarker { inherit mkResource namespaceName; } {
+          inherit markerName;
+          importKind = "CustomResourceDefinition";
+          importApiVersion = "apiextensions.k8s.io/v1";
+          importName = crdName;
+          extraAnnotations = {
+            ${kixKeys.crdKind} = kind;
+            ${kixKeys.crdVersion} = _validatedVersion;
+            ${kixKeys.crdScope} = _validatedScope;
+            ${kixKeys.crdServedVersions} = builtins.concatStringsSep "," _validatedServed;
+          };
+          extraRequires = installedByList;
+        }
+      );
+
+      crdBuilders = mkCRDBuilders {
+        crdOrRef = marker;
+        factBehavior = _validatedBehavior;
+        readiness = _validatedReadiness;
+        version = _validatedVersion;
+        servedVersions = _validatedServed;
+        crdScope = _validatedScope;
+        declaredBy = declaration;
+        unservedFix = "If the CustomResourceDefinition serves it, add it to that declaration's servedVersions.";
+        inherit group kind;
+      };
+    in
+    marker
+    // {
+      out = marker.out // crdBuilders;
     };
 
 }

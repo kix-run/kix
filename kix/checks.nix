@@ -1,15 +1,10 @@
-# kix checks: the kubeconform schema check, plus a re-export of the
-# cross-resource checks for `nix flake check` callers.
+# kix checks: the kubeconform schema check.
 #
-# Imported by kix/lib/mkFlake.nix (and the lithus monorepo) as:
+# Imported by kix/lib/mkFlake.nix as:
 #   kixChecks = import ./checks.nix { inherit pkgs lib; };
 #
-# The 14 cross-resource checks themselves live in kix/lib/eval/validate.nix
-# and run inside every cluster evaluation since 2026-09. `validateManifestSet`
-# here is the throwing form over an already-evaluated `rawManifests`; it
-# cannot fail on its own any more, because that eval asserts the same
-# checks first. It stays so existing `checks."validate-cluster-<n>"`
-# attributes keep evaluating.
+# The cross-resource checks live in kix/lib/eval/validate.nix and run inside
+# every cluster evaluation, so a cluster that builds has passed them.
 
 { pkgs, lib }:
 
@@ -39,32 +34,5 @@ rec {
           -schema-location '${kubernetesSchemas}/master-standalone-strict/{{ .ResourceKind }}{{ .KindSuffix }}.json'
         touch $out
       '';
-
-  # --- Cross-resource validation ---
-  #
-  # Pure eval-time Nix checks. No IFD, no runtime.
-  #
-  # Validates:
-  #   1. ServiceAccount references from workloads
-  #   2. RoleBinding/ClusterRoleBinding roleRef targets
-  #   3. ConfigMap volume references
-  #   4. Service selectors match workload pod template labels
-  #   5. HPA scaleTargetRef points to existing workloads
-  #   6. StatefulSet serviceName → headless Service
-  #   7. No duplicate (kind, namespace, name) tuples
-  #   8. managed-by label present on all resources
-  #   9. Deployment/StatefulSet selector ⊆ pod template labels
-  #  10. Ingress backend Service references
-  #  11. Namespace existence for namespaced resources
-  #  12. NetworkPolicy podSelector matches workloads
-  #  13. Service named targetPort → container port name
-  #  14. PodDisruptionBudget selector matches workloads
-  #
-  # Only validates INTERNAL references (resources created by kix).
-  # External references are exempted via documented allowlists.
-
-  # Cross-resource checks live in kix/lib/eval/validate.nix so buildCluster
-  # runs them on every eval. Re-exported here for `nix flake check` callers.
-  inherit (import ./lib/eval/validate.nix { inherit lib; }) validateManifestSet crossResourceFailures;
 
 }

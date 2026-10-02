@@ -57,13 +57,17 @@ help when the nodes have no usable zone labels.
 
 ## Package and workload ceilings
 
-A package declares `meta.availability.max` when the whole package cannot meet
-a higher level. Kix lowers the resolved level to that ceiling and warns that
-the instance does not meet the cluster's request.
+A package declares `meta.availability.max` when the program itself cannot
+meet a higher level. Kix lowers the resolved level to that ceiling and warns
+that the instance does not meet the cluster's request.
 
-Some packages contain both replicated data services and single-replica
-controllers. A workload builder can set `availability.max` for that one
-workload. The rest of the package still receives the full instance level.
+Some packages contain both replicated data services and a workload that runs
+one pod at a time. A workload builder can set `availability.max = "none"` for
+that one workload. The rest of the package still receives the full instance
+level.
+
+The ceiling `none` means one pod at a time, so Kix refuses a Deployment or
+StatefulSet with more than one replica under it.
 
 ## Explicit placement takes ownership
 

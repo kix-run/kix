@@ -88,6 +88,11 @@ pub struct ImportTarget {
     /// `data`. Parsed from the `kix.run/import-secret-keys` annotation (comma
     /// separated). Empty = identity-only check (resource existence).
     pub expected_keys: Vec<String>,
+    /// For `CustomResourceDefinition` imports from a CRD ref marker, the API
+    /// versions the declaration says the CRD serves, from
+    /// `kix.run/crd-served-versions`. Each must be in the live CRD's
+    /// `spec.versions` with `served: true`. Empty = no version check.
+    pub served_versions: Vec<String>,
 }
 
 /// Extract an [`ImportTarget`] from a manifest if it is a PackageInstance
@@ -142,12 +147,28 @@ pub fn import_target_from_manifest(manifest: &Value) -> Option<ImportTarget> {
         })
         .unwrap_or_default();
 
+    let served_versions = if import_kind == "CustomResourceDefinition" {
+        let listed = annotations
+            .get(keys::CRD_SERVED_VERSIONS)
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        listed
+            .split(',')
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(String::from)
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     Some(ImportTarget {
         kind: import_kind,
         api_version: import_api_version,
         name: import_name,
         namespace,
         expected_keys,
+        served_versions,
     })
 }
 
@@ -237,6 +258,21 @@ pub async fn wait_for_import_target(
                 // actually serving requests before we advance the wave.
                 if target.kind == "CustomResourceDefinition" {
                     if check_crd_ready(&obj.data) {
+                        // A declared version the CRD does not serve fails
+                        // every apply of the kind at that version, and
+                        // waiting does not change what the CRD serves.
+                        let unserved = unserved_crd_versions(&obj.data, &target.served_versions);
+                        if !unserved.is_empty() {
+                            return Ok(ReadinessResult::ImportMismatch {
+                                missing_keys: Vec::new(),
+                                message: format!(
+                                    "CustomResourceDefinition {} does not serve {} (serves {}). Correct version or servedVersions on the scope.mkCRDRef or mkImport crds entry that declares it.",
+                                    target.name,
+                                    unserved.join(", "),
+                                    served_crd_versions(&obj.data).join(", ")
+                                ),
+                            });
+                        }
                         let _ = probe_crd_discovery(client, &obj.data).await;
                         return Ok(ReadinessResult::Ready);
                     }
@@ -563,6 +599,10 @@ impl TerminalReason {
 pub enum ReadinessResult {
     /// Resource is ready.
     Ready,
+    /// An `OnDelete` DaemonSet is ready, but `stale` of its pods still run
+    /// the previous pod template. The controller replaces a pod only when it
+    /// is deleted, so the deploy reports this instead of waiting.
+    ReadyPendingRestart { stale: i64, message: String },
     /// Timed out waiting for readiness.
     TimedOut { elapsed: Duration, message: String },
     /// The poll loop observed a cancellation request and bailed before
@@ -1172,6 +1212,14 @@ pub async fn wait_for_ready(
         }
 
         if check_readiness(&obj, kind) {
+            if kind == "DaemonSet"
+                && let Some(stale) = daemonset_pending_restart(&obj.data)
+            {
+                return Ok(ReadinessResult::ReadyPendingRestart {
+                    stale,
+                    message: "the DaemonSet replaces a pod with the current template only when the pod is deleted".into(),
+                });
+            }
             // A CRD that reports Established=True can still be invisible to
             // the apiserver's discovery endpoint for a few hundred ms (and
             // longer across HA replicas). Probe discovery before declaring
@@ -1355,7 +1403,10 @@ fn check_deployment_ready(generation: Option<i64>, data: &Value) -> bool {
 }
 
 /// DaemonSet: numberReady == desiredNumberScheduled && updatedNumberScheduled == desiredNumberScheduled
-/// && observedGeneration >= generation
+/// && observedGeneration >= generation. An `OnDelete` DaemonSet drops the
+/// updatedNumberScheduled condition: the controller replaces its pods only
+/// when they are deleted, and `daemonset_pending_restart` counts the pods
+/// still on the previous template.
 ///
 /// A DaemonSet whose node selector matches no node has
 /// `desiredNumberScheduled: 0` once the controller has observed it, and
@@ -1383,12 +1434,44 @@ fn check_daemonset_ready(generation: Option<i64>, data: &Value) -> bool {
         .pointer("/status/numberReady")
         .and_then(Value::as_i64)
         .unwrap_or(0);
+    // Under OnDelete the controller replaces a pod only when someone
+    // deletes it, so pods on the previous template are not waited for;
+    // `daemonset_pending_restart` reports them.
+    if is_on_delete(data) {
+        return ready >= desired;
+    }
+
     let updated = data
         .pointer("/status/updatedNumberScheduled")
         .and_then(Value::as_i64)
         .unwrap_or(0);
 
     ready >= desired && updated >= desired
+}
+
+fn is_on_delete(data: &Value) -> bool {
+    data.pointer("/spec/updateStrategy/type")
+        .and_then(Value::as_str)
+        == Some("OnDelete")
+}
+
+/// The number of pods of an `OnDelete` DaemonSet that still run a previous
+/// pod template, or `None` when there are none or the DaemonSet rolls its
+/// pods itself.
+pub fn daemonset_pending_restart(data: &Value) -> Option<i64> {
+    if !is_on_delete(data) {
+        return None;
+    }
+    let desired = data
+        .pointer("/status/desiredNumberScheduled")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let updated = data
+        .pointer("/status/updatedNumberScheduled")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let stale = desired - updated;
+    (stale > 0).then_some(stale)
 }
 
 /// Job: status.succeeded >= 1
@@ -1432,6 +1515,30 @@ fn check_pvc_ready(data: &Value) -> bool {
 /// CRD: conditions contains Established=True
 fn check_crd_ready(data: &Value) -> bool {
     has_condition(data, "Established", "True")
+}
+
+/// Names in a CRD's `spec.versions` with `served: true`.
+fn served_crd_versions(data: &Value) -> Vec<String> {
+    data.pointer("/spec/versions")
+        .and_then(Value::as_array)
+        .map(|versions| {
+            versions
+                .iter()
+                .filter(|v| v.get("served").and_then(Value::as_bool) == Some(true))
+                .filter_map(|v| v.get("name").and_then(Value::as_str).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The entries of `wanted` the CRD does not serve, in `wanted`'s order.
+fn unserved_crd_versions(data: &Value, wanted: &[String]) -> Vec<String> {
+    let served = served_crd_versions(data);
+    wanted
+        .iter()
+        .filter(|v| !served.contains(v))
+        .cloned()
+        .collect()
 }
 
 /// Generic CR: check .status.conditions for Ready=True or Available=True, else immediate.
@@ -1882,6 +1989,66 @@ mod tests {
         assert!(!check_readiness(&ds, "DaemonSet"));
     }
 
+    fn on_delete_ds(desired: i64, ready: i64, updated: i64) -> DynamicObject {
+        make_obj_gen(
+            2,
+            json!({
+                "spec": {"updateStrategy": {"type": "OnDelete"}},
+                "status": {
+                    "observedGeneration": 2,
+                    "desiredNumberScheduled": desired,
+                    "numberReady": ready,
+                    "updatedNumberScheduled": updated,
+                }
+            }),
+        )
+    }
+
+    #[test]
+    fn on_delete_daemonset_with_stale_pods_is_ready_and_pending_restart() {
+        let ds = on_delete_ds(3, 3, 1);
+        assert!(check_readiness(&ds, "DaemonSet"));
+        assert_eq!(daemonset_pending_restart(&ds.data), Some(2));
+    }
+
+    #[test]
+    fn on_delete_daemonset_fully_updated_has_no_pending_restart() {
+        let ds = on_delete_ds(3, 3, 3);
+        assert!(check_readiness(&ds, "DaemonSet"));
+        assert_eq!(daemonset_pending_restart(&ds.data), None);
+    }
+
+    #[test]
+    fn on_delete_daemonset_waits_for_ready_pods() {
+        let ds = on_delete_ds(3, 2, 1);
+        assert!(!check_readiness(&ds, "DaemonSet"));
+    }
+
+    #[test]
+    fn on_delete_daemonset_matching_no_node_is_ready() {
+        let ds = on_delete_ds(0, 0, 0);
+        assert!(check_readiness(&ds, "DaemonSet"));
+        assert_eq!(daemonset_pending_restart(&ds.data), None);
+    }
+
+    #[test]
+    fn rolling_update_daemonset_waits_for_updated_pods() {
+        let ds = make_obj_gen(
+            2,
+            json!({
+                "spec": {"updateStrategy": {"type": "RollingUpdate"}},
+                "status": {
+                    "observedGeneration": 2,
+                    "desiredNumberScheduled": 3,
+                    "numberReady": 3,
+                    "updatedNumberScheduled": 1,
+                }
+            }),
+        );
+        assert!(!check_readiness(&ds, "DaemonSet"));
+        assert_eq!(daemonset_pending_restart(&ds.data), None);
+    }
+
     #[test]
     fn daemonset_matching_no_node_is_ready_once_observed() {
         // io-engine on a cluster with no openebs.io/engine=mayastor node:
@@ -1993,7 +2160,7 @@ mod tests {
             "apiVersion": keys::API_VERSION,
             "kind": "PackageInstance",
             "metadata": {
-                "name": "crd-ref-sgclusters-stackgres-io",
+                "name": "crd-ref-stackgres-operator-sgclusters-stackgres-io",
                 "namespace": "data",
                 "annotations": {
                     keys::MODE: "import",
@@ -2056,6 +2223,103 @@ mod tests {
         });
         let target = import_target_from_manifest(&manifest).expect("should parse");
         assert!(target.expected_keys.is_empty());
+    }
+
+    #[test]
+    fn import_marker_without_kind_has_no_target() {
+        // A kind-less import (`kix.mkImport` with no `kind`) names nothing
+        // the deploy can look up, so the marker is not waited on.
+        let manifest = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "PackageInstance",
+            "metadata": {
+                "name": "platform-storage",
+                "namespace": "kube-system",
+                "annotations": {
+                    keys::MODE: "import",
+                    keys::IMPORT_NAME: "standard",
+                }
+            }
+        });
+        assert!(import_target_from_manifest(&manifest).is_none());
+        // The marker itself is ready as soon as it exists.
+        assert!(is_immediate_kind("PackageInstance"));
+    }
+
+    #[test]
+    fn crd_ref_marker_carries_served_versions() {
+        let marker = |extra: Value| {
+            let mut annotations = json!({
+                keys::MODE: "import",
+                keys::IMPORT_KIND: "CustomResourceDefinition",
+                keys::IMPORT_API_VERSION: "apiextensions.k8s.io/v1",
+                keys::IMPORT_NAME: "scrapeconfigs.monitoring.coreos.com",
+                keys::CRD_VERSION: "v1alpha1",
+            });
+            for (k, v) in extra.as_object().unwrap() {
+                annotations[k] = v.clone();
+            }
+            json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": "PackageInstance",
+                "metadata": {
+                    "name": "crd-ref-vm-scrapeconfigs-monitoring-coreos-com",
+                    "namespace": "monitoring",
+                    "annotations": annotations,
+                }
+            })
+        };
+        // `crd-version` alone is the default version, not a served list.
+        let default_only = import_target_from_manifest(&marker(json!({}))).unwrap();
+        assert!(default_only.served_versions.is_empty());
+        let listed = import_target_from_manifest(&marker(json!({
+            keys::CRD_SERVED_VERSIONS: "v1alpha1,v1beta1"
+        })))
+        .unwrap();
+        assert_eq!(listed.served_versions, vec!["v1alpha1", "v1beta1"]);
+    }
+
+    #[test]
+    fn non_crd_import_has_no_served_versions() {
+        let manifest = json!({
+            "kind": "PackageInstance",
+            "metadata": {
+                "name": "secret-ref-myapp-bootstrap",
+                "namespace": "myapp",
+                "annotations": {
+                    keys::MODE: "import",
+                    keys::IMPORT_KIND: "Secret",
+                    keys::IMPORT_API_VERSION: "v1",
+                    keys::IMPORT_NAME: "bootstrap",
+                    keys::CRD_VERSION: "v1",
+                }
+            }
+        });
+        let target = import_target_from_manifest(&manifest).unwrap();
+        assert!(target.served_versions.is_empty());
+    }
+
+    #[test]
+    fn crd_served_version_check() {
+        let crd = json!({
+            "spec": {
+                "versions": [
+                    { "name": "v1", "served": true, "storage": true },
+                    { "name": "v1beta1", "served": false, "storage": false },
+                ]
+            }
+        });
+        let wanted = |vs: &[&str]| vs.iter().map(|v| v.to_string()).collect::<Vec<_>>();
+        // Served.
+        assert!(unserved_crd_versions(&crd, &wanted(&["v1"])).is_empty());
+        // Listed but not served, and absent.
+        assert_eq!(
+            unserved_crd_versions(&crd, &wanted(&["v1", "v1beta1", "v2"])),
+            vec!["v1beta1", "v2"]
+        );
+        // No declared versions (a marker without the annotation): nothing to check.
+        assert!(unserved_crd_versions(&crd, &[]).is_empty());
+        assert_eq!(served_crd_versions(&crd), vec!["v1"]);
     }
 
     #[test]

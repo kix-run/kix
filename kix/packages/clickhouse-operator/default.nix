@@ -135,17 +135,14 @@ in
       '';
     };
 
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "50m";
-          memory = "128Mi";
-        };
-        limits = {
-          cpu = "500m";
-          memory = "512Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "50m";
+        memory = "128Mi";
+      };
+      limits = {
+        cpu = "500m";
+        memory = "512Mi";
       };
       description = ''
         Resources of the operator container. Upstream sets none. The operator
@@ -154,17 +151,14 @@ in
       '';
     };
 
-    metricsExporterResources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "20m";
-          memory = "64Mi";
-        };
-        limits = {
-          cpu = "250m";
-          memory = "256Mi";
-        };
+    metricsExporterResources = kix.options.resources {
+      requests = {
+        cpu = "20m";
+        memory = "64Mi";
+      };
+      limits = {
+        cpu = "250m";
+        memory = "256Mi";
       };
       description = "Resources of the metrics-exporter container. Its work per scrape is one round of queries per ClickHouse host.";
     };

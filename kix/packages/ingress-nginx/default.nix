@@ -1,15 +1,46 @@
-# ingress-nginx kix package.
+# ingress-nginx: the NGINX Ingress controller, which serves the Ingresses of
+# its IngressClass. Upstream ended development after v1.15.1; new clusters
+# should route through Gateway API (the envoy-gateway package).
 #
-# NGINX Ingress Controller for Kubernetes. Supports multiple instances
-# in the same namespace; all resource names are prefixed with
-# scope.instanceName to avoid collisions.
+# Installs the controller Deployment, its Service, ConfigMap, ServiceAccount,
+# and RBAC, an IngressClass, and a validating admission webhook whose
+# certificate two certgen Jobs create and patch into the webhook
+# configuration. `metrics.enabled` turns on the controller's Prometheus
+# metrics; with the optional `prometheus` dep it also adds Service
+# <name>-metrics and a ServiceMonitor.
 #
-# Resources: ServiceAccount, ClusterRole, ClusterRoleBinding, Role,
-# RoleBinding, ConfigMap (NGINX config), Deployment, Service
-# (LoadBalancer/ClusterIP), IngressClass, ValidatingWebhookConfiguration.
+# root = the Deployment. The controller exits at startup when its
+# `--publish-service` Service does not exist. The argument reads the
+# Service's name, which orders the Service first, so the Service selects the
+# pods through `rawSelector`, which does not wait for the Deployment.
 #
-# root = Service, selecting the Deployment via out.selector.
-# IngressClass and ConfigMap pulled in via requires.
+# Defaults are upstream's: snippet annotations off, annotation risk level
+# High, forwarded headers not trusted, and an IngressClass that is not the
+# cluster default.
+#
+# Known limits:
+# - The webhook configuration has failurePolicy Fail and matches every
+#   Ingress in the cluster, whatever its class. While any instance's
+#   controller is unavailable, every Ingress create and update fails.
+# - IngressClass names are cluster-scoped, so instances in two namespaces
+#   need different `ingressClassName` values.
+# - The controller runs with a writable root filesystem, as upstream's
+#   does, and has no default resource limits.
+#
+# No dependency or option is required:
+#
+#   instances.ingress-nginx.ingress-nginx.package = packages.ingress-nginx;
+#
+# Exposes:
+#   out.ingressClassName
+#       The IngressClass name. A consumer that reads it orders its Ingress
+#       after the controller is serving and the webhook has its CA.
+#   out.podSelector, out.podNamespace
+#       Where the controller pods run, for the policy that lets them reach
+#       an exposed backend.
+#
+# Escape hatches: `settings` (the controller ConfigMap), `extraArgs`, `env`,
+# `service.spec`, `service.annotations`, and the instance's `partsOverlays`.
 
 {
   scope,
@@ -19,7 +50,27 @@
 }:
 
 let
-  # --- RBAC DSL ---
+  release = "v1.15.1";
+  # kube-webhook-certgen versions separately from the controller; v1.6.9 is
+  # the release upstream deploys with controller v1.15.1.
+  certgenRelease = "v1.6.9";
+
+  name = scope.instanceName;
+  who = "ingress-nginx ${scope.namespaceName}/${name}";
+  # Cluster-scoped objects carry the namespace too, so instances with the
+  # same name in two namespaces do not collide. Namespace `a-b` with
+  # instance `c` and namespace `a` with instance `b-c` still give the same
+  # name, and the build fails with a Duplicate resource error.
+  clusterName = "${scope.namespaceName}-${name}";
+
+  selectorLabels = {
+    "app.kubernetes.io/name" = "ingress-nginx";
+    "app.kubernetes.io/instance" = name;
+    "app.kubernetes.io/component" = "controller";
+  };
+  labelsFor = component: selectorLabels // { "app.kubernetes.io/component" = component; };
+  admissionLabels = labelsFor "admission-webhook";
+
   inherit (scope.rbac)
     group
     core
@@ -37,266 +88,410 @@ let
   ];
   disco = group "discovery.k8s.io" [ "endpointslices" ];
   coord = group "coordination.k8s.io" [ "leases" ];
+  adm = group "admissionregistration.k8s.io" [ "validatingwebhookconfigurations" ];
 
+  tcp = port: {
+    inherit port;
+    protocol = "TCP";
+  };
 in
 {
   meta = {
-    version = "v1.15.1";
-    description = "NGINX Ingress Controller for Kubernetes";
+    version = release;
+    description = "NGINX Ingress controller (legacy: upstream retired after v1.15.1; prefer envoy-gateway)";
     owner = "platform";
     defaultAliases = [ "ingressNginx" ];
     k8s.minVersion = "1.25";
-    # The ingress controller proxies external traffic to backend pods.
-    # It needs world ingress (external HTTP/HTTPS), all-pods ingress
-    # (webhook callbacks from kube-apiserver) and all-pods egress: the
-    # backends are whatever the cluster's Ingress objects name, on any
-    # port, and nothing in the graph ties them to this package. Without
-    # that rule cilium drops every proxied request at the controller and
-    # clients see 504 (seen on the harbor smoke cluster, 2026-09-19).
     network.intents = {
-      backends = {
-        egress = [ { to = "all-pods"; } ];
-      };
-      external-ingress = {
-        ingress = [
-          {
-            from = "world";
-            ports = [
-              {
-                port = 80;
-                protocol = "TCP";
-              }
-              {
-                port = 443;
-                protocol = "TCP";
-              }
-            ];
-          }
-        ];
-      };
-      webhook-ingress = {
-        ingress = [
-          {
-            from = "all-pods";
-            ports = [
-              {
-                port = 8443;
-                protocol = "TCP";
-              }
-            ];
-          }
-        ];
-      };
+      # Ingress objects name their backends at runtime, on any port, so the
+      # graph cannot see the controller's upstream connections.
+      backends.egress = [ { to = "all-pods"; } ];
+      # Clients outside the cluster, plus in-cluster clients and NodePort
+      # traffic that arrives SNATed from a node.
+      front-door.ingress = [
+        {
+          from = "world";
+          ports = [
+            (tcp 80)
+            (tcp 443)
+          ];
+        }
+        {
+          from = "all-pods";
+          ports = [
+            (tcp 80)
+            (tcp 443)
+          ];
+        }
+      ];
+      # The API server calls the admission webhook through the
+      # ValidatingWebhookConfiguration, which is not a pod-to-pod edge.
+      webhook.ingress = [
+        {
+          from = "apiserver";
+          ports = [ (tcp 8443) ];
+        }
+      ];
     };
   };
 
   options = {
-    # Override the resource name prefix. Defaults to the instance name.
-    namePrefix = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-    };
     image = kix.options.image {
       repository = "registry.k8s.io/ingress-nginx/controller";
-      tag = "v1.15.1";
+      tag = release;
+      digest = "sha256:594ceea76b01c592858f803f9ff4d2cb40542cae2060410b2c95f75907d659e1";
+      description = "Image of the controller.";
     };
-    webhookCertgenImage = kix.options.image {
+    certgen.image = kix.options.image {
       repository = "registry.k8s.io/ingress-nginx/kube-webhook-certgen";
-      tag = "v1.6.9";
-      description = "Image for the Jobs that create and patch the admission webhook certificate.";
+      tag = certgenRelease;
+      digest = "sha256:01038e7de14b78d702d2849c3aad72fd25903c4765af63cf16aa3398f5d5f2dd";
+      description = "Image of the Jobs that create the admission webhook certificate and patch its CA into the webhook configuration.";
     };
-    # Suffix appended to controller-bound resource names (Deployment,
-    # ConfigMap, Service, PDB, admission Service). Helm chart 4.13+
-    # uses "-controller"; older charts (4.10 and earlier) use "".
-    controllerNameSuffix = lib.mkOption {
-      type = lib.types.str;
-      default = "";
+    certgen.resources = kix.options.resources {
+      requests = {
+        cpu = "10m";
+        memory = "20Mi";
+      };
+      description = ''
+        Resource requests and limits for the two certgen Jobs, which run for
+        a few seconds per deploy. Each field keeps its default until set,
+        and null removes a default.
+      '';
     };
-    # Override the controller's --election-id arg. Defaults to "<name>-leader".
-    electionId = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-    };
-    # Override the controller's --ingress-class arg. Defaults to ingressClassName.
-    # (Helm chart 4.15+ defaults this to "nginx" not the resource name.)
-    controllerIngressClass = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-    };
-    replicaCount = lib.mkOption {
-      type = lib.types.int;
-      # A serving data plane: two controllers once a pod restart must not
-      # drop ingress traffic, three once a whole zone may go.
+    replicas = lib.mkOption {
+      type = lib.types.ints.positive;
+      # Two controllers once a pod restart must not drop ingress traffic,
+      # three once a whole zone may go.
       default = kix.availability.pick availability {
         none = 1;
         pod = 2;
         node = 2;
         zone = 3;
       };
-      description = ''
-        Number of ingress-nginx controller replicas. Defaults from the
-        cluster's availability level (v2_discussions/145).
-      '';
-    };
-    serviceType = lib.mkOption {
-      type = lib.types.str;
-      default = "ClusterIP";
-    };
-    externalTrafficPolicy = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-    };
-    clusterIP = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-    };
-    # Annotations stamped onto the controller's Service. Cloud-provider
-    # internal-LB tagging lives here: Hetzner uses
-    # `load-balancer.hetzner.cloud/*`, AWS `service.beta.kubernetes.io/
-    # aws-load-balancer-internal: "true"`, GCP
-    # `cloud.google.com/load-balancer-type: "Internal"`, etc. Required
-    # when `serviceType = "LoadBalancer"` and the cluster needs an
-    # internal-only LB; harmless on `ClusterIP` Services.
-    serviceAnnotations = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = { };
-    };
-    loadBalancerIP = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "Pinned LB IP for `serviceType = LoadBalancer` (cloud-provider-specific honour).";
+      defaultText = lib.literalMD "1, 2, 2, or 3 for the cluster's availability level `none`, `pod`, `node`, or `zone`";
+      description = "Controller replicas. Every replica serves traffic; leader election only decides which one writes Ingress status.";
     };
     ingressClassName = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
+      # The API server's rule for an IngressClass name: a lowercase DNS-1123
+      # subdomain. The length limit follows from the controller value.
+      type = lib.types.strMatching "[a-z0-9]([-a-z0-9.]*[a-z0-9])?";
+      default = name;
+      defaultText = lib.literalExpression "scope.instanceName";
+      description = ''
+        Name of the IngressClass this controller serves, the name an Ingress
+        sets in `spec.ingressClassName`: lowercase letters, digits, `-`, and
+        `.`, starting and ending with a letter or digit. The class's
+        controller value is `k8s.io/ingress-nginx/<namespace>/<name>`, which
+        must fit in 250 characters. IngressClasses are cluster-scoped, so
+        instances in different namespaces need different names.
+      '';
     };
     isDefaultClass = lib.mkOption {
       type = lib.types.bool;
-      default = true;
+      default = false;
+      description = ''
+        Mark the IngressClass as the cluster default, so Ingresses that name
+        no class use this controller. Ingresses rendered by Kix always name
+        their class. A cluster may have only one default class; with two,
+        the API server rejects every Ingress that names none.
+      '';
     };
-    controllerValue = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-    };
-    config = lib.mkOption {
+    settings = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
-      default = {
-        proxy-body-size = "200M";
-        use-forwarded-headers = "true";
-        annotations-risk-level = "Critical";
-      };
-    };
-    allowSnippetAnnotations = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-    };
-    maxmindLicenseKey = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-    };
-    # Extra labels added to pod templates (e.g. tenant labels).
-    podLabels = lib.mkOption {
-      type = lib.types.attrsOf lib.types.anything;
       default = { };
+      example = {
+        proxy-body-size = "50m";
+        ssl-protocols = "TLSv1.3";
+      };
+      description = ''
+        Data of the controller's ConfigMap, with upstream's keys and string
+        values (ingress-nginx "ConfigMap" documentation). Snippet
+        annotations need both `allow-snippet-annotations = "true"` and
+        `annotations-risk-level = "Critical"`. Trust `X-Forwarded-*`
+        headers (`use-forwarded-headers`) only behind a proxy that sets them.
+      '';
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "100m";
-          memory = "90Mi";
+    service = {
+      annotations = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        description = "Annotations on the controller Service, such as a cloud provider's load balancer settings.";
+      };
+      nodePorts = {
+        http = lib.mkOption {
+          type = lib.types.nullOr lib.types.port;
+          default = null;
+          description = "nodePort of the Service's http port. Null lets Kubernetes choose. Needs `service.spec.type` NodePort or LoadBalancer.";
+        };
+        https = lib.mkOption {
+          type = lib.types.nullOr lib.types.port;
+          default = null;
+          description = "nodePort of the Service's https port. Null lets Kubernetes choose. Needs `service.spec.type` NodePort or LoadBalancer.";
+        };
+      };
+      spec = lib.mkOption {
+        default = { };
+        description = ''
+          Fields of the controller Service's `spec`, with Kubernetes field
+          names (`loadBalancerClass`, `loadBalancerSourceRanges`,
+          `ipFamilyPolicy`, ...). The package sets `selector` and `ports`;
+          set node ports through `service.nodePorts`.
+        '';
+        type = lib.types.submodule {
+          freeformType = lib.types.attrsOf lib.types.anything;
+          options = {
+            type = lib.mkOption {
+              type = lib.types.enum [
+                "ClusterIP"
+                "NodePort"
+                "LoadBalancer"
+              ];
+              default = "ClusterIP";
+              description = "Service type. LoadBalancer needs a load balancer provider in the cluster.";
+            };
+            externalTrafficPolicy = lib.mkOption {
+              type = lib.types.nullOr (
+                lib.types.enum [
+                  "Cluster"
+                  "Local"
+                ]
+              );
+              default = null;
+              description = "`Local` keeps client source addresses on NodePort and LoadBalancer Services. Null leaves the Kubernetes default, `Cluster`.";
+            };
+          };
         };
       };
     };
-    allocateLoadBalancerNodePorts = lib.mkOption {
-      type = lib.types.nullOr lib.types.bool;
-      default = null;
-      description = "Whether to allocate node ports for LoadBalancer services";
+    extraArgs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "--watch-ingress-without-class=true" ];
+      description = ''
+        Flags appended to the controller's arguments. A flag the package
+        sets or derives from (`--publish-service`, `--election-id`,
+        `--controller-class`, `--ingress-class`, `--configmap`,
+        `--enable-metrics`, the port flags `--http-port`, `--https-port`,
+        and `--healthz-port`, and the `--validating-webhook*` flags) is
+        refused, and the error says what to do instead.
+      '';
     };
-    nodePorts = lib.mkOption {
-      type = lib.types.attrsOf lib.types.int;
-      default = { };
-      description = "Map of port name to nodePort value (e.g. { http = 30080; https = 30443; })";
+    env = kix.options.env // {
+      description = ''
+        Extra environment variables for the controller. A value is a string,
+        a `fieldRef` source, or a `secretKeyRef` source naming a Secret
+        managed outside Kix with `kix.untrackedRef`. The package sets
+        `POD_NAME`, `POD_NAMESPACE`, and `LD_PRELOAD`.
+      '';
     };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "100m";
+        memory = "90Mi";
+      };
+      description = ''
+        Resource requests and limits for the controller container. There is
+        no default limit: nginx starts one worker per CPU, so memory use
+        follows the node's CPU count. Each field keeps its default until
+        set, and null removes a default.
+      '';
+    };
+    metrics = kix.options.monitor;
   };
 
-  build =
-    {
-      self,
-      config,
-      clusterConfig,
-    }:
-    let
-      name = if config.namePrefix != null then config.namePrefix else scope.instanceName;
+  build = [
+    (
+      {
+        self,
+        config,
+        prometheus ? null,
+        ...
+      }:
+      let
+        # The namespace makes the value differ between instances in two
+        # namespaces, so two IngressClasses with one name are reported as a
+        # Duplicate resource instead of being merged into one object that
+        # both controllers serve.
+        controllerValue =
+          let
+            value = "k8s.io/ingress-nginx/${scope.namespaceName}/${config.ingressClassName}";
+          in
+          if builtins.stringLength value > 250 then
+            throw "${who}: the IngressClass controller value \"${value}\" is longer than the API server's 250-character limit. Shorten ingressClassName."
+          else
+            value;
+        serviceType = config.service.spec.type;
+        metricsOn = config.metrics.enabled && prometheus != null;
 
-      # Name used for controller-bound resources (Deployment, ConfigMap,
-      # Service, PDB, admission Service). Newer ingress-nginx charts
-      # (4.13+) suffix these with "-controller" while keeping the SA,
-      # Roles, IngressClass, ValidatingWebhookConfiguration, and
-      # admission Jobs at the bare instance name.
-      ctrlName = "${name}${config.controllerNameSuffix}";
+        # The controller parses booleans with Go's strconv.ParseBool, which
+        # also accepts "1", "t", and "True". Other spellings are refused so
+        # the Critical-risk check below cannot be bypassed. The controller
+        # compares the risk level in lower case.
+        snippets = config.settings."allow-snippet-annotations" or null;
+        riskLevel = lib.toLower (config.settings."annotations-risk-level" or "");
+        settings =
+          if snippets != null && snippets != "true" && snippets != "false" then
+            throw "${who}: settings.\"allow-snippet-annotations\" is \"${snippets}\"; use \"true\" or \"false\"."
+          else if snippets == "true" && riskLevel != "critical" then
+            throw "${who}: settings.\"allow-snippet-annotations\" is \"true\", but snippet annotations are Critical risk and the admission webhook rejects them unless settings.\"annotations-risk-level\" is \"Critical\". Set both, or neither."
+          else
+            config.settings;
 
-      # Derived values: ingressClassName and controllerValue default to
-      # instance-name-based values when not overridden.
-      ingressClassName = if config.ingressClassName != null then config.ingressClassName else name;
+        nodePortsSet = lib.filterAttrs (_: p: p != null) config.service.nodePorts;
+        # mergeGuarded below refuses these keys too, but its message cannot
+        # name the option to use instead.
+        serviceSpecOwned = {
+          selector = "selects the controller pods. Remove it.";
+          ports = "defines ports http and https. Set node ports with service.nodePorts.http and service.nodePorts.https, and remove service.spec.ports.";
+        };
+        serviceSpecOwnedHits = builtins.filter (k: (config.service.spec.${k} or null) != null) (
+          builtins.attrNames serviceSpecOwned
+        );
+        serviceSpec =
+          if serviceSpecOwnedHits != [ ] then
+            throw (
+              lib.concatMapStringsSep "\n" (
+                k: "${who}: service.spec.${k} is set by the package, which ${serviceSpecOwned.${k}}"
+              ) serviceSpecOwnedHits
+            )
+          else if serviceType == "ClusterIP" && nodePortsSet != { } then
+            throw "${who}: service.nodePorts sets ${lib.concatStringsSep ", " (builtins.attrNames nodePortsSet)}, which needs service.spec.type NodePort or LoadBalancer; the type is ClusterIP."
+          else if serviceType == "ClusterIP" && config.service.spec.externalTrafficPolicy != null then
+            throw "${who}: service.spec.externalTrafficPolicy applies to NodePort and LoadBalancer Services, and the API server rejects it on ClusterIP. Change service.spec.type or remove it."
+          else
+            kix.mergeGuarded
+              {
+                inherit who;
+                what = "service.spec";
+                locked = [
+                  [ "selector" ]
+                  [ "ports" ]
+                ];
+              }
+              {
+                # rawSelector reads the Deployment's labels without forcing
+                # its manifest, which requires this Service.
+                selector = self.deployment.rawSelector;
+                ports =
+                  map
+                    (
+                      p:
+                      p
+                      // lib.optionalAttrs (config.service.nodePorts.${p.name} != null) {
+                        nodePort = config.service.nodePorts.${p.name};
+                      }
+                    )
+                    [
+                      {
+                        name = "http";
+                        port = 80;
+                        targetPort = 80;
+                        appProtocol = "http";
+                      }
+                      {
+                        name = "https";
+                        port = 443;
+                        targetPort = 443;
+                        appProtocol = "https";
+                      }
+                    ];
+              }
+              (lib.filterAttrs (_: v: v != null) config.service.spec);
 
-      controllerIngressClass =
-        if config.controllerIngressClass != null then config.controllerIngressClass else ingressClassName;
+        args = [
+          "/nginx-ingress-controller"
+          "--publish-service=$(POD_NAMESPACE)/${self.service.out.name}"
+          "--election-id=${name}-leader"
+          "--controller-class=${controllerValue}"
+          "--ingress-class=${config.ingressClassName}"
+          "--configmap=$(POD_NAMESPACE)/${self.configmap.out.name}"
+          "--validating-webhook=:8443"
+          "--validating-webhook-certificate=/usr/local/certificates/cert"
+          "--validating-webhook-key=/usr/local/certificates/key"
+        ]
+        # Upstream's default is false, which serves only Go runtime metrics
+        # on :10254. The flag follows the toggle alone, so adding a
+        # prometheus instance does not restart the controller.
+        ++ lib.optional config.metrics.enabled "--enable-metrics=true"
+        ++ kix.guardArgs {
+          inherit who;
+          owned = {
+            "--enable-metrics" = "the package sets it from metrics.enabled; set that instead.";
+            "--http-port" = "the Service, container ports, and network policy use port 80; remove it.";
+            "--https-port" = "the Service, container ports, and network policy use port 443; remove it.";
+            "--healthz-port" = "the probes and the metrics Service use port 10254; remove it.";
+            "--publish-service" = "the package points it at the controller Service; remove it.";
+            "--election-id" = "the package derives it from the instance name; remove it.";
+            "--controller-class" =
+              "the package derives it from ingressClassName; set ingressClassName instead.";
+            "--ingress-class" = "the package sets it to ingressClassName; set ingressClassName instead.";
+            "--configmap" = "the package points it at its ConfigMap; set settings instead.";
+            "--validating-webhook" = "the package serves the admission webhook on :8443; remove it.";
+            "--validating-webhook-certificate" = "the package mounts the admission certificate; remove it.";
+            "--validating-webhook-key" = "the package mounts the admission certificate; remove it.";
+          };
+        } config.extraArgs;
 
-      controllerValue =
-        if config.controllerValue != null then config.controllerValue else "k8s.io/${name}";
+        env = kix.mkEnvVars (
+          kix.mergeEnv {
+            inherit who;
+            owned = [
+              {
+                vars = {
+                  POD_NAME.valueFrom.fieldRef.fieldPath = "metadata.name";
+                  POD_NAMESPACE.valueFrom.fieldRef.fieldPath = "metadata.namespace";
+                };
+                from = "the pod's own metadata, which the controller reads for --publish-service and leader election";
+                fix = "Remove it.";
+              }
+              {
+                vars.LD_PRELOAD = "/usr/local/lib/libmimalloc.so";
+                from = "the controller image's mimalloc allocator";
+                fix = "Remove it.";
+              }
+            ];
+          } config.env
+        );
 
-      electionId = if config.electionId != null then config.electionId else "${name}-leader";
-
-      selectorLabels = {
-        "app.kubernetes.io/name" = "ingress-nginx";
-        "app.kubernetes.io/instance" = name;
-        "app.kubernetes.io/component" = "controller";
-      };
-
-      commonLabels = selectorLabels // {
-        "app.kubernetes.io/part-of" = "ingress-nginx";
-      };
-
-      # ClusterRole/ClusterRoleBinding don't carry the component label.
-      clusterScopedLabels = {
-        "app.kubernetes.io/name" = "ingress-nginx";
-        "app.kubernetes.io/instance" = name;
-        "app.kubernetes.io/part-of" = "ingress-nginx";
-      };
-
-      clusterRoles = mkClusterRoleSet scope {
-        subjects = [
+        controllerSubjects = [
           {
             kind = "ServiceAccount";
             name = self.serviceAccount.out.name;
             namespace = scope.namespaceName;
           }
         ];
-        labels = clusterScopedLabels;
-        roles = {
-          "${name}" = grant [
+        admissionSubjects = [
+          {
+            kind = "ServiceAccount";
+            name = self.admissionServiceAccount.out.name;
+            namespace = scope.namespaceName;
+          }
+        ];
+
+        # Each role set is read by its fixed keys below, so no role name can
+        # replace another part.
+        controllerClusterRbac = mkClusterRoleSet scope {
+          subjects = controllerSubjects;
+          labels = selectorLabels;
+          roles.${clusterName} = grant [
             (
               [
                 core.configmaps
                 core.endpoints
                 core.nodes
                 core.pods
+                # Ingresses in any namespace name their TLS Secrets.
                 core.secrets
                 core.namespaces
                 core.services
-              ]
-              |> watch
-            )
-            (core.events |> emit)
-            (
-              [
                 net.ingresses
                 net.ingressclasses
                 disco.endpointslices
               ]
               |> watch
             )
+            (core.events |> emit)
             (net "ingresses/status" |> allow [ "update" ])
             (
               coord.leases
@@ -307,645 +502,365 @@ in
             )
           ];
         };
-      };
-
-      nsRoles = mkRoleSet scope {
-        subjects = [
-          {
-            kind = "ServiceAccount";
-            name = self.serviceAccount.out.name;
-            namespace = scope.namespaceName;
-          }
-        ];
-        labels = commonLabels;
-        roles = {
-          "${name}" = grant [
-            (core.namespaces |> allow [ "get" ])
-            (
-              [
-                core.configmaps
-                core.pods
-                core.secrets
-                core.endpoints
-                core.services
-              ]
-              |> watch
-            )
-            (core.events |> emit)
+        controllerRbac = mkRoleSet scope {
+          subjects = controllerSubjects;
+          labels = selectorLabels;
+          roles.${name} = grant [
             (
               coord.leases
-              |> restrictTo [ electionId ]
+              |> restrictTo [ "${name}-leader" ]
               |> allow [
                 "get"
                 "update"
               ]
             )
             (coord.leases |> allow [ "create" ])
+          ];
+        };
+        admissionClusterRbac = mkClusterRoleSet scope {
+          subjects = admissionSubjects;
+          labels = admissionLabels;
+          roles."${clusterName}-admission" = grant [
             (
-              [
-                disco.endpointslices
-                net.ingresses
-                net.ingressclasses
+              adm.validatingwebhookconfigurations
+              |> restrictTo [ self.admissionWebhook.out.name ]
+              |> allow [
+                "get"
+                "update"
               ]
-              |> watch
             )
-            (net "ingresses/status" |> allow [ "update" ])
           ];
         };
-      };
+        admissionRbac = mkRoleSet scope {
+          subjects = admissionSubjects;
+          labels = admissionLabels;
+          roles."${name}-admission" = grant [
+            (core.secrets |> allow [ "create" ])
+            (core.secrets |> restrictTo [ "${name}-admission" ] |> allow [ "get" ])
+          ];
+        };
 
-      admissionClusterRoles =
-        let
-          adm = group "admissionregistration.k8s.io" [ "validatingwebhookconfigurations" ];
-        in
-        mkClusterRoleSet scope {
-          subjects = [
+        certgenContainer = containerName: containerArgs: {
+          name = containerName;
+          image = kix.image.ref config.certgen.image;
+          imagePullPolicy = config.certgen.image.pullPolicy;
+          args = containerArgs ++ [
+            "--namespace=$(POD_NAMESPACE)"
+            "--secret-name=${name}-admission"
+          ];
+          inherit (config.certgen) resources;
+          env = [
             {
-              kind = "ServiceAccount";
-              name = self.admissionServiceAccount.out.name;
-              namespace = scope.namespaceName;
+              name = "POD_NAMESPACE";
+              valueFrom.fieldRef.fieldPath = "metadata.namespace";
             }
           ];
-          labels = clusterScopedLabels // {
-            "app.kubernetes.io/component" = "admission-webhook";
-          };
-          roles = {
-            "${name}-admission" = grant [
-              (
-                adm.validatingwebhookconfigurations
-                |> allow [
-                  "get"
-                  "update"
-                ]
-              )
-            ];
+          securityContext = {
+            allowPrivilegeEscalation = false;
+            capabilities.drop = [ "ALL" ];
+            readOnlyRootFilesystem = true;
+            runAsGroup = 65532;
+            runAsNonRoot = true;
+            runAsUser = 65532;
+            seccompProfile.type = "RuntimeDefault";
           };
         };
 
-      admissionWebhookLabels = commonLabels // {
-        "app.kubernetes.io/component" = "admission-webhook";
-      };
-      admissionHookAnnotations = {
-        "helm.sh/hook" = "pre-install,pre-upgrade,post-install,post-upgrade";
-        "helm.sh/hook-delete-policy" = "before-hook-creation,hook-succeeded";
-      };
-      admissionRole = scope.mkResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "Role";
-        name = "${name}-admission";
-        labels = admissionWebhookLabels;
-        annotations = admissionHookAnnotations;
-        extra.rules = [
-          {
-            apiGroups = [ "" ];
-            resources = [ "secrets" ];
-            verbs = [
-              "create"
-              "get"
-            ];
-          }
-        ];
-      };
-      admissionRoleBinding = scope.mkResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "RoleBinding";
-        name = "${name}-admission";
-        labels = admissionWebhookLabels;
-        annotations = admissionHookAnnotations;
-        extra = {
-          roleRef = {
-            apiGroup = "rbac.authorization.k8s.io";
-            kind = "Role";
-            name = admissionRole.out.name;
-          };
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = self.admissionServiceAccount.out.name;
-              namespace = scope.namespaceName;
-            }
-          ];
-        };
-      };
-      admissionNsRoles = {
-        "${name}-admission" = admissionRole;
-        "${name}-admission-binding" = admissionRoleBinding;
-      };
-
-    in
-    {
-
-      # --- ServiceAccount ---
-      serviceAccount = scope.mkResource {
-        apiVersion = "v1";
-        kind = "ServiceAccount";
-        name = name;
-        labels = commonLabels;
-        extra = {
-          automountServiceAccountToken = true;
-        };
-      };
-
-      # --- ConfigMap (NGINX configuration) ---
-      configmap = scope.mkResource {
-        apiVersion = "v1";
-        kind = "ConfigMap";
-        name = ctrlName;
-        labels = commonLabels;
-        data =
-          config.config
-          // lib.optionalAttrs config.allowSnippetAnnotations {
-            allow-snippet-annotations = "true";
-          };
-      };
-
-      # --- Deployment ---
-      deployment = scope.mkDeployment {
-        name = ctrlName;
-        labels = commonLabels;
-        # The admission Secret's untracked reference below names
-        # admissionCreate as its creator, which orders this Deployment after
-        # the Job and makes deploy wait for the Secret. Controller RBAC
-        # must be reachable from root so the ServiceAccount has permissions
-        # to list ingressclasses, services, etc. Without these, the
-        # controller's caches time out and the pod CrashLoops.
-        # Service must exist before the controller starts: --publish-service
-        # below references it, and the controller fatally exits with
-        # `no service with name ${name} found` if the lookup fails at startup.
-        requires = [
-          self.service
-        ]
-        ++ builtins.attrValues clusterRoles
-        ++ builtins.attrValues nsRoles;
-        spec = {
-          replicas = config.replicaCount;
-          revisionHistoryLimit = 10;
-          minReadySeconds = 0;
-          selector.matchLabels = selectorLabels;
-          template = {
-            metadata = {
-              labels = selectorLabels // config.podLabels;
-            };
+        certgenJob =
+          jobName: container: requires:
+          scope.mkJob {
+            name = jobName;
+            labels = admissionLabels;
+            inherit requires;
             spec = {
-              automountServiceAccountToken = true;
-              serviceAccountName = self.serviceAccount.out.name;
-              terminationGracePeriodSeconds = 300;
-              dnsPolicy = "ClusterFirst";
-              containers = [
-                {
-                  name = "controller";
-                  image = kix.image.ref config.image;
-                  imagePullPolicy = config.image.pullPolicy;
-                  args = [
-                    "/nginx-ingress-controller"
-                    "--publish-service=$(POD_NAMESPACE)/${ctrlName}"
-                    "--election-id=${electionId}"
-                    "--controller-class=${controllerValue}"
-                    "--ingress-class=${controllerIngressClass}"
-                    "--configmap=$(POD_NAMESPACE)/${self.configmap.out.name}"
-                    "--validating-webhook=:8443"
-                    "--validating-webhook-certificate=/usr/local/certificates/cert"
-                    "--validating-webhook-key=/usr/local/certificates/key"
-                  ]
-                  ++ lib.optional (
-                    config.maxmindLicenseKey != null
-                  ) "--maxmind-license-key=${config.maxmindLicenseKey}";
-                  env = [
-                    {
-                      name = "LD_PRELOAD";
-                      value = "/usr/local/lib/libmimalloc.so";
-                    }
-                    {
-                      name = "POD_NAME";
-                      valueFrom.fieldRef = {
-                        apiVersion = "v1";
-                        fieldPath = "metadata.name";
-                      };
-                    }
-                    {
-                      name = "POD_NAMESPACE";
-                      valueFrom.fieldRef = {
-                        apiVersion = "v1";
-                        fieldPath = "metadata.namespace";
-                      };
-                    }
-                  ];
-                  ports = [
-                    {
-                      name = "http";
-                      containerPort = 80;
-                      protocol = "TCP";
-                    }
-                    {
-                      name = "https";
-                      containerPort = 443;
-                      protocol = "TCP";
-                    }
-                    {
-                      name = "webhook";
-                      containerPort = 8443;
-                      protocol = "TCP";
-                    }
-                  ];
-                  livenessProbe = {
-                    httpGet = {
-                      path = "/healthz";
-                      port = 10254;
-                      scheme = "HTTP";
-                    };
-                    initialDelaySeconds = 10;
-                    periodSeconds = 10;
-                    timeoutSeconds = 1;
-                    successThreshold = 1;
-                    failureThreshold = 5;
-                  };
-                  readinessProbe = {
-                    httpGet = {
-                      path = "/healthz";
-                      port = 10254;
-                      scheme = "HTTP";
-                    };
-                    initialDelaySeconds = 10;
-                    periodSeconds = 10;
-                    timeoutSeconds = 1;
-                    successThreshold = 1;
-                    failureThreshold = 3;
-                  };
-                  lifecycle = {
-                    preStop.exec.command = [ "/wait-shutdown" ];
-                  };
-                  resources = config.resources;
-                  securityContext = {
-                    runAsUser = 101;
-                    runAsGroup = 82;
-                    runAsNonRoot = true;
-                    allowPrivilegeEscalation = false;
-                    readOnlyRootFilesystem = false;
-                    capabilities = {
-                      add = [ "NET_BIND_SERVICE" ];
-                      drop = [ "ALL" ];
-                    };
-                    seccompProfile.type = "RuntimeDefault";
-                  };
-                  volumeMounts = [
-                    {
-                      name = "webhook-cert";
-                      mountPath = "/usr/local/certificates";
-                      readOnly = true;
-                    }
-                  ];
-                }
-              ];
-              nodeSelector = {
-                "kubernetes.io/os" = "linux";
+              # Long enough for the deploy's readiness check to see the
+              # finished Job. At 0 the API server deletes it the moment it
+              # completes and the check fails with NotFound.
+              ttlSecondsAfterFinished = 600;
+              template = {
+                metadata.labels = admissionLabels;
+                spec = {
+                  serviceAccount = self.admissionServiceAccount;
+                  restartPolicy = "OnFailure";
+                  containers = [ container ];
+                  nodeSelector."kubernetes.io/os" = "linux";
+                };
               };
-              volumes = [
-                {
-                  name = "webhook-cert";
-                  secret = {
-                    # Minted by the admission-create Job, not rendered here.
-                    secretName = kix.untrackedRef {
+            };
+          };
+      in
+      {
+        serviceAccount = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ServiceAccount";
+          inherit name;
+          labels = selectorLabels;
+        };
+
+        clusterRole = controllerClusterRbac.${clusterName};
+        clusterRoleBinding = controllerClusterRbac."${clusterName}-binding";
+        role = controllerRbac.${name};
+        roleBinding = controllerRbac."${name}-binding";
+
+        configmap = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          inherit name;
+          labels = selectorLabels;
+          data = settings;
+        };
+
+        deployment = scope.mkDeployment {
+          inherit name;
+          labels = selectorLabels;
+          # The controller's caches never sync without its RBAC. The
+          # IngressClass is listed so that the instance is Ready only once
+          # the class it serves exists; nothing else in the Deployment
+          # references it.
+          requires = [
+            self.ingressClass
+            self.clusterRole
+            self.clusterRoleBinding
+            self.role
+            self.roleBinding
+          ];
+          spec = {
+            inherit (config) replicas;
+            selector.matchLabels = selectorLabels;
+            template = {
+              metadata.labels = selectorLabels;
+              spec = {
+                serviceAccount = self.serviceAccount;
+                terminationGracePeriodSeconds = 300;
+                containers = [
+                  {
+                    name = "controller";
+                    image = kix.image.ref config.image;
+                    imagePullPolicy = config.image.pullPolicy;
+                    inherit args env;
+                    ports = [
+                      (kix.port "http" 80)
+                      (kix.port "https" 443)
+                      (kix.port "webhook" 8443)
+                      (kix.port "metrics" 10254)
+                    ];
+                    livenessProbe = {
+                      httpGet = {
+                        path = "/healthz";
+                        port = "metrics";
+                      };
+                      initialDelaySeconds = 10;
+                      failureThreshold = 5;
+                    };
+                    readinessProbe = {
+                      httpGet = {
+                        path = "/healthz";
+                        port = "metrics";
+                      };
+                      initialDelaySeconds = 10;
+                    };
+                    lifecycle.preStop.exec.command = [ "/wait-shutdown" ];
+                    inherit (config) resources;
+                    securityContext = {
+                      runAsUser = 101;
+                      runAsGroup = 82;
+                      runAsNonRoot = true;
+                      allowPrivilegeEscalation = false;
+                      readOnlyRootFilesystem = false;
+                      capabilities = {
+                        add = [ "NET_BIND_SERVICE" ];
+                        drop = [ "ALL" ];
+                      };
+                      seccompProfile.type = "RuntimeDefault";
+                    };
+                    volumeMounts = [
+                      {
+                        name = "webhook-cert";
+                        mountPath = "/usr/local/certificates";
+                        readOnly = true;
+                      }
+                    ];
+                  }
+                ];
+                nodeSelector."kubernetes.io/os" = "linux";
+                volumes = [
+                  {
+                    name = "webhook-cert";
+                    # The admissionCreate Job creates this Secret, so the
+                    # Deployment applies after that Job completes.
+                    secret.secretName = kix.untrackedRef {
                       kind = "Secret";
                       name = "${name}-admission";
                       by = self.admissionCreate;
                     };
-                    defaultMode = 420;
-                  };
-                }
-              ];
+                  }
+                ];
+              };
             };
           };
         };
-      };
 
-      # --- Service ---
-      service =
-        let
-          addNodePort =
-            portDef:
-            portDef
-            // lib.optionalAttrs (config.nodePorts ? ${portDef.name}) {
-              nodePort = config.nodePorts.${portDef.name};
-            };
-        in
-        scope.mkResource {
+        service = scope.mkResource {
           apiVersion = "v1";
           kind = "Service";
-          name = ctrlName;
-          labels = commonLabels;
-          annotations = config.serviceAnnotations;
+          inherit name;
+          labels = selectorLabels;
+          annotations = config.service.annotations;
+          spec = serviceSpec;
+        };
+
+        metricsService =
+          if metricsOn then
+            self.deployment
+            |> kix.service.fromWorkload {
+              name = "${name}-metrics";
+              ports = [
+                {
+                  name = "metrics";
+                  port = 10254;
+                  targetPort = "metrics";
+                }
+              ];
+              labels = labelsFor "metrics";
+            }
+            |> scope.mkResource
+          else
+            null;
+
+        ingressClass = scope.mkClusterResource {
+          apiVersion = "networking.k8s.io/v1";
+          kind = "IngressClass";
+          name = config.ingressClassName;
+          labels = selectorLabels;
+          annotations = lib.optionalAttrs config.isDefaultClass {
+            "ingressclass.kubernetes.io/is-default-class" = "true";
+          };
+          spec.controller = controllerValue;
+        };
+
+        admissionServiceAccount = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ServiceAccount";
+          name = "${name}-admission";
+          labels = admissionLabels;
+        };
+
+        admissionClusterRole = admissionClusterRbac."${clusterName}-admission";
+        admissionClusterRoleBinding = admissionClusterRbac."${clusterName}-admission-binding";
+        admissionRole = admissionRbac."${name}-admission";
+        admissionRoleBinding = admissionRbac."${name}-admission-binding";
+
+        admissionService = scope.mkResource {
+          apiVersion = "v1";
+          kind = "Service";
+          name = "${name}-admission";
+          labels = admissionLabels;
           spec = {
-            type = config.serviceType;
-            ipFamilyPolicy = "SingleStack";
-            ipFamilies = [ "IPv4" ];
-            # Use self.deployment.rawSelector instead of
-            # self.deployment.out.selector to avoid an evaluation cycle:
-            # the deployment now `requires` this service (so the controller
-            # finds its --publish-service at startup). rawSelector is a
-            # cheap accessor that doesn't force the workload's manifest
-            # hash: no cycle, and the selector is coupled to the actual
-            # workload spec (unlike a hand-rolled label literal).
+            # rawSelector, as on the controller Service: the Deployment
+            # requires the webhook configuration, which names this Service.
             selector = self.deployment.rawSelector;
-            ports = map addNodePort [
+            ports = [
               {
-                name = "http";
-                port = 80;
-                protocol = "TCP";
-                targetPort = 80;
-                appProtocol = "http";
-              }
-              {
-                name = "https";
+                name = "https-webhook";
                 port = 443;
-                protocol = "TCP";
-                targetPort = 443;
+                targetPort = 8443;
                 appProtocol = "https";
               }
             ];
-          }
-          //
-            lib.optionalAttrs (config.serviceType == "LoadBalancer" && config.externalTrafficPolicy != null)
-              {
-                externalTrafficPolicy = config.externalTrafficPolicy;
-              }
-          // lib.optionalAttrs (config.allocateLoadBalancerNodePorts != null) {
-            allocateLoadBalancerNodePorts = config.allocateLoadBalancerNodePorts;
-          }
-          // lib.optionalAttrs (config.clusterIP != null) {
-            clusterIP = config.clusterIP;
-          }
-          // lib.optionalAttrs (config.serviceType == "LoadBalancer" && config.loadBalancerIP != null) {
-            loadBalancerIP = config.loadBalancerIP;
-          };
-          requires = [
-            self.ingressClass
-            self.configmap
-            self.admissionService
-            self.admissionWebhook
-            self.admissionCreate
-          ];
-        };
-
-      # --- Admission webhook ServiceAccount ---
-      admissionServiceAccount = scope.mkResource {
-        apiVersion = "v1";
-        kind = "ServiceAccount";
-        name = "${name}-admission";
-        labels = commonLabels // {
-          "app.kubernetes.io/component" = "admission-webhook";
-        };
-        annotations = {
-          "helm.sh/hook" = "pre-install,pre-upgrade,post-install,post-upgrade";
-          "helm.sh/hook-delete-policy" = "before-hook-creation,hook-succeeded";
-        };
-        extra.automountServiceAccountToken = true;
-      };
-
-      # Job: generate TLS cert and store as secret ${name}-admission.
-      # Runs once; Kubernetes re-creates it on next apply only if deleted.
-      admissionCreate = scope.mkJob {
-        name = "${name}-admission-create";
-        labels = commonLabels // {
-          "app.kubernetes.io/component" = "admission-webhook";
-        };
-        annotations = {
-          "helm.sh/hook" = "pre-install,pre-upgrade";
-          "helm.sh/hook-delete-policy" = "before-hook-creation,hook-succeeded";
-        };
-        spec = {
-          # Long enough for the deploy's readiness check to see the finished
-          # Job. At 0 the apiserver reaps it the instant it completes and
-          # the check fails with NotFound, cancelling everything downstream.
-          ttlSecondsAfterFinished = 600;
-          template = {
-            metadata = {
-              name = "${name}-admission-create";
-              labels = commonLabels // {
-                "app.kubernetes.io/component" = "admission-webhook";
-              };
-            };
-            spec = {
-              serviceAccountName = self.admissionServiceAccount.out.name;
-              automountServiceAccountToken = true;
-              restartPolicy = "OnFailure";
-              containers = [
-                {
-                  name = "create";
-                  image = kix.image.ref config.webhookCertgenImage;
-                  imagePullPolicy = config.webhookCertgenImage.pullPolicy;
-                  args = [
-                    "create"
-                    "--host=${ctrlName}-admission,${ctrlName}-admission.$(POD_NAMESPACE).svc"
-                    "--namespace=$(POD_NAMESPACE)"
-                    "--secret-name=${name}-admission"
-                  ];
-                  env = [
-                    {
-                      name = "POD_NAMESPACE";
-                      valueFrom.fieldRef.fieldPath = "metadata.namespace";
-                    }
-                  ];
-                  securityContext = {
-                    allowPrivilegeEscalation = false;
-                    capabilities.drop = [ "ALL" ];
-                    readOnlyRootFilesystem = true;
-                    runAsGroup = 65532;
-                    runAsNonRoot = true;
-                    runAsUser = 65532;
-                    seccompProfile.type = "RuntimeDefault";
-                  };
-                }
-              ];
-              nodeSelector."kubernetes.io/os" = "linux";
-            };
           };
         };
-        requires = builtins.attrValues admissionClusterRoles ++ builtins.attrValues admissionNsRoles;
-      };
 
-      # Job: patch ValidatingWebhookConfiguration with the generated CA bundle.
-      admissionPatch = scope.mkJob {
-        name = "${name}-admission-patch";
-        labels = commonLabels // {
-          "app.kubernetes.io/component" = "admission-webhook";
-        };
-        annotations = {
-          "helm.sh/hook" = "post-install,post-upgrade";
-          "helm.sh/hook-delete-policy" = "before-hook-creation,hook-succeeded";
-        };
-        spec = {
-          # Long enough for the deploy's readiness check to see the finished
-          # Job. At 0 the apiserver reaps it the instant it completes and
-          # the check fails with NotFound, cancelling everything downstream.
-          ttlSecondsAfterFinished = 600;
-          template = {
-            metadata = {
-              name = "${name}-admission-patch";
-              labels = commonLabels // {
-                "app.kubernetes.io/component" = "admission-webhook";
-              };
-            };
-            spec = {
-              serviceAccountName = self.admissionServiceAccount.out.name;
-              automountServiceAccountToken = true;
-              restartPolicy = "OnFailure";
-              containers = [
-                {
-                  name = "patch";
-                  image = kix.image.ref config.webhookCertgenImage;
-                  imagePullPolicy = config.webhookCertgenImage.pullPolicy;
-                  args = [
-                    "patch"
-                    "--webhook-name=${name}-admission"
-                    "--namespace=$(POD_NAMESPACE)"
-                    "--patch-mutating=false"
-                    "--secret-name=${name}-admission"
-                    "--patch-failure-policy=Fail"
-                  ];
-                  env = [
-                    {
-                      name = "POD_NAMESPACE";
-                      valueFrom.fieldRef.fieldPath = "metadata.namespace";
-                    }
-                  ];
-                  securityContext = {
-                    allowPrivilegeEscalation = false;
-                    capabilities.drop = [ "ALL" ];
-                    readOnlyRootFilesystem = true;
-                    runAsGroup = 65532;
-                    runAsNonRoot = true;
-                    runAsUser = 65532;
-                    seccompProfile.type = "RuntimeDefault";
-                  };
-                }
-              ];
-              nodeSelector."kubernetes.io/os" = "linux";
-            };
-          };
-        };
-        requires = [
-          self.admissionCreate
-          self.admissionWebhook
-        ];
-      };
+        # certgen keeps an existing Secret, so a rerun after the TTL removes
+        # the Job, or after its spec changes, leaves the certificate as is.
+        admissionCreate =
+          certgenJob "${name}-admission-create"
+            (certgenContainer "create" [
+              "create"
+              "--host=${self.admissionService.out.name},${self.admissionService.out.name}.$(POD_NAMESPACE).svc"
+            ])
+            [
+              self.admissionRole
+              self.admissionRoleBinding
+            ];
 
-      # --- Admission webhook Service ---
-      admissionService = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        name = "${ctrlName}-admission";
-        # Distinct identity vs the main controller Service
-        # (distinctSameKindLabels); the upstream chart uses the same
-        # component value for its admission resources.
-        labels = commonLabels // {
-          "app.kubernetes.io/component" = "admission-webhook";
-        };
-        spec = {
-          type = "ClusterIP";
-          # See selector comment on the main Service: rawSelector avoids
-          # the cycle while staying coupled to the workload's labels.
-          selector = self.deployment.rawSelector;
-          ports = [
+        admissionPatch =
+          certgenJob "${name}-admission-patch"
+            (certgenContainer "patch" [
+              "patch"
+              "--webhook-name=${self.admissionWebhook.out.name}"
+              "--patch-mutating=false"
+              "--patch-failure-policy=Fail"
+            ])
+            [
+              self.admissionCreate
+              self.admissionClusterRole
+              self.admissionClusterRoleBinding
+            ];
+
+        admissionWebhook = scope.mkClusterResource {
+          apiVersion = "admissionregistration.k8s.io/v1";
+          kind = "ValidatingWebhookConfiguration";
+          name = "${clusterName}-admission";
+          labels = admissionLabels;
+          extra.webhooks = [
             {
-              name = "https-webhook";
-              port = 443;
-              protocol = "TCP";
-              targetPort = 8443;
-              appProtocol = "https";
+              name = "validate.nginx.ingress.kubernetes.io";
+              admissionReviewVersions = [ "v1" ];
+              clientConfig.service = {
+                name = self.admissionService.out.name;
+                namespace = scope.namespaceName;
+                path = "/networking/v1/ingresses";
+                port = 443;
+              };
+              failurePolicy = "Fail";
+              matchPolicy = "Equivalent";
+              rules = [
+                {
+                  apiGroups = [ "networking.k8s.io" ];
+                  apiVersions = [ "v1" ];
+                  operations = [
+                    "CREATE"
+                    "UPDATE"
+                  ];
+                  resources = [ "ingresses" ];
+                  scope = "*";
+                }
+              ];
+              sideEffects = "None";
+              timeoutSeconds = 10;
             }
           ];
         };
-      };
 
-      # --- ValidatingWebhookConfiguration (cluster-scoped) ---
-      admissionWebhook = scope.mkClusterResource {
-        apiVersion = "admissionregistration.k8s.io/v1";
-        kind = "ValidatingWebhookConfiguration";
-        name = "${name}-admission";
-        labels = commonLabels // {
-          "app.kubernetes.io/component" = "admission-webhook";
+        # The root is the Deployment rather than the user-facing Service,
+        # because the Service is upstream of the Deployment: with the Service
+        # as root, the instance would report Ready before the controller.
+        root = {
+          resource = self.deployment;
+          # No other part references the ServiceMonitor, so the
+          # PackageInstance reaches it only through this list.
+          requires = builtins.filter (r: r != null) [ self.serviceMonitor ];
+          out = {
+            # Consumers depend through string context. The class name carries
+            # the Deployment's and the patch Job's context as well as the
+            # IngressClass's, so an Ingress that reads it applies after the
+            # controller serves and the webhook configuration has its CA
+            # bundle; before that the webhook (failurePolicy Fail) rejects it.
+            ingressClassName = builtins.appendContext self.ingressClass.out.name (
+              builtins.getContext self.deployment.out.name // builtins.getContext self.admissionPatch.out.name
+            );
+            # Raw labels: the reader writes a policy selector from them and
+            # already depends on this instance through ingressClassName.
+            podSelector = selectorLabels;
+            podNamespace = scope.namespaceName;
+          };
         };
-        extra.webhooks = [
-          {
-            name = "validate.nginx.ingress.kubernetes.io";
-            admissionReviewVersions = [ "v1" ];
-            clientConfig.service = {
-              name = self.admissionService.out.name;
-              namespace = scope.namespaceName;
-              path = "/networking/v1/ingresses";
-              port = 443;
-            };
-            failurePolicy = "Fail";
-            matchPolicy = "Equivalent";
-            rules = [
-              {
-                apiGroups = [ "networking.k8s.io" ];
-                apiVersions = [ "v1" ];
-                operations = [
-                  "CREATE"
-                  "UPDATE"
-                ];
-                resources = [ "ingresses" ];
-                scope = "*";
-              }
-            ];
-            sideEffects = "None";
-            timeoutSeconds = 10;
-          }
-        ];
-      };
+      }
+    )
 
-      # --- IngressClass (cluster-scoped) ---
-      ingressClass = scope.mkClusterResource {
-        apiVersion = "networking.k8s.io/v1";
-        kind = "IngressClass";
-        name = ingressClassName;
-        labels = commonLabels;
-        annotations = lib.optionalAttrs config.isDefaultClass {
-          "ingressclass.kubernetes.io/is-default-class" = "true";
-        };
-        spec = {
-          controller = controllerValue;
-        };
-      };
-
-      # --- Entry point ---
-      #
-      # root.resource is the Deployment, not the Service, even though the
-      # Service is the user-facing handle. Why: this package is wired
-      # "inverse": the Deployment requires the Service (the controller's
-      # --publish-service flag fatally exits if the Service doesn't exist
-      # at startup), so the Service is upstream of the Deployment in the
-      # forward closure. If root were the Service, the PackageInstance's
-      # "main" resource would be Ready before the actual controller pod.
-      #
-      # ingressClassName carries the Deployment's store-path context in
-      # addition to the IngressClass's. Consumer dep edges flow through
-      # manifest string-context (see kix/lib/k8s.nix:271), so any package
-      # that references `ingressNginx.out.ingressClassName` (notably
-      # kix.expose) gets a direct depends-on edge to the controller pod,
-      # not just to the IngressClass. Without this, the consumer's Ingress
-      # only edges to the IngressClass (wave 0) and lands in the same
-      # wave as the Service, racing the controller and failing admission
-      # until the controller catches up.
-      root = {
-        resource = self.deployment;
-        out = {
-          ingressClassName = builtins.appendContext self.ingressClass.out.name (
-            builtins.getContext self.deployment.out.name
-          );
-          # Where the controller's pods are, for whoever has to let them
-          # in. `kix.expose` turns these two into the ingress rule that
-          # makes an exposed backend reachable under default deny; raw
-          # labels, because the reader is writing a policy selector and
-          # already depends on this instance through ingressClassName.
-          podSelector = selectorLabels;
-          podNamespace = scope.namespaceName;
-        };
-      };
-    }
-    // clusterRoles
-    // nsRoles
-    // admissionClusterRoles
-    // admissionNsRoles;
+    (kix.monitor {
+      service = "metricsService";
+      port = "metrics";
+    })
+  ];
 }

@@ -1,0 +1,3 @@
+# 2026-10-02 · `kix/packages/victoria-metrics-agent` · The package writes its own podAntiAffinity over `failureDomainKeys` instead of using `kix.availability.spreadConstraints`.
+
+victoria-metrics-agent (default.nix:175-184, and the same pattern in victoria-metrics-alert and victoria-metrics-cluster) builds anti-affinity for operator-placed pods from `clusterConfig.cluster.topology.failureDomainKeys` by hand. `kix.availability.spreadConstraints { level; selector; topology; }` produces the spread rule the availability plugin uses for Kix workloads, and stackgres-cluster uses it for the same case. The hand copy can drift from the plugin's rule (DoNotSchedule on the requested level's key, ScheduleAnyway elsewhere).

@@ -1,6 +1,6 @@
 ---
 title: "Built-in security rules"
-description: "The built-in checks for workload identity, privilege, image references, read-only filesystems, and namespace network policy."
+description: "The built-in checks for workload identity, privilege, cluster-wide RBAC, image references, read-only filesystems, and namespace network policy."
 ---
 
 The security rule set lives in `kix.rules.security`. Rules run by default, but
@@ -13,11 +13,17 @@ their findings are capped at `scorecard.maxSeverity`, which defaults to
 | `security.noPrivileged` | manifest | `error` | No regular or init container sets `securityContext.privileged = true`. |
 | `security.readOnlyRootfs` | manifest | `warning` | Every regular and init container sets `securityContext.readOnlyRootFilesystem = true`. |
 | `security.noHostNetwork` | manifest | `error` | The pod does not enable `hostNetwork`, `hostPID`, or `hostIPC`. |
+| `security.noClusterAdmin` | manifest | `error` | No ClusterRoleBinding binds the `cluster-admin` ClusterRole, and no ClusterRole has a rule whose `apiGroups`, `resources`, and `verbs` all contain `"*"`. |
 | `security.noLatestTag` | manifest | `warning` | Every container image has an explicit tag other than `latest`. |
 | `security.noUnresolvedPlaceholder` | manifest | `warning` | No image reference contains a common placeholder or the start of an unexpanded Nix-style variable. |
 | `security.hasNetworkPolicy` | namespace | `warning` | A namespace containing a Deployment, StatefulSet, or DaemonSet also contains a policy kind supplied by its network-policy provider. |
 
-The manifest rules apply to Deployments, StatefulSets, DaemonSets, and Jobs.
+The manifest rules other than `noClusterAdmin` apply to Deployments,
+StatefulSets, DaemonSets, and Jobs. `noClusterAdmin` applies to
+ClusterRoleBindings and ClusterRoles. A namespaced RoleBinding to
+`cluster-admin` and a wildcard limited to one API group pass it. The finding
+names the binding and its subjects; derive narrower rules with `scope.rbac`
+instead.
 For `nonRoot`, a container-level setting overrides the pod setting. A
 container with `runAsNonRoot = false` therefore fails even if the pod sets it
 to true.
@@ -29,7 +35,7 @@ references. It cannot tell whether a plausible tag or digest exists; use
 
 ## Package exceptions
 
-Three rules have matching [`meta.unsafe`](/docs/reference/meta/unsafe/)
+Four rules have matching [`meta.unsafe`](/docs/reference/meta/unsafe/)
 grants:
 
 | Rule | Grant |
@@ -37,6 +43,7 @@ grants:
 | `security.nonRoot` | `run-as-root` |
 | `security.noPrivileged` | `privileged` |
 | `security.noHostNetwork` | `host-network` |
+| `security.noClusterAdmin` | `cluster-admin` |
 
 The exception removes that rule from the package and produces an info-level
 `architecture.unsafeGrants` audit finding. There is no grant for

@@ -12,6 +12,7 @@ let
     getWorkloadSelector
     isService
     ;
+  inherit (import ../../core/markers.nix { inherit lib; }) isProvidedLoadBalancerClass;
 in
 {
   buildWorkloadCnps =
@@ -24,7 +25,7 @@ in
       wSelector,
       hostNetwork,
       edges,
-      networkConfig,
+      enforced,
       packageIntents ? { },
       networkPolicyEnforcer ? null,
     }:
@@ -35,10 +36,6 @@ in
         else
           let
             enforcerApi = networkPolicyEnforcer.netpol;
-
-            directions = networkConfig.directions or "both";
-            doEgress = directions == "both" || directions == "egress";
-            doIngress = directions == "both" || directions == "ingress";
 
             intentRules =
               if packageIntents != { } then
@@ -82,7 +79,7 @@ in
             serviceDeps = builtins.filter (s: s != null) (map (e: e.service) edges);
 
             egressCnp =
-              if !doEgress then
+              if !enforced.egress then
                 null
               else
                 enforcerApi.mkPolicy {
@@ -101,7 +98,7 @@ in
                 };
 
             ingressCnp =
-              if !doIngress || ingressRules == [ ] then
+              if !enforced.ingress || ingressRules == [ ] then
                 null
               else
                 enforcerApi.mkPolicy {
@@ -120,7 +117,7 @@ in
                 };
 
             callerIngressCnps =
-              if !doIngress then
+              if !enforced.ingress then
                 [ ]
               else
                 map (
@@ -169,17 +166,13 @@ in
       emit,
       instanceName,
       allPartResources,
-      networkConfig,
+      enforced,
       packageMeta,
       networkPolicyEnforcer ? null,
     }:
     let
       # left lazy: self-enforcer instances arrive with a null enforcer but must still produce warnings
       enforcerApi = networkPolicyEnforcer.netpol;
-
-      directions = networkConfig.directions or "both";
-      doEgress = directions == "both" || directions == "egress";
-      doIngress = directions == "both" || directions == "ingress";
 
       workloads = builtins.filter isWorkload allPartResources;
 
@@ -224,12 +217,19 @@ in
         in
         wNs != null && builtins.elem "${wNs}/${saName}" boundSAKeys;
 
+      # A LoadBalancer Service served by a provider in the build (its class
+      # comes from kix.providedLoadBalancerClass) is reached from that
+      # provider's pods, which open the backend themselves, not from outside
+      # the cluster.
       needsExternalIngress = builtins.any (
-        r: isService r && (r.rawManifest.spec.type or "") == "LoadBalancer"
+        r:
+        isService r
+        && (r.rawManifest.spec.type or "") == "LoadBalancer"
+        && !(isProvidedLoadBalancerClass (r.rawManifest.spec.loadBalancerClass or null))
       ) allPartResources;
 
       apiServerSupplementPolicies =
-        if !doEgress then
+        if !enforced.egress then
           [ ]
         else
           builtins.concatMap (
@@ -261,7 +261,7 @@ in
           ) workloads;
 
       externalIngressSupplementPolicies =
-        if !doIngress || !needsExternalIngress then
+        if !enforced.ingress || !needsExternalIngress then
           [ ]
         else
           builtins.concatMap (
@@ -303,6 +303,10 @@ in
       # the resolved behavior rides on the resource itself (threaded through
       # the CRD builder chain or the cluster override at seal time, with no
       # index lookup needed here
+      #
+      # The policies do not require the CR, because a CR's readiness can
+      # need the connection they open (a Velero BackupStorageLocation is
+      # Available only once its store answers).
       terminatingCrs =
         # Self-enforcer instances arrive with a null enforcer, so no policies
         if networkPolicyEnforcer == null then
@@ -330,7 +334,7 @@ in
           }) r.absorbedEndpointFacts;
 
           egressCnp =
-            if !doEgress then
+            if !enforced.egress then
               [ ]
             else
               [
@@ -357,13 +361,13 @@ in
                         }
                       ) crEdges;
                     };
-                    extraDeps = [ r ];
+                    extraDeps = [ ];
                   };
                 })
               ];
 
           callerIngressCnps =
-            if !doIngress then
+            if !enforced.ingress then
               [ ]
             else
               map (
@@ -386,7 +390,7 @@ in
                         })
                       ];
                     };
-                    extraDeps = [ r ];
+                    extraDeps = [ ];
                   };
                 }
               ) crEdges;
@@ -413,13 +417,11 @@ in
     {
       namespaceName,
       nsResource,
-      directions,
+      enforced,
       networkPolicyEnforcer ? null,
     }:
     let
       enforcerApi = networkPolicyEnforcer.netpol;
-      denyIngress = directions == "both" || directions == "ingress";
-      denyEgress = directions == "both" || directions == "egress";
     in
     enforcerApi.mkPolicy {
       mkResource = core.mkResource;
@@ -432,7 +434,8 @@ in
           "app.kubernetes.io/managed-by" = "kix";
         };
         spec = enforcerApi.mkDefaultDenySpec {
-          inherit denyIngress denyEgress;
+          denyIngress = enforced.ingress;
+          denyEgress = enforced.egress;
         };
       };
     };

@@ -3,7 +3,7 @@
   "kind": "CustomResourceDefinition",
   "metadata": {
     "annotations": {
-      "controller-gen.kubebuilder.io/version": "v0.14.0"
+      "controller-gen.kubebuilder.io/version": "v0.16.5"
     },
     "name": "backuprepositories.velero.io"
   },
@@ -74,7 +74,7 @@
                     "type": "string"
                   },
                   "resticIdentifier": {
-                    "description": "ResticIdentifier is the full restic-compatible string for identifying\nthis repository.",
+                    "description": "ResticIdentifier is the full restic-compatible string for identifying\nthis repository. This field is only used when RepositoryType is \"restic\".",
                     "type": "string"
                   },
                   "volumeNamespace": {
@@ -85,7 +85,6 @@
                 "required": [
                   "backupStorageLocation",
                   "maintenanceFrequency",
-                  "resticIdentifier",
                   "volumeNamespace"
                 ],
                 "type": "object"
@@ -94,7 +93,7 @@
                 "description": "BackupRepositoryStatus is the current status of a BackupRepository.",
                 "properties": {
                   "lastMaintenanceTime": {
-                    "description": "LastMaintenanceTime is the last time maintenance was run.",
+                    "description": "LastMaintenanceTime is the last time repo maintenance succeeded.",
                     "format": "date-time",
                     "nullable": true,
                     "type": "string"
@@ -111,6 +110,39 @@
                       "NotReady"
                     ],
                     "type": "string"
+                  },
+                  "recentMaintenance": {
+                    "description": "RecentMaintenance is status of the recent repo maintenance.",
+                    "items": {
+                      "properties": {
+                        "completeTimestamp": {
+                          "description": "CompleteTimestamp is the completion time of the repo maintenance.",
+                          "format": "date-time",
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "message": {
+                          "description": "Message is a message about the current status of the repo maintenance.",
+                          "type": "string"
+                        },
+                        "result": {
+                          "description": "Result is the result of the repo maintenance.",
+                          "enum": [
+                            "Succeeded",
+                            "Failed"
+                          ],
+                          "type": "string"
+                        },
+                        "startTimestamp": {
+                          "description": "StartTimestamp is the start time of the repo maintenance.",
+                          "format": "date-time",
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
                   }
                 },
                 "type": "object"

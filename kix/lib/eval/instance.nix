@@ -21,8 +21,10 @@ let
   inherit (view) mkPackageView;
   inherit (resolve)
     resolveArg
+    describeRequester
     evaluateInstanceConfig
     callPackagePhase1
+    buildEntriesOf
     discoverBuildDeps
     resolveDeclaredDeps
     ;
@@ -49,6 +51,9 @@ in
       clusterCtx ? { },
       annotationDomainIndex ? { },
       factBehaviorOverrides ? { },
+      # nsName -> instName -> bool: whether the instance renders. Read by
+      # import instances, whose extraDeps may name another instance.
+      isInstanceActive,
     }@args:
 
     if (instCfg.package._type or "") == "kix-import" then
@@ -61,6 +66,8 @@ in
           inherit kixlib;
         };
 
+        where = "${namespaceName}/${instanceName}";
+
         # Resolve the instance override or cluster default against the package
         # ceiling and substrate capabilities. Pass the result to the package,
         # workload interceptors, and instance processors.
@@ -70,21 +77,39 @@ in
             ((clusterConfig.cluster or { }).availability or { }).default
               or (availabilityLib.substrate (clusterConfig.cluster.capabilities or { })).level;
           instanceOverride = instCfg.availability or null;
-          ceiling = (peekedPackageMeta.availability or { }).max or null;
-          where = "${namespaceName}/${instanceName}";
+          ceiling = availabilityLib.ceilingOfMeta {
+            value = peekedPackageMeta.availability or null;
+            inherit where;
+          };
+          inherit where;
         };
+
+        # The helper set this instance's package receives, in its option
+        # defaults and its build functions alike.
+        packageKix = kixlib // {
+          availability =
+            kixlib.availability
+            // availabilityLib.underCeiling {
+              inherit (availability) ceiling;
+              inherit where;
+            };
+        };
+
+        requester = describeRequester namespaceName instanceName instCfg;
 
         _dnsResolution = resolveArg {
           argName = "dns";
-          inherit resolutionIndex;
+          inherit resolutionIndex requester;
           requesterNamespace = namespaceName;
           hasDefault = true;
           explicitOverride = null;
         };
         # Missing DNS prevents Kix from ordering workloads after a DNS provider.
         # This remains a warning until diagnostics support severity levels.
+        # An inactive optional instance answering `dns`, such as a flavour's
+        # platform-dns import, declares DNS without ordering on it.
         _dnsResolutionCheck =
-          if !_dnsResolution.found then
+          if !_dnsResolution.found && !((clusterCtx.inactiveOptionalKeys or { }) ? dns) then
             builtins.trace "[kix] warning: no DNS instance (alias 'dns') was found. Kix will not wait for DNS to be ready before deploying workloads. Add a DNS provider or import if this ordering is required" null
           else
             null;
@@ -164,7 +189,7 @@ in
           namespaces = nsResources;
           labelStyle = instCfg.labelStyle;
           selectorLabelsOverride = instCfg.selectorLabels;
-          clusterDomain = clusterConfig.clusterDomain or "cluster.local";
+          inherit (clusterConfig) clusterDomain;
           capabilities = clusterConfig.cluster.capabilities or { };
           inherit factBehaviorOverrides;
           # Lazy: settled by the outer fixpoint before the first mkWorkload forces it.
@@ -190,6 +215,7 @@ in
           package = instCfg.package;
           scope = scope';
           availability = availability.level;
+          kix = packageKix;
         };
 
         packageMeta = raw.meta or { };
@@ -201,7 +227,7 @@ in
 
         resolvedDeps = resolveDeclaredDeps {
           declaredDeps = discoveredDeps;
-          inherit resolutionIndex allInstances;
+          inherit resolutionIndex allInstances requester;
           namespace = namespaceName;
           explicitOverrides = deps;
         };
@@ -213,7 +239,12 @@ in
             isOptional = depSpec.optional or false;
             explicitOverride = deps.${argName} or null;
             resolution = resolveArg {
-              inherit argName resolutionIndex explicitOverride;
+              inherit
+                argName
+                resolutionIndex
+                explicitOverride
+                requester
+                ;
               requesterNamespace = namespaceName;
               hasDefault = isOptional;
             };
@@ -260,17 +291,19 @@ in
           packageOptions = raw.options or { };
           packageConfig = raw.config or { };
           packageConfigFile = "package config of ${namespaceName}/${instanceName}";
-          inherit instCfg clusterConfig configInjections;
+          inherit
+            instCfg
+            clusterConfig
+            configInjections
+            namespaceName
+            instanceName
+            ;
         };
 
         allOverlays = globalPartsOverlays ++ (instCfg.partsOverlays or [ ]);
         boundOverlays = map (o: o scope') allOverlays;
 
-        rawBuildEntries =
-          if builtins.isList raw.build then
-            map (entry: if builtins.isPath entry then import entry else entry) raw.build
-          else
-            [ raw.build ];
+        rawBuildEntries = buildEntriesOf raw.build;
 
         callBuildFn =
           self: fn:
@@ -283,7 +316,7 @@ in
             extra =
               lib.optionalAttrs (args ? scope) { scope = scope'; }
               // lib.optionalAttrs (args ? lib) { inherit lib; }
-              // lib.optionalAttrs (args ? kix) { kix = kixlib; }
+              // lib.optionalAttrs (args ? kix) { kix = packageKix; }
               // lib.optionalAttrs (args ? deps) { deps = resolvedDeps; }
               // lib.optionalAttrs (args ? availability) { availability = availability.level; };
             depArgs = lib.intersectAttrs args resolvedDeps;
@@ -293,7 +326,15 @@ in
         parts = lib.fix (
           self:
           let
-            merged = builtins.foldl' (acc: fn: acc // (callBuildFn self fn)) { } rawBuildEntries;
+            # mergeCollide compares key sets only, so the fixpoint stays lazy.
+            # partsOverlays below keep `//`: replacing a part is their purpose.
+            merged = builtins.foldl' (
+              acc: fn:
+              helpers.mergeCollide
+                "${namespaceName}/${instanceName}: two build entries define the same part, and the later one would silently replace the earlier. Rename one of them (kix.expose takes partName and exposurePart; kix.monitor takes monitorPart and rulesPart), or use partsOverlays to replace a part on purpose. Duplicated part"
+                acc
+                (callBuildFn self fn)
+            ) { } rawBuildEntries;
           in
           if boundOverlays != [ ] then
             builtins.foldl' (acc: overlay: acc // (overlay self acc)) merged boundOverlays

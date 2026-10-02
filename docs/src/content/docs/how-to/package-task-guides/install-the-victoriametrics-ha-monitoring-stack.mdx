@@ -50,8 +50,11 @@ cluster, set `vm-alert.config.alertmanager.storage` to a persistent volume claim
 spec. This preserves silences and the notification log across a simultaneous
 restart of both replicas.
 
-Before making Grafana reachable outside the cluster, configure its admin
-credentials with an existing Secret. See [Use externally managed
+Grafana takes its administrator's login from a `grafanaAdmin` secret with the
+keys `admin-user` and `admin-password`. The example writes a development
+password into the cluster file. On a real cluster, keep it in a SOPS source or
+in a Secret managed outside Kix through a `secret-ref` instance. See [Use
+externally managed
 Secrets](/docs/how-to/platform-capabilities/use-externally-managed-secrets/)
 for the Kix pattern.
 

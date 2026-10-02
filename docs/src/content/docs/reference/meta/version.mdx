@@ -1,4 +1,34 @@
 ---
 title: "`version`"
-description: TODO
+description: The upstream version a package deploys, and the version grammar Kix compares.
 ---
+
+`meta.version` is the upstream release a package deploys, such as
+`"1.19.6"` or `"v1.19.6"`. Both spellings are valid. A package that only
+writes another package's resources omits it.
+
+## Grammar
+
+A version is an optional `v`, numbers separated by dots, an optional
+`-suffix`, and an optional `+build`: `1.31`, `v2.12.2`, `1.31.2+rke2r1`,
+`1.31.2-gke.1209000`.
+
+A `-suffix` is a prerelease only when its first identifier is `alpha`,
+`beta`, `rc`, `pre`, `dev`, or `preview`, optionally followed by digits
+(`rc1`), as Kubernetes tags its releases. Any other suffix (`-gke.1209000`,
+`-eks-7f9249a`, `-cf`) is a vendor build tag and is ignored, like `+build`.
+This differs from semver 2.0, which would treat every suffix as a
+prerelease. Helm's `-0` in `>= 1.18.0-0` is therefore a build tag too.
+
+## Ordering
+
+Versions compare number by number, padding the shorter one with zeros, so
+`1.31` equals `1.31.0`. With equal numbers, a prerelease sorts before the
+release, and prereleases compare by semver 2.0 rules after `rc10` is split
+into `rc` and `10`, so `rc2` sorts before `rc10`.
+
+`kix/package-eval.nix` checks that every package's `meta.version` parses.
+
+## Related
+
+- [`compatibleWith`](/docs/reference/meta/compatiblewith/)

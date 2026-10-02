@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check 19-scorecards",
-      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    23 manifests evaluated       \n scorecard  pass    0 errors, 6 warnings, 2 info \n",
+      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    24 manifests evaluated       \n scorecard  pass    0 errors, 6 warnings, 2 info \n",
       "stderr": "",
-      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 23 manifests evaluated\nscorecard pass 0 errors, 6 warnings, 2 info\n",
+      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 24 manifests evaluated\nscorecard pass 0 errors, 6 warnings, 2 info\n",
       "stderrDrift": "",
       "exitCode": 0
     }

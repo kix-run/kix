@@ -37,21 +37,12 @@ kix.buildCluster {
 
         instances.kube-system.cilium = {
           package = packages.cilium;
-          config.values = {
-            kubeProxyReplacement = false;
-            prometheus.enabled = false;
-            ipam.operator.clusterPoolIPv4PodCIDRList = [ "10.244.0.0/16" ];
-          };
         };
 
         # Every rule set, so the package is held to all of them.
         scorecard = {
           enable = true;
           rules = kix.rules;
-          # A node log reader has to be uid 0: the kubelet writes pod logs as
-          # root, mode 0640. Accepting that is the cluster operator's call,
-          # made here for the one namespace the agent runs in.
-          ruleOverrides.byNamespace.logging."security.nonRoot".severity = "warning";
           # The CNI is privileged, host-networked and root by nature. The
           # rules stay errors everywhere the packages under test run.
           ruleOverrides.byNamespace.kube-system."*".severity = "info";
@@ -119,7 +110,7 @@ kix.buildCluster {
           logs = {
             package = packages.clickhouse-logs;
             config = {
-              healthCheck.enable = true;
+              healthCheck.enabled = true;
               retentionDays = 3;
             };
           };

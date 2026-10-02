@@ -4,7 +4,7 @@
 
 ## `scope.mkSecret` — kix-managed secret
 
-Creates a K8s Secret resource with enriched `out`. Accepts inline `stringData` or SOPS `source` + `hash`.
+Creates a K8s Secret resource with enriched `out`. Accepts inline `stringData` or SOPS `source` + `hash`. A declared key needs a value in `stringData` or the SOPS `source`; the build refuses one with neither.
 
 ```nix
 creds = scope.mkSecret {
@@ -32,6 +32,8 @@ appSecret = scope.mkSecretRef {
 };
 ```
 
+List every key a pod reads by name. `keys = [ ]` is allowed only when no pod does: pods use the Secret whole (`envFrom`, a volume without `items`), and the deploy checks only that it exists. A named read of a key of such a ref fails cross-resource check 22.
+
 **Gotcha 1 — the marker must be in the returned attrset, not just `let`.** Package build functions only emit resources that `collectTypedAttrs` finds in the returned attrset. A `mkSecretRef` stashed in a `let` binding will *not* produce a manifest. Always `inherit` the ref in the return attrset:
 
 ```nix
@@ -49,10 +51,12 @@ in {
 **Gotcha 2 — wave ordering for operator-provisioned secrets.** If the Secret is created by an operator *after* some CR is applied (e.g. StackGres auto-creates `Secret/<cluster-name>` when it reconciles an `SGCluster`), the marker needs an explicit `requires` edge to that CR. Otherwise the marker lands in wave 0, the readiness poll starts before the operator has had a chance to materialize the Secret, and the deploy times out.
 
 ```nix
-superuserRef = backendScope.mkSecretRef {
-  name = builtins.unsafeDiscardStringContext clusterName;  # strips context
+# stackgres-cluster: the operator creates Secret/<cluster> when it
+# reconciles the SGCluster.
+superuserSecret = scope.mkSecretRef {
+  inherit name;
   keys = [ "superuser-username" "superuser-password" ];
-  requires = [ postgres.raw.cluster ];  # <- re-establish the dep edge
+  requires = [ self.cluster ];   # <- wait for the CR that makes the Secret
 };
 ```
 
@@ -120,9 +124,12 @@ That is also how a `kix.healthCheck` probe gets a credential: its `env` callback
 `packages/secret` and `packages/secret-ref` wrap the primitives as first-class instances:
 
 ```nix
-# Cluster definition -- standalone secret for DI
-instances.cloudflare-api = {
+# Cluster definition: a standalone secret for DI. `aliases` names the
+# contract the consumer's dependency asks for (`providerCredentials`,
+# `valkeyPassword`), never a bare `credentials`.
+instances.my-ns.cloudflare-api = {
   package = packages.secret;
+  aliases = [ "providerCredentials" ];
   config = {
     keys = [ "api-token" ];
     source = ./secrets/cloudflare-api.yaml;
@@ -131,14 +138,23 @@ instances.cloudflare-api = {
 };
 
 # External secret ref for DI
-instances.vault-creds = {
+instances.my-ns.vault-creds = {
   package = packages.secret-ref;
   config.keys = [ "username" "password" ];
 };
 
-# Consumer receives via DI
-instances.my-app.deps.credentials = instances.cloudflare-api;
+# A consumer resolves `providerCredentials` by alias, or is wired explicitly:
+instances.my-ns.my-app.deps.providerCredentials = ref.my-ns.cloudflare-api;
 ```
+
+A package reads a secret dep through one binding made by `kix.checkSecretKeys`, so a missing key fails with the secret's name before any `keyRef` throws:
+
+```nix
+creds = kix.checkSecretKeys { inherit who; arg = "providerCredentials"; dep = providerCredentials; keys = [ "api-token" ]; };
+env = kix.mkEnvVars { API_TOKEN = creds.out.keyRef "api-token"; };
+```
+
+Do not check keys in `deps.<x>.assertions`: they run after `keyRef` has already thrown.
 
 ## DON'T: reference secrets by raw string
 

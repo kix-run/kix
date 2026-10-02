@@ -373,6 +373,39 @@ rec {
         ) (safeList ((r.spec or { }).rules or [ ]))
       ) (builtins.filter (r: r.kind == "HTTPRoute") resources);
 
+      # Custom resources to the chart's own CRD of their group and kind, so
+      # the deploy applies the CR after the CRD is served. A chart resource
+      # of a kind the chart does not ship gets no edge here; the cluster
+      # build refuses it unless it depends on a declaration (check 21).
+      crdsByGroupKind = builtins.listToAttrs (
+        map (crd: {
+          name = "${crd.spec.group or ""}/${crd.spec.names.kind or ""}";
+          value = crd;
+        }) (builtins.filter (r: r.kind == "CustomResourceDefinition") resources)
+      );
+      groupOf =
+        apiVersion:
+        let
+          parts = lib.splitString "/" apiVersion;
+        in
+        if builtins.length parts == 2 then builtins.head parts else "";
+      instanceOfEdges = builtins.concatMap (
+        r:
+        let
+          key = "${groupOf (r.apiVersion or "")}/${r.kind}";
+        in
+        if r.kind != "CustomResourceDefinition" && crdsByGroupKind ? ${key} then
+          [
+            {
+              from = r;
+              to = crdsByGroupKind.${key};
+              type = "instance-of";
+            }
+          ]
+        else
+          [ ]
+      ) resources;
+
       # ServiceMonitors to Services selected by labels.
       serviceMonitorEdges = builtins.concatMap (
         r:
@@ -398,7 +431,8 @@ rec {
     ++ pdbEdges
     ++ ingressEdges
     ++ httpRouteEdges
-    ++ serviceMonitorEdges;
+    ++ serviceMonitorEdges
+    ++ instanceOfEdges;
 
   # Convert edges to a resourceId -> [resourceId] map.
   # Direction: from depends on to.
@@ -418,4 +452,35 @@ rec {
   # These are reachable through the DAG and don't need to be direct
   # requires of the package root.
   dependedOnIds = edges: lib.unique (map (e: resourceId e.to) edges);
+
+  # The root of an imported chart: the only Service, else the only
+  # Deployment, StatefulSet or DaemonSet. Consumers read the root's
+  # out.selector and out.fqdn, so any other case throws instead of guessing.
+  # `resources` are wrapped resources (with `kind` and `name`).
+  pickRoot =
+    releaseName: resources:
+    let
+      ofKinds = kinds: builtins.filter (r: builtins.elem r.kind kinds) resources;
+      services = ofKinds [ "Service" ];
+      workloads = ofKinds [
+        "Deployment"
+        "StatefulSet"
+        "DaemonSet"
+      ];
+      names = rs: builtins.concatStringsSep ", " (map (r: "${r.kind}/${r.name}") rs);
+      fix =
+        kind: name:
+        ''Name it: resources.mkParts { root = resources.get "${kind}" "${name}"; }, or kix.helmChart { root = { kind = "${kind}"; name = "${name}"; }; ... }.'';
+      first = rs: builtins.head rs;
+    in
+    if builtins.length services == 1 then
+      first services
+    else if services != [ ] then
+      throw "importChart (${releaseName}): autoRoot cannot choose a root: the chart renders ${toString (builtins.length services)} Services (${names services}). Consumers read the root's out.selector and out.fqdn, so the root must be the resource they connect to. ${fix "Service" (first services).name}"
+    else if builtins.length workloads == 1 then
+      first workloads
+    else if workloads != [ ] then
+      throw "importChart (${releaseName}): autoRoot cannot choose a root: the chart renders no Service and ${toString (builtins.length workloads)} workloads (${names workloads}). Consumers read the root's out.selector, so the root must be the workload they connect to. ${fix (first workloads).kind (first workloads).name}"
+    else
+      throw "importChart (${releaseName}): autoRoot cannot choose a root: the chart renders no Service, Deployment, StatefulSet or DaemonSet. Name the root resource: resources.mkParts { root = resources.get \"<kind>\" \"<name>\"; }, or kix.helmChart { root = { kind = \"<kind>\"; name = \"<name>\"; }; ... }.";
 }

@@ -1,7 +1,7 @@
 # Built-in scorecard rules: Security
 #
-# Checks for container security context, host access, image hygiene,
-# and namespace-level network policies.
+# Checks for container security context, host access, cluster-wide RBAC,
+# image hygiene, and namespace-level network policies.
 #
 # See v2_discussions/60_scorecard_rules_design.md §Built-in rule library.
 
@@ -156,6 +156,66 @@ in
         ];
       in
       violations;
+  };
+
+  # A ClusterRoleBinding to the built-in `cluster-admin`, or a ClusterRole
+  # with a rule whose apiGroups, resources, and verbs all contain "*" (the
+  # same reach under another name). A namespaced RoleBinding and a wildcard
+  # limited to one API group are not checked.
+  noClusterAdmin = {
+    description = "No ClusterRoleBinding may grant cluster-admin, and no ClusterRole may grant every verb on every resource";
+    level = "manifest";
+    severity = "error";
+    tags = [
+      "security"
+      "rbac"
+      "cis-benchmark"
+    ];
+    appliesTo =
+      {
+        resource,
+        meta ? { },
+        ...
+      }:
+      builtins.elem (resource.kind or "") [
+        "ClusterRoleBinding"
+        "ClusterRole"
+      ]
+      && !(holdsGrant meta "cluster-admin");
+    check =
+      { resource, ... }:
+      let
+        name = resource.metadata.name or "unnamed";
+        fix =
+          "Derive the rules the program needs with scope.rbac, or, when it must read and write "
+          + "every kind (a cluster-wide backup tool), add \"cluster-admin\" to the package's meta.unsafe "
+          + "with a comment that gives the reason.";
+        describeSubject =
+          s:
+          if (s.kind or "") == "ServiceAccount" then
+            "ServiceAccount ${s.namespace or "?"}/${s.name or "?"}"
+          else
+            "${s.kind or "subject"} ${s.name or "?"}";
+        subjects = map describeSubject (listOr (resource.subjects or [ ]));
+        subjectText = if subjects == [ ] then "no subjects" else lib.concatStringsSep ", " subjects;
+        isAllWildcard =
+          rule:
+          builtins.all (field: builtins.elem "*" (listOr (rule.${field} or [ ]))) [
+            "apiGroups"
+            "resources"
+            "verbs"
+          ];
+      in
+      if resource.kind == "ClusterRoleBinding" then
+        lib.optional
+          ((resource.roleRef.kind or "") == "ClusterRole" && (resource.roleRef.name or "") == "cluster-admin")
+          {
+            message = "ClusterRoleBinding '${name}' grants cluster-admin to ${subjectText}. ${fix}";
+          }
+      else
+        lib.optional (builtins.any isAllWildcard (listOr (resource.rules or [ ]))) {
+          message = "ClusterRole '${name}' grants every verb on every resource in every API group, the reach of cluster-admin. ${fix}";
+        };
   };
 
   noLatestTag = {

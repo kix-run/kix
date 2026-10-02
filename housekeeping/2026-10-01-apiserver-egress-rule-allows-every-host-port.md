@@ -1,0 +1,7 @@
+# 2026-10-01 · `kix/packages/cilium/netpol-rules.nix` · `apiServerEgressRule` allows the `host` and `remote-node` identities on every port.
+
+The rule lists `kube-apiserver`, `host`, and `remote-node` in `toEntities` with no `toPorts`, because a host-networked API server (k3s, kind, RKE2) resolves to `host` or `remote-node`. Every pod with API access can therefore reach any port on any node: kubelets on 10250, RKE2's etcd on 2379, node exporters. Scoping it needs `toPorts` (6443, plus the kubelet port where a component scrapes kubelets) tested on a kube-proxy cluster and on a kube-proxy-replacement cluster, where the Service address is translated before policy.
+
+`kix/lib/flavors/rke2.nix` depends on this breadth: `rke2-metrics-server-egress` reaches the kubelets on 10250 only through the apiserver rule. Narrowing the rule must give that intent an explicit kubelet rule, or metrics-server stops scraping without an error at evaluation.
+
+- Hit again 2026-10-02 while deriving Prometheus scrape policies (`kix/lib/plugins/netpol/scrape.nix`): the kubelet, apiserver, etcd, scheduler, and controller-manager monitors of prometheus-default-rules reach their host-network targets only through the server's API server rule, so narrowing it also needs scrape rules for those targets.

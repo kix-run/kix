@@ -27,8 +27,16 @@ The `storageClasses` role requires `out.storageClassName`. PVC packages use
 that value when they do not set a class explicitly.
 
 Use a provisioner and parameters supported by the target cluster. The example
-uses a static local provisioner to keep the package small; it is not a general
-purpose dynamic storage configuration.
+adds a `Retain` class for kind's local-path-provisioner.
+
+For StorageClasses you do not need a package of your own: a
+`storage-classes` instance claims the same role and renders the classes you
+list in `config.classes`. See
+[Configure storage classes and PVCs](/docs/how-to/platform-capabilities/configure-storage-classes-and-pvcs/).
+Whichever provider you use, do not annotate its class
+`storageclass.kubernetes.io/is-default-class` where the flavor imports a
+default class: the cluster would then have two defaults, and
+`storage-classes` refuses it.
 
 ## Add the managed instance
 

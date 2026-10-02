@@ -10,9 +10,9 @@
     {
       "command": "kix graph how-to-adoption --format tree",
       "stdout": "├── PackageInstance/legacy-api@legacy (import)\n├── PackageInstance/legacy-api-contract@apps\n│   ├── PackageInstance/legacy-api@legacy (import)\n├── ConfigMap/legacy-api-contract@apps\n│   └── PackageInstance/legacy-api-contract@apps\n│       ├── PackageInstance/legacy-api@legacy (import)\n├── PackageInstance/legacy-api-contract@apps\n│   ├── PackageInstance/legacy-api@legacy (import)\n└── PackageInstance/legacy-api@legacy (import)\n",
-      "stderr": "20 resources, 36 dependencies\n",
+      "stderr": "21 resources, 39 dependencies\n",
       "stdoutDrift": "ConfigMap/legacy-api-contract@apps\nPackageInstance/legacy-api-contract@apps\nPackageInstance/legacy-api@legacy (import)\n",
-      "stderrDrift": "20 resources, 36 dependencies\n",
+      "stderrDrift": "21 resources, 39 dependencies\n",
       "exitCode": 0
     }
   ]

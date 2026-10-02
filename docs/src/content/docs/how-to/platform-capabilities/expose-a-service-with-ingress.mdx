@@ -49,8 +49,9 @@ package names its resources after it. If the cluster already has one
 compatible instance, use that instance instead.
 
 The ingress-nginx Service defaults to `ClusterIP`. Set
-`config.serviceType = "LoadBalancer"` when your environment provides external
-load balancers and traffic must enter the cluster through that Service.
+`config.service.spec.type = "LoadBalancer"` when your environment provides
+external load balancers and traffic must enter the cluster through that
+Service.
 
 ## Set the application hostname
 

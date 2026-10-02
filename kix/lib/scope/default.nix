@@ -39,7 +39,7 @@ rec {
       clusterLabels ? { },
       labelStyle ? "kix",
       selectorLabelsOverride ? null,
-      clusterDomain ? "cluster.local",
+      clusterDomain,
       capabilities ? { },
       networkPolicyEnforcer ? null,
       peekedPackageMeta ? { },
@@ -47,6 +47,7 @@ rec {
       # the instance's resolved availability (core/availability.nix resolve)
       availability ? {
         level = "none";
+        ceiling = null;
         warnings = [ ];
       },
       factBehaviorOverrides ? { },
@@ -61,6 +62,14 @@ rec {
         inherit instanceName labelStyle selectorLabelsOverride;
       };
       inherit (scopeLabels) selectorLabels instanceLabels labels;
+
+      # The policy directions the cluster enforces, `{ ingress; egress; }`
+      # from `networkPolicy.directions`, or null without an enforcer. A
+      # policy section for a direction it leaves false isolates the selected
+      # pods in a direction default deny leaves open. An enforcer is set only
+      # when the netpol plugin is enabled, so the option is defined.
+      networkPolicyEnforced =
+        if networkPolicyEnforcer == null then null else clusterCtx.config.networkPolicy.enforced;
 
       # Role satisfaction for validator gates: "provided" (managed provider
       # or environment binding), "absent" (declared vacant), "unknown"
@@ -141,6 +150,7 @@ rec {
           namespaces
           mkOptional
           networkPolicyEnforcer
+          networkPolicyEnforced
           ;
         namespace = namespaceResource;
 
@@ -168,6 +178,14 @@ rec {
           passengers: outAttrs:
           lib.mapAttrs (_: v: if builtins.isString v then scopeObj.augmentEdge passengers v else v) outAttrs;
 
+        # The dependency's out with the context of `passengers` added to
+        # every string value, plus the Service references among its parts,
+        # keyed by name. A package that re-exports a dependency's address
+        # (stackgres-database) keeps the result as a folder part. A consumer
+        # of that address then waits for the passengers, and the network
+        # policy builder, which indexes only the typed parts of a workload's
+        # direct dependencies, finds the Service reference there and gives
+        # the consumer egress to it.
         forwardEdges =
           dep: passengers:
           let
@@ -213,6 +231,7 @@ rec {
               namespaces
               clusterLabels
               labelStyle
+              clusterDomain
               capabilities
               networkPolicyEnforcer
               peekedPackageMeta

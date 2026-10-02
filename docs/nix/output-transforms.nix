@@ -55,6 +55,18 @@ let
       s/(Activation\/)?([a-z0-9][a-z0-9-]*[a-z0-9])-[0-9abcdfghijklmnpqrsvwxyz]{11,12}\b/\1\2-<activation-id>/g
     '';
 
+    # Source locations in Nix error traces. Nix 2.31 prints a file from a
+    # flake input as `/nix/store/<hash>-source/<path>` and builtin files as
+    # `<nix/<file>>`; newer Nix prints `«github:owner/repo/rev?…»/<path>` and
+    # `«nix-internal»/<file>`. Both become `«source»/<path>`, so a capture's
+    # drift does not depend on the Nix version of the machine that made it.
+    # Run before redact-identity-hash, which would rewrite the store hash.
+    normalize-nix-source-paths = ''
+      s|/nix/store/[a-z0-9]{32}-source/|«source»/|g
+      s|«[^»]*»/|«source»/|g
+      s|<nix/([^>]*)>|«source»/\1|g
+    '';
+
     # Kix identity hashes: 32-char base32 Nix-style hashes that appear in
     # `kix.run/identity-hash`, `kix.run/depends-on`, and embedded store
     # paths in `kix build`/`kix graph` output. These are content-addressed
@@ -180,6 +192,7 @@ let
     # (it consumes the longer suffix); identity-hash second so it doesn't
     # also catch the activation suffix.
     "redact-activation-id"
+    "normalize-nix-source-paths"
     "redact-identity-hash"
     "redact-nar-hash"
     "strip-pod-suffix"

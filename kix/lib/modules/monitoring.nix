@@ -1,8 +1,11 @@
 # Native Prometheus monitoring stack.
 #
 # Instantiates prometheus-operator, prometheus, alertmanager, node-exporter,
-# kube-state-metrics, and grafana as individual native packages.
-# Each component is individually configurable and disableable.
+# kube-state-metrics, and grafana as individual native packages in
+# `monitoring.namespace`. Each component can be turned off. The packages
+# wire each other through their dependencies: Prometheus sends alerts to the
+# Alertmanager, Grafana gets both and Loki as datasources, and the default
+# rules name the scrape targets of the other instances.
 #
 # Usage:
 #   modules = [
@@ -10,28 +13,52 @@
 #     {
 #       monitoring.enabled = true;
 #       monitoring.prometheus.retention = "30d";
-#       monitoring.grafana.enabled = false;
+#       # Grafana's administrator login: a secret with keys `admin-user`
+#       # and `admin-password`, answering the `grafanaAdmin` alias.
+#       instances.monitoring-system.grafana-admin = {
+#         package = packages.secret;
+#         aliases = [ "grafanaAdmin" ];
+#         config.source = ./secrets/grafana-admin.sops.yaml;
+#         config.keys = [ "admin-user" "admin-password" ];
+#       };
 #     }
 #   ];
 #
-# For advanced per-instance overrides, use the instances option directly:
-#   instances.monitoring-system.prometheus-server.config.storage = { ... };
+# For anything else, set the instance's config directly:
+#   instances.monitoring-system.prometheus-server.config.extraSpec.remoteWrite = [ ... ];
+#
+# `monitoring.loki.enabled` adds Loki (the loki package) and its claim
+# `loki-storage` to the same namespace, and Grafana gets a Loki datasource
+# from it. Tune Loki through its own options:
+#   instances.monitoring-system.loki.config.settings.limits_config.retention_period = "720h";
+# `monitoring.lokiLogs.enabled` (on with Loki) adds the loki-logs agent,
+# which ships every pod's logs to that Loki.
+#
+# node-exporter and loki-logs mount host paths, so the namespace runs at the
+# `privileged` Pod Security level. For a restricted monitoring namespace,
+# turn both off and declare those agents in a namespace of their own.
 
 {
   config,
   lib,
   kix,
   packages,
+  ref,
   ...
 }:
 
 let
   cfg = config.monitoring;
   ns = cfg.namespace;
-  # Created by the `priority-classes` instance below and named by promtail.
-  # A module cannot read another instance's `out`, so both sides use this
-  # name; eval fails if promtail names a class that no resource creates.
-  promtailPriorityClass = "monitoring-loki";
+  # The module's `kix` argument carries only `mkImport`, so the quantity
+  # type comes from its file rather than `kix.types.quantity`.
+  quantity = import ../vocab/quantity.nix { inherit lib; };
+  # A Prometheus duration: 30s, 7d, 1h30m.
+  duration = lib.types.strMatching "([0-9]+(ms|s|m|h|d|w|y))+";
+  # Instance name of the log shipper's PriorityClass. The instance below
+  # creates the class, and loki-logs reads its name through
+  # deps.priorityClass, which also orders the DaemonSet after it.
+  logShipperPriorityClass = "monitoring-log-shipper";
 in
 {
   options.monitoring = {
@@ -40,19 +67,6 @@ in
     namespace = lib.mkOption {
       type = lib.types.str;
       default = "monitoring-system";
-    };
-
-    releaseName = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = ''
-        If set, prefix monitoring instance names so resource names match
-        kube-prometheus-stack's helm-release naming. e.g. `releaseName =
-        "prometheus"` yields `prometheus-kube-prometheus-operator`,
-        `prometheus-grafana`, `prometheus-kube-state-metrics`, etc.
-        Use when migrating an existing helm-managed cluster and you need
-        byte-level parity with the rendered manifests.
-      '';
     };
 
     operator.enabled = lib.mkOption {
@@ -66,37 +80,28 @@ in
         default = true;
       };
       retention = lib.mkOption {
-        type = lib.types.str;
+        type = duration;
         default = "7d";
+        description = "How long Prometheus keeps samples (the resource's `retention`).";
       };
       retentionSize = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
+        type = lib.types.nullOr (lib.types.strMatching "[0-9]+(\\.[0-9]+)?(B|KB|MB|GB|TB|PB|EB)");
         default = null;
+        example = "40GB";
+        description = "The most data Prometheus keeps, in Prometheus units (`retentionSize`). Null sets no limit.";
       };
       scrapeInterval = lib.mkOption {
-        type = lib.types.str;
+        type = duration;
         default = "30s";
+        description = "Default scrape interval (`scrapeInterval`).";
       };
-      resources = lib.mkOption {
-        type = lib.types.anything;
-        default = {
-          requests = {
-            cpu = "500m";
-            memory = "2Gi";
-          };
-          limits = {
-            cpu = "2";
-            memory = "4Gi";
-          };
+      storage = {
+        size = lib.mkOption {
+          type = lib.types.nullOr quantity.type;
+          default = null;
+          example = "50Gi";
+          description = "Size of each Prometheus server's data volume, in the class of the cluster's `storageClasses` provider. For another class, set `instances.<monitoring.namespace>.prometheus-server.deps.storageClasses`. Null keeps the data in an emptyDir.";
         };
-      };
-      storage = lib.mkOption {
-        type = lib.types.anything;
-        default = null;
-      };
-      externalUrl = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
       };
     };
 
@@ -105,10 +110,10 @@ in
         type = lib.types.bool;
         default = true;
       };
-      routing = lib.mkOption {
-        type = lib.types.nullOr lib.types.anything;
+      settings = lib.mkOption {
+        type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
         default = null;
-        description = "Override alertmanager routing config (receivers, routes).";
+        description = "Alertmanager configuration, passed to the alertmanager instance's `settings`. Null uses that package's configuration, which routes every alert to the receiver `null`.";
       };
     };
 
@@ -126,52 +131,42 @@ in
       enabled = lib.mkOption {
         type = lib.types.bool;
         default = true;
+        description = "Run Grafana. It needs a `grafanaAdmin` secret in the namespace (see the module header).";
       };
-      replicas = lib.mkOption {
-        type = lib.types.int;
-        default = 1;
-        description = "Number of Grafana replicas. Use 1 for most setups; persistence.enabled must be false (or RWX storage) for >1.";
-      };
-      rootUrl = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Grafana root URL. Derived from cluster.domain if null.";
-      };
-      persistence = lib.mkOption {
-        type = lib.types.anything;
-        default = {
-          enabled = true;
-          size = "10Gi";
+      persistence = {
+        enabled = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Keep Grafana's data on a PersistentVolumeClaim (a persistent-volume-claim instance named `storage` in the monitoring namespace). False keeps it in an emptyDir, which a pod restart empties.";
+        };
+        size = lib.mkOption {
+          type = quantity.type;
+          default = "10Gi";
+          description = "Size of Grafana's claim.";
+        };
+        storageClassName = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = "StorageClass of Grafana's claim. Null leaves the choice to the persistent-volume-claim package.";
         };
       };
-      extraDatasources = lib.mkOption {
-        type = lib.types.listOf lib.types.anything;
+      datasources = lib.mkOption {
+        type = lib.types.listOf (lib.types.attrsOf lib.types.anything);
         default = [ ];
+        description = "Datasources added after the wired ones, passed to the grafana instance's `datasources`.";
       };
     };
 
-    defaultRules = {
-      enabled = lib.mkOption {
-        type = lib.types.bool;
-        default = false;
-        description = ''
-          Deploy standard Kubernetes monitoring rules and ServiceMonitors.
-          Includes ~150 alert rules, ~90 recording rules, and ServiceMonitors
-          for kubelet, apiserver, etcd, scheduler, controller-manager, coredns,
-          and kube-proxy. Equivalent to kube-prometheus-stack defaults.
-        '';
-      };
-      # Forwarded to the prometheus-default-rules package.
-      rules = lib.mkOption {
-        type = lib.types.anything;
-        default = { };
-        description = "Override per-group rule toggles (etcd, kubeApiserver, etc.)";
-      };
-      monitors = lib.mkOption {
-        type = lib.types.anything;
-        default = { };
-        description = "Override per-component monitor toggles (kubelet, apiserver, etc.)";
-      };
+    defaultRules.enabled = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Deploy the prometheus-default-rules package: the standard Kubernetes
+        alerting and recording rules, and ServiceMonitors for the API
+        server, the kubelets, CoreDNS, etcd, kube-controller-manager,
+        kube-scheduler, and kube-proxy. Turn single rule groups or monitors
+        off through `instances.<namespace>.default-rules.config`.
+      '';
     };
 
     loki = {
@@ -179,111 +174,49 @@ in
         type = lib.types.bool;
         default = false;
       };
-      namespace = lib.mkOption {
-        type = lib.types.str;
-        default = "monitoring-loki";
-        description = ''
-          Namespace where Loki + its PVC live. Loki gets its own namespace so
-          the sibling PVC can be named `storage` (matching the immich-style
-          DI convention) without colliding with other monitoring PVCs.
-        '';
-      };
       storageSize = lib.mkOption {
-        type = lib.types.str;
+        type = quantity.type;
         default = "10Gi";
-        description = "Size of the persistent volume claim backing single-binary Loki.";
-      };
-      extraValues = lib.mkOption {
-        type = lib.types.attrsOf lib.types.anything;
-        default = { };
-        description = "Extra Helm values forwarded to the loki package's `extraValues`.";
+        description = "Size of the claim behind Loki, which holds every log line for the retention period. For a StorageClass, set `instances.<monitoring.namespace>.loki-storage.config.storageClassName`.";
       };
     };
 
-    promtail.enabled = lib.mkOption {
+    lokiLogs.enabled = lib.mkOption {
       type = lib.types.bool;
       default = cfg.loki.enabled;
       defaultText = "monitoring.loki.enabled";
+      description = "Ship every pod's logs to this module's Loki with the loki-logs Vector agent.";
     };
   };
 
   config = lib.mkIf cfg.enabled {
     instances.${ns} =
       let
-        grafanaRootUrl =
-          if cfg.grafana.rootUrl != null then
-            cfg.grafana.rootUrl
-          # `cluster.domain` always exists and is null when no public domain
-          # has been configured.
-          else if (config.cluster.domain or null) != null then
-            "http://grafana.${config.cluster.domain}"
-          else
-            "http://grafana.localhost";
-
-        # Map internal keys to chart template suffixes when releaseName is set.
-        # The prefixed instance key becomes "${releaseName}-${chartSuffix.<key>}"
-        # which mirrors kube-prometheus-stack's rendered resource names.
-        chartSuffix = {
-          prometheus-operator = "kube-prometheus-operator";
-          prometheus-server = "kube-prometheus-prometheus";
-          alertmanager = "kube-prometheus-alertmanager";
-          node-exporter = "prometheus-node-exporter";
-          kube-state-metrics = "kube-state-metrics";
-          grafana = "grafana";
-          default-rules = "kube-prometheus";
-          # Keep `storage`, the Grafana PVC, unrenamed.
-          # Renaming it to `prometheus-grafana` would shadow the package's
-          # `storage` alias for grafana's DI (the alias resolver matches the
-          # named "storage" instance in the loki namespace before falling
-          # back to alias-keyed candidates). PVC name parity is a small,
-          # separate concern to fix in the package layer.
-        };
-        rename =
-          k:
-          if cfg.releaseName == null || !(chartSuffix ? ${k}) then
-            k
-          else
-            "${cfg.releaseName}-${chartSuffix.${k}}";
         rawInstances = {
           prometheus-operator = lib.mkIf cfg.operator.enabled {
             package = packages.prometheus-operator;
           };
 
+          # Each value is a default, so the instance's own extraSpec wins.
           prometheus-server = lib.mkIf cfg.prometheus.enabled {
             package = packages.prometheus;
             config = {
-              retention = cfg.prometheus.retention;
-              scrapeInterval = cfg.prometheus.scrapeInterval;
-              resources = cfg.prometheus.resources;
-            }
-            // lib.optionalAttrs (cfg.prometheus.retentionSize != null) {
-              retentionSize = cfg.prometheus.retentionSize;
-            }
-            // lib.optionalAttrs (cfg.prometheus.storage != null) {
-              storage = cfg.prometheus.storage;
-            }
-            // lib.optionalAttrs (cfg.prometheus.externalUrl != null) {
-              externalUrl = cfg.prometheus.externalUrl;
-            }
-            // lib.optionalAttrs cfg.alertmanager.enabled {
-              # The alertmanager package no longer renders its own Service; it
-              # refs the operator's `alertmanager-operated` (port `web`). The
-              # operator turns this into Alertmanager service discovery, so
-              # the name must be a Service that exists in the namespace.
-              alerting.alertmanagers = [
+              extraSpec = lib.mapAttrs (_: lib.mkDefault) (
                 {
-                  namespace = ns;
-                  name = "alertmanager-operated";
-                  port = "web";
+                  inherit (cfg.prometheus) retention scrapeInterval;
                 }
-              ];
+                // lib.optionalAttrs (cfg.prometheus.retentionSize != null) {
+                  inherit (cfg.prometheus) retentionSize;
+                }
+              );
+              inherit (cfg.prometheus) storage;
             };
           };
 
           alertmanager = lib.mkIf cfg.alertmanager.enabled {
             package = packages.alertmanager;
-            config = lib.optionalAttrs (cfg.alertmanager.routing != null) {
-              config = cfg.alertmanager.routing;
+            config = lib.optionalAttrs (cfg.alertmanager.settings != null) {
+              inherit (cfg.alertmanager) settings;
             };
           };
 
@@ -297,16 +230,6 @@ in
 
           default-rules = lib.mkIf cfg.defaultRules.enabled {
             package = packages.prometheus-default-rules;
-            config = {
-              rules = {
-                enabled = true;
-              }
-              // cfg.defaultRules.rules;
-              monitors = {
-                enabled = true;
-              }
-              // cfg.defaultRules.monitors;
-            };
           };
 
           # Storage lives as its own instance so cluster operators control
@@ -316,71 +239,54 @@ in
           storage = lib.mkIf (cfg.grafana.enabled && cfg.grafana.persistence.enabled) {
             package = packages."persistent-volume-claim";
             config = {
-              size = cfg.grafana.persistence.size;
-            }
-            //
-              lib.optionalAttrs
-                (cfg.grafana.persistence ? storageClass && cfg.grafana.persistence.storageClass != null)
-                {
-                  accessModes = [ "ReadWriteOnce" ];
-                };
+              inherit (cfg.grafana.persistence) storageClassName;
+              # The claim's `size` option is a string; the quantity type also
+              # accepts a plain number of bytes.
+              size = toString cfg.grafana.persistence.size;
+            };
           };
 
           grafana = lib.mkIf cfg.grafana.enabled {
             package = packages.grafana;
+            config.datasources = cfg.grafana.datasources;
+          };
+
+          ${logShipperPriorityClass} = lib.mkIf cfg.lokiLogs.enabled {
+            package = packages.priority-class;
             config = {
-              rootUrl = grafanaRootUrl;
-              replicas = cfg.grafana.replicas;
-              # The Helm-wrapped Loki package does not expose out.serviceUrl.
-              datasources =
-                lib.optional cfg.loki.enabled {
-                  name = "Loki";
-                  type = "loki";
-                  # Loki lives in its own namespace so the sibling PVC can be
-                  # called `storage` (immich pattern).
-                  url = "http://loki-gateway.${cfg.loki.namespace}.svc.cluster.local";
-                  access = "proxy";
-                }
-                ++ cfg.grafana.extraDatasources;
+              value = 1000000;
+              description = "Log shipper DaemonSet of the monitoring stack, so it can preempt lower-priority pods on a full node";
             };
           };
 
-          priority-classes = lib.mkIf cfg.promtail.enabled {
-            package = packages.priority-classes;
-            config.classes = {
-              ${promtailPriorityClass} = {
-                value = 1000000;
-                description = "Monitoring and log shipping workloads (Loki, Promtail)";
-              };
-            };
+          # Grafana's optional `storage` dependency would otherwise bind
+          # Loki's claim in this namespace. A non-empty `aliases` replaces
+          # the package's `storage` alias, and nothing resolves `lokiStorage`
+          # (housekeeping/2026-10-01-no-way-to-drop-default-aliases.md).
+          # clusters/test-monitoring-loki.nix asserts that Grafana then
+          # mounts no claim.
+          loki-storage = lib.mkIf cfg.loki.enabled {
+            package = packages."persistent-volume-claim";
+            aliases = [ "lokiStorage" ];
+            config.size = cfg.loki.storageSize;
           };
 
-          promtail = lib.mkIf cfg.promtail.enabled {
-            package = packages.promtail;
-            config.priorityClassName = promtailPriorityClass;
+          loki = lib.mkIf cfg.loki.enabled {
+            package = packages.loki;
+            deps.storage = ref.${ns}.loki-storage;
+          };
+
+          loki-logs = lib.mkIf cfg.lokiLogs.enabled {
+            package = packages.loki-logs;
+            deps.loki =
+              if cfg.loki.enabled then
+                ref.${ns}.loki
+              else
+                throw "monitoring.lokiLogs.enabled is true but monitoring.loki.enabled is false, so there is no Loki to ship to. Enable monitoring.loki, or turn lokiLogs off and declare a loki-logs instance with deps.loki pointing at your Loki.";
+            deps.priorityClass = ref.${ns}.${logShipperPriorityClass};
           };
         };
       in
-      lib.mapAttrs' (k: v: lib.nameValuePair (rename k) v) rawInstances;
-
-    # Loki uses its own namespace so its sibling PVC can be named `storage`.
-    # The flavor's storageClasses import supplies the PVC storageClassName.
-    # Helm rendering runs at module level because package build functions do
-    # not receive the Helm bridge.
-    instances.${cfg.loki.namespace} = lib.mkIf cfg.loki.enabled {
-      # The PVC instance is named "storage", which matches the
-      # extraVolumes claimName baked into the package's default values.
-      # The same-namespace StatefulSet resolves the PVC by name.
-      storage = {
-        package = packages."persistent-volume-claim";
-        config.size = cfg.loki.storageSize;
-      };
-      loki = {
-        package = packages.loki;
-        config.values = cfg.loki.extraValues;
-      };
-    };
-
-    namespaces.${cfg.loki.namespace} = lib.mkIf cfg.loki.enabled { };
+      rawInstances;
   };
 }

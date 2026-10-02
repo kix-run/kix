@@ -8,6 +8,8 @@ When modifying kix APIs, package conventions, or the diff tooling, keep the `kix
 
 When modifying how packages vendor their CRDs, or `scripts/vendor-crds.py`, keep the `crd-vendoring` skill (`.claude/skills/crd-vendoring/SKILL.md`) up to date. It is the maintainer of that script and the reference for adding CRD-bearing packages.
 
+When changing package conventions, the lib APIs packages use (`kix/lib/vocab/`, `scope.*` builders, `meta` keys), or the package review process, keep the `package-review` skill (`.claude/skills/package-review/SKILL.md`) up to date. Authors and reviewers run its checklist against every new or changed package, so a stale item either misses a defect or flags correct code.
+
 When modifying CLI public APIs, commands, data flows, or crate structure, keep `cli/README.md` up to date. This is the primary reference for LLMs working on CLI features — stale docs cause wasted exploration.
 
 When implementing new features or completing existing ones, check `ROADMAP.md` and mark completed items as `[x]`, expand descriptions with implementation details, or add new items discovered during development.

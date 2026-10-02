@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix check how-to-adoption-takeover",
-      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    10 manifests evaluated       \n scorecard  pass    0 errors, 6 warnings, 1 info \n",
+      "stdout": " TOOL       RESULT  DETAILS                      \n eval       pass    11 manifests evaluated       \n scorecard  pass    0 errors, 6 warnings, 1 info \n",
       "stderr": "",
-      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 10 manifests evaluated\nscorecard pass 0 errors, 6 warnings, 1 info\n",
+      "stdoutDrift": "TOOL RESULT DETAILS\neval pass 11 manifests evaluated\nscorecard pass 0 errors, 6 warnings, 1 info\n",
       "stderrDrift": "",
       "exitCode": 0
     }

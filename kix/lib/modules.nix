@@ -1,6 +1,9 @@
 # NixOS module options consumed by buildCluster.
 
 { lib, ... }:
+let
+  versions = import ./core/version.nix { inherit lib; };
+in
 {
   imports = [
     ./plugins/netpol/module.nix
@@ -82,7 +85,12 @@
                 '';
               };
               partsOverlays = lib.mkOption {
-                type = lib.types.listOf lib.types.anything;
+                # `raw` stores each function as defined. `anything` would wrap
+                # it and merge its result, which evaluates every nested value:
+                # `root.resource = self.<part>` then forces `self` while the
+                # parts fixed point is still being computed, and an overlay
+                # that reads the previous overlay's `base.root` recurses.
+                type = lib.types.listOf lib.types.raw;
                 default = [ ];
                 description = ''
                   Parts overlay functions (scope: self: base: attrset).
@@ -119,10 +127,16 @@
                 type = lib.types.listOf lib.types.raw;
                 default = [ ];
                 description = ''
-                  Additional dependency edges for the instance's PackageInstance
-                  marker. Used to inject ordering constraints that aren't
-                  captured by store-path context (e.g. an import depending on
-                  a managed instance's root resource).
+                  Additional dependencies for a kix.mkImport instance's
+                  PackageInstance marker, for ordering that no value read
+                  from another instance carries. Each entry is a resource or
+                  `ref.<namespace>.<instance>`, which stands for that
+                  instance's PackageInstance marker. Evaluation fails,
+                  whether or not the instance is active, for any other
+                  value, for a ref to the import itself, and for a non-empty
+                  list on a managed instance. When the import is active, a
+                  ref to an optional instance that is not active also fails;
+                  a ref does not activate one.
                 '';
               };
               platformIntents = lib.mkOption {
@@ -228,7 +242,8 @@
     };
 
     globalPartsOverlays = lib.mkOption {
-      type = lib.types.listOf lib.types.anything;
+      # `raw` for the reason given at `partsOverlays`.
+      type = lib.types.listOf lib.types.raw;
       default = [ ];
       description = ''
         Parts overlay functions applied to ALL instances. Signature:
@@ -238,11 +253,17 @@
     };
 
     k8sVersion = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
+      type = lib.types.nullOr (
+        lib.types.addCheck lib.types.str versions.isVersion
+        // {
+          description = "Kubernetes version such as \"1.31\" or \"v1.31.2-gke.1209000\"";
+        }
+      );
       default = null;
       description = ''
         Target Kubernetes version (e.g. "1.30"). Used by package meta
-        compatibility checks (meta.k8s.minVersion / maxVersion).
+        compatibility checks (meta.k8s.minVersion / maxVersion). A version
+        less precise than a package's constraint is reported as a warning.
       '';
     };
 
@@ -450,7 +471,12 @@
       podCidr = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Pod network CIDR (e.g. '10.244.0.0/16').";
+        description = ''
+          Pod network CIDR (e.g. '10.244.0.0/16'). Read by the cilium
+          package as its IPAM pool when it installs the chart with
+          cluster-pool IPAM. The kind, k3s, and rke2 flavours set their
+          defaults.
+        '';
       };
       serviceCidr = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
@@ -460,7 +486,7 @@
       dnsUpstream = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [ ];
-        description = "Upstream DNS resolvers (for CoreDNS forwarding, cert-manager DNS01, etc).";
+        description = "Upstream DNS resolvers. The coredns package's forward plugin reads them; empty means /etc/resolv.conf.";
       };
     };
 

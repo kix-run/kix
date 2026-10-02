@@ -277,7 +277,7 @@
       "page": "author-packages-and-clusters/map-the-availability-level-in-a-package",
       "scenario": "application",
       "status": "implemented",
-      "unverifiedNixBlocks": 5
+      "unverifiedNixBlocks": 7
     },
     {
       "page": "author-packages-and-clusters/reuse-one-package-for-multiple-instances",
@@ -511,21 +511,10 @@
       "status": "implemented",
       "snippets": [
         "acmeClusterIssuer",
-        "selfSignedClusterIssuer"
+        "stagingClusterIssuer",
+        "selfSignedClusterIssuer",
+        "importedClusterIssuer"
       ]
-    },
-    {
-      "page": "package-task-guides/deploy-a-python-app",
-      "scenario": "package-stacks",
-      "status": "implemented",
-      "snippets": [
-        "pythonApplicationInstance"
-      ],
-      "offlineCaptures": [
-        "how-to/package-python/check",
-        "how-to/package-python/workload"
-      ],
-      "unverifiedNixBlocks": 1
     },
     {
       "page": "package-task-guides/deploy-stackgres",
@@ -538,7 +527,8 @@
       "offlineCaptures": [
         "how-to/package-stackgres/check",
         "how-to/package-stackgres/database-resources"
-      ]
+      ],
+      "unverifiedNixBlocks": 2
     },
     {
       "page": "package-task-guides/deploy-valkey-redis",
@@ -550,7 +540,8 @@
       "offlineCaptures": [
         "how-to/package-valkey/check",
         "how-to/package-valkey/resources"
-      ]
+      ],
+      "unverifiedNixBlocks": 2
     },
     {
       "page": "package-task-guides/deploy-velero",
@@ -562,7 +553,8 @@
       "offlineCaptures": [
         "how-to/package-velero/check",
         "how-to/package-velero/backup-configuration"
-      ]
+      ],
+      "unverifiedNixBlocks": 2
     },
     {
       "page": "package-task-guides/install-cilium-network-policy-support",
@@ -575,7 +567,8 @@
       "offlineCaptures": [
         "how-to/package-cilium/check",
         "how-to/package-cilium/components"
-      ]
+      ],
+      "unverifiedNixBlocks": 2
     },
     {
       "page": "package-task-guides/install-envoy-gateway",
@@ -599,20 +592,28 @@
       ],
       "offlineCaptures": [
         "how-to/install-ingress-nginx/controller-resources"
-      ]
+      ],
+      "unverifiedNixBlocks": 1
+    },
+    {
+      "page": "package-task-guides/install-mayastor",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "unverifiedNixBlocks": 4
     },
     {
       "page": "package-task-guides/install-the-monitoring-stack",
       "scenario": "package-stacks",
       "status": "implemented",
       "snippets": [
-        "monitoringStack"
+        "monitoringStack",
+        "lokiStack"
       ],
       "offlineCaptures": [
         "how-to/package-monitoring/check",
         "how-to/package-monitoring/packages"
       ],
-      "unverifiedNixBlocks": 1
+      "unverifiedNixBlocks": 2
     },
     {
       "page": "package-task-guides/install-the-victoriametrics-ha-monitoring-stack",
@@ -643,7 +644,17 @@
       ]
     },
     {
-      "page": "platform-capabilities/add-tls-through-cluster-issuers",
+      "page": "package-task-guides/publish-dns-records-with-external-dns",
+      "scenario": "package-stacks",
+      "status": "implemented",
+      "snippets": [
+        "externalDnsInstance",
+        "externalDnsKindTryout"
+      ],
+      "unverifiedNixBlocks": 2
+    },
+    {
+      "page": "platform-capabilities/add-tls-through-a-cluster-issuer",
       "scenario": "platform",
       "status": "implemented",
       "snippets": [
@@ -666,15 +677,16 @@
       "offlineCaptures": [
         "how-to/platform-monitoring/check",
         "how-to/platform-monitoring/service-monitor"
-      ]
+      ],
+      "unverifiedNixBlocks": 1
     },
     {
       "page": "platform-capabilities/configure-storage-classes-and-pvcs",
       "scenario": "platform",
       "status": "implemented",
       "snippets": [
-        "managedStorageClassPackage",
-        "shadowPlatformStorage",
+        "storageClassesInstance",
+        "importedStorageClass",
         "configuredPersistentVolumeClaim"
       ]
     },
@@ -688,7 +700,8 @@
       "offlineCaptures": [
         "how-to/platform-intents/check",
         "how-to/platform-intents/intent"
-      ]
+      ],
+      "unverifiedNixBlocks": 1
     },
     {
       "page": "platform-capabilities/enable-generated-network-policy",
@@ -972,7 +985,7 @@
       "offlineCaptures": [
         "how-to/application-list/list-clusters"
       ],
-      "unverifiedNixBlocks": 3
+      "unverifiedNixBlocks": 4
     }
   ]
 }

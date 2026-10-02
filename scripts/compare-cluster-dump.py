@@ -225,8 +225,8 @@ def _is_runtime_resource(doc: dict) -> bool:
     if annotations.get("objectset.rio.cattle.io/owner-name", "").startswith("rke2-"):
         return True
     # Cilium CRDs and cluster-scoped resources are deployed by RKE2's
-    # bundled cilium, not by kix.  The cilium-rke2 kix package only
-    # generates a HelmChartConfig (a configuration overlay), not the
+    # bundled cilium, not by kix. Under RKE2 the kix `cilium` package
+    # generates only a HelmChartConfig (a configuration overlay), not the
     # operator itself.
     # Evidence: cilium CRDs have no helm annotations — they're created
     # by the cilium agent DaemonSet at startup.
@@ -269,7 +269,7 @@ def _is_runtime_resource(doc: dict) -> bool:
     # ---------------------------------------------------------------
     # K8s creates PVCs from StatefulSet volumeClaimTemplates automatically.
     # Their names follow the pattern: {vctName}-{stsName}-{ordinal}
-    # (e.g. data-loki-write-0, valkey-data-valkey-shopfront-prod-node-2).
+    # (e.g. data-loki-write-0, data-valkey-2).
     #
     # We require TWO conditions to avoid false positives:
     # 1. Name ends with -{digit} (the StatefulSet ordinal suffix)

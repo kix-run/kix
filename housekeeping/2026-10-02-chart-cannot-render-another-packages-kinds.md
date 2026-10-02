@@ -1,0 +1,3 @@
+# 2026-10-02 · `kix/lib/helm.nix` · A Helm chart resource of another package's kind cannot depend on that package, so check 21 refuses it.
+
+A chart that renders a ServiceMonitor, PrometheusRule or Certificate behind a values toggle produces a resource whose CRD comes from another instance. `importChart` gives chart resources edges only to the chart's own objects, so the resource has no dependency on the CRD's declaration and cross-resource check 21 fails the build. The remedy today is to turn the toggle off and build the resource with the owner's builder in a package (smartctl-exporter lost its scrape this way). An `importChart` argument that forwards a dependency's CRD declarations would let the chart keep its resources.

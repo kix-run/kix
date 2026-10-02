@@ -8,8 +8,8 @@ let
     { scope, ... }:
     {
       meta = {
-        version = "1.0.0";
-        description = "Default StorageClass for the documentation example";
+        description = "StorageClass for the documentation example";
+        owner = "platform";
         roles = [ "storageClasses" ];
       };
 
@@ -19,9 +19,10 @@ let
           storageClass = scope.mkClusterResource {
             apiVersion = "storage.k8s.io/v1";
             kind = "StorageClass";
-            name = "example-local";
+            name = "local-path-retain";
             extra = {
-              provisioner = "kubernetes.io/no-provisioner";
+              provisioner = "rancher.io/local-path";
+              reclaimPolicy = "Retain";
               volumeBindingMode = "WaitForFirstConsumer";
             };
           };
@@ -81,7 +82,7 @@ kix.buildCluster {
   modules = [
     kix.flavors.kind
     (
-      { lib, ... }:
+      { ref, ... }:
       {
         # region:shadowPlatformStorage
         instances.storage-system.storage = {
@@ -109,26 +110,101 @@ kix.buildCluster {
           package = packages.cert-manager;
         };
 
-        instances.cert-manager.cluster-issuers = {
-          package = packages."cluster-issuers";
-          config = {
-            mainIssuer = "letsencrypt-production";
-            issuers = lib.mkForce {
-              letsencrypt-production = {
-                kind = "acme";
-                server = "https://acme-v02.api.letsencrypt.org/directory";
-                email = "platform@example.com";
-                privateKeySecretName = "letsencrypt-production-account";
-                cloudflareSecret = {
-                  name = "cloudflare-api-token";
-                  key = "api-token";
-                };
-                dnsZones = [ "example.com" ];
-              };
-            };
+        # A Secret created outside Kix that holds the Cloudflare API token
+        # under the key `api-token`.
+        instances.cert-manager.cloudflare-api-token = {
+          package = packages.secret-ref;
+          config.keys = [ "api-token" ];
+        };
+
+        instances.cert-manager.letsencrypt = {
+          package = packages.cluster-issuer;
+          deps.issuerCredentials = ref.cert-manager.cloudflare-api-token;
+          config.spec.acme = {
+            server = "https://acme-v02.api.letsencrypt.org/directory";
+            email = "platform@example.com";
+            solvers = [
+              {
+                dns01.cloudflare.apiTokenSecretRef.key = "api-token";
+                selector.dnsZones = [ "example.com" ];
+              }
+            ];
           };
         };
         # endregion:acmeClusterIssuer
+
+        # region:stagingClusterIssuer
+        instances.cert-manager.letsencrypt-staging = {
+          package = packages.cluster-issuer;
+          # A non-empty alias replaces the default `clusterIssuer`, so only
+          # the production issuer answers it.
+          aliases = [ "stagingClusterIssuer" ];
+          deps.issuerCredentials = ref.cert-manager.cloudflare-api-token;
+          config.spec.acme = {
+            server = "https://acme-staging-v02.api.letsencrypt.org/directory";
+            email = "platform@example.com";
+            solvers = [
+              {
+                dns01.cloudflare.apiTokenSecretRef.key = "api-token";
+                selector.dnsZones = [ "example.com" ];
+              }
+            ];
+          };
+        };
+        # endregion:stagingClusterIssuer
+
+        # region:importedClusterIssuer
+        instances.external-tls.cluster-issuer = {
+          package = kix.mkImport {
+            out.withCert =
+              args:
+              args
+              // {
+                annotations = (args.annotations or { }) // {
+                  "cert-manager.io/cluster-issuer" = "letsencrypt";
+                };
+              };
+          };
+          aliases = [ "clusterIssuer" ];
+        };
+        # endregion:importedClusterIssuer
+
+        # The managed `letsencrypt` issuer also answers `clusterIssuer`, and
+        # DI prefers a managed instance over an import, so this consumer
+        # names the import.
+        instances.external-tls.web = {
+          package = webPackage;
+          config.ingress.host = "imported.example.com";
+          deps.clusterIssuer = ref.external-tls.cluster-issuer;
+        };
+
+        # region:externalDnsInstance
+        instances.external-dns = {
+          # A Secret created outside Kix that holds the Cloudflare API
+          # token under the key `api-token`.
+          cloudflare-api-token = {
+            package = packages.secret-ref;
+            config.keys = [ "api-token" ];
+          };
+
+          external-dns = {
+            package = packages.external-dns;
+            deps.providerCredentials = ref.external-dns.cloudflare-api-token;
+            config = {
+              provider = "cloudflare";
+              policy = "upsert-only";
+              txtOwnerId = "production/external-dns";
+              sources = [
+                "service"
+                "ingress"
+                "gateway-httproute"
+              ];
+              secretEnv.CF_API_TOKEN = "api-token";
+              extraArgs = [ "--domain-filter=example.com" ];
+            };
+          };
+        };
+        # endregion:externalDnsInstance
 
         # region:tlsApplicationInstance
         instances.apps.web = {

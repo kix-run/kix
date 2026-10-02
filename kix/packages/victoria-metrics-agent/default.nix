@@ -47,9 +47,8 @@ in
   # calibrated to the cluster's value, so a differing agent override
   # double-counts samples. Surfaced through the structured diagnostics
   # channel so it lands in kix's warning output, not a bare eval trace.
-  # FUTURE (purist note, 2026-08-31): arguably an assertion, or remove
-  # the agent-side option so drift cannot exist. Kept a warning while
-  # the trial wants easy experimentation.
+  # It is a warning rather than an error so that a trial can scrape at
+  # another interval.
   warnings =
     { config, deps, ... }:
     lib.optional
@@ -101,30 +100,26 @@ in
       default = { };
       description = "Labels attached to every scraped sample (e.g. cluster identity).";
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "250m";
-          memory = "512Mi";
-        };
-        limits = {
-          memory = "1Gi";
-        };
+    # No CPU limit: a CFS quota throttles scrape bursts. The memory limit
+    # bounds the process.
+    resources = kix.options.resources {
+      requests = {
+        cpu = "250m";
+        memory = "512Mi";
+      };
+      limits = {
+        memory = "1Gi";
       };
     };
     extraArgs = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
-      default = {
-        # Stream-parse scrape responses instead of buffering them whole;
-        # bounds vmagent memory on large targets (k8s-stack chart default).
-        "promscrape.streamParse" = "true";
-      };
+      default = { };
+      description = "vmagent flags for the VMAgent CR's `extraArgs`, keyed by flag name without the leading dash. Merged over the package's flags, so an entry here replaces the package's value for that flag. The package sets `promscrape.streamParse = \"true\"`.";
     };
     extraSpec = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
-      description = "Extra fields deep-merged into the VMAgent CR spec.";
+      description = "Extra fields deep-merged into the VMAgent CR spec. The package refuses `remoteWrite` and `scrapeInterval`, which come from the vmCluster dependency, and `image`, `replicaCount`, `selectAllByDefault`, `resources`, and `extraArgs`, which have options of their own.";
     };
 
     # After the agent is ready, run ./health-check.py as a Job in this
@@ -153,6 +148,11 @@ in
         ...
       }:
       let
+        # Stream-parse scrape responses instead of buffering them whole;
+        # bounds vmagent memory on large targets (k8s-stack chart default).
+        baseArgs = {
+          "promscrape.streamParse" = "true";
+        };
         baseSpec = {
           replicaCount = config.replicaCount;
           image = crImage config.image;
@@ -184,18 +184,27 @@ in
             }) clusterConfig.cluster.topology.failureDomainKeys;
           };
           resources = config.resources;
+          extraArgs = baseArgs // config.extraArgs;
         }
         // lib.optionalAttrs (config.externalLabels != { }) {
           externalLabels = config.externalLabels;
-        }
-        // lib.optionalAttrs (config.extraArgs != { }) {
-          extraArgs = config.extraArgs;
         };
       in
       {
         vmAgent = vmOperator.out.mkVMAgent scope {
           inherit name;
-          spec = lib.recursiveUpdate baseSpec config.extraSpec;
+          spec = kix.mergeGuarded {
+            who = "victoria-metrics-agent ${scope.namespaceName}/${name}";
+            locked = map lib.toList [
+              "remoteWrite"
+              "scrapeInterval"
+              "image"
+              "replicaCount"
+              "selectAllByDefault"
+              "resources"
+              "extraArgs"
+            ];
+          } baseSpec config.extraSpec;
         };
 
         root = {

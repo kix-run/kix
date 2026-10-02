@@ -1,210 +1,63 @@
-# cert-manager CRD definitions.
+# cert-manager's six CustomResourceDefinitions, vendored from the release's
+# cert-manager.crds.yaml (crds/sources.txt).
+#
+# The validating webhook admits every object of these kinds with
+# failurePolicy Fail and refuses writes until cainjector has injected its CA
+# into the webhook configuration. Each handle's `cr` and `mkCR` therefore add
+# the API-check Job (startupapicheck.nix) to the custom resource's requires.
+# Certificate, CertificateRequest, Issuer, and ClusterIssuer also declare
+# their Ready condition, so a deploy waits for them and reports
+# cert-manager's message on failure. Order and Challenge report a
+# `status.state` and no conditions.
 
-{
-  self,
-  config,
-  clusterConfig,
-  scope,
-  lib,
-}:
+{ self, scope, ... }:
 let
-  common = import ./common.nix { instanceName = scope.instanceName; };
+  vendored = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
 
-  mkCRD =
-    categories: attrs:
-    scope.mkCRD (
-      attrs |> scope.crd.withLabels common.controllerLabels |> scope.crd.withCategories categories
-    );
+  ready.condition = {
+    type = "Ready";
+    status = "True";
+  };
 
-  mkCertManagerCRD = mkCRD [ "cert-manager" ];
-  mkAcmeCRD = mkCRD [
-    "cert-manager"
-    "cert-manager-acme"
-  ];
+  withCheck = args: args // { requires = (args.requires or [ ]) ++ [ self.apiCheck ]; };
+
+  gate =
+    crd:
+    crd
+    // {
+      out = crd.out // {
+        cr = args: crd.out.cr (withCheck args);
+        mkCR = consumerScope: args: crd.out.mkCR consumerScope (withCheck args);
+      };
+    };
 in
 {
   crds = {
-    certificates = mkCertManagerCRD (
-      scope.crd.fromKind "Certificate" { spec.group = "cert-manager.io"; }
-      |> scope.crd.withShortNames [
-        "cert"
-        "certs"
-      ]
-      |> scope.crd.withPrinterColumns [
-        {
-          jsonPath = ".status.conditions[?(@.type==\"Ready\")].status";
-          name = "Ready";
-          type = "string";
-        }
-        {
-          jsonPath = ".spec.secretName";
-          name = "Secret";
-          type = "string";
-        }
-        {
-          jsonPath = ".spec.issuerRef.name";
-          name = "Issuer";
-          type = "string";
-        }
-        {
-          jsonPath = ".status.conditions[?(@.type==\"Ready\")].message";
-          name = "Status";
-          priority = 1;
-          type = "string";
-        }
-        {
-          jsonPath = ".metadata.creationTimestamp";
-          name = "Age";
-          type = "date";
-        }
-      ]
-      |> scope.crd.withSchema (builtins.elemAt (builtins.fromJSON (builtins.readFile ./crds/certificates.cert-manager.io.json)).spec.versions 0)
-      .schema.openAPIV3Schema.properties.spec
+    certificates = gate (
+      scope.mkCRD {
+        spec = vendored "certificates.cert-manager.io.json";
+        readiness = ready;
+      }
     );
-
-    certificateRequests = mkCertManagerCRD (
-      scope.crd.fromKind "CertificateRequest" { spec.group = "cert-manager.io"; }
-      |> scope.crd.withShortNames [
-        "cr"
-        "crs"
-      ]
-      |> scope.crd.withPrinterColumns [
-        {
-          jsonPath = ".status.conditions[?(@.type==\"Approved\")].status";
-          name = "Approved";
-          type = "string";
-        }
-        {
-          jsonPath = ".status.conditions[?(@.type==\"Denied\")].status";
-          name = "Denied";
-          type = "string";
-        }
-        {
-          jsonPath = ".status.conditions[?(@.type==\"Ready\")].status";
-          name = "Ready";
-          type = "string";
-        }
-        {
-          jsonPath = ".spec.issuerRef.name";
-          name = "Issuer";
-          type = "string";
-        }
-        {
-          jsonPath = ".spec.username";
-          name = "Requester";
-          type = "string";
-        }
-        {
-          jsonPath = ".status.conditions[?(@.type==\"Ready\")].message";
-          name = "Status";
-          priority = 1;
-          type = "string";
-        }
-        {
-          jsonPath = ".metadata.creationTimestamp";
-          name = "Age";
-          type = "date";
-        }
-      ]
+    certificateRequests = gate (
+      scope.mkCRD {
+        spec = vendored "certificaterequests.cert-manager.io.json";
+        readiness = ready;
+      }
     );
-
-    challenges = mkAcmeCRD (
-      scope.crd.fromKind "Challenge" { spec.group = "acme.cert-manager.io"; }
-      |> scope.crd.withPrinterColumns [
-        {
-          jsonPath = ".status.state";
-          name = "State";
-          type = "string";
-        }
-        {
-          jsonPath = ".spec.dnsName";
-          name = "Domain";
-          type = "string";
-        }
-        {
-          jsonPath = ".status.reason";
-          name = "Reason";
-          priority = 1;
-          type = "string";
-        }
-        {
-          jsonPath = ".metadata.creationTimestamp";
-          name = "Age";
-          type = "date";
-        }
-      ]
+    challenges = gate (scope.mkCRD { spec = vendored "challenges.acme.cert-manager.io.json"; });
+    clusterIssuers = gate (
+      scope.mkCRD {
+        spec = vendored "clusterissuers.cert-manager.io.json";
+        readiness = ready;
+      }
     );
-
-    clusterIssuers = mkCertManagerCRD (
-      scope.crd.fromKind "ClusterIssuer" { spec.group = "cert-manager.io"; }
-      |> scope.crd.clusterScoped
-      |> scope.crd.withPrinterColumns [
-        {
-          jsonPath = ".status.conditions[?(@.type==\"Ready\")].status";
-          name = "Ready";
-          type = "string";
-        }
-        {
-          jsonPath = ".status.conditions[?(@.type==\"Ready\")].message";
-          name = "Status";
-          priority = 1;
-          type = "string";
-        }
-        {
-          jsonPath = ".metadata.creationTimestamp";
-          name = "Age";
-          type = "date";
-        }
-      ]
+    issuers = gate (
+      scope.mkCRD {
+        spec = vendored "issuers.cert-manager.io.json";
+        readiness = ready;
+      }
     );
-
-    issuers = mkCertManagerCRD (
-      scope.crd.fromKind "Issuer" { spec.group = "cert-manager.io"; }
-      |> scope.crd.withPrinterColumns [
-        {
-          jsonPath = ".status.conditions[?(@.type==\"Ready\")].status";
-          name = "Ready";
-          type = "string";
-        }
-        {
-          jsonPath = ".status.conditions[?(@.type==\"Ready\")].message";
-          name = "Status";
-          priority = 1;
-          type = "string";
-        }
-        {
-          jsonPath = ".metadata.creationTimestamp";
-          name = "Age";
-          type = "date";
-        }
-      ]
-    );
-
-    orders = mkAcmeCRD (
-      scope.crd.fromKind "Order" { spec.group = "acme.cert-manager.io"; }
-      |> scope.crd.withPrinterColumns [
-        {
-          jsonPath = ".status.state";
-          name = "State";
-          type = "string";
-        }
-        {
-          jsonPath = ".spec.issuerRef.name";
-          name = "Issuer";
-          type = "string";
-        }
-        {
-          jsonPath = ".status.reason";
-          name = "Reason";
-          priority = 1;
-          type = "string";
-        }
-        {
-          jsonPath = ".metadata.creationTimestamp";
-          name = "Age";
-          type = "date";
-        }
-      ]
-    );
+    orders = gate (scope.mkCRD { spec = vendored "orders.acme.cert-manager.io.json"; });
   };
 }

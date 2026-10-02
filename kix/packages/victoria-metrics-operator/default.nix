@@ -10,9 +10,9 @@
 # every existing kix.monitor call and app-package ServiceMonitor works
 # unchanged when this package holds the `prometheus` alias.
 #
-# Deliberately no cluster:conflictsWith prometheus-operator. Mixed
-# clusters are legitimate; DI ambiguity on the `prometheus` alias is the
-# guard against wiring both at once.
+# No conflictsWith entry for prometheus-operator: mixed clusters are
+# legitimate, and DI ambiguity on the `prometheus` alias is the guard
+# against wiring both at once.
 #
 # Exposes CRD builder functions via `out`:
 #   out.mkServiceMonitor / mkPodMonitor / mkPrometheusRule / mkProbe
@@ -69,17 +69,14 @@ in
         availability level (v2_discussions/145).
       '';
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "80m";
-          memory = "120Mi";
-        };
-        limits = {
-          cpu = "500m";
-          memory = "320Mi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "80m";
+        memory = "120Mi";
+      };
+      limits = {
+        cpu = "500m";
+        memory = "320Mi";
       };
     };
     logLevel = lib.mkOption {

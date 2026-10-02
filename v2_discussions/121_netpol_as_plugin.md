@@ -1,7 +1,7 @@
 # 121: Netpol as a plugin — extraction mechanics and the core hook contract
 
 **Status:** Draft (Design Doc)
-**Related:** `119_core_surface_audit.md` (poses the question), `92_declarative_network_policy_intents.md` (the enforcer interface this finishes neutralizing), `115_pod_spec_hardening_pass.md` (second consumer of the same hooks), `96_netpol_autogeneration_blindspots.md` (unchanged by extraction), `archive/83_netpol*.md` (design record of what moves)
+**Related:** `119_core_surface_audit.md` (poses the question), `archive/92_declarative_network_policy_intents.md` (the enforcer interface this finishes neutralizing), `115_pod_spec_hardening_pass.md` (second consumer of the same hooks), `96_netpol_autogeneration_blindspots.md` (unchanged by extraction), `archive/83_netpol*.md` (design record of what moves)
 
 Doc 119 rates netpol derivation **layer, not essence** and asks: does it ship in the
 OSS core at all, or as a module? This doc answers the *how*: which Nix-level

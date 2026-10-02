@@ -8,6 +8,47 @@ let
 
   normalize = import ../core/normalize.nix { inherit lib; };
 
+  quantity = import ./quantity.nix { inherit lib; };
+
+  # Resource names a ResourceRequirements map may use besides cpu, memory
+  # and ephemeral-storage.
+  isResourceName =
+    name:
+    builtins.elem name [
+      "cpu"
+      "memory"
+      "ephemeral-storage"
+    ]
+    || builtins.match "hugepages-.+" name != null
+    || lib.hasInfix "/" name;
+
+  # The value of `kix.options.resources` with every unset field removed:
+  # no null leaves, no empty `requests` or `limits`, no null `claims`.
+  # Undeclared resource names are checked here because a freeformType's
+  # own `check` never runs; `apply` has no instance name to report.
+  cleanResources =
+    value:
+    let
+      dropNulls = lib.filterAttrs (_: v: v != null);
+      side =
+        sideName:
+        let
+          kept = dropNulls value.${sideName};
+          bad = builtins.filter (n: !(isResourceName n)) (builtins.attrNames kept);
+        in
+        if bad != [ ] then
+          throw "kix.options.resources: ${
+            lib.concatMapStringsSep ", " (n: "${sideName}.${n}") bad
+          } is not a resource name. Use cpu, memory or ephemeral-storage, hugepages-<size>, or an extended resource whose name contains \"/\" (nvidia.com/gpu)."
+        else
+          kept;
+      requests = side "requests";
+      limits = side "limits";
+    in
+    lib.optionalAttrs (requests != { }) { inherit requests; }
+    // lib.optionalAttrs (limits != { }) { inherit limits; }
+    // lib.optionalAttrs (value.claims != null) { claims = map dropNulls value.claims; };
+
   resourceNamespace =
     resource:
     let
@@ -41,12 +82,213 @@ let
       builtins.fromJSON (builtins.unsafeDiscardStringContext svc.out.port)
     else
       throw "${caller}: service '${svc.name or "unknown"}' has no out.port. Specify port explicitly";
+
+  # The public route kix.expose renders for an instance, as data:
+  # { via; host; scheme; url; urlOrNull; }. `via` is "gateway", "ingress"
+  # or null (no route). `scheme` is null when Kix cannot vouch for it (a
+  # gateway without out.listeners, such as a kix.mkImport). `url` throws
+  # when there is no route or no scheme, naming the cause; `urlOrNull` is
+  # null then, for a package that works without a public URL. It reads
+  # config, clusterConfig, scope and the exposure deps, never `self`, so
+  # any part can read it. `rawHost` keeps the string context of
+  # config.ingress.host for rendering. With `deriveHost = false` the host
+  # comes only from config.ingress.host, so an instance without one has no
+  # route.
+  exposureOf =
+    {
+      name,
+      config,
+      clusterConfig,
+      scope,
+      gateway,
+      ingressNginx,
+      clusterIssuer,
+      deriveHost ? true,
+    }:
+    let
+      publicDomain = clusterConfig.cluster.domain or null;
+      configHost = (config.ingress or { }).host or null;
+      candidateHost =
+        if configHost != null then
+          configHost
+        else if deriveHost && publicDomain != null then
+          "${name}.${publicDomain}"
+        else
+          null;
+
+      hasGateway = gateway != null && gateway ? out.gatewayRef;
+      hasIngress = ingressNginx != null;
+      mode =
+        if hasGateway then
+          if hasIngress then
+            throw "kix.expose (${name}): both 'gateway' and 'ingressNginx' are present. Wire exactly one via deps in the cluster definition."
+          else
+            "gateway"
+        else if hasIngress then
+          "ingress"
+        else
+          null;
+
+      via = if mode != null && candidateHost != null then mode else null;
+      rawHost = if via != null then candidateHost else null;
+      host = if rawHost == null then null else builtins.unsafeDiscardStringContext rawHost;
+
+      listener =
+        if via == "gateway" then
+          gatewayListener {
+            inherit
+              name
+              host
+              scope
+              gateway
+              ;
+          }
+        else
+          null;
+
+      scheme =
+        if via == "ingress" then
+          if clusterIssuer != null then "https" else "http"
+        else if listener != null then
+          listener.scheme
+        else
+          null;
+
+      defaultPort = if scheme == "https" then 443 else 80;
+      portSuffix = lib.optionalString (
+        listener != null && listener.port != defaultPort
+      ) ":${toString listener.port}";
+
+      urlOrNull = if scheme == null then null else "${scheme}://${host}${portSuffix}";
+      gwRef = gateway.out.gatewayRef;
+      missing =
+        if mode == null then
+          "nothing routes to it: wire a gateway or ingressNginx dependency"
+        else if candidateHost == null then
+          if deriveHost then
+            "its route has no host: set ingress.host on the instance or cluster.domain"
+          else
+            "its route has no host: set ingress.host on the instance"
+        else
+          "Gateway ${gwRef.namespace}/${gwRef.name} publishes no out.listeners, so Kix cannot tell which listener the HTTPRoute attaches to, or its scheme and port: use a gateway instance that publishes out.listeners";
+    in
+    {
+      inherit
+        via
+        host
+        rawHost
+        scheme
+        urlOrNull
+        ;
+      url =
+        if urlOrNull != null then
+          urlOrNull
+        else
+          throw "kix.expose (${scope.namespaceName}/${name}): the package reads the instance's public URL (exposure.url), but ${missing}. If the package has an option for its URL, set that instead.";
+    };
+
+  # The Gateway listener an HTTPRoute for `host` from the instance's
+  # namespace attaches to, matched as Gateway API does: protocol HTTP or
+  # HTTPS, `hostname` unset, equal, or a `*.` wildcard covering the host,
+  # and `allowedRoutes.namespaces.from` admitting the namespace (unset means
+  # Same). Kix does not evaluate a `Selector`, so such a listener is
+  # unverified and chosen only after verified ones, with a warning.
+  # Returns { scheme; port; } or null when the gateway publishes no
+  # listeners. Throws when no listener accepts the route.
+  gatewayListener =
+    {
+      name,
+      host,
+      scope,
+      gateway,
+    }:
+    let
+      gwRef = gateway.out.gatewayRef;
+      gwLabel = "Gateway ${gwRef.namespace}/${gwRef.name}";
+      routeNs = scope.namespaceName;
+      listeners = gateway.out.listeners or null;
+
+      hostnameOf = l: l.hostname or null;
+      fromOf = l: l.allowedRoutes.namespaces.from or null;
+
+      hostMatches =
+        l:
+        let
+          h = hostnameOf l;
+        in
+        h == null || h == host || (lib.hasPrefix "*." h && lib.hasSuffix (lib.removePrefix "*" h) host);
+
+      # "verified", "unverified" (Selector), or a rejection reason.
+      verdict =
+        l:
+        let
+          from = fromOf l;
+        in
+        if
+          !(builtins.elem l.protocol [
+            "HTTP"
+            "HTTPS"
+          ])
+        then
+          "protocol is ${l.protocol}"
+        else if !(hostMatches l) then
+          "hostname \"${hostnameOf l}\" does not match"
+        else if from == "All" then
+          "verified"
+        else if from == "Selector" then
+          "unverified"
+        else if gwRef.namespace == routeNs then
+          "verified"
+        else
+          "allowedRoutes.namespaces.from is ${
+            if from == null then "unset (Same)" else from
+          } and the Gateway is in \"${gwRef.namespace}\"";
+
+      judged = lib.imap0 (i: l: {
+        inherit i l;
+        v = verdict l;
+        scheme = if l.protocol == "HTTPS" then "https" else "http";
+      }) listeners;
+
+      candidates = builtins.filter (j: j.v == "verified" || j.v == "unverified") judged;
+
+      rank = j: [
+        (if j.v == "verified" then 0 else 1)
+        (if j.scheme == "https" then 0 else 1)
+        (if j.l.port == (if j.scheme == "https" then 443 else 80) then 0 else 1)
+        j.i
+      ];
+      chosen = builtins.head (builtins.sort (a: b: rank a < rank b) candidates);
+
+      checked = builtins.concatStringsSep ", " (map (j: "${j.l.name} (${j.v})") judged);
+    in
+    if listeners == null then
+      null
+    else if candidates == [ ] then
+      throw "kix.expose (${name}): ${gwLabel} has no HTTP or HTTPS listener that accepts host \"${host}\" from namespace \"${routeNs}\", so the HTTPRoute would not attach. Checked: ${
+        if judged == [ ] then "no listeners" else checked
+      }. Add a listener for this host with allowedRoutes.namespaces.from = \"All\" to the gateway instance, or set ingress.host to a name one of its listeners accepts."
+    else
+      (
+        if chosen.v == "unverified" then
+          lib.warn "kix.expose (${name}): ${gwLabel} listener \"${chosen.l.name}\" admits routes by namespace selector, which Kix does not check. The URL assumes namespace \"${routeNs}\" matches it."
+        else
+          lib.id
+      )
+        {
+          inherit (chosen) scheme;
+          inherit (chosen.l) port;
+        };
 in
 
 rec {
 
   # Use kix.keys.<name> for annotation keys defined in core/annotations.nix.
   keys = kixKeys;
+
+  # Values Kix gives its own keys, from core/annotations.nix:
+  #   annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
+  keyValues = kixAnnotations.values;
 
   # Package helpers for endpoint facts; see core/facts.nix for their contracts.
   facts = {
@@ -113,6 +355,10 @@ rec {
   # that carries a netpol edge, a credential reference, a quorum size) or
   # that has an option of its own. `locked` is a list of attribute paths;
   # `who` names the package instance and `what` the option, for the error.
+  #
+  # A locked path is also refused when `overrides` sets one of its ancestors
+  # to a value that is not an attribute set: recursiveUpdate would replace
+  # the whole subtree, so `{ a = null; }` removes a locked `a.b`.
   mergeGuarded =
     {
       who,
@@ -121,31 +367,233 @@ rec {
     }:
     base: overrides:
     let
-      touched = builtins.filter (path: lib.hasAttrByPath path overrides) locked;
+      # The proper prefix of `path` that `overrides` sets to a
+      # non-attrset, or null when there is none.
+      replacingAncestor =
+        path:
+        lib.findFirst (
+          prefix:
+          lib.hasAttrByPath prefix overrides && !builtins.isAttrs (lib.getAttrFromPath prefix overrides)
+        ) null (map (n: lib.take n path) (lib.range 1 (builtins.length path - 1)));
+
+      describe =
+        path:
+        let
+          shown = lib.concatStringsSep "." path;
+          ancestor = replacingAncestor path;
+          value = lib.getAttrFromPath ancestor overrides;
+        in
+        if lib.hasAttrByPath path overrides then
+          shown
+        else if ancestor == null then
+          null
+        else
+          "${shown} (replaced by `${lib.concatStringsSep "." ancestor} = ${
+            if value == null then "null" else "<${builtins.typeOf value}>"
+          }`)";
+
+      touched = builtins.filter (d: d != null) (map describe locked);
     in
     if touched != [ ] then
-      throw "${who}: ${what} overrides ${
-        lib.concatMapStringsSep ", " (lib.concatStringsSep ".") touched
-      }, which the package sets for correctness. Use the option that owns it."
+      throw "${who}: ${what} overrides ${lib.concatStringsSep ", " touched}, which the package sets for correctness. Use the option that owns it."
     else
       lib.recursiveUpdate base overrides;
 
-  parseGi =
-    s:
+  # Option types for values Kubernetes parses. `quantity` is the grammar of
+  # vocab/quantity.nix: "500m", "1.5Gi", 2.
+  types.quantity = quantity.type;
+
+  # The quantity `q` in millicores when `resource` is "cpu", and in bytes
+  # otherwise, rounded down. null when `q` is not a quantity.
+  #
+  #   kix.parseQuantity "memory" "512Mi"   # 536870912
+  parseQuantity = quantity.parse;
+
+  # The env attrset for `kix.mkEnvVars`: the package's `defaults`, then the
+  # instance's `env` (a `kix.options.env` value), then the variables the
+  # package owns. Each entry of `owned` is
+  #   { vars ? { }; names ? [ ]; from; fix; }
+  # `vars` are added to the result and may not appear in `env`; `names` may
+  # not appear in `env` and are delivered another way (an `envFrom`). A key
+  # in `env` that a group owns throws, also when its value is null, with
+  # one line per group naming `from` and `fix`.
+  #
+  #   env = kix.mkEnvVars (kix.mergeEnv {
+  #     inherit who;
+  #     defaults.LOG_LEVEL = "info";
+  #     owned = [ {
+  #       vars.DB_HOST = database.out.fqdn;
+  #       from = "the database dependency";
+  #       fix = "Wire a different database instance through deps.database instead.";
+  #     } ];
+  #   } config.env);
+  mergeEnv =
+    {
+      who,
+      owned ? [ ],
+      defaults ? { },
+    }:
+    env:
     let
-      str = builtins.unsafeDiscardStringContext (toString s);
-      matchTi = builtins.match "([0-9]+)Ti" str;
-      matchGi = builtins.match "([0-9]+)Gi" str;
-      matchMi = builtins.match "([0-9]+)Mi" str;
+      hits =
+        group:
+        builtins.filter (n: env ? ${n}) (builtins.attrNames (group.vars or { }) ++ group.names or [ ]);
+      lines = builtins.concatMap (
+        group:
+        let
+          h = hits group;
+        in
+        lib.optional (h != [ ])
+          "${who}: env sets ${lib.concatStringsSep ", " h}, which ${
+            if builtins.length h == 1 then "comes" else "come"
+          } from ${group.from}. ${group.fix}"
+      ) owned;
     in
-    if matchTi != null then
-      (builtins.fromJSON (builtins.head matchTi)) * 1024
-    else if matchGi != null then
-      builtins.fromJSON (builtins.head matchGi)
-    else if matchMi != null then
-      (builtins.fromJSON (builtins.head matchMi)) / 1024
+    if lines != [ ] then
+      throw (lib.concatStringsSep "\n" lines)
     else
-      null;
+      defaults // env // lib.foldl' (acc: group: acc // group.vars or { }) { } owned;
+
+  # Returns `args` (an `extraArgs` list) unless it sets a flag the package
+  # owns. `owned` maps each flag to the reason and fix shown in the error.
+  # An argument sets a flag when it equals the flag or starts with the flag
+  # followed by "=", so `--ingress-class-by-name=true` does not set
+  # `--ingress-class`. A one-letter flag such as `-c` also matches an
+  # argument that starts with it (`-c/etc/x`), the attached-value form that
+  # getopt and clap accept. For a Go program, whose single-dash flags can be
+  # whole words, an owned `-v` would therefore refuse `-vmodule=x`. Every hit
+  # is reported, one line each.
+  #
+  #   args = baseArgs ++ kix.guardArgs {
+  #     inherit who;
+  #     owned."--metrics-bind-address" = "the metrics Service uses :8080; remove it.";
+  #   } config.extraArgs;
+  guardArgs =
+    {
+      who,
+      option ? "extraArgs",
+      owned,
+    }:
+    args:
+    let
+      isShortFlag = flag: builtins.match "-[^-]" flag != null;
+      flagOf =
+        arg:
+        lib.findFirst (
+          flag: arg == flag || lib.hasPrefix "${flag}=" arg || (isShortFlag flag && lib.hasPrefix flag arg)
+        ) null (builtins.attrNames owned);
+      lines = builtins.concatMap (
+        arg:
+        let
+          flag = flagOf arg;
+        in
+        lib.optional (
+          flag != null
+        ) "${who}: ${option} sets \"${arg}\", which the package owns: ${owned.${flag}}"
+      ) args;
+    in
+    if lines != [ ] then throw (lib.concatStringsSep "\n" lines) else args;
+
+  # Returns `dep` (a secret dependency, or null for an absent optional one)
+  # after checking that its `out.keys` declares every name in `keys` and,
+  # when `anyOf` is a list of key groups, every name of at least one group.
+  # `arg` is the dependency's argument name, for the error. Read the secret
+  # through the returned value, so the check runs before any `keyRef`.
+  #
+  #   creds = kix.checkSecretKeys {
+  #     inherit who;
+  #     arg = "cloudCredentials";
+  #     dep = cloudCredentials;
+  #     keys = [ "cloud" ];
+  #   };
+  checkSecretKeys =
+    {
+      who,
+      arg,
+      dep,
+      keys ? [ ],
+      anyOf ? null,
+    }:
+    let
+      declared = if dep.out.keys or null == null then [ ] else dep.out.keys;
+      missingOf = names: builtins.filter (k: !(builtins.elem k declared)) names;
+      missingKeys = missingOf keys;
+      groupMet = anyOf == null || builtins.any (group: missingOf group == [ ]) anyOf;
+      showGroup = group: "[${lib.concatStringsSep ", " group}]";
+      wanted =
+        lib.optional (missingKeys != [ ]) (lib.concatStringsSep ", " missingKeys)
+        ++ lib.optional (!groupMet) "one of ${lib.concatMapStringsSep " or " showGroup anyOf}";
+      declaredText = if declared == [ ] then "no keys" else lib.concatStringsSep ", " declared;
+    in
+    if dep == null || wanted == [ ] then
+      dep
+    else
+      throw "${who}: deps.${arg} resolved to secret \"${dep.out.name}\", which declares ${declaredText}; this package reads ${lib.concatStringsSep " and " wanted}. Add them to that instance's keys (a SOPS secret lists them in keys), or wire another secret with deps.${arg} = ref.<ns>.<instance>.";
+
+  # A network policy for pods an operator creates from a custom resource.
+  # Derived policy covers only workloads the package renders, so the package
+  # states these pods' traffic itself. `spec` is in the enforcer's policy
+  # format and carries the selector for the operand pods (Cilium:
+  # `endpointSelector`). `scope` decides the policy's namespace; pass
+  # `scope.forService dep` for a policy in a dependency's namespace.
+  #
+  # The `ingress`/`ingressDeny` or `egress`/`egressDeny` sections of a
+  # direction the cluster does not enforce (`scope.networkPolicyEnforced`)
+  # are dropped: such a section would isolate the pods in a direction that
+  # default deny leaves open, and allow only what the section lists.
+  #
+  # Null when the scope has no enforcer (network policy off, no provider,
+  # or the enforcer's own instance) or when every section of `spec` was
+  # dropped, so callers filter nulls before adding the policy to
+  # `root.requires`.
+  #
+  #   peerIngress = kix.operandPolicy {
+  #     inherit scope;
+  #     name = "${name}-peers";
+  #     spec = {
+  #       endpointSelector.matchLabels = podSelector;
+  #       ingress = [ { fromEndpoints = [ { matchLabels = podSelector; } ]; } ];
+  #     };
+  #   };
+  operandPolicy =
+    {
+      scope,
+      name,
+      spec,
+    }:
+    let
+      enforced = scope.networkPolicyEnforced;
+      sections = {
+        ingress = [
+          "ingress"
+          "ingressDeny"
+        ];
+        egress = [
+          "egress"
+          "egressDeny"
+        ];
+      };
+      unenforced =
+        lib.optionals (!enforced.ingress) sections.ingress
+        ++ lib.optionals (!enforced.egress) sections.egress;
+      enforcedSpec = removeAttrs spec unenforced;
+      hasSection = s: builtins.any (k: s ? ${k}) (sections.ingress ++ sections.egress);
+    in
+    if scope.networkPolicyEnforcer == null || (hasSection spec && !hasSection enforcedSpec) then
+      null
+    else
+      scope.networkPolicyEnforcer.netpol.mkPolicy {
+        mkResource = scope.mkResource;
+        extraArgs = {
+          inherit name;
+          spec = enforcedSpec;
+          labels = {
+            ${kixKeys.derived} = "true";
+            ${kixKeys.policyType} = "operator-managed-workload";
+          };
+          extraDeps = [ ];
+        };
+      };
 
   service = {
     extractPorts =
@@ -598,6 +1046,8 @@ rec {
 
   untrackedRef = markers.mkUntrackedRef;
 
+  providedLoadBalancerClass = markers.mkProvidedLoadBalancerClass;
+
   options = {
     # Image option with repository, tag, and optional digest and pull policy.
     # A null digest leaves the reference unpinned. A null pullPolicy leaves
@@ -619,16 +1069,29 @@ rec {
     # `tagText` is the Nix expression the option reference shows as the
     # tag's default, for a package whose `config` sets the tag from another
     # option. `tag` stays the declared default the digest rule compares with.
+    #
+    # A package that has no image of its own (a framework package that runs
+    # the user's application) leaves `repository`, `tag`, or both null. A
+    # null argument gives its field no default, so an instance must set it;
+    # reading the image without it fails with the module system's "accessed
+    # but has no value defined" error, naming the field's option path. The
+    # option's own default is then `{ }`: a submodule option with no default
+    # and no definition evaluates to an attrset without its fields.
+    #
+    #   options.image = kix.options.image { };
     image =
       {
-        repository,
-        tag,
+        repository ? null,
+        tag ? null,
         digest ? null,
         pullPolicy ? "IfNotPresent",
         tagText ? null,
         description ? "Container image for this instance. Set it from a pin file (`kix.pins`) so the deployed reference is committed and resolved.",
       }:
+      assert lib.assertMsg (digest == null || tag != null)
+        "kix.options.image: digest ${digest} is set without the tag it was resolved from. Pass `tag` too.";
       let
+        hasDefault = repository != null && tag != null;
         default = {
           inherit
             repository
@@ -647,26 +1110,29 @@ rec {
         };
       in
       lib.mkOption {
-        inherit description default;
+        inherit description;
         type = lib.types.submodule (
           { config, ... }:
           {
             options = {
-              repository = lib.mkOption {
-                type = lib.types.str;
-                default = repository;
-                description = "Image repository, registry host included.";
-              };
-              tag =
-                lib.mkOption {
+              repository = lib.mkOption (
+                {
                   type = lib.types.str;
-                  default = tag;
+                  description = "Image repository, registry host included.";
+                }
+                // lib.optionalAttrs (repository != null) { default = repository; }
+              );
+              tag = lib.mkOption (
+                {
+                  type = lib.types.str;
                   description = "Image tag. What was asked for.";
                 }
-                // lib.optionalAttrs (tagText != null) { defaultText = lib.literalExpression tagText; };
+                // lib.optionalAttrs (tag != null) { default = tag; }
+                // lib.optionalAttrs (tagText != null) { defaultText = lib.literalExpression tagText; }
+              );
               digest = lib.mkOption {
                 type = lib.types.nullOr lib.types.str;
-                default = if config.tag == tag then digest else null;
+                default = if tag != null && config.tag == tag then digest else null;
                 defaultText = lib.literalMD "the package's digest while `tag` is the package's tag, otherwise null";
                 description = "Resolved manifest digest, `sha256:` followed by 64 hex characters. What will actually run. Null means not resolved.";
               };
@@ -699,7 +1165,20 @@ rec {
           }
         );
       }
-      // lib.optionalAttrs (tagText != null) {
+      // (
+        if hasDefault then
+          { inherit default; }
+        else
+          {
+            default = { };
+            defaultText = lib.literalMD "none: an instance sets ${
+              lib.concatMapStringsSep " and " (f: "`${f}`") (
+                lib.optional (repository == null) "repository" ++ lib.optional (tag == null) "tag"
+              )
+            }";
+          }
+      )
+      // lib.optionalAttrs (hasDefault && tagText != null) {
         defaultText = lib.literalExpression (
           lib.generators.toPretty {
             multiline = true;
@@ -707,6 +1186,111 @@ rec {
           } shownDefault
         );
       };
+
+    # Container resource requests and limits as typed fields. Each default
+    # sits on its field, so an instance that sets `limits.memory` keeps the
+    # package's `requests`; null removes a default. The value is a
+    # ResourceRequirements with unset fields absent, ready for a container's
+    # `resources`.
+    #
+    #   options.resources = kix.options.resources {
+    #     requests = { cpu = "100m"; memory = "128Mi"; };
+    #     limits.memory = "256Mi";
+    #   };
+    #
+    # Defaults may set cpu, memory and ephemeral-storage. An instance may
+    # also set hugepages-<size> and extended resources (nvidia.com/gpu).
+    resources =
+      {
+        requests ? { },
+        limits ? { },
+        description ? "Container resource requests and limits. Each field keeps its default until set, and null removes a default.",
+      }:
+      let
+        known = [
+          "cpu"
+          "memory"
+          "ephemeral-storage"
+        ];
+        badDefaults = builtins.filter (k: !(builtins.elem k known)) (
+          builtins.attrNames requests ++ builtins.attrNames limits
+        );
+        side =
+          defaults:
+          lib.mkOption {
+            type = lib.types.submodule {
+              freeformType = lib.types.attrsOf types.quantity;
+              options = lib.genAttrs known (
+                name:
+                lib.mkOption {
+                  type = lib.types.nullOr types.quantity;
+                  default = defaults.${name} or null;
+                  description = "The ${name} quantity. Null leaves it unset.";
+                }
+              );
+            };
+            default = { };
+            description = "Resource quantities by name.";
+          };
+        shownDefault = cleanResources {
+          inherit requests limits;
+          claims = null;
+        };
+      in
+      if badDefaults != [ ] then
+        throw "kix.options.resources: defaults may set cpu, memory and ephemeral-storage; ${lib.concatStringsSep ", " badDefaults} is not one of them."
+      else
+        lib.mkOption {
+          inherit description;
+          default = { };
+          defaultText = lib.literalExpression (lib.generators.toPretty { } shownDefault);
+          type = lib.types.submodule {
+            options = {
+              requests = side requests;
+              limits = side limits;
+              claims = lib.mkOption {
+                type = lib.types.nullOr (
+                  lib.types.listOf (
+                    lib.types.submodule {
+                      options = {
+                        name = lib.mkOption {
+                          type = lib.types.str;
+                          description = "Name of an entry in the pod's `resourceClaims`.";
+                        };
+                        request = lib.mkOption {
+                          type = lib.types.nullOr lib.types.str;
+                          default = null;
+                          description = "Request within the claim to use. Null uses the whole claim.";
+                        };
+                      };
+                    }
+                  )
+                );
+                default = null;
+                description = "Dynamic resource claims the container uses. Null leaves it unset.";
+              };
+            };
+          };
+          apply = cleanResources;
+        };
+
+    # Extra environment variables for a container, rendered with
+    # `kix.mergeEnv` so the variables the package owns cannot be replaced.
+    env = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.nullOr (
+          lib.mkOptionType {
+            name = "envValue";
+            description = "string or env var source with `valueFrom`";
+            descriptionClass = "noun";
+            check = v: builtins.isString v || (builtins.isAttrs v && v ? valueFrom);
+            merge = lib.options.mergeEqualOption;
+          }
+        )
+      );
+      default = { };
+      description = "Extra environment variables. A value is a string, a `fieldRef` source such as `{ valueFrom.fieldRef.fieldPath = \"metadata.name\"; }`, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. A credential that comes from a dependency is wired by the package. Null removes a variable the package sets by default.";
+    };
 
     ingress = {
       host = lib.mkOption {
@@ -736,7 +1320,7 @@ rec {
 
     # For packages with a kix.healthCheck probe; the helper reads both.
     healthCheck = {
-      enable = lib.mkOption {
+      enabled = lib.mkOption {
         type = lib.types.bool;
         default = false;
         description = "Run the package's post-deploy probe (kix.healthCheck) once its resources are ready. A failing probe fails the deploy before the activation switches.";
@@ -754,7 +1338,7 @@ rec {
   # context, so the Job runs after its targets and receives matching egress.
   # Job success completes the probe; exhausting backoffLimit fails the deploy.
   #
-  #   options.healthCheck = kix.options.healthCheck;   # enable, retryFor
+  #   options.healthCheck = kix.options.healthCheck;   # enabled, retryFor
   #   build = [
   #     ({ self, vmCluster, ... }: { ... })
   #     (kix.healthCheck {
@@ -838,7 +1422,7 @@ rec {
           # -> bool. False renders nothing. The default reads the option
           # set `kix.options.healthCheck` when the package declares it, and
           # is true when it does not.
-          when ? ({ config, ... }: config.healthCheck.enable or true),
+          when ? ({ config, ... }: config.healthCheck.enabled or true),
           # -> seconds the script keeps re-checking before it gives up.
           # Same default rule as `when`; 90 when the package has no option.
           retryFor ? ({ config, ... }: config.healthCheck.retryFor or 90),
@@ -966,16 +1550,21 @@ rec {
     {
       service ? null,
       paths ? null,
-      partName ? "ingress",
+      # The Ingress or HTTPRoute part.
+      partName ? "route",
+      # A record part { via; host; scheme; url; urlOrNull; } describing
+      # that route (exposureOf). Set both names on a second kix.expose call.
+      exposurePart ? "exposure",
       defaultAnnotations ? { },
       port ? null,
-      tlsSecretName ? null,
-      tlsSecret ? null,
-      tlsSecretPart ? null,
       # Gateway API mode only: per-rule HTTPRoute timeouts, e.g.
       # { request = "0s"; } to disable the default 15s request timeout for
       # long-lived streaming backends. Ignored in Ingress (nginx) mode.
       timeouts ? null,
+      # When false, the route's host comes only from config.ingress.host:
+      # without it the instance gets no route and `exposure.via` is null.
+      # When true, a missing host defaults to <instance>.<cluster.domain>.
+      deriveHost ? true,
     }:
     {
       self,
@@ -1001,68 +1590,25 @@ rec {
 
       svc = if service != null then self.${service} else null;
 
-      effectiveTlsSecret = if tlsSecretPart != null then self.${tlsSecretPart} else tlsSecret;
+      info = exposureOf {
+        inherit
+          name
+          config
+          clusterConfig
+          scope
+          gateway
+          ingressNginx
+          clusterIssuer
+          deriveHost
+          ;
+      };
 
-      _tlsSecretNsCheck =
-        if effectiveTlsSecret != null then
-          let
-            secretNs =
-              if (effectiveTlsSecret.namespace._type or "") == "k8s-cluster-scoped" then
-                null
-              else
-                effectiveTlsSecret.namespace.name or null;
-          in
-          if secretNs != null && secretNs != scope.namespaceName then
-            throw "kix.expose (${name}): tlsSecret '${effectiveTlsSecret.name or "?"}' is in namespace "
-            + "\"${secretNs}\" but the Ingress is in namespace \"${scope.namespaceName}\". "
-            + "Kubernetes ingress controllers only read TLS secrets from the Ingress's own namespace."
-          else
-            null
-        else if tlsSecretName != null then
-          if builtins.getContext tlsSecretName == { } then
-            throw "kix.expose (${name}): tlsSecretName \"${tlsSecretName}\" is a raw string literal. "
-            + "Use `tlsSecret = someSecretResource` (so Kix can check that the secret is in the correct namespace), "
-            + "`tlsSecretName = someSecret.out.name` (tracked string), "
-            + "or `tlsSecretName = kix.untrackedRef \"...\"` to opt out explicitly."
-          else
-            null
-        else
-          null;
-
-      tlsSecretNameEffective =
-        if effectiveTlsSecret != null then
-          effectiveTlsSecret.out.name
-        else if tlsSecretName != null then
-          tlsSecretName
-        else
-          "${name}-tls";
-
-      clusterDomain = clusterConfig.cluster.domain or null;
-      configHost = (config.ingress or { }).host or null;
-      effectiveHost =
-        if configHost != null then
-          configHost
-        else if clusterDomain != null then
-          "${name}.${clusterDomain}"
-        else
-          null;
-
-      hasGateway = gateway != null && gateway ? out.gatewayRef;
-
-      hasIngress = ingressNginx != null;
-
-      useGateway =
-        hasGateway
-        && (
-          if hasIngress then
-            throw "kix.expose (${name}): both 'gateway' and 'ingressNginx' are present. Wire exactly one via deps in the cluster definition."
-          else
-            true
-        );
-      useIngress = hasIngress && !hasGateway;
-
-      hasExposure = (useGateway || useIngress) && effectiveHost != null;
-      hasTls = hasExposure && useIngress && clusterIssuer != null;
+      effectiveHost = info.rawHost;
+      hasExposure = info.via != null;
+      useGateway = info.via == "gateway";
+      useIngress = info.via == "ingress";
+      hasTls = useIngress && clusterIssuer != null;
+      tlsSecretName = "${name}-tls";
 
       configAnnotations = (config.ingress or { }).annotations or { };
 
@@ -1173,6 +1719,17 @@ rec {
           };
         };
 
+      # The HTTPRoute CRD arrives with the Gateway API implementation, outside
+      # Kix. The ref gives the route its CRD-before-CR dependency. Two
+      # kix.expose calls in one instance render the same marker, which the
+      # cluster build keeps once.
+      routeCrd = scope.mkCRDRef {
+        group = "gateway.networking.k8s.io";
+        kind = "HTTPRoute";
+        plural = "httproutes";
+        version = "v1";
+      };
+
       controllerEdgeParts =
         if !(wantsControllerEdge && controllerSelector != null) then
           { }
@@ -1186,81 +1743,99 @@ rec {
     in
     builtins.seq _modeCheck (
       controllerEdgeParts
+      // lib.optionalAttrs (hasExposure && useGateway) {
+        "${partName}Crd" = routeCrd;
+      }
       // {
+        # `_type` stops the part walkers (eval/helpers.nix
+        # collectTypedAttrs) at the record, so they do not force `url`.
+        ${exposurePart} = {
+          _type = "kix-exposure";
+          inherit (info)
+            via
+            host
+            scheme
+            url
+            urlOrNull
+            ;
+        };
+
+        # Forcing info.scheme runs the listener match, so a route that no
+        # listener accepts fails the build even when nothing reads the URL.
         ${partName} =
           if hasExposure && useGateway then
-            if paths != null then
-              scope.mkResource (
-                httpRoute.fromPaths (
+            builtins.seq info.scheme (
+              if paths != null then
+                scope.mkCR routeCrd (
+                  httpRoute.fromPaths (
+                    {
+                      inherit name;
+                      host = effectiveHost;
+                      parentRef = gateway.out.gatewayRef;
+                      paths = map (p: {
+                        inherit (p) path;
+                        pathType = p.pathType or "Prefix";
+                        svc = self.${p.service};
+                        port = p.port or null;
+                      }) paths;
+                    }
+                    // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
+                  )
+                )
+              else
+                svc
+                |> httpRoute.fromService (
                   {
                     inherit name;
                     host = effectiveHost;
                     parentRef = gateway.out.gatewayRef;
-                    paths = map (p: {
-                      inherit (p) path;
-                      pathType = p.pathType or "Prefix";
-                      svc = self.${p.service};
-                      port = p.port or null;
-                    }) paths;
                   }
+                  // lib.optionalAttrs (port != null) { inherit port; }
                   // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
                 )
-              )
-            else
-              svc
-              |> httpRoute.fromService (
-                {
-                  inherit name;
-                  host = effectiveHost;
-                  parentRef = gateway.out.gatewayRef;
-                }
-                // lib.optionalAttrs (port != null) { inherit port; }
-                // lib.optionalAttrs (timeouts != null) { inherit timeouts; }
-              )
-              |> scope.mkResource
+                |> scope.mkCR routeCrd
+            )
 
           else if hasExposure && useIngress then
-            builtins.seq _tlsSecretNsCheck (
-              (
-                if paths != null then
-                  {
-                    apiVersion = "networking.k8s.io/v1";
-                    kind = "Ingress";
-                    inherit name;
-                    annotations = defaultAnnotations // configAnnotations;
-                    spec = {
-                      ingressClassName = ingressNginx.out.ingressClassName;
-                      rules = multiPathRules;
-                    }
-                    // lib.optionalAttrs hasTls {
-                      tls = [
-                        {
-                          hosts = [ effectiveHost ];
-                          secretName = tlsSecretNameEffective;
-                        }
-                      ];
-                    };
+            (
+              if paths != null then
+                {
+                  apiVersion = "networking.k8s.io/v1";
+                  kind = "Ingress";
+                  inherit name;
+                  annotations = defaultAnnotations // configAnnotations;
+                  spec = {
+                    ingressClassName = ingressNginx.out.ingressClassName;
+                    rules = multiPathRules;
                   }
-                else
-                  svc
-                  |> ingress.fromService (
-                    {
-                      inherit name;
-                      host = effectiveHost;
-                      className = ingressNginx.out.ingressClassName;
-                      tls = lib.optional hasTls {
+                  // lib.optionalAttrs hasTls {
+                    tls = [
+                      {
                         hosts = [ effectiveHost ];
-                        secretName = tlsSecretNameEffective;
-                      };
-                      annotations = defaultAnnotations // configAnnotations;
-                    }
-                    // lib.optionalAttrs (port != null) { inherit port; }
-                  )
-              )
-              |> (if hasTls then clusterIssuer.out.withCert else lib.id)
-              |> _controllerEdgeWarn
-              |> scope.mkResource
+                        secretName = tlsSecretName;
+                      }
+                    ];
+                  };
+                }
+              else
+                svc
+                |> ingress.fromService (
+                  {
+                    inherit name;
+                    host = effectiveHost;
+                    className = ingressNginx.out.ingressClassName;
+                    tls = lib.optional hasTls {
+                      hosts = [ effectiveHost ];
+                      secretName = tlsSecretName;
+                    };
+                    annotations = defaultAnnotations // configAnnotations;
+                  }
+                  // lib.optionalAttrs (port != null) { inherit port; }
+                )
             )
+            |> (if hasTls then clusterIssuer.out.withCert else lib.id)
+            |> _controllerEdgeWarn
+            |> scope.mkResource
 
           else
             null;
@@ -1271,11 +1846,18 @@ rec {
   # metrics Services (harbor: core, registry, jobservice, exporter) call
   # this once per Service without the parts or the resource names
   # colliding. The defaults are the single-Service case.
+  #
+  # `scheme` and `tlsConfig` (a ServiceMonitor endpoint `tlsConfig`) apply
+  # to the primary endpoint only. Each of `extraEndpoints` is a ServiceMonitor
+  # endpoint over the defaults `scheme = "http"`, `path = "/metrics"`, and the
+  # instance's `metrics.interval` when that is set.
   monitor =
     {
       service,
       port ? "metrics",
       path ? "/metrics",
+      scheme ? "http",
+      tlsConfig ? null,
       alerts ? { },
       extraEndpoints ? [ ],
       extraLabels ? { },
@@ -1299,16 +1881,27 @@ rec {
       metricsEnabled = (metricsConfig.enabled or true) && prometheus != null;
       scrapeInterval = (metricsConfig.interval or null);
 
+      intervalAttrs = lib.optionalAttrs (scrapeInterval != null) {
+        interval = scrapeInterval;
+      };
       primaryEndpoint = {
         port = if builtins.isInt port then null else port;
         targetPort = if builtins.isInt port then port else null;
-        scheme = "http";
-        inherit path;
+        inherit scheme path tlsConfig;
       }
-      // lib.optionalAttrs (scrapeInterval != null) {
-        interval = scrapeInterval;
-      };
-      endpoints = [ (lib.filterAttrs (_: v: v != null) primaryEndpoint) ] ++ extraEndpoints;
+      // intervalAttrs;
+      extraEndpoint =
+        e:
+        {
+          scheme = "http";
+          path = "/metrics";
+        }
+        // intervalAttrs
+        // e;
+      endpoints = [
+        (lib.filterAttrs (_: v: v != null) primaryEndpoint)
+      ]
+      ++ map extraEndpoint extraEndpoints;
 
       alertRules = lib.mapAttrsToList (
         alertName: alertDef:

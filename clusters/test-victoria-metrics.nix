@@ -120,11 +120,11 @@ kix.buildCluster {
         vm-agent = {
           package = packages.victoria-metrics-agent;
           # The post-deploy probe Job (kix.healthCheck).
-          config.healthCheck.enable = true;
+          config.healthCheck.enabled = true;
         };
         vm-alert = {
           package = packages.victoria-metrics-alert;
-          config.healthCheck.enable = true;
+          config.healthCheck.enabled = true;
         };
         grafana = {
           package = packages.grafana;
@@ -133,6 +133,15 @@ kix.buildCluster {
           # The rename path: drop the entry an older Grafana kept under the
           # default name, which holds the same uid.
           config.deleteDatasources = [ { name = "Prometheus"; } ];
+        };
+        # Test values only.
+        grafana-admin = {
+          package = packages.secret;
+          aliases = [ "grafanaAdmin" ];
+          config.stringData = {
+            admin-user = "admin";
+            admin-password = "test-only";
+          };
         };
         scrape-consumer = {
           package = scrapeConsumerPackage;

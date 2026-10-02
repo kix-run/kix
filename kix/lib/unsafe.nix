@@ -56,7 +56,21 @@ rec {
         Mounting BPF into the kernel, writing sysfs parameters or attaching
         to block devices needs a privileged container, and a CNI or a
         storage driver cannot do its job without one. Legitimate holders:
-        CNI packages, CSI node plugins and node-level agents.
+        CNI packages, CSI node plugins, node-level agents, and operators
+        that create privileged pods in their own namespace (tailscale's
+        proxies run a privileged init container that enables IP forwarding).
+      '';
+    };
+    "cluster-admin" = {
+      description = "may bind a ServiceAccount to cluster-admin or to a ClusterRole that grants every verb on every resource";
+      rationale = ''
+        A backup and restore tool reads every object in the cluster and
+        recreates any kind on restore, including custom resources whose
+        CRDs are installed after the package is built, so no rule list
+        derived at build time covers it. `security.noClusterAdmin` refuses
+        every other binding of that reach. Legitimate holders: cluster-wide
+        backup tools such as velero. Anything narrower derives its rules
+        with `scope.rbac`.
       '';
     };
   };

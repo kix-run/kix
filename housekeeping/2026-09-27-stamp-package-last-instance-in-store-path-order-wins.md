@@ -12,3 +12,6 @@ can reorder them and move the markers to the other owner, which churns
 manifests and snapshots
 (`cli/kix-cli/tests/snapshots/snapshot_test__build_example_yaml.snap`)
 and can misattribute the object.
+
+- Hit again 2026-10-02 while regenerating the CLI snapshots after the W8
+  merges: both markers moved from `postgres` to `immich-db`.

@@ -1,15 +1,41 @@
-# Vaultwarden: self-hosted Bitwarden-compatible password manager.
+# vaultwarden: Vaultwarden, a Bitwarden-compatible password manager
+# server, on PostgreSQL.
 #
-# Uses Postgres via DI. Attachments persisted on a storage PVC.
+# Installs a Deployment and a Service on port 8080, and a route through
+# `kix.expose` when the cluster has an ingress controller or a gateway.
+# Vaultwarden's `DOMAIN` is the route's URL unless `domain` is set.
 #
 # Dependencies:
-#   storage          required, persistent volume for attachments/icons
-#   postgres         required, database (expects stackgres-style credentials
-#                    secret exposed via `out.superuserSecret`)
+#   storage (required)    a claim, mounted at /data, for attachments, icons,
+#                         and keys
+#   database (required)   a PostgreSQL database and role with
+#                         `out.{host,port,database}` and `out.credentials`
+#                         (keys `username` and `password`), such as
+#                         stackgres-database
 #
-# Exposure handled by kix.expose (ingress via DI).
+# Minimal instance, with a stackgres-cluster `postgres` elsewhere:
 #
-# root = Service (port 8080).
+#   instances.vault = {
+#     storage = {
+#       package = packages.persistent-volume-claim;
+#       config.size = "1Gi";
+#     };
+#     vaultwarden-db = {
+#       package = packages.stackgres-database;
+#       config.passwordSource = ./secrets/vaultwarden-db.yaml;
+#       config.passwordHash = "...";
+#     };
+#     vaultwarden.package = packages.vaultwarden;   # takes deps.storage
+#   };                                              # and deps.database
+#
+# `out`: the Service's `name`, `fqdn`, and `port` (8080).
+#
+# Escape hatches: `env` for Vaultwarden settings (signups, invitations,
+# ADMIN_TOKEN), `ingress` for the route, and the instance's `partsOverlays`.
+#
+# Limits: one replica with the Recreate strategy. The database password goes
+# into DATABASE_URL unescaped, so it must not contain URL delimiters such as
+# `@`, `/`, or `:`.
 
 {
   scope,
@@ -55,46 +81,24 @@ in
     domain = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Public URL (e.g. https://vault.example.com). Required for clients to connect.";
+      description = "Public URL (e.g. https://vault.example.com), which invitation links and WebAuthn need. Default: the URL kix.expose routes (exposure.url); evaluation fails when Kix cannot derive one. Set it when TLS terminates outside Kix, for example behind cloudflared.";
     };
-    signupsAllowed = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-    };
-    invitationsAllowed = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-    };
-    showPasswordHint = lib.mkOption {
-      type = lib.types.bool;
-      default = false;
-    };
-    env = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = { };
-      description = "Extra environment variables (SCREAMING_SNAKE_CASE).";
+    env = kix.options.env // {
+      description = "Extra Vaultwarden environment variables (Vaultwarden's `.env.template` lists them). A value is a string, a `fieldRef` source, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. The package sets SIGNUPS_ALLOWED = \"false\", INVITATIONS_ALLOWED = \"true\", and SHOW_PASSWORD_HINT = \"false\"; a value here replaces them and null removes them. ADMIN_TOKEN turns on the admin panel; give it the token's Argon2 hash, from a Secret. The package owns the database, address, and data folder variables.";
     };
     # The guerzon/vaultwarden chart sets no resources; these are the values
     # its values.yaml suggests.
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "50m";
-          memory = "256Mi";
-        };
-        limits = {
-          cpu = "300m";
-          memory = "1Gi";
-        };
+    resources = kix.options.resources {
+      requests = {
+        cpu = "50m";
+        memory = "256Mi";
+      };
+      limits = {
+        cpu = "300m";
+        memory = "1Gi";
       };
     };
     ingress = kix.options.ingress;
-    adminToken = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "Argon2 hash for admin panel access. Null disables admin panel.";
-    };
     initChownData = lib.mkOption {
       type = lib.types.bool;
       default = false;
@@ -118,21 +122,12 @@ in
         config,
         clusterConfig,
         storage,
-        postgres,
+        database,
         scope,
         kix,
         ...
       }:
       let
-        clusterDomain = clusterConfig.cluster.domain or null;
-        effectiveHost =
-          if config.ingress.host != null then
-            config.ingress.host
-          else if clusterDomain != null then
-            "${name}.${clusterDomain}"
-          else
-            null;
-
         healthCheck = {
           httpGet = {
             path = "/alive";
@@ -142,11 +137,10 @@ in
           timeoutSeconds = 1;
         };
 
-        # Credentials come from stackgres' superuser secret via env var
-        # substitution ($(VAR) syntax). Until we create a dedicated
-        # vaultwarden role/db, connect with the superuser to the default
-        # `postgres` database.
-        databaseUrl = "postgresql://$(DB_USERNAME):$(DB_PASSWORD)@${postgres.out.fqdn}:${postgres.out.port}/postgres";
+        # DB_USERNAME and DB_PASSWORD come from the database's credentials
+        # Secret; Kubernetes substitutes $(VAR) from variables defined
+        # earlier in the list.
+        databaseUrl = "postgresql://$(DB_USERNAME):$(DB_PASSWORD)@${database.out.host}:${database.out.port}/${database.out.database}";
 
         dataMount = kix.mount.pvc storage { mountPath = "/data"; };
       in
@@ -158,6 +152,11 @@ in
               replicas = 1;
               strategy.type = "Recreate";
               selector.matchLabels = scope.selectorLabels;
+              # A changed database password restarts the pods, which read it
+              # once at start. A Secret Kix does not build has no hash.
+              template.metadata.annotations = lib.optionalAttrs (database.out.credentials.out ? identityHash) {
+                "checksum/database" = database.out.credentials.out.identityHash;
+              };
               template.spec = {
                 # Kubernetes default: Rocket's own shutdown grace is a few
                 # seconds.
@@ -207,31 +206,48 @@ in
                       image = kix.image.ref config.image;
                       ports = [ (kix.port "http" 8080) ];
                       env =
-                        # Secret refs FIRST so k8s can substitute $(DB_USERNAME)/$(DB_PASSWORD)
-                        # in DATABASE_URL. K8s only substitutes vars defined earlier in the list.
-                        (postgres.out.superuserSecret.out.mkEnv {
-                          DB_USERNAME = "superuser-username";
-                          DB_PASSWORD = "superuser-password";
+                        (database.out.credentials.out.mkEnv {
+                          DB_USERNAME = "username";
+                          DB_PASSWORD = "password";
                         })
                         ++ kix.mkEnvVars (
-                          {
-                            DATA_FOLDER = "/data";
-                            DATABASE_URL = databaseUrl;
-                            DOMAIN =
-                              if config.domain != null then
-                                config.domain
-                              else if effectiveHost != null then
-                                "https://${effectiveHost}"
-                              else
-                                null;
-                            SIGNUPS_ALLOWED = lib.boolToString config.signupsAllowed;
-                            INVITATIONS_ALLOWED = lib.boolToString config.invitationsAllowed;
-                            SHOW_PASSWORD_HINT = lib.boolToString config.showPasswordHint;
-                            ROCKET_ADDRESS = "0.0.0.0";
-                            ROCKET_PORT = "8080";
-                            ADMIN_TOKEN = config.adminToken;
-                          }
-                          // config.env
+                          kix.mergeEnv {
+                            who = "vaultwarden ${scope.namespaceName}/${name}";
+                            defaults = {
+                              SIGNUPS_ALLOWED = "false";
+                              INVITATIONS_ALLOWED = "true";
+                              SHOW_PASSWORD_HINT = "false";
+                            };
+                            owned = [
+                              {
+                                vars.DATABASE_URL = databaseUrl;
+                                names = [
+                                  "DB_USERNAME"
+                                  "DB_PASSWORD"
+                                ];
+                                from = "the database dependency";
+                                fix = "Wire another database through deps.database instead.";
+                              }
+                              {
+                                vars.DOMAIN = if config.domain != null then config.domain else self.exposure.url;
+                                from = "the `domain` option or the instance's route";
+                                fix = "Set `domain` instead.";
+                              }
+                              {
+                                vars.DATA_FOLDER = dataMount.mountPath;
+                                from = "the storage dependency, which the package mounts at ${dataMount.mountPath}";
+                                fix = "Remove it.";
+                              }
+                              {
+                                vars = {
+                                  ROCKET_ADDRESS = "0.0.0.0";
+                                  ROCKET_PORT = "8080";
+                                };
+                                from = "the package, whose probes and Service use port 8080";
+                                fix = "Remove it.";
+                              }
+                            ];
+                          } config.env
                         );
                       livenessProbe = healthCheck // {
                         initialDelaySeconds = 5;

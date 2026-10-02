@@ -1,0 +1,5 @@
+# 2026-10-02 · `kix/lib/meta.nix` · A `deps.<x>.assertions` check on a secret dependency's keys never reports, because the build's `out.keyRef` throws first.
+
+A package that checks the keys of its secret dependency in `deps.<x>.assertions` and reads the same key with `out.keyRef` shows the lib's generic error instead of its own message. clickhouse with a `credentials` secret that declares only `foo` stops at `secret "credentials" does not declare key "password"`; the assertion at `kix/packages/clickhouse/default.nix:94-101` never runs. Reworked packages check keys inside the build with `kix.checkSecretKeys`, which runs before any `keyRef`. The diagnostic ordering in the lib is unchanged, so any package that still checks keys in `deps.<x>.assertions` carries dead code.
+
+- Hit again 2026-10-02 by `kix/packages/harbor`: it checks the keys of `harborSecrets` and `caBundle` with `kix.checkSecretKeys` inside the build, so a missing key names the instance and the dependency instead of failing in `out.keyRef`.

@@ -29,8 +29,8 @@ def _classify(key: str) -> str:
         return "sgpostgresconfig"
     if "sginstanceprofile" in key:
         return "sginstanceprofile"
-    if "valkey" in key and "health" in key:
-        return "valkey-health"
+    if "valkey" in key and "config" in key:
+        return "valkey-config"
     if "valkey" in key and "service" in key:
         return "valkey-service"
     if "valkey" in key:

@@ -1,68 +1,71 @@
-# kube-state-metrics: Kubernetes object state metrics exporter.
+# kube-state-metrics: the exporter that turns the state of Kubernetes
+# objects (pods, deployments, nodes, and more) into metrics.
 #
-# Single Deployment that listens to the K8s API server and exposes
-# metrics about the state of objects (pods, deployments, nodes, etc.).
-# Ships its own ServiceMonitor via optional prometheus DI.
+# Installs a Deployment, its ServiceAccount, a ClusterRole that can list and
+# watch the kinds it reports, and a Service on port 8080 (metrics) and 8081
+# (its own telemetry). With a `prometheus` dependency and `metrics.enabled`,
+# it also renders a ServiceMonitor through `prometheus.out.mkServiceMonitor`.
+#
+# Dependencies:
+#   prometheus (optional)   the scraper whose ServiceMonitor builder it uses
+#
+# Minimal instance:
+#
+#   instances.monitoring.kube-state-metrics.package = packages.kube-state-metrics;
+#
+# `out`: the Service's `name`, `fqdn`, and `port`. The Service name is the
+# `job` label of every series, which the kube-state-metrics rules of
+# prometheus-default-rules read through its `kubeStateMetrics` dependency.
+#
+# Escape hatches: `extraArgs` for kube-state-metrics flags, and the
+# instance's `partsOverlays`.
+#
+# Limits: one replica at every availability level (`availability.max =
+# "none"` on the Deployment), because a second unsharded replica duplicates
+# every series. The package ships no alerts; prometheus-default-rules does.
 
 {
   scope,
   lib,
   kix,
-  availability,
 }:
 let
+  release = "v2.19.1";
   name = scope.instanceName;
+  who = "kube-state-metrics ${scope.namespaceName}/${name}";
+  metricsPort = 8080;
+  telemetryPort = 8081;
 in
 {
   meta = {
-    version = "v2.19.1";
+    version = release;
     description = "kube-state-metrics: Kubernetes object state exporter";
     owner = "platform";
     defaultAliases = [ "kubeStateMetrics" ];
     k8s.minVersion = "1.25";
-    # Unsharded exporter: a second replica duplicates every series, so
-    # there is no honest way to go above "pod".
-    availability.max = "pod";
   };
 
   options = {
-    nodeSelector = lib.mkOption {
-      type = lib.types.attrsOf lib.types.str;
-      default = { };
-      description = "Merged over the default kubernetes.io/os=linux selector.";
-    };
     image = kix.options.image {
       repository = "registry.k8s.io/kube-state-metrics/kube-state-metrics";
-      tag = "v2.19.1";
+      tag = release;
+      digest = "sha256:85108987d044b18a098126732f98602df408888c0f7d456241f5abefb9744bc1";
     };
-    replicas = lib.mkOption {
-      type = lib.types.int;
-      # One at every level: a second replica scrapes the same API objects
-      # and duplicates every series.
-      default = kix.availability.pick availability {
-        none = 1;
-        pod = 1;
-        node = 1;
-        zone = 1;
+    resources = kix.options.resources {
+      requests = {
+        cpu = "10m";
+        memory = "64Mi";
       };
-      description = ''
-        Number of kube-state-metrics replicas. Read from the cluster's
-        availability level (v2_discussions/145), but one at every level
-        because a second replica would duplicate every series.
-      '';
+      limits = {
+        cpu = "1";
+        memory = "256Mi";
+      };
     };
-    resources = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        requests = {
-          cpu = "10m";
-          memory = "64Mi";
-        };
-        limits = {
-          cpu = "1";
-          memory = "256Mi";
-        };
-      };
+    extraArgs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "--metric-labels-allowlist=pods=[app.kubernetes.io/name]" ];
+      description = "kube-state-metrics flags appended after the package's, such as `--resources` or `--metric-labels-allowlist`. `--port`, `--telemetry-port`, and the sharding flags are refused: the probes and the Service use the ports, and the package runs one unsharded replica.";
     };
     metrics = kix.options.monitor;
   };
@@ -76,7 +79,29 @@ in
     }:
     let
       hasMetrics = config.metrics.enabled && prometheus != null;
-      mkServiceMonitor = if prometheus != null then prometheus.out.mkServiceMonitor scope else null;
+
+      args = [
+        "--port=${toString metricsPort}"
+        "--telemetry-port=${toString telemetryPort}"
+      ]
+      ++ kix.guardArgs {
+        inherit who;
+        owned = {
+          "--port" = "the probes and the Service use port ${toString metricsPort}; remove it.";
+          "--telemetry-port" = "the Service uses port ${toString telemetryPort}; remove it.";
+          "--shard" = "the package runs one unsharded replica; remove it.";
+          "--total-shards" = "the package runs one unsharded replica; remove it.";
+        };
+      } config.extraArgs;
+
+      probe = {
+        httpGet = {
+          path = "/healthz";
+          port = "http-metrics";
+        };
+        initialDelaySeconds = 5;
+        periodSeconds = 10;
+      };
 
       inherit (scope.rbac)
         group
@@ -99,6 +124,7 @@ in
       autoscaling = group "autoscaling" [ "horizontalpodautoscalers" ];
       policy = group "policy" [ "poddisruptionbudgets" ];
       certs = group "certificates.k8s.io" [ "certificatesigningrequests" ];
+      discovery = group "discovery.k8s.io" [ "endpointslices" ];
       storage = group "storage.k8s.io" [
         "storageclasses"
         "volumeattachments"
@@ -120,6 +146,8 @@ in
         "rolebindings"
       ];
 
+      # Upstream's examples/standard/cluster-role.yaml without tokenreviews
+      # and subjectaccessreviews, which only `--auth-filter` uses.
       clusterRoles = mkClusterRoleSet scope {
         subjects = [
           {
@@ -143,6 +171,7 @@ in
             (core.persistentvolumes |> watch)
             (core.namespaces |> watch)
             (core.endpoints |> watch)
+            (discovery.endpointslices |> watch)
             (core.serviceaccounts |> watch)
             (apps.statefulsets |> watch)
             (apps.deployments |> watch)
@@ -175,104 +204,79 @@ in
         apiVersion = "v1";
         kind = "ServiceAccount";
         inherit name;
-        extra.automountServiceAccountToken = true;
       };
 
-      deployment =
-        {
-          inherit name;
-          spec = {
-            replicas = config.replicas;
-            selector.matchLabels = scope.selectorLabels;
-            template.spec = {
-              serviceAccountName = self.serviceAccount.out.name;
-              automountServiceAccountToken = true;
-              # Kubernetes' default, set explicitly; the kube-state-metrics
-              # chart (8.3.1) sets none.
-              terminationGracePeriodSeconds = 30;
-              securityContext = {
-                runAsNonRoot = true;
-                runAsUser = 65534;
-                fsGroup = 65534;
-              };
-              containers = [
-                {
-                  name = "kube-state-metrics";
-                  image = kix.image.ref config.image;
-                  imagePullPolicy = config.image.pullPolicy;
-                  args = [
-                    "--port=8080"
-                    "--telemetry-port=8081"
-                  ];
-                  ports = [
-                    (kix.port "http-metrics" 8080)
-                    (kix.port "telemetry" 8081)
-                  ];
-                  resources = config.resources;
-                  securityContext = {
-                    allowPrivilegeEscalation = false;
-                    readOnlyRootFilesystem = true;
-                    capabilities.drop = [ "ALL" ];
-                  };
-                  livenessProbe = {
-                    httpGet = {
-                      path = "/healthz";
-                      port = 8080;
-                    };
-                    initialDelaySeconds = 5;
-                    periodSeconds = 10;
-                  };
-                  readinessProbe = {
-                    httpGet = {
-                      path = "/healthz";
-                      port = 8080;
-                    };
-                    initialDelaySeconds = 5;
-                    periodSeconds = 10;
-                  };
-                }
-              ];
-              nodeSelector = {
-                "kubernetes.io/os" = "linux";
-              }
-              // config.nodeSelector;
+      deployment = scope.mkDeployment {
+        inherit name;
+        availability.max = "none";
+        spec = {
+          replicas = 1;
+          selector.matchLabels = scope.selectorLabels;
+          template.spec = {
+            serviceAccountName = self.serviceAccount.out.name;
+            # Kubernetes' default; kube-state-metrics holds no state to drain.
+            terminationGracePeriodSeconds = 30;
+            securityContext = {
+              runAsNonRoot = true;
+              runAsUser = 65534;
+              fsGroup = 65534;
             };
+            containers = [
+              {
+                name = "kube-state-metrics";
+                image = kix.image.ref config.image;
+                imagePullPolicy = config.image.pullPolicy;
+                inherit args;
+                ports = [
+                  (kix.port "http-metrics" metricsPort)
+                  (kix.port "telemetry" telemetryPort)
+                ];
+                resources = config.resources;
+                securityContext = {
+                  allowPrivilegeEscalation = false;
+                  readOnlyRootFilesystem = true;
+                  capabilities.drop = [ "ALL" ];
+                };
+                livenessProbe = probe;
+                readinessProbe = probe;
+              }
+            ];
+            nodeSelector."kubernetes.io/os" = "linux";
           };
-        }
-        |> scope.mkDeployment;
+        };
+      };
 
       service =
         self.deployment
         |> kix.service.fromWorkload {
           inherit name;
-          type = "ClusterIP";
           ports = [
             {
               name = "http-metrics";
-              port = 8080;
-              targetPort = 8080;
+              port = metricsPort;
+              targetPort = "http-metrics";
               protocol = "TCP";
             }
             {
               name = "telemetry";
-              port = 8081;
-              targetPort = 8081;
+              port = telemetryPort;
+              targetPort = "telemetry";
               protocol = "TCP";
             }
           ];
         }
         |> scope.mkResource;
 
-      # ── Monitoring (optional via DI) ─────────────────────────────────────
-
+      # Built through the dependency's builder rather than `kix.monitor`,
+      # which has no `honorLabels`: the series carry the `namespace` and
+      # `pod` of the objects they describe, and without honorLabels
+      # Prometheus renames them to `exported_namespace` and `exported_pod`.
       serviceMonitor =
         if hasMetrics then
-          mkServiceMonitor {
-            name = "${name}-monitor";
+          prometheus.out.mkServiceMonitor scope {
+            inherit name;
             spec = {
-              # ServiceMonitors match SERVICE labels, not pod labels. The
-              # deployment selector never matched the Service and this job
-              # was silently unscraped (caught live on stage1, 2026-08-31).
+              namespaceSelector.matchNames = [ scope.namespaceName ];
               selector.matchLabels = self.service.out.selector;
               endpoints = [
                 (

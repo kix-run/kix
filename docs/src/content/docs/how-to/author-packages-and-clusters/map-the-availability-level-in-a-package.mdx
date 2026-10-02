@@ -1,6 +1,6 @@
 ---
 title: "Map the availability level in a package"
-description: "Choose replica and quorum defaults from the cluster's availability requirement, and declare honest package or workload limits."
+description: "Choose replica and quorum defaults from the cluster's availability requirement, and declare package or workload limits."
 ---
 
 Accept the `availability` argument in the package function. It is the resolved
@@ -16,11 +16,13 @@ package ceiling have been applied.
 
 ## Map every level
 
-Use `kix.availability.pick` for a replica or quorum default:
+Use `kix.availability.pick` for a replica or quorum default. A workload whose
+replicas serve load (a web server, a proxy, a queue worker) gets a `replicas`
+option, named after the Kubernetes field, that defaults to the mapping:
 
 ```nix title="package.nix"
-options.replicaCount = lib.mkOption {
-  type = lib.types.int;
+options.replicas = lib.mkOption {
+  type = lib.types.ints.positive;
   default = kix.availability.pick availability {
     none = 1;
     pod = 2;
@@ -32,7 +34,25 @@ options.replicaCount = lib.mkOption {
 
 The table must contain all four levels. This keeps a later cluster-level
 change from reaching an undefined package state. An instance may still set
-`config.replicaCount` explicitly because this mapping is an option default.
+`config.replicas` explicitly because this mapping is an option default.
+
+A leader-elected controller or webhook has no replica option. It sets
+`spec.replicas` from the mapping directly:
+
+```nix title="package.nix"
+controller = scope.mkDeployment {
+  name = "${scope.instanceName}-controller";
+  spec.replicas = kix.availability.pick availability {
+    none = 1;
+    pod = 2;
+    node = 2;
+    zone = 2;
+  };
+  # ...
+};
+```
+
+The cluster operator changes its count through the instance's `availability`.
 
 Use `kix.availability.atLeast` when a feature switches on at one level:
 
@@ -48,33 +68,74 @@ quorum store often need different counts at the same level.
 
 ## Declare a package ceiling
 
-If the package as a whole cannot meet a level, declare the highest one it can
-provide:
+If the program itself cannot meet a level, whatever the package wires and
+whatever the instance configures, declare the highest level it can provide:
 
 ```nix title="package.nix"
-meta.availability.max = "pod";
+# One writer: the program keeps its state in a local SQLite file.
+meta.availability.max = "none";
 ```
 
 Kix lowers the level passed to the package and warns when an instance requests
 more. The ceiling describes a real limitation; it must not hide a replica
-default that the package could map correctly.
+default that the package could map correctly. Under a package ceiling,
+`kix.availability.atLeast` fails on a threshold above the ceiling, because the
+package never sees those levels and the test is always false. If the package
+has such a test, the limit belongs on the builder calls of the workloads that
+cannot reach the higher levels.
+
+`none` means the workload runs one pod at a time, so its replica count is 1.
+A Deployment or StatefulSet with more than one replica under a `none` ceiling
+is an evaluation error that names the workload. `pod` means a pod crash or a
+rolling update causes no downtime, which one replica cannot provide.
 
 ## Limit one workload
 
-A package may contain one single-replica controller beside workloads that use
-the full availability level. Put the ceiling on that builder call:
+Put the ceiling on a builder call instead when the limit belongs to one
+workload, depends on the package's configuration, or comes from what the
+package wires rather than from the program. `meta` cannot read config, and a
+package ceiling applies to every workload in the package.
+
+A package may contain one singleton beside workloads that use the full
+availability level:
 
 ```nix title="package.nix"
-controller = scope.mkDeployment {
-  name = "${scope.instanceName}-controller";
-  availability.max = "pod";
+worker = scope.mkDeployment {
+  name = "${scope.instanceName}-worker";
+  availability.max = "none";
   spec.replicas = 1;
   # ...
 };
 ```
 
-This lowers derived placement checks for the controller only. The package's
-`availability` argument and its other workloads are unchanged.
+A ceiling can be computed from config. This workload can run several pods
+unless they share a local cache volume:
+
+```nix title="package.nix"
+server = scope.mkDeployment (
+  {
+    name = "${scope.instanceName}-server";
+    spec.replicas =
+      if config.cache.local then 1 else kix.availability.pick availability {
+        none = 1;
+        pod = 2;
+        node = 2;
+        zone = 3;
+      };
+    # ...
+  }
+  // lib.optionalAttrs config.cache.local { availability.max = "none"; }
+);
+```
+
+A builder ceiling lowers derived placement for that workload only, and Kix
+warns when it caps the instance's level. The package's `availability`
+argument and its other workloads are unchanged.
+
+A cluster operator can lift a builder ceiling with a `partsOverlays` entry
+that rebuilds the workload without `availability.max`. An overlay that keeps
+the ceiling and raises the replica count fails evaluation. A package ceiling
+has no such escape, which is why it is reserved for limits of the program.
 
 ## Leave placement to Kix
 

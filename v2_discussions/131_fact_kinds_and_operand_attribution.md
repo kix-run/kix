@@ -1,7 +1,7 @@
 # 131: Fact kinds — remainders and operand attribution
 
 **Status:** Draft (attribution question under active discussion)
-**Related:** `97_service_contract_primitives.md` (Phase-2 service DSL), `92_declarative_network_policy_intents.md`, `95_netpol_build_time_validation.md`, `121_netpol_as_plugin.md`
+**Related:** `97_service_contract_primitives.md` (Phase-2 service DSL), `archive/92_declarative_network_policy_intents.md`, `95_netpol_build_time_validation.md`, `121_netpol_as_plugin.md`
 **Supersedes:** `archive/130_typed_network_exposure.md` (S1 mechanism + operand termination shipped as the typed-facts channel, PR #31), `archive/96_netpol_autogeneration_blindspots.md` (blindspots 1–2 closed by fact conduction; blindspot 3 partially closed by factBehavior)
 
 What shipped (PR #31, not re-argued here): the typed-facts channel

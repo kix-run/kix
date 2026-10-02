@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix list packages --cluster 02-hello-world",
-      "stdout": " NAME              VERSION  OWNER     STATUS                  \n hello-world       1.27     app-team  installed [tutorial-02] \n platform-dns      -        -         import [kube-system]    \n platform-storage  -        -         import [kube-system]    \n",
+      "stdout": " NAME              VERSION  OWNER     STATUS                  \n hello-world       1.30.5   app-team  installed [tutorial-02] \n platform-dns      -        -         import [kube-system]    \n platform-storage  -        -         import [kube-system]    \n",
       "stderr": "",
-      "stdoutDrift": "NAME VERSION OWNER STATUS\nhello-world 1.27 app-team installed [tutorial-02]\nplatform-dns - - import [kube-system]\nplatform-storage - - import [kube-system]\n",
+      "stdoutDrift": "NAME VERSION OWNER STATUS\nhello-world 1.30.5 app-team installed [tutorial-02]\nplatform-dns - - import [kube-system]\nplatform-storage - - import [kube-system]\n",
       "stderrDrift": "",
       "exitCode": 0
     }

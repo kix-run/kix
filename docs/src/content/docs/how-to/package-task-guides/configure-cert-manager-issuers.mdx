@@ -1,46 +1,84 @@
 ---
 title: "Configure cert-manager issuers"
-description: "Install cert-manager and configure a ClusterIssuer for ACME DNS-01 certificates or local self-signed certificates."
+description: "Install cert-manager and add ClusterIssuers for ACME DNS-01 certificates or local self-signed certificates."
 ---
 
 import Command from '/src/components/Command.astro';
 import Snippet from '/src/components/Snippet.astro';
 import acmeClusterIssuer from '/src/snippets/clusters/test-doc-how-tos/acmeClusterIssuer.json';
+import stagingClusterIssuer from '/src/snippets/clusters/test-doc-how-tos/stagingClusterIssuer.json';
+import importedClusterIssuer from '/src/snippets/clusters/test-doc-how-tos/importedClusterIssuer.json';
 import selfSignedClusterIssuer from '/src/snippets/ludo/variants/cluster-kind-tls/selfSignedClusterIssuer.json';
 
 Kix separates the cert-manager controller from issuer configuration. Install
-`cert-manager`, then add one `cluster-issuers` instance to create the
-ClusterIssuer resources used throughout the cluster.
+`cert-manager`, then add one `cluster-issuer` instance for each ClusterIssuer.
+The ClusterIssuer takes the instance's name, and `config.spec` is its `spec`
+in cert-manager's API.
+
+Put every `cluster-issuer` instance in cert-manager's namespace. cert-manager
+reads a ClusterIssuer's Secrets only from its own namespace, so the issuer's
+credentials must be there, and a Kix Secret serves only the namespace it is
+declared in. Instance names are unique within a namespace, so two issuers
+cannot render the same ClusterIssuer name. An instance in another namespace
+fails the build and names the namespace to move it to.
 
 ## Configure an ACME issuer
 
-For public certificates, configure the ACME server, account email, the name of
-the account-key Secret that cert-manager will create, and Cloudflare DNS-01
-credentials:
+For public certificates, give the ACME server, the account email, and a
+solver. This example uses Cloudflare DNS-01:
 
 <Snippet {...acmeClusterIssuer} />
 
-The example replaces the package defaults with one issuer. Keep
-`lib.mkForce`: `issuers` is an attrset option, so an ordinary assignment would
-merge with the default production and staging entries.
-
-Before deployment, create the `cloudflare-api-token` Secret in the
-`cert-manager` namespace with an `api-token` key. The cert-manager controller
-uses its own namespace for Secrets referenced by a ClusterIssuer. The
-`cluster-issuers` package currently passes this Secret name to cert-manager; it
-does not create or verify the Secret.
-
-Use [a Kix-managed Secret](/docs/how-to/platform-capabilities/use-kix-managed-secrets/),
+The `cloudflare-api-token` instance declares a Secret created outside Kix that
+holds the token under the key `api-token`. Use
+[a Kix-managed Secret](/docs/how-to/platform-capabilities/use-kix-managed-secrets/),
 [a SOPS-backed Secret](/docs/how-to/platform-capabilities/use-sops-backed-secrets-if-production-ready/),
-or an externally managed Secret. Restrict `dnsZones` to the zones this token
-may update.
+or [an externally managed Secret](/docs/how-to/platform-capabilities/use-externally-managed-secrets/),
+in the `cert-manager` namespace.
 
-`mainIssuer` must name one entry in `issuers`. Kix exports that issuer as the
-`clusterIssuer` dependency used by TLS-capable packages.
+`deps.issuerCredentials` wires that Secret to the issuer. A Kix Secret
+dependency is named for what it holds; `issuerCredentials` holds every key
+this issuer's Secret key selectors name. Leave `name` out of each selector,
+such as `apiTokenSecretRef`, and set only `key`. Kix fills in the Secret's
+name and fails the build when the Secret does not declare that key, so the
+ClusterIssuer cannot reach the cluster pointing at a Secret or key that is
+not there. To name a Secret that Kix should not check, write
+`name = kix.untrackedRef "<secret>"`.
+
+An issuer that needs several credentials, such as an ACME external account
+binding and a DNS token, keeps them as several keys of its one
+`issuerCredentials` Secret; each selector picks its own `key`.
+
+Kix sets `acme.privateKeySecretRef.name` to `<instance>-acme-account-key`
+unless the spec sets it. cert-manager creates that Secret when it registers
+the ACME account. Restrict `selector.dnsZones` to the zones the token may
+update.
+
+The spec is checked against the ClusterIssuer CRD that the cert-manager
+package vendors. A field the CRD does not define, a missing required field
+such as `acme.server`, a value of the wrong type (such as `solvers` written
+without list brackets), a spec with no issuer type or two, and a solver that
+sets both `http01` and `dns01` or two DNS providers each fail the build with
+the spec path and the accepted values. A field set to `null` is left out.
+
+external-dns reads its Cloudflare token from a Secret in its own namespace.
+Give that Secret the same key, so one source feeds both.
+
+## Add a staging issuer
+
+Every `cluster-issuer` instance answers the `clusterIssuer` dependency that
+TLS-capable packages read, so a second issuer in the same namespace makes that
+dependency ambiguous. Give the staging issuer a non-empty `aliases` list:
+
+<Snippet {...stagingClusterIssuer} />
+
+Instance `aliases` replace the package's default alias. The list must not be
+empty, because an empty list falls back to the default, so it names an alias
+nothing reads. Kix has no way yet to say that an instance answers no alias.
 
 ## Configure a self-signed issuer
 
-For a local cluster, replace the issuer set with a self-signed issuer:
+For a local cluster, use a self-signed issuer:
 
 <Snippet {...selfSignedClusterIssuer} />
 
@@ -49,28 +87,72 @@ account or DNS provider. Clients will not trust its certificates unless you
 install the generated trust material, so do not use this configuration for a
 public service.
 
+## Use cert-manager installed outside Kix
+
+When cert-manager and its ClusterIssuer come from Helm or a platform add-on,
+Kix does not own them and the `cluster-issuer` package cannot be used: it
+needs the cert-manager package's CRD handle, schema, and namespace. Declare
+the existing issuer with `kix.mkImport` and the `clusterIssuer` alias instead:
+
+<Snippet {...importedClusterIssuer} />
+
+Kix then checks nothing about the issuer beyond the name the import gives it.
+A `cluster-issuer` instance that answers `clusterIssuer` anywhere in the
+cluster takes precedence over the import, so use one or the other. The
+example cluster has both, which is why its consumer of the import sets
+`deps.clusterIssuer` explicitly.
+
+## HTTP-01 solvers
+
+The spec accepts an `http01` solver, and the build warns when the cluster
+enforces network policy. cert-manager creates the HTTP-01 solver pods at
+runtime in each Certificate's namespace, and Kix's derived policy does not
+admit the ingress controller to them, so the challenge does not complete
+unless something else admits that traffic. Use a DNS-01 solver, or admit the
+solver pods on TCP 8089 with a platform intent as in
+[Declare platform intents for non-Kix-managed pods](/docs/how-to/platform-capabilities/declare-platform-intents-for-non-kix-managed-pods/).
+The warning does not read platform intents, so it remains after you add one.
+
+## References Kix does not track
+
+Kix fills and checks only Secret key selectors and the ACME account key.
+`ca.secretName`, `venafi.*.credentialsRef.name`,
+`vault.auth.kubernetes.serviceAccountRef.name`, the HTTP-01 solver's Ingress,
+IngressClass, and Gateway references, and anything inside a webhook solver's
+`config` pass through as written. Kix does not check that those
+objects exist.
+
 ## Check and deploy
 
 Evaluate the cluster before applying it:
 
 <Command commands={["kix check doc-how-tos"]} />
 
-Deploy cert-manager, its CRDs, and the ClusterIssuer:
+Deploy cert-manager, its CRDs, and the ClusterIssuers:
 
 <Command commands={["kix deploy doc-how-tos"]} />
+
+A deploy waits for each ClusterIssuer, and each Certificate built from
+`certManager.out.crds.Certificate`, to report `Ready`. An ACME ClusterIssuer
+reports `Ready` once cert-manager has registered its account. Kix does not
+wait for the Certificates that cert-manager creates from Ingress annotations.
+ACME registration and DNS-01 issuance of the Certificates Kix waits for can
+take longer than the default readiness timeout of 180 seconds; raise it with
+`--timeout` on clusters that issue through ACME:
+
+<Command commands={["kix deploy doc-how-tos --timeout 15m"]} />
 
 After deployment, inspect issuer readiness:
 
 <Command
   commands={[
     "kubectl get clusterissuers",
-    "kubectl describe clusterissuer letsencrypt-production",
+    "kubectl describe clusterissuer letsencrypt",
   ]}
 />
 
-Do not proceed to application TLS until the selected issuer reports `Ready`.
-For ACME failures, check the credential key, zone restriction, DNS delegation,
-and cert-manager controller logs.
+For ACME failures, check the credential key, the zone restriction, DNS
+delegation, and the cert-manager controller logs.
 
-See [Add TLS through cluster issuers](/docs/how-to/platform-capabilities/add-tls-through-cluster-issuers/)
-to use the selected issuer from an application package.
+See [Add TLS through a cluster issuer](/docs/how-to/platform-capabilities/add-tls-through-a-cluster-issuer/)
+to use the issuer from an application package.

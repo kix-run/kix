@@ -108,12 +108,24 @@ reconciler, and no runbook should need to.
 | Mismatched selector vs template labels | `mkDeployment` etc. copy `spec.selector.matchLabels` to `template.metadata.labels` |
 | Workload built outside the seal | `mkResource` refuses Deployment, StatefulSet, DaemonSet and Job; only the typed builders run the validators, derived spread and PDB, and netpol edges |
 | Dangling resource refs | All refs are Nix-typed; `null` resources are stripped, not silently dropped |
+| Claim of a StorageClass nothing creates | cross-resource check 20 (imports and PersistentVolumes count) |
+| Custom resource applied before its CRD, or of a kind nothing declares | cross-resource check 21 (depends-on closure, served versions); `kix deploy` checks a CRD ref's versions against the live CRD |
+| Pod reads a Secret or ConfigMap key that is not there | `out.keyRef` at build time; cross-resource check 22 for names written directly |
+| Managed Secret created without its keys | `scope.mkSecret` refuses a key with no value and no SOPS source |
+| Two default StorageClasses, IngressClasses, or global-default PriorityClasses | cross-resource check 23 |
+| Instance value discards part of an option default | The option contract (`kix/lib/eval/options.nix`): an untyped or `attrsOf` option with a non-empty attrset default, a submodule default that disagrees with its fields, or a declaration the check cannot read fails `every-package-evaluates` (§12.13); outside kixpkgs, `kix.checkPackageOptions` or `mkFlake { packages.<name> = ...; }` |
+| Instance value replaces a config path, env var, or flag the package owns | `kix.mergeGuarded`, `kix.mergeEnv`, and `kix.guardArgs` refuse it with one message per hit |
+| Package reads a key its secret dependency does not declare | `kix.checkSecretKeys` names the secret, its keys, and the missing ones |
+| More than one replica of a workload that runs one pod at a time | the availability plugin refuses `spec.replicas > 1` under an effective ceiling of `none` |
+| `cluster.local` hard-coded on a cluster with another domain | `architecture.clusterDomainLiteral` (error) |
 | Meaningful empty value deleted (`emptyDir: {}`, empty selectors) | Collapse-rule normalization: literal empties render; only containers that lost every member to null-stripping collapse. `kix.keep` protects constructor-built containers |
 | Sourceless volume shipped to the apiserver | `volumeHasSource` scorecard rule (severity error) checks volumes as they will render |
 | Missing deps | DI resolution errors with an actionable message |
+| A second copy of a one-per-cluster operator, auto-instantiated for a consumer in another namespace | `eval/auto.nix` refuses to place a package marked one per cluster in a second namespace and names the consumers |
+| Two instances that render the same cluster-scoped object (the same CRD, ClusterRole, or IngressClass) | `buildCluster` fails, naming the object and both instances |
 | Cross-namespace mounts/secret-refs | `_kix.namespace` markers + `checkNamespacedRefs` |
 | `extra.*` shadowing managed fields | `mkResource` `_extraShadowCheck` |
-| TLS secret in wrong namespace | `kix.expose` cross-ns check |
+| TLS secret in wrong namespace | `kix.expose` names the TLS Secret `<instance>-tls` in the instance's own namespace |
 | Unknown `_kix.*` typo | `stripKixMeta` whitelist |
 | Untracked secret-name string | `mkDeployment` requires DI tracking; `kix.untrackedRef` is the only escape hatch |
 | Volume name collision | `kix.withMounts` `_dupeCheck` |
@@ -209,11 +221,22 @@ every replica-shaped default (`kix.availability.pick availability { none =
 the cluster's failure-domain keys plus a PodDisruptionBudget from the
 replica count (`cluster.availability`, v2_discussions/145). The package
 cannot know what a failure zone is on the cluster it lands on, and a literal
-`topologyKey` or a literal `3` is a guess. The level and the per-instance
-override belong to the cluster operator (`instances.<ns>.<inst>.availability`).
-A package that cannot reach a level says so with `meta.availability.max` and
-a reason. Write placement by hand only for a rule the derivation cannot
-express (a quorum that must never co-locate).
+`topologyKey` or a literal `3` is a guess. Pods an operator places from a custom resource get the same rule
+through `kix.availability.spreadConstraints` in the resource's pod spec. The
+level and the per-instance override belong to the cluster operator
+(`instances.<ns>.<inst>.availability`).
+
+A workload whose replicas serve load has a `replicas` option, the
+Kubernetes field name, that defaults to `pick`. A leader-elected
+controller or webhook has no replica option; it sets `spec.replicas`
+from `pick`, and the cluster operator changes it through the instance's
+`availability`. A workload that runs one pod at a time declares the
+ceiling `none` and sets one replica. `meta.availability.max` is for a
+limit of the program that holds for every workload, with a reason in a
+comment; a limit that depends on configuration, on what the package
+wires, or on one workload goes on that builder call
+(`availability.max`). Write placement by hand only for a rule the
+derivation cannot express (a quorum that must never co-locate).
 
 ### 6.2 Resources are rich objects
 
@@ -221,7 +244,7 @@ Consumers query the resource directly through `out`:
 
 ```nix
 # Right
-env = { DB_HOST = postgres.out.fqdn; DB_NAME = postgres.out.database; };
+env = { DB_HOST = database.out.host; DB_NAME = database.out.database; };
 sm  = prometheus.out.mkServiceMonitor scope { ... };
 ing = svc |> clusterIssuer.out.withCert |> scope.mkResource;
 
@@ -258,6 +281,18 @@ discriminator (explicit `labels` on the Service, selected explicitly); a
 first-class `kix.run/part` identity label is an open design question in
 ROADMAP.
 
+Under default deny the scrape path is derived like any other edge: the
+netpol plugin joins each Prometheus with the monitors it selects and opens
+the server's egress and each target's ingress. A package never opens its
+metrics port with an intent. Kix derives no rule for host-network targets it
+did not build (the kubelet, control-plane static pods); the server reaches
+them only because its API server rule admits every port on the nodes
+(HANDBOOK §16.8). Scrape configs outside the monitor objects get no rule.
+Select PodMonitor pods with `matchLabels`, and give a monitor over pods an
+operator creates a port number: Kix cannot derive a path from a
+`matchExpressions` selector or from a port name it cannot resolve, and under
+default deny either one fails evaluation.
+
 ### 6.3 Wiring (DI) > module system > meta
 
 Reach for these in order:
@@ -291,14 +326,11 @@ modules = [
   kix.modules.monitoring
   { monitoring.enabled = true; monitoring.loki.enabled = true; }
 
-  # Pure override module — merges into the loki instance the monitoring
-  # module already declared in the monitoring-loki namespace.
+  # Pure override module: merges into the loki instance the monitoring
+  # module already declared in the monitoring namespace.
   ({ config, ... }: {
-    instances.${config.monitoring.loki.namespace}.loki.config = {
-      values = {
-        # whatever loki package config you want to merge in
-        loki.limits_config.retention_period = "168h";
-      };
+    instances.${config.monitoring.namespace}.loki.config.settings = {
+      limits_config.retention_period = "720h";
     };
   })
 ];
@@ -310,7 +342,7 @@ Two safety properties to lean on:
   errors. Override-only modules touch `config` (and `aliases` / `deps` /
   `partsOverlays` if needed), nothing else.
 - **Reference the upstream namespace through its option** (e.g.
-  `config.monitoring.loki.namespace`) instead of hardcoding the string —
+  `config.monitoring.namespace`) instead of hardcoding the string:
   if the upstream module renames the namespace, your override follows.
   A typo'd namespace creates a fresh instance with no `package`, which
   fails eval with a clear "option ... is used but not defined" error
@@ -342,11 +374,11 @@ Rule of thumb:
 | `config` | `deferredModule` | Tweak typed package options. Module-merged across contributors. |
 | `deps` | `attrsOf anything` | Force a specific DI provider for one build arg. Two modules setting the same dep = error. |
 | `aliases` | `listOf str` | Set DI resolution keys for this instance. When non-empty, **replaces** the package's `meta.defaultAliases`; when empty, defaults apply. Not the right tool for multi-instance disambiguation — see §8.4. |
-| `labelStyle` | `enum { kix, helm }` | Switch label scheme — for byte-level Helm parity (e.g. when `releaseName` is set). |
+| `labelStyle` | `enum { kix, helm }` | Switch label scheme, for adopting a Helm-installed workload whose selector labels are immutable. |
 | `selectorLabels` | `attrsOf str` | Override auto-generated selector labels. Escape hatch for *immutable* selectors on pre-existing StatefulSets. |
 | `partsOverlays` | `listOf (scope → self → base → attrset)` | Post-build resource transforms. Run after the package's `build` inside the same fixpoint — full access to `scope`. Can rewrite `root`, extend `out` with builders, add parts. Multiple modules concatenate. |
-| `extraDeps` | `listOf raw` | Inject DAG edges not visible via Nix string context (e.g. "import depends on a managed root"). |
-| `optional` | `bool` | Pre-configure but only deploy if a non-optional instance transitively depends on this. |
+| `extraDeps` | `listOf raw` | On a `kix.mkImport` instance only: dependencies for its marker that no value carries. Entries are resources or `ref.<ns>.<inst>` (that instance's PackageInstance marker). A ref to an optional instance that nothing activates, a malformed entry, and `extraDeps` on a managed instance fail evaluation. |
+| `optional` | `bool` | Pre-configure but only deploy if a non-optional instance transitively depends on this, through a required build argument or a `deps` ref. |
 
 **Cluster-level channels:**
 
@@ -365,23 +397,24 @@ Rule of thumb:
 
 #### Concrete example: `partsOverlays` to expose CRD builders
 
-`partsOverlays` is the most powerful escape hatch — runs after the
+`partsOverlays` is the most powerful escape hatch: it runs after the
 package's `build` returns, inside the same fixpoint, with full access to
-`scope`. Use it when a Helm-wrapped or upstream package doesn't expose
-`out.*` builders the consumer needs:
+`scope`. `kix.helmChart` returns a package whose `out` has no builders for
+the kinds its chart installs. Use an overlay to add one:
 
 ```nix
-# clusters/test-monitoring-helm.nix
-instances.monitoring-system.kube-prometheus-stack = {
-  package = packages.kube-prometheus-stack;
+instances.kyverno.kyverno = {
+  package = kix.helmChart {
+    repo = "https://kyverno.github.io/kyverno/"; name = "kyverno";
+    version = "3.9.1"; hash = "sha256-..."; releaseName = "kyverno";
+  };
   partsOverlays = [
     (scope: self: base: {
       root = base.root // {
         out = (base.root.out or { }) // {
-          mkServiceMonitor = (scope.mkCRDRef {
-            group = "monitoring.coreos.com";
-            kind = "ServiceMonitor";
-            plural = "servicemonitors";
+          mkValidatingPolicy = (scope.mkCRDRef {
+            group = "policies.kyverno.io"; kind = "ValidatingPolicy";
+            plural = "validatingpolicies"; version = "v1"; crdScope = "Cluster";
           }).out.mkCR;
         };
       };
@@ -389,6 +422,9 @@ instances.monitoring-system.kube-prometheus-stack = {
   ];
 };
 ```
+
+Consumers call `kyverno.out.mkValidatingPolicy scope { name; spec; }`.
+See `how-to/adopt-existing-resources/patch-package-output-with-overlays`.
 
 If a `partsOverlay` becomes a copy-pasted pattern across clusters, that's
 a signal to upstream it into the package's own `out` (§7.2).
@@ -409,12 +445,14 @@ extend them.
 
 ```nix
 # Right
-env = kix.mkEnvVars { DB_HOST = postgres.out.fqdn; };
+env = kix.mkEnvVars { DB_HOST = database.out.host; };
 selector.matchLabels = workload.out.selector;
+priorityClassName = priorityClass.out.name;
 
 # Wrong
-env = kix.mkEnvVars { DB_HOST = "${postgres}"; };       # store path string — invalid as DNS name
+env = kix.mkEnvVars { DB_HOST = "${database}"; };       # store path string, invalid as a DNS name
 selector.matchLabels = workload.spec.selector.matchLabels;   # bypasses context
+priorityClassName = "batch-low";   # no ordering: pods can be refused until the class exists
 ```
 
 The `out.*` form is a **real K8s name** (or selector, or fqdn) carrying the
@@ -489,10 +527,10 @@ DI concern resolved by the cluster.
 Build args declare DI deps. Required deps have no default; optional deps get `? null`:
 
 ```nix
-build = { self, config, postgres, storage, machineLearning ? null, prometheus ? null, ... }: { ... };
+build = { self, config, database, storage, machineLearning ? null, prometheus ? null, ... }: { ... };
 ```
 
-`postgres` and `storage` are required: the package can't function without them.
+`database` and `storage` are required: the package can't function without them.
 `machineLearning` and `prometheus` are optional capabilities — the package
 gracefully omits resources when they're absent.
 
@@ -500,7 +538,7 @@ gracefully omits resources when they're absent.
 
 Infrastructure-role owners claim their role from the closed registry in
 `kix/lib/eval/roles.nix` (currently: `network-policy-enforcer`, `dns`,
-`storageClasses`, `cni`, `loadBalancer`):
+`storageClasses`, `snapshotController`, `cni`, `loadBalancer`):
 
 ```nix
 # kix/packages/storage-classes/default.nix
@@ -511,7 +549,14 @@ meta = {
 
 The role name doubles as a DI alias automatically, and binding-mode
 conflicts against environment-provided roles (`cluster.roles.<name>.binding`,
-`absent` | `shadowable` | `exclusive`) are refused at eval. Everything that
+`absent` | `shadowable` | `exclusive`) are refused at eval. When the
+environment provides a role through an implementation a package can drive
+(RKE2's bundled Cilium), the binding stays `shadowable` and the flavour
+declares the implementation as a platform import claiming the role
+(`kube-system/platform-cilium`, whose `out` names the HelmChartConfig); the
+package takes the import as a dependency and derives what it emits from the
+binding and the import, and every other pair is an eval error rather than a
+guess. Everything that
 isn't a registry role resolves through ordinary aliases — e.g.
 `persistent-volume-claim` declares `meta.defaultAliases = [ "storage" ]`.
 
@@ -602,6 +647,12 @@ scheduler; each node becomes eligible the moment its predecessors emit
 
 When something looks like "wait N seconds and hope" — design the structured
 verdict instead.
+
+A rollout Kix can derive belongs in the plan: a pod that reads a
+Kix-built ConfigMap or Secret carries its identity hash as a
+`checksum/<name>` annotation, so `kix diff` shows the restart. Reloader
+(`out.withReloadOn`) is for content the build cannot see, such as a
+Secret written by an external secret store.
 
 ### 9.4 A value that varies per deploy is committed, not injected
 
@@ -704,6 +755,14 @@ that look right in the source are often wrong in kix.
 
 Detailed playbook: `.claude/skills/kix-migration/SKILL.md`.
 
+### 11.2 Review a package against the checklist
+
+Before a new or reworked package merges, its author and its reviewer run it
+through `.claude/skills/package-review/SKILL.md`: short guidance on what an
+exemplary Kix package looks like, then a mechanical checklist of the mistakes
+packages keep making (options, secrets, network intents, availability,
+monitoring, tests). Add an item there when a review finds a new one.
+
 ## 12. Anti-patterns
 
 Concrete things that look right but aren't.
@@ -712,10 +771,10 @@ Concrete things that look right but aren't.
 
 ```nix
 # Wrong
-env = { DB_HOST = "${postgres}"; };  # store path → not a valid K8s host
+env = { DB_HOST = "${database}"; };  # store path → not a valid K8s host
 
 # Right
-env = { DB_HOST = postgres.out.fqdn; };
+env = { DB_HOST = database.out.host; };
 ```
 
 `"${resource}"` evaluates to the store path. Use it only when you genuinely
@@ -792,8 +851,8 @@ that's the price of the workaround being visible.
 (`kix/lib/eval/roles.nix`) is closed. Services other packages consume
 resolve via arg name → instance name → instance aliases (which *replace*
 package `defaultAliases` when non-empty). Roles are only for the registry's
-infrastructure slots (network-policy-enforcer, dns, storageClasses, cni,
-loadBalancer).
+infrastructure slots (network-policy-enforcer, dns, storageClasses,
+snapshotController, cni, loadBalancer).
 
 ### 12.8 Backwards-compatibility shims
 
@@ -835,6 +894,47 @@ ratchet rather than a fix: a predicate over spelling cannot tell you that
 `sha-typo12` is wrong. What closes the class is §9.4, a resolved digest in a
 committed pin file, checked against a registry by `kix pin check`.
 
+### 12.12 Re-deriving the public URL
+
+```nix
+# Wrong: repeats kix.expose's host logic and guesses the scheme
+DOMAIN = "https://${config.ingress.host or "${name}.${clusterConfig.cluster.domain}"}";
+
+# Right: the record of the route kix.expose rendered
+DOMAIN = self.exposure.url;
+```
+
+The record knows whether a route exists, which host it serves and
+whether TLS is on. A copy of the host logic drifts, and a hard-coded
+`https` is wrong on a cluster without a cluster issuer. Reading `url`
+fails evaluation when Kix cannot derive the URL; a package that works
+without one reads `urlOrNull` and says what happens when it is null.
+
+### 12.13 An option whose default the module system cannot merge
+
+```nix
+# Wrong: an instance that sets resources.limits.memory loses the requests
+resources = lib.mkOption {
+  type = lib.types.anything;
+  default = { requests = { cpu = "100m"; memory = "128Mi"; }; };
+};
+
+# Right: each default sits on its field
+resources = kix.options.resources { requests = { cpu = "100m"; memory = "128Mi"; }; };
+```
+
+An instance value replaces an `anything`, `attrsOf`, or submodule default
+as a whole, so the package's entries disappear without a message. The
+option contract refuses such a default in package CI
+(`every-package-evaluates`, once per package; a cluster evaluation does not
+run it, so run it on a package kept outside kixpkgs yourself, see the
+`options` reference page). Put the defaults on
+submodule fields; to keep `attrsOf` entries an instance adds to, default
+the option to `{ }` and set each entry in the package's `config` with
+`lib.mkDefault`; when the instance should replace the value as a whole,
+default it to null and apply the package's value in the build. Give the
+option a `defaultText` naming the value in the last two cases.
+
 ## 13. When to update what
 
 | Change | Update |
@@ -845,6 +945,7 @@ committed pin file, checked against a registry by `kix pin check`.
 | New flavor | `kix/lib/flavors/`, register in `kix/lib/default.nix`. `docs/HANDBOOK.md` §15 (capability matrix). |
 | New scorecard rule | `kix/lib/rules/`, register in `kix/lib/rules/default.nix`. `docs/HANDBOOK.md` §17. |
 | New non-obvious pattern (edge case, escape hatch, weird interaction) | `kix/lib/architecture.md` "Non-obvious patterns" section. |
+| New or reworked package | Review it with `.claude/skills/package-review/SKILL.md`; add a checklist item when the review finds a new kind of mistake. |
 | Migration learning (new pattern that came up while migrating) | `.claude/skills/kix-migration/SKILL.md` — but **ask the user first** before editing. |
 | Durable design tenet shifted | `PRINCIPLES.md`, then propagate consequences here. |
 | Roadmap item completed | `ROADMAP.md` — mark `[x]`, expand with implementation details. |

@@ -465,7 +465,7 @@
           "06-service-dep"
         ];
         allowFailure = true;
-        stdoutGrep = "error: dependency 'backend' was not found";
+        stdoutGrep = "error: .*dependency 'backend' was not found";
       }
     ];
   }
@@ -1283,8 +1283,8 @@
             .[]
             | select(
                 (.kind == "Deployment" and .metadata.namespace == "ingress-system")
-                or (.kind == "Service" and .metadata.namespace == "ingress-system" and .metadata.name == "ingressNginx")
-                or (.kind == "IngressClass" and .metadata.name == "ingressNginx")
+                or (.kind == "Service" and .metadata.namespace == "ingress-system" and .metadata.name == "ingress-nginx")
+                or (.kind == "IngressClass" and .metadata.name == "ingress-nginx")
               )
             | if .kind == "Deployment" then
                 {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, replicas: .spec.replicas}
@@ -1377,57 +1377,6 @@
               else
                 {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec}
               end
-          ]'';
-      }
-    ];
-  }
-
-  {
-    group = "how-to/package-python";
-    page = "/docs/how-to/package-task-guides/deploy-a-python-app/";
-    cwd = "kix-examples/";
-    offline = [
-      {
-        capture = "check";
-        run = [
-          "kix"
-          "check"
-          "how-to-package-python"
-        ];
-      }
-      {
-        capture = "workload";
-        run = [
-          "kix"
-          "build"
-          "how-to-package-python"
-          "--output"
-          "json"
-        ];
-        stdoutJq = ''
-          [
-            .[]
-            | select(
-                (.kind == "Deployment" and .metadata.namespace == "python-example")
-                or (.kind == "Service" and .metadata.namespace == "python-example")
-                or (.kind == "ConfigMap" and .metadata.namespace == "python-example")
-              )
-            | if .kind == "Deployment" then
-                {
-                  apiVersion,
-                  kind,
-                  metadata: {name: .metadata.name, namespace: .metadata.namespace},
-                  spec: {
-                    replicas: .spec.replicas,
-                    containers: .spec.template.spec.containers
-                      | map({name, image, command, args, ports, livenessProbe, readinessProbe})
-                  }
-                }
-              else if .kind == "Service" then
-                {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, spec: {ports: .spec.ports}}
-              else
-                {apiVersion, kind, metadata: {name: .metadata.name, namespace: .metadata.namespace}, data}
-              end end
           ]'';
       }
     ];

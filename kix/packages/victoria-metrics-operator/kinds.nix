@@ -2,9 +2,8 @@
 # Consumed by crds.nix (CRD resources) and operator.nix (RBAC plurals),
 # so the shipped CRDs and the operator's permissions cannot drift apart.
 #
-# RUNTIME INVARIANT (learned on kind, 2026-08-31): the operator requires
-# its COMPLETE CRD bundle. Slim-shipping a subset of the group is not an
-# option, twice over:
+# Runtime invariant: the operator requires its complete CRD bundle, for
+# two reasons:
 #   1. At startup it unconditionally registers status-condition field
 #      indexers for every kind in ChildConditionIndexedKinds
 #      (k8stools/child_condition_index.go @ v0.74.1) and the manager
@@ -12,8 +11,8 @@
 #      if any of those CRDs is absent.
 #   2. It then starts informer watches for every controller; a watch on a
 #      missing kind dies ~3 minutes in with "failed to wait for ... caches
-#      to sync" (observed live with *v1.VLAgent) and takes the manager
-#      down: a slow crashloop.
+#      to sync" (for example *v1.VLAgent) and takes the manager down: a
+#      slow crashloop.
 # So this table mirrors the chart's crd.yaml bundle for the pinned
 # operator version (25 kinds @ 0.67.3 / v0.74.1), plurals verbatim;
 # note the irregulars (vmanomalies, vmdistributed, vldistributed).
@@ -26,6 +25,8 @@
   # The prometheus-operator kinds the operator's built-in converter can
   # turn into VM equivalents. One entry per converter the operator has.
   #
+  # `version` is the API version upstream prometheus-operator serves for
+  # the kind, so a declared CRD and a reference to the real one agree.
   # `env` is the suffix of its VM_ENABLEDPROMETHEUSCONVERTER_* variable,
   # and `builder` says whether the package exposes an out.mk* for the
   # kind. That distinction decides when the CRD is needed:
@@ -50,6 +51,7 @@
     serviceMonitors = {
       kind = "ServiceMonitor";
       plural = "servicemonitors";
+      version = "v1";
       shortNames = [ "smon" ];
       env = "SERVICESCRAPE";
       builder = true;
@@ -58,6 +60,7 @@
     podMonitors = {
       kind = "PodMonitor";
       plural = "podmonitors";
+      version = "v1";
       shortNames = [ "pmon" ];
       env = "PODMONITOR";
       builder = true;
@@ -66,6 +69,7 @@
     prometheusRules = {
       kind = "PrometheusRule";
       plural = "prometheusrules";
+      version = "v1";
       shortNames = [ "promrule" ];
       env = "PROMETHEUSRULE";
       builder = true;
@@ -74,6 +78,7 @@
     probes = {
       kind = "Probe";
       plural = "probes";
+      version = "v1";
       shortNames = [ "prb" ];
       env = "PROBE";
       builder = true;
@@ -82,6 +87,7 @@
     scrapeConfigs = {
       kind = "ScrapeConfig";
       plural = "scrapeconfigs";
+      version = "v1alpha1";
       shortNames = [ "scfg" ];
       env = "SCRAPECONFIG";
       builder = false;
@@ -90,6 +96,7 @@
     alertmanagerConfigs = {
       kind = "AlertmanagerConfig";
       plural = "alertmanagerconfigs";
+      version = "v1alpha1";
       shortNames = [ "amcfg" ];
       env = "ALERTMANAGERCONFIG";
       builder = false;

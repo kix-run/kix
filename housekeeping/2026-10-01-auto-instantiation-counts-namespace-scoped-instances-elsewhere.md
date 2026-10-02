@@ -1,0 +1,3 @@
+# 2026-10-01 · `kix/lib/eval/auto.nix` · Auto-instantiation treats a mandatory instance in any namespace as answering a required dependency, including a namespace-scoped one that resolution will skip.
+
+`mandatoryKeys` lists every mandatory instance's name and aliases with no namespace. A managed valkey (`meta.scope = "namespace"`) in `cache` therefore stops the shelf from instantiating a valkey for immich in `immich`, and immich then fails with "dependency 'valkey' was not found for namespace 'immich'", which names the skipped `cache/valkey`. The fix the message suggests (add an instance) is what auto-instantiation would have done. The check is at `demandsOf` (`required = builtins.filter (d: !(mandatoryKeys ? ${d})) ...`).

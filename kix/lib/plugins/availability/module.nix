@@ -2,8 +2,9 @@
 #
 # Packages map ctx.availability to replica counts. Cluster capabilities define
 # available failure domains. The workload interceptor adds placement before
-# sealing; the instance processor adds PDBs and checks replica shortfalls; the
-# cluster processor reports uncertain substrate capabilities once per cluster.
+# sealing; the instance processor adds PDBs, warns about replica shortfalls,
+# and refuses more than one replica under a `none` ceiling; the cluster
+# processor reports uncertain substrate capabilities once per cluster.
 {
   config,
   lib,
@@ -41,18 +42,6 @@ let
     else
       [ hostKey ];
 
-  # Use DoNotSchedule on the key represented by the requested level and
-  # ScheduleAnyway on lower-priority keys. maxSkew=1 permits more replicas
-  # than domains while keeping their distribution within one pod.
-  whenUnsatisfiable =
-    level: key:
-    if level == "zone" && key == zoneKey then
-      "DoNotSchedule"
-    else if level == "node" && key == hostKey then
-      "DoNotSchedule"
-    else
-      "ScheduleAnyway";
-
   isMultiReplica =
     kind: spec:
     builtins.elem kind spreadKinds && builtins.isInt (spec.replicas or null) && spec.replicas > 1;
@@ -61,24 +50,21 @@ let
   # derives neither constraints nor a PDB for it (one signal, one meaning).
   authorPlaced = spec: (spec.template.spec or { }) ? topologySpreadConstraints;
 
-  # Exclude nodes rejected by taints from topology counts. Otherwise an
-  # unschedulable control-plane node can make a hard hostname constraint
-  # prevent additional worker pods.
-  # Count only the current Deployment revision during rolling updates.
-  # StatefulSets replace pods in place and have no pod-template-hash label.
+  # The constraints come from core/availability.nix. For a Deployment,
+  # matchLabelKeys counts only the current revision during a rolling
+  # update; StatefulSets replace pods in place and have no
+  # pod-template-hash label.
   mkConstraints =
     kind: level: selector:
-    map (
-      key:
-      {
-        topologyKey = key;
-        maxSkew = 1;
-        whenUnsatisfiable = whenUnsatisfiable level key;
-        nodeTaintsPolicy = "Honor";
-        labelSelector.matchLabels = selector;
-      }
-      // lib.optionalAttrs (kind == "Deployment") { matchLabelKeys = [ "pod-template-hash" ]; }
-    ) failureDomainKeys;
+    map (c: c // lib.optionalAttrs (kind == "Deployment") { matchLabelKeys = [ "pod-template-hash" ]; })
+      (
+        avail.spreadConstraints {
+          inherit level selector;
+          topology = {
+            inherit zoneKey hostKey failureDomainKeys;
+          };
+        }
+      );
 
   # A PDB written by the author covers a workload when its selector is a
   # subset of the workload's template labels.
@@ -284,13 +270,63 @@ in
           r:
           "[${ctx.instanceName}] ${r.rawManifest.kind} '${r.rawManifest.metadata.name}' runs "
           + "${toString r.rawManifest.spec.replicas} replica under availability \"${levelOf r}\": "
-          + "losing its node would cause downtime. Set the replica count based on the availability level "
-          + "(kix.availability.pick), set meta.availability.max to the level the package supports, "
-          + "or availability.max on this workload alone."
+          + "losing its node would cause downtime. Map the replica count with kix.availability.pick, "
+          + "or, if the workload cannot run more than one pod, set availability.max = \"none\" "
+          + "on its builder call."
         ) shortfall;
+
+        # The ceiling `none` means one pod at a time, so a Deployment or
+        # StatefulSet above one replica under it is an error. Every part
+        # resource is judged, root-reachable or not, after partsOverlays. A
+        # resource sealed without a builder (a raw mkResource in an overlay)
+        # is judged against the package ceiling in ctx.availability.
+        ceilingOf =
+          r:
+          let
+            a = r._availability or ctx.availability;
+          in
+          if (a.ceiling or null) == null then
+            null
+          else
+            {
+              level = a.ceiling;
+              from = a.ceilingFrom or "package";
+            };
+        overReplicated = builtins.filter (
+          r:
+          let
+            m = r.rawManifest or { };
+          in
+          builtins.elem (m.kind or "") spreadKinds
+          && builtins.isInt (m.spec.replicas or null)
+          && m.spec.replicas > 1
+          && ((ceilingOf r).level or null) == "none"
+        ) ctx.allPartResources;
+        ceilingSource = {
+          builder = "availability.max on its builder call";
+          package = "the package's meta.availability.max";
+        };
+        overReplicatedMessage =
+          r:
+          let
+            m = r.rawManifest;
+          in
+          "[${ctx.namespaceName}/${ctx.instanceName}] ${m.kind} '${m.metadata.name}' runs "
+          + "${toString m.spec.replicas} replicas, but ${ceilingSource.${(ceilingOf r).from}} is \"none\", "
+          + "so it supports one pod at a time. Set its replica count to 1. If you maintain the package "
+          + "and the program can coordinate several replicas (leader election, an HA mode, a shared "
+          + "work queue), remove or raise the ceiling, or compute it from config on the builder call, "
+          + "and map the count with kix.availability.pick.";
+        replicaGuard =
+          if overReplicated == [ ] then
+            null
+          else
+            throw (lib.concatMapStringsSep "\n" overReplicatedMessage overReplicated);
       in
       {
-        resources = map mkPdb (builtins.filter wantsPdb workloads);
+        # The instance always forces `resources`, so the replica guard runs
+        # in every build.
+        resources = builtins.seq replicaGuard (map mkPdb (builtins.filter wantsPdb workloads));
         warnings = ctx.availability.warnings ++ placedWarnings ++ shortfallWarnings;
       };
 

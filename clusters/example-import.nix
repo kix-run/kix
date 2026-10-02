@@ -1,4 +1,4 @@
-# clusters/example-import.nix — Example: immich with imported (external) valkey.
+# clusters/example-import.nix: example of immich with imported (external) valkey.
 #
 # Demonstrates mkImport: valkey is not managed by kix but exists in the cluster.
 # The import derives out (name, fqdn, port) from the real valkey package via
@@ -17,18 +17,27 @@ kix.buildCluster {
       };
 
       instances = {
-        # Storage infrastructure — managed by kix even when other deps are imported.
-        kube-system = {
-          storage-classes = {
-            package = packages.storage-classes;
-            aliases = [ "storageClasses" ];
+        # The cluster's existing StorageClass, imported as the storageClasses
+        # provider. The immich claim below names no class and gets this one.
+        # region:importedStorageClass
+        kube-system.platform-storage.package = kix.mkImport {
+          kind = "StorageClass";
+          apiVersion = "storage.k8s.io/v1";
+          roles = [ "storageClasses" ];
+          out = {
+            name = "local-path";
+            storageClassName = "local-path";
           };
         };
+        # endregion:importedStorageClass
 
         # Valkey exists in the cluster but is managed externally.
         # mkImport with `from` runs the valkey package build in import mode
         # (lightweight mkResource) to derive out.name, out.fqdn, out.port.
-        # Only a marker PackageInstance CR is deployed.
+        # Only a marker PackageInstance CR is deployed. The import's out has
+        # no authSecret (housekeeping/2026-10-01-import-drops-root-out-extras.md),
+        # so immich sends no password, and the external Valkey must accept
+        # clients without one.
         cache = {
           valkey = {
             package = kix.mkImport { from = packages.valkey; };
@@ -39,15 +48,30 @@ kix.buildCluster {
         # Postgres managed externally (e.g. StackGres, CloudNativePG, RDS).
         database = {
           postgres = {
-            package = kix.mkImport { from = packages."stackgres-cluster"; };
+            package = kix.mkImport {
+              from = packages."stackgres-cluster";
+              # The extensions the external cluster has installed. The
+              # stackgres-database below checks the ones immich asks for
+              # against this list.
+              out.extensions = [
+                "vchord"
+                "uuid-ossp"
+                "cube"
+                "earthdistance"
+                "unaccent"
+                "pg_trgm"
+              ];
+            };
 
           };
         };
 
         # Immich namespace: server + ML worker + per-app database instance.
-        # valkey resolves via DI from the cache namespace (cluster-wide).
+        # valkey resolves via DI from the cache namespace: an import is
+        # cluster-scoped, while a managed valkey serves only its own
+        # namespace.
         # The stackgres-database instance below lives in *this* namespace
-        # but talks to the imported postgres in the `database` namespace —
+        # but talks to the imported postgres in the `database` namespace,
         # demonstrating the cross-namespace flow without cross-namespace
         # secret reads (the credentials Secret is materialized locally).
         immich = {
@@ -58,13 +82,14 @@ kix.buildCluster {
             };
           };
 
+          # immich adds the extensions it needs to this instance, which
+          # checks them against the imported cluster's out.extensions.
           immich-db = {
             package = packages."stackgres-database";
             aliases = [ "database" ];
             config = {
               database = "immich";
               user = "immich";
-              extensions = [ "vector" ];
               password = "immich-dev-password";
             };
           };

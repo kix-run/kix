@@ -1,8 +1,8 @@
-# Test clusters — exercise various kix features.
+# Test clusters that exercise Kix features.
 #
 # Build:  nix build .#cluster-minimal --extra-experimental-features pipe-operators
 #
-# Note: test-helm is excluded — it references ../tests/helm-test-chart which is
+# Note: test-helm is excluded because it references ../tests/helm-test-chart, which is
 # outside this flake tree. Build it from the root flake instead.
 
 {
@@ -36,14 +36,15 @@
         auto = ./test-auto.nix;
         auto2 = ./test-auto2.nix;
         immich = ./test-immich.nix;
+        n8n = ./test-n8n.nix;
         clickhouse = ./test-clickhouse.nix;
         clickhouse-operator = ./test-clickhouse-operator.nix;
         clickhouse-swap-bare = ./test-clickhouse-swap/bare.nix;
         clickhouse-swap-replicated = ./test-clickhouse-swap/replicated.nix;
         kind = ./test-kind.nix;
         spread = ./test-spread.nix;
-        monitoring-helm = ./test-monitoring-helm.nix;
         monitoring-native = ./test-monitoring-native.nix;
+        monitoring-loki = ./test-monitoring-loki.nix;
         test-secrets = ./test-secrets.nix;
         victoria-metrics = ./test-victoria-metrics.nix;
         kind-probe = ./test-kind-probe.nix;
@@ -55,6 +56,16 @@
         operators = ./test-operators.nix;
         sealed-jobs = ./test-sealed-jobs.nix;
         ingress-netpol = ./test-ingress-netpol.nix;
+        rke2-cilium = ./test-rke2-cilium.nix;
+        external-dns = ./test-external-dns.nix;
+        external-dns-tryout = ./test-external-dns-tryout.nix;
+        velero = ./test-velero.nix;
+        reloader = ./test-reloader/kind.nix;
+        tailscale = ./test-tailscale/cluster.nix;
+        mayastor = ./test-mayastor.nix;
+        virtualization = ./test-virtualization.nix;
+        metabase = ./test-metabase.nix;
+        monitoring-netpol = ./test-monitoring-netpol.nix;
       };
     };
 }

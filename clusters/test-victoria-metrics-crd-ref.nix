@@ -1,4 +1,4 @@
-# clusters/test-victoria-metrics-crd-ref.nix — the VM operator on a cluster
+# clusters/test-victoria-metrics-crd-ref.nix: the VM operator on a cluster
 # that already runs prometheus-operator.
 #
 # Companion to test-victoria-metrics.nix, which covers the default: the
@@ -8,13 +8,19 @@
 #
 # What it proves:
 # 1. No CustomResourceDefinition is rendered for ServiceMonitor,
-#    PodMonitor, PrometheusRule or Probe — four import markers instead.
+#    PodMonitor, PrometheusRule or Probe: import markers instead.
 # 2. `out.mkServiceMonitor` / `mkPrometheusRule` still build CRs, because
 #    mkCRDRef returns the same builders mkCRD does. An inline consumer
 #    calls both, so a regression here fails the build rather than the
 #    deploy.
 # 3. The VM-native CRDs are unaffected: the operator still ships its own
 #    complete bundle, which it must (kinds.nix).
+# 4. Every converter is on, so the two v1alpha1 kinds (ScrapeConfig,
+#    AlertmanagerConfig) are referenced too. With the instance named
+#    victoria-metrics-operator, the AlertmanagerConfig marker is the longest
+#    CRD ref marker name in kixpkgs:
+#    crd-ref-victoria-metrics-operator-alertmanagerconfigs-monitoring-coreos-com
+#    (75 characters; a marker name is a DNS-1123 subdomain, up to 253).
 #
 # Build:  nix build .#cluster-victoria-metrics-crd-ref --extra-experimental-features pipe-operators
 
@@ -84,9 +90,15 @@ kix.buildCluster {
       namespaces.monitoring-system = { };
 
       instances.monitoring-system = {
-        vm-operator = {
+        victoria-metrics-operator = {
           package = packages.victoria-metrics-operator;
-          config.prometheusOperatorCRDs = "reference";
+          config = {
+            prometheusOperatorCRDs = "reference";
+            convert = {
+              scrapeConfigs = true;
+              alertmanagerConfigs = true;
+            };
+          };
         };
         vm-cluster = {
           package = packages.victoria-metrics-cluster;

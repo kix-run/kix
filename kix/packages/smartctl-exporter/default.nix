@@ -3,6 +3,11 @@
 # Wraps the upstream prometheus-smartctl-exporter Helm chart.
 # Deployed as a DaemonSet with privileged access to host /dev.
 #
+# The chart's ServiceMonitor and PrometheusRule are turned off. They are
+# prometheus-operator kinds, and a chart resource cannot depend on the
+# package that declares them, so the cluster build refuses them (check 21).
+# Scrape the exporter from a package that takes the prometheus dependency.
+#
 # Chart:   https://prometheus-community.github.io/helm-charts
 # Name:    prometheus-smartctl-exporter
 # Version: 0.16.0
@@ -40,20 +45,8 @@ let
       }
     ];
 
-    serviceMonitor = {
-      enabled = true;
-      relabelings = [
-        {
-          action = "replace";
-          sourceLabels = [ "__meta_kubernetes_pod_node_name" ];
-          targetLabel = "node";
-        }
-      ];
-    };
-
-    prometheusRules = {
-      enabled = true;
-    };
+    serviceMonitor.enabled = false;
+    prometheusRules.enabled = false;
   };
 in
 {

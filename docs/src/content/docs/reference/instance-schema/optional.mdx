@@ -29,9 +29,16 @@ use it.
 Kix starts with every non-optional instance and follows its dependencies. An
 optional instance is activated when that dependency closure reaches it by:
 
-- its instance name, alias, default alias, or role;
+- a required build argument that matches its instance name, alias, default
+  alias, or role;
 - an explicit `deps.<argument> = ref.<namespace>.<instance>`; or
 - a dependency of another optional instance that has already been activated.
+
+An optional build argument (`x ? null`) activates nothing, and a dormant
+optional instance or import does not answer it, so the argument is null
+unless an active instance answers it. An activated import emits its
+PackageInstance marker, so the deploy waits for the resource the import
+names.
 
 An activated optional instance is evaluated and deployed like any other
 instance. A dormant one contributes no manifests.

@@ -11,3 +11,4 @@ not of type `submodule'". The 2026-09-27 entry about `how-to-adoption`
 has the same cause: its real error is "attribute 'root' missing" at
 `ref.apps.legacy-api-contract.root` in kix-examples'
 `how-to/adoption/cluster.nix`.
+- Hit again 2026-10-01 while planning instance-config error locations: `ffi.rs` `classify_eval_error` also matches "does not exist", so a misspelled instance option ("The option `instances.<ns>.<inst>.config.replicaz' does not exist") is reported as a missing cluster.

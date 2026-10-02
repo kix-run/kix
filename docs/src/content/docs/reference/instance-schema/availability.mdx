@@ -21,9 +21,12 @@ instances.apps.preview = {
 
 An override may be higher or lower than the cluster default, provided the
 substrate supports it. A package's `meta.availability.max` may lower the
-resolved level further and emits a warning when it does.
+resolved level further and emits a warning when it does. A workload's own
+`availability.max` on its builder call lowers the level for that workload
+only.
 
 The resolved value is passed to the package as its `availability` argument and
 controls derived placement and PodDisruptionBudgets. Explicit instance options,
 including replica counts, still override package defaults derived from the
-level.
+level, except that a replica count above one under a `none` ceiling is an
+evaluation error.

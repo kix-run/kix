@@ -57,6 +57,8 @@ in
     evaluateInstance
     evaluateImportInstance
     buildCluster
+    checkPackageOptions
+    packageOptionViolations
     ;
 
   inherit (env) mkEnv;
@@ -96,7 +98,6 @@ in
     scaleway = ./flavors/scaleway.nix;
     openshift = ./flavors/openshift.nix;
     rke2 = ./flavors/rke2.nix;
-    lithus = ./flavors/lithus.nix;
     talos = ./flavors/talos.nix;
   };
 

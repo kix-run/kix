@@ -1,0 +1,3 @@
+# 2026-10-01 · `kix/lib/flavors` · Flavours that import into kube-system but declare no platform intents cut kube-system off under network policy.
+
+With `networkPolicy.enable = true`, every declared namespace gets a `<ns>-default-deny` policy (`kix/lib/plugins/netpol/module.nix`). k3s and scaleway (and other flavours) declare `platform-dns` in kube-system, so kube-system is declared and denied, but they declare no intents for the environment's own pods there (CoreDNS, metrics-server, local-path-provisioner, traefik). Only kind and rke2 do. `ludo/cluster.nix` keeps network policy off for this reason; turning it on would cut off k3s's CoreDNS.

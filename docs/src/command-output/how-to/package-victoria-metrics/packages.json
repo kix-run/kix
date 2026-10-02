@@ -9,9 +9,9 @@
   "commands": [
     {
       "command": "kix list packages --cluster how-to-package-victoria-metrics",
-      "stdout": " NAME              VERSION   OWNER     STATUS                        \n grafana           13.1.1    platform  installed [monitoring-system] \n platform-dns      -         -         import [kube-system]          \n platform-storage  -         -         import [kube-system]          \n vm-agent          v1.150.0  platform  installed [monitoring-system] \n vm-alert          v1.150.0  platform  installed [monitoring-system] \n vm-cluster        v1.150.0  platform  installed [monitoring-system] \n vm-operator       v0.74.1   platform  installed [monitoring-system] \n",
+      "stdout": " NAME              VERSION   OWNER     STATUS                        \n grafana           13.1.1    platform  installed [monitoring-system] \n grafana-admin     1.0.0     platform  installed [monitoring-system] \n platform-dns      -         -         import [kube-system]          \n platform-storage  -         -         import [kube-system]          \n vm-agent          v1.150.0  platform  installed [monitoring-system] \n vm-alert          v1.150.0  platform  installed [monitoring-system] \n vm-cluster        v1.150.0  platform  installed [monitoring-system] \n vm-operator       v0.74.1   platform  installed [monitoring-system] \n",
       "stderr": "",
-      "stdoutDrift": "NAME VERSION OWNER STATUS\ngrafana 13.1.1 platform installed [monitoring-system]\nplatform-dns - - import [kube-system]\nplatform-storage - - import [kube-system]\nvm-agent v1.150.0 platform installed [monitoring-system]\nvm-alert v1.150.0 platform installed [monitoring-system]\nvm-cluster v1.150.0 platform installed [monitoring-system]\nvm-operator v0.74.1 platform installed [monitoring-system]\n",
+      "stdoutDrift": "NAME VERSION OWNER STATUS\ngrafana 13.1.1 platform installed [monitoring-system]\ngrafana-admin 1.0.0 platform installed [monitoring-system]\nplatform-dns - - import [kube-system]\nplatform-storage - - import [kube-system]\nvm-agent v1.150.0 platform installed [monitoring-system]\nvm-alert v1.150.0 platform installed [monitoring-system]\nvm-cluster v1.150.0 platform installed [monitoring-system]\nvm-operator v0.74.1 platform installed [monitoring-system]\n",
       "stderrDrift": "",
       "exitCode": 0
     }

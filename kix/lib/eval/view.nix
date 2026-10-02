@@ -19,8 +19,17 @@ in
     let
       ctx = "instance '${instanceName}'";
 
+      # A known folder (`crds`, `secrets`) whose name `rootOut` also defines is
+      # left out of the view, so `out.crds.<Kind>` can sit beside a `crds.*`
+      # parts folder and the view's `crds` is the `out` value. The folder's
+      # resources are still emitted, because emission reads `parts`.
       folders = lib.filterAttrs (
-        n: v: n != "root" && v != null && builtins.isAttrs v && !(v ? _type)
+        n: v:
+        n != "root"
+        && v != null
+        && builtins.isAttrs v
+        && !(v ? _type)
+        && !(knownFolders ? ${n} && rootOut ? ${n})
       ) parts;
 
       autoKeys = rootOut;

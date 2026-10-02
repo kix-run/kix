@@ -28,6 +28,13 @@ let
         max = 63;
         desc = "a lowercase RFC 1035 label: start with a letter, then letters, digits or '-', ending alphanumeric";
       }
+    else if kind == "CronJob" then
+      {
+        pattern = "[a-z0-9]([-a-z0-9.]*[a-z0-9])?";
+        max = 52;
+        desc = "a lowercase DNS-1123 subdomain: letters, digits, '-' or '.', starting and ending alphanumeric";
+        maxReason = "the CronJob controller appends an 11-character suffix to the names of the Jobs it creates";
+      }
     else if kind == "Namespace" then
       {
         pattern = "[a-z0-9]([-a-z0-9]*[a-z0-9])?";
@@ -41,62 +48,15 @@ let
         desc = "a lowercase DNS-1123 subdomain: letters, digits, '-' or '.', starting and ending alphanumeric";
       };
 
-  _parseQuantity =
-    resource: q:
-    let
-      str = builtins.unsafeDiscardStringContext (toString q);
-      cpuMilli = builtins.match "([0-9]+)m" str;
-      cpuPlainInt = builtins.match "([0-9]+)" str;
-      cpuDecimal = builtins.match "([0-9]+)\\.([0-9]+)" str;
-      memBin = builtins.match "([0-9]+)(Ki|Mi|Gi|Ti|Pi|Ei)" str;
-      memDec = builtins.match "([0-9]+)(K|M|G|T|P|E)" str;
-      memPlain = builtins.match "([0-9]+)" str;
-      binMult =
-        s:
-        {
-          Ki = 1024;
-          Mi = 1024 * 1024;
-          Gi = 1024 * 1024 * 1024;
-          Ti = 1024 * 1024 * 1024 * 1024;
-          Pi = 1024 * 1024 * 1024 * 1024 * 1024;
-          Ei = 1024 * 1024 * 1024 * 1024 * 1024 * 1024;
-        }
-        .${s};
-      decMult =
-        s:
-        {
-          K = 1000;
-          M = 1000000;
-          G = 1000000000;
-          T = 1000000000000;
-          P = 1000000000000000;
-          E = 1000000000000000000;
-        }
-        .${s};
-    in
-    if resource == "cpu" then
-      if cpuMilli != null then
-        builtins.fromJSON (builtins.head cpuMilli)
-      else if cpuDecimal != null then
-        let
-          whole = builtins.fromJSON (builtins.elemAt cpuDecimal 0);
-          frac = builtins.elemAt cpuDecimal 1;
-          fracPadded = builtins.substring 0 3 (frac + "000");
-          fracInt = builtins.fromJSON fracPadded;
-        in
-        whole * 1000 + fracInt
-      else if cpuPlainInt != null then
-        (builtins.fromJSON (builtins.head cpuPlainInt)) * 1000
-      else
-        null
-    else if memBin != null then
-      (builtins.fromJSON (builtins.elemAt memBin 0)) * (binMult (builtins.elemAt memBin 1))
-    else if memDec != null then
-      (builtins.fromJSON (builtins.elemAt memDec 0)) * (decMult (builtins.elemAt memDec 1))
-    else if memPlain != null then
-      builtins.fromJSON (builtins.head memPlain)
-    else
-      null;
+  quantity = import ../vocab/quantity.nix { inherit lib; };
+
+  markers = import ../core/markers.nix { inherit lib; };
+
+  # True when a Service spec's `loadBalancerClass` comes from
+  # `kix.providedLoadBalancerClass` (core/markers.nix), so a provider in the
+  # build serves the Service. Any other class, with or without string
+  # context, is false.
+  hasProviderClass = spec: markers.isProvidedLoadBalancerClass (spec.loadBalancerClass or null);
 in
 {
   mkValidators =
@@ -266,7 +226,9 @@ in
         if kind == "" || name == "" || exempt then
           null
         else if tooLong then
-          throw "[${instanceName}] ${kind} name '${name}' is ${toString (builtins.stringLength name)} characters; Kubernetes allows at most ${toString rule.max} for this kind."
+          throw "[${instanceName}] ${kind} name '${name}' is ${toString (builtins.stringLength name)} characters; Kubernetes allows at most ${toString rule.max} for this kind${
+            lib.optionalString (rule ? maxReason) ", because ${rule.maxReason}"
+          }."
         else if malformed then
           throw "[${instanceName}] ${kind} name '${name}' is not valid. It must be ${rule.desc}.${hint}"
         else
@@ -286,6 +248,9 @@ in
         else
           null;
 
+      # A Service whose loadBalancerClass comes from a provider in the build
+      # is served by that provider, so the cluster's loadBalancer role does
+      # not apply to it.
       checkLoadBalancer =
         args:
         let
@@ -293,7 +258,12 @@ in
           status = roleStatus "loadBalancer";
           serviceDesc = "[${instanceName}] Service '${args.name or "unknown"}' uses type=LoadBalancer";
         in
-        if (args.kind or "") == "Service" && specType == "LoadBalancer" && capabilities != { } then
+        if
+          (args.kind or "") == "Service"
+          && specType == "LoadBalancer"
+          && capabilities != { }
+          && !(hasProviderClass (args.spec or { }) || hasProviderClass (args.extra.spec or { }))
+        then
           if status == "absent" then
             throw (
               serviceDesc
@@ -621,10 +591,28 @@ in
                   null
                 else
                   let
-                    l = _parseQuantity res limits.${res};
-                    r = _parseQuantity res requests.${res};
+                    # `parse` throws for a value it cannot compute exactly:
+                    # a cpu value the quantity type accepts can be out of
+                    # range in millicores. Throw first with the field named.
+                    problem =
+                      field: values:
+                      let
+                        reason = quantity.problem res values.${res};
+                      in
+                      if reason == null then
+                        null
+                      else
+                        "[${instanceName}] Container '${c.name}' resources.${field}.${res} (${toString values.${res}}) cannot be computed exactly: ${reason}. Kix computes quantities as 64-bit integers.";
+                    limitProblem = problem "limits" limits;
+                    requestProblem = problem "requests" requests;
+                    l = quantity.parse res limits.${res};
+                    r = quantity.parse res requests.${res};
                   in
-                  if l == null || r == null then
+                  if limitProblem != null then
+                    throw limitProblem
+                  else if requestProblem != null then
+                    throw requestProblem
+                  else if l == null || r == null then
                     null
                   else if l < r then
                     throw "[${instanceName}] Container '${c.name}' resources.limits.${res} (${toString limits.${res}}) is lower than resources.requests.${res} (${toString requests.${res}}). "

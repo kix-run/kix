@@ -66,9 +66,9 @@ These limits are what make derivation (idea 9) trustworthy: it fires only where 
 
 ## 10. Capabilities have owners; consumers borrow
 
-- A resource that belongs to a capability (storage owns PVCs, reflection, monitoring) is obtained from that capability's owner via a DI builder, not hand-rolled (see 03-advanced.md#networking--package-meta, `meta.provides`).
+- A resource that belongs to a capability (storage owns PVCs, reflection, monitoring) is obtained from that capability's owner via a DI builder, not hand-rolled (see 03-advanced.md#networking--package-meta, `meta.roles`).
 - Single responsibility across package boundaries: one package owns "how storage is provisioned," everyone else asks for it.
-- This is policed, not just suggested. The `capabilityOwnership` scorecard rule fires on hand-rolled resources that belong to another capability.
+- This is policed, not just suggested. A raw PVC is an eval error unless the package holds `meta.unsafe = [ "raw-pvc" ]`, and `architecture.annotationDomainOwnership` fires on an operator's annotations without a dependency on that operator.
 
 ## 11. Compose by adding behaviors
 
@@ -79,4 +79,4 @@ These limits are what make derivation (idea 9) trustworthy: it fires only where 
 
 - Every idea pushes the same direction: describe intent once, in K8s terms, let the compiler derive the rest, and get told at eval time when it cannot.
 - The recurring cost is indirection (the final manifest is package plus instance plus flavor plus overlays, never one file) and an implicit graph (a hardcoded string silently drops an edge).
-- The scorecard enforces the discipline these ideas assume rather than leaving it to convention (see 03-advanced.md#scorecard--rules): `selectorCoherence` and `fqdnWithoutContext` fail the build when a value carries no context, and `capabilityOwnership` fails it when a package hand-rolls another capability's resources.
+- The scorecard enforces the discipline these ideas assume rather than leaving it to convention (see 03-advanced.md#scorecard--rules): `selectorCoherence` and `fqdnWithoutContext` fail the build when a value carries no context, and the raw-PVC check fails it when a package hand-rolls a claim instead of taking `storage` by DI.

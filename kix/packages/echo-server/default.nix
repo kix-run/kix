@@ -1,7 +1,25 @@
-# Echo server package: simple nginx returning a test page.
+# echo-server: an nginx server that answers every request with a fixed
+# text message.
 #
-# Useful for validating cluster connectivity in local environments (kind).
-# Resources: ConfigMap, Deployment, Service.
+# Installs a ConfigMap holding the nginx config, a Deployment, and a Service
+# in front of it. It needs no dependencies and no config, so it is the
+# smallest package to deploy when checking that a cluster works.
+#
+# Minimal instance:
+#
+#   instances.demo.hello = {
+#     package = packages.echo-server;
+#     config.message = "hello from demo";   # optional; tells instances apart
+#   };
+#
+# `out`: the Service's `name`, `fqdn`, and `port` (`config.service.port`,
+# 80 by default). `/healthz` answers "ok"; every other path returns
+# `config.message`.
+#
+# Escape hatches: none of its own. Use the instance's `partsOverlays` for
+# anything the options do not cover (placement, extra labels).
+#
+# Limits: the message is plain text, and the server serves nothing else.
 
 {
   scope,
@@ -15,15 +33,16 @@ let
 in
 {
   meta = {
-    version = "1.27";
+    version = "1.30.5";
     description = "Nginx echo server for connectivity testing";
     owner = "app-team";
   };
 
   options = {
     image = kix.options.image {
-      repository = "nginxinc/nginx-unprivileged";
-      tag = "1.27-alpine";
+      repository = "docker.io/nginxinc/nginx-unprivileged";
+      tag = "1.30.5-alpine";
+      digest = "sha256:ed04ec1ff34502c339ee5c3ae3f855442398edc1d05591e2b98981dcbbd20b1e";
     };
     replicaCount = lib.mkOption {
       type = lib.types.int;
@@ -40,16 +59,21 @@ in
         from the cluster's availability level (v2_discussions/145).
       '';
     };
-    service = lib.mkOption {
-      type = lib.types.anything;
-      default = {
-        type = "ClusterIP";
-        port = 80;
+    service = {
+      type = lib.mkOption {
+        type = lib.types.enum [
+          "ClusterIP"
+          "NodePort"
+          "LoadBalancer"
+        ];
+        default = "ClusterIP";
+        description = "Type of the echo-server's Service.";
       };
-      description = ''
-        `Service` exposure for the echo-server. Attrset with `type` (e.g.
-        `ClusterIP`, `NodePort`) and `port` keys.
-      '';
+      port = lib.mkOption {
+        type = lib.types.port;
+        default = 80;
+        description = "Port the Service listens on. It forwards to the container's port 8080.";
+      };
     };
     message = lib.mkOption {
       type = lib.types.str;
@@ -62,11 +86,7 @@ in
   };
 
   build =
-    {
-      self,
-      config,
-      clusterConfig,
-    }:
+    { self, config, ... }:
     {
       # --- ConfigMap (nginx config + response page) ---
       configmap = scope.mkResource {

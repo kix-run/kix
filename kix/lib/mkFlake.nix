@@ -9,6 +9,11 @@
   # Prepended to each cluster's modules.
   clusterModules ? [ ],
 
+  # Packages this flake defines, by name: a package or a path to one. Each
+  # gets the check `option-contract-<name>`, because evaluating a cluster
+  # does not check the option contract.
+  packages ? { },
+
   systems ? [
     "x86_64-linux"
     "aarch64-linux"
@@ -114,12 +119,6 @@ let
 
       clusterChecks = lib.concatMapAttrs (cname: cluster: {
         "schema-cluster-${cname}" = kixChecks.schemaCheck "cluster-${cname}" (kix.mkManifests cluster);
-        "validate-cluster-${cname}" =
-          assert kixChecks.validateManifestSet "cluster-${cname}" cluster.rawManifests;
-          pkgs.runCommand "validate-cluster-${cname}" { } ''
-            echo "Cross-resource validation passed for cluster-${cname}."
-            touch $out
-          '';
         "pi-wiring-cluster-${cname}" =
           assert piChecks.validatePIWiring "cluster-${cname}" cluster;
           pkgs.runCommand "pi-wiring-cluster-${cname}" { } ''
@@ -127,10 +126,31 @@ let
             touch $out
           '';
       }) resolvedClusters;
+
+      packageChecks = lib.mapAttrs' (
+        name: package:
+        lib.nameValuePair "option-contract-${name}" (
+          builtins.seq
+            (kix.checkPackageOptions {
+              package = if builtins.isPath package || builtins.isString package then import package else package;
+              who = "package `${name}`";
+              scope = {
+                instanceName = name;
+                namespaceName = name;
+              };
+            })
+            (
+              pkgs.runCommand "option-contract-${name}" { } ''
+                echo "The options of ${name} satisfy the option contract."
+                touch $out
+              ''
+            )
+        )
+      ) packages;
     in
     {
       packages = clusterPackages;
-      checks = clusterChecks;
+      checks = clusterChecks // packageChecks;
       legacyPackages = {
         kixClusters = resolvedClusters;
         kixPackages = lib.mapAttrs (

@@ -1,4 +1,4 @@
-# clusters/test-full.nix — Full cluster: all charts with most features enabled.
+# clusters/test-full.nix: a full cluster, all charts with most features enabled.
 #
 # Stress test for package configs and optional resource gating.
 
@@ -21,66 +21,83 @@ kix.buildCluster {
       };
 
       instances = {
-        # velero with no credentials at all: no Secret and no secret-ref
-        # marker. clusters/test-operators.nix builds the managed-Secret path.
-        velero.velero.package = packages.velero;
+        # velero with every optional part on: the CSI data mover, a snapshot
+        # location, a schedule, global volume policies, and maintenance
+        # settings. Both secrets are secret-refs, created outside Kix.
+        velero = {
+          velero-credentials = {
+            package = packages.secret-ref;
+            aliases = [ "cloudCredentials" ];
+            config.keys = [ "cloud" ];
+          };
+          velero-repo-credentials = {
+            package = packages.secret-ref;
+            aliases = [ "repositoryPassword" ];
+            config.keys = [ "repository-password" ];
+          };
+          velero = {
+            package = packages.velero;
+            config = {
+              features = [ "EnableCSI" ];
+              backupStorageLocation = {
+                objectStorage.bucket = "full-test";
+                config.region = "us-east-1";
+              };
+              volumeSnapshotLocation.config.region = "us-east-1";
+              schedules.nightly = {
+                schedule = "CRON_TZ=UTC 0 3 * * *";
+                template = {
+                  ttl = "720h0m0s";
+                  snapshotMoveData = true;
+                };
+              };
+              volumePolicies = [
+                {
+                  conditions.csi = { };
+                  action.type = "snapshot";
+                }
+                {
+                  conditions.volumeTypes = [
+                    "emptyDir"
+                    "hostPath"
+                  ];
+                  action.type = "skip";
+                }
+              ];
+              repositoryMaintenance.settings.keepLatestMaintenanceJobs = 3;
+            };
+          };
+        };
         kube-system = {
           coredns = {
             package = packages.coredns;
 
             config = {
-              replicaCount = 3;
-              serviceAccount.create = true;
-              prometheus = {
-                service = {
-                  enabled = true;
-                  annotations = {
-                    "prometheus.io/scrape" = "true";
-                    "prometheus.io/port" = "9153";
-                  };
-                };
-                monitor = {
-                  enabled = true;
-                  interval = null;
-                };
-              };
-              hpa = {
-                enabled = true;
-                minReplicas = 2;
-                maxReplicas = 10;
-                metrics = [
-                  {
-                    type = "Resource";
-                    resource = {
-                      name = "cpu";
-                      target = {
-                        type = "Utilization";
-                        averageUtilization = 80;
-                      };
-                    };
-                  }
-                ];
-              };
+              replicas = 3;
+              clusterIP = "10.96.0.10";
             };
           };
         };
 
         cache = {
+          # Created outside Kix, as an existing Secret would be.
+          valkey-auth = {
+            package = packages.secret-ref;
+            aliases = [ "valkeyPassword" ];
+            config.keys = [ "password" ];
+          };
+
           valkey = {
             package = packages.valkey;
 
             config = {
+              replicas = 3;
               sentinel = {
                 enabled = true;
                 quorum = 2;
-                primarySet = "myprimary";
-                downAfterMilliseconds = 60000;
-                failoverTimeout = 180000;
-                parallelSyncs = 1;
-                image = {
-                  repository = "docker.io/bitnami/valkey-sentinel";
-                  tag = "8.1.1-debian-12-r0";
-                  pullPolicy = "IfNotPresent";
+                primarySettings = {
+                  down-after-milliseconds = 60000;
+                  failover-timeout = 180000;
                 };
                 resources = {
                   requests = {
@@ -95,33 +112,22 @@ kix.buildCluster {
                   };
                 };
               };
-              metrics = {
-                enabled = true;
-                image = {
-                  repository = "docker.io/bitnami/redis-exporter";
-                  tag = "1.70.0-debian-12-r2";
-                  pullPolicy = "IfNotPresent";
+              settings = {
+                maxmemory-policy = "allkeys-lru";
+                save = [ "900 1" ];
+              };
+              metrics.resources = {
+                requests = {
+                  cpu = "100m";
+                  memory = "128Mi";
+                  ephemeral-storage = "50Mi";
                 };
-                resources = {
-                  requests = {
-                    cpu = "100m";
-                    memory = "128Mi";
-                    ephemeral-storage = "50Mi";
-                  };
-                  limits = {
-                    cpu = "150m";
-                    memory = "192Mi";
-                    ephemeral-storage = "2Gi";
-                  };
+                limits = {
+                  cpu = "150m";
+                  memory = "192Mi";
+                  ephemeral-storage = "2Gi";
                 };
               };
-              auth = {
-                enabled = true;
-                existingSecret = "valkey-auth";
-                existingSecretPasswordKey = "valkey-password";
-                sentinel = true;
-              };
-              replicaCount = 3;
             };
           };
         };

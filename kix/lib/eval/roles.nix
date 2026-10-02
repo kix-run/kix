@@ -13,7 +13,7 @@
 # Out-contracts are shallow (attribute presence on the provider's `out`).
 # They are enforced lazily on the findRoleProvider path because eager checking
 # would force provider instances out of fixpoint order. Deep contracts
-# (e.g. the 13-attr enforcer interface) stay with their consumer
+# (e.g. the 14-attr enforcer interface) stay with their consumer
 # (plugins/netpol/interface.nix).
 
 { lib }:
@@ -31,18 +31,23 @@ rec {
     };
 
     storageClasses = {
-      description = "Default StorageClass provider. Consumers (persistent-volume-claim, stackgres-cluster, ...) read out.storageClassName.";
+      description = "StorageClass provider. Consumers (persistent-volume-claim, stackgres-cluster, ...) read out.storageClassName, the class a claim uses when it names none.";
       outContract = [ "storageClassName" ];
     };
 
     cni = {
-      description = "Pod network owner. No out contract yet. The role exists for binding-mode conflicts: an exclusive environment CNI (kindnet on stock kind) refuses a managed one at eval instead of breaking the cluster at deploy.";
+      description = "Pod network owner. No out contract yet. The role exists for binding-mode conflicts: an exclusive environment CNI (kindnet on stock kind) refuses a managed one at eval instead of breaking the cluster at deploy. Under shadowable the environment installed the CNI, usually declared as a platform import claiming this role (rke2: platform-cilium), and a claimant such as the cilium package configures or uses it.";
       outContract = [ ];
     };
 
     loadBalancer = {
       description = "Service type=LoadBalancer implementation. Presence (managed provider or environment binding) gates LoadBalancer Services.";
       outContract = [ ];
+    };
+
+    snapshotController = {
+      description = "CSI snapshot controller and the snapshot.storage.k8s.io API, one per cluster. Consumers build VolumeSnapshotClass and VolumeSnapshot through out.crds. An environment that runs its own controller binds the role exclusive, so a second, managed controller is refused at eval.";
+      outContract = [ "crds" ];
     };
   };
 

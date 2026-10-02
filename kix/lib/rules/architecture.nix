@@ -156,9 +156,8 @@ in
   };
 
   # An untracked reference says "something else creates this". A bare
-  # claim is checked by nothing: the openebs etcd StatefulSet mounted a
-  # Secret whose comment said the operator made it at runtime, nothing did,
-  # every eval passed, and the pods sat in Init with "secret not found".
+  # claim is checked by nothing: when nothing creates the object, every eval
+  # passes and a pod that mounts it waits in Init with "secret not found".
   # List every bare claim in a build in one place, so a reviewer reads a
   # list instead of finding them one mount at a time. A name is not listed
   # when every reference to it in its namespace names its creator: with
@@ -454,8 +453,11 @@ in
         matchLabels = resource.spec.selector or { };
         values = builtins.attrValues matchLabels;
         anyWithContext = builtins.any (v: builtins.isString v && builtins.getContext v != { }) values;
+        # A Service over an operator's pods has no workload to derive from;
+        # cross-resource check 4 checks the custom resource it names.
+        isOperandService = (resource.metadata.annotations or { }) ? ${kixKeys.operandOf};
       in
-      if matchLabels == { } || anyWithContext then
+      if matchLabels == { } || anyWithContext || isOperandService then
         [ ]
       else
         [
@@ -723,5 +725,80 @@ in
           "string \"${s}\" contains a cluster Service address (*.svc) that Kix cannot trace to a Service. "
           + "Use the Service or ServiceRef's `out.fqdn` or `out.host` so Kix can derive network policies and deployment order.";
       }) (lib.unique offending);
+  };
+
+  # A string naming cluster.local resolves only on a cluster whose
+  # clusterDomain is cluster.local. The rule is inert on such clusters.
+  # CustomResourceDefinitions are skipped: their schema text quotes example
+  # FQDNs. The configured domain is masked before matching, so a domain
+  # such as east.cluster.local is not a hit, and cluster.local counts only
+  # as whole labels (mycluster.local and cluster.localhost do not match).
+  clusterDomainLiteral = {
+    description = "Rendered strings must not name cluster.local when the cluster's clusterDomain is another domain";
+    level = "cluster";
+    severity = "error";
+    tags = [
+      "architecture"
+      "portability"
+    ];
+    appliesTo =
+      { clusterConfig, ... }: (clusterConfig.clusterDomain or "cluster.local") != "cluster.local";
+    check =
+      { allResources, clusterConfig, ... }:
+      let
+        domain = clusterConfig.clusterDomain;
+        # Stands in for the configured domain while matching: it is not a
+        # label character, so "x.svc.<domain>" never reads as cluster.local.
+        sentinel = builtins.fromJSON ''"\u0001"'';
+        masked = builtins.replaceStrings [ domain ] [ sentinel ];
+
+        # `builtins.split` output for whole-label occurrences of
+        # cluster.local, each match capturing the character on either side.
+        # The string is padded with a space at both ends so an occurrence at
+        # either end also has a non-label character beside it.
+        pieces = s: builtins.split "([^A-Za-z0-9-])cluster\\.local([^A-Za-z0-9-])" (" " + masked s + " ");
+        hasHit = s: builtins.length (pieces s) > 1;
+
+        # Up to 80 characters either side of the first hit, on one line.
+        excerpt =
+          s:
+          let
+            p = pieces s;
+            m = builtins.elemAt p 1;
+            rejoin = lib.concatMapStrings (
+              x: if builtins.isString x then x else "${builtins.elemAt x 0}cluster.local${builtins.elemAt x 1}"
+            );
+            padded = builtins.head p + builtins.elemAt m 0;
+            before = builtins.substring 1 (builtins.stringLength padded - 1) padded;
+            rest = builtins.elemAt m 1 + rejoin (lib.drop 2 p);
+            after = builtins.substring 0 (builtins.stringLength rest - 1) rest;
+            lb = builtins.stringLength before;
+            la = builtins.stringLength after;
+          in
+          builtins.replaceStrings [ sentinel "\n" ] [ domain "\\n" ] (
+            (if lb > 80 then "..." + builtins.substring (lb - 80) 80 before else before)
+            + "cluster.local"
+            + (if la > 80 then builtins.substring 0 80 after + "..." else after)
+          );
+
+        findingFor =
+          r:
+          let
+            offending = builtins.filter hasHit (collectStrings r);
+          in
+          lib.optional (offending != [ ]) {
+            namespace = r.metadata.namespace or null;
+            resource = r.metadata.name or "?";
+            message =
+              "${r.kind or "?"} '${r.metadata.name or "?"}' in namespace '${
+                r.metadata.namespace or "(cluster)"
+              }' contains \"${builtins.unsafeDiscardStringContext (excerpt (builtins.head offending))}\", which names the DNS domain cluster.local, but this cluster's clusterDomain is \"${domain}\", "
+              + "so that address does not resolve. Build in-cluster addresses from a Service's out.fqdn or out.url, "
+              + "or read clusterConfig.clusterDomain; for a Helm chart, pass the domain to the chart's cluster-domain value.";
+          };
+      in
+      builtins.concatMap findingFor (
+        builtins.filter (r: (r.kind or "") != "CustomResourceDefinition") allResources
+      );
   };
 }

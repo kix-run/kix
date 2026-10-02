@@ -14,6 +14,9 @@
 #
 # Success prints { ok = true; passed = [ ... ]; }. Any failure throws with
 # the failing test names and details.
+#
+# Each file in ./units is loaded into the same matrix. Add tests for a new
+# feature there as `units/<topic>.nix`, with test names `<topic>-<what>`.
 
 {
   # Default: the exact nixpkgs the ludo flake pins (read from its lock file,
@@ -334,6 +337,12 @@ let
   mkLevelPackage =
     {
       metaExtra ? { },
+      table ? {
+        none = 1;
+        pod = 2;
+        node = 2;
+        zone = 3;
+      },
     }:
     {
       scope,
@@ -347,14 +356,9 @@ let
         version = "test";
       }
       // metaExtra;
-      options.replicaCount = lib.mkOption {
-        type = lib.types.int;
-        default = kix.availability.pick availability {
-          none = 1;
-          pod = 2;
-          node = 2;
-          zone = 3;
-        };
+      options.replicas = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = kix.availability.pick availability table;
       };
       build =
         {
@@ -369,7 +373,7 @@ let
           deployment = scope.mkDeployment {
             name = "web";
             spec = {
-              replicas = config.replicaCount;
+              replicas = config.replicas;
               selector.matchLabels = scope.selectorLabels;
               template = {
                 metadata.labels = scope.selectorLabels;
@@ -615,6 +619,7 @@ let
             group = "test.io";
             kind = "TestCluster";
             plural = "testclusters";
+            version = "v1";
             inherit factBehavior;
           };
           root = {
@@ -672,7 +677,9 @@ let
   };
 
   # same consumer but builder-less: raw mkResource with a kind string;
-  # no behavior arrives unless cluster.factBehavior supplies it
+  # no behavior arrives unless cluster.factBehavior supplies it. Its own
+  # CRD ref, without factBehavior, gives the CR the declaration the cluster
+  # build requires (check 21).
   rawCrConsumerPackage = {
     meta.version = "test";
     build =
@@ -683,11 +690,18 @@ let
         ...
       }:
       {
+        testClusterCrd = scope.mkCRDRef {
+          group = "test.io";
+          kind = "TestCluster";
+          plural = "testclusters";
+          version = "v1";
+        };
         cluster = scope.mkResource {
           apiVersion = "test.io/v1";
           kind = "TestCluster";
           name = "mycluster";
           spec.connection = db.out.fqdn;
+          requires = [ self.testClusterCrd ];
         };
         deployment = scope.mkDeployment {
           name = "consumer";
@@ -785,6 +799,7 @@ let
               ports,
             }:
             rule "service-egress" { inherit selector namespace ports; };
+          mkHostNetworkEgressRule = { ports }: rule "host-network-egress" { inherit ports; };
           mkSelfRules =
             { selector }:
             {
@@ -820,6 +835,7 @@ let
               namespace =
                 if (intent.scope or "namespaced") == "clusterwide" then clusterScoped else namespaceResource;
               extra.spec.stubIntent = true;
+              requires = [ crdRef ];
             };
         };
       in
@@ -830,6 +846,63 @@ let
         root = {
           resource = crdRef;
           out.netpol = netpolApi;
+        };
+      };
+  };
+
+  # An import of a StorageClass the environment provides, as an instance
+  # value. It is not optional, so its marker is in every build, and claims
+  # that name the class resolve (check 20).
+  storageClassImport = name: {
+    package = eval.mkImport {
+      kind = "StorageClass";
+      apiVersion = "storage.k8s.io/v1";
+      out = {
+        inherit name;
+        storageClassName = name;
+      };
+    };
+  };
+
+  # A prometheus provider whose builders render their arguments as
+  # prometheus-operator custom resources. Each kind comes from a
+  # scope.mkCRDRef part, so a resource built through the stub depends on a
+  # declaration of its kind, as one built through the real package does.
+  prometheusStub = {
+    meta = {
+      version = "test";
+      defaultAliases = [ "prometheus" ];
+    };
+    build =
+      { self, scope, ... }:
+      let
+        ref =
+          kind: plural:
+          scope.mkCRDRef {
+            group = "monitoring.coreos.com";
+            inherit kind plural;
+            version = "v1";
+          };
+        as =
+          crd: consumerScope: args:
+          crd.out.mkCR consumerScope args;
+      in
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "prometheus";
+        };
+        serviceMonitorCrd = ref "ServiceMonitor" "servicemonitors";
+        podMonitorCrd = ref "PodMonitor" "podmonitors";
+        prometheusRuleCrd = ref "PrometheusRule" "prometheusrules";
+        root = {
+          resource = self.cm;
+          out = {
+            mkServiceMonitor = as self.serviceMonitorCrd;
+            mkPodMonitor = as self.podMonitorCrd;
+            mkPrometheusRule = as self.prometheusRuleCrd;
+          };
         };
       };
   };
@@ -994,8 +1067,10 @@ let
       };
   };
 
-  # Stock-catalog fixtures: a role-claiming shelf package and a consumer
-  # whose storageClasses dep is OPTIONAL (like persistent-volume-claim).
+  # Stock-catalog fixtures: a role-claiming shelf package and two consumers
+  # that write the class they resolved into ConfigMap `sc-consumer`, one
+  # with an OPTIONAL storageClasses dep (like persistent-volume-claim) and
+  # one with a REQUIRED one.
   stockStorage = mkCmPackage {
     name = "stock-sc";
     metaExtra.roles = [ "storageClasses" ];
@@ -1017,6 +1092,26 @@ let
           kind = "ConfigMap";
           name = "sc-consumer";
           extra.data.sc = if storageClasses == null then "missing" else storageClasses.out.storageClassName;
+        };
+        root = self.cm;
+      };
+  };
+
+  requiredScConsumer = {
+    meta.version = "test";
+    build =
+      {
+        self,
+        scope,
+        storageClasses,
+        ...
+      }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "sc-consumer";
+          extra.data.sc = storageClasses.out.storageClassName;
         };
         root = self.cm;
       };
@@ -1074,47 +1169,6 @@ let
           resource = self.cm;
           out.who = "via-${z.out.who}";
         };
-      };
-  };
-
-  # Transitive weak-demand fixtures: a shelf package with its own weak
-  # storageClasses demand, and a consumer whose REQUIRED dep pulls it.
-  weakMiddlePackage = {
-    meta.version = "test";
-    build =
-      {
-        self,
-        scope,
-        storageClasses ? null,
-        ...
-      }:
-      {
-        cm = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "middle";
-          extra.data.sc = if storageClasses == null then "missing" else storageClasses.out.storageClassName;
-        };
-        root = self.cm;
-      };
-  };
-
-  weakMiddleConsumer = {
-    meta.version = "test";
-    build =
-      {
-        self,
-        scope,
-        middle,
-        ...
-      }:
-      {
-        cm = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "top-consumer";
-        };
-        root = self.cm;
       };
   };
 
@@ -1217,31 +1271,60 @@ let
 
   # ------------------------------------------------------------------- tests
 
-  tests = {
-    t00-mkforce-replaces-anything-default =
-      let
-        config = eval.evaluateInstanceConfig {
-          packageOptions.issuers = lib.mkOption {
-            type = lib.types.attrsOf lib.types.anything;
-            default = {
-              production.kind = "acme";
-              staging.kind = "acme";
-            };
-          };
-          instCfg.config.imports = [
-            {
-              issuers = lib.mkForce {
-                local.kind = "selfSigned";
-              };
-            }
-          ];
-        };
-      in
-      config.issuers == {
-        local.kind = "selfSigned";
-      }
-      || throw "mkForce did not replace the complete types.anything option default";
+  # Arguments each file under ./units receives. A unit file is a function
+  # `{ lib, mkCluster, ... }:` that returns tests named `<unit>-<what>`.
+  unitHelpers = {
+    inherit
+      lib
+      k8s
+      eval
+      kixlib
+      publicKix
+      kixKeys
+      mkCluster
+      baseInstances
+      netpolOn
+      mkCmPackage
+      manifests
+      ofKind
+      namesOf
+      hasName
+      byName
+      evalFails
+      prometheusStub
+      storageClassImport
+      requiredScConsumer
+      containerBase
+      mkReplicatedPackage
+      mkLevelPackage
+      levelSeenBy
+      singleNode
+      multiZone
+      ;
+  };
 
+  # Merges test sets and throws on a repeated name, which `//` would
+  # otherwise resolve by dropping one of the tests.
+  mergeTests =
+    source: acc: more:
+    let
+      repeated = builtins.attrNames (builtins.intersectAttrs acc more);
+    in
+    if repeated == [ ] then
+      acc // more
+    else
+      throw "kix/lib tests: ${source} repeats test names already defined: ${builtins.concatStringsSep ", " repeated}";
+
+  # Every ./units/*.nix, in file-name order.
+  unitTestFiles = lib.attrNames (
+    lib.filterAttrs (n: type: type == "regular" && lib.hasSuffix ".nix" n) (builtins.readDir ./units)
+  );
+
+  tests = lib.foldl' (
+    acc: file: mergeTests "units/${file}" acc (import (./units + "/${file}") unitHelpers)
+  ) inlineTests unitTestFiles;
+
+  inlineTests = {
     # netpol disabled: no policies of any kind, interceptor pipeline inert.
     t01-netpol-off-no-cnps =
       let
@@ -1264,6 +1347,32 @@ let
       in
       (lib.hasInfix dnsHash annot && lib.hasInfix dbSvcHash annot && !(lib.hasInfix dnsPiHash annot))
       || throw "app depends-on missing dns/db edge; annotation: ${annot}";
+
+    # An optional DNS import that nothing demands, as most flavours declare
+    # platform-dns, emits no marker, so no workload may depend on it.
+    t02b-optional-dns-import-adds-no-edge =
+      let
+        cluster = mkCluster [
+          {
+            instances.dbns.db = baseInstances.instances.dbns.db;
+            instances.appns.app = baseInstances.instances.appns.app;
+            instances.kube-system.platform-dns = {
+              package = eval.mkImport {
+                kind = "Deployment";
+                apiVersion = "apps/v1";
+                roles = [ "dns" ];
+                out.name = "coredns";
+              };
+              optional = true;
+            };
+          }
+        ];
+        ms = manifests cluster;
+        markerHash = k8s.extractStoreHash cluster.instances.kube-system.platform-dns.root.outPath;
+        annot = dependsOn (byName "app" (ofKind "Deployment" ms));
+      in
+      (!(lib.hasInfix markerHash annot) && !(hasName "platform-dns" (ofKind "PackageInstance" ms)))
+      || throw "app depends on the inactive platform-dns marker; annotation: ${annot}";
 
     # netpol enabled with a conforming enforcer: per-workload egress CNP,
     # per-namespace default-deny, and the caller-side ingress CNP parented
@@ -1536,30 +1645,11 @@ let
           metaExtra.roles = [ "storageClasses" ];
           out.storageClassName = "stub-sc";
         };
-        consumer = {
-          meta.version = "test";
-          build =
-            {
-              self,
-              scope,
-              storageClasses,
-              ...
-            }:
-            {
-              cm = scope.mkResource {
-                apiVersion = "v1";
-                kind = "ConfigMap";
-                name = "sc-consumer";
-                extra.data.sc = storageClasses.out.storageClassName;
-              };
-              root = self.cm;
-            };
-        };
         ms = manifests (mkCluster [
           baseInstances
           {
             instances.storage.provider.package = storageStub;
-            instances.appns.consumer.package = consumer;
+            instances.appns.consumer.package = requiredScConsumer;
           }
         ]);
         probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
@@ -1567,11 +1657,11 @@ let
       (probe != null && probe.data.sc == "stub-sc")
       || throw "role-as-alias resolution failed: ${builtins.toJSON probe}";
 
-    # --- stock catalogs / weak role demand (doc 127 §5) ---
+    # --- stock catalogs (doc 127 §5) ---
 
-    # An OPTIONAL dep on a role name pulls the role provider from
-    # availablePackages when nothing else provides it.
-    t20-weak-role-demand-pulls-stock =
+    # An optional dependency places no demand, even on a role name: the
+    # role provider on the shelf stays there and the dependency is null.
+    t20-optional-role-dep-does-not-pull-stock =
       let
         ms = manifests (mkCluster [
           baseInstances
@@ -1582,8 +1672,8 @@ let
         ]);
         probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
       in
-      (hasName "stock-sc" (ofKind "ConfigMap" ms) && probe != null && probe.data.sc == "stock-sc-name")
-      || throw "stock not pulled by weak role demand: ${builtins.toJSON probe}";
+      (!(hasName "stock-sc" (ofKind "ConfigMap" ms)) && probe != null && probe.data.sc == "missing")
+      || throw "optional role dependency pulled stock: ${builtins.toJSON probe}";
 
     # No demand → the catalog entry stays on the shelf (demand-rooted
     # closure: nothing is installed because a flavor bundled it).
@@ -1596,62 +1686,35 @@ let
       in
       !(hasName "stock-sc" (ofKind "ConfigMap" ms)) || throw "stock instantiated without any demand";
 
-    # An optional platform import providing the role suppresses the stock
-    # pull; existing environment-provided resolution stays unchanged
-    # (the ludo-kind case).
-    t22-import-suppresses-stock =
+    # An optional dependency on a role resolves to a platform import that
+    # provides it, as the kind flavour's platform-storage import does for
+    # ludo-kind, and the shelf provider is not pulled. An optional import
+    # that nothing demands stays inactive and answers nothing.
+    t22-optional-role-dep-resolves-import =
       let
-        ms = manifests (mkCluster [
-          baseInstances
-          {
-            availablePackages.stock-storage.package = stockStorage;
-            instances.platform.storage = {
-              package = eval.mkImport {
-                roles = [ "storageClasses" ];
-                out.storageClassName = "import-sc";
-              };
-              optional = true;
-            };
-            instances.appns.consumer.package = optionalScConsumer;
-          }
-        ]);
-        probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
+        sc =
+          optional:
+          let
+            ms = manifests (mkCluster [
+              baseInstances
+              {
+                availablePackages.stock-storage.package = stockStorage;
+                instances.platform.storage = {
+                  package = eval.mkImport {
+                    roles = [ "storageClasses" ];
+                    out.storageClassName = "import-sc";
+                  };
+                  inherit optional;
+                };
+                instances.appns.consumer.package = optionalScConsumer;
+              }
+            ]);
+          in
+          lib.optionalString (hasName "stock-sc" (ofKind "ConfigMap" ms)) "stock+"
+          + (byName "sc-consumer" (ofKind "ConfigMap" ms)).data.sc or "no-consumer";
       in
-      (!(hasName "stock-sc" (ofKind "ConfigMap" ms)) && probe != null && probe.data.sc == "import-sc")
-      || throw "import did not suppress stock pull: ${builtins.toJSON probe}";
-
-    # The real lithus flavor: preset + catalog. A PVC-shaped demand pulls
-    # the whole OpenEBS stock (StorageClasses, per-worker DiskPools) and
-    # the consumer resolves the default class through the role.
-    t23-lithus-stock-on-demand =
-      let
-        ms = manifests (mkCluster [
-          ../flavors/lithus.nix
-          { cluster.flavor.lithus.workers = [ "w1" ]; }
-          { instances.appns.consumer.package = optionalScConsumer; }
-        ]);
-        probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
-      in
-      (
-        hasName "lbs1-pool1-2x" (ofKind "StorageClass" ms)
-        && hasName "w1-pool1" (ofKind "DiskPool" ms)
-        && probe != null
-        && probe.data.sc == "lbs1-pool1-2x"
-      )
-      || throw "lithus stock not pulled on demand: ${builtins.toJSON (namesOf ms)}";
-
-    # lithus with no storage demand compiles WITHOUT OpenEBS in the
-    # artifact (the doc-127 proof case).
-    t24-lithus-no-demand-no-openebs =
-      let
-        ms = manifests (mkCluster [
-          ../flavors/lithus.nix
-          { cluster.flavor.lithus.workers = [ "w1" ]; }
-          { instances.appns.probe.package = probePackage; }
-        ]);
-      in
-      (ofKind "StorageClass" ms == [ ] && ofKind "DiskPool" ms == [ ])
-      || throw "lithus emitted storage stock without demand: ${builtins.toJSON (namesOf ms)}";
+      (sc false == "import-sc" && sc true == "missing")
+      || throw "optional role dependency: active import ${sc false}, inactive import ${sc true}";
 
     # --- capability-ownership decomposition (v2_discussions/128) ---
 
@@ -1895,19 +1958,19 @@ let
       )
       || throw "unknown-domain lint wrong: unknown=${builtins.toJSON unknownFindings} known=${builtins.toJSON knownFindings}";
 
-    # --- weak-role wiring (PR 29 review findings 2-5) ---
+    # --- role demand wiring (PR 29 review findings 2-5) ---
 
-    # Role providers are cluster-scoped: weak demand from two namespaces
-    # shares ONE stock instance instead of instantiating two strong
-    # providers of the same role (which would be a duplicate-role error).
-    t32-weak-role-multi-namespace-shares-stock =
+    # Role providers are cluster-scoped: demand from two namespaces shares
+    # ONE stock instance instead of instantiating two strong providers of
+    # the same role (which would be a duplicate-role error).
+    t32-role-demand-multi-namespace-shares-stock =
       let
         ms = manifests (mkCluster [
           baseInstances
           {
             availablePackages.stock-storage.package = stockStorage;
-            instances.ns1.consumer1.package = optionalScConsumer;
-            instances.ns2.consumer2.package = optionalScConsumer;
+            instances.ns1.consumer1.package = requiredScConsumer;
+            instances.ns2.consumer2.package = requiredScConsumer;
           }
         ]);
         stockCms = builtins.filter (m: (m.metadata.name or "") == "stock-sc") (ofKind "ConfigMap" ms);
@@ -1918,43 +1981,9 @@ let
         && builtins.length probes == 2
         && builtins.all (p: p.data.sc == "stock-sc-name") probes
       )
-      || throw "multi-namespace weak demand not deduped: stock=${toString (builtins.length stockCms)} probes=${
+      || throw "multi-namespace role demand not deduped: stock=${toString (builtins.length stockCms)} probes=${
         builtins.toJSON (map (p: p.data.sc) probes)
       }";
-
-    # An environment binding suppresses the stock pull even without an
-    # import instance. Flavors declare `cni` exclusively this way. The
-    # compiler must not instantiate stock and then refuse its own work.
-    t33-env-exclusive-binding-suppresses-stock =
-      let
-        ms = manifests (mkCluster [
-          baseInstances
-          {
-            cluster.roles.storageClasses.binding = "exclusive";
-            availablePackages.stock-storage.package = stockStorage;
-            instances.appns.consumer.package = optionalScConsumer;
-          }
-        ]);
-        probe = byName "sc-consumer" (ofKind "ConfigMap" ms);
-      in
-      (!(hasName "stock-sc" (ofKind "ConfigMap" ms)) && probe != null && probe.data.sc == "missing")
-      || throw "exclusive binding did not suppress stock pull: ${builtins.toJSON probe}";
-
-    # Shadowable: the environment default is the provider; pulling stock
-    # would silently shadow it, so the shelf entry stays untouched.
-    t34-env-shadowable-binding-suppresses-stock =
-      let
-        ms = manifests (mkCluster [
-          baseInstances
-          {
-            cluster.roles.storageClasses.binding = "shadowable";
-            availablePackages.stock-storage.package = stockStorage;
-            instances.appns.consumer.package = optionalScConsumer;
-          }
-        ]);
-      in
-      !(hasName "stock-sc" (ofKind "ConfigMap" ms))
-      || throw "shadowable binding did not suppress stock pull";
 
     # A never-activated optional instance claiming a role a mandatory
     # instance also provides is NOT a conflict: it emits nothing this
@@ -1978,39 +2007,36 @@ let
       (builtins.length stockCms == 1 && probe != null && probe.data.sc == "stock-sc-name")
       || throw "inactive optional treated as role conflict: stock=${toString (builtins.length stockCms)} probe=${builtins.toJSON probe}";
 
-    # Weak role demand propagates transitively: a catalog package pulled in
-    # by a REQUIRED dep has its own weak storageClasses demand honored.
-    t36-weak-role-demand-transitive =
+    # A typo'd role on a shelf entry throws (same closed vocabulary as
+    # instantiated meta.roles) instead of silently never matching. The shelf
+    # is read only when something demands from it, so the consumer's
+    # storageClasses dependency is required, and stock-storage answers it
+    # once the typo'd entry is gone.
+    t37-catalog-role-typo-throws =
       let
-        ms = manifests (mkCluster [
+        shelf = extra: [
           baseInstances
           {
-            availablePackages.middle.package = weakMiddlePackage;
-            availablePackages.stock-storage.package = stockStorage;
-            instances.appns.top.package = weakMiddleConsumer;
+            availablePackages = {
+              stock-storage.package = stockStorage;
+            }
+            // extra;
+            instances.appns.consumer.package = requiredScConsumer;
           }
-        ]);
-        middleCm = byName "middle" (ofKind "ConfigMap" ms);
+        ];
       in
       (
-        hasName "stock-sc" (ofKind "ConfigMap" ms)
-        && middleCm != null
-        && middleCm.data.sc == "stock-sc-name"
+        builtins.length (manifests (mkCluster (shelf { }))) > 0
+        && evalFails (
+          mkCluster (shelf {
+            bad-storage.package = mkCmPackage {
+              name = "bad";
+              metaExtra.roles = [ "storageClases" ];
+            };
+          })
+        )
       )
-      || throw "transitive weak demand not honored: ${builtins.toJSON middleCm}";
-
-    # A typo'd role on a shelf entry throws (same closed vocabulary as
-    # instantiated meta.roles) instead of silently never matching.
-    t37-catalog-role-typo-throws = evalFails (mkCluster [
-      baseInstances
-      {
-        availablePackages.bad-storage.package = mkCmPackage {
-          name = "bad";
-          metaExtra.roles = [ "storageClases" ];
-        };
-        instances.appns.consumer.package = optionalScConsumer;
-      }
-    ]);
+      || throw "a typo'd role on a shelf entry did not throw, or the control cluster failed";
 
     # Directly wired deps (deps.operator = ref...) count as linking against
     # the declarer. The domain lint must not false-warn on explicit wiring.
@@ -3042,7 +3068,7 @@ let
                   resource = self.frontDeployment;
                   requires = [
                     self.apiDeployment
-                    self.ingress
+                    self.route
                   ];
                 };
               }
@@ -3384,7 +3410,20 @@ let
               in
               built
               // {
-                creator = scope.mkResource creator;
+                # A Knative Service is a custom resource, so its build needs
+                # a declaration of its kind (check 21).
+                knativeCrd = scope.mkCRDRef {
+                  group = "serving.knative.dev";
+                  kind = "Service";
+                  plural = "services";
+                  version = "v1";
+                };
+                creator = scope.mkResource (
+                  creator
+                  // lib.optionalAttrs (creator.apiVersion == "serving.knative.dev/v1") {
+                    requires = [ args.self.knativeCrd ];
+                  }
+                );
               }
             )
           );
@@ -4123,7 +4162,7 @@ let
                     ];
                   };
                   instances.appns.app.config.healthCheck = {
-                    enable = true;
+                    enabled = true;
                     retryFor = 40;
                   };
                 }
@@ -4591,7 +4630,7 @@ let
         application =
           { ... }:
           {
-            consumer.package = optionalScConsumer;
+            consumer.package = requiredScConsumer;
           };
         cluster = publicKix.buildCluster {
           name = "mkenv-role";
@@ -4912,7 +4951,18 @@ let
         &&
           levelSeenBy [
             multiZone
-            { instances.appns.capped.package = mkLevelPackage { metaExtra.availability.max = "pod"; }; }
+            {
+              # Constant above "pod": the package never sees a higher level.
+              instances.appns.capped.package = mkLevelPackage {
+                metaExtra.availability.max = "pod";
+                table = {
+                  none = 1;
+                  pod = 2;
+                  node = 2;
+                  zone = 2;
+                };
+              };
+            }
           ] == "pod"
       )
       || throw "ceiling not applied: ${builtins.toJSON keys}";
@@ -5165,7 +5215,7 @@ let
         &&
           replicasUnder [
             multiZone
-            { instances.appns.web.config.replicaCount = 7; }
+            { instances.appns.web.config.replicas = 7; }
           ] == 7
         &&
           levelSeenBy [
@@ -5596,31 +5646,6 @@ let
         ]);
       in
       whoOf ms == "managed" || throw "managed optional did not outrank the import: ${whoOf ms}";
-
-    t112-contested-weak-role-demand-throws = evalFails (mkCluster [
-      baseInstances
-      {
-        availablePackages.stock-a.package = stockStorage;
-        availablePackages.stock-b.package = stockStorage;
-        instances.appns.consumer.package = optionalScConsumer;
-      }
-    ]);
-
-    # An environment binding retires the weak demand, so the contested
-    # role is never looked up.
-    t113-env-binding-retires-contested-weak-role-demand =
-      let
-        ms = manifests (mkCluster [
-          baseInstances
-          {
-            cluster.roles.storageClasses.binding = "shadowable";
-            availablePackages.stock-a.package = stockStorage;
-            availablePackages.stock-b.package = stockStorage;
-            instances.appns.consumer.package = optionalScConsumer;
-          }
-        ]);
-      in
-      !(hasName "stock-sc" ms) || throw "bound role still pulled stock";
 
     # `deps.x = ref...` wires the dependency, so the consumer places no
     # demand on the shelf, contested or not.
@@ -6059,6 +6084,7 @@ let
           "cert-manager"
           "clickhouse-operator"
           "prometheus-operator"
+          "stackgres-operator"
           "tailscale"
         ];
         missing = lib.subtractLists withConfig expected;
@@ -6093,11 +6119,11 @@ let
           follows =
             jobImage {
               image = {
-                tag = "v1.18.0";
+                tag = "v1.21.3";
                 pullPolicy = "Always";
               };
             } == {
-              image = "quay.io/jetstack/cert-manager-startupapicheck:v1.18.0";
+              image = "quay.io/jetstack/cert-manager-startupapicheck:v1.21.3";
               imagePullPolicy = "Always";
             };
           own =
@@ -6109,6 +6135,74 @@ let
       in
       builtins.all lib.id (builtins.attrValues cases)
       || throw "startupapicheck image does not follow the controller: ${builtins.toJSON cases}";
+
+    # A global overlay and an instance overlay on one instance, read by a
+    # consumer through `out`: the global overlay runs first, the instance
+    # overlay second, and the consumer sees the `out` both produced.
+    parts-overlays-global-then-instance =
+      let
+        consumerPackage = {
+          meta.version = "test";
+          build =
+            {
+              self,
+              scope,
+              base,
+              ...
+            }:
+            {
+              cm = scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "consumer-${base.out.greeting}";
+              };
+              root = self.cm;
+            };
+        };
+        ms = manifests (mkCluster [
+          {
+            globalPartsOverlays = [
+              (
+                scope: _self: base:
+                if scope.instanceName == "base" then
+                  {
+                    root = base.root // {
+                      out = (base.root.out or { }) // {
+                        greeting = "hello";
+                      };
+                    };
+                  }
+                else
+                  { }
+              )
+            ];
+            instances.ovl.base = {
+              package = mkCmPackage {
+                name = "base-cm";
+                out = { };
+              };
+              partsOverlays = [
+                (scope: _self: base: {
+                  extraCm = scope.mkResource {
+                    apiVersion = "v1";
+                    kind = "ConfigMap";
+                    name = "overlay-${base.root.out.greeting}";
+                  };
+                  root = base.root // {
+                    out = base.root.out // {
+                      greeting = "${base.root.out.greeting}-again";
+                    };
+                  };
+                })
+              ];
+            };
+            instances.ovl.consumer.package = consumerPackage;
+          }
+        ]);
+        cms = ofKind "ConfigMap" ms;
+      in
+      (hasName "overlay-hello" cms && hasName "consumer-hello-again" cms)
+      || throw "partsOverlays order or out propagation wrong; ConfigMaps: ${builtins.toJSON (namesOf cms)}";
   }
   // import ./validate.nix {
     inherit
@@ -6144,6 +6238,7 @@ in
       xConsumer
       stockStorage
       optionalScConsumer
+      requiredScConsumer
       ;
   };
   result =

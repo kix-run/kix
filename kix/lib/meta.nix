@@ -4,55 +4,87 @@ let
   unsafe = import ./unsafe.nix { inherit lib; };
   roles = import ./eval/roles.nix { inherit lib; };
 
-  parseVersion = v: map lib.toIntBase10 (lib.splitString "." v);
-
-  compareVersions =
-    a: b:
-    let
-      la = parseVersion a;
-      lb = parseVersion b;
-      len = lib.max (builtins.length la) (builtins.length lb);
-      pad = l: l ++ lib.genList (_: 0) (len - builtins.length l);
-      pa = pad la;
-      pb = pad lb;
-      go =
-        i:
-        if i >= len then
-          0
-        else if builtins.elemAt pa i < builtins.elemAt pb i then
-          -1
-        else if builtins.elemAt pa i > builtins.elemAt pb i then
-          1
-        else
-          go (i + 1);
-    in
-    go 0;
-
-  versionAtLeast = a: b: compareVersions a b >= 0;
-  versionAtMost = a: b: compareVersions a b <= 0;
+  versions = import ./core/version.nix { inherit lib; };
 
   fail = message: {
     assertion = false;
     inherit message;
   };
 
-  versionCheck =
+  # Checks `version` against a minVersion/maxVersion constraint set.
+  # `subject` names what the version belongs to and `field` the constraint
+  # path, both for messages. A constraint that is not a version is the
+  # author's error and fails. A version that is null, not a version, or less
+  # precise than the constraint cannot be checked and warns instead, except
+  # that a null version is skipped silently when `warnWhenNull` is false.
+  constraintDiagnostics =
     {
-      depName,
-      depVersion,
+      field,
+      subject,
+      version,
       constraint,
+      describeFailure,
+      warnWhenNull ? true,
     }:
     let
+      bounds = builtins.filter (b: constraint ? ${b}) [
+        "minVersion"
+        "maxVersion"
+      ];
+      badBounds = builtins.filter (b: !(versions.isVersion constraint.${b})) bounds;
       reason = lib.optionalString (constraint ? reason) ". ${constraint.reason}";
+      check =
+        bound:
+        let
+          want = constraint.${bound};
+          result =
+            if bound == "minVersion" then versions.atLeast version want else versions.atMost version want;
+        in
+        if result == null then
+          {
+            warnings = [
+              "cannot check ${field}: ${subject} reports version \"${version}\", which is less precise than ${bound} \"${want}\", so Kix cannot tell. Kix skipped the check."
+            ];
+            assertions = [ ];
+          }
+        else
+          {
+            warnings = [ ];
+            assertions = lib.optional (!result) (fail (describeFailure bound want + reason));
+          };
+      checks = map check bounds;
     in
-    lib.concatLists [
-      (lib.optional (constraint ? minVersion && !(versionAtLeast depVersion constraint.minVersion)) (
-        fail "dependency '${depName}' version ${depVersion} is older than the required minimum ${constraint.minVersion}${reason}"
-      ))
-      (lib.optional (constraint ? maxVersion && !(versionAtMost depVersion constraint.maxVersion)) (
-        fail "dependency '${depName}' version ${depVersion} is newer than the supported maximum ${constraint.maxVersion}${reason}"
-      ))
-    ];
+    if badBounds != [ ] then
+      {
+        warnings = [ ];
+        assertions = map (
+          b:
+          fail "${field}.${b} ${
+            builtins.toJSON constraint.${b}
+          } is not a version: expected numbers separated by dots, for example \"1.31\" or \"v2.12.2\"."
+        ) badBounds;
+      }
+    else if bounds == [ ] then
+      noDiagnostics
+    else if version == null && !warnWhenNull then
+      noDiagnostics
+    else if version == null then
+      {
+        warnings = [ "cannot check ${field}: ${subject} reports no version. Kix skipped the check." ];
+        assertions = [ ];
+      }
+    else if !(versions.isVersion version) then
+      {
+        warnings = [
+          "cannot check ${field}: ${subject} reports version ${builtins.toJSON version}, which is not a version number. Kix skipped the check."
+        ];
+        assertions = [ ];
+      }
+    else
+      {
+        warnings = builtins.concatMap (c: c.warnings) checks;
+        assertions = builtins.concatMap (c: c.assertions) checks;
+      };
 
   emitTraces = prefix: items: lib.foldl' (acc: msg: builtins.trace "${prefix}${msg}" acc) null items;
 
@@ -64,8 +96,6 @@ let
 
 in
 rec {
-  inherit versionAtLeast versionAtMost compareVersions;
-
   peekPackageMeta =
     { package, kixlib }:
     if builtins.isAttrs package && package ? build then
@@ -115,7 +145,7 @@ rec {
       };
       # Shelf packages bypass buildRolesIndex until instantiated, so validate
       # meta.roles here so a typo'd role on a catalog entry throws instead
-      # of silently never matching a weak demand.
+      # of silently never matching a demand.
       shelfRoles = map (roles.assertKnownRole "meta.roles of ${context}") (packageMeta.roles or [ ]);
     in
     lib.unique (explicitAliases ++ shelfRoles ++ (packageMeta.defaultAliases or [ ]));
@@ -133,35 +163,49 @@ rec {
       k8s = packageMeta.k8s or { };
       clusterK8s = clusterConfig.k8sVersion or null;
 
-      k8sAssertions =
-        if clusterK8s == null then
-          [ ]
-        else
-          lib.concatLists [
-            (lib.optional (k8s ? minVersion && !(versionAtLeast clusterK8s k8s.minVersion)) (
-              fail "package requires Kubernetes ${k8s.minVersion} or newer, cluster targets ${clusterK8s}"
-            ))
-            (lib.optional (k8s ? maxVersion && !(versionAtMost clusterK8s k8s.maxVersion)) (
-              fail "package requires Kubernetes ${k8s.maxVersion} or older, cluster targets ${clusterK8s}"
-            ))
-          ];
+      # Most clusters leave k8sVersion unset, so null does not warn.
+      k8sDiag = constraintDiagnostics {
+        field = "meta.k8s";
+        subject = "the cluster's k8sVersion";
+        version = clusterK8s;
+        constraint = k8s;
+        warnWhenNull = false;
+        describeFailure =
+          bound: want:
+          if bound == "minVersion" then
+            "package requires Kubernetes ${want} or newer, cluster targets ${clusterK8s}"
+          else
+            "package requires Kubernetes ${want} or older, cluster targets ${clusterK8s}";
+      };
 
       compat = packageMeta.compatibleWith or { };
-      compatAssertions = builtins.concatMap (
+      compatDiags = map (
         depName:
         let
           depInfo = resolvedDepMeta.${depName} or null;
           dep = if depInfo != null then depInfo.instance else null;
-          depVersion = if dep != null then dep._meta.version or (dep.out.version or null) else null;
+          # A managed instance carries its package's meta; an import may
+          # publish out.version.
+          depVersion = dep._meta.packageMeta.version or (dep.out.version or null);
         in
-        if depVersion == null then
-          [ ]
+        if dep == null then
+          noDiagnostics
         else
-          versionCheck {
-            inherit depName depVersion;
+          constraintDiagnostics {
+            field = "meta.compatibleWith.${depName}";
+            subject = "dependency '${depName}'";
+            version = depVersion;
             constraint = compat.${depName};
+            describeFailure =
+              bound: want:
+              if bound == "minVersion" then
+                "dependency '${depName}' version ${depVersion} is older than the required minimum ${want}"
+              else
+                "dependency '${depName}' version ${depVersion} is newer than the supported maximum ${want}";
           }
       ) (builtins.attrNames compat);
+
+      versionDiags = [ k8sDiag ] ++ compatDiags;
 
       conflictAssertions = builtins.concatMap (
         conflict:
@@ -176,10 +220,21 @@ rec {
             else
               builtins.filter (c: c.namespace == namespaceName && !(isSelf c)) candidates;
           scope = if isClusterWide then "(cluster-wide)" else "in namespace '${namespaceName}'";
-          instances = builtins.concatStringsSep ", " (map (c: "${c.namespace}/${c.instName}") matching);
+          # A null autoInstantiatedFor marks a declared instance.
+          isAuto = c: (c.meta.autoInstantiatedFor or null) != null;
+          label =
+            c:
+            "${c.namespace}/${c.instName}"
+            + lib.optionalString (isAuto c) " (auto-instantiated for ${builtins.concatStringsSep ", " c.meta.autoInstantiatedFor})";
+          instances = builtins.concatStringsSep ", " (map label matching);
+          autoAdvice = lib.optionalString (builtins.any isAuto matching) (
+            ". An auto-instantiated instance is created for a required dependency that no declared instance answers. "
+            + "Make ${namespaceName}/${instanceName} answer '${name}' (instances.${namespaceName}.${instanceName}.aliases), "
+            + "or bind the consumers to it with deps.<arg> = ref.${namespaceName}.${instanceName}."
+          );
         in
         lib.optional (matching != [ ]) (
-          fail "conflicts with '${name}' ${scope}. Conflicting instances: ${instances}"
+          fail "${namespaceName}/${instanceName} conflicts with '${name}' ${scope}. Conflicting instances: ${instances}${autoAdvice}"
         )
       ) (packageMeta.conflictsWith or [ ]);
 
@@ -207,12 +262,13 @@ rec {
     in
     {
       assertions = lib.concatLists [
-        k8sAssertions
-        compatAssertions
+        (builtins.concatMap (d: d.assertions) versionDiags)
         conflictAssertions
         unsafeAssertions
       ];
-      warnings = deprecationWarnings;
+      warnings =
+        deprecationWarnings
+        ++ map (w: "[${instanceName}] ${w}") (builtins.concatMap (d: d.warnings) versionDiags);
     };
 
   evaluatePackageDiagnostics =
