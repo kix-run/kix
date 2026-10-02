@@ -1,3 +1,3 @@
-# 2026-09-28 · `kix/packages/prometheus-operator`, `kix/packages/tailscale` · `pullPolicy` on `prometheusConfigReloader.image` and `proxyImage` does nothing.
+# 2026-09-28 · `kix/packages/prometheus-operator` · `pullPolicy` on `prometheusConfigReloader.image` does nothing.
 
-Both options come from `kix.options.image`, so they expose `pullPolicy`, but the package only passes `kix.image.ref` of them to an operator (`--prometheus-config-reloader` and the tailscale `PROXY_IMAGE` env). The operator creates those containers and chooses their `imagePullPolicy` itself, so an instance that sets `pullPolicy` sees no change and no error.
+The option comes from `kix.options.image`, so it exposes `pullPolicy`, but the package only passes `kix.image.ref` of it to the operator (`--prometheus-config-reloader`). The operator creates the sidecar and takes its `imagePullPolicy` from the Prometheus or Alertmanager resource, so an instance that sets `pullPolicy` sees no change and no error. The option's description says so; nothing refuses it.

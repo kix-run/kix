@@ -91,10 +91,6 @@ let
     config.stringData.password = "password";
   };
 
-  nonRoot = {
-    rule = "security.nonRoot";
-    reason = "housekeeping/2026-09-27-five-packages-fail-non-root-rule.md";
-  };
   lokiLabels = {
     rule = "architecture.distinctSameKindLabels";
     reason = "housekeeping/2026-09-27-loki-chart-services-share-labels.md";
@@ -133,7 +129,6 @@ let
         reason = "housekeeping/2026-09-27-smartctl-exporter-monitor-selects-helm-labels.md";
       }
     ];
-    tailscale = [ nonRoot ];
   };
 
   # What a package needs beyond its defaults. `config` is the instance
@@ -268,6 +263,14 @@ let
       provisioner = "rancher.io/local-path";
       reclaimPolicy = "Retain";
       volumeBindingMode = "WaitForFirstConsumer";
+    };
+    tailscale.instances.oauth-credentials = {
+      package = packages.secret;
+      aliases = [ "oauthCredentials" ];
+      config.stringData = {
+        client_id = "id";
+        client_secret = "secret";
+      };
     };
     valkey.instances.valkey-password = valkeyPassword;
     vaultwarden.instances = { inherit storage; };

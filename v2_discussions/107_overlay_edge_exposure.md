@@ -57,35 +57,23 @@ No `mode` flag, no `exposeL4` sibling. Mode is intrinsic to the service's port s
 
 ## Tailscale: how it slots in
 
-`tailscale-operator` (new package, `kix/packages/tailscale-operator/`) ships:
+The `tailscale` package (`kix/packages/tailscale/`, operator v1.102.4) ships the operator, its RBAC, the eight tailscale.com CRDs, `IngressClass/tailscale`, and policies for the pods the operator creates. The OAuth client is the `oauthCredentials` dependency (a `secret` or `secret-ref` with keys `client_id` and `client_secret`).
 
-- Operator Deployment + RBAC + CRDs (`Connector`, `ProxyClass`, `ProxyGroup`, `Recorder`).
-- OAuth client secret (kix-secret, hydrated via SOPS).
-- Configurable: tailnet name, default tags, MagicDNS settings.
-
-It *exports* multiple edge personalities via `out`:
+Its `out`:
 
 ```nix
 out = {
-  ingressClassName  = "tailscale";   # so it can feed `ingress` dep
-  tlsTermination    = "upstream";    # hint for the linter
-  loadBalancerClass = "tailscale";   # so it can feed `loadBalancer` dep
-  serviceAnnotations.${"tailscale.com/expose"} = "true";
-  gatewayRef = { ... };              # so it can feed `gateway` dep (Gateway API)
+  crds = { Connector; DNSConfig; PeerRelay; ProxyClass; ProxyGroup; ProxyGroupPolicy; Recorder; Tailnet; };
+  loadBalancerClass = "tailscale";   # with a dependency on the operator
+  ingressClass;                      # the IngressClass resource
+  mkBackendPolicy;                   # opens a backend's pods to the proxies
+  mkIngress;                         # { ingress; policy; } for one backend
+  mkConnector; mkProxyGroup; mkDNSConfig; mkRecorder;
+  podSelector; podNamespace; extraImages;
 };
 ```
 
-Cluster wires whichever personalities it wants:
-
-```nix
-deps = {
-  ingress      = self.tailscaleOperator;   # HTTP via tailscale
-  loadBalancer = self.tailscaleOperator;   # L4 via tailscale
-  # clusterIssuer omitted — tailscale terminates TLS itself
-};
-```
-
-A package that calls `kix.expose { service = "service"; }` on a service whose front-door port is named `http` gets an Ingress with `ingressClassName: tailscale`, no Certificate. A package whose service has port `name: postgres` gets the same Service patched to `type: LoadBalancer, loadBalancerClass: tailscale`. The package author wrote one call.
+There is no `out.ingressClassName`, so the package cannot be wired as the `ingress` dependency of `kix.expose`. A tailscale Ingress names its machine by the first label of `tls[0].hosts[0]` and ignores rules whose host differs, while `kix.expose` writes `rules[].host` and no `tls`. A package puts a Service on the tailnet itself, with `out.mkIngress` or with a LoadBalancer Service whose `loadBalancerClass` is `out.loadBalancerClass` plus `out.mkBackendPolicy`. A class that carries a dependency makes `checkLoadBalancer` skip the cluster's `loadBalancer` role and keeps derived policy from opening the Service's pods to the internet.
 
 ## Firezone: same shape, with a controller
 
@@ -113,7 +101,7 @@ Why in-cluster controller rather than a `kix deploy` post-step or out-of-band Te
 
 ## Gateway API consideration
 
-Tailscale ships `GatewayClass: tailscale`. So `kix.expose` against `gateway = self.tailscaleOperator` produces an HTTPRoute attached to a tailscale-managed Gateway. Same renderer as today's nginx-Gateway path. No new code in `compose.nix` for this case; it's purely a packaging matter.
+The tailscale operator ships no GatewayClass at v1.102.4, so the `gateway` slot has no tailscale provider.
 
 The current "both `ingress` and `gateway` wired = throw" rule stays. We're not auto-preferring Gateway over Ingress in v1 — Gateway-API support is uneven across providers (firezone has none yet) and the explicit-pick rule keeps cluster definitions readable.
 
@@ -147,8 +135,8 @@ Zero new fields for the operator to write. The "single list" ask is satisfied by
 2. **Add `loadBalancer` DI dep** to `kix.expose`. Implement the Service-patch path (`type: LoadBalancer` + `loadBalancerClass` + merged annotations). Structured diagnostic when an L4-shape expose call has no `loadBalancer` wired.
 3. **Add port-shape dispatch** in `kix.expose`: HTTP-shaped → existing path; else → loadBalancer path.
 4. **Optional `tlsTermination` lint**: warning when `clusterIssuer` wired against `out.tlsTermination = "upstream"`.
-5. **Ship `kix/packages/tailscale-operator/`** — operator + CRDs + OAuth secret. Exports `ingressClassName`, `loadBalancerClass`, `gatewayRef`.
-6. **Wire `ludo/cluster.nix`** — `ingress = self.tailscaleOperator`, `loadBalancer = self.tailscaleOperator`. Drop `clusterIssuer` for ludo (tailscale-only edge).
+5. **Ship `kix/packages/tailscale/`**: done, with the `out` above. No `ingressClassName` and no `gatewayRef`.
+6. **Wire `ludo/cluster.nix`**: the tailscale package cannot fill the `ingress` slot (open question 2). Until step 2 gives `kix.expose` a `loadBalancer` slot, ludo's packages put their Services on the tailnet themselves, with `out.mkIngress`, or with `out.loadBalancerClass` and `out.mkBackendPolicy`. Drop `clusterIssuer` for ludo (tailscale-only edge).
 7. **Add `cluster.out.exposures` + `kix exposures` CLI** — derived view, no new declarations.
 8. **Firezone controller** — build small operator (Go or Rust), package as `kix/packages/firezone-resource/`, ship alongside upstream firezone helm chart for the gateway. Tracked separately; not a ludo-D-day blocker.
 
@@ -163,7 +151,7 @@ Steps 1–6 satisfy doc 105 §B3 for the ludo D-day. Step 7 closes the operator-
 ## Open questions
 
 1. **Port-shape heuristic specifics.** Which port names count as HTTP-shaped? Proposal: `{http, https, web, api}` plus `targetPort` numeric heuristic (80, 443, 8080, 8443) only as a tiebreaker. Should the package author's explicit `port = ...` always win? (Probably yes.)
-2. **Tailscale `Connector` / `ProxyGroup` CRDs vs Service-LB path.** Newer tailscale-operator versions prefer `Connector` for subnet-router-style exposure. Does `loadBalancer` dep cover both, or do we need a separate `connector` dep? (Likely cover with a config option on the tailscale-operator package; `loadBalancerClass` is the K8s-native primitive.)
+2. **Tailscale in the `ingress` slot.** `kix.expose` would need to render a machine-name Ingress (`tls.hosts = [ <label> ]`, no `rules[].host`) whose URL Kix cannot know, because the tailnet name is not in the build. Until then the package exposes `out.mkIngress` and `out.loadBalancerClass` instead. Connectors and ProxyGroups are custom resources the package builds through `out.mkConnector` and `out.mkProxyGroup`, not a DI slot.
 3. **Firezone CRD shape.** What does `FirezoneResource` look like for non-Service resources (CIDRs, internal DNS)? Defer to firezone-controller design doc.
 4. **TLS-termination lint severity.** Warning vs error when `clusterIssuer` is wired against an upstream-terminating edge? Warning for v1 (operators may have transitional setups); revisit.
 5. **`kix exposures` CLI output shape.** Plain table, JSON, or both? (Both, JSON for piping.) Lives in `cli/` — separate impl ticket.
