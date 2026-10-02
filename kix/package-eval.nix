@@ -251,7 +251,6 @@ let
     };
     n8n.instances.valkey-password = valkeyPassword;
     persistent-volume-claim.config.size = "1Gi";
-    posthog-proxy.config.host = "posthog.example.com";
     priority-class.config.value = 1000;
     python-app = {
       config.backend.image = {
