@@ -15,11 +15,12 @@
 # cluster-wide, and the webhooks have no namespaceSelector, so they admit
 # every namespace. `conflictsWith` refuses a second instance.
 #
-# The SGConfig sets `deploy.restapi` and `deploy.collector` to false. The
-# REST API, web console, and OpenTelemetry collector are pods the operator
-# creates from the SGConfig, and Kix gives them no RBAC binding or network
-# policy, so the package does not run them. PostgreSQL metrics come from each
-# cluster's exporter sidecar (stackgres-cluster `metrics`).
+# The SGConfig sets `deploy.restapi`, `deploy.collector`, and
+# `collector.prometheusOperator.allowDiscovery` to false. The REST API, web
+# console, and OpenTelemetry collector are pods the operator creates from the
+# SGConfig, and Kix gives them no RBAC binding or network policy, so the
+# package does not run them. PostgreSQL metrics come from each cluster's
+# exporter sidecar (stackgres-cluster `metrics`).
 #
 # The operator merges SGCONFIG into the live SGConfig. A key removed from
 # `sgConfig` keeps its old value there; set it explicitly instead.
@@ -253,6 +254,11 @@ in
                 restapi = false;
                 collector = false;
               };
+              # With discovery on, the SGConfig reconciler reads the
+              # prometheuses.monitoring.coreos.com definition, which the
+              # ClusterRole does not grant, and the reconcile fails on every
+              # pass. Discovery only serves the collector, which is off.
+              collector.prometheusOperator.allowDiscovery = false;
             }
             // lib.optionalAttrs (pullPolicy != null) { imagePullPolicy = pullPolicy; }
           )
