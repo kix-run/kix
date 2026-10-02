@@ -95,39 +95,26 @@ def fetch_crds(url: str, only: set[str] | None = None) -> list[dict]:
 def roles_in(
     text: bytes | str, selectors: set[str], *, source: str = "<input>"
 ) -> list[dict]:
-    """The ClusterRoles and Roles in a YAML stream that `selectors` name,
-    each as `Kind/name`, sorted by selector. Every selector must match a
-    document; selecting any other kind is refused, because a package builds
-    its own bindings and service accounts."""
-    for selector in sorted(selectors):
-        kind, _, name = selector.partition("/")
-        if not name:
-            raise VendorError(f"{source}: {selector} is not Kind/name")
-        if kind not in RBAC_KINDS:
+    """The ClusterRoles and Roles that `selectors` name as `Kind/name`,
+    sorted by selector. Every selector must match a document. Other kinds
+    are refused, because a package builds its own bindings and service
+    accounts, and a URL without selectors is refused, because an operator
+    bundle holds roles for several service accounts."""
+    if not selectors:
+        raise VendorError(f"{source}: name the roles to take from it, as Kind/name")
+    for kind, _, name in sorted(s.partition("/") for s in selectors):
+        if kind not in RBAC_KINDS or not name:
             raise VendorError(
-                f"{source}: {selector}: only {' and '.join(RBAC_KINDS)} are vendored"
+                f"{source}: {kind}/{name}: not ClusterRole/name or Role/name"
             )
-
-    def selector_of(doc: dict) -> str:
-        return f"{doc.get('kind')}/{doc.get('metadata', {}).get('name')}"
-
     by_selector = {
-        selector_of(d): d
+        f"{d.get('kind')}/{d.get('metadata', {}).get('name')}": d
         for d in documents_in(text, source)
-        if selector_of(d) in selectors
     }
     missing = sorted(selectors - by_selector.keys())
     if missing:
         raise VendorError(f"{source}: does not contain {', '.join(missing)}")
     return [by_selector[s] for s in sorted(selectors)]
-
-
-def fetch_roles(url: str, selectors: set[str]) -> list[dict]:
-    """The roles a `rbac/sources.txt` line names. A URL without selectors is
-    refused: an operator bundle holds roles for several service accounts."""
-    if not selectors:
-        raise VendorError(f"{url}: name the roles to take from it, as Kind/name")
-    return roles_in(fetch(url), selectors, source=url)
 
 
 def render(crd: dict) -> str:
@@ -136,21 +123,15 @@ def render(crd: dict) -> str:
     return json.dumps(crd, indent=2, sort_keys=True) + "\n"
 
 
-def file_name(crd: dict) -> str:
-    return f"{crd['metadata']['name']}.json"
-
-
-def rbac_file_name(role: dict) -> str:
-    """`<kind>-<name>.json`, with `:` in the name written as `_`
-    (`kubevirt.io:operator` gives `clusterrole-kubevirt.io_operator.json`).
-    Any other character outside `[a-z0-9.-]` is refused."""
-    name = role["metadata"]["name"]
+def file_name(obj: dict) -> str:
+    """`<metadata.name>.json` for a CRD. `<kind>-<name>.json` for a role,
+    with `:` written as `_` (`clusterrole-kubevirt.io_operator.json`)."""
+    name = obj["metadata"]["name"]
+    if obj["kind"] == CRD_KIND:
+        return f"{name}.json"
     if not re.fullmatch(r"[a-z0-9.:-]+", name):
-        raise VendorError(
-            f"{role['kind']}/{name}: the name has a character outside [a-z0-9.:-], "
-            "which no file name mapping covers"
-        )
-    return f"{role['kind'].lower()}-{name.replace(':', '_')}.json"
+        raise VendorError(f"{obj['kind']}/{name}: no file name mapping for this name")
+    return f"{obj['kind'].lower()}-{name.replace(':', '_')}.json"
 
 
 def parse_sources(path: pathlib.Path) -> list[tuple[str, set[str]]]:

@@ -34,12 +34,12 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from vendor_crds import (
     VendorError,
+    fetch,
     fetch_crds,
-    fetch_roles,
     file_name,
     parse_sources,
-    rbac_file_name,
     render,
+    roles_in,
 )
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -48,58 +48,50 @@ PACKAGES = REPO / "kix" / "packages"
 
 def discover(names: list[str]) -> list[pathlib.Path]:
     """The `crds/` and `rbac/` directories to process, all of them or the
-    named packages'."""
-    if names:
-        dirs = []
-        for name in names:
-            found = [
-                d
-                for d in (PACKAGES / name / "crds", PACKAGES / name / "rbac")
-                if d.is_dir()
-            ]
-            if not found:
-                sys.exit(f"kix/packages/{name}: no crds/ or rbac/ directory")
-            dirs.extend(found)
-        return dirs
-    return sorted(
+    named packages'. Only `crds/` may use an `update.py` in place of a
+    `sources.txt`."""
+    dirs = sorted(
         d
         for d in [*PACKAGES.glob("*/crds"), *PACKAGES.glob("*/rbac")]
-        if (d / "sources.txt").exists() or (d / "update.py").exists()
+        if (d / "sources.txt").exists()
+        or (d.name == "crds" and (d / "update.py").exists())
     )
+    if names:
+        dirs = [d for d in dirs if d.parent.name in names]
+        if missing := sorted(set(names) - {d.parent.name for d in dirs}):
+            sys.exit(f"no crds/ or rbac/ sources in: {', '.join(missing)}")
+    return dirs
 
 
 def wanted(directory: pathlib.Path) -> dict[str, str]:
     """`file name -> rendered content` for one directory, from its sources."""
+    script = directory / "update.py"
     if directory.name == "rbac":
         objects = [
-            (rbac_file_name(role), role)
+            role
             for url, selectors in parse_sources(directory / "sources.txt")
-            for role in fetch_roles(url, selectors)
+            for role in roles_in(fetch(url), selectors, source=url)
         ]
-    else:
-        objects = [(file_name(crd), crd) for crd in crds_for(directory)]
-    out: dict[str, str] = {}
-    for name, obj in objects:
-        if name in out:
-            raise VendorError(f"{obj['metadata']['name']} is produced twice")
-        out[name] = render(obj)
-    return out
-
-
-def crds_for(directory: pathlib.Path) -> list[dict]:
-    """The CRDs one `crds/` directory's `update.py` or `sources.txt` names."""
-    script = directory / "update.py"
-    if script.exists():
+    elif script.exists():
         spec = importlib.util.spec_from_file_location(
             f"crds_{directory.parent.name}", script
         )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)  # type: ignore[union-attr]
-        return module.crds()
-    crds = []
-    for url, only in parse_sources(directory / "sources.txt"):
-        crds.extend(fetch_crds(url, only))
-    return crds
+        objects = module.crds()
+    else:
+        objects = [
+            crd
+            for url, only in parse_sources(directory / "sources.txt")
+            for crd in fetch_crds(url, only)
+        ]
+    out: dict[str, str] = {}
+    for obj in objects:
+        name = file_name(obj)
+        if name in out:
+            raise VendorError(f"{obj['metadata']['name']} is produced twice")
+        out[name] = render(obj)
+    return out
 
 
 def reconcile(directory: pathlib.Path, files: dict[str, str], check: bool) -> list[str]:
