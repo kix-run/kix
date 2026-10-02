@@ -14,10 +14,17 @@
 #   database (required)       a `stackgres-database` instance (alias
 #                             `database`); n8n reads its host, port,
 #                             database name, and credentials.
-#   valkey (required)         a standalone `valkey` in this namespace. The
-#                             package turns Sentinel off on it: n8n has no
-#                             Sentinel client. valkey itself needs a
-#                             `valkeyPassword` secret (key `password`).
+#   valkey (required)         a `valkey` in this namespace, or a
+#                             `kix.mkImport` of one. n8n has no Sentinel
+#                             client, so the package turns Sentinel off on
+#                             a managed valkey and refuses an import that
+#                             publishes a Sentinel port. valkey itself
+#                             needs a `valkeyPassword` secret (key
+#                             `password`). An import carries no password,
+#                             so when the imported Valkey needs one, set
+#                             `env.QUEUE_BULL_REDIS_PASSWORD` to a
+#                             `secretKeyRef` whose name is a
+#                             `kix.untrackedRef`.
 #   encryptionKey (required)  a `secret` or `secret-ref` with key `key`.
 #                             n8n encrypts saved credentials with it, so
 #                             the main instance and the workers must share
@@ -26,10 +33,27 @@
 #   prometheus (optional)     a ServiceMonitor for the main instance when
 #                             `metrics.enabled` is true.
 #   ingressNginx or gateway, clusterIssuer (optional)
-#                             the route from `kix.expose`. n8n's public URLs
-#                             (N8N_HOST, N8N_PROTOCOL, N8N_EDITOR_BASE_URL,
-#                             N8N_WEBHOOK_URL) follow it; set them in `env`
-#                             when TLS terminates outside Kix.
+#                             the route from `kix.expose`. N8N_HOST,
+#                             N8N_PROTOCOL, N8N_EDITOR_BASE_URL,
+#                             N8N_WEBHOOK_URL, and N8N_PROXY_HOPS = "1"
+#                             follow it; set them in `env` when TLS
+#                             terminates outside Kix or another proxy sits
+#                             in front.
+#
+# Each instance needs its own database, encryption key, and valkey. A second
+# n8n in the same namespace resolves the same `database`, `encryptionKey`,
+# and `valkey` as the first unless its `deps` name other instances, and two
+# main instances on one database run every trigger twice.
+#
+# On ingress-nginx the package sets three `ingress.annotations` defaults;
+# setting the same key replaces each one:
+#   proxy-body-size                  the larger of `env.N8N_PAYLOAD_SIZE_MAX`
+#                                    (default 16) and
+#                                    `env.N8N_FORMDATA_FILE_SIZE_MAX`
+#                                    (default 200), in MiB.
+#   proxy-read-timeout, proxy-send-timeout
+#                                    3600 seconds, for the editor's push
+#                                    websocket.
 #
 # Minimal instances, with SOPS files that hold the secret values:
 #
@@ -78,7 +102,9 @@
 # Escape hatches: `env` (both n8n containers), `runners.env` (the sidecar),
 # `worker.extraArgs` (for example `--concurrency=20`), and `partsOverlays`.
 # Module allowlists for Code nodes are in the runners image's
-# `/etc/n8n-task-runners.json`.
+# `/etc/n8n-task-runners.json`. To change them, replace the `worker` part
+# through `partsOverlays` so that it mounts a file of your own at that path
+# in the `task-runners` container.
 
 {
   scope,
@@ -196,7 +222,7 @@ in
     };
 
     env = kix.options.env // {
-      description = "Extra environment variables for the n8n container of the main instance and of every worker. A value is a string, a `fieldRef` source such as `{ valueFrom.fieldRef.fieldPath = \"metadata.name\"; }`, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. Credentials from the dependencies are wired by the package. Null removes a variable the package sets by default. ${lib.concatStringsSep ", " runnerSharedVars} also reach the task-runner sidecar; set other runner settings in `runners.env`.";
+      description = "Extra environment variables for the n8n container of the main instance and of every worker. A value is a string, a `fieldRef` source such as `{ valueFrom.fieldRef.fieldPath = \"metadata.name\"; }`, or a `secretKeyRef` source naming a Secret managed outside Kix with `kix.untrackedRef`. Credentials from the dependencies are wired by the package, except the password of a valkey from `kix.mkImport`, which `QUEUE_BULL_REDIS_PASSWORD` supplies. Null removes a variable the package sets by default. ${lib.concatStringsSep ", " runnerSharedVars} also reach the task-runner sidecar; set other runner settings in `runners.env`.";
     };
 
     worker = {
@@ -292,7 +318,6 @@ in
         database,
         valkey,
         encryptionKey,
-        prometheus ? null,
         ...
       }:
       let
@@ -305,7 +330,8 @@ in
           keys = [ "key" ];
         };
 
-        # A valkey from `kix.mkImport` may publish no password.
+        # A valkey from `kix.mkImport` has no `out.authSecret`, so `env`
+        # supplies its password when it needs one.
         valkeyAuth = valkey.out ? authSecret;
 
         # A `kix.mergeEnv` owned group that also refuses the `_FILE` twins.
@@ -338,11 +364,6 @@ in
               }
             )
             {
-              # An import's password comes from `kix.mkImport { out.authSecret; }`.
-              names = lib.optionals (!valkeyAuth) [
-                "QUEUE_BULL_REDIS_PASSWORD"
-                "QUEUE_BULL_REDIS_PASSWORD_FILE"
-              ];
               from = "the valkey dependency";
               fix = "Wire a different valkey through deps.valkey instead.";
             };
@@ -385,13 +406,13 @@ in
             fix = "Remove it: the package sets it so queue mode, the task-runner sidecar, the Service, and the probes agree.";
           };
 
-        # n8n 2.x replaced WEBHOOK_URL with N8N_WEBHOOK_URL and ignores the
-        # old name while the new one is set, which the package does when
-        # the instance has a route.
+        # n8n 2.35 deprecated WEBHOOK_URL in favour of N8N_WEBHOOK_URL and
+        # ignores the old name while the new one is set, which the package
+        # does when the instance has a route.
         legacyWebhookGroup = {
           names = [ "WEBHOOK_URL" ];
-          from = "n8n 1.x; n8n 2.x reads N8N_WEBHOOK_URL first";
-          fix = "Set N8N_WEBHOOK_URL instead.";
+          from = "n8n releases before 2.35 (2.35 deprecated it in favour of N8N_WEBHOOK_URL)";
+          fix = "Set N8N_WEBHOOK_URL instead. The package sets it from the instance's route when there is one, and env overrides that.";
         };
 
         # Workers need the public URL too: a Wait node's resume URL is built
@@ -404,8 +425,6 @@ in
           N8N_PROXY_HOPS = "1";
         };
 
-        metricsOn = config.metrics.enabled && prometheus != null;
-
         defaultsFor =
           role:
           exposureDefaults
@@ -414,7 +433,7 @@ in
               # Main then runs no executions and starts no task broker.
               OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS = "true";
             }
-            // lib.optionalAttrs metricsOn {
+            // lib.optionalAttrs config.metrics.enabled {
               N8N_METRICS = "true";
               N8N_METRICS_INCLUDE_QUEUE_METRICS = "true";
             }
@@ -490,7 +509,8 @@ in
             env = n8nEnv role;
             # n8n listens only after the main instance has run the database
             # migrations, so startup allows five minutes. The readiness
-            # endpoint also checks the database and Valkey connections.
+            # endpoint checks the database connection; a worker's also
+            # checks Valkey.
             startupProbe = httpProbe "http" "/healthz" // {
               failureThreshold = 30;
             };
@@ -592,6 +612,10 @@ in
 
         podSpec = {
           automountServiceAccountToken = false;
+          # The instance's Service, named `n8n` by default, would otherwise
+          # inject N8N_PORT=tcp://... and other variables with n8n's N8N_
+          # prefix into every container.
+          enableServiceLinks = false;
           # n8n waits up to 30 s for running executions, and the launcher up
           # to 50 s for its runners.
           terminationGracePeriodSeconds = 60;
@@ -684,8 +708,9 @@ in
       }
     )
 
-    # The Gateway API route's default 15 s request timeout would cut the
-    # editor's push websocket.
+    # Envoy's default 15 s route timeout, which applies on an Envoy-based
+    # gateway when the HTTPRoute sets none, would cut the editor's push
+    # websocket.
     (kix.expose {
       service = "service";
       timeouts.request = "0s";
