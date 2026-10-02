@@ -1,11 +1,12 @@
-# clusters/test-operators.nix — the operator packages whose workloads used
-# to be raw scope.mkResource Deployments, on a three-zone kind cluster.
+# clusters/test-operators.nix: operator and storage-driver packages on a
+# three-zone kind cluster.
 #
-# coredns, velero, arc, cdi, kubevirt, infisical-operator and openebs, one
-# namespace each, every workload now sealed through the typed builders:
-# derived spread, PodDisruptionBudgets, network-policy edges. multiNode and
-# three zones are declared so the derivation has domains to spread over;
-# the kind cluster matches (scripts/kind-spread-config.yaml).
+# coredns, arc, cdi, kubevirt, infisical-operator, zfs-localpv,
+# snapshot-controller, and mayastor, every workload sealed through the
+# typed builders: derived spread, PodDisruptionBudgets, network-policy
+# edges. multiNode and three zones are declared so the derivation has
+# domains to spread over; the kind cluster matches
+# (scripts/kind-spread-config.yaml).
 #
 # Build:  nix build .#cluster-operators --extra-experimental-features pipe-operators
 # Deploy: scripts/kind-operators.sh
@@ -64,7 +65,7 @@ kix.buildCluster {
           # schedule nowhere and the run judges the control plane and etcd.
           # The kubelet sets openebs.io/csi-node once csi-node registers, so
           # that label would not keep them off.
-          config.csiNode.nodeSelector."kix.run/test-schedule" = "never";
+          config.csiNode.nodeSelector."example.com/test-schedule" = "never";
         };
       };
     }
