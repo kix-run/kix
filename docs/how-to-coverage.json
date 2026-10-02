@@ -511,7 +511,9 @@
       "status": "implemented",
       "snippets": [
         "acmeClusterIssuer",
-        "selfSignedClusterIssuer"
+        "stagingClusterIssuer",
+        "selfSignedClusterIssuer",
+        "importedClusterIssuer"
       ]
     },
     {
