@@ -416,6 +416,7 @@
               configInjections = resolveInjections nsName instName;
               inherit workloadInterceptors instanceProcessors clusterCtx;
               inherit annotationDomainIndex factBehaviorOverrides;
+              isInstanceActive = isActive;
             }
           ) nsInsts
         ) mergedInstances

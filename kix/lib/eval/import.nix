@@ -208,6 +208,10 @@ rec {
       clusterLabels,
       clusterConfig ? { },
       clusterCtx ? { },
+      # The cluster's evaluated instances and whether each renders; extraDeps
+      # reads `root` from the ones its `ref` entries name.
+      allInstances ? { },
+      isInstanceActive ? (_: _: true),
       ...
     }:
     let
@@ -460,7 +464,36 @@ rec {
             }
           ) rawPlatformIntents;
 
-      instanceExtraDeps = (instCfg.extraDeps or [ ]) ++ materializedIntentPolicies;
+      # An instance-level extraDeps entry is a resource or a
+      # `ref.<namespace>.<instance>` pointer, which stands for that instance's
+      # PackageInstance marker (its `root`). mkResource takes dependencies
+      # only from entries with an outPath and ignores anything else, so any
+      # other value fails here.
+      resolveExtraDep =
+        entry:
+        if builtins.isAttrs entry && (entry._type or "") == "kix-ref" then
+          let
+            refText = "ref.${entry.namespace}.${entry.instanceName}";
+          in
+          if entry.namespace == namespaceName && entry.instanceName == instanceName then
+            throw "${who}: extraDeps names ${refText}, the import itself. An import's marker cannot depend on itself."
+          else if !((allInstances.${entry.namespace} or { }) ? ${entry.instanceName}) then
+            throw "${who}: extraDeps names ${refText}, which is not an instance. It names a package in availablePackages that nothing auto-instantiated there; declare it under instances.${entry.namespace}.${entry.instanceName}."
+          else if !(isInstanceActive entry.namespace entry.instanceName) then
+            throw "${who}: extraDeps names ${refText}, an optional instance that nothing activates. Kix renders no marker for it, so the import's marker would wait for a resource that is never deployed. Set optional = false on instances.${entry.namespace}.${entry.instanceName}, or remove the entry."
+          else
+            allInstances.${entry.namespace}.${entry.instanceName}.root
+        else if builtins.isAttrs entry && (entry._type or "") == "k8s-resource" then
+          entry
+        else
+          throw "${who}: each extraDeps entry is a resource or a ref.<namespace>.<instance> pointer; got ${
+            if builtins.isAttrs entry then
+              "an attribute set with keys ${builtins.concatStringsSep ", " (builtins.attrNames entry)}"
+            else
+              builtins.typeOf entry
+          }.";
+
+      instanceExtraDeps = map resolveExtraDep (instCfg.extraDeps or [ ]) ++ materializedIntentPolicies;
 
       markerResource = mkResource {
         apiVersion = kixAnnotations.apiVersion;
