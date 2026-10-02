@@ -20,21 +20,25 @@
 # A dashboard reads through a second clickhouse-database instance on the
 # same database with [ "SELECT" ].
 #
-# Vector's configuration is Vector's own vocabulary: `vectorConfig` is
-# merged over the package's (`builtinVectorConfig` below), null removes.
-#
 # DI deps:
 #   clickhouseDatabase (required)  the database and the inserting user
 #   prometheus (optional)          ServiceMonitor on Vector's own metrics
 #
 # Exposes:
 #   out.database, out.table   where the rows land
+#   out.metricsUrl            every agent's Prometheus endpoint, through the
+#                             headless metrics Service
 #
-# The agent runs as uid 0, because the kubelet writes pod logs as root with
-# mode 0640, and with nothing else: no capabilities, a read-only root, the
-# log directory mounted read-only. A cluster that enforces the scorecard's
-# security.nonRoot rule has to accept that for the agent's namespace
-# (scorecard.ruleOverrides.byNamespace.<ns>."security.nonRoot").
+# Escape hatches: `settings` (Vector's own config, merged over the package's
+# by `mergeConfig` in vector-agent.nix; a null removes an unlocked key),
+# `extraArgs`, `env`, and the instance's `partsOverlays`.
+#
+# The agent runs as uid 0 to read the kubelet's log files and mounts host
+# paths, so the package declares the `run-as-root` grant and the
+# `privileged` Pod Security level for its namespace.
+#
+# The Vector agent itself (image, options, pod spec, RBAC, health check)
+# comes from ./vector-agent.nix, which loki-logs shares.
 #
 # root = metrics Service.
 
@@ -45,8 +49,10 @@
 }:
 let
   name = scope.instanceName;
+  who = "clickhouse-logs ${scope.namespaceName}/${name}";
   table = "logs";
-  metricsPort = 9598;
+  vectorAgent = import ./vector-agent.nix { inherit lib kix; };
+  credentialsPath = "/etc/vector-credentials";
 
   schemaFor = retentionDays: {
     # Replicated DDL throughout, so it is the same on one node and on many.
@@ -81,9 +87,16 @@ let
 in
 {
   meta = {
-    version = "0.58.0";
+    inherit (vectorAgent) version;
     description = "Pod logs into ClickHouse, shipped by a Vector agent on every node";
+    owner = "platform";
     defaultAliases = [ "clusterLogs" ];
+    # The kubelet writes pod logs as root with mode 0640, so the agent reads
+    # them as uid 0, with no capabilities and a read-only root filesystem.
+    unsafe = [ "run-as-root" ];
+    # hostPath volumes (the node's /var/log and the read positions), which
+    # the baseline Pod Security level forbids.
+    podSecurity = "privileged";
   };
 
   deps = {
@@ -101,41 +114,32 @@ in
       };
   };
 
-  options = {
-    image = kix.options.image {
-      repository = "docker.io/timberio/vector";
-      tag = "0.58.0-distroless-libc";
-      digest = "sha256:6c93dfe2554cc7e38316d618961cd657d5271c7a7aa727e0007502b28cb82c2e";
-    };
-
+  options = vectorAgent.options // {
     retentionDays = lib.mkOption {
       type = lib.types.ints.positive;
       default = 14;
       description = "Days a log row is kept. Becomes the table's TTL.";
     };
 
-    vectorConfig = lib.mkOption {
+    settings = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = { };
       example = {
         sources.kubernetes_logs.extra_namespace_label_selector = "logs!=off";
+        sinks.clickhouse.batch.timeout_secs = 10;
       };
       description = ''
-        Vector configuration merged over the package's own (sources
+        Vector configuration merged over the package's own: sources
         `kubernetes_logs` and `internal_metrics`, transform `row`, sinks
-        `clickhouse` and `metrics`). Set a key to null to remove it.
+        `clickhouse` and `metrics`, and the `credentials` secrets backend. A
+        null removes a key the package sets. The package locks `data_dir`,
+        `sources.internal_metrics`, and `sinks.metrics` (probes, metrics
+        Service, and health check), `sinks.clickhouse.type`, `.endpoint`,
+        `.database`, and `.auth` (from `deps.clickhouseDatabase`),
+        `sinks.clickhouse.table` (the table this package creates), and
+        `secret.credentials` (the mounted password); setting one, or
+        replacing a key above it, fails evaluation.
       '';
-    };
-
-    resources = kix.options.resources {
-      requests = {
-        cpu = "50m";
-        memory = "96Mi";
-      };
-      limits = {
-        cpu = "500m";
-        memory = "256Mi";
-      };
     };
 
     metrics = kix.options.monitor;
@@ -154,18 +158,8 @@ in
       }:
       let
         db = clickhouseDatabase.out;
-        credentialsPath = "/etc/vector-credentials";
 
-        inherit (scope.rbac)
-          core
-          grant
-          watch
-          mkClusterRoleSet
-          ;
-
-        builtinVectorConfig = {
-          data_dir = "/var/lib/vector";
-
+        builtinSettings = lib.recursiveUpdate vectorAgent.baseConfig {
           # Vector no longer expands environment variables in its config
           # (0.58 puts that behind --dangerously-allow-env-var-interpolation).
           # Its secrets backend reads the credentials Secret, mounted as a
@@ -174,14 +168,6 @@ in
           secret.credentials = {
             type = "directory";
             path = credentialsPath;
-          };
-
-          sources = {
-            kubernetes_logs = {
-              type = "kubernetes_logs";
-              self_node_name = "\${VECTOR_SELF_NODE_NAME}";
-            };
-            internal_metrics.type = "internal_metrics";
           };
 
           # One flat row per line, in the table's column names. The source's
@@ -203,48 +189,63 @@ in
             '';
           };
 
-          sinks = {
-            clickhouse = {
-              type = "clickhouse";
-              inputs = [ "row" ];
-              # The address goes into the file as a value, so the edge to
-              # the ClickHouse Service (ordering, network policy) travels
-              # through the ConfigMap like any other. Only the password is
-              # looked up at run time, through the secrets backend above.
-              endpoint = db.httpUrl;
-              inherit (db) database;
-              inherit table;
-              auth = {
-                strategy = "basic";
-                user = db.username;
-                password = "SECRET[credentials.password]";
-              };
-              compression = "gzip";
-              # The timestamp arrives as RFC 3339 text.
-              date_time_best_effort = true;
-              batch.timeout_secs = 5;
-              # The inserting user may not be allowed the SELECT Vector's
-              # health check runs; a failed insert is loud enough.
-              healthcheck.enabled = false;
+          sinks.clickhouse = {
+            type = "clickhouse";
+            inputs = [ "row" ];
+            # The address goes into the file as a value, so the edge to the
+            # ClickHouse Service (ordering, network policy) travels through
+            # the ConfigMap like any other. Only the password is looked up
+            # at run time, through the secrets backend above.
+            endpoint = db.httpUrl;
+            inherit (db) database;
+            inherit table;
+            auth = {
+              strategy = "basic";
+              user = db.username;
+              password = "SECRET[credentials.password]";
             };
-            metrics = {
-              type = "prometheus_exporter";
-              inputs = [ "internal_metrics" ];
-              address = "0.0.0.0:${toString metricsPort}";
-            };
+            compression = "gzip";
+            # The timestamp arrives as RFC 3339 text.
+            date_time_best_effort = true;
+            batch.timeout_secs = 5;
+            # The inserting user may not be allowed the SELECT Vector's
+            # health check runs; a failed insert is loud enough.
+            healthcheck.enabled = false;
           };
         };
 
-        vectorConfig = lib.filterAttrsRecursive (_: v: v != null) (
-          lib.recursiveUpdate builtinVectorConfig config.vectorConfig
-        );
+        mergedSettings = vectorAgent.mergeConfig {
+          inherit who;
+          sink = "clickhouse";
+          locked = [
+            [
+              "secret"
+              "credentials"
+            ]
+            [
+              "sinks"
+              "clickhouse"
+              "database"
+            ]
+            [
+              "sinks"
+              "clickhouse"
+              "table"
+            ]
+            [
+              "sinks"
+              "clickhouse"
+              "auth"
+            ]
+          ];
+        } builtinSettings config.settings;
       in
       {
         configMap = scope.mkResource {
           apiVersion = "v1";
           kind = "ConfigMap";
           name = "${name}-config";
-          data."vector.yaml" = builtins.toJSON vectorConfig;
+          data."vector.yaml" = builtins.toJSON mergedSettings;
         };
 
         serviceAccount = scope.mkResource {
@@ -277,88 +278,14 @@ in
               selector.matchLabels = scope.selectorLabels;
               template = {
                 metadata.annotations."checksum/config" = self.configMap.out.identityHash;
-                spec = {
-                  serviceAccountName = self.serviceAccount.out.name;
-                  # Every node's logs, the control plane's included.
-                  tolerations = [
-                    {
-                      operator = "Exists";
-                      effect = "NoSchedule";
-                    }
-                  ];
-                  securityContext.seccompProfile.type = "RuntimeDefault";
-                  # Long enough to flush the batch in hand.
-                  terminationGracePeriodSeconds = 30;
-                  containers = [
-                    {
-                      name = "vector";
-                      image = kix.image.ref config.image;
-                      imagePullPolicy = config.image.pullPolicy;
-                      args = [
-                        "--config"
-                        "/etc/vector/vector.yaml"
-                      ];
-                      env = kix.mkEnv { } [
-                        {
-                          name = "VECTOR_SELF_NODE_NAME";
-                          valueFrom.fieldRef.fieldPath = "spec.nodeName";
-                        }
-                      ];
-                      ports = [ (kix.port "metrics" metricsPort) ];
-                      # The exporter is served by the same topology as the
-                      # pipeline, so it answers only once the config loaded.
-                      readinessProbe = {
-                        httpGet = {
-                          path = "/metrics";
-                          port = "metrics";
-                        };
-                        periodSeconds = 10;
-                      };
-                      livenessProbe = {
-                        tcpSocket.port = "metrics";
-                        periodSeconds = 20;
-                        failureThreshold = 6;
-                      };
-                      inherit (config) resources;
-                      # The kubelet writes pod logs as root, mode 0640, so
-                      # reading them takes uid 0. Nothing else is granted:
-                      # no capabilities, a read-only root, and the log
-                      # directory itself mounted read-only.
-                      securityContext = {
-                        runAsUser = 0;
-                        allowPrivilegeEscalation = false;
-                        readOnlyRootFilesystem = true;
-                        capabilities.drop = [ "ALL" ];
-                      };
-                      volumeMounts = [
-                        {
-                          name = "var-log";
-                          mountPath = "/var/log";
-                          readOnly = true;
-                        }
-                        {
-                          name = "data";
-                          mountPath = "/var/lib/vector";
-                        }
-                      ];
-                    }
-                  ];
-                  volumes = [
-                    {
-                      name = "var-log";
-                      hostPath.path = "/var/log";
-                    }
-                    # Read positions. On the node so a restarted agent
-                    # resumes where it stopped and neither drops nor
-                    # re-sends what it had already read.
-                    {
-                      name = "data";
-                      hostPath = {
-                        path = "/var/lib/vector/${scope.namespaceName}-${name}";
-                        type = "DirectoryOrCreate";
-                      };
-                    }
-                  ];
+                spec = vectorAgent.podSpec {
+                  inherit
+                    scope
+                    who
+                    name
+                    config
+                    self
+                    ;
                 };
               };
             };
@@ -371,16 +298,10 @@ in
 
         service =
           self.daemonSet
-          |> kix.service.fromWorkload { name = "${name}-metrics"; }
-          |> (
-            svc:
-            svc
-            // {
-              spec = svc.spec // {
-                clusterIP = "None";
-              };
-            }
-          )
+          |> kix.service.fromWorkload {
+            name = "${name}-metrics";
+            spec.clusterIP = "None";
+          }
           |> scope.mkResource;
 
         root = {
@@ -388,27 +309,11 @@ in
           out = {
             inherit (db) database;
             inherit table;
-            metricsUrl = "http://${self.service.out.fqdn}:${toString metricsPort}/metrics";
+            metricsUrl = "${self.service.out.url { }}/metrics";
           };
         };
       }
-      # What the kubernetes_logs source reads to put a namespace, labels and
-      # a node on each line.
-      // (mkClusterRoleSet scope {
-        subjects = [
-          {
-            kind = "ServiceAccount";
-            name = self.serviceAccount.out.name;
-            namespace = scope.namespaceName;
-          }
-        ];
-        labels = scope.selectorLabels;
-        roles.${"${scope.namespaceName}-${name}"} = grant [
-          (core.pods |> watch)
-          (core.namespaces |> watch)
-          (core.nodes |> watch)
-        ];
-      })
+      // vectorAgent.rbac { inherit scope self name; }
     )
 
     (kix.monitor {
@@ -416,13 +321,6 @@ in
       port = "metrics";
     })
 
-    (kix.healthCheck {
-      env =
-        { self, ... }:
-        {
-          VECTOR_METRICS_URL = self.root.out.metricsUrl;
-        };
-      script = builtins.readFile ./health-check.py;
-    })
+    (vectorAgent.healthCheck { sink = "clickhouse"; })
   ];
 }
