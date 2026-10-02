@@ -394,7 +394,14 @@ impl StoreGraph {
     /// `kix diff`.
     ///
     /// Resources group by their stamped `kix.run/package[-namespace]`
-    /// annotations. Cluster-level resources (no package annotation) stay in
+    /// annotations, except that a manifest matching a `reference` path joins
+    /// every reference package that lists the path: a build lists one store
+    /// path under several packages (a `secret-ref-*` marker each importer
+    /// declares), and `stamp::stamp_annotations` stamps only one of them.
+    /// A PackageInstance is a package of its own unless it is an import
+    /// marker stamped with another package; a marker the build indexes as a
+    /// package (a `kix.mkImport` platform import) is stamped `_cluster`.
+    /// Cluster-level resources (no package annotation) stay in
     /// `resources` outside any PackageNode, the way a real graph keeps
     /// them. Identity hashes map back onto `reference`'s store paths: a
     /// matched resource reuses the reference path and manifest (equal hash
@@ -413,6 +420,16 @@ impl StoreGraph {
             .keys()
             .map(|p| (store_hash(p), p))
             .collect();
+
+        let mut reference_members: HashMap<&PathBuf, Vec<(&str, &str)>> = HashMap::new();
+        for p in reference.packages.values() {
+            for res in &p.resource_paths {
+                reference_members
+                    .entry(res)
+                    .or_default()
+                    .push((p.namespace.as_str(), p.instance_name.as_str()));
+            }
+        }
 
         let ann = |m: &Value, key: &str| -> Option<String> {
             m.pointer("/metadata/annotations")
@@ -467,12 +484,13 @@ impl StoreGraph {
                 },
             );
 
-            // An import marker (`crd-ref-*`, `secret-ref-*`, ...) is a
-            // PackageInstance, but a build lists it as a resource of the
-            // package that declares it, not as a package of its own. It is
-            // grouped below by its `kix.run/package` stamp like any resource.
+            let stamped_pkg = ann(m, keys::PACKAGE).filter(|p| p != "_cluster");
+
+            // An import marker declared by a package (`crd-ref-*`,
+            // `secret-ref-*`, ...) is a resource of that package, grouped
+            // below. Any other PackageInstance is a package.
             if m.get("kind").and_then(Value::as_str) == Some(PACKAGE_INSTANCE_KIND)
-                && !crate::manifest::lifecycle::is_marker(m)
+                && !(crate::manifest::lifecycle::is_marker(m) && stamped_pkg.is_some())
             {
                 let ns = m
                     .pointer("/metadata/namespace")
@@ -496,9 +514,15 @@ impl StoreGraph {
                 continue;
             }
 
-            let pkg = ann(m, keys::PACKAGE).unwrap_or_else(|| "_cluster".into());
-            let pkg_ns = ann(m, keys::PACKAGE_NAMESPACE).unwrap_or_else(|| "_cluster".into());
-            if pkg != "_cluster" {
+            if let Some(members) = matched.and_then(|&p| reference_members.get(p)) {
+                for (pkg_ns, pkg) in members {
+                    paths_by_pkg
+                        .entry(format!("{pkg_ns}/{pkg}"))
+                        .or_default()
+                        .push(path.clone());
+                }
+            } else if let Some(pkg) = stamped_pkg {
+                let pkg_ns = ann(m, keys::PACKAGE_NAMESPACE).unwrap_or_else(|| "_cluster".into());
                 paths_by_pkg
                     .entry(format!("{pkg_ns}/{pkg}"))
                     .or_default()
@@ -761,24 +785,230 @@ mod tests {
             assert_eq!(dns.version.as_deref(), Some("2.0"));
         }
 
+        /// An unstamped PackageInstance as the library renders it. With
+        /// `import` set it is an import marker, shaped like the build's
+        /// `secret-ref-*`, `service-ref-*` and `platform-*` markers.
+        fn rendered_pi(ns: &str, name: &str, import: Option<(&str, &str)>) -> Value {
+            let mut anns = serde_json::Map::new();
+            anns.insert(keys::DEPENDS_ON.into(), json!("x,requires:y"));
+            if let Some((kind, target)) = import {
+                anns.insert(keys::MODE.into(), json!("import"));
+                anns.insert(keys::IMPORT_API_VERSION.into(), json!("v1"));
+                anns.insert(keys::IMPORT_KIND.into(), json!(kind));
+                anns.insert(keys::IMPORT_NAME.into(), json!(target));
+            }
+            let mut spec = json!({"instanceName": name, "namespaceName": ns});
+            if import.is_some() {
+                spec["mode"] = json!("import");
+            } else {
+                spec["version"] = json!("1");
+            }
+            json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": crate::manifest::lifecycle::PACKAGE_INSTANCE_KIND,
+                "metadata": {
+                    "name": name,
+                    "namespace": ns,
+                    "annotations": anns,
+                    "labels": {"app.kubernetes.io/instance": name},
+                },
+                "spec": spec,
+            })
+        }
+
+        fn rendered(kind: &str, ns: &str, name: &str) -> Value {
+            json!({
+                "apiVersion": "v1",
+                "kind": kind,
+                "metadata": {"name": name, "namespace": ns},
+            })
+        }
+
+        /// `(store hash seed, PackageInstance, [(seed, resource)])`.
+        type BuiltPackage<'a> = (&'a str, Value, Vec<(&'a str, Value)>);
+
+        /// A build graph shaped like `from_result_dir` makes one: each
+        /// package lists `(seed, manifest)` resources by store path, a seed
+        /// listed under two packages is one store path, every PackageInstance
+        /// is in `resources`, and `stamp_annotations` has run.
+        fn built(packages: &[BuiltPackage]) -> StoreGraph {
+            let path = |seed: &str| PathBuf::from(format!("/nix/store/{}-k8s", h(seed)));
+            let mut g = StoreGraph::empty("c");
+            for (pi_seed, pi, resources) in packages {
+                let pi_path = path(pi_seed);
+                g.resources.insert(
+                    pi_path.clone(),
+                    ResourceNode {
+                        store_path: pi_path.clone(),
+                        manifest: pi.clone(),
+                    },
+                );
+                let mut resource_paths = Vec::new();
+                for (seed, manifest) in resources {
+                    let p = path(seed);
+                    g.resources.insert(
+                        p.clone(),
+                        ResourceNode {
+                            store_path: p.clone(),
+                            manifest: manifest.clone(),
+                        },
+                    );
+                    g.resource_owner.insert(p.clone(), pi_path.clone());
+                    resource_paths.push(p);
+                }
+                g.packages.insert(
+                    pi_path.clone(),
+                    PackageNode {
+                        store_path: pi_path,
+                        instance_name: pi["spec"]["instanceName"].as_str().unwrap().into(),
+                        namespace: pi["metadata"]["namespace"].as_str().unwrap().into(),
+                        version: pi["spec"]["version"].as_str().map(str::to_string),
+                        lifecycle: None,
+                        resource_paths,
+                        cross_deps: vec![],
+                    },
+                );
+            }
+            crate::manifest::stamp::stamp_annotations(&mut g);
+            g
+        }
+
+        /// Synthesize the live side from every stamped manifest of `build`,
+        /// as a converged cluster holds them, and check it groups exactly
+        /// like the build, which is what `plan::diff_graphs` compares.
+        fn assert_converged(build: &StoreGraph) {
+            let live_manifests: Vec<Value> = build
+                .resources
+                .values()
+                .map(|n| n.manifest.clone())
+                .collect();
+            let live = StoreGraph::synthesize(&live_manifests, build);
+
+            let groups = |g: &StoreGraph| -> std::collections::BTreeMap<String, Vec<PathBuf>> {
+                g.packages
+                    .values()
+                    .map(|p| {
+                        (
+                            format!("{}/{}", p.namespace, p.instance_name),
+                            p.resource_paths.clone(),
+                        )
+                    })
+                    .collect()
+            };
+            let unowned = |g: &StoreGraph| -> std::collections::BTreeSet<PathBuf> {
+                g.resources
+                    .keys()
+                    .filter(|p| !g.resource_owner.contains_key(*p) && !g.packages.contains_key(*p))
+                    .cloned()
+                    .collect()
+            };
+            assert_eq!(groups(&live), groups(build));
+            assert_eq!(unowned(&live), unowned(build));
+        }
+
         /// A live import marker stamped with the package that declares it
         /// lands among that package's resources, the way a build lists it,
         /// and is not a package of its own.
         #[test]
         fn an_import_marker_is_a_resource_of_its_declaring_package() {
-            let mut marker = package_instance("data", "crd-ref-pg-sgclusters", "", &h("mk"));
-            let anns = marker["metadata"]["annotations"].as_object_mut().unwrap();
-            anns.insert(keys::PACKAGE.into(), json!("pg"));
-            anns.insert(keys::PACKAGE_NAMESPACE.into(), json!("data"));
-            anns.insert(keys::MODE.into(), json!("import"));
-            let manifests = vec![package_instance("data", "pg", "1", &h("pi")), marker];
-            let g = StoreGraph::synthesize(&manifests, &StoreGraph::empty("c"));
+            let build = built(&[(
+                "pi",
+                rendered_pi("data", "pg", None),
+                vec![
+                    ("sts", rendered("StatefulSet", "data", "pg")),
+                    (
+                        "mk",
+                        rendered_pi(
+                            "data",
+                            "crd-ref-pg-sgclusters",
+                            Some(("CustomResourceDefinition", "sgclusters.stackgres.io")),
+                        ),
+                    ),
+                ],
+            )]);
+            assert_converged(&build);
 
+            let live_manifests: Vec<Value> = build
+                .resources
+                .values()
+                .map(|n| n.manifest.clone())
+                .collect();
+            let g = StoreGraph::synthesize(&live_manifests, &StoreGraph::empty("c"));
             assert_eq!(g.packages.len(), 1);
             let pg = pkg(&g, "data", "pg");
-            assert_eq!(pg.resource_paths.len(), 1);
-            let owned = &g.resources[&pg.resource_paths[0]].manifest;
-            assert_eq!(owned["metadata"]["name"], json!("crd-ref-pg-sgclusters"));
+            assert_eq!(pg.resource_paths.len(), 2);
+        }
+
+        /// `secret-ref-*` and `service-ref-*` markers for one database are
+        /// one store path each, listed under the database package and under
+        /// every package that imports them; the live object carries only
+        /// one `kix.run/package` stamp. The synthesized graph lists each
+        /// marker under every package the build does.
+        #[test]
+        fn a_marker_two_packages_list_is_a_resource_of_both() {
+            let secret_ref = rendered_pi(
+                "data",
+                "secret-ref-postgres-postgres",
+                Some(("Secret", "postgres")),
+            );
+            let service_ref = rendered_pi(
+                "data",
+                "service-ref-postgres-postgres",
+                Some(("Service", "postgres")),
+            );
+            let build = built(&[
+                (
+                    "pg",
+                    rendered_pi("data", "postgres", None),
+                    vec![
+                        ("sgc", rendered("SGCluster", "data", "postgres")),
+                        ("svcref", service_ref.clone()),
+                        ("secref", secret_ref.clone()),
+                    ],
+                ),
+                (
+                    "appdb",
+                    rendered_pi("app", "app-db", None),
+                    vec![
+                        ("job", rendered("Job", "data", "app-db-bootstrap")),
+                        ("svcref", service_ref),
+                        ("secref", secret_ref),
+                    ],
+                ),
+            ]);
+            assert_converged(&build);
+        }
+
+        /// A `kix.mkImport` platform import (`platform-storage`,
+        /// `platform-dns`) is a package of its own in the build, so
+        /// `stamp_annotations` stamps it `_cluster`. It stays a package
+        /// whether or not it owns resources, never a cluster-level resource.
+        #[test]
+        fn a_platform_import_is_a_package_of_its_own() {
+            let build = built(&[
+                (
+                    "storage",
+                    rendered_pi(
+                        "kube-system",
+                        "platform-storage",
+                        Some(("StorageClass", "standard")),
+                    ),
+                    vec![],
+                ),
+                (
+                    "dns",
+                    rendered_pi(
+                        "kube-system",
+                        "platform-dns",
+                        Some(("Deployment", "coredns")),
+                    ),
+                    vec![(
+                        "cnp",
+                        rendered("CiliumNetworkPolicy", "kube-system", "coredns-egress"),
+                    )],
+                ),
+            ]);
+            assert_converged(&build);
         }
 
         #[test]
