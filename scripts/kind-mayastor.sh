@@ -133,7 +133,9 @@ wait_volume_state() {
 }
 
 # Background jobs of run_check (policy-verdict captures, the port-forward),
-# killed on exit so a failed step leaves none running.
+# killed on exit so a failed step leaves none running. They call kubectl
+# directly: a backgrounded shell function runs in a subshell, and killing
+# that subshell's PID leaves its kubectl child running.
 PIDS=()
 kill_jobs() { [ "${#PIDS[@]}" -eq 0 ] || kill "${PIDS[@]}" 2>/dev/null || true; }
 
@@ -143,13 +145,13 @@ run_check() {
   # 0. One policy-verdict capture per Cilium agent, started before the
   # control plane restarts so cold-start traffic is captured.
   for p in $(k -n kube-system get pods -l k8s-app=cilium -o name); do
-    k -n kube-system exec "$p" -c cilium-agent -- cilium-dbg monitor --type policy-verdict >"$H/verdict-${p##*/}.log" 2>&1 &
+    kubectl --context "$CTX" -n kube-system exec "$p" -c cilium-agent -- cilium-dbg monitor --type policy-verdict >"$H/verdict-${p##*/}.log" 2>&1 &
     PIDS+=($!)
   done
   require "control plane restarted" k -n "$NS" rollout restart deploy || return 1
   require "control plane rolled out" k -n "$NS" rollout status deploy --timeout 10m || return 1
 
-  k -n "$NS" port-forward svc/mayastor-api-rest 18081:8081 >/dev/null 2>&1 &
+  kubectl --context "$CTX" -n "$NS" port-forward svc/mayastor-api-rest 18081:8081 >/dev/null 2>&1 &
   PIDS+=($!)
   sleep 3
 
