@@ -444,7 +444,8 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         super::shared_orphans::keep_shared(&client, cluster, orphan_rids).await?;
 
     let resource_graph = ResourceGraph::from_manifests(&target_manifests).into_diagnostic()?;
-    let plan = DeployPlan::from_graph_and_changes(&resource_graph, &all_actions);
+    let plan =
+        DeployPlan::from_graph_and_changes(&resource_graph, &all_actions).into_diagnostic()?;
 
     // Find the target activation name and identity hash
     let record = kix::manifest::lifecycle::record_of(&target_manifests);

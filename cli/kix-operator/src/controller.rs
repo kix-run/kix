@@ -207,7 +207,8 @@ fn build_deploy_plan(
 ) -> Result<(DeployPlan, Vec<ResourceId>), OperatorError> {
     let resource_graph = ResourceGraph::from_manifests(new_manifests)
         .map_err(|e| OperatorError::GraphError(e.to_string()))?;
-    let plan = DeployPlan::from_graph_and_changes(&resource_graph, all_actions);
+    let plan = DeployPlan::from_graph_and_changes(&resource_graph, all_actions)
+        .map_err(|e| OperatorError::GraphError(e.to_string()))?;
     let orphan_rids: Vec<ResourceId> = all_actions
         .iter()
         .filter_map(|a| {

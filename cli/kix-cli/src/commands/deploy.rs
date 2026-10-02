@@ -290,7 +290,8 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    let plan = DeployPlan::from_graph_and_changes(&resource_graph, &all_actions);
+    let plan =
+        DeployPlan::from_graph_and_changes(&resource_graph, &all_actions).into_diagnostic()?;
 
     // Read the Activation name and identity hash from the new manifests.
     let activation_manifest = lifecycle::record_of(&new_manifests);
@@ -2213,7 +2214,7 @@ mod run_end_tests {
         let graph = ResourceGraph::from_manifests(manifests).unwrap();
         let changes: Vec<ChangeAction> =
             manifests.iter().cloned().map(ChangeAction::Apply).collect();
-        DeployPlan::from_graph_and_changes(&graph, &changes)
+        DeployPlan::from_graph_and_changes(&graph, &changes).unwrap()
     }
 
     fn config(on_error: OnErrorPolicy, prune: PrunePolicy) -> SchedulerConfig {
