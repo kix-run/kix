@@ -107,7 +107,12 @@ in
 
   inherit (namespaceMod) mkNamespace;
 
-  inherit (auto) normalizeAvailablePackages getRequiredDeps computeAutoInstances;
+  inherit (auto)
+    normalizeAvailablePackages
+    getRequiredDeps
+    planAutoInstances
+    computeAutoInstances
+    ;
 
   inherit (resolve)
     buildResolutionIndex

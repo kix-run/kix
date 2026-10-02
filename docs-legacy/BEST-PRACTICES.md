@@ -121,6 +121,7 @@ reconciler, and no runbook should need to.
 | Meaningful empty value deleted (`emptyDir: {}`, empty selectors) | Collapse-rule normalization: literal empties render; only containers that lost every member to null-stripping collapse. `kix.keep` protects constructor-built containers |
 | Sourceless volume shipped to the apiserver | `volumeHasSource` scorecard rule (severity error) checks volumes as they will render |
 | Missing deps | DI resolution errors with an actionable message |
+| A second copy of a one-per-cluster operator, auto-instantiated for a consumer in another namespace | `eval/auto.nix` refuses it, naming each consumer and placement, and asks for one declared instance in its own namespace before offering the `deps.<name> = ref.<ns>.<inst>` binding; `architecture.crdOwnerIsClusterSingleton` (error) makes every CRD owner declare the marker this reads |
 | Cross-namespace mounts/secret-refs | `_kix.namespace` markers + `checkNamespacedRefs` |
 | `extra.*` shadowing managed fields | `mkResource` `_extraShadowCheck` |
 | TLS secret in wrong namespace | `kix.expose` names the TLS Secret `<instance>-tls` in the instance's own namespace |

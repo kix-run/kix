@@ -131,6 +131,36 @@ rec {
       ++ (if instanceAliases != [ ] then instanceAliases else packageMeta.defaultAliases or [ ])
     );
 
+  # The meta declarations that limit a package to one instance per cluster.
+  # `keys` are the names the instance answers to (its instance name and
+  # aliases). Returns `conflictKeys`, the keys named by a `cluster:<key>`
+  # conflictsWith entry (the conflictsWith assertion in checkMetaStatic
+  # refuses a second instance answering one), and `roles`, the meta.roles
+  # claims (hooks.checkRoleBindings refuses two managed providers of a
+  # role). Both are empty for a package that may run more than once.
+  clusterSingletonClaims =
+    { packageMeta, keys }:
+    {
+      conflictKeys = builtins.filter (k: builtins.elem k keys) (
+        map (lib.removePrefix "cluster:") (
+          builtins.filter (lib.hasPrefix "cluster:") (packageMeta.conflictsWith or [ ])
+        )
+      );
+      roles = packageMeta.roles or [ ];
+    };
+
+  # clusterSingletonClaims as the meta lines that declare them, for
+  # messages; [ ] when the package has none.
+  clusterSingletonMarkers =
+    args:
+    let
+      claims = clusterSingletonClaims args;
+      nixList = xs: "[ ${builtins.concatStringsSep " " (map builtins.toJSON xs)} ]";
+    in
+    lib.optional (claims.conflictKeys != [ ])
+      "meta.conflictsWith = ${nixList (map (k: "cluster:${k}") claims.conflictKeys)}"
+    ++ lib.optional (claims.roles != [ ]) "meta.roles = ${nixList claims.roles}";
+
   peekPackageAliases =
     {
       availEntry,
