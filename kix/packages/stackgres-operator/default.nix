@@ -854,28 +854,30 @@ in
       crds = lib.mapAttrs' (
         kind: k:
         lib.nameValuePair k.part (
-          gate (scope.mkCRDRef (
-            {
-              inherit group kind;
-              inherit (k) plural version;
-              servedVersions = k.servedVersions or null;
-              readiness = k.readiness or null;
-              installedBy = self.operatorDeployment;
-            }
-            // lib.optionalAttrs (kind == "SGCluster") {
-              # The operand pods dial the addresses in an SGCluster spec,
-              # including an SGObjectStorage endpoint it references.
-              factBehavior = {
-                endpoint = "terminate";
-                podSelector = cr: operandSelectors.sgCluster cr.metadata.name;
-              };
-            }
-            // lib.optionalAttrs (kind == "SGObjectStorage") {
-              # No pod dials the endpoint for the SGObjectStorage; the
-              # SGCluster that references it carries the address on.
-              factBehavior.endpoint = "conduct";
-            }
-          ))
+          gate (
+            scope.mkCRDRef (
+              {
+                inherit group kind;
+                inherit (k) plural version;
+                servedVersions = k.servedVersions or null;
+                readiness = k.readiness or null;
+                installedBy = self.operatorDeployment;
+              }
+              // lib.optionalAttrs (kind == "SGCluster") {
+                # The operand pods dial the addresses in an SGCluster spec,
+                # including an SGObjectStorage endpoint it references.
+                factBehavior = {
+                  endpoint = "terminate";
+                  podSelector = cr: operandSelectors.sgCluster cr.metadata.name;
+                };
+              }
+              // lib.optionalAttrs (kind == "SGObjectStorage") {
+                # No pod dials the endpoint for the SGObjectStorage; the
+                # SGCluster that references it carries the address on.
+                factBehavior.endpoint = "conduct";
+              }
+            )
+          )
         )
       ) referencedKinds;
 
