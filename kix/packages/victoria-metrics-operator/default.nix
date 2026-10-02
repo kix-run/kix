@@ -10,9 +10,9 @@
 # every existing kix.monitor call and app-package ServiceMonitor works
 # unchanged when this package holds the `prometheus` alias.
 #
-# Deliberately no cluster:conflictsWith prometheus-operator. Mixed
-# clusters are legitimate; DI ambiguity on the `prometheus` alias is the
-# guard against wiring both at once.
+# One instance per cluster (`meta.conflictsWith`). It does not conflict
+# with prometheus-operator: mixed clusters are legitimate, and DI ambiguity
+# on the `prometheus` alias is the guard against wiring both at once.
 #
 # Exposes CRD builder functions via `out`:
 #   out.mkServiceMonitor / mkPodMonitor / mkPrometheusRule / mkProbe
@@ -47,6 +47,9 @@ in
     # (it stamps its CRDs with it); declared for the
     # architecture.annotationDomainOwnership lint (v2_discussions/128).
     annotationDomains = [ "operator.victoriametrics.com" ];
+    # The CRDs are cluster-scoped. Not `cluster:prometheus`, which
+    # prometheus-operator also answers.
+    conflictsWith = [ "cluster:vmOperator" ];
   };
 
   options = {
