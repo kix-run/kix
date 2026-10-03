@@ -81,6 +81,18 @@ Use JSON when another program will process the result:
   cwd="kix-examples/"
 />
 
+Each modified resource in the JSON lists its field changes under `changes`,
+old to new:
+
+```json
+{ "path": "$.spec.replicas", "change": "changed", "old": 2, "new": 3 }
+```
+
+`change` is `added`, `removed`, or `changed`. Secret values, and hashes of
+them, read `(secret, not shown)`. A value larger than 16 KiB reads
+`(N bytes, not shown)`. A password written as a literal container `env`
+value or into a ConfigMap is shown as it is, so keep secrets in Secrets.
+
 ## Confirm a clean result
 
 After deploying the intended change, run the command again. A clean result
