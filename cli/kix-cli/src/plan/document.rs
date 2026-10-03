@@ -15,8 +15,10 @@
 use std::collections::{BTreeMap, HashMap};
 
 use kix::cluster::migrate::MigrationPair;
+use kix::eval::store_graph::StoreGraph;
 use kix::manifest::diff::{DiffKind, Difference};
 use kix::manifest::types::ResourceId;
+use kix::manifest::{keys, lifecycle};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -33,8 +35,21 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub struct Plan {
     pub schema_version: u32,
     pub made_by: MadeBy,
+    /// The Kix that made the plan.
+    pub kix: KixBuild,
     /// The name the build gives the Kix cluster, which its records carry.
     pub cluster: String,
+    /// The build the plan is for: the new side.
+    pub build: Build,
+    /// The build the plan compares against: the cluster's current
+    /// Activation record for `kix plan` and `kix diff` against the cluster,
+    /// the cached record under `--current-activation`, the `--from` build,
+    /// or the Activation record in a `--from` snapshot. `null` when there is
+    /// none: a first deploy, or a snapshot without a record.
+    pub deployed: Option<DeployedBuild>,
+    /// The flags that change what the planned deploy writes or deletes.
+    /// `null` from `kix diff`, which plans no deploy.
+    pub flags: Option<PlanFlags>,
     pub packages: Packages,
     /// Stateful resources the change removes and adds in the same slot. A
     /// deploy stops on them unless run with `--accept-migrations`.
@@ -56,6 +71,114 @@ pub struct Plan {
     /// Whether Pods start, pull their images, and pass their probes. No
     /// preview can tell, so this is always `not_checked`.
     pub readiness: Checked<String>,
+}
+
+/// A Kix binary, so a plan can be checked against the Kix that deploys it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct KixBuild {
+    /// The crate version. It does not change with every commit.
+    pub version: String,
+    /// The Nix store path the running binary is in, `null` for a binary
+    /// outside the store (a `cargo build`). Two binaries with the same store
+    /// path are the same build.
+    pub store_path: Option<String>,
+}
+
+impl KixBuild {
+    /// The running binary.
+    pub fn current() -> Self {
+        let store_path = std::env::current_exe()
+            .and_then(std::fs::canonicalize)
+            .ok()
+            .and_then(|exe| store_path_of(&exe.to_string_lossy()));
+        KixBuild {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            store_path,
+        }
+    }
+}
+
+/// `/nix/store/<hash>-<name>` for a path inside it.
+fn store_path_of(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/nix/store/")?;
+    let entry = rest.split('/').next().filter(|e| !e.is_empty())?;
+    Some(format!("/nix/store/{entry}"))
+}
+
+/// A cluster build.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Build {
+    /// The build's result directory, the path a deploy records in the
+    /// Activation record's `built-via` annotation. It locates the build. It does not identify the
+    /// content: two machines can build the same manifests at different
+    /// paths.
+    pub store_path: String,
+    /// The `identity-hash` annotation of the build's Activation record, a hash
+    /// of every rendered manifest and what is upstream of it. Two builds with
+    /// the same identity hash deploy the same objects. `null` only for a
+    /// build without an Activation record.
+    pub identity_hash: Option<String>,
+}
+
+impl Build {
+    pub fn of(graph: &StoreGraph) -> Self {
+        let record = graph
+            .resources
+            .values()
+            .map(|node| &node.manifest)
+            .find(|m| lifecycle::is_record(m));
+        Build {
+            store_path: graph.result_dir.to_string_lossy().into_owned(),
+            identity_hash: record
+                .and_then(|r| keys::get(r, keys::IDENTITY_HASH))
+                .map(str::to_string),
+        }
+    }
+}
+
+/// The build a cluster runs, as its Activation record names it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct DeployedBuild {
+    /// The Activation record's name.
+    pub activation: String,
+    /// The record's `identity-hash` annotation, as [`Build::identity_hash`].
+    pub identity_hash: Option<String>,
+    /// The record's `built-via` annotation, when it has one.
+    pub store_path: Option<String>,
+}
+
+impl DeployedBuild {
+    /// From an Activation record's manifest. `None` when it has no name.
+    pub fn of_record(record: &Value) -> Option<Self> {
+        Some(DeployedBuild {
+            activation: record.pointer("/metadata/name")?.as_str()?.to_string(),
+            identity_hash: keys::get(record, keys::IDENTITY_HASH).map(str::to_string),
+            store_path: keys::get(record, keys::BUILT_VIA).map(str::to_string),
+        })
+    }
+
+    /// The record of `manifests`, if there is one.
+    pub fn of_manifests(manifests: &[Value]) -> Option<Self> {
+        lifecycle::record_of(manifests).and_then(Self::of_record)
+    }
+}
+
+/// The planning flags of `kix plan` and `kix deploy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PlanFlags {
+    pub prune: bool,
+    /// `--prune-mode`, `null` when not given.
+    pub prune_mode: Option<PruneModeFlag>,
+    pub reconcile: bool,
+    pub force_conflicts: bool,
+    pub accept_migrations: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PruneModeFlag {
+    Default,
+    No,
 }
 
 /// How a [`Plan`] was made, which bounds what it can know.
@@ -379,6 +502,7 @@ impl Plan {
     pub fn new(
         made_by: MadeBy,
         cluster: &str,
+        build: Build,
         packages: &PackageDiff,
         detail: Detail,
         migrations: &[MigrationPair],
@@ -387,7 +511,11 @@ impl Plan {
         Plan {
             schema_version: SCHEMA_VERSION,
             made_by,
+            kix: KixBuild::current(),
             cluster: cluster.to_string(),
+            build,
+            deployed: None,
+            flags: None,
             packages: Packages::of(packages, detail),
             migrations: Checked::found(migrations.iter().map(Migration::from).collect()),
             conflicts: Checked::not_checked(reason),
@@ -623,6 +751,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_store_path_is_the_store_entry_of_a_path_inside_it() {
+        assert_eq!(
+            store_path_of("/nix/store/abc-kix-0.1.0/bin/kix").as_deref(),
+            Some("/nix/store/abc-kix-0.1.0")
+        );
+        assert_eq!(store_path_of("/home/u/target/debug/kix"), None);
+        assert_eq!(store_path_of("/nix/store/"), None);
+    }
+
+    /// The build and the deployed record are named by their Activation
+    /// record's identity hash and result directory.
+    #[test]
+    fn a_plan_names_its_build_and_the_deployed_record() {
+        let record = serde_json::json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {"name": "c-1a2b", "annotations": {
+                keys::IDENTITY_HASH: "id-old",
+                keys::BUILT_VIA: "/nix/store/old-cluster-c",
+            }},
+        });
+        let deployed = DeployedBuild::of_manifests(&[record]).expect("a record");
+        assert_eq!(deployed.activation, "c-1a2b");
+        assert_eq!(deployed.identity_hash.as_deref(), Some("id-old"));
+        assert_eq!(
+            deployed.store_path.as_deref(),
+            Some("/nix/store/old-cluster-c")
+        );
+        assert_eq!(DeployedBuild::of_manifests(&[]), None);
+    }
+
     /// A prune delete is a change even when no package changes.
     #[test]
     fn a_prune_delete_alone_is_a_change() {
@@ -633,6 +793,7 @@ mod tests {
         let mut plan = Plan::new(
             MadeBy::DryRun,
             "c",
+            Build::of(&kix::eval::store_graph::StoreGraph::empty("c")),
             &empty,
             Detail::Plain,
             &[],

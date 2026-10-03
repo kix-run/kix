@@ -529,7 +529,7 @@ mod tests {
     /// documents parse back into `Plan`.
     #[test]
     fn plan_and_diff_agree_on_the_objects_they_both_checked() {
-        use super::super::document::{Detail, MadeBy, NotCheckedReason, Plan};
+        use super::super::document::{Build, Detail, MadeBy, NotCheckedReason, Plan};
         let deployed = vec![
             configmap("app", "a", &"a".repeat(32), json!({"k": "1"})),
             configmap("app", "b", &"b".repeat(32), json!({"k": "1"})),
@@ -548,6 +548,7 @@ mod tests {
         let diff_doc = Plan::new(
             MadeBy::LiveRead,
             "c",
+            Build::of(&new_graph),
             &diff_side,
             Detail::Fields,
             &[],
@@ -573,6 +574,7 @@ mod tests {
         let plan_doc = Plan::new(
             MadeBy::DryRun,
             "c",
+            Build::of(&new_graph),
             &plan_side,
             Detail::Fields,
             &[],

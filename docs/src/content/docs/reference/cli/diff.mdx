@@ -141,6 +141,9 @@ describes the top-level keys, the checked-section shape, and the
 | Key | Value from `kix diff` |
 | --- | --- |
 | `made_by` | `live_read` against the cluster or a snapshot; `builds` with `--from <build>` |
+| `build` | The new build, as for `kix plan` |
+| `deployed` | The old side's Activation record: the cluster's current record, the `--from` build's record, or the record in a `--from` snapshot. `null` when there is none |
+| `flags` | `null`: a diff plans no deploy |
 | `migrations` | Checked: the stateful migrations the comparison found |
 | `drift` | Checked against the live cluster when the deployed build is on this machine. Otherwise `not_checked`: `deployed_build_unavailable` for a snapshot or a missing deployed build, `builds_only` with `--from <build>` |
 | `conflicts`, `admission`, `prune` | `not_checked`, reason `read_only` (or `builds_only` with `--from <build>`) |

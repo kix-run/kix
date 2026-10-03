@@ -141,7 +141,11 @@ are skipped; `plan::document` turns the result into the `Plan` document.
 
 The document (`plan/document.rs`, `Plan`) is the one shape `kix plan` and
 `kix diff` print for `-o json` and `-o yaml`: `schema_version`, `made_by`
-(`dry_run`, `live_read`, `builds`), `cluster`, `packages` (the old
+(`dry_run`, `live_read`, `builds`), `kix` (`KixBuild`: crate version and the
+binary's store path), `cluster`, `build` (`Build::of`: result directory and the
+Activation record's identity hash), `deployed` (`DeployedBuild`: `kix plan`
+from `Prepared::active`, `kix diff` from the old side's record), `flags`
+(`PlanFlags`, `kix plan` only), `packages` (the old
 `packages` object, typed), and `migrations`, `conflicts`, `admission`,
 `drift`, `prune`, `readiness` as `Checked<T>`, serialized
 `{"status":"checked","items":[...]}` or

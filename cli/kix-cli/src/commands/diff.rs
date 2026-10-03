@@ -19,7 +19,9 @@ use kix::manifest::types::ResourceId;
 
 use crate::cli::{Detail as DetailArg, DiffArgs, OutputFormat};
 use crate::output;
-use crate::plan::document::{Checked, Detail, MadeBy, NotCheckedReason, Plan};
+use crate::plan::document::{
+    Build, Checked, DeployedBuild, Detail, MadeBy, NotCheckedReason, Plan,
+};
 use crate::plan::origin::{self, Sides};
 use crate::plan::{self, ManifestIndex, PackageDiff, render};
 
@@ -177,25 +179,30 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
     let doc = match side {
         OldSide::Build => {
             origin::label_builds(&mut packages);
-            Plan::new(
+            let mut doc = Plan::new(
                 MadeBy::Builds,
                 cluster,
+                Build::of(new),
                 &packages,
                 detail,
                 &migration_pairs,
                 NotCheckedReason::BuildsOnly,
-            )
+            );
+            doc.deployed = DeployedBuild::of_manifests(&old_manifests);
+            doc
         }
         OldSide::Manifests => {
             let mut doc = Plan::new(
                 MadeBy::LiveRead,
                 cluster,
+                Build::of(new),
                 &packages,
                 detail,
                 &migration_pairs,
                 NotCheckedReason::ReadOnly,
             );
             doc.drift = Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable);
+            doc.deployed = DeployedBuild::of_manifests(&old_manifests);
             doc
         }
         OldSide::Live(live) => {
@@ -213,11 +220,17 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
             let mut doc = Plan::new(
                 MadeBy::LiveRead,
                 cluster,
+                Build::of(new),
                 &packages,
                 detail,
                 &migration_pairs,
                 NotCheckedReason::ReadOnly,
             );
+            doc.deployed = live
+                .current
+                .as_ref()
+                .and_then(|r| serde_json::to_value(r).ok())
+                .and_then(|r| DeployedBuild::of_record(&r));
             doc.drift = match drift {
                 Some(items) => Checked::found(items),
                 None => Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable),
