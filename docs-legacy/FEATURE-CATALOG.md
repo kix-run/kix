@@ -64,7 +64,7 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 - **`contracts.gateway`**: the `out` of a `gateway` provider (`gatewayRef`, `listeners`, `podSelector`, `podNamespace`), in `kix/lib/vocab/gateway.nix`. `check` holds envoy-gateway and traefik to every field; `kix.expose` requires `gatewayRef` and checks the rest, and writes the backend policy from `podSelector` when it is set. `checks.gateway-swap` builds File Browser on each implementation and requires the same manifests but for the HTTPRoute's parentRef.
 - **`contracts.postgresDatabase`**: the `out` of a `database` provider (`host`, `port`, `database`, `credentials`, `username`, `extensions`, `tls`), in `kix/lib/vocab/postgres-database.nix`. `check` holds a provider package to every field (`stackgres-database` and `cnpg-database` use it); `assertions` holds a consumer's `deps.database` to the connection fields and the shape of the rest (harbor, immich, keycloak, metabase, n8n, vaultwarden), so a `kix.mkImport` database needs only `host`, `port`, `database`, and `credentials`.
 - **`contracts.otlpEndpoint`**: the `out` of an `otlp` provider (`otlpGrpcUrl`, `otlpHttpUrl`, each `scheme://host:port` with no path, and `tls`), in `kix/lib/vocab/otlp-endpoint.nix`. `check` holds a provider to every field (`tempo`, `otel-collector`); `assertions` holds a consumer's `deps.otlp` to the two URLs, so a `kix.mkImport` endpoint may omit `tls`.
-- **`tempo` package**: Grafana Tempo in single-binary mode on a `storage` claim, with OTLP receivers on a `<name>-otlp` Service and the query API on `<name>` (`out.queryUrl`). Answers `tempo` only, so a sender names it with `deps.otlp = ref.<ns>.<instance>` or the cluster adds the `otlp` alias. Typed `retention` (Prometheus duration grammar); `settings`, `extraArgs`, and `env` escape hatches with locked paths and flags. Grafana's optional `tempo` dependency wires a datasource with uid `tempo` and, with `loki`, a span-to-logs link on the `namespace` and `pod` labels.
+- **`tempo` package**: Grafana Tempo in single-binary mode on a `storage` claim, with OTLP receivers on a `<name>-otlp` Service and the query API on `<name>` (`out.queryUrl`). Answers `tempo` only, so a sender names it with `deps.otlp = ref.<ns>.<instance>` or the cluster adds the `otlp` alias. Typed `retention` (Prometheus duration grammar); `settings`, `extraArgs`, and `env` escape hatches with locked paths and flags. Optional `objectStorage` (`bucket`, `endpointScheme`, `credentialKeys`) moves trace blocks to S3 under the prefix `<namespace>-<instance>`, with the keys from a `storageCredentials` dependency as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` and the store from an `endpointService` dependency (derived policy) or `settings.storage.trace.s3.endpoint` (a world egress rule on its port); credentials in `settings` or flags, an endpoint with a scheme, and one naming a Service are refused. `metricsGenerator.enabled` runs the `service-graphs` and `span-metrics` processors and remote-writes to the `prometheusServer` dependency's `out.remoteWriteUrl` (victoria-metrics-cluster). Grafana's optional `tempo` dependency wires a datasource with uid `tempo`, with `loki` a span-to-logs link on the `namespace` and `pod` labels, and with `prometheusServer` a service map on the Prometheus datasource.
 - **`mkEnv`** — Combine named env vars with raw K8s env entries (e.g. valueFrom.secretKeyRef).
 - **`parseQuantity`**: Kubernetes quantity to millicores (cpu) or bytes, rounded down, as an integer; `null` when invalid; a value outside the signed 64-bit range throws. One grammar with `kix.types.quantity`.
 - **`types.quantity`**: option type for a Kubernetes quantity (non-negative decimal or integer, optional suffix; no sign or exponent).
@@ -264,8 +264,8 @@ rather than a second one.
 - **`victoria-metrics-operator`** — the operator plus its complete CRD bundle
   (all 25 kinds from the upstream chart; the operator crashes at startup on a
   missing indexed kind, so an eval-time throw guards the floor). Ships the
-  ServiceMonitor and PrometheusRule CRDs and claims the `prometheus` and
-  `prometheusServer` DI aliases, so every existing `kix.monitor` consumer
+  ServiceMonitor and PrometheusRule CRDs and claims the `prometheus` DI
+  alias, so every existing `kix.monitor` consumer
   works unchanged and the operator converts the results to VMServiceScrape
   and VMRule. Exposes the same `out.mkServiceMonitor` builders as
   `prometheus-operator`. On a cluster that already runs prometheus-operator,
@@ -287,8 +287,10 @@ rather than a second one.
   replicationFactor 2, three vmstorage, PodDisruptionBudgets, preferred
   hostname anti-affinity, `useStrictSecurity`, and `-dedup.minScrapeInterval` pinned to the scrape
   interval (the operator's 1 ms fallback covers replication twins, not an HA
-  vmagent pair). `out.insertUrl`, `out.insertBaseUrl`, `out.serviceUrl` and
-  `out.scrapeInterval` carry the wiring.
+  vmagent pair). `out.remoteWriteUrl` (the full Prometheus remote-write URL,
+  read by `victoria-metrics-agent` and by Tempo's metrics generator),
+  `out.insertBaseUrl`, `out.serviceUrl`, and `out.scrapeInterval` carry the
+  wiring.
 - **`victoria-metrics-agent`** — the VMAgent CR, remote-writing to the
   cluster's insert URL and defaulting its scrape interval from
   `vmCluster.out.scrapeInterval`.

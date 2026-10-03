@@ -11,7 +11,7 @@
 #    (RF=2, 3x vmstorage, dedup flags, PDBs, anti-affinity) and claims the
 #    `prometheusServer` alias — the grafana instance auto-wires its
 #    Prometheus datasource from out.serviceUrl with zero config.
-# 4. victoria-metrics-agent remote-writes to the cluster's insertUrl (the
+# 4. victoria-metrics-agent remote-writes to the cluster's remoteWriteUrl (the
 #    dependency edge rides the URL); victoria-metrics-alert wires
 #    datasource/remoteWrite/remoteRead through vmCluster.out and discovers
 #    its VMAlertmanager by label selector.
