@@ -9,8 +9,9 @@
 //!
 //! The JSON Schema of this type is committed at
 //! `kix-cli/schema/plan.schema.json`; a test fails when the type and the file
-//! disagree. Bump [`SCHEMA_VERSION`] when a change is not backward
-//! compatible: a field removed or renamed, or a value's meaning changed.
+//! disagree. Set [`SCHEMA_VERSION`] to the day's date when a change is not
+//! backward compatible: a field removed or renamed, or a value's meaning
+//! changed.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -26,14 +27,17 @@ use serde_json::Value;
 use super::origin::ChangeLabel;
 use super::{ManifestIndex, PackageChangeDiff, PackageDiff, PackageInfo, Side};
 
-/// Version of the document's shape. Readers should refuse a version they do
-/// not know.
-pub const SCHEMA_VERSION: u32 = 1;
+/// Version of the document's shape: the date, `YYYY-MM-DD`, of its last
+/// change that was not backward compatible. Readers should refuse a version
+/// they do not know.
+pub const SCHEMA_VERSION: &str = "2026-10-03";
 
 /// What a deploy of a build would change, or how two things differ.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Plan {
-    pub schema_version: u32,
+    /// The date, `YYYY-MM-DD`, of the document shape's last change that was
+    /// not backward compatible.
+    pub schema_version: String,
     pub made_by: MadeBy,
     /// The Kix that made the plan.
     pub kix: KixBuild,
@@ -509,7 +513,7 @@ impl Plan {
         reason: NotCheckedReason,
     ) -> Plan {
         Plan {
-            schema_version: SCHEMA_VERSION,
+            schema_version: SCHEMA_VERSION.to_string(),
             made_by,
             kix: KixBuild::current(),
             cluster: cluster.to_string(),
@@ -734,7 +738,8 @@ mod tests {
 
     /// The committed schema is the type's schema. Regenerate it with
     /// `KIX_WRITE_PLAN_SCHEMA=1 cargo test -p kix-cli plan::document`, and
-    /// bump `SCHEMA_VERSION` when the change is not backward compatible.
+    /// set `SCHEMA_VERSION` to the day's date when the change is not backward
+    /// compatible.
     #[test]
     fn the_committed_schema_matches_the_type() {
         let generated = serde_json::to_string_pretty(&schema()).unwrap() + "\n";
@@ -747,7 +752,7 @@ mod tests {
             committed == generated,
             "kix-cli/schema/plan.schema.json does not match the Plan type. \
              Regenerate it with KIX_WRITE_PLAN_SCHEMA=1 cargo test -p kix-cli plan::document \
-             and bump SCHEMA_VERSION if the change is not backward compatible."
+             and set SCHEMA_VERSION to the day's date if the change is not backward compatible."
         );
     }
 

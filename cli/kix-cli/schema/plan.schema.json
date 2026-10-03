@@ -1081,9 +1081,8 @@
       "description": "Whether Pods start, pull their images, and pass their probes. No\npreview can tell, so this is always `not_checked`."
     },
     "schema_version": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer"
+      "description": "The date, `YYYY-MM-DD`, of the document shape's last change that was\nnot backward compatible.",
+      "type": "string"
     }
   },
   "required": [

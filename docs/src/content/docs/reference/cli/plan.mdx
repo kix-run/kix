@@ -96,7 +96,7 @@ read either. Its JSON Schema is
 
 | Key | Content |
 | --- | --- |
-| `schema_version` | Integer. It increases when a change is not backward compatible. |
+| `schema_version` | A date string, `YYYY-MM-DD`, currently `"2026-10-03"`. It changes only when the document changes in a way that is not backward compatible. |
 | `made_by` | `dry_run` from `kix plan`; `builds` from `kix plan --current-activation` or `kix diff --from <build>`; `live_read` from `kix diff` against the cluster or a snapshot. |
 | `kix` | `{ version, store_path }` of the Kix that made the plan. `store_path` is the Nix store path of the binary, `null` for a binary built outside the store. |
 | `cluster` | The name the build gives the Kix cluster. |

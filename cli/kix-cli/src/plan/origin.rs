@@ -322,11 +322,8 @@ fn segments(path: &str) -> Vec<String> {
                 depth += 1;
             }
             ']' => depth = depth.saturating_sub(1),
-            '.' if depth == 0 => {
-                if !current.is_empty() {
-                    out.push(std::mem::take(&mut current));
-                }
-            }
+            '.' if depth == 0 && !current.is_empty() => out.push(std::mem::take(&mut current)),
+            '.' if depth == 0 => {}
             _ if depth == 0 => current.push(c),
             _ => {}
         }

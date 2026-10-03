@@ -155,8 +155,8 @@ plus `not_checked` objects. `--detail plain|fields|manifests` (default
 (see `plan/mod.rs` below); `kix deploy --dry-run` uses `plain`. Its JSON Schema is committed at
 `kix-cli/schema/plan.schema.json`; `plan::document::tests` fails when the
 type and the file differ (regenerate with `KIX_WRITE_PLAN_SCHEMA=1 cargo
-test -p kix-cli plan::document`, and bump `SCHEMA_VERSION` when a change is
-not backward compatible). `plan::server::tests` and the kind integration
+test -p kix-cli plan::document`, and set `SCHEMA_VERSION`, a `YYYY-MM-DD`
+date string, to the day's date when a change is not backward compatible). `plan::server::tests` and the kind integration
 test check that a plan and a diff against the same live state list the same
 objects, and that a plan writes no record.
 
