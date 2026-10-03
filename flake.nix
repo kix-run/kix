@@ -40,6 +40,7 @@
           clickhouse-swap-bare = ./clusters/test-clickhouse-swap/bare.nix;
           clickhouse-swap-replicated = ./clusters/test-clickhouse-swap/replicated.nix;
           cnpg = ./clusters/test-cnpg.nix;
+          rabbitmq = ./clusters/test-rabbitmq.nix;
           postgres-swap-stackgres = ./clusters/test-postgres-swap/stackgres.nix;
           postgres-swap-cnpg = ./clusters/test-postgres-swap/cnpg.nix;
           gateway-swap-envoy = ./clusters/test-gateway-swap/envoy.nix;

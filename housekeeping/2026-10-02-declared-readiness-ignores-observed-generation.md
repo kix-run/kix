@@ -8,3 +8,4 @@ writes `Pending`, so a deploy that changed its credentials or URL can pass
 before the controller has seen the change. The condition form of the rule has
 the same gap when the operator does not stamp `observedGeneration` on its
 conditions.
+- Hit again 2026-10-03 while writing `kix/packages/rabbitmq-operator`: the RabbitmqCluster's `AllReplicasReady` condition carries no `observedGeneration`, though the operator writes `status.observedGeneration`, which the condition rule could read instead.
