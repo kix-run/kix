@@ -589,7 +589,12 @@ per cluster), `cnpg-cluster` in place of `stackgres-cluster`, and
 credentials keys, so the application package does not change
 (`clusters/test-postgres-swap`). `cnpg-database` takes no `owner` or
 `bootstrap.*` options: CloudNativePG creates the role and database itself,
-and the role always owns the database.
+and the role always owns the database. For backups, add a
+`cnpg-barman-cloud` instance in the operator's namespace and set
+`cnpg-cluster`'s `backup`, with S3 credentials as a `storageCredentials`
+secret in the cluster's namespace. For PgBouncer, add a `cnpg-pooler` with
+`deps.postgres` on the cluster and wire the `cnpg-database`'s
+`deps.postgres` to the pooler.
 
 ### Instance-level options
 

@@ -513,7 +513,9 @@ instead, where a provider outside kixpkgs can reach it. The Postgres
 takes `deps.database` (harbor, immich, keycloak, metabase, n8n, vaultwarden)
 holds the dependency to it with `assertions`. `checks.postgres-swap` builds
 Metabase on each provider and requires the same manifests but for the
-host. Its consumer side requires only the connection fields (`host`,
+host. A connection pooler fits the same contract: `cnpg-database` with a
+`cnpg-pooler` as its `postgres` dependency publishes the pooler's Service as
+`host`, and the consumer does not change. Its consumer side requires only the connection fields (`host`,
 `port`, `database`, `credentials`), so a `kix.mkImport` of an external
 database works, while `check` requires `username`, `extensions`, and `tls`
 as well, so every provider package publishes the same `out`.
