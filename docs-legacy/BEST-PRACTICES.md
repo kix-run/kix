@@ -655,6 +655,7 @@ When designing a new feature, ask: how does this look in week 2? Year 2?
 | Day-2 concern | Where it lives |
 |---|---|
 | Drift detection | `kix health` — identity-hash compare |
+| Previewing a deploy | `kix plan`, a server-side dry run of the deploy itself |
 | Stale-resource cleanup | `kix gc` (soft + hard) |
 | Rollback | `kix rollback` — superseded Activation CRs |
 | Migration safety (PVC deletion, etc.) | `meta.lifecycle = "stateful"` + diff protection |
@@ -683,7 +684,21 @@ Kix-built ConfigMap or Secret carries its identity hash as a
 (`out.withReloadOn`) is for content the build cannot see, such as a
 Secret written by an external secret store.
 
-### 9.4 A value that varies per deploy is committed, not injected
+### 9.4 The preview is made by the code that deploys
+
+A preview that runs different code from the deploy disagrees with it in
+exactly the cases that matter: an admission webhook that refuses an object,
+a field another manager owns, an immutable field. `kix plan` runs the deploy
+pipeline with every write sent as a dry run, and `kix deploy` prints that
+plan before it asks. Keep `kix diff` for comparisons that must not write,
+such as CI without cluster credentials, and read its output knowing it
+cannot see the write path.
+
+Every check a preview could not run is reported as not checked, with the
+reason, rather than as an empty list. A reviewer can then tell "no
+conflicts" from "conflicts were not looked for".
+
+### 9.5 A value that varies per deploy is committed, not injected
 
 Something outside the compilation unit sometimes decides an input to it. A CI
 build finishes and produces an image tag. A person decides that this build is
@@ -912,15 +927,15 @@ serverImage.tag = "sha-REPLACE_ME";
 
 This is the worst shape a wrong value can take, because everything passes.
 `sha-REPLACE_ME` is a valid tag string, so the build succeeds, `noLatestTag`
-is satisfied, `kix check` is clean and `kix deploy --dry-run` reports
-"configured". The first signal is ImagePullBackOff, in production, minutes
+is satisfied, `kix check` is clean, and `kix plan` accepts the change,
+since a dry run never pulls an image. The first signal is ImagePullBackOff, in production, minutes
 later. Every route that does not go through the CI job that edits the tree,
 which is to say every person, every agent and every runbook, deploys a
 reference that does not exist.
 
 `security.noUnresolvedPlaceholder` catches the known spellings, and it is a
 ratchet rather than a fix: a predicate over spelling cannot tell you that
-`sha-typo12` is wrong. What closes the class is §9.4, a resolved digest in a
+`sha-typo12` is wrong. What closes the class is §9.5, a resolved digest in a
 committed pin file, checked against a registry by `kix pin check`.
 
 ### 12.12 Re-deriving the public URL

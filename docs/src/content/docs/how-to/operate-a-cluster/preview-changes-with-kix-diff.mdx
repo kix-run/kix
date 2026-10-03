@@ -1,6 +1,6 @@
 ---
-title: "Preview changes with `kix diff`"
-description: "Compare rendered manifests with live Kubernetes resources before deploying."
+title: "Preview changes with `kix plan` and `kix diff`"
+description: "Preview a deploy with a server-side dry run, or compare rendered manifests with live Kubernetes resources using read-only access."
 ---
 
 import Command from '/src/components/Command.astro';
@@ -8,11 +8,42 @@ import diffClean from '/src/command-output/how-to/application-diff/diff-clean.js
 import diffChange from '/src/command-output/how-to/application-diff/diff-message-change.json';
 import diffMarkdown from '/src/command-output/how-to/application-diff/diff-markdown.json';
 
-Use `kix diff` to preview how the rendered cluster differs from the resources
-currently running in Kubernetes. The command reads live state but does not
-apply changes.
+Kix has two previews, and neither changes the cluster:
 
-## Compare desired and live resources
+- `kix plan` runs the deploy with every write sent as a server-side dry run.
+  Use it to preview a deploy you are about to run. It needs the same
+  permissions as the deploy.
+- `kix diff` only reads. Use it where the job has read-only credentials, or
+  no cluster access at all, such as a pull request check.
+
+## Preview a deploy with `kix plan`
+
+Run the plan with the flags you will deploy with:
+
+<Command
+  commands={["kix plan how-to-application --prune"]}
+  cwd="kix-examples/"
+/>
+
+The output is the package-grouped plan `kix deploy` prints before it asks for
+confirmation. Each field change is what the apiserver says the apply would
+produce. After the packages, the plan lists anything the deploy would stop
+on: a field another manager owns, a webhook or admission policy denial, a
+validation error, an immutable field, or an RBAC refusal. Every refusal is
+listed, so you can fix them all before deploying.
+
+The plan exits `0` when the deploy would change and delete nothing, `2` when
+it would change or delete something, and `3` when it would stop. In CI, treat
+`0` and `2` as success and block on `3`, a deploy the cluster would refuse;
+[`kix plan`](/docs/reference/cli/plan/#exit-status) has a script that does
+this.
+
+Objects whose CRD or namespace the same deploy creates cannot be checked by a
+dry run. The plan lists them under "Not checked by the dry run" with the
+changes from comparing builds. On a cluster's first deploy most objects are
+in this list.
+
+## Compare desired and live resources with `kix diff`
 
 Start from a cluster that matches what is deployed. Kix compares only the
 fields it applied, so an unchanged cluster reports nothing and exits 0:
@@ -46,6 +77,13 @@ Read the packages you edited first, then the dependent resources, which tell
 you how far the rollout reaches. A non-empty diff exits with status 2, which
 lets CI tell a change from a clean comparison.
 
+When the deployed build is on this machine, a field someone changed on the
+cluster is tagged `(reverts drift)` when the deploy puts it back, and a
+Drift section at the end names the field manager that changed it. When there
+are changes, the last line reminds you that `kix diff` cannot see admission
+webhooks, field ownership conflicts, or deploy refusals. Run `kix plan` for
+those.
+
 ## Select the flake and context
 
 By default, Kix evaluates the current directory and reads the current kubectl
@@ -74,6 +112,9 @@ Redirect it into a file for the job to publish:
   cwd="kix-examples/"
 />
 
+`kix plan --output markdown` produces the same layout with the write-path
+checks added, for a job that has the deployer's credentials.
+
 Use JSON when another program will process the result:
 
 <Command
@@ -81,8 +122,11 @@ Use JSON when another program will process the result:
   cwd="kix-examples/"
 />
 
-By default the JSON names each changed resource and counts its changed
-fields. Add `--detail fields` to list each field change, old to new:
+`kix diff` and `kix plan` print the same JSON document, so one consumer can
+read either. The checks a read-only diff cannot make read
+`{ "status": "not_checked", "reason": "read_only" }`. By default the JSON
+names each changed resource and counts its changed fields. Add
+`--detail fields` to list each field change, old to new:
 
 <Command
   commands={["kix diff how-to-application --output json --detail fields > kix-diff.json"]}
@@ -90,13 +134,15 @@ fields. Add `--detail fields` to list each field change, old to new:
 />
 
 ```json
-{ "path": "$.spec.replicas", "change": "changed", "old": 2, "new": 3 }
+{ "path": "$.spec.replicas", "change": "changed", "old": 2, "new": 3, "labels": ["intended"] }
 ```
 
-`change` is `added`, `removed`, or `changed`. Add `--detail manifests` to
-also include, under `manifests` on each package, the old and new manifest of
-every resource that changes, is added, or is removed, for a tool that shows a
-line-by-line diff:
+`change` is `added`, `removed`, or `changed`. `labels` is present when the
+deployed build is on this machine. Add `--detail manifests` to also include,
+under `manifests` on each package, the old and new manifest of every resource
+that changes, is added, or is removed, for a tool that shows a line-by-line
+diff. In `kix plan` the two manifests of an object the cluster checked are
+the live object and the cluster's dry-run result:
 
 <Command
   commands={["kix diff how-to-application --output json --detail manifests > kix-diff.json"]}
@@ -111,11 +157,17 @@ value or into a ConfigMap is shown as it is, so keep secrets in Secrets.
 
 ## Confirm a clean result
 
-After deploying the intended change, run the command again. A clean result
-confirms that Kix does not currently plan another content change.
+After deploying the intended change, run `kix diff` or `kix plan` again. A
+clean result confirms that Kix does not currently plan another content
+change.
 
 `kix diff` compares the fields Kix applied. Use `kix drift` when you need to
 know who else owns a field and what they changed.
+
+:::note[Reference]
+See [`kix plan`](/docs/reference/cli/plan/) for the full plan document, labels,
+and exit codes.
+:::
 
 :::note[Related guides]
 See [Generate PR-review Markdown from `kix diff`](/docs/how-to/policy-ci-and-compliance/generate-pr-review-markdown-from-kix-diff/)

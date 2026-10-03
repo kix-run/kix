@@ -399,6 +399,7 @@ impl ClusterOps for ScriptedOps {
             Ok(action) => Ok(ApplyResult {
                 action,
                 resource_id: rid,
+                preview: None,
             }),
             Err(ApplyFailure::Other(msg)) => Err(ApplyError::UnknownKind { kind: msg }),
             Err(ApplyFailure::ImmutableConflict) => Err(ApplyError::ImmutableConflict {
@@ -423,6 +424,7 @@ impl ClusterOps for ScriptedOps {
         script.recreate.run().await.map(|action| ApplyResult {
             action,
             resource_id: rid,
+            preview: None,
         })
     }
 

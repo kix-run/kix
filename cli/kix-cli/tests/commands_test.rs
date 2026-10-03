@@ -65,6 +65,8 @@ fn inspect_text() {
         .stdout(predicate::str::contains("Cluster: example"));
 }
 
+/// `deploy --dry-run` is `kix plan`. With `--current-activation` it compares
+/// two builds offline, says so, and exits 2 because the plan has changes.
 #[test]
 fn deploy_dry_run() {
     kix()
@@ -76,9 +78,9 @@ fn deploy_dry_run() {
             "--current-activation",
         ])
         .assert()
-        .success()
+        .code(2)
         .stdout(predicate::str::contains("Plan:"))
-        .stdout(predicate::str::contains("Dry run"));
+        .stdout(predicate::str::contains("Two builds compared"));
 }
 
 #[test]

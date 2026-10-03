@@ -1,0 +1,3 @@
+# 2026-10-03 · `cli/kix-cli/src/commands/diff.rs` · `kix diff` against live reports fields another manager owns as removals that a deploy would not make.
+
+On stage1, `kix diff stage1` listed four labels on `ServiceAccount/coredns@kube-system` as removed and `spec.type: ClusterIP` on `Service/stackgres-operator@stackgres-system` as removed. `kix plan stage1` asked the apiserver and found neither change: `helm` owns the labels, so server-side apply keeps them, and the apiserver keeps `spec.type` at its default. The kix-owned view of an object that Kix has not applied (or applied before another manager took fields) holds fields the build does not, and the comparison reads each one as a deletion. A reviewer reading the diff sees deletions that will not happen.

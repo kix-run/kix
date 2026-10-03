@@ -78,6 +78,33 @@ fn clear_activation_cache(kix_cluster: &str) {
 }
 
 const KIND_CLUSTER: &str = "kix-integration";
+
+/// `package bucket resource` for every object a plan document's packages
+/// section lists as added, removed, or modified.
+fn package_objects(doc: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let packages = &doc["packages"];
+    let changed = packages["changed"].as_array().into_iter().flatten().chain(
+        packages["cluster_level"]
+            .as_object()
+            .map(|_| &packages["cluster_level"]),
+    );
+    for c in changed {
+        let key = c["key"].as_str().unwrap_or_default();
+        for bucket in ["added_resources", "removed_resources"] {
+            for r in c[bucket].as_array().into_iter().flatten() {
+                out.insert(format!("{key} {bucket} {}", r.as_str().unwrap_or_default()));
+            }
+        }
+        for m in c["modified_resources"].as_array().into_iter().flatten() {
+            out.insert(format!(
+                "{key} modified {}",
+                m["resource"].as_str().unwrap_or_default()
+            ));
+        }
+    }
+    out
+}
 const KUBE_CTX: &str = "kind-kix-integration";
 /// The kix cluster name (from clusters/test-kind.nix, registered as "kind" in flake.nix)
 const KIX_CLUSTER: &str = "kind";
@@ -106,6 +133,41 @@ fn deploy_and_gc() {
         }
     }
     let _guard = CleanupGuard;
+
+    // =========================================================================
+    // Phase 0: Plan before the first deploy. Nothing exists yet, so the
+    // objects in the namespace the deploy creates cannot be dry-run; the
+    // plan says so and writes nothing.
+    // =========================================================================
+    eprintln!("\n=== Phase 0: Plan a first deploy ===");
+
+    let plan0 = kix(KIND_CLUSTER)
+        .args(["plan", KIX_CLUSTER, "-o", "json"])
+        .output()
+        .expect("plan should run");
+    assert_eq!(
+        plan0.status.code(),
+        Some(2),
+        "a first deploy changes something"
+    );
+    let doc0: serde_json::Value =
+        serde_json::from_slice(&plan0.stdout).expect("plan prints one JSON document");
+    assert_eq!(doc0["made_by"], "dry_run");
+    assert_eq!(doc0["admission"]["items"], serde_json::json!([]));
+    assert!(
+        doc0["not_checked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["reason"] == "namespace_created_by_this_deploy"),
+        "objects in the new namespace are not checked: {}",
+        doc0["not_checked"]
+    );
+    let records = kubectl_stdout(KUBE_CTX, &["get", keys::ACTIVATIONS_CRD, "-o", "name"]);
+    assert!(
+        records.trim().is_empty(),
+        "a plan writes no record: {records}"
+    );
 
     // =========================================================================
     // Phase 1: First deploy — everything created
@@ -159,12 +221,228 @@ fn deploy_and_gc() {
 
     assert!(second.status.success(), "second deploy should succeed");
     assert!(
-        stdout2.contains("Everything up to date"),
+        stdout2.contains("Nothing to apply"),
         "should detect everything unchanged via local DAG diff"
     );
     assert!(
-        stdout2.contains("Loading previous activation"),
-        "should load cached activation"
+        stdout2.contains("Active activation:"),
+        "should plan against the cluster's Active record"
+    );
+
+    // =========================================================================
+    // Phase 2b: Plan and diff of a changed build list the same objects, and
+    // the plan applies nothing.
+    // =========================================================================
+    eprintln!("\n=== Phase 2b: kix plan and kix diff agree ===");
+
+    let plan = kix(KIND_CLUSTER)
+        .args(["plan", "kind-v2", "-o", "json"])
+        .output()
+        .expect("plan should run");
+    let diff = kix(KIND_CLUSTER)
+        .args(["diff", "kind-v2", "-o", "json"])
+        .output()
+        .expect("diff should run");
+    assert_eq!(
+        plan.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    assert_eq!(
+        diff.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&diff.stderr)
+    );
+    let plan_doc: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    let diff_doc: serde_json::Value = serde_json::from_slice(&diff.stdout).unwrap();
+    assert_eq!(plan_doc["made_by"], "dry_run");
+    assert_eq!(diff_doc["made_by"], "live_read");
+    assert_eq!(diff_doc["conflicts"]["status"], "not_checked");
+    assert_eq!(
+        package_objects(&plan_doc),
+        package_objects(&diff_doc),
+        "plan and diff list different objects"
+    );
+    let unchanged = kix(KIND_CLUSTER)
+        .args(["plan", KIX_CLUSTER])
+        .output()
+        .expect("plan should run");
+    assert!(
+        unchanged.status.success(),
+        "the plan of the deployed build is empty after planning kind-v2: {}",
+        String::from_utf8_lossy(&unchanged.stdout)
+    );
+
+    // =========================================================================
+    // Phase 2c: A saved plan gates the deploy. A plan goes stale when a
+    // hand edit makes a new conflict; the deploy of a plan made with
+    // --force-conflicts takes the plan's flags, so it succeeds without the
+    // flag on the command line; and the plan is stale once the cluster runs
+    // that build.
+    // =========================================================================
+    eprintln!("\n=== Phase 2c: kix deploy --plan ===");
+
+    let dir = std::env::temp_dir().join(format!("kix-saved-plan-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let unforced = dir.join("unforced.json");
+    let forced = dir.join("forced.json");
+    let diffed = dir.join("diff.json");
+    std::fs::write(&unforced, &plan.stdout).expect("write the saved plan");
+    std::fs::write(&diffed, &diff.stdout).expect("write the saved diff");
+    let check = |saved: &Path, extra: &[&str]| {
+        let mut args = vec![
+            "deploy",
+            "kind-v2",
+            "--plan",
+            saved.to_str().unwrap(),
+            "--dry-run",
+        ];
+        args.extend_from_slice(extra);
+        kix(KIND_CLUSTER)
+            .args(&args)
+            .output()
+            .expect("deploy --plan should run")
+    };
+    let mismatched_rules = |out: &std::process::Output| -> Vec<String> {
+        let c: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        c["mismatches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["rule"].as_str().map(str::to_string))
+            .collect()
+    };
+
+    let current = check(&unforced, &["-o", "json"]);
+    assert_eq!(
+        current.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&current.stderr)
+    );
+
+    let from_diff = check(&diffed, &[]);
+    assert_eq!(
+        from_diff.status.code(),
+        Some(0),
+        "a saved kix diff matches: {}{}",
+        String::from_utf8_lossy(&from_diff.stdout),
+        String::from_utf8_lossy(&from_diff.stderr)
+    );
+
+    let contradicted = check(&unforced, &["--prune"]);
+    assert_eq!(contradicted.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&contradicted.stderr).contains("--prune"),
+        "{}",
+        String::from_utf8_lossy(&contradicted.stderr)
+    );
+
+    // A hand edit of a field the deploy sets: kubectl now owns replicas.
+    let deployment = kubectl_stdout(KUBE_CTX, &["get", "deploy", "-n", "echo", "-o", "name"]);
+    let deployment = deployment.lines().next().expect("a Deployment").to_string();
+    let scaled = kubectl(
+        KUBE_CTX,
+        &["scale", &deployment, "-n", "echo", "--replicas=3"],
+    );
+    assert!(scaled.status.success());
+    let stale = check(&unforced, &["-o", "json"]);
+    assert_eq!(
+        stale.status.code(),
+        Some(4),
+        "{}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+    assert_eq!(mismatched_rules(&stale), vec!["new_refusal"]);
+
+    // The deploy itself refuses the stale plan and applies nothing.
+    let refused = kix(KIND_CLUSTER)
+        .args([
+            "deploy",
+            "kind-v2",
+            "--plan",
+            unforced.to_str().unwrap(),
+            "--yes",
+        ])
+        .output()
+        .expect("deploy --plan should run");
+    assert_eq!(refused.status.code(), Some(4));
+    let replicas = kubectl_stdout(
+        KUBE_CTX,
+        &[
+            "get",
+            &deployment,
+            "-n",
+            "echo",
+            "-o",
+            "jsonpath={.spec.replicas}",
+        ],
+    );
+    assert_eq!(replicas.trim(), "3", "a refused deploy applies nothing");
+
+    // A diff checks no refusals, so the saved diff still matches, and the
+    // check says the deploy would stop on the new conflict.
+    let stops = check(&diffed, &[]);
+    assert_eq!(
+        stops.status.code(),
+        Some(3),
+        "{}{}",
+        String::from_utf8_lossy(&stops.stdout),
+        String::from_utf8_lossy(&stops.stderr)
+    );
+
+    let forced_plan = kix(KIND_CLUSTER)
+        .args(["plan", "kind-v2", "--force-conflicts", "-o", "json"])
+        .output()
+        .expect("plan should run");
+    assert_eq!(forced_plan.status.code(), Some(2));
+    std::fs::write(&forced, &forced_plan.stdout).unwrap();
+    let deployed = kix(KIND_CLUSTER)
+        .args([
+            "deploy",
+            "kind-v2",
+            "--plan",
+            forced.to_str().unwrap(),
+            "--yes",
+        ])
+        .output()
+        .expect("deploy --plan should run");
+    assert!(
+        deployed.status.success(),
+        "the apply takes --force-conflicts from the plan: {}{}",
+        String::from_utf8_lossy(&deployed.stdout),
+        String::from_utf8_lossy(&deployed.stderr)
+    );
+    assert!(String::from_utf8_lossy(&deployed.stderr).contains("The reviewed plan matches"));
+    let replicas = kubectl_stdout(
+        KUBE_CTX,
+        &[
+            "get",
+            &deployment,
+            "-n",
+            "echo",
+            "-o",
+            "jsonpath={.spec.replicas}",
+        ],
+    );
+    assert_eq!(replicas.trim(), "2", "the build's replicas, not kubectl's");
+
+    let stale = check(&forced, &["-o", "json"]);
+    assert_eq!(stale.status.code(), Some(4));
+    assert_eq!(mismatched_rules(&stale), vec!["deployed_build"]);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Put the first build back for the phases below.
+    let back = kix(KIND_CLUSTER)
+        .args(["deploy", KIX_CLUSTER, "--yes", "--prune"])
+        .output()
+        .expect("deploy should run");
+    assert!(
+        back.status.success(),
+        "{}",
+        String::from_utf8_lossy(&back.stderr)
     );
 
     // =========================================================================

@@ -45,6 +45,7 @@
           gateway-swap-envoy = ./clusters/test-gateway-swap/envoy.nix;
           gateway-swap-traefik = ./clusters/test-gateway-swap/traefik.nix;
           kind = ./clusters/test-kind.nix;
+          kind-v2 = ./clusters/test-kind-v2.nix;
           metrics-server = ./clusters/test-metrics-server.nix;
           otel-collector = ./clusters/test-otel-collector.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;

@@ -1,0 +1,1106 @@
+{
+  "$defs": {
+    "ActivationChange": {
+      "properties": {
+        "new": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "old": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AdmissionRefusal": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/RefusalReason"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "webhook": {
+          "description": "The admission webhook or ValidatingAdmissionPolicy that answered,\nwhen one did.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "resource",
+        "reason",
+        "message"
+      ],
+      "type": "object"
+    },
+    "Build": {
+      "description": "A cluster build.",
+      "properties": {
+        "identity_hash": {
+          "description": "The `identity-hash` annotation of the build's Activation record, a hash\nof every rendered manifest and what is upstream of it. Two builds with\nthe same identity hash deploy the same objects. `null` only for a\nbuild without an Activation record.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "store_path": {
+          "description": "The build's result directory, the path a deploy records in the\nActivation record's `built-via` annotation. It locates the build. It does not identify the\ncontent: two machines can build the same manifests at different\npaths.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "store_path"
+      ],
+      "type": "object"
+    },
+    "ChangeKind": {
+      "enum": [
+        "added",
+        "removed",
+        "changed"
+      ],
+      "type": "string"
+    },
+    "ChangeLabel": {
+      "description": "Where a field change comes from. A change can carry both an intent label\nand a drift label: the commit changes a field someone also edited by hand.",
+      "oneOf": [
+        {
+          "const": "intended",
+          "description": "The deployed build and the new build differ here.",
+          "type": "string"
+        },
+        {
+          "const": "reverts_drift",
+          "description": "The live object differs from the deployed build here, and the deploy\napplies this object, so it puts the build's value back.",
+          "type": "string"
+        },
+        {
+          "const": "drift_kept",
+          "description": "The live object differs from the deployed build here, and the deploy\nleaves this object alone because its identity hash did not change, so\nthe difference stays. `kix deploy --reconcile` applies it.",
+          "type": "string"
+        }
+      ]
+    },
+    "ChangedPackage": {
+      "properties": {
+        "added_resources": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dep_affected_resources": {
+          "description": "Resources whose only change is a dependency's propagated hash.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "kept_resources": {
+          "description": "Resources that left the build that no prune deletes: Namespaces,\nCRDs, and objects another Kix cluster's current build contains.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "key": {
+          "type": "string"
+        },
+        "manifests": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ManifestSides"
+          },
+          "description": "At `--detail manifests`: the old and new manifest of each modified,\nadded, and removed resource. Kept resources are left out.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "modified_resources": {
+          "items": {
+            "$ref": "#/$defs/ModifiedResource"
+          },
+          "type": "array"
+        },
+        "new_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "old_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "removed_resources": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "key",
+        "added_resources",
+        "removed_resources",
+        "kept_resources",
+        "modified_resources",
+        "dep_affected_resources"
+      ],
+      "type": "object"
+    },
+    "Checked": {
+      "description": "The result of one check, or why it did not run.",
+      "oneOf": [
+        {
+          "description": "The check ran; `items` is what it found, possibly nothing.",
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/Migration"
+              },
+              "type": "array"
+            },
+            "status": {
+              "const": "checked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The check did not run.",
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/NotCheckedReason"
+            },
+            "status": {
+              "const": "not_checked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Checked2": {
+      "description": "The result of one check, or why it did not run.",
+      "oneOf": [
+        {
+          "description": "The check ran; `items` is what it found, possibly nothing.",
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/Conflict"
+              },
+              "type": "array"
+            },
+            "status": {
+              "const": "checked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The check did not run.",
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/NotCheckedReason"
+            },
+            "status": {
+              "const": "not_checked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Checked3": {
+      "description": "The result of one check, or why it did not run.",
+      "oneOf": [
+        {
+          "description": "The check ran; `items` is what it found, possibly nothing.",
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/AdmissionRefusal"
+              },
+              "type": "array"
+            },
+            "status": {
+              "const": "checked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The check did not run.",
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/NotCheckedReason"
+            },
+            "status": {
+              "const": "not_checked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Checked4": {
+      "description": "The result of one check, or why it did not run.",
+      "oneOf": [
+        {
+          "description": "The check ran; `items` is what it found, possibly nothing.",
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/DriftChange"
+              },
+              "type": "array"
+            },
+            "status": {
+              "const": "checked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The check did not run.",
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/NotCheckedReason"
+            },
+            "status": {
+              "const": "not_checked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Checked5": {
+      "description": "The result of one check, or why it did not run.",
+      "oneOf": [
+        {
+          "description": "The check ran; `items` is what it found, possibly nothing.",
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/PruneEntry"
+              },
+              "type": "array"
+            },
+            "status": {
+              "const": "checked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The check did not run.",
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/NotCheckedReason"
+            },
+            "status": {
+              "const": "not_checked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Checked6": {
+      "description": "The result of one check, or why it did not run.",
+      "oneOf": [
+        {
+          "description": "The check ran; `items` is what it found, possibly nothing.",
+          "properties": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "status": {
+              "const": "checked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The check did not run.",
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/NotCheckedReason"
+            },
+            "status": {
+              "const": "not_checked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "reason"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Conflict": {
+      "properties": {
+        "message": {
+          "description": "The apiserver's message.",
+          "type": "string"
+        },
+        "owners": {
+          "items": {
+            "$ref": "#/$defs/ConflictOwner"
+          },
+          "type": "array"
+        },
+        "resource": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource",
+        "owners",
+        "message"
+      ],
+      "type": "object"
+    },
+    "ConflictOwner": {
+      "properties": {
+        "fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "manager": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "manager",
+        "fields"
+      ],
+      "type": "object"
+    },
+    "DeployedBuild": {
+      "description": "The build a cluster runs, as its Activation record names it.",
+      "properties": {
+        "activation": {
+          "description": "The Activation record's name.",
+          "type": "string"
+        },
+        "identity_hash": {
+          "description": "The record's `identity-hash` annotation, as [`Build::identity_hash`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "store_path": {
+          "description": "The record's `built-via` annotation, when it has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "activation"
+      ],
+      "type": "object"
+    },
+    "DriftChange": {
+      "properties": {
+        "deployed": true,
+        "live": true,
+        "managers": {
+          "description": "Field managers other than Kix that own the field live. Empty when\nKubernetes recorded no other owner.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "reverted": {
+          "description": "The deploy applies this object and puts the deployed value back.\nFalse when it leaves the object alone (its identity hash did not\nchange).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "resource",
+        "path",
+        "managers",
+        "reverted"
+      ],
+      "type": "object"
+    },
+    "FieldChange": {
+      "description": "One field change, old to new. A secret value reads\n[`super::SECRET_NOT_SHOWN`], or [`super::SECRET_CHANGED_NOT_SHOWN`] on the\nnew side when the old side differs; a value over\n[`super::MAX_SHOWN_VALUE_BYTES`] reads `\"(N bytes, not shown)\"`.",
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/ChangeKind"
+        },
+        "labels": {
+          "description": "What made the change. Absent when the deployed build was not\navailable to compare with.",
+          "items": {
+            "$ref": "#/$defs/ChangeLabel"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "new": {
+          "description": "Absent when the new side has no value."
+        },
+        "old": {
+          "description": "Absent when the old side has no value."
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "change"
+      ],
+      "type": "object"
+    },
+    "KixBuild": {
+      "description": "A Kix binary, so a plan can be checked against the Kix that deploys it.",
+      "properties": {
+        "store_path": {
+          "description": "The Nix store path the running binary is in, `null` for a binary\noutside the store (a `cargo build`). Two binaries with the same store\npath are the same build.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "The crate version. It does not change with every commit.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version"
+      ],
+      "type": "object"
+    },
+    "MadeBy": {
+      "description": "How a [`Plan`] was made, which bounds what it can know.",
+      "oneOf": [
+        {
+          "const": "dry_run",
+          "description": "`kix plan`: the deploy pipeline ran as a server-side dry run, so field\nchanges are what the apiserver says each write would produce.",
+          "type": "string"
+        },
+        {
+          "const": "live_read",
+          "description": "`kix diff` against the live cluster or a snapshot: a read-only\ncomparison with the kix-owned view.",
+          "type": "string"
+        },
+        {
+          "const": "builds",
+          "description": "Two builds compared, with no cluster access.",
+          "type": "string"
+        }
+      ]
+    },
+    "ManifestSides": {
+      "description": "One resource's manifest on each side, hidden as a [`FieldChange`] value\nis. A manifest over [`super::MAX_SHOWN_MANIFEST_BYTES`] reads\n`\"(N bytes, not shown)\"`. `kix plan` shows the live object and the\ndry-run result of each object the apiserver answered for.",
+      "properties": {
+        "new": {
+          "description": "Absent when the resource does not exist on the new side."
+        },
+        "old": {
+          "description": "Absent when the resource does not exist on the old side."
+        }
+      },
+      "type": "object"
+    },
+    "Migration": {
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "slot": {
+          "description": "`namespace/instance`.",
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slot",
+        "source",
+        "target",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ModifiedResource": {
+      "properties": {
+        "changes": {
+          "description": "Each field change, at `--detail fields` and `--detail manifests`.",
+          "items": {
+            "$ref": "#/$defs/FieldChange"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "diff_count": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resource": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource",
+        "diff_count"
+      ],
+      "type": "object"
+    },
+    "NotCheckedReason": {
+      "description": "Why a check did not run, so a reader knows how to get it.",
+      "oneOf": [
+        {
+          "const": "builds_only",
+          "description": "Two builds were compared and no cluster was read. `kix plan` against\nthe cluster checks it.",
+          "type": "string"
+        },
+        {
+          "const": "read_only",
+          "description": "A read-only comparison cannot see it: it shows only on the write\npath. `kix plan` checks it.",
+          "type": "string"
+        },
+        {
+          "const": "deployed_build_unavailable",
+          "description": "The deployed build's manifests are not on this machine, so a change\nthe commit makes cannot be told apart from drift.",
+          "type": "string"
+        },
+        {
+          "const": "not_previewable",
+          "description": "No preview can tell.",
+          "type": "string"
+        }
+      ]
+    },
+    "PackageEntry": {
+      "properties": {
+        "kept_resources": {
+          "description": "For a removed package, the resources that stay on the cluster.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "key": {
+          "description": "`namespace/name`.",
+          "type": "string"
+        },
+        "manifests": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ManifestSides"
+          },
+          "description": "At `--detail manifests`: the new manifest of each resource of an\nadded package, or the old manifest of each resource a removed\npackage deletes.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "resources": {
+          "description": "Every resource of the package, including `kept_resources`.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "resources",
+        "kept_resources"
+      ],
+      "type": "object"
+    },
+    "Packages": {
+      "description": "The package-grouped changes, as `kix diff -o json` has always printed\nthem under `packages`.",
+      "properties": {
+        "activation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActivationChange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The deploy record's name, old to new. `None` when both sides name the\nsame record."
+        },
+        "added": {
+          "items": {
+            "$ref": "#/$defs/PackageEntry"
+          },
+          "type": "array"
+        },
+        "changed": {
+          "items": {
+            "$ref": "#/$defs/ChangedPackage"
+          },
+          "type": "array"
+        },
+        "cluster_level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChangedPackage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Resources outside any package (Namespaces, CRDs, cluster-scoped\nbundles) that differ. Keyed `_cluster`."
+        },
+        "removed": {
+          "items": {
+            "$ref": "#/$defs/PackageEntry"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "$ref": "#/$defs/Summary"
+        },
+        "unchanged": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "added",
+        "removed",
+        "changed",
+        "unchanged",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "PlanFlags": {
+      "description": "The planning flags of `kix plan` and `kix deploy`.",
+      "properties": {
+        "accept_migrations": {
+          "type": "boolean"
+        },
+        "force_conflicts": {
+          "type": "boolean"
+        },
+        "prune": {
+          "type": "boolean"
+        },
+        "prune_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PruneModeFlag"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`--prune-mode`, `null` when not given."
+        },
+        "reconcile": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "prune",
+        "reconcile",
+        "force_conflicts",
+        "accept_migrations"
+      ],
+      "type": "object"
+    },
+    "PruneEntry": {
+      "properties": {
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fate": {
+          "$ref": "#/$defs/PruneFate"
+        },
+        "resource": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource",
+        "fate"
+      ],
+      "type": "object"
+    },
+    "PruneFate": {
+      "oneOf": [
+        {
+          "const": "delete",
+          "description": "Deleted (`--prune`); the dry-run delete was accepted.",
+          "type": "string"
+        },
+        {
+          "const": "delete_refused",
+          "description": "`--prune` would delete it, but the dry-run delete was refused.",
+          "type": "string"
+        },
+        {
+          "const": "kept_warn_only",
+          "description": "Kept by a deploy without `--prune`, and recorded on the new\nactivation for a later `--prune` or `kix gc`.",
+          "type": "string"
+        },
+        {
+          "const": "kept_skipped",
+          "description": "Kept by `--prune-mode=no`.",
+          "type": "string"
+        },
+        {
+          "const": "kept_never_pruned",
+          "description": "A Namespace or CRD: never deleted automatically.",
+          "type": "string"
+        },
+        {
+          "const": "kept_shared",
+          "description": "Another Kix cluster's current build contains it.",
+          "type": "string"
+        },
+        {
+          "const": "kept_changed",
+          "description": "It changed since it was read; the next prune checks it again.",
+          "type": "string"
+        }
+      ]
+    },
+    "PruneModeFlag": {
+      "enum": [
+        "default",
+        "no"
+      ],
+      "type": "string"
+    },
+    "RefusalReason": {
+      "oneOf": [
+        {
+          "const": "webhook_denied",
+          "description": "An admission webhook denied the write.",
+          "type": "string"
+        },
+        {
+          "const": "policy_denied",
+          "description": "A ValidatingAdmissionPolicy denied the write; `webhook` names the\npolicy.",
+          "type": "string"
+        },
+        {
+          "const": "invalid",
+          "description": "The object fails validation: schema or a CRD's rules.",
+          "type": "string"
+        },
+        {
+          "const": "immutable_field",
+          "description": "A changed field cannot be modified; the object must be deleted and\ncreated again.",
+          "type": "string"
+        },
+        {
+          "const": "forbidden",
+          "description": "RBAC or an admission plugin forbids the write.",
+          "type": "string"
+        },
+        {
+          "const": "namespace_missing",
+          "description": "The namespace does not exist and the build does not create it.",
+          "type": "string"
+        },
+        {
+          "const": "unknown_kind",
+          "description": "The apiserver does not serve the kind and the build has no CRD for it.",
+          "type": "string"
+        },
+        {
+          "const": "decryption",
+          "description": "A SOPS Secret could not be decrypted.",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "The deploy refuses it before sending, or the apiserver gave another\nerror.",
+          "type": "string"
+        }
+      ]
+    },
+    "Summary": {
+      "properties": {
+        "added": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "changed": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "removed": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unchanged": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "added",
+        "removed",
+        "changed",
+        "unchanged"
+      ],
+      "type": "object"
+    },
+    "UncheckedObject": {
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "reason": {
+          "$ref": "#/$defs/UncheckedReason"
+        },
+        "resource": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource",
+        "reason",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "UncheckedReason": {
+      "oneOf": [
+        {
+          "const": "crd_created_by_this_deploy",
+          "description": "Its kind comes from a CRD this deploy creates.",
+          "type": "string"
+        },
+        {
+          "const": "crd_changed_by_this_deploy",
+          "description": "Its kind's CRD is changed by this deploy, and the dry run checked\nthe object against the CRD on the cluster now.",
+          "type": "string"
+        },
+        {
+          "const": "namespace_created_by_this_deploy",
+          "description": "Its namespace is created by this deploy.",
+          "type": "string"
+        },
+        {
+          "const": "webhook_no_dry_run",
+          "description": "An admission webhook that would be called does not support dry run.",
+          "type": "string"
+        },
+        {
+          "const": "dependency_not_checked",
+          "description": "The engine never reached the object, for example because the dry run\nwas cancelled. A refused dependency does not cause this: a dry run\nstill tries the dependents of a refused object.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "What a deploy of a build would change, or how two things differ.",
+  "properties": {
+    "admission": {
+      "$ref": "#/$defs/Checked3",
+      "description": "Writes the apiserver, an admission webhook or the deploy itself would\nrefuse, other than ownership conflicts."
+    },
+    "build": {
+      "$ref": "#/$defs/Build",
+      "description": "The build the plan is for: the new side."
+    },
+    "cluster": {
+      "description": "The name the build gives the Kix cluster, which its records carry.",
+      "type": "string"
+    },
+    "conflicts": {
+      "$ref": "#/$defs/Checked2",
+      "description": "Fields another field manager owns that the apply would set."
+    },
+    "deployed": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DeployedBuild"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The build the plan compares against: the cluster's current\nActivation record for `kix plan` and `kix diff` against the cluster,\nthe cached record under `--current-activation`, the `--from` build,\nor the Activation record in a `--from` snapshot. `null` when there is\nnone: a first deploy, or a snapshot without a record."
+    },
+    "drift": {
+      "$ref": "#/$defs/Checked4",
+      "description": "Fields where the live cluster differs from the deployed build and\nthat this change touches."
+    },
+    "flags": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PlanFlags"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The flags that change what the planned deploy writes or deletes.\n`null` from `kix diff`, which plans no deploy."
+    },
+    "kix": {
+      "$ref": "#/$defs/KixBuild",
+      "description": "The Kix that made the plan."
+    },
+    "made_by": {
+      "$ref": "#/$defs/MadeBy"
+    },
+    "migrations": {
+      "$ref": "#/$defs/Checked",
+      "description": "Stateful resources the change removes and adds in the same slot. A\ndeploy stops on them unless run with `--accept-migrations`."
+    },
+    "not_checked": {
+      "description": "Objects the dry run could not check, and why. Their entries in\n`packages` come from comparing builds. Empty unless `made_by` is\n`dry_run`.",
+      "items": {
+        "$ref": "#/$defs/UncheckedObject"
+      },
+      "type": "array"
+    },
+    "packages": {
+      "$ref": "#/$defs/Packages"
+    },
+    "prune": {
+      "$ref": "#/$defs/Checked5",
+      "description": "Resources that leave the build, and what the deploy does with each."
+    },
+    "readiness": {
+      "$ref": "#/$defs/Checked6",
+      "description": "Whether Pods start, pull their images, and pass their probes. No\npreview can tell, so this is always `not_checked`."
+    },
+    "schema_version": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "made_by",
+    "kix",
+    "cluster",
+    "build",
+    "packages",
+    "migrations",
+    "conflicts",
+    "admission",
+    "drift",
+    "prune",
+    "not_checked",
+    "readiness"
+  ],
+  "title": "Plan",
+  "type": "object"
+}

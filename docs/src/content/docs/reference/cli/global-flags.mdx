@@ -38,6 +38,7 @@ where the table shows them; elsewhere they are accepted and have no effect.
 | `build`, `check`, `graph`, `inspect`, `images`, `list` | yes | | yes | yes | yes |
 | `status` | yes | yes | flat view only | flat view only | flat view only |
 | `diff` | yes | yes | yes | | yes |
+| `plan` | yes | yes | yes | | yes |
 | `deploy`, `gc`, `migrate domain`, `logs`, `pf` | | yes | yes | | yes |
 | `export` | | | yes | | yes |
 | `rollback`, `drift` | yes | yes | | | |
@@ -51,7 +52,7 @@ where the table shows them; elsewhere they are accepted and have no effect.
 `--no-cache` applies only to commands that read the
 [eval cache](/docs/reference/cli/eval-cache-behavior/). `kix pin` uses
 `--flake` only as a place to look for `pins.json`. `-o` on `rollback` applies
-only with `--list`.
+only with `--list`, and on `deploy` only with `--dry-run`.
 
 ## Environment variables
 

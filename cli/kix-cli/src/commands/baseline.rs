@@ -86,14 +86,14 @@ pub async fn load_failed(
             continue;
         };
         if !quiet {
-            println!(
+            crate::say!(
                 "  {} including resources from failed deployment {} ({}...)",
                 output::yellow("!"),
                 output::bold(&record.name),
                 &hash[..8.min(hash.len())],
             );
             if let Some(reason) = &record.reason {
-                println!("    it stopped because: {reason}");
+                crate::say!("    it stopped because: {reason}");
             }
         }
         out.closures.push(closure);
@@ -219,7 +219,7 @@ pub fn load_kept(active: &ActiveActivation, cluster: &str, quiet: bool) -> KeptB
     }
     if !out.sources.is_empty() {
         let names: Vec<&str> = out.sources.iter().map(|s| s.activation.as_str()).collect();
-        println!(
+        crate::say!(
             "  {} including orphans kept by earlier deploys, from {}",
             output::yellow("!"),
             names.join(", "),

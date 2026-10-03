@@ -6,8 +6,8 @@ description: "Build a cluster, show the plan against what is running, and apply 
 import Command from '/src/components/Command.astro';
 
 `kix deploy` builds a cluster, compares the build with the activation the
-cluster runs now, shows a package-grouped plan, asks for confirmation, and
-applies the changed resources with server-side apply. Each resource starts as
+cluster runs now, checks the plan with a server-side dry run, shows it, asks
+for confirmation, and applies the changed resources with server-side apply. Each resource starts as
 soon as the resources it depends on are ready. `kix apply` is an alias for the
 same command.
 
@@ -17,7 +17,7 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 ## Synopsis
 
 ```text
-kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
+kix deploy <CLUSTER> [-y] [--dry-run] [--plan <FILE>] [--prune | --prune-mode default|no]
            [--timeout <DURATION>] [--on-error stop|continue]
            [--reconcile] [--force-conflicts] [--accept-migrations]
            [--current-activation] [--operator]
@@ -29,21 +29,22 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
 | --- | --- |
 | `<CLUSTER>` | Cluster name to build from the flake. |
 | `-y`, `--yes` | Skip the confirmation prompt. Required when stdin is not a terminal, unless `--dry-run` is set. |
-| `--dry-run` | Run the whole plan with `dryRun=All`. The apiserver reports each outcome, including admission, RBAC and field-conflict errors, and nothing changes. |
+| `--dry-run` | Run [`kix plan`](/docs/reference/cli/plan/) with the same planning flags and stop. Nothing changes. The exit status and `-o` handling are `kix plan`'s, and `--yes`, `--timeout`, `--on-error`, `--log-format`, and `--tui` have no effect. |
+| `--plan <FILE>` | Deploy only if the plan made now still matches a reviewed one. See [Deploy a reviewed plan](#deploy-a-reviewed-plan). With `--dry-run`, check the plan and exit without deploying. Not with `--current-activation` or `--operator`. |
 | `--prune` | Delete orphans: resources the previous activation had and this build does not, including orphans earlier deploys kept. Without it, orphans are listed and kept, and the new Activation records where they came from so a later `kix deploy --prune` or `kix gc` deletes them. |
 | `--prune-mode <MODE>` | `default` prunes according to `--prune`. `no` never prunes in this run, even with `--prune`; use `kix gc` later. |
 | `--timeout <DURATION>` | How long to wait for each resource to become ready: `5m`, `300s`, or a bare number of seconds. Default `180s`. |
-| `--on-error <MODE>` | `stop` (default) halts the run at the first failure and cancels what has not started. `continue` cancels only the dependents of a failed resource and carries on with the rest. Either way, a run in which any resource failed exits `1`. |
+| `--on-error <MODE>` | `stop` (default) stops before applying anything when the plan shows a refused write, and halts the run at the first failure and cancels what has not started. `continue` applies the plan even when it shows refused writes, cancels only the dependents of a failed resource, and carries on with the rest. Either way, a run in which any resource failed exits `1`. |
 | `--reconcile` | Re-apply every resource, including those whose identity hash matches the running activation. Use it to put back fields that were changed on the cluster. |
-| `--force-conflicts` | Take ownership of fields another field manager owns. Without it, a conflict fails that resource and names the fields and their current owner. |
+| `--force-conflicts` | Take ownership of fields another field manager owns. Without it, a conflict is a refused write in the plan, naming the fields and their current owner, and under `--on-error stop` the deploy stops before applying anything. |
 | `--accept-migrations` | Proceed when the plan removes and adds stateful resources in the same slot. Without it such a deploy stops, even with `--yes`. Kix does not copy data. |
-| `--current-activation` | Take the previous activation from the local cache instead of the cluster. The plan is computed offline, so it cannot see deploys that stopped part way or orphans that earlier deploys kept; the new Activation lists the builds those orphans came from again, so a later plain deploy can prune them. With `--dry-run` nothing contacts the cluster. Without it, the deploy refuses before applying anything when the cached build is not the Active build of the cluster in the current context: the cache is keyed by cluster name only, so another context's cluster of the same name can have written it. |
+| `--current-activation` | Take the previous activation from the local cache instead of the cluster. The plan is computed offline, so it cannot see deploys that stopped part way or orphans that earlier deploys kept; the new Activation lists the builds those orphans came from again, so a later plain deploy can prune them. With `--dry-run` nothing contacts the cluster. Without `--dry-run`, the deploy refuses before applying anything when the cached build is not the Active build of the cluster in the current context: the cache is keyed by cluster name only, so another context's cluster of the same name can have written it. |
 | `--operator` | Hand the build to the Kix operator instead of applying it from this machine. See [Operator mode](/docs/reference/cli/operator-mode/). |
 | `--log-format <FORMAT>` | `pretty` (default): interactive progress, coloured when stdout is a terminal; falls back to `line` when stdin is not a terminal. `line`: one plain line per resource outcome. `json`: JSON deploy events, one per line, ending with a `summary` object. The plan is still plain text on the same stream. |
 | `--tui` | Draw a live dependency tree while deploying. Ignored when stdin is not a terminal. |
 | `--group-by-ns` | With `--tui`, group the tree by namespace instead of package. Execution order does not change. |
 | `--fold-height <ROWS>` | With `--tui`, cap the live view at this many rows. Default: half the terminal height, between 10 and 40. |
-| `--flake`, `--context`, `--override-input` | See [Global flags](/docs/reference/cli/global-flags/). `-o` and `--no-cache` have no effect; use `--log-format` to choose the output. |
+| `--flake`, `--context`, `--override-input` | See [Global flags](/docs/reference/cli/global-flags/). `-o` has an effect only with `--dry-run`, and `--no-cache` has none; use `--log-format` to choose the deploy's output. |
 
 ## What a deploy does
 
@@ -60,9 +61,17 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
 3. Refuses to start if another deploy of the same cluster is in progress.
    Resources left by an earlier deploy that stopped part way are folded into
    the plan: they are re-applied or reported as orphans.
-4. Prints the plan, warnings for node labels that `DoNotSchedule` spread or
-   affinity rules need but no schedulable node carries, and whether the
-   working tree has uncommitted changes.
+4. Sends every write and prune delete of the plan as a server-side dry run,
+   the way [`kix plan`](/docs/reference/cli/plan/) does, and prints the
+   result: the changed resources (with field changes under `-v`), the
+   writes the cluster would refuse, prune fates, drift, and the objects the
+   dry run could not check. The dry run is skipped when there is nothing to
+   apply or prune. It also prints
+   warnings for node labels that `DoNotSchedule` spread or affinity rules
+   need but no schedulable node carries, and whether the working tree has
+   uncommitted changes. Under `--on-error stop`, a plan with a refused write
+   or a refused prune delete stops the deploy here, before anything is
+   applied. With `--current-activation` the plan is not sent to the cluster.
 5. Asks for confirmation, then creates the Activation record and applies.
    Unchanged resources are skipped. A deploy with nothing to change exits
    without applying. Before the record is created, the run stops if the
@@ -117,6 +126,67 @@ are covered in [API server retries and request limits](/docs/reference/cli/api-s
 Set `KIX_NO_INTERACTIVE` to any value to treat the terminal as
 non-interactive.
 
+## Deploy a reviewed plan
+
+Save the plan a reviewer approves, then deploy with it:
+
+```bash
+kix plan prod --output json > plan.json   # reviewed and approved
+kix deploy prod --plan plan.json --yes
+```
+
+The deploy builds and plans again with the planning flags recorded in the
+plan, and applies nothing if the new plan differs from the reviewed one on
+any of these:
+
+| Compared | What differs |
+| --- | --- |
+| Cluster | The plan is for another Kix cluster. |
+| New build | The build's identity hash. A store path that moved, with the same manifests, still matches. |
+| Deployed build | The identity hash of the build the cluster runs: another deploy landed after the review. |
+| Planning flags | `--prune`, `--prune-mode`, `--reconcile`, `--force-conflicts`, or `--accept-migrations`. A flag given on the command line that the plan was made without is an error before the build. |
+| Refusals | A conflict, by object, or an admission refusal, by object and reason, that the reviewed plan did not have. |
+| Reverted drift | A drifted field, by object and path, that the deploy would put back and the reviewed plan did not list. |
+| Prune deletes | An orphan the deploy would delete that the reviewed plan did not list. |
+| Objects not checked | An object the dry run checked for the reviewed plan and cannot check now, for example because a webhook it calls lost dry-run support. Its refusals and drift would not show. |
+
+What the reviewed plan had and the new one does not, such as a conflict
+someone resolved, does not refuse the deploy. Messages, live values,
+`resourceVersion`s, and order are not compared.
+
+The planning flags come from the plan: a flag it has and the command line
+omits still applies. A plan whose sections do not match how it says it was
+made, for example a `kix plan` document with prune marked not checked, was
+edited after it was written and is refused. The deploy prints the file's
+SHA-256 so an approval system can check it used the file it approved.
+
+A refusal lists what differs and exits `4`. `kix deploy --plan plan.json
+--dry-run` makes the same comparison without deploying. It exits `4` when the
+plan no longer matches, `3` when it matches but the deploy would stop on a
+refused write or a migration not accepted, and `0` otherwise. With
+`--output json` it prints `{ plan_sha256, matches, mismatches, skipped, kix_differs }`.
+
+A plan saved from [`kix diff`](/docs/reference/cli/diff/) against the cluster
+can be used too, when the deployed build was available to it, so its drift
+section is checked. A diff checks no refusals, prune deletes, or objects a
+dry run cannot reach, so those are not compared and the output says so; the
+deploy still makes its own dry run first. A deploy from a diff plan refuses
+`--prune`, `--force-conflicts`, `--reconcile`, and `--accept-migrations`,
+since the diff shows no reviewer what they would do. Refused outright: a
+plan that compared two builds without reading the cluster
+(`made_by: builds`), and a `kix diff` of a snapshot or export, or one made
+without the deployed build, since neither shows drift.
+
+The checks above catch an edited plan only when its sections contradict how
+it says it was made. Adding items to a list, or marking a drift section not
+checked, makes the comparison weaker without making the file inconsistent,
+so an approval system should check the SHA-256 the deploy prints against the
+file it approved.
+
+When the plan was made by a Kix binary at another Nix store path, or of
+another version, the deploy prints a note and does not refuse. Two binaries
+built outside the store with the same version print no note.
+
 ## Examples
 
 <Command commands={[
@@ -139,7 +209,11 @@ error goes to stderr and the exit status is non-zero.
 | Code | Meaning |
 | --- | --- |
 | `0` | Deploy complete, nothing to apply, or the prompt was declined |
-| `1` | A resource failed, under either `--on-error` mode, or the run was cancelled; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; or a build, evaluation or cluster error |
+| `1` | A resource failed, under either `--on-error` mode, or the run was cancelled; the plan showed a refused write under `--on-error stop`; a stateful migration was detected without `--accept-migrations`; confirmation was needed on a non-interactive terminal; or a build, evaluation or cluster error |
+
+With `--dry-run` the exit status is [`kix plan`'s](/docs/reference/cli/plan/#exit-status):
+`0` when nothing would change, `2` when something would, and `3` when the
+deploy would stop.
 
 :::tip[Use it in a task]
 See [Deploy with dry-run, timeouts, pruning, and log or TUI output modes](/docs/how-to/operate-a-cluster/deploy-with-dry-run-timeouts-pruning-and-log-tui-output-modes/)

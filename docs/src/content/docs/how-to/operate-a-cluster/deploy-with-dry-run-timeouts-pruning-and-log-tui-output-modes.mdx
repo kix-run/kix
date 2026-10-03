@@ -17,9 +17,15 @@ server without persisting them:
 
 <Command expandable {...dryRun} />
 
-For an existing deployment, the preview uses server-side dry-run, so admission
-checks, permissions, and field conflicts are still evaluated. It does not ask
-for confirmation and does not create an activation record.
+`kix deploy --dry-run` runs [`kix plan`](/docs/reference/cli/plan/) with the
+same planning flags, so admission checks, permissions, and field conflicts
+are evaluated, and every refused write is listed. It does not ask for
+confirmation and does not create an activation record. It exits `2` when the
+deploy would change something and `3` when the deploy would stop.
+
+A deploy without `--dry-run` runs the same dry run before it asks for
+confirmation. Under the default `--on-error stop`, a plan with a refused
+write stops the deploy before anything is applied.
 
 Remove `--dry-run` when the plan is ready to apply. Keep `--prune` only when
 the orphaned resources shown in the plan should be deleted.
@@ -102,7 +108,7 @@ result as NDJSON. The last event is a `summary` object with the counts and
 
 <Command
   commands={[
-    "kix deploy how-to-application --dry-run --log-format json | jq -R -c 'fromjson? // empty' > deploy-events.ndjson",
+    "kix deploy how-to-application --yes --log-format json | jq -R -c 'fromjson? // empty' > deploy-events.ndjson",
   ]}
   cwd="kix-examples/"
 />
@@ -123,10 +129,11 @@ order.
 
 ## Troubleshoot a first-deploy preview
 
-A server-side dry-run of a cluster's first deployment can report that a
-Namespace or Kix CRD does not exist. The previewed prerequisite is not
-persisted for a later resource to use. Run `kix check` for validation and
-`kix diff` to review the initial change set before the first deploy.
+A dry run persists nothing, so it cannot check an object whose Namespace or
+CRD the same deploy creates. The plan lists those objects under "Not checked
+by the dry run", with their changes from comparing builds, and most of a
+cluster's first deployment is in that list. Run `kix check` for validation
+before the first deploy, and review the listed objects in the plan.
 
 :::note[Reference]
 See [`kix deploy`](/docs/reference/cli/deploy-apply/) for all deploy flags,

@@ -20,6 +20,7 @@ use super::super::apply::{self, ApplyAction, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
 use super::super::errors::{FailureClass, classify, describe};
 use super::super::fetch::{self, FetchError};
+use super::super::preview::{DryRunAnswer, DryRunOutcome, Journal, Refusal};
 use super::super::prune_guard::{PruneGuard, Pruned};
 use super::super::readiness::{self, ImportTarget, ReadinessError, ReadinessResult};
 use super::super::secrets::{self, HydrationResult, SecretError};
@@ -119,6 +120,8 @@ pub struct KubeOps {
     recorded_kept: std::sync::Mutex<Option<Vec<activation::KeptOrphanSource>>>,
     /// Made at the first prune delete, when discovery has settled.
     prune_guard: tokio::sync::OnceCell<PruneGuard>,
+    /// Under dry run, the apiserver's answer for each object.
+    journal: Journal,
 }
 
 impl KubeOps {
@@ -131,7 +134,15 @@ impl KubeOps {
             record_pending: std::sync::atomic::AtomicBool::new(false),
             recorded_kept: std::sync::Mutex::new(None),
             prune_guard: tokio::sync::OnceCell::new(),
+            journal: Journal::default(),
         }
+    }
+
+    /// Under dry run, what the apiserver answered for each object applied so
+    /// far: the object the apply would produce, or why it was refused.
+    /// Empty for a real run. Drains the journal.
+    pub fn take_dry_run_answers(&self) -> Vec<DryRunAnswer> {
+        self.journal.take()
     }
 
     /// The `status.orphansKeptFrom` the run's finalize wrote, or `None` when
@@ -369,9 +380,10 @@ impl ClusterOps for KubeOps {
     }
 
     async fn hydrate(&self, manifest: Value) -> Result<(Value, Vec<HydrationResult>), SecretError> {
+        let rid = ResourceId::from_value(&manifest);
         // `sops` is a synchronous subprocess. On a blocking thread it cannot
         // stall the runtime; the engine's own thread never runs it.
-        tokio::task::spawn_blocking(move || {
+        let hydrated = tokio::task::spawn_blocking(move || {
             let mut single = [manifest];
             let results = secrets::hydrate_secrets(&mut single)?;
             let [manifest] = single;
@@ -383,11 +395,39 @@ impl ClusterOps for KubeOps {
                 path: String::new(),
                 message: format!("hydration task failed: {join}"),
             })
-        })
+        });
+        if self.cfg.dry_run
+            && let Err(e) = &hydrated
+        {
+            self.journal
+                .record(rid, DryRunOutcome::Refused(Refusal::of_hydration(e)));
+        }
+        hydrated
     }
 
     async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError> {
-        let (ar, scope) = self.resolve_kind(manifest).await?;
+        let rid = ResourceId::from_value(manifest);
+        // A dry run creates no CRD, so discovery cannot gain a kind during
+        // one and a cache miss is final.
+        let resolved = if self.cfg.dry_run {
+            self.cached_kind(&rid.kind)
+                .await
+                .ok_or_else(|| ApplyError::UnknownKind {
+                    kind: rid.kind.clone(),
+                })
+        } else {
+            self.resolve_kind(manifest).await
+        };
+        let (ar, scope) = match resolved {
+            Ok(found) => found,
+            Err(e) => {
+                if self.cfg.dry_run {
+                    self.journal
+                        .record(rid, DryRunOutcome::Refused(Refusal::of_apply(&e)));
+                }
+                return Err(e);
+            }
+        };
         // What the manifest expects something else to have created
         // (kix.untrackedRef with a kind and a creator). The creator is a
         // dependency, so it is ready by now; what is checked is that it
@@ -407,7 +447,7 @@ impl ClusterOps for KubeOps {
             }
         }
         let live = self.live_activations();
-        apply::apply_resource(
+        let applied = apply::apply_resource(
             &self.client,
             &ar,
             scope,
@@ -417,7 +457,22 @@ impl ClusterOps for KubeOps {
             live.as_ref(),
             self.cfg.force_conflicts,
         )
-        .await
+        .await;
+        if self.cfg.dry_run {
+            match &applied {
+                Ok(ApplyResult {
+                    preview: Some(preview),
+                    ..
+                }) => self
+                    .journal
+                    .record(rid, DryRunOutcome::Applied(preview.clone())),
+                Ok(_) => {}
+                Err(e) => self
+                    .journal
+                    .record(rid, DryRunOutcome::Refused(Refusal::of_apply(e))),
+            }
+        }
+        applied
     }
 
     async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, String> {
@@ -461,8 +516,14 @@ impl ClusterOps for KubeOps {
         // run promises, so the apply still runs; only that one error is the
         // expected "would be created after the delete".
         if self.cfg.dry_run {
+            let existing = api
+                .get_opt(&rid.name)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|o| serde_json::to_value(o).ok());
             let live = self.live_activations();
-            return match apply::apply_resource(
+            let applied = apply::apply_resource(
                 &self.client,
                 &ar,
                 scope,
@@ -472,12 +533,25 @@ impl ClusterOps for KubeOps {
                 live.as_ref(),
                 self.cfg.force_conflicts,
             )
-            .await
-            {
+            .await;
+            let outcome = match &applied {
+                Ok(result) => DryRunOutcome::Recreated {
+                    live: existing,
+                    result: result.preview.as_ref().map(|p| p.result.clone()),
+                },
+                Err(ApplyError::ImmutableConflict { .. }) => DryRunOutcome::Recreated {
+                    live: existing,
+                    result: None,
+                },
+                Err(e) => DryRunOutcome::Refused(Refusal::of_apply(e)),
+            };
+            self.journal.record(rid.clone(), outcome);
+            return match applied {
                 Ok(result) => Ok(result),
                 Err(ApplyError::ImmutableConflict { .. }) => Ok(ApplyResult {
                     action: ApplyAction::Created,
                     resource_id: rid,
+                    preview: None,
                 }),
                 Err(e) => Err(format!("dry-run re-apply failed: {e}")),
             };
@@ -562,6 +636,10 @@ impl ClusterOps for KubeOps {
     }
 
     async fn rediscover(&self) -> Result<(), FetchError> {
+        // A dry run persists no CRD, so there is nothing new to discover.
+        if self.cfg.dry_run {
+            return Ok(());
+        }
         // A settled walk: every listed group version answered.
         let new = fetch::DiscoveryPass {
             resources: fetch::discover_resources(&self.client).await?,
@@ -684,10 +762,22 @@ impl ClusterOps for KubeOps {
         // later run pruning what an earlier one already removed must not
         // read as a failure, which would land the new record Degraded for no
         // reason.
-        guard
+        let deleted = guard
             .delete(&ar, &scope, rid, &dp)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+        if self.cfg.dry_run {
+            use super::super::preview::PruneAnswer;
+            let answer = match &deleted {
+                Ok(Pruned::Deleted | Pruned::Gone) => PruneAnswer::Deleted,
+                Ok(Pruned::Kept(shared)) => PruneAnswer::KeptShared(shared.describe()),
+                Ok(Pruned::Changed(_)) => PruneAnswer::KeptChanged,
+                Err(e) => PruneAnswer::Refused(e.clone()),
+            };
+            self.journal
+                .record(rid.clone(), DryRunOutcome::Pruned(answer));
+        }
+        deleted
     }
 
     async fn finalize(
