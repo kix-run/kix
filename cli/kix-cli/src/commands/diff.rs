@@ -19,7 +19,9 @@ use kix::manifest::types::ResourceId;
 
 use crate::cli::{DiffArgs, OutputFormat};
 use crate::output;
-use crate::plan::{self, PackageDiff};
+use crate::plan::document::{Checked, MadeBy, NotCheckedReason, Plan};
+use crate::plan::origin::{self, Sides};
+use crate::plan::{self, PackageDiff, render};
 
 use super::CommandContext;
 
@@ -27,12 +29,25 @@ struct DiffResult {
     packages: PackageDiff,
     /// Detected stateful migration pairs, reported without execution.
     migration_pairs: Vec<MigrationPair>,
+    /// The document `-o json` and `-o yaml` print, made from the two above.
+    doc: Plan,
 }
 
 impl DiffResult {
     fn has_diff(&self) -> bool {
         self.packages.has_changes() || !self.migration_pairs.is_empty()
     }
+}
+
+/// What the old side of the comparison is, which bounds what the document
+/// can say.
+enum OldSide {
+    /// A build result: every difference is the new build's.
+    Build,
+    /// A manifest directory: a snapshot or an export.
+    Manifests,
+    /// The live cluster's kix-owned view.
+    Live(Box<LiveSide>),
 }
 
 /// Every mode is one comparison of two store graphs. The new side is
@@ -49,53 +64,58 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     let new_graph = build_store_graph(&flake_path, &args.cluster, &overrides, &spinner)?;
     clear_spinner(&spinner);
 
-    // Resources `kix deploy` would refuse; only known against a live cluster.
-    let mut namespaceless = Vec::new();
-    let old_graph = if let Some(from) = &args.from {
+    let (old_graph, side) = if let Some(from) = &args.from {
         let path = PathBuf::from(from);
         if !path.is_dir() {
             return Err(miette!("from directory does not exist: {from}"));
         }
         let spinner = make_spinner(ctx, "Loading old side...");
-        let graph = if path.join("kix-packages.json").is_file() {
-            load_old_graph(&path, &spinner)?
+        let loaded = if path.join("kix-packages.json").is_file() {
+            (load_old_graph(&path, &spinner)?, OldSide::Build)
         } else {
             let manifests: Vec<Value> = load_manifests_from_dir(&path)
                 .map_err(|e| miette!("failed to load manifest directory {from}: {e}"))?
                 .into_iter()
                 .map(|(_, v)| v)
                 .collect();
-            StoreGraph::synthesize(&manifests, &new_graph)
+            (
+                StoreGraph::synthesize(&manifests, &new_graph),
+                OldSide::Manifests,
+            )
         };
         clear_spinner(&spinner);
-        graph
+        loaded
     } else {
         let spinner = make_spinner(ctx, "Fetching live cluster state...");
         let global = ctx.global.clone();
-        let (manifests, refused) = ctx
+        let live = ctx
             .runtime
             .block_on(fetch_live_manifests(&global, &new_graph))?;
         clear_spinner(&spinner);
-        namespaceless = refused;
-        StoreGraph::synthesize(&manifests, &new_graph)
+        (
+            StoreGraph::synthesize(&live.manifests, &new_graph),
+            OldSide::Live(Box::new(live)),
+        )
     };
 
-    let result = diff_graphs(&old_graph, &new_graph);
+    let result = diff_graphs(&old_graph, &new_graph, &side);
 
     match ctx.output_format(OutputFormat::Text) {
-        OutputFormat::Json => print_json_output(&result, false)?,
-        OutputFormat::Yaml => print_json_output(&result, true)?,
+        OutputFormat::Json => println!("{}", result.doc.to_json()),
+        OutputFormat::Yaml => print!("{}", result.doc.to_yaml().into_diagnostic()?),
         OutputFormat::Markdown => print_markdown_output(&result),
         OutputFormat::Text => print_text_output(&result, &ctx.global),
     }
-    for rid in namespaceless {
-        eprintln!(
-            "{} {}",
-            output::red("error:"),
-            ApplyError::NoNamespace {
-                resource: rid.display_id()
-            }
-        );
+    if let OldSide::Live(live) = &side {
+        for rid in &live.namespaceless {
+            eprintln!(
+                "{} {}",
+                output::red("error:"),
+                ApplyError::NoNamespace {
+                    resource: rid.display_id()
+                }
+            );
+        }
     }
 
     if result.has_diff() {
@@ -139,24 +159,141 @@ fn set_spinner(spinner: &Option<indicatif::ProgressBar>, msg: &str) {
     }
 }
 
-fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> DiffResult {
+fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide) -> DiffResult {
     let new_manifests: Vec<Value> = new.resources.values().map(|n| n.manifest.clone()).collect();
     let old_manifests: Vec<Value> = old.resources.values().map(|n| n.manifest.clone()).collect();
     // Fail-closed: live objects that predate the lifecycle stamp carry no
     // `kix.run/lifecycle`, and then no pairs fire.
     let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests);
+    let mut packages = plan::diff_graphs(old, new);
+    let cluster = &new.cluster_name;
+
+    let doc = match side {
+        OldSide::Build => {
+            origin::label_builds(&mut packages);
+            Plan::new(
+                MadeBy::Builds,
+                cluster,
+                &packages,
+                &migration_pairs,
+                NotCheckedReason::BuildsOnly,
+            )
+        }
+        OldSide::Manifests => {
+            let mut doc = Plan::new(
+                MadeBy::LiveRead,
+                cluster,
+                &packages,
+                &migration_pairs,
+                NotCheckedReason::ReadOnly,
+            );
+            doc.drift = Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable);
+            doc
+        }
+        OldSide::Live(live) => {
+            let deployed = deployed_build(new, live.current.as_ref());
+            let drift = deployed.as_ref().map(|deployed| {
+                let deployed_by_rid = deployed.by_rid(new);
+                let sides = Sides {
+                    deployed: &deployed_by_rid,
+                    live: manifests_by_rid(old),
+                    new: manifests_by_rid(new),
+                    managed: &live.managed,
+                };
+                origin::label_live(&mut packages, &sides)
+            });
+            let mut doc = Plan::new(
+                MadeBy::LiveRead,
+                cluster,
+                &packages,
+                &migration_pairs,
+                NotCheckedReason::ReadOnly,
+            );
+            doc.drift = match drift {
+                Some(items) => Checked::found(items),
+                None => Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable),
+            };
+            doc
+        }
+    };
     DiffResult {
-        packages: plan::diff_graphs(old, new),
+        packages,
         migration_pairs,
+        doc,
     }
 }
 
-/// The live cluster's kix-owned view, and the resources of `new_graph` that
-/// `kix deploy` would refuse as [`ApplyError::NoNamespace`].
+fn manifests_by_rid(graph: &StoreGraph) -> HashMap<ResourceId, &Value> {
+    graph
+        .resources
+        .values()
+        .map(|n| (ResourceId::from_value(&n.manifest), &n.manifest))
+        .collect()
+}
+
+/// The deployed build, as the current record names it.
+enum Deployed {
+    /// The current record names the build being compared.
+    New,
+    Loaded(Box<StoreGraph>),
+}
+
+impl Deployed {
+    fn by_rid<'a>(&'a self, new: &'a StoreGraph) -> HashMap<ResourceId, &'a Value> {
+        manifests_by_rid(match self {
+            Deployed::New => new,
+            Deployed::Loaded(g) => g,
+        })
+    }
+}
+
+/// The build the current record says the cluster runs: the new build when
+/// the record's identity hash is the new build's record hash, otherwise the
+/// result directory its `kix.run/built-via` names, when it is still on this
+/// machine.
+fn deployed_build(
+    new_graph: &StoreGraph,
+    current: Option<&kube::api::DynamicObject>,
+) -> Option<Deployed> {
+    let annotations = current.and_then(|r| r.metadata.annotations.as_ref())?;
+    let new_record_hash = new_graph
+        .resources
+        .values()
+        .find(|node| lifecycle::is_record(&node.manifest))
+        .and_then(|node| keys::get(&node.manifest, keys::IDENTITY_HASH));
+    if new_record_hash.is_some()
+        && new_record_hash == keys::get_meta(annotations, keys::IDENTITY_HASH)
+    {
+        return Some(Deployed::New);
+    }
+    let dir = Path::new(keys::get_meta(annotations, keys::BUILT_VIA)?);
+    if !dir.join("kix-packages.json").is_file() {
+        return None;
+    }
+    let mut graph = StoreGraph::from_result_dir_with_status(dir, &|_: &str| {}).ok()?;
+    stamp_annotations(&mut graph);
+    Some(Deployed::Loaded(Box::new(graph)))
+}
+
+/// The live side of a comparison with the cluster.
+struct LiveSide {
+    /// The kix-owned view of each compared object.
+    manifests: Vec<Value>,
+    /// Resources of the build that `kix deploy` would refuse as
+    /// [`ApplyError::NoNamespace`].
+    namespaceless: Vec<ResourceId>,
+    /// The current record: Active or Degraded, newest.
+    current: Option<kube::api::DynamicObject>,
+    /// Each compared object as served, `managedFields` included, for naming
+    /// who made a drift change.
+    managed: HashMap<ResourceId, Value>,
+}
+
+/// The live cluster's kix-owned view of `new_graph`'s Kix cluster.
 async fn fetch_live_manifests(
     global: &crate::cli::GlobalArgs,
     new_graph: &StoreGraph,
-) -> Result<(Vec<Value>, Vec<ResourceId>)> {
+) -> Result<LiveSide> {
     let client = fetch::make_client(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
@@ -259,6 +396,13 @@ async fn fetch_live_manifests(
         .iter()
         .map(|(path, node)| (store_hash(path), &node.manifest))
         .collect();
+    let managed: HashMap<ResourceId, Value> = compared
+        .iter()
+        .filter_map(|obj| {
+            let rid = ResourceId::from_value(&fetch::to_manifest_value(obj));
+            serde_json::to_value(obj).ok().map(|v| (rid, v))
+        })
+        .collect();
     let mut manifests = fetch::kix_owned_manifests_against(compared, &built);
 
     let reaped = reaped_since_deploy(new_graph, current.as_ref(), &manifests);
@@ -271,7 +415,12 @@ async fn fetch_live_manifests(
     // Added as they were built, so each compares as unchanged.
     manifests.extend(reaped);
 
-    Ok((manifests, namespaceless))
+    Ok(LiveSide {
+        manifests,
+        namespaceless,
+        current,
+        managed,
+    })
 }
 
 /// Build manifests that declare their own deletion (a Job's
@@ -412,7 +561,9 @@ fn print_text_output(result: &DiffResult, global: &crate::cli::GlobalArgs) {
 
     print_migration_pairs(&result.migration_pairs);
 
-    if !result.has_diff() {
+    if result.has_diff() {
+        print!("{}", render::render_text(&result.doc));
+    } else {
         println!("{}", output::green("No differences found."));
     }
 }
@@ -447,41 +598,6 @@ fn print_migration_pairs(pairs: &[MigrationPair]) {
     println!();
 }
 
-fn print_json_output(result: &DiffResult, as_yaml: bool) -> Result<()> {
-    // Shared PackageDiff renderer used by deploy
-    // modal and the CI PR-comment action. Migration pairs are appended.
-    let mut output = serde_json::json!({
-        "packages": plan::render_package_diff_json(&result.packages),
-    });
-
-    if !result.migration_pairs.is_empty() {
-        output["migration_pairs"] = Value::Array(
-            result
-                .migration_pairs
-                .iter()
-                .map(|p| {
-                    serde_json::json!({
-                        "slot": p.slot,
-                        "source": p.source.display_id(),
-                        "target": p.target.display_id(),
-                        "reason": p.reason,
-                    })
-                })
-                .collect(),
-        );
-    }
-
-    if as_yaml {
-        print!("{}", serde_yml::to_string(&output).into_diagnostic()?);
-    } else {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&output).into_diagnostic()?
-        );
-    }
-    Ok(())
-}
-
 fn print_markdown_output(result: &DiffResult) {
     // Shared package-level renderer. Same producer used by the deploy
     // modal and the CI PR-comment GitHub Action so they stay in sync.
@@ -511,7 +627,9 @@ fn print_markdown_output(result: &DiffResult) {
         println!();
     }
 
-    if !result.has_diff() {
+    if result.has_diff() {
+        print!("{}", render::render_markdown(&result.doc));
+    } else {
         println!("No differences found.");
     }
 }

@@ -9,6 +9,34 @@ use crate::cli::{GlobalArgs, OutputFormat};
 
 static COLOR_ENABLED: OnceLock<bool> = OnceLock::new();
 
+/// Set when stdout carries a machine-readable document (`kix plan -o json`),
+/// so the progress lines a plan prints on the way go to stderr instead.
+static PROGRESS_TO_STDERR: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Send the lines [`say!`] prints to stderr from now on.
+pub fn progress_to_stderr() {
+    PROGRESS_TO_STDERR.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether [`say!`] prints to stderr.
+pub fn progress_on_stderr() -> bool {
+    PROGRESS_TO_STDERR.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `println!` for progress lines that a machine-readable plan on stdout
+/// must not interleave with: stderr after [`progress_to_stderr`].
+#[macro_export]
+macro_rules! say {
+    ($($arg:tt)*) => {
+        if $crate::output::progress_on_stderr() {
+            eprintln!($($arg)*);
+        } else {
+            println!($($arg)*);
+        }
+    };
+}
+
 /// Initialize color support based on CLI flags and environment.
 pub fn init_color(global: &GlobalArgs) {
     COLOR_ENABLED.get_or_init(|| {

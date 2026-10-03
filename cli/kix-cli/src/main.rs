@@ -105,6 +105,7 @@ fn main() -> miette::Result<()> {
     match &cli.command {
         Command::Build(args) => commands::build::run(args, &mut ctx),
         Command::Diff(args) => commands::diff::run(args, &mut ctx),
+        Command::Plan(args) => commands::plan::run(args, &mut ctx),
         Command::Check(args) => commands::check::run(args, &mut ctx),
         Command::Deploy(args) => commands::deploy::run(args, &mut ctx),
         Command::Status(args) => commands::status::run(args, &mut ctx),

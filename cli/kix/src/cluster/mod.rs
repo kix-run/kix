@@ -14,6 +14,7 @@ pub mod graph;
 pub mod migrate;
 pub mod normalize;
 pub mod ops;
+pub mod preview;
 pub mod prune_guard;
 pub mod readiness;
 pub mod scheduler;

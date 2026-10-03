@@ -727,8 +727,18 @@ pub async fn run_deploy(
                         });
                         state.mark_terminal(&node_id, false);
 
-                        // Cancel all transitive dependents.
-                        let cancelled = state.cascade_cancel(&node_id);
+                        // A dry run persists nothing, so a dependent's own
+                        // dry run answers as much after a refused
+                        // predecessor as after an accepted one. A preview
+                        // that stopped at the first refusal would hide every
+                        // refusal behind it.
+                        let cancelled = if config.dry_run {
+                            state.promote_dependents(&node_id);
+                            Vec::new()
+                        } else {
+                            // Cancel all transitive dependents.
+                            state.cascade_cancel(&node_id)
+                        };
                         let because = match &node_id {
                             NodeId::Resource(rid) => CancelReason::PredecessorFailed(rid.clone()),
                             NodeId::Synthetic(_) => CancelReason::External,
@@ -2596,6 +2606,34 @@ mod engine_tests {
         assert!(
             !calls.iter().any(|c| matches!(c, Call::Delete(_))),
             "an incomplete run must not prune the still-current closure: {calls:?}",
+        );
+    }
+
+    /// A dry run tries the dependents of a refused node, since nothing a dry
+    /// run writes persists: every refusal shows, not only the first.
+    #[tokio::test(start_paused = true)]
+    async fn a_dry_run_tries_the_dependents_of_a_refused_node() {
+        let manifests = vec![m("Deployment", "a", &[]), m("Deployment", "b", &["a"])];
+        let ops = Arc::new(ScriptedOps::new());
+        ops.set_dry_run(true);
+        ops.script(
+            rid("Deployment", "a"),
+            NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::Other("boom".into())))),
+        );
+        let mut cfg = config(quiet_watchdog());
+        cfg.on_error = OnErrorPolicy::Continue;
+        cfg.dry_run = true;
+        let rec = Arc::new(Recorder::default());
+
+        let result = run(&ops, plan_of(&manifests), &cfg, rec.clone())
+            .await
+            .unwrap();
+        assert_eq!((result.failed, result.cancelled), (1, 0));
+        assert!(
+            ops.calls()
+                .contains(&Call::ApplyEnd(rid("Deployment", "b"))),
+            "b was not tried: {:?}",
+            ops.calls()
         );
     }
 

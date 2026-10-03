@@ -20,6 +20,7 @@ pub mod migrate;
 pub mod operator;
 pub mod pf;
 pub mod pin;
+pub mod plan;
 pub mod rollback;
 pub mod shared_orphans;
 pub mod snapshot;

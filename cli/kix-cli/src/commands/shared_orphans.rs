@@ -37,7 +37,7 @@ pub async fn keep_shared(
 /// One line per kept object.
 pub fn print(shared: &[SharedOrphan]) {
     for s in shared {
-        println!("  {} prune: {}", output::yellow("="), s.describe());
+        crate::say!("  {} prune: {}", output::yellow("="), s.describe());
     }
 }
 

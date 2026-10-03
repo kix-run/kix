@@ -2,8 +2,14 @@
 //!
 //! Package-grouped, changes-only output inspired by nvd (nix-version-diff).
 //! Shows version changes per package and resource-level diffs in verbose mode.
+//! [`document::Plan`] is the typed document `kix plan` and `kix diff` emit.
 
-use std::collections::BTreeMap;
+pub mod document;
+pub mod origin;
+pub mod render;
+pub mod server;
+
+use std::collections::{BTreeMap, HashMap};
 
 use kix::eval::PackageNode;
 use kix::eval::store_graph::StoreGraph;
@@ -28,6 +34,12 @@ pub struct PackageDiff {
     /// The deploy record rotates whenever anything changed; one line, not a
     /// create plus a delete. `None` when both sides name the same record.
     pub activation: Option<RecordChange>,
+    /// Whether `labels` was computed: a three-way comparison with the
+    /// deployed build. Without it no field change carries a label.
+    pub labelled: bool,
+    /// For each modified resource, one label list per entry of its
+    /// `resource_diffs`, in order.
+    pub labels: HashMap<ResourceId, Vec<Vec<origin::ChangeLabel>>>,
 }
 
 /// Old and new deploy record names; either side may be absent (first
@@ -314,6 +326,8 @@ pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
         unchanged,
         cluster_level,
         activation,
+        labelled: false,
+        labels: HashMap::new(),
     }
 }
 
@@ -494,6 +508,8 @@ pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
         unchanged,
         cluster_level: None,
         activation: None,
+        labelled: false,
+        labels: HashMap::new(),
     }
 }
 
@@ -502,56 +518,11 @@ pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
 // GitHub Action all consume the same output here so formats stay in sync.
 // See v2_discussions/84_m0_m1_implementation_plan.md §5.
 
-/// Render a `PackageDiff` as a JSON value suitable for machine consumption
-/// or as the base of a larger document (e.g. `kix diff` wraps it with
-/// legacy resource / migration-pair sections).
+/// Render a `PackageDiff` as the `packages` section of the plan document
+/// ([`document::Packages`]).
+#[cfg(test)]
 pub fn render_package_diff_json(diff: &PackageDiff) -> Value {
-    serde_json::json!({
-        "added": diff.added.iter().map(render_package_info_json).collect::<Vec<_>>(),
-        "removed": diff.removed.iter().map(render_package_info_json).collect::<Vec<_>>(),
-        "changed": diff.changed.iter().map(render_change_json).collect::<Vec<_>>(),
-        "cluster_level": diff.cluster_level.as_ref().map(render_change_json),
-        "activation": diff.activation.as_ref().map(|a| serde_json::json!({
-            "old": a.old,
-            "new": a.new,
-        })),
-        "unchanged": diff.unchanged,
-        "summary": {
-            "added": diff.added.len(),
-            "removed": diff.removed.len(),
-            "changed": diff.changed.len(),
-            "unchanged": diff.unchanged,
-        },
-    })
-}
-
-/// `resources` counts every resource of the package, including the ones in
-/// `kept_resources`.
-fn render_package_info_json(p: &PackageInfo) -> Value {
-    serde_json::json!({
-        "key": p.key,
-        "version": p.version,
-        "resources": p.resource_count,
-        "kept_resources": p.kept.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
-    })
-}
-
-fn render_change_json(c: &PackageChangeDiff) -> Value {
-    let (removed, kept) = c.removed_and_kept();
-    serde_json::json!({
-        "key": c.key,
-        "old_version": c.old_version,
-        "new_version": c.new_version,
-        "added_resources": c.added_resources.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
-        "removed_resources": removed.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
-        "kept_resources": kept.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
-        "modified_resources": c.resource_diffs.iter().map(|(id, diffs)| serde_json::json!({
-            "resource": id.display_id(),
-            "diff_count": diffs.len(),
-            "changes": diffs.iter().map(|d| render_field_change_json(id, d)).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
-        "dep_affected_resources": c.dep_affected_resources.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
-    })
+    serde_json::to_value(document::Packages::from(diff)).expect("packages serialize")
 }
 
 /// Stands in for a value the JSON diff leaves out because it is secret: a
@@ -566,35 +537,9 @@ pub const SECRET_NOT_SHOWN: &str = "(secret, not shown)";
 /// that CI uploads.
 pub const MAX_SHOWN_VALUE_BYTES: usize = 16 * 1024;
 
-/// One field change of a modified resource: `path` as the text diff prints
-/// it, `change` (`added`, `removed`, or `changed`), and the `old` and `new`
-/// values, each absent when that side has no value. A secret value reads
-/// [`SECRET_NOT_SHOWN`]; a value over [`MAX_SHOWN_VALUE_BYTES`] reads
-/// `"(N bytes, not shown)"`.
-///
-/// Other values are shown as the build and the cluster hold them. A
-/// password written as a literal container `env` value, or into a
-/// ConfigMap, is not recognised as secret.
-fn render_field_change_json(id: &ResourceId, d: &Difference) -> Value {
-    use kix::manifest::diff::DiffKind;
-    let change = match d.kind {
-        DiffKind::MissingInB => "removed",
-        DiffKind::ExtraInB => "added",
-        DiffKind::ValueMismatch | DiffKind::TypeMismatch => "changed",
-    };
-    let mut out = serde_json::json!({ "path": d.path, "change": change });
-    let is_secret = id.kind == "Secret";
-    for (side, value) in [("old", &d.a_value), ("new", &d.b_value)] {
-        if let Some(value) = value {
-            out[side] = shown_value(is_secret, &d.path, value);
-        }
-    }
-    out
-}
-
 /// `value`, found at `path`, with every secret value in it replaced by
 /// [`SECRET_NOT_SHOWN`], or a size note when it is too large to show.
-fn shown_value(is_secret: bool, path: &str, value: &Value) -> Value {
+pub(crate) fn shown_value(is_secret: bool, path: &str, value: &Value) -> Value {
     let mut value = value.clone();
     hide_secrets(is_secret, path, &mut value);
     let bytes = value.to_string().len();
@@ -602,6 +547,18 @@ fn shown_value(is_secret: bool, path: &str, value: &Value) -> Value {
         return Value::String(format!("({bytes} bytes, not shown)"));
     }
     value
+}
+
+/// `d` with the values [`is_secret_path`] covers replaced by
+/// [`SECRET_NOT_SHOWN`], for the text plan. Unlike the JSON it keeps large
+/// values, which the text diff prints line by line.
+fn without_secrets(id: &ResourceId, d: &Difference) -> Difference {
+    let mut d = d.clone();
+    let is_secret = id.kind == "Secret";
+    for value in [&mut d.a_value, &mut d.b_value].into_iter().flatten() {
+        hide_secrets(is_secret, &d.path, value);
+    }
+    d
 }
 
 fn hide_secrets(is_secret: bool, path: &str, value: &mut Value) {
@@ -627,7 +584,7 @@ fn hide_secrets(is_secret: bool, path: &str, value: &mut Value) {
 /// Whether the value at `path` is secret. Annotation keys contain dots and
 /// slashes, and diff paths do not escape them, so a key is matched by its
 /// prefix after `annotations.`.
-fn is_secret_path(is_secret: bool, path: &str) -> bool {
+pub(crate) fn is_secret_path(is_secret: bool, path: &str) -> bool {
     if path.contains(".annotations.checksum/") {
         return true;
     }
@@ -991,9 +948,26 @@ fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
                                 output::yellow("~"),
                                 output::yellow(&id.to_string()),
                             );
-                            let formatted = format_diffs(diffs, &config, color, true);
-                            for line in formatted.lines() {
-                                let _ = writeln!(out, "        {line}");
+                            let labels = diff.labels.get(id);
+                            for (i, d) in diffs.iter().enumerate() {
+                                let shown = without_secrets(id, d);
+                                let formatted = format_diffs(
+                                    std::slice::from_ref(&shown),
+                                    &config,
+                                    color,
+                                    true,
+                                );
+                                let tag = labels
+                                    .and_then(|l| l.get(i))
+                                    .map(|l| render::label_tag(l))
+                                    .unwrap_or_default();
+                                for (n, line) in formatted.lines().enumerate() {
+                                    if n == 0 && !tag.is_empty() {
+                                        let _ = writeln!(out, "        {line}  {tag}");
+                                    } else {
+                                        let _ = writeln!(out, "        {line}");
+                                    }
+                                }
                             }
                         }
                         for id in &change.dep_affected_resources {
