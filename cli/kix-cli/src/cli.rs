@@ -676,9 +676,23 @@ pub struct DeployArgs {
     #[arg(short, long)]
     pub yes: bool,
 
-    /// Preview only: run `kix plan` with the same flags and change nothing
+    /// Preview only: run `kix plan` with the same flags and change nothing.
+    /// With `--plan`, check the reviewed plan still matches and exit
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Deploy only if the plan made now still matches this reviewed one, a
+    /// `kix plan -o json` or `kix diff -o json` document. The deploy uses the
+    /// plan's planning flags and exits 4, applying nothing, when the cluster,
+    /// either build, the flags, or the refusals, reverted drift, and prune
+    /// deletes it would make differ from what was reviewed
+    #[arg(
+        long = "plan",
+        id = "saved_plan",
+        value_name = "FILE",
+        conflicts_with_all = ["current_activation", "operator"]
+    )]
+    pub saved_plan: Option<std::path::PathBuf>,
 
     /// Behavior on error: stop or continue. With `stop`, a deploy whose plan
     /// shows a refused write stops before it applies anything

@@ -234,6 +234,10 @@ esac
 
 A build with no resources prints no document and exits `0`.
 
+To deploy exactly what a reviewer approved, save the JSON and pass it to
+[`kix deploy --plan`](/docs/reference/cli/deploy-apply/#deploy-a-reviewed-plan),
+which refuses when the plan made at deploy time differs.
+
 A dry run relies on every server it reaches to honour `dryRun=All`. An
 aggregated API server that ignores the parameter, or an admission webhook
 that declares `sideEffects: None` but has side effects, can still change

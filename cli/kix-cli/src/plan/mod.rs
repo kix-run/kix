@@ -7,6 +7,7 @@
 pub mod document;
 pub mod origin;
 pub mod render;
+pub mod saved;
 pub mod server;
 
 use std::collections::{BTreeMap, HashMap};

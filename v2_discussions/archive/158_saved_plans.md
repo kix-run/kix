@@ -1,6 +1,6 @@
 # 158: Saved plans, `kix deploy --plan`
 
-**Status:** Design (first draft, rules agreed in kixpkgs#185)
+**Status:** Implemented (`cli/kix-cli/src/plan/saved.rs`, `kix deploy --plan`). The `resourceVersion` precondition and deploying from a binary cache are open in `ROADMAP.md`.
 **Related:** `archive/157_kix_plan_primary_preview.md` (§5, the goal), kixpkgs#185 (the rules), kixpkgs#186 (the document fields this relies on)
 
 ## Context
@@ -134,11 +134,10 @@ Review a new plan, or deploy without --plan.
   conflict check, and `--plan` with `--current-activation` refused.
 - `cli/kix-cli/src/commands/deploy.rs`: load, merge flags into `PlanArgs`
   before `prepare`, call `compare` after `plan::document`. When the deploy
-  skips the dry run (nothing to apply or prune), F's write-path sections
-  read as checked and empty today; for `--plan` they must read
-  `not_checked` so rules 5 and 7 are skipped
-  honestly
-  (housekeeping `deploy-plan-without-dry-run-says-checked`).
+  skips the dry run because there is nothing to apply or prune, F's
+  write-path sections read as checked and empty. As implemented that is
+  kept: with no write and no delete there is nothing to refuse, revert, or
+  delete, so rules 5 to 7 hold.
 - The kind integration test: plan, save, deploy with `--plan` (matches);
   plan, `kubectl scale`, deploy with `--plan` (exits 4 on rule 6); plan,
   deploy, deploy the old plan again (exits 4 on rule 3).

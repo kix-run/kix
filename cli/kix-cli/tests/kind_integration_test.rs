@@ -276,6 +276,83 @@ fn deploy_and_gc() {
     );
 
     // =========================================================================
+    // Phase 2c: A saved plan gates the deploy. It matches until the cluster
+    // runs another build, a flag it was not made with is refused before any
+    // build, and the deploy of the build it names succeeds.
+    // =========================================================================
+    eprintln!("\n=== Phase 2c: kix deploy --plan ===");
+
+    let saved = std::env::temp_dir().join(format!("kix-saved-plan-{}.json", std::process::id()));
+    std::fs::write(&saved, &plan.stdout).expect("write the saved plan");
+    let saved_arg = saved.to_str().unwrap();
+    let check = |extra: &[&str]| {
+        let mut args = vec!["deploy", "kind-v2", "--plan", saved_arg, "--dry-run"];
+        args.extend_from_slice(extra);
+        kix(KIND_CLUSTER)
+            .args(&args)
+            .output()
+            .expect("deploy --plan should run")
+    };
+
+    let current = check(&["-o", "json"]);
+    assert_eq!(
+        current.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&current.stderr)
+    );
+    let comparison: serde_json::Value = serde_json::from_slice(&current.stdout).unwrap();
+    assert_eq!(comparison["matches"], true, "{comparison}");
+
+    let contradicted = check(&["--prune"]);
+    assert_eq!(contradicted.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&contradicted.stderr).contains("--prune"),
+        "{}",
+        String::from_utf8_lossy(&contradicted.stderr)
+    );
+
+    let deployed = kix(KIND_CLUSTER)
+        .args(["deploy", "kind-v2", "--plan", saved_arg, "--yes"])
+        .output()
+        .expect("deploy --plan should run");
+    assert!(
+        deployed.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&deployed.stdout),
+        String::from_utf8_lossy(&deployed.stderr)
+    );
+    assert!(String::from_utf8_lossy(&deployed.stderr).contains("The reviewed plan matches"));
+
+    let stale = check(&["-o", "json"]);
+    assert_eq!(
+        stale.status.code(),
+        Some(4),
+        "{}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+    let comparison: serde_json::Value = serde_json::from_slice(&stale.stdout).unwrap();
+    let rules: Vec<&str> = comparison["mismatches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["rule"].as_str())
+        .collect();
+    assert_eq!(rules, vec!["deployed_build"], "{comparison}");
+    let _ = std::fs::remove_file(&saved);
+
+    // Put the first build back for the phases below.
+    let back = kix(KIND_CLUSTER)
+        .args(["deploy", KIX_CLUSTER, "--yes", "--prune"])
+        .output()
+        .expect("deploy should run");
+    assert!(
+        back.status.success(),
+        "{}",
+        String::from_utf8_lossy(&back.stderr)
+    );
+
+    // =========================================================================
     // Phase 3: Soft GC — no garbage (same activation)
     // =========================================================================
     eprintln!("\n=== Phase 3: Soft GC (no garbage expected) ===");

@@ -46,22 +46,33 @@ use super::operator::Reconciled;
 use kix::manifest::keys;
 
 pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
+    let saved = match &args.saved_plan {
+        Some(path) => Some(load_saved_plan(path, &args.plan)?),
+        None => None,
+    };
+    let plan_args = match &saved {
+        Some(s) => &s.args,
+        None => &args.plan,
+    };
     // A dry run is the plan, made by the same code with the same flags.
     if args.dry_run {
-        return super::plan::run(&args.plan, Detail::Plain, ctx);
+        return match &saved {
+            Some(s) => check_saved_plan(s, ctx),
+            None => super::plan::run(&args.plan, Detail::Plain, ctx),
+        };
     }
     if args.operator {
         return run_operator(args, ctx);
     }
 
-    let Some(mut p) = prepare(&args.plan, ctx)? else {
+    let Some(mut p) = prepare(plan_args, ctx)? else {
         return Ok(());
     };
 
     // Detect stateful migration pairs and require --accept-migrations.
     if !p.migration_pairs.is_empty() {
         print_migration_pairs(&p.migration_pairs);
-        if !args.plan.accept_migrations {
+        if !plan_args.accept_migrations {
             eprintln!(
                 "{}",
                 output::red(
@@ -99,14 +110,27 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let report = match &p.pre_client {
         Some(client) if total_apply > 0 || !p.orphan_rids.is_empty() => {
             let client = client.clone();
-            Some(super::plan::dry_run(&p, &args.plan, client, ctx)?)
+            Some(super::plan::dry_run(&p, plan_args, client, ctx)?)
         }
         _ => None,
     };
-    let doc = super::plan::document(&mut p, report.as_ref(), &args.plan, Detail::Plain);
+    let doc = super::plan::document(&mut p, report.as_ref(), plan_args, Detail::Plain);
 
     if !ctx.global.quiet {
-        super::plan::print_text(&p, &doc, &args.plan, ctx.global.verbose > 0);
+        super::plan::print_text(&p, &doc, plan_args, ctx.global.verbose > 0);
+    }
+
+    // A reviewed plan that no longer matches applies nothing.
+    if let Some(s) = &saved {
+        let comparison = plan::saved::compare(&s.reviewed, &doc);
+        eprintln!();
+        eprint!(
+            "{}",
+            plan::saved::render_text(&comparison, &s.reviewed, &s.path)
+        );
+        if !comparison.matches {
+            std::process::exit(plan::saved::EXIT_STALE);
+        }
     }
 
     // Under `--on-error stop` the deploy would halt at the first refused
@@ -302,6 +326,78 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     if !end.succeeded {
         std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// A reviewed plan read for `kix deploy --plan`, with the planning flags the
+/// deploy uses.
+pub(crate) struct SavedPlan {
+    pub path: String,
+    pub reviewed: plan::document::Plan,
+    pub args: PlanArgs,
+}
+
+/// Read a saved plan and take its planning flags. Fails before any build
+/// when the plan cannot be used or the command line contradicts its flags.
+fn load_saved_plan(path: &std::path::Path, given: &PlanArgs) -> Result<SavedPlan> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| miette!("cannot read the plan {}: {e}", path.display()))?;
+    let reviewed: plan::document::Plan = serde_json::from_str(&text)
+        .map_err(|e| miette!("{} is not a Kix plan document: {e}", path.display()))?;
+    if let Some(why) = plan::saved::unusable(&reviewed) {
+        return Err(miette!("cannot deploy from {}: {why}", path.display()));
+    }
+    let flags = plan::saved::flags_for(&reviewed, &super::plan::flags_of(given))
+        .map_err(|e| miette!("cannot deploy from {}: {e}", path.display()))?;
+    let mut args = given.clone();
+    args.prune = flags.prune;
+    args.prune_mode = flags.prune_mode.map(|m| match m {
+        plan::document::PruneModeFlag::Default => PruneMode::Default,
+        plan::document::PruneModeFlag::No => PruneMode::No,
+    });
+    args.reconcile = flags.reconcile;
+    args.force_conflicts = flags.force_conflicts;
+    args.accept_migrations = flags.accept_migrations;
+    Ok(SavedPlan {
+        path: path.display().to_string(),
+        reviewed,
+        args,
+    })
+}
+
+/// `kix deploy --plan <file> --dry-run`: plan again, compare, and exit 0
+/// when the reviewed plan matches or [`plan::saved::EXIT_STALE`] when not.
+/// The dry run always runs when connected, as `kix plan` does.
+fn check_saved_plan(saved: &SavedPlan, ctx: &mut CommandContext) -> Result<()> {
+    let format = ctx.output_format(crate::cli::OutputFormat::Text);
+    if format != crate::cli::OutputFormat::Text {
+        output::progress_to_stderr();
+    }
+    let Some(mut p) = prepare(&saved.args, ctx)? else {
+        return Ok(());
+    };
+    let report = match &p.pre_client {
+        Some(client) => Some(super::plan::dry_run(&p, &saved.args, client.clone(), ctx)?),
+        None => None,
+    };
+    let doc = super::plan::document(&mut p, report.as_ref(), &saved.args, Detail::Plain);
+    let comparison = plan::saved::compare(&saved.reviewed, &doc);
+    match format {
+        crate::cli::OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&comparison).into_diagnostic()?
+        ),
+        crate::cli::OutputFormat::Yaml => {
+            print!("{}", serde_yml::to_string(&comparison).into_diagnostic()?)
+        }
+        _ => print!(
+            "{}",
+            plan::saved::render_text(&comparison, &saved.reviewed, &saved.path)
+        ),
+    }
+    if !comparison.matches {
+        std::process::exit(plan::saved::EXIT_STALE);
     }
     Ok(())
 }

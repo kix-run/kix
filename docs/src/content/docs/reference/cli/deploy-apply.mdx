@@ -17,7 +17,7 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 ## Synopsis
 
 ```text
-kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
+kix deploy <CLUSTER> [-y] [--dry-run] [--plan <FILE>] [--prune | --prune-mode default|no]
            [--timeout <DURATION>] [--on-error stop|continue]
            [--reconcile] [--force-conflicts] [--accept-migrations]
            [--current-activation] [--operator]
@@ -30,6 +30,7 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
 | `<CLUSTER>` | Cluster name to build from the flake. |
 | `-y`, `--yes` | Skip the confirmation prompt. Required when stdin is not a terminal, unless `--dry-run` is set. |
 | `--dry-run` | Run [`kix plan`](/docs/reference/cli/plan/) with the same planning flags and stop. Nothing changes. The exit status and `-o` handling are `kix plan`'s, and `--yes`, `--timeout`, `--on-error`, `--log-format`, and `--tui` have no effect. |
+| `--plan <FILE>` | Deploy only if the plan made now still matches a reviewed one. See [Deploy a reviewed plan](#deploy-a-reviewed-plan). With `--dry-run`, check the plan and exit without deploying. Not with `--current-activation` or `--operator`. |
 | `--prune` | Delete orphans: resources the previous activation had and this build does not, including orphans earlier deploys kept. Without it, orphans are listed and kept, and the new Activation records where they came from so a later `kix deploy --prune` or `kix gc` deletes them. |
 | `--prune-mode <MODE>` | `default` prunes according to `--prune`. `no` never prunes in this run, even with `--prune`; use `kix gc` later. |
 | `--timeout <DURATION>` | How long to wait for each resource to become ready: `5m`, `300s`, or a bare number of seconds. Default `180s`. |
@@ -124,6 +125,47 @@ are covered in [API server retries and request limits](/docs/reference/cli/api-s
 
 Set `KIX_NO_INTERACTIVE` to any value to treat the terminal as
 non-interactive.
+
+## Deploy a reviewed plan
+
+Save the plan a reviewer approves, then deploy with it:
+
+```bash
+kix plan prod --output json > plan.json   # reviewed and approved
+kix deploy prod --plan plan.json --yes
+```
+
+The deploy builds and plans again with the planning flags recorded in the
+plan, and applies nothing if the new plan differs from the reviewed one on
+any of these:
+
+| Compared | What differs |
+| --- | --- |
+| Cluster | The plan is for another Kix cluster. |
+| New build | The build's identity hash. A store path that moved, with the same manifests, still matches. |
+| Deployed build | The identity hash of the build the cluster runs: another deploy landed after the review. |
+| Planning flags | `--prune`, `--prune-mode`, `--reconcile`, `--force-conflicts`, or `--accept-migrations`. A flag given on the command line that the plan was made without is an error before the build. |
+| Refusals | A conflict, by object, or an admission refusal, by object and reason, that the reviewed plan did not have. |
+| Reverted drift | A drifted field, by object and path, that the deploy would put back and the reviewed plan did not list. |
+| Prune deletes | An orphan the deploy would delete that the reviewed plan did not list. |
+
+What the reviewed plan had and the new one does not, such as a conflict
+someone resolved, does not refuse the deploy. Messages, live values,
+`resourceVersion`s, and order are not compared.
+
+A refusal lists what differs and exits `4`. `kix deploy --plan plan.json
+--dry-run` makes the same comparison and exits `0` or `4` without deploying;
+with `--output json` it prints `{ matches, mismatches, skipped, kix_differs }`.
+
+A plan saved from [`kix diff`](/docs/reference/cli/diff/) against the cluster
+can be used too. A diff checks no refusals or prune deletes, so those are
+not compared and the output says so; the deploy still makes its own dry run
+first. A deploy from a diff plan refuses `--prune`, `--force-conflicts`, and
+`--reconcile`. A plan that compared two builds without reading the cluster
+(`made_by: builds`) is refused.
+
+When the plan was made by another Kix binary, the deploy prints a note and
+does not refuse.
 
 ## Examples
 

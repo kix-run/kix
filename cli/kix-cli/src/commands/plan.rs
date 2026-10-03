@@ -83,7 +83,7 @@ pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Resu
     Ok(())
 }
 
-fn flags_of(args: &PlanArgs) -> PlanFlags {
+pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
     PlanFlags {
         prune: args.prune,
         prune_mode: args.prune_mode.map(|m| match m {

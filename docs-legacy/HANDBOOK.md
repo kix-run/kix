@@ -2007,6 +2007,13 @@ it would change or delete something, and 3 when it would stop. `kix deploy` make
 before it asks for confirmation, and under `--on-error stop` it stops before
 applying anything when the plan shows a refused write.
 
+`kix deploy --plan plan.json` deploys a reviewed plan. It plans again with
+the saved plan's flags and exits 4, applying nothing, when the cluster, the
+new or deployed build's identity hash, or the flags differ, or when the new
+plan has a refusal, reverted drift, or prune delete the reviewed one did not.
+A saved `kix diff` plan skips the refusal and prune comparisons, and a plan
+made from two builds alone is refused.
+
 Diff features:
 - Structural (path-based) differences with **keyed-list awareness** — containers→name, ports→name, env→name, volumeMounts→mountPath, subjects→kind:name. So reordering doesn't show as a diff.
 - **Rename detection** via fuzzy similarity matching across kix-only and cluster-only sets.
