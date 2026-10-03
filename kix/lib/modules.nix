@@ -429,6 +429,38 @@ in
       };
     };
 
+    # containerd's configuration on the nodes. Kix cannot read or change it;
+    # flavours set what their node images ship, and a package that talks to
+    # containerd on the host (spegel) reads it.
+    cluster.containerd = {
+      socket = lib.mkOption {
+        type = lib.types.strMatching "/.+";
+        default = "/run/containerd/containerd.sock";
+        description = "Path of containerd's gRPC socket on each node.";
+      };
+      registryConfigPath = lib.mkOption {
+        type = lib.types.strMatching "/.+";
+        default = "/etc/containerd/certs.d";
+        description = "The CRI registry `config_path` on each node: the directory of per-registry `hosts.toml` files that containerd reads mirrors from.";
+      };
+      contentPath = lib.mkOption {
+        type = lib.types.strMatching "/.+";
+        default = "/var/lib/containerd/io.containerd.content.v1.content";
+        description = "Path of containerd's content store on each node.";
+      };
+      discardUnpackedLayers = lib.mkOption {
+        type = lib.types.nullOr lib.types.bool;
+        default = null;
+        description = ''
+          The CRI `discard_unpacked_layers` setting on each node. When true,
+          containerd deletes an image's compressed layers once it has
+          unpacked them, so a node cannot serve them to its peers. The
+          kind, Talos, EKS, and GKE flavours set it to true, as their node
+          images ship. null = unknown.
+        '';
+      };
+    };
+
     # Exposed through `cluster.out.maintenance` for consumers that suppress
     # actions during a declared maintenance window.
 

@@ -39,6 +39,15 @@
     };
   };
 
+  # GKE nodes turn discard_unpacked_layers on and configure mirrors in
+  # containerd's legacy form. Spegel's GKE setup moves the registry hosts
+  # to /etc/containerd/hosts.d with a node startup script; a cluster that
+  # applies it sets discardUnpackedLayers to false.
+  cluster.containerd = {
+    registryConfigPath = lib.mkDefault "/etc/containerd/hosts.d";
+    discardUnpackedLayers = lib.mkDefault true;
+  };
+
   cluster.capabilities = {
     managedControlPlane = lib.mkDefault true;
     nodeAutoscaling = lib.mkDefault false; # available per node pool, not on by default

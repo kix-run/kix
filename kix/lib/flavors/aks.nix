@@ -37,6 +37,9 @@
     };
   };
 
+  # The node image keeps unpacked layers, so peers can serve them.
+  cluster.containerd.discardUnpackedLayers = lib.mkDefault false;
+
   cluster.capabilities = {
     managedControlPlane = lib.mkDefault true;
     nodeAutoscaling = lib.mkDefault false; # available per node pool, not on by default

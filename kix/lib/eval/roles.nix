@@ -50,6 +50,11 @@ rec {
       outContract = [ ];
     };
 
+    registryMirror = {
+      description = "Node-local OCI registry mirror that containerd on every node tries before the upstream registry (Spegel), one per cluster. No out contract: the role exists for binding-mode conflicts. k3s and RKE2 embed Spegel and bind the role exclusive, so a spegel instance is refused there at eval.";
+      outContract = [ ];
+    };
+
     snapshotController = {
       description = "CSI snapshot controller and the snapshot.storage.k8s.io API, one per cluster. Consumers build VolumeSnapshotClass and VolumeSnapshot through out.crds. An environment that runs its own controller binds the role exclusive, so a second, managed controller is refused at eval.";
       outContract = [ "crds" ];

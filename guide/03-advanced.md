@@ -324,7 +324,7 @@ network = {
 
 ### meta.roles and capability ownership
 
-`meta.roles` - the registry roles the package claims (`kix/lib/eval/roles.nix`: `network-policy-enforcer`, `dns`, `storageClasses`, `snapshotController`, `metricsApi`, `cni`, `loadBalancer`). The registry is closed: an unknown role is an eval error. A role name doubles as a DI alias.
+`meta.roles` - the registry roles the package claims (`kix/lib/eval/roles.nix`: `network-policy-enforcer`, `dns`, `storageClasses`, `snapshotController`, `metricsApi`, `registryMirror`, `cni`, `loadBalancer`). The registry is closed: an unknown role is an eval error. A role name doubles as a DI alias.
 
 **Enforcer lookup.** The cluster finds the package whose `meta.roles` contains `"network-policy-enforcer"` and routes every CNP through its `out.netpol.mkPolicy` (binds the right CRD ref). Cilium declares it:
 
