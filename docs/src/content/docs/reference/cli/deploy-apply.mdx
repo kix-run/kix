@@ -127,9 +127,12 @@ non-interactive.
 
 `--log-format json` does not currently produce a standalone NDJSON document:
 the plan remains plain text. A consumer must separate JSON event lines from
-the surrounding text. The last JSON line is the `summary` object, with
-`succeeded` (which matches the exit status), `dry_run`, and the `created`,
-`configured`, `unchanged`, `failed`, `cancelled`, and `pruned` counts.
+the surrounding text. When the run reaches the deploy engine, the last JSON
+line is the `summary` object, with `succeeded` (which matches the exit
+status), `dry_run`, and the `created`, `configured`, `unchanged`, `failed`,
+`cancelled`, and `pruned` counts. A run that stops before the engine starts,
+such as a refused plan or a failed connection, writes no `summary` line; its
+error goes to stderr and the exit status is non-zero.
 
 ## Exit status
 

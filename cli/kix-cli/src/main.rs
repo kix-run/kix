@@ -32,6 +32,10 @@ fn validate_cluster_name(name: &str) -> miette::Result<()> {
 /// with the body of every error response that is not JSON, such as the
 /// plain-text `404 page not found` a group version answers while discovery
 /// settles, and then returns the error, which kix reports or retries itself.
+/// The same setting hides its other warnings: the `timeout in poll` and
+/// `eof in poll` lines a watch stream logs before it ends, and the warning
+/// on a response that fails to deserialize, which prints the whole response
+/// body. `-vvv` (`debug` everywhere) or `KIX_LOG` shows them again.
 /// `kube_client::client::tls` keeps its warning that certificate checks are
 /// off.
 fn default_filter(verbose: u8, quiet: bool) -> &'static str {
