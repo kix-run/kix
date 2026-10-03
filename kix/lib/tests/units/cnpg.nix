@@ -1,8 +1,8 @@
 # Tests for the CloudNativePG packages: the refusals of cnpg-operator,
-# cnpg-cluster, and cnpg-database, each beside a positive control, the
-# rendered Cluster, Database, and DatabaseRole, the webhook check that every
-# postgresql.cnpg.io custom resource waits for, and the vendored sources'
-# release.
+# cnpg-cluster, cnpg-database, cnpg-barman-cloud, and cnpg-pooler, each
+# beside a positive control, the rendered Cluster, Database, DatabaseRole,
+# backups, and Pooler, the webhook check that every postgresql.cnpg.io
+# custom resource waits for, and the vendored sources' release.
 
 {
   lib,
@@ -15,6 +15,7 @@
   byName,
   evalFails,
   singleNode,
+  netpolOn,
   ...
 }:
 
@@ -24,6 +25,10 @@ let
   databasePackage = import ../../../packages/cnpg-database;
   stackgresOperatorPackage = import ../../../packages/stackgres-operator;
   stackgresClusterPackage = import ../../../packages/stackgres-cluster;
+  barmanPackage = import ../../../packages/cnpg-barman-cloud;
+  poolerPackage = import ../../../packages/cnpg-pooler;
+  certManagerPackage = import ../../../packages/cert-manager;
+  secretPackage = import ../../../packages/secret;
 
   # A package's failed assertion messages for `config`, evaluated against
   # its options. Throws lose their message in tryEval, so the tests read
@@ -94,6 +99,99 @@ let
     ];
   ms = cluster: manifests cluster;
   clusterSpec = cluster: (byName "postgres" (ofKind "Cluster" (ms cluster))).spec;
+  dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+  hashOf = r: builtins.unsafeDiscardStringContext r.out.identityHash;
+
+  # The operator, cert-manager, the plugin, S3 credentials, and a cluster
+  # `postgres` with `backup` set. `modules` are added to the cluster.
+  backups =
+    {
+      backup ? {
+        destinationPath = "s3://backups/pg";
+      },
+      plugin ? true,
+      pluginNamespace ? "cnpg-system",
+      pluginConfig ? { },
+      credentials ? {
+        accessKeyId = "id";
+        secretAccessKey = "key";
+      },
+      clusterExtraSpec ? { },
+      modules ? [ ],
+    }:
+    mkCluster (
+      [
+        {
+          instances.cnpg-system.cnpg-operator.package = operatorPackage;
+          instances.cert-manager.cert-manager.package = certManagerPackage;
+          instances.data = {
+            postgres = {
+              package = clusterPackage;
+              config = {
+                inherit backup;
+                extraSpec = clusterExtraSpec;
+              };
+            };
+          }
+          // lib.optionalAttrs (credentials != null) {
+            s3-credentials = {
+              package = secretPackage;
+              aliases = [ "storageCredentials" ];
+              config.stringData = credentials;
+            };
+          };
+        }
+      ]
+      ++ lib.optional plugin {
+        instances.${pluginNamespace}.cnpg-barman-cloud = {
+          package = barmanPackage;
+          config = pluginConfig;
+        };
+      }
+      ++ modules
+    );
+
+  # A cluster `postgres`, a cnpg-pooler `pooler` in front of it, and a
+  # cnpg-database `app-db` on the pooler.
+  pooled =
+    {
+      poolerConfig ? { },
+      poolerNamespace ? "data",
+      postgres ? clusterPackage,
+      modules ? [ ],
+    }:
+    mkCluster (
+      [
+        (
+          { ref, ... }:
+          {
+            instances.cnpg-system.cnpg-operator.package = operatorPackage;
+            instances.stackgres-system = lib.optionalAttrs (postgres == stackgresClusterPackage) {
+              stackgres-operator.package = stackgresOperatorPackage;
+            };
+            instances.data = {
+              postgres.package = postgres;
+              app-db = {
+                package = databasePackage;
+                deps.postgres = ref.${poolerNamespace}.pooler;
+                config.password = "password";
+              };
+            };
+          }
+        )
+        (
+          { ref, ... }:
+          {
+            instances.${poolerNamespace}.pooler = {
+              package = poolerPackage;
+              deps.postgres = ref.data.postgres;
+              config = poolerConfig;
+            };
+          }
+        )
+      ]
+      ++ modules
+    );
 in
 {
   # Every postgresql.cnpg.io custom resource waits for the webhook check,
@@ -479,4 +577,455 @@ in
       };
     }
   ]);
+
+  # With `backup` set: the Cluster enables the plugin as its WAL archiver
+  # and names the ObjectStore, the ObjectStore takes its credentials from
+  # the storageCredentials Secret, the ScheduledBackup uses the plugin, the
+  # Cluster waits for the plugin Deployment, and the ScheduledBackup for the
+  # operator's webhook check. A world egress policy selects the instance
+  # pods (the test enforcer renders no intent rules, so the port is not
+  # visible here).
+  cnpg-cluster-backup-resources =
+    let
+      cluster = backups {
+        backup = {
+          destinationPath = "s3://backups/pg";
+          schedule = "@daily";
+          retention = "30d";
+          credentialKeys.region = "region";
+          extraSpec.configuration.endpointURL = "https://s3.example.com:9000";
+        };
+        credentials = {
+          accessKeyId = "id";
+          secretAccessKey = "key";
+          region = "eu-west-1";
+        };
+        modules = [ netpolOn ];
+      };
+      all = ms cluster;
+      spec = clusterSpec cluster;
+      store = byName "postgres-backup" (ofKind "ObjectStore" all);
+      scheduled = byName "postgres" (ofKind "ScheduledBackup" all);
+      egress = byName "postgres-backup-egress" (ofKind "CiliumNetworkPolicy" all);
+      pluginHash = hashOf cluster.instances.cnpg-system.cnpg-barman-cloud.raw.deployment;
+      checkHash = hashOf cluster.instances.cnpg-system.cnpg-operator.raw.webhookCheck;
+      postgres = byName "postgres" (ofKind "Cluster" all);
+    in
+    (
+      spec.plugins == [
+        {
+          name = "barman-cloud.cloudnative-pg.io";
+          isWALArchiver = true;
+          parameters.barmanObjectName = "postgres-backup";
+        }
+      ]
+      &&
+        store.spec == {
+          configuration = {
+            destinationPath = "s3://backups/pg";
+            endpointURL = "https://s3.example.com:9000";
+            s3Credentials = {
+              accessKeyId = {
+                name = "s3-credentials";
+                key = "accessKeyId";
+              };
+              secretAccessKey = {
+                name = "s3-credentials";
+                key = "secretAccessKey";
+              };
+              region = {
+                name = "s3-credentials";
+                key = "region";
+              };
+            };
+          };
+          retentionPolicy = "30d";
+        }
+      &&
+        scheduled.spec == {
+          cluster.name = "postgres";
+          schedule = "@daily";
+          method = "plugin";
+          pluginConfiguration.name = "barman-cloud.cloudnative-pg.io";
+          backupOwnerReference = "self";
+          immediate = true;
+        }
+      && lib.hasInfix pluginHash (dependsOn postgres)
+      && lib.hasInfix checkHash (dependsOn scheduled)
+      && egress.spec.endpointSelector.matchLabels == {
+        "cnpg.io/cluster" = "postgres";
+        "cnpg.io/podRole" = "instance";
+      }
+    )
+    || throw "backup resources: ${
+      builtins.toJSON {
+        inherit (spec) plugins;
+        store = store.spec or null;
+        scheduled = scheduled.spec or null;
+        egress = egress.spec or null;
+      }
+    }";
+
+  # Without `backup` the Cluster has no plugin entry and the package builds
+  # no ObjectStore or ScheduledBackup, even with the plugin and a
+  # storageCredentials Secret in the cluster; `extraSpec.plugins` then
+  # passes through.
+  cnpg-cluster-backup-off =
+    let
+      all = ms (backups {
+        backup = null;
+        clusterExtraSpec.plugins = [ { name = "example.com"; } ];
+      });
+    in
+    (
+      (clusterSpec (backups { backup = null; })) ? plugins == false
+      && ofKind "ObjectStore" all == [ ]
+      && ofKind "ScheduledBackup" all == [ ]
+      && (byName "postgres" (ofKind "Cluster" all)).spec.plugins == [ { name = "example.com"; } ]
+    )
+    || throw "backup off: an ObjectStore, ScheduledBackup, or plugin entry was rendered";
+
+  # `backup` without the plugin, without the credentials, or with a
+  # credentials Secret that lacks a key is refused; the same cluster with
+  # all three evaluates.
+  cnpg-cluster-backup-needs-deps =
+    (
+      evalFails (backups { plugin = false; })
+      && evalFails (backups { credentials = null; })
+      && evalFails (backups {
+        credentials.accessKeyId = "id";
+      })
+      && evalFails (backups {
+        backup = {
+          destinationPath = "s3://backups/pg";
+          credentialKeys.region = "region";
+        };
+      })
+      && !evalFails (backups { })
+    )
+    || throw "backup dependencies: a missing dependency or key passed, or the control failed";
+
+  # backup.extraSpec cannot set the paths the package writes, and the
+  # Cluster's extraSpec cannot set `plugins` while backups are on; other
+  # paths pass.
+  cnpg-cluster-backup-extra-spec-locks =
+    let
+      withExtra =
+        extraSpec:
+        backups {
+          backup = {
+            destinationPath = "s3://backups/pg";
+            inherit extraSpec;
+          };
+        };
+    in
+    (
+      evalFails (withExtra { configuration.destinationPath = "s3://other"; })
+      && evalFails (withExtra { configuration.s3Credentials.inheritFromIAMRole = true; })
+      && evalFails (withExtra { retentionPolicy = "7d"; })
+      && evalFails (backups { clusterExtraSpec.plugins = [ ]; })
+      && !evalFails (withExtra {
+        configuration.wal.compression = "gzip";
+        instanceSidecarConfiguration.logLevel = "debug";
+      })
+    )
+    || throw "backup extraSpec locks: a locked path passed, or the control failed";
+
+  # With an in-cluster store as endpointService, the ObjectStore's
+  # endpointURL is the store's Service, which the instance pods get egress
+  # to, and backup.extraSpec may not set another endpoint. A store outside
+  # the cluster opens no in-cluster path.
+  cnpg-cluster-backup-endpoint-service =
+    let
+      # An S3 store whose root is its Service, listening on TCP 7070.
+      storePackage =
+        { scope, kix, ... }:
+        {
+          meta = {
+            description = "S3 store stand-in";
+            owner = "platform";
+          };
+          build =
+            { self, ... }:
+            {
+              deployment = scope.mkDeployment {
+                name = "s3";
+                availability.max = "none";
+                spec = {
+                  replicas = 1;
+                  selector.matchLabels = scope.selectorLabels;
+                  template.spec.containers = [
+                    {
+                      name = "s3";
+                      image = "example.com/s3:1";
+                      ports = [ (kix.port "s3" 7070) ];
+                    }
+                  ];
+                };
+              };
+              service = self.deployment |> kix.service.fromWorkload { name = "s3"; } |> scope.mkResource;
+              root = self.service;
+            };
+        };
+      withStore =
+        backup:
+        backups {
+          inherit backup;
+          modules = [
+            netpolOn
+            (
+              { ref, ... }:
+              {
+                instances.data = {
+                  s3.package = storePackage;
+                  postgres.deps.endpointService = ref.data.s3;
+                };
+              }
+            )
+          ];
+        };
+      all = ms (withStore {
+        destinationPath = "s3://backups/pg";
+      });
+      store = byName "postgres-backup" (ofKind "ObjectStore" all);
+      policies = ofKind "CiliumNetworkPolicy" all;
+      toStore = builtins.filter (
+        p:
+        (p.spec.endpointSelector.matchLabels or { }) == { "cnpg.io/cluster" = "postgres"; }
+        && lib.hasInfix "7070" (builtins.toJSON p.spec)
+      ) policies;
+    in
+    (
+      lib.hasPrefix "http://s3.data.svc." store.spec.configuration.endpointURL
+      && toStore != [ ]
+      && byName "postgres-backup-egress" policies == null
+      && evalFails (withStore {
+        destinationPath = "s3://backups/pg";
+        extraSpec.configuration.endpointURL = "https://s3.example.com";
+      })
+    )
+    || throw "endpointService: ${
+      builtins.toJSON {
+        endpoint = store.spec.configuration.endpointURL or null;
+        policies = map (p: p.metadata.name) policies;
+      }
+    }";
+
+  # The schedule, destination, and retention checks: a five-field crontab,
+  # a destination that is not an s3:// URL, a malformed retention, and an
+  # endpoint that is not a URL are refused; six fields and a descriptor
+  # pass.
+  cnpg-cluster-backup-refusals =
+    let
+      scheduleMessages =
+        schedule:
+        failedMessages {
+          package = clusterPackage;
+          instanceName = "postgres";
+          config.backup = {
+            destinationPath = "s3://backups/pg";
+            inherit schedule;
+          };
+        };
+      fiveFields = scheduleMessages "0 2 * * *";
+      sixFields = scheduleMessages "0 0 2 * * *";
+      descriptor = scheduleMessages "@every 12h";
+      withBackup =
+        backup:
+        backups {
+          backup = {
+            destinationPath = "s3://backups/pg";
+          }
+          // backup;
+        };
+    in
+    (
+      says ''backup.schedule "0 2 * * *" has 5 fields'' fiveFields
+      && sixFields == [ ]
+      && descriptor == [ ]
+      && evalFails (withBackup { destinationPath = "gs://backups/pg"; })
+      && evalFails (withBackup { retention = "30 days"; })
+      && evalFails (withBackup { extraSpec.configuration.endpointURL = "s3.example.com"; })
+      && !evalFails (withBackup { retention = "4w"; })
+    )
+    || throw "backup refusals: ${builtins.toJSON { inherit fiveFields sixFields descriptor; }}";
+
+  # mkObjectStore refuses a Secret selector named by a literal string and
+  # accepts one marked with kix.untrackedRef.
+  cnpg-barman-cloud-object-store-literal-secret =
+    let
+      withCA =
+        name:
+        backups {
+          backup = {
+            destinationPath = "s3://backups/pg";
+            extraSpec.configuration.endpointCA = {
+              inherit name;
+              key = "ca.crt";
+            };
+          };
+        };
+    in
+    (
+      evalFails (withCA "store-ca")
+      && !evalFails (withCA (
+        kixlib.untrackedRef {
+          name = "store-ca";
+          kind = "Secret";
+        }
+      ))
+    )
+    || throw "mkObjectStore: the literal Secret name passed, or the untracked one failed";
+
+  # The plugin must run in the operator's namespace.
+  cnpg-barman-cloud-operator-namespace =
+    (evalFails (backups { pluginNamespace = "backup-system"; }) && !evalFails (backups { }))
+    || throw "cnpg-barman-cloud namespace: another namespace passed, or the control failed";
+
+  # The plugin's Service carries the label and annotations the operator
+  # discovers it by, and the server certificate names that Service.
+  cnpg-barman-cloud-registration =
+    let
+      all = ms (backups { });
+      service = byName "cnpg-barman-cloud" (ofKind "Service" all);
+      certificate = byName "cnpg-barman-cloud-server" (ofKind "Certificate" all);
+      deployment = byName "cnpg-barman-cloud" (ofKind "Deployment" all);
+      secretNames = map (v: v.secret.secretName) deployment.spec.template.spec.volumes;
+    in
+    (
+      service.metadata.labels."cnpg.io/pluginName" == "barman-cloud.cloudnative-pg.io"
+      && service.metadata.annotations."cnpg.io/pluginPort" == "9090"
+      && service.metadata.annotations."cnpg.io/pluginServerSecret" == certificate.spec.secretName
+      && builtins.elem service.metadata.annotations."cnpg.io/pluginClientSecret" secretNames
+      && certificate.spec.dnsNames == [ service.metadata.name ]
+      && deployment.spec.strategy.type == "Recreate"
+    )
+    || throw "plugin registration: ${
+      builtins.toJSON {
+        service = service.metadata;
+        certificate = certificate.spec;
+      }
+    }";
+
+  # The plugin's refusals: an image or sidecar tag of another minor, a flag
+  # the package sets, and SIDECAR_IMAGE in env; the defaults, another flag,
+  # and another variable pass.
+  cnpg-barman-cloud-refusals =
+    let
+      messages =
+        config:
+        failedMessages {
+          package = barmanPackage;
+          instanceName = "cnpg-barman-cloud";
+          namespaceName = "cnpg-system";
+          inherit config;
+        };
+      oldImage = messages { image.tag = "v0.14.0"; };
+      oldSidecar = messages { sidecar.image.tag = "v0.14.0"; };
+      fine = messages { image.tag = "v0.15.0"; };
+    in
+    (
+      says ''image.tag "v0.14.0" is not a plugin-barman-cloud 0.15 release'' oldImage
+      && says ''sidecar.image.tag "v0.14.0" is not a plugin-barman-cloud 0.15 release'' oldSidecar
+      && fine == [ ]
+      && evalFails (backups { pluginConfig.extraArgs = [ "--server-address=:9091" ]; })
+      && evalFails (backups { pluginConfig.env.SIDECAR_IMAGE = "example.com/sidecar:1"; })
+      && !evalFails (backups {
+        pluginConfig = {
+          extraArgs = [ "--log-level=debug" ];
+          env.GOMEMLIMIT = "200MiB";
+        };
+      })
+    )
+    || throw "cnpg-barman-cloud refusals: ${builtins.toJSON { inherit oldImage oldSidecar fine; }}";
+
+  # The vendored definition and roles come from the package's release.
+  cnpg-barman-cloud-sources-match-release =
+    let
+      urls =
+        file:
+        builtins.filter (l: l != "" && !lib.hasPrefix "#" l) (
+          map (l: builtins.head (lib.splitString " " (lib.trim l))) (
+            lib.splitString "\n" (builtins.readFile file)
+          )
+        );
+      release =
+        (barmanPackage {
+          scope = {
+            instanceName = "cnpg-barman-cloud";
+            namespaceName = "cnpg-system";
+          };
+          inherit lib;
+          kix = kixlib;
+        }).meta.version;
+      dir = ../../../packages/cnpg-barman-cloud;
+      stray = builtins.filter (u: !(lib.hasInfix "/${release}/" u)) (
+        urls (dir + "/crds/sources.txt") ++ urls (dir + "/rbac/sources.txt")
+      );
+    in
+    stray == [ ] || throw "sources.txt URLs not at ${release}: ${builtins.toJSON stray}";
+
+  # A cnpg-database on a pooler creates its role and database on the
+  # pooler's Cluster and hands consumers the pooler's Service. The Pooler
+  # waits for the operator's webhook check, and the pooler pods get egress
+  # to the instance pods, which admit them, on TCP 5432.
+  cnpg-pooler-database =
+    let
+      cluster = pooled { modules = [ netpolOn ]; };
+      all = ms cluster;
+      pooler = byName "pooler" (ofKind "Pooler" all);
+      role = byName "data-app-db" (ofKind "DatabaseRole" all);
+      credentials = byName "app-db-credentials" (ofKind "Secret" all);
+      policies = ofKind "CiliumNetworkPolicy" all;
+      checkHash = hashOf cluster.instances.cnpg-system.cnpg-operator.raw.webhookCheck;
+      egress = byName "pooler-pooler-egress" policies;
+      ingress = byName "pooler-pooler-to-instances" policies;
+    in
+    (
+      pooler.spec.cluster.name == "postgres"
+      && pooler.spec.type == "rw"
+      && pooler.spec.pgbouncer.poolMode == "session"
+      && role.spec.cluster.name == "postgres"
+      && lib.hasPrefix "pooler.data.svc." credentials.stringData.host
+      && lib.hasInfix checkHash (dependsOn pooler)
+      && egress != null
+      && lib.hasInfix ''"cnpg.io/podRole":"instance"'' (builtins.toJSON egress.spec)
+      && ingress != null
+      && lib.hasInfix ''"cnpg.io/poolerName":"pooler"'' (builtins.toJSON ingress.spec)
+    )
+    || throw "pooler: ${
+      builtins.toJSON {
+        pooler = pooler.spec or null;
+        host = credentials.stringData.host or null;
+        policies = map (p: p.metadata.name) policies;
+      }
+    }";
+
+  # The pooler's refusals: an instance name that is not a DNS-1035 label,
+  # monitoring.enablePodMonitor, a locked extraSpec path, a pooler in
+  # another namespace than its cluster, and a pooler on a stackgres-cluster;
+  # the defaults and a pgbouncer parameter pass.
+  cnpg-pooler-refusals =
+    let
+      messages =
+        instanceName: config:
+        failedMessages {
+          package = poolerPackage;
+          inherit instanceName config;
+        };
+      badName = messages "Pooler" { };
+      podMonitor = messages "pooler" { extraSpec.monitoring.enablePodMonitor = true; };
+      fine = messages "pooler" { extraSpec.pgbouncer.poolMode = "transaction"; };
+    in
+    (
+      says "is not a DNS-1035 label" badName
+      && says "extraSpec sets monitoring.enablePodMonitor" podMonitor
+      && fine == [ ]
+      && evalFails (pooled { poolerConfig.extraSpec.instances = 3; })
+      && evalFails (pooled { poolerConfig.extraSpec.template.spec.containers = [ ]; })
+      && evalFails (pooled { poolerNamespace = "apps"; })
+      && evalFails (pooled { postgres = stackgresClusterPackage; })
+      && !evalFails (pooled { poolerConfig.extraSpec.pgbouncer.parameters.max_client_conn = "500"; })
+    )
+    || throw "cnpg-pooler refusals: ${builtins.toJSON { inherit badName podMonitor fine; }}";
 }
