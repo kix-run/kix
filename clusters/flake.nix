@@ -71,6 +71,7 @@
         metrics-server = ./test-metrics-server.nix;
         keycloak = ./test-keycloak.nix;
         otel-collector = ./test-otel-collector.nix;
+        falco = ./test-falco.nix;
         traefik = ./test-traefik.nix;
         monitoring-netpol = ./test-monitoring-netpol.nix;
         tempo = ./test-tempo.nix;

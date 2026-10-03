@@ -183,6 +183,21 @@ let
         config.stringData.api-token = "token";
       };
     };
+    # A rules file, so the rules ConfigMap and its mount are built, and a
+    # Prometheus provider, so the metrics Service and the ServiceMonitor are
+    # built.
+    falco = {
+      config.rules.custom = [
+        {
+          rule = "Package eval rule";
+          desc = "A rule that exercises the rules ConfigMap.";
+          condition = "evt.type = open and proc.name = never-matches";
+          output = "Package eval rule (proc=%proc.name)";
+          priority = "NOTICE";
+        }
+      ];
+      instances.prometheus-operator.package = packages.prometheus-operator;
+    };
     filebrowser.instances = { inherit storage; };
     firezone.config = {
       domain = "firezone.example.com";

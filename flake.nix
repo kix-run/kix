@@ -48,6 +48,7 @@
           kind-v2 = ./clusters/test-kind-v2.nix;
           metrics-server = ./clusters/test-metrics-server.nix;
           otel-collector = ./clusters/test-otel-collector.nix;
+          falco = ./clusters/test-falco.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
           monitoring-loki = ./clusters/test-monitoring-loki.nix;
           victoria-metrics = ./clusters/test-victoria-metrics.nix;
