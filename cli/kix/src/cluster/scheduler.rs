@@ -266,6 +266,18 @@ pub enum DeployError {
         message: String,
         partial: DeployResult,
     },
+
+    /// Every node reached its verdict, but the Activation record could not be
+    /// finalized, so the record still reads Deploying and the previous
+    /// activation stays current.
+    #[error(
+        "the changes were applied, but the deployment record could not be finalized: {message}. \
+         The record may still read Deploying."
+    )]
+    FinalizeFailed {
+        message: String,
+        partial: DeployResult,
+    },
 }
 
 impl DeployError {
@@ -275,7 +287,8 @@ impl DeployError {
             DeployError::NodesFailed { partial, .. }
             | DeployError::DiscoveryFailed { partial, .. }
             | DeployError::Cancelled { partial, .. }
-            | DeployError::Internal { partial, .. } => Some(partial),
+            | DeployError::Internal { partial, .. }
+            | DeployError::FinalizeFailed { partial, .. } => Some(partial),
             DeployError::ActivationError(_) => None,
         }
     }
@@ -1047,14 +1060,21 @@ pub async fn run_deploy(
                 previous: f.previous,
             }),
             Ok(Ok(None)) => {}
-            Ok(Err(message)) => emit(DeployEvent::BestEffortFailed {
-                what: "activation finalize".into(),
-                message,
-            }),
-            Err(_) => emit(DeployEvent::BestEffortFailed {
-                what: "activation finalize".into(),
-                message: format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
-            }),
+            // The record did not become current, so the run has not
+            // succeeded and its build must not be cached as the one the
+            // cluster runs.
+            Ok(Err(message)) => {
+                return Err(DeployError::FinalizeFailed {
+                    message,
+                    partial: result,
+                });
+            }
+            Err(_) => {
+                return Err(DeployError::FinalizeFailed {
+                    message: format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
+                    partial: result,
+                });
+            }
         }
     }
 

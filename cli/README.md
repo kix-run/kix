@@ -29,6 +29,7 @@ nix build → StoreGraph → stamp annotations
   → scheduler::run_deploy (DAG-streaming, SSA + readiness per node)
   → prune orphans (named in the plan and in `DeployEvent::PruneStart { resources, kept, delete }`, which carries the never-pruned Namespaces and CRDs in `kept` apart from `resources` under every policy, so each renderer lists them as kept; warn-only unless `--prune`) → finalize activation
     (stopped before finalize? → ops.abort marks the record Failed)
+    (finalize failed? → DeployError::FinalizeFailed: exit non-zero, build not cached as current)
 ```
 
 ## Cluster identity

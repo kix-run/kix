@@ -2386,6 +2386,45 @@ mod run_end_tests {
         assert!(!RunEnd::of(&result).succeeded);
     }
 
+    /// Every node applies but the record will not finalize: the build is
+    /// not current and the command exits non-zero.
+    #[tokio::test]
+    async fn a_failed_finalize_is_neither_succeeded_nor_current() {
+        let ops = Arc::new(ScriptedOps::new());
+        ops.finalize_behaviour(Behaviour::Now(Err("conflict".into())));
+        let cfg = config(OnErrorPolicy::Stop, PrunePolicy::WarnOnly);
+        let result = run(&ops, &[deployment("a", &[])], &[], &[], &cfg).await;
+        assert!(
+            matches!(result, Err(scheduler::DeployError::FinalizeFailed { .. })),
+            "{result:?}"
+        );
+        assert_eq!(
+            RunEnd::of(&result),
+            RunEnd {
+                succeeded: false,
+                current: false,
+            }
+        );
+    }
+
+    /// A run that left a node unattempted and could not mark its record
+    /// Failed is still neither succeeded nor current.
+    #[tokio::test]
+    async fn a_failed_abort_is_neither_succeeded_nor_current() {
+        let ops = ops_failing_a();
+        ops.abort_behaviour(Behaviour::Now(Err("conflict".into())));
+        let manifests = [deployment("a", &[]), deployment("b", &["a"])];
+        let cfg = config(OnErrorPolicy::Continue, PrunePolicy::WarnOnly);
+        let result = run(&ops, &manifests, &[], &[], &cfg).await;
+        assert_eq!(
+            RunEnd::of(&result),
+            RunEnd {
+                succeeded: false,
+                current: false,
+            }
+        );
+    }
+
     #[tokio::test]
     async fn a_clean_run_succeeds() {
         let manifests = [deployment("a", &[]), deployment("b", &["a"])];

@@ -639,6 +639,14 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
             if let Some(r) = e.partial() {
                 print_summary(r, end.succeeded);
             }
+            // The event stream already reports failed nodes and cancellation.
+            if !matches!(
+                e,
+                scheduler::DeployError::NodesFailed { .. }
+                    | scheduler::DeployError::Cancelled { .. }
+            ) {
+                eprintln!("{} {e}", output::red("error:"));
+            }
         }
     }
     // A prune delete that fails leaves `result` `Ok` with `failed > 0`.
