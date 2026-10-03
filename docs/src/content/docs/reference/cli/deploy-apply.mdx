@@ -148,14 +148,21 @@ any of these:
 | Refusals | A conflict, by object, or an admission refusal, by object and reason, that the reviewed plan did not have. |
 | Reverted drift | A drifted field, by object and path, that the deploy would put back and the reviewed plan did not list. |
 | Prune deletes | An orphan the deploy would delete that the reviewed plan did not list. |
+| Objects not checked | An object the dry run checked for the reviewed plan and cannot check now, for example because a webhook it calls lost dry-run support. Its refusals and drift would not show. |
 
 What the reviewed plan had and the new one does not, such as a conflict
 someone resolved, does not refuse the deploy. Messages, live values,
 `resourceVersion`s, and order are not compared.
 
+The planning flags come from the plan: a flag it has and the command line
+omits still applies. A plan whose sections do not match how it says it was
+made, for example a `kix plan` document with prune marked not checked, was
+edited after it was written and is refused. The deploy prints the file's
+SHA-256 so an approval system can check it used the file it approved.
+
 A refusal lists what differs and exits `4`. `kix deploy --plan plan.json
 --dry-run` makes the same comparison and exits `0` or `4` without deploying;
-with `--output json` it prints `{ matches, mismatches, skipped, kix_differs }`.
+with `--output json` it prints `{ plan_sha256, matches, mismatches, skipped, kix_differs }`.
 
 A plan saved from [`kix diff`](/docs/reference/cli/diff/) against the cluster
 can be used too. A diff checks no refusals or prune deletes, so those are

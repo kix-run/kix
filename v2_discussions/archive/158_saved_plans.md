@@ -17,8 +17,11 @@ Two facts shape the design:
 
 - **`kix deploy` builds from source.** It never applies a stored plan. It
   rebuilds, plans again, and compares. A saved plan restricts a deploy; it
-  never supplies its content. A tampered `plan.json` can at worst make the
-  deploy refuse.
+  never supplies its content. An edited `plan.json` can still loosen the
+  comparison (mark a section not checked, add known items, set flags), so
+  the deploy refuses a plan whose sections do not match its `made_by` and
+  prints the file's SHA-256, which an approval system checks against the
+  file it approved.
 - **The document is lossy on purpose.** Secret values read `(secret, not
   shown)` and values over 16 KiB read `(N bytes, not shown)`. Two plans
   can print the same field change for different values, so the comparison
@@ -39,9 +42,10 @@ kix deploy <cluster> --plan plan.json --dry-run
 1. Read `plan.json` into `plan::document::Plan`. Refuse a `schema_version`
    this Kix does not know, and a document that does not parse.
 2. Take the planning flags from the saved plan's `flags`. A planning flag
-   given on the command line that contradicts it is an error before any
-   build: `--prune` against a plan made without it, or the reverse.
-   Repeating a flag the plan already has is allowed.
+   given on the command line that the plan was made without is an error
+   before any build. A flag the plan has and the command line omits is
+   taken from the plan, and the apply reads every planning flag from the
+   merged set, never from the command line.
 3. `deploy::prepare` with those flags, then the dry-run pass and
    `plan::document`, as every `kix deploy` does today.
 4. `plan::saved::compare(&reviewed, &fresh)` returns the mismatches. Any

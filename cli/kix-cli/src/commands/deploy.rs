@@ -122,7 +122,8 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // A reviewed plan that no longer matches applies nothing.
     if let Some(s) = &saved {
-        let comparison = plan::saved::compare(&s.reviewed, &doc);
+        let mut comparison = plan::saved::compare(&s.reviewed, &doc);
+        comparison.plan_sha256 = Some(s.sha256.clone());
         eprintln!();
         eprint!(
             "{}",
@@ -292,6 +293,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let global = ctx.global.clone();
     let end = ctx.runtime.block_on(run_deploy_async(
         args,
+        plan_args,
         &global,
         plan,
         &orphan_rids,
@@ -304,7 +306,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         activation_manifest,
         &failed_baseline.consumed,
         kept_orphans,
-        if args.plan.current_activation {
+        if plan_args.current_activation {
             active_hash.as_deref()
         } else {
             None
@@ -334,6 +336,8 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 /// deploy uses.
 pub(crate) struct SavedPlan {
     pub path: String,
+    /// [`plan::saved::digest`] of the file as read.
+    pub sha256: String,
     pub reviewed: plan::document::Plan,
     pub args: PlanArgs,
 }
@@ -341,9 +345,9 @@ pub(crate) struct SavedPlan {
 /// Read a saved plan and take its planning flags. Fails before any build
 /// when the plan cannot be used or the command line contradicts its flags.
 fn load_saved_plan(path: &std::path::Path, given: &PlanArgs) -> Result<SavedPlan> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| miette!("cannot read the plan {}: {e}", path.display()))?;
-    let reviewed: plan::document::Plan = serde_json::from_str(&text)
+    let bytes =
+        std::fs::read(path).map_err(|e| miette!("cannot read the plan {}: {e}", path.display()))?;
+    let reviewed: plan::document::Plan = serde_json::from_slice(&bytes)
         .map_err(|e| miette!("{} is not a Kix plan document: {e}", path.display()))?;
     if let Some(why) = plan::saved::unusable(&reviewed) {
         return Err(miette!("cannot deploy from {}: {why}", path.display()));
@@ -361,6 +365,7 @@ fn load_saved_plan(path: &std::path::Path, given: &PlanArgs) -> Result<SavedPlan
     args.accept_migrations = flags.accept_migrations;
     Ok(SavedPlan {
         path: path.display().to_string(),
+        sha256: plan::saved::digest(&bytes),
         reviewed,
         args,
     })
@@ -382,7 +387,8 @@ fn check_saved_plan(saved: &SavedPlan, ctx: &mut CommandContext) -> Result<()> {
         None => None,
     };
     let doc = super::plan::document(&mut p, report.as_ref(), &saved.args, Detail::Plain);
-    let comparison = plan::saved::compare(&saved.reviewed, &doc);
+    let mut comparison = plan::saved::compare(&saved.reviewed, &doc);
+    comparison.plan_sha256 = Some(saved.sha256.clone());
     match format {
         crate::cli::OutputFormat::Json => println!(
             "{}",
@@ -1363,9 +1369,13 @@ fn apply_symbol(action: &ApplyAction) -> (std::borrow::Cow<'static, str>, &'stat
     }
 }
 
+/// `plan_args` are the planning flags the deploy uses: `args.plan`, or a
+/// saved plan's flags under `--plan`. The apply reads them from here and
+/// never from `args.plan`, so it does what the plan it was compared on does.
 #[allow(clippy::too_many_arguments)]
 async fn run_deploy_async(
     args: &DeployArgs,
+    plan_args: &PlanArgs,
     global: &crate::cli::GlobalArgs,
     plan: DeployPlan,
     orphan_rids: &[ResourceId],
@@ -1448,7 +1458,7 @@ async fn run_deploy_async(
 
     let discovery = Arc::new(tokio::sync::RwLock::new(discovery));
 
-    let prune_policy = prune_policy_for(&args.plan);
+    let prune_policy = prune_policy_for(plan_args);
     let on_error = match args.on_error {
         OnError::Stop => OnErrorPolicy::Stop,
         OnError::Continue => OnErrorPolicy::Continue,
@@ -1476,7 +1486,7 @@ async fn run_deploy_async(
             activation_name: activation_name.map(str::to_string),
             activation_identity_hash: activation_identity_hash.map(str::to_string),
             receipt: receipt.cloned(),
-            force_conflicts: args.plan.force_conflicts,
+            force_conflicts: plan_args.force_conflicts,
             dry_run: false,
             // Create the record before the first wave, so a run that stops
             // part way leaves something that says what it was attempting

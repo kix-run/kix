@@ -28,6 +28,7 @@ pub enum Rule {
     NewRefusal,
     NewRevertedDrift,
     NewPruneDelete,
+    NewlyUnchecked,
 }
 
 impl Rule {
@@ -40,6 +41,7 @@ impl Rule {
             Rule::NewRefusal => "new refusal",
             Rule::NewRevertedDrift => "new drift",
             Rule::NewPruneDelete => "new prune delete",
+            Rule::NewlyUnchecked => "not checked now",
         }
     }
 }
@@ -54,6 +56,8 @@ pub struct Mismatch {
 /// The result of comparing a fresh plan with a reviewed one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Comparison {
+    /// [`digest`] of the reviewed plan file, set by the caller.
+    pub plan_sha256: Option<String>,
     pub matches: bool,
     pub mismatches: Vec<Mismatch>,
     /// Rules the reviewed plan could not be held to, because it did not
@@ -65,6 +69,13 @@ pub struct Comparison {
     pub kix_differs: Option<(String, String)>,
 }
 
+/// The SHA-256 of a saved plan file, so an approval system can check the
+/// deploy used the file it approved.
+pub fn digest(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
 /// Why a saved plan cannot be used at all, before any build.
 pub fn unusable(reviewed: &Plan) -> Option<String> {
     if reviewed.schema_version != super::document::SCHEMA_VERSION {
@@ -73,6 +84,26 @@ pub fn unusable(reviewed: &Plan) -> Option<String> {
             reviewed.schema_version,
             super::document::SCHEMA_VERSION
         ));
+    }
+    // A plan's sections follow from how it was made. One that reads
+    // otherwise was edited, and an edit can only loosen the comparison:
+    // a section marked not checked is skipped, and flags are taken as given.
+    let consistent = match reviewed.made_by {
+        MadeBy::DryRun => {
+            reviewed.flags.is_some()
+                && matches!(reviewed.conflicts, Checked::Checked { .. })
+                && matches!(reviewed.admission, Checked::Checked { .. })
+                && matches!(reviewed.prune, Checked::Checked { .. })
+        }
+        MadeBy::LiveRead => reviewed.flags.is_none(),
+        MadeBy::Builds => true,
+    };
+    if !consistent {
+        return Some(
+            "its sections do not match how it says it was made, so it was edited after \
+             `kix plan` or `kix diff` wrote it"
+                .into(),
+        );
     }
     if reviewed.made_by == MadeBy::Builds {
         return Some(
@@ -172,8 +203,17 @@ pub fn compare(reviewed: &Plan, fresh: &Plan) -> Comparison {
         );
     }
 
-    let deployed_hash = |p: &Plan| p.deployed.as_ref().map(|d| d.identity_hash.clone());
-    if deployed_hash(reviewed) != deployed_hash(fresh) {
+    // A record without an identity hash (written by an older Kix) is
+    // matched by its name, which carries a prefix of the hash.
+    let same_deployed = match (&reviewed.deployed, &fresh.deployed) {
+        (None, None) => true,
+        (Some(r), Some(f)) => match (&r.identity_hash, &f.identity_hash) {
+            (Some(rh), Some(fh)) => rh == fh,
+            _ => r.activation == f.activation && r.identity_hash == f.identity_hash,
+        },
+        _ => false,
+    };
+    if !same_deployed {
         let name = |p: &Plan| match &p.deployed {
             Some(d) => format!(
                 "{} (identity {})",
@@ -281,6 +321,24 @@ pub fn compare(reviewed: &Plan, fresh: &Plan) -> Comparison {
         Checked::NotChecked { .. } => skipped.push(Rule::NewPruneDelete),
     }
 
+    // An object the fresh dry run could not check shows no refusal and no
+    // drift, so one that the reviewed plan checked hides what rules 5 and 6
+    // would have caught.
+    if reviewed.made_by == MadeBy::DryRun {
+        let known: BTreeSet<&str> = reviewed
+            .not_checked
+            .iter()
+            .map(|o| o.resource.as_str())
+            .collect();
+        let new = fresh
+            .not_checked
+            .iter()
+            .filter(|o| !known.contains(o.resource.as_str()))
+            .map(|o| format!("{}: {}", o.resource, o.detail))
+            .collect();
+        mismatch(Rule::NewlyUnchecked, new);
+    }
+
     let kix = |p: &Plan| {
         p.kix
             .store_path
@@ -290,6 +348,7 @@ pub fn compare(reviewed: &Plan, fresh: &Plan) -> Comparison {
     let kix_differs = (kix(reviewed) != kix(fresh)).then(|| (kix(reviewed), kix(fresh)));
 
     Comparison {
+        plan_sha256: None,
         matches: mismatches.is_empty(),
         mismatches,
         skipped,
@@ -343,6 +402,10 @@ fn describe_flags(flags: Option<&PlanFlags>) -> String {
 /// The comparison as the deploy prints it. `path` names the saved plan.
 pub fn render_text(c: &Comparison, reviewed: &Plan, path: &str) -> String {
     let mut out = String::new();
+    let path = match &c.plan_sha256 {
+        Some(sha) => format!("{path}, {sha}"),
+        None => path.to_string(),
+    };
     if c.matches {
         let _ = writeln!(
             out,
@@ -408,7 +471,7 @@ pub fn render_text(c: &Comparison, reviewed: &Plan, path: &str) -> String {
 mod tests {
     use super::super::document::{
         AdmissionRefusal, Build, Conflict, ConflictOwner, DeployedBuild, DriftChange, KixBuild,
-        NotCheckedReason, PruneEntry, RefusalReason,
+        NotCheckedReason, PruneEntry, RefusalReason, UncheckedObject, UncheckedReason,
     };
     use super::*;
 
@@ -610,6 +673,61 @@ mod tests {
             c.kix_differs,
             Some(("/nix/store/kix-a".into(), "/nix/store/kix-b".into()))
         );
+    }
+
+    /// A dry-run plan whose sections say they were not checked, or that has
+    /// no flags, was edited: either would loosen the comparison.
+    #[test]
+    fn an_edited_plan_is_unusable() {
+        let mut unpruned = plan();
+        unpruned.prune = Checked::not_checked(NotCheckedReason::ReadOnly);
+        assert!(unusable(&unpruned).is_some());
+        let mut flagless = plan();
+        flagless.flags = None;
+        assert!(unusable(&flagless).is_some());
+        let mut diff_with_flags = plan();
+        diff_with_flags.made_by = MadeBy::LiveRead;
+        assert!(unusable(&diff_with_flags).is_some());
+    }
+
+    /// Records without an identity hash are matched by name.
+    #[test]
+    fn a_deployed_record_without_a_hash_is_matched_by_name() {
+        let unhashed = |name: &str| {
+            let mut p = plan();
+            p.deployed = Some(DeployedBuild {
+                activation: name.into(),
+                identity_hash: None,
+                store_path: None,
+            });
+            p
+        };
+        assert!(compare(&unhashed("c-1"), &unhashed("c-1")).matches);
+        assert_eq!(
+            rules(&compare(&unhashed("c-1"), &unhashed("c-2"))),
+            vec![Rule::DeployedBuild]
+        );
+        assert_eq!(
+            rules(&compare(&plan(), &unhashed("c-old"))),
+            vec![Rule::DeployedBuild]
+        );
+    }
+
+    /// An object the reviewed plan checked and the fresh one could not hides
+    /// its refusals and drift, so it refuses.
+    #[test]
+    fn an_object_no_longer_checked_refuses() {
+        let unchecked = UncheckedObject {
+            resource: "Deployment/a@app".into(),
+            reason: UncheckedReason::WebhookNoDryRun,
+            detail: "webhook w does not support dry run".into(),
+        };
+        let mut fresh = plan();
+        fresh.not_checked = vec![unchecked.clone()];
+        assert_eq!(rules(&compare(&plan(), &fresh)), vec![Rule::NewlyUnchecked]);
+        let mut reviewed = plan();
+        reviewed.not_checked = vec![unchecked];
+        assert!(compare(&reviewed, &fresh).matches);
     }
 
     #[test]
