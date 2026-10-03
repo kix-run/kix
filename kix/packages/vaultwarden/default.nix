@@ -8,9 +8,9 @@
 # Dependencies:
 #   storage (required)    a claim, mounted at /data, for attachments, icons,
 #                         and keys
-#   database (required)   a PostgreSQL database and role with
-#                         `out.{host,port,database}` and `out.credentials`
-#                         (keys `username` and `password`), such as
+#   database (required)   a PostgreSQL database and role honouring the
+#                         Postgres database contract
+#                         (kix.contracts.postgresDatabase), such as
 #                         stackgres-database
 #
 # Minimal instance, with a stackgres-cluster `postgres` elsewhere:
@@ -65,6 +65,9 @@ in
     description = "Vaultwarden: Bitwarden-compatible password manager";
     owner = "app-team";
   };
+
+  deps.database.assertions =
+    dep: kix.contracts.postgresDatabase.assertions "vaultwarden ${scope.namespaceName}/${name}" dep;
 
   # Printed on the build that passes too, as the reminder to undo the
   # override afterwards.
