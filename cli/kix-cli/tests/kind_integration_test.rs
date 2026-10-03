@@ -163,7 +163,7 @@ fn deploy_and_gc() {
         "objects in the new namespace are not checked: {}",
         doc0["not_checked"]
     );
-    let records = kubectl_stdout(KUBE_CTX, &["get", "activations.kix.run", "-o", "name"]);
+    let records = kubectl_stdout(KUBE_CTX, &["get", keys::ACTIVATIONS_CRD, "-o", "name"]);
     assert!(
         records.trim().is_empty(),
         "a plan writes no record: {records}"
@@ -221,12 +221,12 @@ fn deploy_and_gc() {
 
     assert!(second.status.success(), "second deploy should succeed");
     assert!(
-        stdout2.contains("Everything up to date"),
+        stdout2.contains("Nothing to apply"),
         "should detect everything unchanged via local DAG diff"
     );
     assert!(
-        stdout2.contains("Loading previous activation"),
-        "should load cached activation"
+        stdout2.contains("Active activation:"),
+        "should plan against the cluster's Active record"
     );
 
     // =========================================================================

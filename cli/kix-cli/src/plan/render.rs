@@ -60,11 +60,6 @@ fn write_stops(out: &mut String, plan: &Plan) {
         ))
     );
     for c in conflicts {
-        let owners: Vec<String> = c
-            .owners
-            .iter()
-            .map(|o| format!("{} owns {}", o.manager, o.fields.join(", ")))
-            .collect();
         let _ = writeln!(
             out,
             "  {} {} {}",
@@ -72,7 +67,9 @@ fn write_stops(out: &mut String, plan: &Plan) {
             c.resource,
             output::red("field ownership conflict"),
         );
-        let _ = writeln!(out, "      {}", owners.join("; "));
+        for o in &c.owners {
+            let _ = writeln!(out, "      {} owns {}", o.manager, o.fields.join(", "));
+        }
         let _ = writeln!(
             out,
             "      {}",
@@ -282,6 +279,9 @@ fn write_not_checked(out: &mut String, plan: &Plan) {
                 );
             }
         }
+    }
+    if !plan.has_changes() {
+        return;
     }
     match plan.made_by {
         MadeBy::DryRun => {

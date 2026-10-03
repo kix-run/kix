@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use kix::cluster::preview::{DryRunAnswer, DryRunOutcome};
+use kix::cluster::preview::{DryRunAnswer, DryRunOutcome, Refusal};
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::diff::engine::structural_diff;
 use kix::manifest::diff::{DiffConfig, Difference};
@@ -116,6 +116,20 @@ impl Overlay<'_> {
             let (live, result) = match &answer.outcome {
                 DryRunOutcome::Applied(p) => (p.live.clone(), Some(p.result.clone())),
                 DryRunOutcome::Recreated { live, result } => (live.clone(), result.clone()),
+                // A 409 means the object exists, so the build comparison's
+                // "added" (the old side may not have known the object, made
+                // by hand or by another tool) is wrong. List it as changed;
+                // the conflict says what about it.
+                DryRunOutcome::Refused(Refusal::Conflict { .. }) => {
+                    if let Some((key, version)) = membership.get(rid)
+                        && let Some(entry) = entry(diff, key, version.clone())
+                        && entry.added_resources.contains(rid)
+                    {
+                        forget(entry, rid);
+                        entry.resource_diffs.push((rid.clone(), Vec::new()));
+                    }
+                    continue;
+                }
                 DryRunOutcome::Refused(_) | DryRunOutcome::Pruned(_) => continue,
             };
             let Some((key, version)) = membership.get(rid) else {

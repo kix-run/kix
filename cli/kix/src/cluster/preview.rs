@@ -244,11 +244,7 @@ pub fn conflict_owners(message: &str) -> Vec<ConflictOwner> {
         let manager = after[..end].to_string();
         let tail = &after[end + 1..];
         let next = tail.find(" with \"").unwrap_or(tail.len());
-        let fields: Vec<String> = tail[..next]
-            .split(|c: char| c.is_whitespace() || c == ',')
-            .filter(|t| t.len() > 1 && t.starts_with('.'))
-            .map(str::to_string)
-            .collect();
+        let fields = field_paths(&tail[..next]);
         match owners.iter_mut().find(|o| o.manager == manager) {
             Some(o) => o.fields.extend(fields),
             None => owners.push(ConflictOwner { manager, fields }),
@@ -256,6 +252,32 @@ pub fn conflict_owners(message: &str) -> Vec<ConflictOwner> {
         rest = &tail[next..];
     }
     owners
+}
+
+/// The field paths in `text`: tokens that start with `.`, split on
+/// whitespace and commas outside brackets, since a list key such as
+/// `ports[containerPort=53,protocol="UDP"]` holds a comma of its own.
+fn field_paths(text: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0usize;
+    for c in text.chars() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth == 0 && (c.is_whitespace() || c == ',') {
+            paths.push(std::mem::take(&mut current));
+        } else {
+            current.push(c);
+        }
+    }
+    paths.push(current);
+    paths
+        .into_iter()
+        .filter(|t| t.len() > 1 && t.starts_with('.'))
+        .collect()
 }
 
 /// The answers a dry run collected, in the order they arrived.
@@ -314,6 +336,18 @@ mod tests {
         );
         assert_eq!(owners[1].manager, "kubectl-edit");
         assert_eq!(owners[1].fields, vec![".metadata.labels.tier"]);
+    }
+
+    #[test]
+    fn a_list_key_with_a_comma_stays_one_field() {
+        let msg = "Apply failed with 2 conflicts: conflicts with \"helm\" using apps/v1:\n- .spec.selector\n- .spec.template.spec.containers[name=\"coredns\"].ports[containerPort=53,protocol=\"UDP\"].name";
+        assert_eq!(
+            conflict_owners(msg)[0].fields,
+            vec![
+                ".spec.selector",
+                ".spec.template.spec.containers[name=\"coredns\"].ports[containerPort=53,protocol=\"UDP\"].name",
+            ]
+        );
     }
 
     #[test]

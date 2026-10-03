@@ -288,12 +288,15 @@ pub(crate) fn document(p: &mut Prepared, report: Option<&DryRunReport>, args: &P
     };
     // Without the deployed build's manifests (the old side was rebuilt from
     // the live objects) a commit's change and drift look the same.
-    let deployed: Option<HashMap<ResourceId, &Value>> = p.old_graph.as_ref().map(|_| {
-        p.active_manifests
-            .iter()
-            .map(|m| (ResourceId::from_value(m), m))
-            .collect()
-    });
+    // A first deploy has no deployed build: every change is intended.
+    let first_deploy = p.active_hash.is_none() && p.active_manifests.is_empty();
+    let deployed: Option<HashMap<ResourceId, &Value>> = (p.old_graph.is_some() || first_deploy)
+        .then(|| {
+            p.active_manifests
+                .iter()
+                .map(|m| (ResourceId::from_value(m), m))
+                .collect()
+        });
     let has_deployed = deployed.is_some();
     let answers: &[DryRunAnswer] = report.map(|r| r.answers.as_slice()).unwrap_or(&[]);
     let drift = Overlay {
@@ -317,7 +320,12 @@ pub(crate) fn document(p: &mut Prepared, report: Option<&DryRunReport>, args: &P
     let mut admission = Vec::new();
     let mut not_checked = Vec::new();
     let mut prune_answers: HashMap<ResourceId, PruneAnswer> = HashMap::new();
-    let crd_kinds = crd_kinds(&p.new_manifests);
+    let crds = BuildCrds::of(&p.new_manifests);
+    let manifests: HashMap<ResourceId, &Value> = p
+        .new_manifests
+        .iter()
+        .map(|m| (ResourceId::from_value(m), m))
+        .collect();
     let built_namespaces: HashSet<String> = p
         .new_manifests
         .iter()
@@ -361,12 +369,13 @@ pub(crate) fn document(p: &mut Prepared, report: Option<&DryRunReport>, args: &P
                 detail: message.clone(),
             }),
             Refusal::UnknownKind { kind }
-                if crd_kinds.contains(kind) && !served.is_some_and(|s| s.contains(kind)) =>
+                if !served.is_some_and(|s| s.contains(kind))
+                    && crds.brings(kind, manifests.get(&answer.rid).copied()) =>
             {
                 not_checked.push(UncheckedObject {
                     resource: resource.clone(),
                     reason: UncheckedReason::CrdCreatedByThisDeploy,
-                    detail: format!("kind {kind} is served once this deploy creates its CRD"),
+                    detail: format!("kind {kind} is served once this deploy installs its CRD"),
                 })
             }
             Refusal::NamespaceMissing { namespace, .. } if built_namespaces.contains(namespace) => {
@@ -450,14 +459,40 @@ pub(crate) fn document(p: &mut Prepared, report: Option<&DryRunReport>, args: &P
     doc
 }
 
-/// Kinds the build's CRDs define.
-fn crd_kinds(manifests: &[Value]) -> HashSet<String> {
-    manifests
-        .iter()
-        .filter(|m| m.get("kind").and_then(Value::as_str) == Some("CustomResourceDefinition"))
-        .filter_map(|m| m.pointer("/spec/names/kind").and_then(Value::as_str))
-        .map(str::to_string)
-        .collect()
+/// The custom resource kinds a build brings: the kinds of the CRDs it
+/// contains, and the API groups of the CRDs its import markers say
+/// something it installs creates (an operator that writes its own CRDs).
+struct BuildCrds {
+    kinds: HashSet<String>,
+    groups: HashSet<String>,
+}
+
+impl BuildCrds {
+    fn of(manifests: &[Value]) -> Self {
+        let kinds = manifests
+            .iter()
+            .filter(|m| m.get("kind").and_then(Value::as_str) == Some("CustomResourceDefinition"))
+            .filter_map(|m| m.pointer("/spec/names/kind").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect();
+        let groups = manifests
+            .iter()
+            .filter_map(|m| readiness::import_target_from_manifest(m).ok().flatten())
+            .filter(|t| t.kind == "CustomResourceDefinition")
+            .filter_map(|t| t.name.split_once('.').map(|(_, group)| group.to_string()))
+            .collect();
+        BuildCrds { kinds, groups }
+    }
+
+    /// Whether `kind`, as `manifest` uses it, is one the build brings.
+    fn brings(&self, kind: &str, manifest: Option<&Value>) -> bool {
+        let group = manifest
+            .and_then(|m| m.get("apiVersion"))
+            .and_then(Value::as_str)
+            .and_then(|av| av.split_once('/'))
+            .map(|(group, _)| group);
+        self.kinds.contains(kind) || group.is_some_and(|g| self.groups.contains(g))
+    }
 }
 
 /// Every resource that leaves the build, with what the deploy does to it.
