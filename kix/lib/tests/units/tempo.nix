@@ -16,6 +16,7 @@
   byName,
   evalFails,
   storageClassImport,
+  containerBase,
   baseInstances,
   ...
 }:
@@ -78,27 +79,54 @@ let
       ++ modules
     );
 
-  # A Service answering prometheusServer, with out.remoteWriteUrl on its
-  # address when `path` is a string and no remoteWriteUrl when it is false.
+  # A Deployment and Service answering prometheusServer, with
+  # out.remoteWriteUrl on the Service's address when `path` is a string and
+  # no remoteWriteUrl when it is false.
   remoteWriteProvider = path: {
     meta = {
       version = "test";
       defaultAliases = [ "prometheusServer" ];
     };
     build =
-      { self, scope, ... }:
       {
-        service = scope.mkResource {
-          apiVersion = "v1";
-          kind = "Service";
+        self,
+        scope,
+        kix,
+        ...
+      }:
+      {
+        deployment = scope.mkDeployment {
           name = "vminsert";
-          spec.ports = [
-            {
-              name = "http";
-              port = 8480;
-            }
-          ];
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata.labels = scope.selectorLabels;
+              spec.containers = [
+                (
+                  {
+                    name = "vminsert";
+                    image = "example/vminsert:1";
+                    ports = [ (kix.port "http" 8480) ];
+                  }
+                  // containerBase
+                )
+              ];
+            };
+          };
         };
+        service =
+          self.deployment
+          |> kix.service.fromWorkload {
+            name = "vminsert";
+            ports = [
+              {
+                name = "http";
+                port = 8480;
+                targetPort = "http";
+              }
+            ];
+          }
+          |> scope.mkResource;
         root = {
           resource = self.service;
           out = {
@@ -108,6 +136,23 @@ let
         };
       };
   };
+
+  # The real Cilium enforcer, whose rules show ports; the test stub's
+  # translateIntentRules returns none.
+  cilium = [
+    {
+      cluster.roles.cni = {
+        binding = "shadowable";
+        provider = "cilium (environment)";
+      };
+      networkPolicy.enable = true;
+      instances.net.cilium.package = ciliumPackage;
+      instances.net.platform-cilium.package = eval.mkImport {
+        roles = [ "cni" ];
+        out.helmChartConfig = null;
+      };
+    }
+  ];
 
   keys = {
     accessKeyId = "id";
@@ -236,7 +281,7 @@ in
       trace.backend == "s3"
       && !(trace ? local)
       && trace.s3.bucket == "traces"
-      && trace.s3.prefix == "tracing-tempo"
+      && trace.s3.prefix == "tracing/tempo"
       && builtins.match "db\\.dbns\\.svc\\..*:5432" trace.s3.endpoint != null
       && trace.s3.insecure == true
       && !(trace.s3 ? access_key)
@@ -285,20 +330,6 @@ in
   # none. An in-cluster store gets no such policy.
   tempo-object-storage-world-egress-port =
     let
-      cilium = [
-        {
-          cluster.roles.cni = {
-            binding = "shadowable";
-            provider = "cilium (environment)";
-          };
-          networkPolicy.enable = true;
-          instances.net.cilium.package = ciliumPackage;
-          instances.net.platform-cilium.package = eval.mkImport {
-            roles = [ "cni" ];
-            out.helmChartConfig = null;
-          };
-        }
-      ];
       policyOf =
         args:
         byName "tempo-object-storage" (
@@ -362,10 +393,12 @@ in
 
   # Each refusal beside a control that differs by the one setting: no
   # storageCredentials, a Secret without a key read, no endpoint, an
-  # endpoint with a scheme or naming a Service, `insecure` that is not a
-  # boolean, endpointScheme without endpointService, the locked bucket and
-  # in-cluster endpoint, inline credentials in settings or flags (refused
-  # also without objectStorage), and an owned AWS variable in env.
+  # endpoint with a scheme, ending in `.svc`, or a single label, `insecure`
+  # that is not a boolean (with and without a port), endpointScheme without
+  # endpointService, endpointService without objectStorage, the locked
+  # bucket and in-cluster endpoint, inline credentials and the SSE-C key in
+  # settings or flags (refused also without objectStorage), and an owned AWS
+  # variable in env.
   tempo-object-storage-refusals =
     let
       external = settings: {
@@ -409,6 +442,18 @@ in
         insecure-not-bool = evalFails (build {
           config = external { insecure = "true"; };
         });
+        insecure-not-bool-with-port = evalFails (build {
+          config = external {
+            endpoint = "s3.example.com:9000";
+            insecure = "true";
+          };
+        });
+        endpoint-short-name = evalFails (build {
+          config = external { endpoint = "minio:9000"; };
+        });
+        endpoint-service-without-object-storage = evalFails (build {
+          inClusterStore = true;
+        });
         endpoint-in-cluster-domain = evalFails (build {
           config = external { endpoint = "minio.store.svc.cluster.local"; };
         });
@@ -435,6 +480,12 @@ in
         });
         inline-secret-without-object-storage = evalFails (build {
           config.settings.storage.trace.s3.access_key = "id";
+        });
+        inline-sse-key = evalFails (build {
+          config = external { sse.encryption_key = "k"; };
+        });
+        sse-key-flag = evalFails (build {
+          config.extraArgs = [ "-storage.trace.s3.sse.encryption-key=k" ];
         });
         secret-flag = evalFails (build {
           config = external { } // {
@@ -488,8 +539,9 @@ in
     )
     || throw "tempo metrics generator: ${builtins.toJSON { inherit cfg off; }}";
 
-  # The generator needs a prometheusServer with out.remoteWriteUrl, and its
-  # storage paths are locked whether it is on or off.
+  # The generator needs a prometheusServer with out.remoteWriteUrl. Its
+  # storage paths are refused whether it is on or off, and its processors
+  # while it is off.
   tempo-metrics-generator-refusals =
     let
       cases = {
@@ -515,9 +567,34 @@ in
         locked-path-while-off = evalFails (tempoCluster {
           settings.metrics_generator.storage.path = "/var/tempo/gen";
         });
+        processors-while-off = evalFails (tempoCluster {
+          settings.overrides.defaults.metrics_generator.processors = [ "span-metrics" ];
+        });
       };
       wrong = lib.attrNames (lib.filterAttrs (_: ok: !ok) cases);
     in
     wrong == [ ]
     || throw "tempo metrics generator refusals: these cases did not behave: ${toString wrong}";
+
+  # Under Cilium, the generator's remote-write URL gives Tempo egress to the
+  # prometheusServer's Service port.
+  tempo-metrics-generator-egress =
+    let
+      egress =
+        (byName "tempo-statefulset-tempo-egress" (
+          ofKind "CiliumNetworkPolicy" (
+            manifests (tempoClusterWith {
+              config.metricsGenerator.enabled = true;
+              remoteWrite = "/api/v1/write";
+              modules = cilium;
+            })
+          )
+        )).spec.egress;
+      toPort =
+        port:
+        builtins.any (
+          r: builtins.any (tp: builtins.any (p: p.port == port) tp.ports) (r.toPorts or [ ])
+        ) egress;
+    in
+    toPort "8480" || throw "tempo generator egress: ${builtins.toJSON egress}";
 }

@@ -4,7 +4,10 @@
 # The kind flavour declares one node and containerd's discard of unpacked
 # layers, both of which the spegel package refuses, so this cluster
 # declares the kind cluster it runs on. Create it with a worker, without
-# the default CNI, and with the CRI patch Spegel needs:
+# the default CNI, and with the CRI patch Spegel needs. The node image's
+# containerd config is version 2 and sets discard_unpacked_layers in the
+# `io.containerd.grpc.v1.cri` table, which containerd 2 copies over the
+# `io.containerd.cri.v1.images` table, so the patch must use the old table:
 #
 #   kind: Cluster
 #   apiVersion: kind.x-k8s.io/v1alpha4
@@ -12,7 +15,7 @@
 #     disableDefaultCNI: true
 #   containerdConfigPatches:
 #     - |-
-#       [plugins."io.containerd.cri.v1.images"]
+#       [plugins."io.containerd.grpc.v1.cri".containerd]
 #         discard_unpacked_layers = false
 #   nodes:
 #     - role: control-plane

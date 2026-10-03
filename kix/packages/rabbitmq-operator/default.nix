@@ -322,9 +322,12 @@ in
         crds.rabbitmqClusters = gate (
           scope.mkCRD {
             spec = (readJSON ./crds/rabbitmqclusters.rabbitmq.com.json).spec;
-            # The condition carries no observedGeneration
-            # (internal/status/all_replicas_ready.go upstream), so right
-            # after a spec change the deploy can read the previous status.
+            # The condition carries no observedGeneration, so the deploy
+            # judges it by status.observedGeneration, which the operator
+            # advances only after a reconcile succeeds
+            # (internal/controller/rabbitmqcluster_controller.go upstream).
+            # A change the operator refuses waits until the deploy times
+            # out; rabbitmq-cluster's header lists those changes.
             readiness.condition = {
               type = "AllReplicasReady";
               status = "True";

@@ -87,11 +87,23 @@
 #       `conditions` to limit the namespaces that use it.
 #
 # Network policy: an intent opens egress to the API server for the server
-# pods, for token reviews. Kix derives no policy between the
-# external-secrets controller and OpenBao, because the address reaches the
-# controller through a ClusterSecretStore. Under default deny, add policies
-# (`namespaces.<ns>.networkPolicies`) that admit the controller's pods to
-# port 8200 of this instance and let them leave their own namespace for it.
+# pods, for token reviews. A ClusterSecretStore built from
+# `out.externalSecretsProvider` names the Service address, and the
+# external-secrets package declares that its controller dials a store's
+# provider, so Kix opens the controller's egress to port 8200 and this
+# instance's ingress from the controller.
+#
+# Known limits:
+#   - If self-initialization fails on pod 0's first start (a request
+#     refused, the ServiceAccount token not mounted), OpenBao has already
+#     initialized the volume and revoked the root token, and refuses to
+#     unseal on every later start. No root token or recovery key exists.
+#     Delete the claim `data-<instance>-0` and the pod, and let it start
+#     again; self-initialization runs only on an empty volume, so the
+#     claim holds nothing else.
+#   - The static key cannot be rotated. A changed `unsealKey` value
+#     restarts the pods, and they cannot unseal the existing data until the
+#     old value is restored.
 #
 # Escape hatches: `settings` for server configuration keys the package does
 # not set, `env`, and the instance's `partsOverlays`. Metrics, audit
@@ -198,9 +210,9 @@ let
     lib.concatStringsSep "\n" (
       [
         "# Write every declared policy, this one included, and list them for the drift report."
-        ''path "sys/policies/acl/*" { capabilities = ["create", "read", "update", "list"] }''
+        ''path "sys/policies/acl/*" { capabilities = ["create", "update", "list"] }''
         "# Write every declared Kubernetes auth role, and list them for the drift report."
-        ''path "auth/kubernetes/role/*" { capabilities = ["create", "read", "update", "list"] }''
+        ''path "auth/kubernetes/role/*" { capabilities = ["create", "update", "list"] }''
       ]
       ++ lib.optional (enginePaths != [ ]) "# Read and enable each declared secrets engine."
       ++ map (p: ''path "sys/mounts/${p}" { capabilities = ["create", "read", "update"] }'') enginePaths
@@ -313,7 +325,7 @@ in
       keyId = lib.mkOption {
         type = lib.types.strMatching "[A-Za-z0-9_.-]+";
         default = "1";
-        description = "Identifier OpenBao records with data sealed by the static key (`current_key_id`). Keep it while the key is the same; the package does not rotate keys.";
+        description = "Identifier OpenBao records with data sealed by the static key (`current_key_id`). The package does not rotate keys: a changed `unsealKey` value leaves restarted pods unable to unseal until the old value is restored.";
       };
     };
 

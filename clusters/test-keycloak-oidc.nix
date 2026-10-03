@@ -9,9 +9,13 @@
 # before signing in.
 #
 # Grafana dials Keycloak's token and userinfo endpoints at the Service
-# address, so its egress to Keycloak is derived. Harbor and Immich discover
-# the issuer at Keycloak's public URL through ingress-nginx, which derived
-# policy does not cover (see their headers).
+# address, so its egress to Keycloak is derived. Harbor and Immich must
+# discover the issuer at Keycloak's public URL, `https://keycloak.localhost`,
+# which a pod cannot reach here: the name is not known to resolve to the
+# ingress inside the cluster, and the self-signed certificate is trusted by
+# neither (no Harbor `caBundle` is wired, and Immich takes none). Their
+# OIDC wiring is evaluated here, not signed into. Their headers say what
+# network path the request needs.
 #
 # Build:  nix build ./clusters#cluster-keycloak-oidc --extra-experimental-features pipe-operators
 
@@ -80,8 +84,9 @@ kix.buildCluster {
                 enabled = true;
                 realm = "main";
                 autoLogin = true;
-                roleAttributePath = "contains(realm_access.roles[*], 'grafana-admin') && 'Admin' || 'Viewer'";
               };
+              settings."auth.generic_oauth".role_attribute_path =
+                "contains(realm_access.roles[*], 'grafana-admin') && 'Admin' || 'Viewer'";
             };
           };
           # Test values only.

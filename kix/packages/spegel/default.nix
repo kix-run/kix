@@ -39,8 +39,9 @@
 #     node the DaemonSet never becomes ready. `cluster.capabilities.multiNode
 #     = false` (the kind flavour's default) is refused; null warns.
 #   - hostPort support in the CNI (kindnet and the portmap plugin have it).
-# k3s and RKE2 embed Spegel (`embedded-registry: true`), and their flavours
-# bind the role exclusive, so this package is refused there.
+# k3s and RKE2 embed Spegel behind `embedded-registry: true`; a cluster
+# that turns it on binds the role exclusive, and this package is then
+# refused. Their flavours set the containerd paths under /var/lib/rancher.
 #
 # Network policy: the package's intents admit the node itself and the
 # other nodes (Cilium's `host` and `remote-node`) to the registry port,
@@ -48,8 +49,8 @@
 # reach each other through the bootstrap Service, which lists the registry
 # and router ports, so their peer traffic is derived from it.
 #
-# Escape hatches: `extraArgs` for the registry command (the address flags,
-# the bootstrap flags, and the containerd flags are refused) and the
+# Escape hatches: `extraArgs` for the registry command (the address,
+# bootstrap, and containerd flags are refused) and the
 # instance's `partsOverlays`. There is no `env` option: Spegel reads each
 # flag from an environment variable too, which would bypass the refused
 # flags. The DaemonSet tolerates every taint and runs on every Linux node.
@@ -58,9 +59,9 @@
 # needs; the pods mount host paths, so `meta.podSecurity` is privileged.
 # Removing the instance leaves the `hosts.toml` files on the nodes;
 # containerd then gets connection refused from the mirrors and pulls from
-# the upstream registry. The package ships no alerts. It does not set a
-# PriorityClass; under node pressure the pods are evicted before
-# system-critical pods.
+# the upstream registry. The package ships no alerts. The pods run at the
+# built-in system-node-critical priority, as upstream's chart sets, so node
+# pressure evicts them after application pods.
 
 {
   scope,
@@ -148,7 +149,7 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       example = [ "--registry-filters=:latest$" ];
-      description = "Flags appended to the registry command's own. The address flags (`--registry-addr`, `--router-addr`, `--metrics-addr`), the bootstrap flags, the containerd flags, `--mirrored-registries`, and `--data-dir` are refused. The debug web page is off; `--debug-web-enabled=true` turns it on.";
+      description = "Flags appended to the registry command's own. The address flags (`--registry-addr`, `--router-addr`, `--metrics-addr`), the bootstrap flags (`--bootstrap-kind`, `--dns-bootstrap-domain`, `--http-bootstrap-addr`, `--http-bootstrap-peer`, `--static-bootstrap-peers`), the containerd flags, `--mirrored-registries`, and `--data-dir` are refused. The debug web page is off; `--debug-web-enabled=true` turns it on.";
     };
 
     metrics = kix.options.monitor;
@@ -170,7 +171,7 @@ in
         # Refusals for nodes that cannot serve; see the header.
         nodeCheck =
           if containerd.discardUnpackedLayers == true then
-            throw "${who}: cluster.containerd.discardUnpackedLayers is true, so containerd deletes each image's layers once it has unpacked them and Spegel has nothing to serve. Set discard_unpacked_layers = false in the CRI section of containerd's config on every node (on kind, a containerdConfigPatches entry), then set cluster.containerd.discardUnpackedLayers = false."
+            throw "${who}: cluster.containerd.discardUnpackedLayers is true, so containerd deletes each image's layers once it has unpacked them and Spegel has nothing to serve. Set discard_unpacked_layers = false in containerd's config on every node, in the same table the node image sets it in (on kind, a containerdConfigPatches entry for [plugins.\"io.containerd.grpc.v1.cri\".containerd]), then set cluster.containerd.discardUnpackedLayers = false."
           else if multiNode == false then
             throw "${who}: cluster.capabilities.multiNode is false. A Spegel pod reports ready only once it has a peer, so on one node the DaemonSet never becomes ready. Remove the instance, or set multiNode = true on a cluster with two or more nodes."
           else
@@ -210,6 +211,9 @@ in
             "--containerd-namespace" = "kubelet pulls into containerd's k8s.io namespace; remove it.";
             "--bootstrap-kind" = "the pods find each other through the bootstrap Service; remove it.";
             "--dns-bootstrap-domain" = "the package names the bootstrap Service; remove it.";
+            "--http-bootstrap-addr" = "the pods find each other through the bootstrap Service; remove it.";
+            "--http-bootstrap-peer" = "the pods find each other through the bootstrap Service; remove it.";
+            "--static-bootstrap-peers" = "the pods find each other through the bootstrap Service; remove it.";
             "--mirrored-registries" =
               "the init container writes the mirror configuration from it as well; set mirroredRegistries instead.";
             "--data-dir" = "the package mounts ${dataDir} from the host; remove it.";
@@ -357,6 +361,8 @@ in
                 (hostVolume "containerd-content" containerd.contentPath "Directory")
                 (hostVolume "data" dataDir "DirectoryOrCreate")
               ];
+              # A built-in class, present in every cluster.
+              priorityClassName = "system-node-critical";
               # Every node pulls images, so every node runs a mirror.
               tolerations = [
                 {

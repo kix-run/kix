@@ -14,6 +14,7 @@
   byName,
   evalFails,
   multiZone,
+  netpolOn,
   ...
 }:
 
@@ -119,6 +120,14 @@ let
     byName name (ofKind kind (manifests cluster));
 
   cluster = clusterWith { consumer = mkConsumer { }; };
+  netpolCluster = clusterWith {
+    consumer = mkConsumer { };
+    modules = [ netpolOn ];
+  };
+  cnps = ofKind "CiliumNetworkPolicy" (manifests netpolCluster);
+  cnpIn =
+    ns: name:
+    lib.findFirst (m: m.metadata.name == name && (m.metadata.namespace or null) == ns) null cnps;
   zoneCluster = clusterWith { modules = [ multiZone ]; };
 
   initOf = c: builtins.fromJSON (find c "ConfigMap" "openbao-init").data."init.json";
@@ -284,6 +293,33 @@ in
       && lib.any (lib.hasInfix job) (dependsOn store)
     )
     || throw "openbao provider: ${builtins.toJSON store}";
+
+  # The store's address opens the external-secrets controller's egress to
+  # OpenBao on 8200 in the controller's namespace, and OpenBao's ingress
+  # from the controller's namespace.
+  openbao-external-secrets-network-edge =
+    let
+      egress = cnpIn "external-secrets" "app-consumer-clustersecretstore-openbao-egress";
+      ingress = cnpIn "secrets" "app-consumer-clustersecretstore-openbao-to-openbao-ingress";
+      json = builtins.toJSON { inherit egress ingress; };
+    in
+    (
+      egress != null
+      && ingress != null
+      && egress.spec.endpointSelector.matchLabels."app.kubernetes.io/component" == "controller"
+      && lib.any (
+        r: (r.namespace or null) == "secrets" && map (p: p.port) (r.ports or [ ]) == [ 8200 ]
+      ) egress.spec.egress
+      && lib.any (
+        r:
+        (r.callerNamespace or null) == "external-secrets"
+        && (r.callerSelector."app.kubernetes.io/component" or null) == "controller"
+        && map (p: p.port) (r.ports or [ ]) == [ 8200 ]
+      ) ingress.spec.ingress
+    )
+    || throw "openbao network edge: ${json}; policies: ${
+      builtins.toJSON (map (m: "${m.metadata.namespace or ""}/${m.metadata.name}") cnps)
+    }";
 
   # Each refusal of the provider, beside the positive control above.
   openbao-provider-refuses-unknown-role =

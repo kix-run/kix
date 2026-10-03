@@ -372,6 +372,7 @@ in
       password = clusterMessages { settings."auth_ldap.dn_lookup_bind.password" = "secret"; };
       secretBackend = clusterMessages { extraSpec.secretBackend.externalSecret.name = "creds"; };
       tlsOnly = clusterMessages { extraSpec.tls.disableNonTLSListeners = true; };
+      envPort = clusterMessages { extraSpec.rabbitmq.envConfig = "RABBITMQ_DIST_PORT=25000"; };
       fine = clusterMessages {
         replicas = 5;
         settings = {
@@ -379,7 +380,10 @@ in
           collect_statistics_interval = 10000;
           "log.console" = true;
         };
-        extraSpec.rabbitmq.additionalPlugins = [ "rabbitmq_shovel" ];
+        extraSpec.rabbitmq = {
+          additionalPlugins = [ "rabbitmq_shovel" ];
+          envConfig = "SERVER_ADDITIONAL_ERL_ARGS=\"+S 2:2\"";
+        };
       };
     in
     (
@@ -394,6 +398,7 @@ in
       && says ''settings sets "auth_ldap.dn_lookup_bind.password". The operator writes settings into the ConfigMap'' password
       && says "extraSpec sets secretBackend" secretBackend
       && says "extraSpec sets tls.disableNonTLSListeners" tlsOnly
+      && says "extraSpec.rabbitmq.envConfig sets RABBITMQ_DIST_PORT" envPort
       && fine == [ ]
     )
     || throw "rabbitmq-cluster refusals: ${
@@ -410,6 +415,7 @@ in
           password
           secretBackend
           tlsOnly
+          envPort
           fine
           ;
       }
@@ -429,6 +435,12 @@ in
       })
       && evalFails (withSpec {
         persistence.storage = "1Gi";
+      })
+      && evalFails (withSpec {
+        override.statefulSet.spec.template.metadata.labels."app.kubernetes.io/part-of" = "other";
+      })
+      && !evalFails (withSpec {
+        override.statefulSet.spec.template.metadata.labels."example.com/team" = "messaging";
       })
       && evalFails (withSpec {
         rabbitmq.additionalConfig = "default_user = admin";
@@ -492,7 +504,8 @@ in
 
   # Under an enforcer: the RabbitMQ pods reach each other on epmd and
   # Erlang distribution, the operator reaches the management API from its
-  # namespace at both ends, and a consumer gets AMQP.
+  # namespace at both ends, and a consumer gets AMQP. The pods get API
+  # server egress only for an image tag below 4.1 or one with no version.
   rabbitmq-cluster-network-policy =
     let
       all = ms (rabbitmq {
@@ -505,8 +518,26 @@ in
       ingress = (policy "rabbitmq-operand-ingress").ingress;
       operatorEgress = policy "messaging-rabbitmq-operator-egress";
       consumerEgress = (policy "consumer-deployment-consumer-egress").egress;
+      # API server egress for the peer discovery backend only below 4.1.
+      apiEgress =
+        tag:
+        builtins.any (r: r ? toEntities && builtins.elem "kube-apiserver" r.toEntities) (
+          (byName "rabbitmq-operand-egress" (
+            ofKind "CiliumNetworkPolicy" (
+              ms (rabbitmq {
+                clusterConfig.image.tag = tag;
+                modules = [ cilium ];
+              })
+            )
+          )).spec.egress
+        );
     in
     (
+      !(builtins.any (r: r ? toEntities && builtins.elem "kube-apiserver" r.toEntities) egress)
+      && apiEgress "4.0.9-management"
+      && apiEgress "management"
+      && !apiEgress "4.1.0-management"
+      &&
       builtins.any (
         r:
         r ? toPorts

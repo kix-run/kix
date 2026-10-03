@@ -3,10 +3,14 @@
 #
 # rabbitmq-operator runs in rabbitmq-system with metrics (a ServiceMonitor
 # through prometheus-operator), and cert-manager issues its webhook
-# certificate. In `messaging`, `rabbitmq` is a one-node rabbitmq-cluster
-# with metrics (a PodMonitor), a settings entry, a default vhost, and an
-# extraSpec plugin. `rabbitmq-ha` runs three nodes, which turns on the
-# derived spread and the PodDisruptionBudget. `perf-test` stands in for an
+# certificate. No Prometheus server runs, so the scrape paths to the
+# operator and to the RabbitMQ pods are not derived here: prometheus-operator
+# and a prometheus instance both answer the `prometheus` alias, and every
+# monitoring package would need its dependency named. In `messaging`, `rabbitmq` is a one-node
+# rabbitmq-cluster with a settings entry, a default vhost, and an extraSpec
+# plugin. `rabbitmq-ha` runs three nodes, which turns on the derived spread
+# and the PodDisruptionBudget. Both have a PodMonitor, since `metrics` is on
+# by default. `perf-test` stands in for an
 # AMQP consumer: it reads `rabbitmq` through `deps.rabbitmq`, which under
 # default deny gives it egress to the RabbitMQ pods on TCP 5672, and
 # publishes and consumes one message a second on the default vhost with the

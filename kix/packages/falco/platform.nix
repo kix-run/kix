@@ -22,4 +22,4 @@ if missing == [ ] then
 else
   "${who}: cluster.capabilities sets ${
     lib.concatMapStringsSep " and " (cap: "${cap} = false") missing
-  }${on}. Falco runs a DaemonSet on every node with host mounts and the BPF, PERFMON, SYS_RESOURCE, and SYS_PTRACE capabilities, which this cluster does not allow. GKE Autopilot forbids both. Remove the falco instance, or run it on a cluster that allows node agents."
+  }${on}. Falco runs a DaemonSet on every node with host mounts and the BPF, PERFMON, SYS_RESOURCE, and SYS_PTRACE capabilities, which this cluster does not allow. If the platform can grant them (a SecurityContextConstraints on OpenShift), set the capability to true in the cluster definition; otherwise remove the falco instance."

@@ -21,6 +21,7 @@ let
   snapshotControllerPackage = import ../../../packages/snapshot-controller;
   secretPackage = import ../../../packages/secret;
   pvcPackage = import ../../../packages/persistent-volume-claim;
+  sourceChecks = import ../../../packages/volsync/checks.nix { inherit lib; };
 
   resticKeys = {
     RESTIC_REPOSITORY = "s3:https://s3.example.com/backups/app";
@@ -217,6 +218,10 @@ in
       cluster = cluster { source.name = lib.concatStrings (lib.replicate 52 "a"); };
       builds = false;
     };
+    not-dns-label = {
+      cluster = cluster { source.name = "Data"; };
+      builds = false;
+    };
     missing-key = {
       cluster = cluster { repositoryKeys = removeAttrs resticKeys [ "RESTIC_PASSWORD" ]; };
       builds = false;
@@ -242,6 +247,96 @@ in
       builds = true;
     };
   };
+
+  # Each refusal's message, from the builder's pure check function, beside
+  # the valid arguments, which pass.
+  volsync-replication-source-messages =
+    let
+      repository.out = {
+        name = "repo";
+        keys = builtins.attrNames resticKeys;
+      };
+      store.out.fqdn = "s3.s3.svc.cluster.test";
+      valid = {
+        name = "data";
+        schedule = "0 3 * * *";
+        copyMethod = "Snapshot";
+        restic = {
+          inherit repository;
+          endpointService = store;
+        };
+      };
+      expect = {
+        not-dns-label = {
+          args.name = "Data";
+          fragment = "not a DNS-1123 label";
+        };
+        long-name = {
+          args.name = lib.concatStrings (lib.replicate 52 "a");
+          fragment = "longer than 51 characters";
+        };
+        schedule = {
+          args.schedule = "0 0 3 * * *";
+          fragment = "is not five cron fields";
+        };
+        copy-method = {
+          args.copyMethod = "None";
+          fragment = "is not Direct, Clone, or Snapshot";
+        };
+        unknown-restic-key = {
+          args.restic = valid.restic // {
+            cacheCapacity = "1Gi";
+          };
+          fragment = "restic sets cacheCapacity";
+        };
+        missing-repository = {
+          args.restic.endpointService = store;
+          fragment = "restic.repository is required";
+        };
+        missing-key = {
+          args.restic.repository.out = {
+            name = "repo";
+            keys = [ "RESTIC_REPOSITORY" ];
+          };
+          fragment = "reads RESTIC_PASSWORD, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY";
+        };
+        store-and-port = {
+          args.restic = valid.restic // {
+            storePort = 443;
+          };
+          fragment = "both endpointService and storePort";
+        };
+        store-without-fqdn = {
+          args.restic = valid.restic // {
+            endpointService.out = { };
+          };
+          fragment = "has no out.fqdn";
+        };
+        not-a-port = {
+          args.restic = {
+            inherit repository;
+            storePort = 70000;
+          };
+          fragment = "is not a port number";
+        };
+        other-mover = {
+          args.extraSpec.rsync = { };
+          fragment = "extraSpec sets rsync";
+        };
+      };
+      problemOf = c: sourceChecks.replicationSourceProblem (valid // c.args);
+      wrong = lib.attrNames (
+        lib.filterAttrs (
+          _: c:
+          let
+            p = problemOf c;
+          in
+          p == null || !(lib.hasInfix c.fragment p)
+        ) expect
+      );
+    in
+    (sourceChecks.replicationSourceProblem valid == null || throw "the valid arguments were refused")
+    && (wrong == [ ] || throw "mkReplicationSource messages did not match: ${toString wrong}");
 
   # A store outside the cluster takes a port number.
   volsync-store-port = check "mkReplicationSource storePort" {

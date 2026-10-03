@@ -50,15 +50,21 @@
 # Single sign-on: with `oidc.enabled`, Immich's OAuth login uses the
 # `oidcProvider` dependency (`kix.contracts.oidcProvider`, such as a keycloak
 # instance wired with `deps.oidcProvider = ref.<ns>.<name>`) in the realm
-# `oidc.realm`, with `oidc.scopes`, `oidc.autoLogin` (`oauth.autoLaunch`),
-# and `oidc.roleClaim`. `oidcClient` is a secret with keys `clientId` and
-# `clientSecret`. Register a confidential client with the redirect URIs
+# `oidc.realm`, with `oidc.scopes` and `oidc.autoLogin` (`oauth.autoLaunch`).
+# `oidcClient` is a secret with keys `clientId` and `clientSecret`. Register a confidential client with the redirect URIs
 # `<public URL>/auth/login`, `<public URL>/user-settings`, and
 # `app.immich:///oauth-callback` for the mobile app. The settings go into
 # the config file, which turns the admin UI read-only. The client id and
 # secret reach the container as environment variables, and the container
 # writes them into a copy of the config file on a memory-backed volume at
-# start, so the ConfigMap holds no credential.
+# start, so the ConfigMap holds no credential. Other OAuth keys, such as
+# `oauth.roleClaim` and `oauth.autoRegister`, go in `settings`.
+#
+# Immich links an OAuth sign-in to an existing local account with the same
+# email and does not check `email_verified`. If the realm lets users set
+# their email without verifying it, a user can take over a local account,
+# the administrator's included. Require verified email in the realm, or
+# give local accounts emails that only their owners control.
 #
 # Immich discovers the provider at the issuer URL, the public URL, and
 # checks that the issuer it reports matches, so it cannot use a Keycloak
@@ -234,26 +240,18 @@ in
         they follow the `machineLearning` dependency. `oauth.clientSecret`
         is refused, because the ConfigMap would hold it; with
         `oidc.enabled` the package sets `oauth.enabled`, `oauth.issuerUrl`,
-        `oauth.clientId`, `oauth.clientSecret`, `oauth.scope`,
-        `oauth.autoLaunch`, and `oauth.roleClaim`, and refuses them here.
+        `oauth.clientId`, `oauth.clientSecret`, `oauth.scope`, and
+        `oauth.autoLaunch`, and refuses them here.
       '';
     };
-    oidc =
-      kix.options.oidc {
-        scopes = [
-          "openid"
-          "email"
-          "profile"
-        ];
-        autoLogin = "`oauth.autoLaunch`";
-      }
-      // {
-        roleClaim = lib.mkOption {
-          type = lib.types.nonEmptyStr;
-          default = "immich_role";
-          description = "The claim whose value, `admin` or `user`, makes a user that Immich creates at first sign-in an administrator or not (`oauth.roleClaim`). Without the claim the user is a regular user. Immich reads it only when it creates the user. In Keycloak, add a mapper on the client that writes this claim.";
-        };
-      };
+    oidc = kix.options.oidc {
+      scopes = [
+        "openid"
+        "email"
+        "profile"
+      ];
+      autoLogin = "`oauth.autoLaunch`";
+    };
     metrics = kix.options.monitor;
     ingress = kix.options.ingress;
     initChownData = lib.mkOption {
@@ -314,7 +312,6 @@ in
             issuerUrl = oidcProviderInfo.issuerUrl;
             scope = lib.concatStringsSep " " config.oidc.scopes;
             autoLaunch = config.oidc.autoLogin;
-            inherit (config.oidc) roleClaim;
           };
         };
         effectiveSettings = lib.recursiveUpdate config.settings oauthSettings;
@@ -399,7 +396,6 @@ in
               "clientId"
               "scope"
               "autoLaunch"
-              "roleClaim"
             ]
         );
         settingsCheck =

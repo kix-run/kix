@@ -1,0 +1,3 @@
+# 2026-10-03 · `kix/packages/openbao` · A failed self-initialization leaves pod 0's volume sealed for good.
+
+OpenBao initializes the barrier and revokes the root token before it runs the `initialize` requests, so a failing request (the red team reproduced one with no ServiceAccount token mounted) leaves a volume that logs `self-initialization failed: refusing to unseal` on every later start. No root token or recovery key exists, and the only way back is to delete the claim `data-<instance>-0` and the pod. Nothing in the deploy says so: the pod crash-loops and the StatefulSet never becomes ready. A readiness or log check that names the recovery would save the search.

@@ -443,7 +443,9 @@ in
           `oidc_scope`, `oidc_groups_claim`, and `oidc_admin_group`, and
           refuses them here; it defaults `oidc_name` to "OpenID Connect".
           `oidc_client_secret` and `ldap_search_password` are always
-          refused, because the value would land in the pod spec.
+          refused, because the value would land in the pod spec. Values
+          reach Harbor as written: the package escapes `$` against
+          Kubernetes' `$(VAR)` expansion.
         '';
       };
     };
@@ -621,12 +623,14 @@ in
         # id and secret are `$(VAR)` references that Kubernetes expands from
         # the env entries before it, so the JSON in the pod spec holds no
         # credential.
+        oidcClientRefs = lib.optionalAttrs oidcOn {
+          oidc_client_id = "$(OIDC_CLIENT_ID)";
+          oidc_client_secret = "$(OIDC_CLIENT_SECRET)";
+        };
         oidcSettings = lib.optionalAttrs oidcOn (
           {
             auth_mode = "oidc_auth";
             oidc_endpoint = oidcProviderInfo.issuerUrl;
-            oidc_client_id = "$(OIDC_CLIENT_ID)";
-            oidc_client_secret = "$(OIDC_CLIENT_SECRET)";
             oidc_scope = lib.concatStringsSep "," config.oidc.scopes;
           }
           // lib.optionalAttrs (config.oidc.groupsClaim != null) {
@@ -650,10 +654,12 @@ in
             (
               k:
               "core.settings sets ${k}, a credential that would land in the pod spec. ${
-                if k == "oidc_client_secret" then
-                  "Set oidc.enabled and wire the client through deps.oidcClient instead."
-                else
+                if k != "oidc_client_secret" then
                   "Harbor has no reference form for it; configure it in Harbor's UI without core.settings."
+                else if oidcOn then
+                  "oidc.enabled already sets it from the oidcClient dependency; remove it from core.settings."
+                else
+                  "Set oidc.enabled and wire the client through deps.oidcClient instead."
               }"
             )
             (
@@ -672,7 +678,13 @@ in
           if settingsProblems != [ ] then
             throw "${who}: ${lib.concatStringsSep " " settingsProblems}"
           else
-            lib.optionalAttrs oidcOn { oidc_name = "OpenID Connect"; } // config.core.settings // oidcSettings;
+            # Kubernetes expands `$(VAR)` and turns `$$` into `$` across the
+            # whole env value, so every `$` except the client references is
+            # doubled to reach Harbor as written.
+            lib.mapAttrs (_: v: if builtins.isString v then lib.replaceStrings [ "$" ] [ "$$" ] v else v) (
+              lib.optionalAttrs oidcOn { oidc_name = "OpenID Connect"; } // config.core.settings // oidcSettings
+            )
+            // oidcClientRefs;
 
         # Every read of a secret dependency goes through these bindings, so
         # a missing key fails here with the secret's name, before any

@@ -52,8 +52,9 @@
 # its latest mover run reports `Successful`. VolSync runs the first sync as
 # soon as the resource is created, so the deploy waits for the first
 # backup or restore. Syncthing movers and rsync destinations report no
-# mover result, so the deploy times out on them
-# (housekeeping/2026-10-03-crd-readiness-cannot-vary-per-resource.md).
+# mover result, so the deploy times out on them; the CRD's readiness
+# applies to every resource of its kind and cannot be overridden per
+# resource.
 #
 # Network policy: the mover pods of a ReplicationSource carry
 # `batch.kubernetes.io/job-name: volsync-src-<name>` (`dst` for a
@@ -113,11 +114,10 @@ let
   # The Lease name compiled into the operator (cmd/main.go).
   leaseName = "b95b3104.backube";
 
-  # VolSync names a mover Job volsync-<src|dst>-<resource name> and hashes
-  # the resource name when the result exceeds 63 characters
-  # (internal/controller/utils/utils.go). The Job controller labels the
-  # Job's pods with its name.
-  maxNameLength = 51;
+  sourceChecks = import ./checks.nix { inherit lib; };
+  inherit (sourceChecks) maxNameLength;
+
+  # The Job controller labels a mover Job's pods with the Job's name.
   moverSelector =
     dir: crName:
     if builtins.stringLength crName > maxNameLength then
@@ -134,23 +134,6 @@ let
     path = "/status/latestMoverStatus/result";
     equals = "Successful";
   };
-
-  # The keys the restic mover reads from the repository Secret by name
-  # (internal/controller/mover/restic/mover.go).
-  resticKeys = [
-    "RESTIC_REPOSITORY"
-    "RESTIC_PASSWORD"
-    "AWS_ACCESS_KEY_ID"
-    "AWS_SECRET_ACCESS_KEY"
-  ];
-
-  # trigger.schedule, as the CRD's pattern and the operator's cron parser
-  # (robfig/cron with five fields and descriptors) accept it.
-  cronField = "(([0-9]+,)*[0-9]+|[0-9]+[/-][0-9]+|\\*(/[0-9]+)?)";
-  scheduleOk =
-    s:
-    builtins.match "@(annually|yearly|monthly|weekly|daily|hourly)" s != null
-    || builtins.match "${cronField}( ${cronField}){4}" s != null;
 
   movers = [
     "rclone"
@@ -298,59 +281,19 @@ in
             what = "ReplicationSource ${consumerScope.namespaceName}/${name}";
             fail = msg: throw "${who}: ${what}: ${msg}";
 
-            unknownRestic = builtins.attrNames (
-              removeAttrs restic [
-                "repository"
-                "endpointService"
-                "storePort"
-              ]
-            );
+            problem = sourceChecks.replicationSourceProblem {
+              inherit
+                name
+                schedule
+                copyMethod
+                restic
+                extraSpec
+                ;
+            };
+            checks = if problem != null then fail problem else null;
             endpointService = restic.endpointService or null;
             storePort = restic.storePort or null;
-            repository =
-              restic.repository
-                or (fail "restic.repository is required: a secret dependency with the keys ${lib.concatStringsSep ", " resticKeys}.");
-            declared = repository.out.keys or [ ];
-            missing = builtins.filter (k: !(builtins.elem k declared)) resticKeys;
-            otherMovers = builtins.filter (m: extraSpec ? ${m}) [
-              "rclone"
-              "rsync"
-              "rsyncTLS"
-              "syncthing"
-              "external"
-            ];
-
-            checks =
-              if builtins.match "[a-z0-9]([-a-z0-9]*[a-z0-9])?" name == null then
-                fail "the name is not a DNS-1123 label. Use lower-case letters, digits, and hyphens."
-              else if builtins.stringLength name > maxNameLength then
-                fail "the name is longer than ${toString maxNameLength} characters, so VolSync hashes its mover Job's name and Kix cannot select the mover pods for network policy. Shorten it."
-              else if !(scheduleOk schedule) then
-                fail "schedule \"${schedule}\" is not five cron fields (minute hour day-of-month month day-of-week) or one of @hourly, @daily, @weekly, @monthly, @yearly, @annually."
-              else if
-                !(builtins.elem copyMethod [
-                  "Direct"
-                  "Clone"
-                  "Snapshot"
-                ])
-              then
-                fail "copyMethod \"${toString copyMethod}\" is not Direct, Clone, or Snapshot."
-              else if unknownRestic != [ ] then
-                fail "restic sets ${lib.concatStringsSep ", " unknownRestic}, which the builder does not know. It takes repository, endpointService, and storePort; put other restic fields in extraSpec.restic."
-              else if missing != [ ] then
-                fail "restic.repository is secret \"${repository.out.name}\", which declares ${
-                  if declared == [ ] then "no keys" else lib.concatStringsSep ", " declared
-                }; the restic mover reads ${lib.concatStringsSep ", " missing} from it. Add them to that secret's keys."
-              else if endpointService != null && storePort != null then
-                fail "restic sets both endpointService and storePort. storePort is the port of a store outside the cluster; remove it."
-              else if
-                storePort != null && !(builtins.isInt storePort && storePort >= 1 && storePort <= 65535)
-              then
-                fail "restic.storePort ${builtins.toJSON storePort} is not a port number."
-              else if otherMovers != [ ] then
-                fail "extraSpec sets ${lib.concatStringsSep ", " otherMovers}, and this builder configures a restic mover. Build other movers with scope.mkCR volsync.out.crds.ReplicationSource."
-              else
-                null;
+            inherit (restic) repository;
 
             # The store's address carried on the repository's name, so
             # the movers get network policy to the store and the resource
@@ -359,10 +302,7 @@ in
               if endpointService == null then
                 repository.out.name
               else
-                kix.facts.connect (builtins.getContext (
-                  endpointService.out.fqdn
-                    or (fail "restic.endpointService has no out.fqdn. Pass an instance whose root is its S3 Service.")
-                )) repository.out.name;
+                kix.facts.connect (builtins.getContext endpointService.out.fqdn) repository.out.name;
 
             spec = kix.mergeGuarded {
               who = "${who}: ${what}";

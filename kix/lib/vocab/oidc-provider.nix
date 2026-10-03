@@ -1,8 +1,9 @@
 # The OpenID Connect provider contract: what an instance wired as an
-# application's `oidcProvider` dependency publishes on root.out, so the
-# application can sign its users in there. A provider (keycloak, or a kix.mkImport standing in for one
-# outside the cluster) passes its out through `check`; a consumer holds its
-# `oidcProvider` dependency to the contract with `assertions`.
+# application's `oidcProvider` dependency publishes on root.out, so that the
+# application can sign users in through it. A provider (keycloak, or a
+# kix.mkImport standing in for one outside the cluster) passes its out
+# through `check`; a consumer holds its `oidcProvider` dependency to the
+# contract with `assertions`.
 #
 # Both fields are functions of a realm name, because one Keycloak serves many
 # realms, each with its own issuer. A provider with one issuer ignores the

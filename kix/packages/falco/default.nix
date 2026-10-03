@@ -43,9 +43,13 @@
 # description), `env`, and the instance's `partsOverlays`.
 #
 # Limits: evaluation refuses a cluster whose `cluster.capabilities` sets
-# `daemonSets` or `privilegedContainers` to false (GKE Autopilot). On a
-# node without one of the socket directories, the kubelet creates it empty.
-# Falco's HTTP output and falcosidekick are not supported.
+# `daemonSets` or `privilegedContainers` to false: GKE Autopilot, and the
+# OpenShift flavour's default. On OpenShift, a SecurityContextConstraints
+# grant for the pod's capabilities and hostPath mounts is the cluster's to
+# write; with it in place, set `cluster.capabilities.privilegedContainers =
+# true`. On a node without one of the socket directories, the kubelet
+# creates it empty. Falco's HTTP, program, and file outputs and
+# falcosidekick are not supported.
 
 {
   scope,
@@ -80,6 +84,13 @@ let
     "required_engine_version"
     "required_plugin_versions"
   ];
+
+  # Falco outputs refused when enabled, with the reason.
+  unsupportedOutputs = {
+    http_output = "no network egress is derived for the HTTP receiver, so under default deny Falco cannot reach it.";
+    program_output = "no network egress is derived for the destinations the program sends alerts to.";
+    file_output = "the container's root filesystem is read-only.";
+  };
 
   # settings paths the package sets, with the reason it owns each.
   lockedSettings = {
@@ -199,12 +210,14 @@ in
         falco.yaml settings, deep-merged over the package's; a list
         replaces the package's list. The package sets
         `json_output: true`, `stdout_output.enabled: true`,
-        `time_format_iso_8601: true`, `log_syslog: false`, and
+        `time_format_iso_8601: true`, `log_stderr: true`, `log_syslog: false`,
         `syslog_output.enabled: false` (the image runs no syslog daemon),
-        and `metrics.output_rule: false`; these may be overridden. It
+        `metrics.interval: 1h`, and `metrics.output_rule: false`; these may
+        be overridden. It
         locks ${lib.concatMapStringsSep ", " (p: "`${p}`") (builtins.attrNames lockedSettings)}.
-        Setting a locked path fails evaluation. `http_output.enabled: true`
-        is refused, because no network egress is derived for it.
+        Setting a locked path fails evaluation. `http_output`,
+        `program_output`, and `file_output` are refused: no network egress
+        is derived for the first two, and the root filesystem is read-only.
       '';
     };
 
@@ -302,9 +315,14 @@ in
                   enabled = true;
                   inherit sockets;
                 };
+                # The plugin's schema requires every engine key once
+                # `engines` is set.
                 docker.enabled = false;
                 podman.enabled = false;
                 containerd.enabled = false;
+                lxc.enabled = false;
+                libvirt_lxc.enabled = false;
+                bpm.enabled = false;
               };
             }
           ];
@@ -312,6 +330,7 @@ in
           json_output = true;
           stdout_output.enabled = true;
           syslog_output.enabled = false;
+          log_stderr = true;
           log_syslog = false;
           webserver = {
             enabled = true;
@@ -323,8 +342,11 @@ in
           };
           # The Prometheus endpoint needs metrics.enabled. The output rule
           # would also write a metrics snapshot to stdout among the alerts.
+          # Falco refuses to start with metrics enabled and no interval;
+          # the interval paces only the output rule.
           metrics = {
             enabled = metricsOn;
+            interval = "1h";
             output_rule = false;
           };
         };
@@ -337,8 +359,9 @@ in
 
         refusals =
           map (l: "settings sets ${l.path}, which the package owns: ${l.reason}.") lockedSet
-          ++ lib.optional ((config.settings.http_output.enabled or false) == true)
-            "settings sets http_output.enabled, which the package does not support: no network egress is derived for the HTTP receiver, so under default deny Falco cannot reach it. Collect the JSON alerts from stdout with the cluster's log pipeline.";
+          ++ map (o: "settings sets ${o}.enabled, which the package does not support: ${unsupportedOutputs.${o}} Collect the JSON alerts from stdout with the cluster's log pipeline.") (
+            builtins.filter (o: (config.settings.${o}.enabled or false) == true) (builtins.attrNames unsupportedOutputs)
+          );
 
         # A locked path whose ancestor settings replaces is refused by
         # mergeGuarded.

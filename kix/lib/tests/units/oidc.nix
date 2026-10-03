@@ -434,13 +434,18 @@ in
 
   # Grafana renders auth.generic_oauth from the provider and reads the
   # client from the secret through env; this instance is the positive
-  # control for the Grafana refusals below.
+  # control for the Grafana refusals below. Role mapping stays in settings.
   oidc-grafana-renders =
     let
       c = grafanaCluster {
-        config.oidc = oidcOn // {
-          autoLogin = true;
-          roleAttributePath = "'Admin'";
+        config = {
+          oidc = oidcOn // {
+            autoLogin = true;
+          };
+          settings = {
+            server.root_url = "https://grafana.example.com";
+            "auth.generic_oauth".role_attribute_path = "'Admin'";
+          };
         };
       };
       ini = grafanaIni c;
@@ -535,8 +540,11 @@ in
   oidc-immich-renders =
     let
       c = immichCluster {
-        config.oidc = oidcOn // {
-          autoLogin = true;
+        config = {
+          oidc = oidcOn // {
+            autoLogin = true;
+          };
+          settings.oauth.roleClaim = "immich_role";
         };
       };
       d = immichDeployment c;
@@ -636,13 +644,24 @@ in
     config.core.env.CONFIG_OVERWRITE_JSON = "{}";
   });
   # core.settings alone also reaches CONFIG_OVERWRITE_JSON.
+  # A `$` in a value is doubled, so Kubernetes' `$(VAR)` expansion hands
+  # Harbor the value as written.
   oidc-harbor-settings-without-oidc =
     harborOverwrite (harborCluster {
       sso = false;
-      config.core.settings.robot_token_duration = 30;
+      config.core.settings = {
+        robot_token_duration = 30;
+        robot_name_prefix = "bot$(x)";
+      };
     }) == {
       robot_token_duration = 30;
+      robot_name_prefix = "bot$$(x)";
     };
+
+  oidc-harbor-settings-ldap-password-refused = evalFails (harborCluster {
+    sso = false;
+    config.core.settings.ldap_search_password = "literal";
+  });
 
   oidc-harbor-admin-group-needs-groups-claim =
     let

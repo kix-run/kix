@@ -61,14 +61,16 @@
 # cluster adds `aliases = [ "otlp" ]` to the instance.
 #
 # Object storage: with `objectStorage` set, Tempo writes blocks to
-# `objectStorage.bucket` under the prefix `<namespace>-<instance>`
+# `objectStorage.bucket` under the prefix `<namespace>/<instance>`
 # (`settings.storage.trace.s3.prefix` changes it), so instances can share a
 # bucket. The live store's write-ahead log stays on the claim. Without
 # endpointService, `settings.storage.trace.s3.endpoint` names the store as
 # `host[:port]` (`s3.<region>.amazonaws.com` for AWS S3), and the pod may
 # open connections outside the cluster on that port, or on 443 (80 with
-# `storage.trace.s3.insecure = true`) when it names none. An endpoint that
-# names a Service in the cluster is refused.
+# `storage.trace.s3.insecure = true`) when it names none. An endpoint whose
+# host ends in `.svc` or `.svc.<cluster domain>`, or is a single label, names
+# a Service in the cluster and is refused; a `<service>.<namespace>` host
+# cannot be told from a public domain and is not.
 #
 #   objectStorage.bucket = "traces";
 #   settings.storage.trace.s3 = {
@@ -97,7 +99,8 @@
 #
 # Limits: one replica (`meta.availability.max = "none"`) and a single
 # tenant. `objectStorage` writes S3 with access keys only; IAM-role
-# credentials, Azure, and Google Cloud Storage are not modelled. The
+# credentials, SSE-C customer keys, Azure, and Google Cloud Storage are not
+# modelled. The
 # generator writes to one remote-write target, without authentication. The
 # package ships no alerts.
 
@@ -186,7 +189,9 @@ let
             # Each instance writes under its own prefix, so two instances
             # can share a bucket.
             s3 = store // {
-              prefix = "${scope.namespaceName}-${name}";
+              # A namespace name cannot hold `/`, so no two instances get
+              # the same prefix.
+              prefix = "${scope.namespaceName}/${name}";
             };
           };
       overrides.defaults = {
@@ -317,12 +322,18 @@ let
       ]
     ];
 
-  # Credential keys of Tempo's S3 client. A value in `settings` would land
-  # in the ConfigMap, so they are refused whatever the backend.
-  s3CredentialKeys = [
-    "access_key"
-    "secret_key"
-    "session_token"
+  # Credential keys of Tempo's S3 client, under `storage.trace.s3`. A value
+  # in `settings` would land in the ConfigMap, so they are refused whatever
+  # the backend.
+  s3CredentialPaths = [
+    [ "access_key" ]
+    [ "secret_key" ]
+    [ "session_token" ]
+    # The SSE-C customer key (tempodb/backend/s3/config.go).
+    [
+      "sse"
+      "encryption_key"
+    ]
   ];
 
   # The S3 credential selectors. Each reads the storageCredentials key of
@@ -365,6 +376,8 @@ let
         "-storage.trace.s3.access_key" = secret "storage.trace.s3.access_key";
         "-storage.trace.s3.secret_key" = secret "storage.trace.s3.secret_key";
         "-storage.trace.s3.session_token" = secret "storage.trace.s3.session_token";
+        "-storage.trace.s3.sse.encryption-key" =
+          "it puts storage.trace.s3.sse.encryption_key, a credential, on the command line, and the package has no way to pass an SSE-C key from a Secret; remove the flag.";
       };
     in
     flags // lib.mapAttrs' (flag: lib.nameValuePair "-${flag}") flags;
@@ -424,9 +437,11 @@ in
         `storage.trace.s3.bucket`, and with an endpointService dependency
         `storage.trace.s3.endpoint` and `storage.trace.s3.insecure`. Setting
         one, or replacing a key above it, fails evaluation. The credential
-        keys `storage.trace.s3.access_key`, `secret_key`, and
-        `session_token` are refused; the storageCredentials dependency
-        supplies the keys.
+        keys `storage.trace.s3.access_key`, `secret_key`, `session_token`,
+        and `sse.encryption_key` are refused; the storageCredentials
+        dependency supplies the access keys. While `metricsGenerator.enabled`
+        is false, `overrides.defaults.metrics_generator.processors` is
+        refused too.
 
         Tempo runs with `-config.expand-env=true`, so `''${NAME}` in a value
         reads the container's env var NAME (set it through `env`); an unset
@@ -447,7 +462,8 @@ in
         `-storage.trace.{backend,local.path}`,
         `-storage.trace.s3.{bucket,endpoint}`, and the live store and
         backend scheduler path flags), the S3 credential flags
-        (`-storage.trace.s3.{access_key,secret_key,session_token}`),
+        (`-storage.trace.s3.{access_key,secret_key,session_token}` and
+        `-storage.trace.s3.sse.encryption-key`),
         `-config.file`, `-config.expand-env`, and `-target` fail evaluation.
       '';
     };
@@ -461,7 +477,7 @@ in
             bucket = lib.mkOption {
               type = lib.types.strMatching "[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]";
               example = "traces";
-              description = "The S3 bucket Tempo writes blocks to (`storage.trace.s3.bucket`). It must exist. Each instance writes under the prefix `<namespace>-<instance>` unless `settings.storage.trace.s3.prefix` names another.";
+              description = "The S3 bucket Tempo writes blocks to (`storage.trace.s3.bucket`). It must exist. Each instance writes under the prefix `<namespace>/<instance>` unless `settings.storage.trace.s3.prefix` names another.";
             };
             endpointScheme = lib.mkOption {
               type = lib.types.nullOr (
@@ -542,9 +558,21 @@ in
       let
         backslashes = backslashPaths [ "settings" ] config.settings;
         s3Settings = config.settings.storage.trace.s3 or { };
-        inlineCredentials = builtins.filter (k: s3Settings ? ${k}) s3CredentialKeys;
+        inlineCredentials = builtins.filter (path: lib.hasAttrByPath path s3Settings) s3CredentialPaths;
+        # Processors configured while the generator is off make Tempo fail
+        # every push to the generator.
         generatorSettings = lib.optionals (!config.metricsGenerator.enabled) (
-          builtins.filter (path: lib.hasAttrByPath path config.settings) generatorPaths
+          builtins.filter (path: lib.hasAttrByPath path config.settings) (
+            generatorPaths
+            ++ [
+              [
+                "overrides"
+                "defaults"
+                "metrics_generator"
+                "processors"
+              ]
+            ]
+          )
         );
         settings =
           if backslashes != [ ] then
@@ -552,11 +580,13 @@ in
           else if generatorSettings != [ ] then
             throw "${who}: settings sets ${
               lib.concatMapStringsSep ", " (lib.concatStringsSep ".") generatorSettings
-            }, which would run the metrics generator outside metricsGenerator. Remove it and set metricsGenerator.enabled = true, which writes to the prometheusServer dependency."
+            }, which configures the metrics generator while metricsGenerator.enabled is false. Remove it, or set metricsGenerator.enabled = true, which runs the generator and writes to the prometheusServer dependency."
           else if inlineCredentials != [ ] then
             throw "${who}: settings sets ${
-              lib.concatMapStringsSep ", " (k: "storage.trace.s3.${k}") inlineCredentials
-            }, a credential that would land in the ConfigMap. Remove it, put the keys in a secret or secret-ref instance, and wire it as the storageCredentials dependency."
+              lib.concatMapStringsSep ", " (
+                path: lib.concatStringsSep "." ([ "storage.trace.s3" ] ++ path)
+              ) inlineCredentials
+            }, a credential that would land in the ConfigMap. Remove it. The package reads the S3 access keys from the storageCredentials dependency (a secret or secret-ref instance); it has no way to pass an SSE-C key from a Secret."
           else
             config.settings;
 
@@ -582,7 +612,10 @@ in
         endpointScheme = if os.endpointScheme != null then os.endpointScheme else "http";
         store =
           if !objectStorageOn then
-            null
+            if endpointService != null then
+              throw "${who}: deps.endpointService is wired and objectStorage is null, so Tempo keeps its blocks on the claim and never reads the store. Set objectStorage.bucket, or remove deps.endpointService."
+            else
+              null
           else if inClusterStore then
             {
               inherit (os) bucket;
@@ -646,12 +679,19 @@ in
             in
             if m == null then
               throw "${who}: settings.storage.trace.s3.endpoint ${builtins.toJSON endpoint} is not host[:port]. Tempo's S3 client reads the address without a scheme and takes TLS from storage.trace.s3.insecure; write it as s3.example.com or s3.example.com:9000."
-            else if lib.hasSuffix ".svc" host || lib.hasSuffix ".svc.${domain}" host then
+            else if !builtins.isBool insecure then
+              throw "${who}: settings.storage.trace.s3.insecure is ${builtins.toJSON insecure}, and Tempo reads a boolean. Set it to true for a store that serves plain HTTP, or remove it."
+            # A single-label host can only resolve inside the cluster, as a
+            # Service short name. `<service>.<namespace>` cannot be told apart
+            # from a public domain and passes.
+            else if
+              lib.hasSuffix ".svc" host
+              || lib.hasSuffix ".svc.${domain}" host
+              || (!lib.hasInfix "." host && !lib.hasPrefix "[" host)
+            then
               throw "${who}: settings.storage.trace.s3.endpoint \"${endpoint}\" names a Service in the cluster, and the pod gets network policy only to stores outside it. Wire the store with deps.endpointService = ref.<namespace>.<instance> and remove the endpoint; set objectStorage.endpointScheme = \"https\" if it serves TLS."
             else if builtins.elemAt m 2 != null then
               lib.toInt (builtins.elemAt m 2)
-            else if !builtins.isBool insecure then
-              throw "${who}: settings.storage.trace.s3.insecure is ${builtins.toJSON insecure}, and Tempo reads a boolean. Set it to true for a store that serves plain HTTP, or remove it."
             else if insecure then
               80
             else

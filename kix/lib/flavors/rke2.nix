@@ -149,14 +149,20 @@ in
         binding = lib.mkDefault "exclusive";
         provider = lib.mkDefault "rke2-metrics-server";
       };
-      # RKE2 embeds Spegel, turned on with `embedded-registry: true` in the
-      # server config. Its containerd lives under /var/lib/rancher/rke2 and
-      # /run/k3s, so a cluster that runs a spegel instance instead sets the
-      # binding to "absent" and the cluster.containerd paths.
-      registryMirror = {
-        binding = lib.mkDefault "exclusive";
-        provider = lib.mkDefault "embedded Spegel (embedded-registry)";
-      };
+      # registryMirror stays unknown: RKE2 embeds Spegel but runs it only
+      # with `embedded-registry: true` in the server config. A cluster that
+      # turns it on sets the binding to "exclusive", so a spegel instance is
+      # refused.
+    };
+
+    # RKE2's agent is k3s's (pkg/agent/config in k3s) with the data
+    # directory /var/lib/rancher/rke2. Its containerd config does not set
+    # discard_unpacked_layers, which containerd defaults to false.
+    cluster.containerd = {
+      socket = lib.mkDefault "/run/k3s/containerd/containerd.sock";
+      registryConfigPath = lib.mkDefault "/var/lib/rancher/rke2/agent/etc/containerd/certs.d";
+      contentPath = lib.mkDefault "/var/lib/rancher/rke2/agent/containerd/io.containerd.content.v1.content";
+      discardUnpackedLayers = lib.mkDefault false;
     };
 
     cluster.capabilities = {

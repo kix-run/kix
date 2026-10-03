@@ -45,10 +45,13 @@
 # (rabbitmq.com/disable-default-topology-spread-constraints), so the
 # derived spread is the only placement rule.
 #
-# Network policy: with an enforcer, the package opens the pods' DNS and API
-# server traffic (the Kubernetes peer discovery backend), Erlang
-# distribution (TCP 25672) and epmd (TCP 4369) between the cluster's own
-# pods, and the operator's calls to the management API (TCP 15672).
+# Network policy: with an enforcer, the package opens the pods' DNS,
+# Erlang distribution (TCP 25672) and epmd (TCP 4369) between the
+# cluster's own pods, and the operator's calls to the management API (TCP
+# 15672). An image tag below 4.1, or one that names no version, also gets
+# API server egress for the Kubernetes peer discovery backend; from 4.1 the
+# operator grants the pods no peer-discovery Role
+# (internal/resource/rabbitmq_resource_builder.go upstream).
 # Consumers get AMQP (TCP 5672) through the client Service reference.
 #
 # Escape hatches: `settings`, rendered as rabbitmq.conf lines into
@@ -63,6 +66,18 @@
 # default vhost. The operator copies the RabbitmqCluster's Kix annotations
 # to the objects it creates; it drops the app.kubernetes.io labels, so
 # `kix gc` does not list those objects as its own.
+#
+# Changes the operator refuses: it sets `ReconcileSuccess=False` and does
+# not advance `status.observedGeneration`, so the deploy waits on
+# `AllReplicasReady` until it times out without naming the reason. Kix
+# cannot see the running cluster's values, so it cannot refuse these at
+# evaluation. They are a lower `replicas` (`UnsupportedOperation`; lowering
+# the availability level from pod to none does this), a smaller
+# `storage.size`, and another `storage.storageClass` (`FailedReconcilePVC`).
+# Read `kubectl get rabbitmqcluster <instance> -o yaml` for the condition.
+# `settings.default_vhost` takes effect only when a node first boots with
+# an empty data directory, so changing it on a running cluster points
+# `out.vhost` at a vhost that does not exist.
 #
 # Exposes:
 #   out.host, out.port  the client Service and its AMQP port (5672).
@@ -116,7 +131,25 @@ let
       "rabbitmq"
       "additionalConfig"
     ]
-  ];
+  ]
+  # The pod labels the operator sets and rabbitmq-operator's
+  # operandSelectors names (internal/metadata/label.go upstream).
+  ++
+    map
+      (label: [
+        "override"
+        "statefulSet"
+        "spec"
+        "template"
+        "metadata"
+        "labels"
+        label
+      ])
+      [
+        "app.kubernetes.io/name"
+        "app.kubernetes.io/component"
+        "app.kubernetes.io/part-of"
+      ];
 
   # rabbitmq.conf keys the package owns, exactly or by prefix, with the
   # reason. Network policy, the PodMonitor, and the operator's management
@@ -166,6 +199,11 @@ in
         k: builtins.match "[^\n\r]*" (renderValue config.settings.${k}) == null
       ) (builtins.attrNames config.settings);
       owned = builtins.filter (k: ownedBy k != null) (builtins.attrNames config.settings);
+      envPorts = builtins.filter (lib.flip lib.hasInfix (config.extraSpec.rabbitmq.envConfig or "")) [
+        "RABBITMQ_NODE_PORT"
+        "RABBITMQ_DIST_PORT"
+        "ERL_EPMD_PORT"
+      ];
       passwords = builtins.filter (k: builtins.match ".*password.*" (lib.toLower k) != null) (
         builtins.attrNames config.settings
       );
@@ -205,6 +243,10 @@ in
       {
         assertion = !(config.extraSpec ? secretBackend);
         message = "extraSpec sets secretBackend, and out.credentials names the Secret ${name}-default-user that the operator creates only without one. Remove secretBackend.";
+      }
+      {
+        assertion = envPorts == [ ];
+        message = "extraSpec.rabbitmq.envConfig sets ${builtins.head envPorts}, which moves a port that out.port and the network policy name. Remove it.";
       }
       {
         assertion = !((config.extraSpec.tls or { }) ? disableNonTLSListeners);
@@ -286,7 +328,9 @@ in
       description = ''
         rabbitmq.conf entries, rendered one `key = value` line each into
         `spec.rabbitmq.additionalConfig`; RabbitMQ applies them over the
-        operator's configuration. `default_vhost` also sets `out.vhost`.
+        operator's configuration. `default_vhost` also sets `out.vhost`;
+        RabbitMQ creates that vhost only when a node first boots with an
+        empty data directory, so set it before the first deploy.
         Refused: keys under `listeners.tcp`, `management.tcp.port`,
         `prometheus.tcp.port`, `distribution.listener`, and
         `cluster_formation`, `default_user`, `default_pass`, keys that
@@ -304,7 +348,14 @@ in
         Merged over the RabbitmqCluster spec. Refused: `replicas`, `image`,
         `resources`, `persistence.storage`, `persistence.storageClassName`,
         `rabbitmq.additionalConfig` (use `settings`), `secretBackend`, and
-        `tls.disableNonTLSListeners`.
+        `tls.disableNonTLSListeners`, the pod template's
+        `app.kubernetes.io/name`, `component`, and `part-of` labels under
+        `override.statefulSet.spec.template.metadata.labels` (the network
+        policy, the PodMonitor, and the operator's own pod cache select
+        them), and an `rabbitmq.envConfig` that sets RABBITMQ_NODE_PORT,
+        RABBITMQ_DIST_PORT, or ERL_EPMD_PORT. `rabbitmq.advancedConfig` is
+        not checked: a listener port it moves leaves network policy on the
+        old port.
         `override.statefulSet.spec.template.spec.topologySpreadConstraints`
         replaces the spread the package derives from the availability
         level.
@@ -346,6 +397,13 @@ in
           topology = clusterConfig.cluster.topology;
         }
       );
+
+      # From 4.1 the operator grants the pods no peer-discovery Role, so
+      # they get no API server egress; a tag with no version keeps it.
+      tagVersion = builtins.match "([0-9]+)\\.([0-9]+).*" config.image.tag;
+      peerDiscoveryApi =
+        tagVersion == null
+        || lib.versionOlder "${builtins.elemAt tagVersion 0}.${builtins.elemAt tagVersion 1}" "4.1";
 
       additionalConfig = lib.concatStrings (
         lib.mapAttrsToList (k: v: "${k} = ${renderValue v}\n") config.settings
@@ -453,7 +511,9 @@ in
           endpointSelector.matchLabels = operandSelector;
           egress = [
             netpol.dnsEgressRule
-            netpol.apiServerEgressRule
+          ]
+          ++ lib.optional peerDiscoveryApi netpol.apiServerEgressRule
+          ++ [
             (netpol.mkServiceEgressRule {
               selector = operandSelector;
               namespace = ns;

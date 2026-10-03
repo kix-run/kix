@@ -97,36 +97,53 @@ in
     };
   };
 
-  # k3s and RKE2 embed Spegel and bind registryMirror exclusive; with the
-  # binding absent the same instance builds.
-  spegel-embedded-refuses-managed = check "spegel under an exclusive binding" {
+  # k3s and RKE2 leave registryMirror unknown, since their embedded
+  # Spegel is off by default, and point the package at their containerd.
+  # A cluster that turns the embedded mirror on binds the role exclusive,
+  # which refuses a managed instance.
+  spegel-embedded-refuses-managed = check "spegel on k3s and RKE2" {
     k3s = {
       cluster = cluster { flavor = k3sFlavor; };
-      builds = false;
+      builds = true;
     };
-    k3s-absent = {
+    k3s-embedded = {
       cluster = cluster {
         flavor = k3sFlavor;
         module = servable // {
-          cluster.roles.registryMirror.binding = lib.mkForce "absent";
+          cluster.roles.registryMirror.binding = "exclusive";
         };
       };
-      builds = true;
+      builds = false;
     };
     rke2 = {
       cluster = cluster { flavor = rke2Flavor; };
-      builds = false;
+      builds = true;
     };
-    rke2-absent = {
+    rke2-embedded = {
       cluster = cluster {
         flavor = rke2Flavor;
         module = servable // {
-          cluster.roles.registryMirror.binding = lib.mkForce "absent";
+          cluster.roles.registryMirror.binding = "exclusive";
         };
       };
-      builds = true;
+      builds = false;
     };
   };
+
+  # The k3s flavour's containerd socket reaches the registry container.
+  spegel-k3s-containerd-paths =
+    let
+      ds = byName "spegel" (
+        ofKind "DaemonSet" (
+          manifests (cluster {
+            flavor = k3sFlavor;
+          })
+        )
+      );
+      sock = lib.findFirst (v: v.name == "containerd-sock") null ds.spec.template.spec.volumes;
+    in
+    sock.hostPath.path == "/run/k3s/containerd/containerd.sock"
+    || throw "spegel on k3s mounts ${builtins.toJSON sock}";
 
   # The role admits one instance per cluster.
   spegel-second-instance = check "two spegel instances" {
@@ -165,6 +182,10 @@ in
           "https://docker.io"
         ];
       };
+      builds = false;
+    };
+    static-bootstrap-peers = {
+      cluster = cluster { instances = withArgs [ "--static-bootstrap-peers=/ip4/10.0.0.1/tcp/5001" ]; };
       builds = false;
     };
     registry-filters = {

@@ -51,7 +51,7 @@ rec {
     };
 
     registryMirror = {
-      description = "Node-local OCI registry mirror that containerd on every node tries before the upstream registry (Spegel), one per cluster. No out contract: the role exists for binding-mode conflicts. k3s and RKE2 embed Spegel and bind the role exclusive, so a spegel instance is refused there at eval.";
+      description = "Node-local OCI registry mirror that containerd on every node tries before the upstream registry (Spegel), one per cluster. No out contract: the role exists for binding-mode conflicts. k3s and RKE2 embed Spegel behind `embedded-registry: true`; a cluster that turns it on binds the role exclusive, so a spegel instance is refused at eval.";
       outContract = [ ];
     };
 

@@ -112,6 +112,19 @@ in
       && cfg.rules_files == [ "/etc/falco/falco_rules.yaml" ]
       && cfg.config_files == [ ]
       && cfg.webserver.listen_port == 8765
+      # Falco exits at startup without a metrics interval, and the
+      # container plugin rejects an engines block missing any engine key.
+      && cfg.metrics.interval == "1h"
+      && cfg.log_stderr
+      && builtins.attrNames (builtins.head cfg.plugins).init_config.engines == [
+        "bpm"
+        "containerd"
+        "cri"
+        "docker"
+        "libvirt_lxc"
+        "lxc"
+        "podman"
+      ]
       && configMapOf "falco-rules" c == null
     )
     || throw "falco defaults: ${builtins.toJSON { inherit sc cfg; }}";
@@ -182,6 +195,8 @@ in
         { metrics.enabled = false; }
         { webserver = null; }
         { http_output.enabled = true; }
+        { program_output.enabled = true; }
+        { file_output.enabled = true; }
       ];
       merged = falcoYaml (withSettings {
         priority = "notice";
@@ -289,6 +304,9 @@ in
       }))
       && lib.hasInfix "daemonSets = false and privilegedContainers = false (provider gke-autopilot)" both
       && lib.hasPrefix "falco security/falco: " both
+      # The fix names no other platform, so it reads right on OpenShift.
+      && !(lib.hasInfix "GKE" both)
+      && lib.hasInfix "set the capability to true" both
       && message {
         daemonSets = true;
         privilegedContainers = null;

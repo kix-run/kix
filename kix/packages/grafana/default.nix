@@ -33,8 +33,9 @@
 #                                `namespace` and `pod` labels that
 #                                loki-logs writes. With `prometheusServer`
 #                                also wired, the service graph reads the
-#                                Prometheus datasource, where Tempo's
-#                                metrics generator writes.
+#                                series Tempo's metrics generator writes
+#                                to that datasource's store when enabled;
+#                                without them the graph is empty.
 #   prometheus (optional)        the operator whose ServiceMonitor scrapes
 #                                Grafana while `metrics.enabled`.
 #   oidcProvider, oidcClient (with `oidc.enabled`)
@@ -87,8 +88,10 @@
 # with the redirect URI `<root_url>/login/generic_oauth`; evaluation fails
 # without a `root_url`.
 # The package sets the authorization, token, and userinfo URLs from the
-# provider's `out.endpoints`, PKCE, `oidc.scopes`, `oidc.autoLogin`, and
-# `oidc.roleAttributePath`, and refuses those keys in `settings` and `env`.
+# provider's `out.endpoints`, PKCE, `oidc.scopes`, and `oidc.autoLogin`,
+# and refuses those keys in `settings` and `env`. Map roles with
+# `settings."auth.generic_oauth".role_attribute_path`, a JMESPath over the
+# token claims (Keycloak puts realm roles under `realm_access.roles`).
 # The browser opens the public authorization URL. Grafana's server dials the
 # token and userinfo URLs, which keycloak gives as its Service address, so
 # Grafana gets derived egress to Keycloak and needs no route to its public
@@ -100,8 +103,9 @@
 #     config.oidc = {
 #       enabled = true;
 #       realm = "main";
-#       roleAttributePath = "contains(realm_access.roles[*], 'admin') && 'Admin' || 'Viewer'";
 #     };
+#     config.settings."auth.generic_oauth".role_attribute_path =
+#       "contains(realm_access.roles[*], 'admin') && 'Admin' || 'Viewer'";
 #     deps.oidcProvider = ref.auth.keycloak;
 #     deps.oidcClient = ref.monitoring-system.grafana-oidc;
 #   };
@@ -388,23 +392,14 @@ in
       };
     };
     metrics = kix.options.monitor;
-    oidc =
-      kix.options.oidc {
-        scopes = [
-          "openid"
-          "profile"
-          "email"
-        ];
-        autoLogin = "`auth.generic_oauth.auto_login`";
-      }
-      // {
-        roleAttributePath = lib.mkOption {
-          type = lib.types.nullOr lib.types.nonEmptyStr;
-          default = null;
-          example = "contains(realm_access.roles[*], 'grafana-admin') && 'Admin' || 'Viewer'";
-          description = "JMESPath over the ID token and userinfo claims that yields the user's Grafana role (`Viewer`, `Editor`, `Admin`, or `GrafanaAdmin`), as `auth.generic_oauth.role_attribute_path`. Keycloak puts realm roles under `realm_access.roles` and client roles under `resource_access.<clientId>.roles`. Null leaves every new user at Grafana's `auto_assign_org_role`.";
-        };
-      };
+    oidc = kix.options.oidc {
+      scopes = [
+        "openid"
+        "profile"
+        "email"
+      ];
+      autoLogin = "`auth.generic_oauth.auto_login`";
+    };
   };
 
   deps.oidcProvider.assertions = dep: kix.contracts.oidcProvider.assertions who dep;
@@ -507,7 +502,8 @@ in
             access = "proxy";
             jsonData =
               # The service graph queries the series Tempo's metrics
-              # generator writes; without them the graph is empty.
+              # generator writes there when enabled; without them the graph
+              # is empty.
               lib.optionalAttrs (prometheusServer != null) {
                 serviceMap.datasourceUid = config.prometheusDatasource.uid;
               }
@@ -611,7 +607,6 @@ in
               scopes = lib.concatStringsSep " " config.oidc.scopes;
               use_pkce = true;
               auto_login = config.oidc.autoLogin;
-              role_attribute_path = config.oidc.roleAttributePath;
             };
         };
 
@@ -628,7 +623,6 @@ in
           "scopes"
           "use_pkce"
           "auto_login"
-          "role_attribute_path"
         ];
 
         ini = lib.mapAttrs (_: lib.filterAttrs (_: v: v != null)) (
