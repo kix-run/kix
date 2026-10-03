@@ -81,6 +81,34 @@ Use JSON when another program will process the result:
   cwd="kix-examples/"
 />
 
+By default the JSON names each changed resource and counts its changed
+fields. Add `--detail fields` to list each field change, old to new:
+
+<Command
+  commands={["kix diff how-to-application --output json --detail fields > kix-diff.json"]}
+  cwd="kix-examples/"
+/>
+
+```json
+{ "path": "$.spec.replicas", "change": "changed", "old": 2, "new": 3 }
+```
+
+`change` is `added`, `removed`, or `changed`. Add `--detail manifests` to
+also include, under `manifests` on each package, the old and new manifest of
+every resource that changes, is added, or is removed, for a tool that shows a
+line-by-line diff:
+
+<Command
+  commands={["kix diff how-to-application --output json --detail manifests > kix-diff.json"]}
+  cwd="kix-examples/"
+/>
+
+At both levels, Secret values and hashes of them read `(secret, not shown)`,
+or `(secret, changed, not shown)` on the new side when the value changes. A
+field value larger than 16 KiB, or a manifest larger than 256 KiB, reads
+`(N bytes, not shown)`. A password written as a literal container `env`
+value or into a ConfigMap is shown as it is, so keep secrets in Secrets.
+
 ## Confirm a clean result
 
 After deploying the intended change, run the command again. A clean result
