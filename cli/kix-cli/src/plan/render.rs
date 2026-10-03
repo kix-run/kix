@@ -260,9 +260,7 @@ fn write_not_checked(out: &mut String, plan: &Plan) {
                 UncheckedReason::WebhookNoDryRun => {
                     "an admission webhook it calls does not support dry run"
                 }
-                UncheckedReason::DependencyNotChecked => {
-                    "the dry run did not reach it"
-                }
+                UncheckedReason::DependencyNotChecked => "the dry run did not reach it",
             };
             let _ = writeln!(out, "  {} {} {}:", output::dim("?"), names.len(), why);
             for name in names.iter().take(5) {
