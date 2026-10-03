@@ -1104,15 +1104,19 @@ pub fn kix_owned_manifests(
 /// manifest.
 ///
 /// An object is unchanged when its `kix.run/identity-hash` names a manifest
-/// in `built` and [`super::drift::check_object`] finds it in sync: the
-/// manifest is the one kix last applied, and every field kix applied still
-/// holds what the server committed then. Comparing the build to the live
-/// view instead would report every field the server filled in, dropped, or
-/// rewrote on that apply, such as an operator's mutating webhook default.
+/// in `built`, [`super::drift::check_object`] finds it in sync, and every
+/// field that manifest sets holds the same value in the kix-owned view (see
+/// [`build_holds_in`]). The view may carry fields the build does not set,
+/// such as the `publisher` StackGres's mutating webhook adds to each
+/// extension; those are what the replacement hides. In sync alone is not
+/// enough: it means the live fields match the apply response, which already
+/// lacks a field the CRD schema pruned and already holds a value a webhook
+/// overwrote. The replacement keeps the live `kix.run/*` annotations, because
+/// both hashes leave them out and a package move would otherwise not show.
 ///
-/// A Secret kix applied with `stringData` is always compared through its
-/// view, with [`restore_string_data`] run against the build manifest of the
-/// same name. The applied-content hash cannot see a change made in `data`.
+/// A Secret kix applied with `stringData` never passes that check (the server
+/// stores no `stringData`), so it is compared through its view, with
+/// [`restore_string_data`] run against the build manifest of the same name.
 pub fn kix_owned_manifests_against(
     objects: impl IntoIterator<Item = DynamicObject>,
     built: &HashMap<String, &serde_json::Value>,
@@ -1123,36 +1127,108 @@ pub fn kix_owned_manifests_against(
         .collect();
     objects
         .into_iter()
-        .map(|obj| match unchanged_since_apply(&obj, built) {
-            Some(manifest) => manifest.clone(),
-            None => {
-                let mut manifest = kix_owned_view(&obj);
-                if let Some(build) = by_id.get(&ResourceId::from_value(&manifest)) {
-                    restore_string_data(&mut manifest, &obj, build);
-                }
-                crate::legacy_domain::upgrade_manifest(&mut manifest);
-                manifest
+        .map(|obj| {
+            let mut view = kix_owned_view(&obj);
+            crate::legacy_domain::upgrade_manifest(&mut view);
+            if let Some(manifest) = unchanged_since_apply(&obj, &view, built) {
+                return manifest;
             }
+            if let Some(build) = by_id.get(&ResourceId::from_value(&view)) {
+                restore_string_data(&mut view, &obj, build);
+            }
+            view
         })
         .collect()
 }
 
-/// The build manifest `obj` was applied from, when nothing has changed it
-/// since. See [`kix_owned_manifests_against`].
-fn unchanged_since_apply<'a>(
+/// The build manifest `obj` was applied from, with the live `kix.run/*`
+/// annotations of `view`, when nothing has changed it since. See
+/// [`kix_owned_manifests_against`].
+fn unchanged_since_apply(
     obj: &DynamicObject,
-    built: &HashMap<String, &'a serde_json::Value>,
-) -> Option<&'a serde_json::Value> {
+    view: &serde_json::Value,
+    built: &HashMap<String, &serde_json::Value>,
+) -> Option<serde_json::Value> {
     let hash = obj
         .metadata
         .annotations
         .as_ref()
         .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))?;
     let manifest = *built.get(hash)?;
-    let applied_string_data =
-        super::fieldsv1::kix_fieldset(obj).is_some_and(|f| f.get("f:stringData").is_some());
-    let in_sync = super::drift::check_object(obj).verdict == super::drift::DriftVerdict::InSync;
-    (in_sync && !applied_string_data).then_some(manifest)
+    if super::drift::check_object(obj).verdict != super::drift::DriftVerdict::InSync
+        || !build_holds_in(manifest, view, "$")
+    {
+        return None;
+    }
+    let mut out = manifest.clone();
+    let live_stamps: Vec<(String, serde_json::Value)> = view
+        .pointer("/metadata/annotations")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(k, _)| keys::is_kix_key(k))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    super::normalize::strip_kix_annotations(&mut out);
+    if !live_stamps.is_empty()
+        && let Some(meta) = out.get_mut("metadata").and_then(|m| m.as_object_mut())
+        && let Some(annotations) = meta
+            .entry("annotations")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+    {
+        annotations.extend(live_stamps);
+    }
+    Some(out)
+}
+
+/// Whether every field `build` sets is present in `live` with an equal
+/// value, using the same equivalences as the diff engine (a server default
+/// or empty list for an absent field, quantity spellings). `live` may hold
+/// fields `build` does not. Lists match by the diff engine's keys, or by
+/// position, and must have the same length. `path` is the diff path of
+/// `build`, which the equivalence rules match on.
+fn build_holds_in(build: &serde_json::Value, live: &serde_json::Value, path: &str) -> bool {
+    use crate::manifest::diff::equivalence::{
+        equivalent_to_unset, is_quantity_field, same_quantity,
+    };
+    use crate::manifest::diff::keyed_lists::{path_leaf, try_key_lists};
+    use serde_json::Value;
+
+    match (build, live) {
+        (Value::Object(b), Value::Object(l)) => {
+            let parent = path_leaf(path);
+            b.iter().all(|(key, bv)| {
+                let child = format!("{path}.{key}");
+                match l.get(key) {
+                    None => equivalent_to_unset(&child, bv),
+                    Some(lv) => {
+                        (bv.is_null() && equivalent_to_unset(&child, lv))
+                            || (is_quantity_field(parent, key) && same_quantity(bv, lv))
+                            || build_holds_in(bv, lv, &child)
+                    }
+                }
+            })
+        }
+        (Value::Array(b), Value::Array(l)) => {
+            if b.len() != l.len() {
+                return false;
+            }
+            match try_key_lists(path_leaf(path), b, l) {
+                Some((b_map, l_map)) => b_map.iter().all(|(key, bv)| {
+                    l_map
+                        .get(key)
+                        .is_some_and(|lv| build_holds_in(bv, lv, &format!("{path}[{key}]")))
+                }),
+                None => b
+                    .iter()
+                    .zip(l)
+                    .enumerate()
+                    .all(|(i, (bv, lv))| build_holds_in(bv, lv, &format!("{path}[{i}]"))),
+            }
+        }
+        _ => build == live,
+    }
 }
 
 /// Serialise a fetched object into a whole-manifest `Value`.
@@ -1513,8 +1589,29 @@ mod tests {
     /// A live SGCluster after an apply: the operator's webhook added
     /// `publisher` to each extension, inside a list kix owns whole.
     fn webhook_defaulted_cluster(extensions: Value, applied_hash: Option<&str>) -> DynamicObject {
-        let mut annotations: BTreeMap<String, String> =
-            [(keys::IDENTITY_HASH.to_string(), "h-pg".to_string())].into();
+        applied_cluster(
+            json!({"postgres": {"extensions": extensions}}),
+            &[(keys::IDENTITY_HASH, "h-pg")],
+            applied_hash,
+        )
+    }
+
+    /// A live SGCluster whose kix Apply entry owns the given annotations and
+    /// `spec.postgres.extensions`. The applied-content hash is computed from
+    /// the object unless `applied_hash` overrides it.
+    fn applied_cluster(
+        spec: Value,
+        owned_annotations: &[(&str, &str)],
+        applied_hash: Option<&str>,
+    ) -> DynamicObject {
+        let mut annotations: BTreeMap<String, String> = owned_annotations
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let annotation_fields: serde_json::Map<String, Value> = owned_annotations
+            .iter()
+            .map(|(k, _)| (format!("f:{k}"), json!({})))
+            .collect();
         let mut obj = DynamicObject {
             metadata: ObjectMeta {
                 name: Some("postgres".into()),
@@ -1525,7 +1622,7 @@ mod tests {
                     "Apply",
                     None,
                     json!({
-                        "f:metadata": {"f:annotations": {format!("f:{}", keys::IDENTITY_HASH): {}}},
+                        "f:metadata": {"f:annotations": annotation_fields},
                         "f:spec": {"f:postgres": {"f:extensions": {}}}
                     }),
                 )]),
@@ -1535,7 +1632,7 @@ mod tests {
             data: json!({
                 "apiVersion": "stackgres.io/v1",
                 "kind": "SGCluster",
-                "spec": {"postgres": {"extensions": extensions}}
+                "spec": spec
             }),
         };
         let hash = match applied_hash {
@@ -1545,6 +1642,107 @@ mod tests {
         annotations.insert(keys::APPLIED_HASH.to_string(), hash);
         obj.metadata.annotations = Some(annotations);
         obj
+    }
+
+    fn built_cluster(spec: Value, annotations: Value) -> Value {
+        json!({
+            "apiVersion": "stackgres.io/v1",
+            "kind": "SGCluster",
+            "metadata": {"name": "postgres", "namespace": "data", "annotations": annotations},
+            "spec": spec
+        })
+    }
+
+    fn diff_paths(built: &Value, compared: &Value) -> Vec<String> {
+        let config = crate::manifest::diff::DiffConfig::default();
+        crate::manifest::diff::engine::structural_diff(built, compared, "$", &config)
+            .into_iter()
+            .map(|d| d.path)
+            .collect()
+    }
+
+    /// A field the CRD schema pruned on apply is absent from the live object,
+    /// although drift finds it in sync. It shows as missing.
+    #[test]
+    fn a_field_pruned_on_apply_shows_in_the_comparison() {
+        let built = built_cluster(
+            json!({"postgres": {"extensions": [{"name": "cube"}], "flavour": "babelfish"}}),
+            json!({keys::IDENTITY_HASH: "h-pg"}),
+        );
+        let by_hash: HashMap<String, &Value> = [("h-pg".to_string(), &built)].into();
+        let live = applied_cluster(
+            json!({"postgres": {"extensions": [{"name": "cube"}]}}),
+            &[(keys::IDENTITY_HASH, "h-pg")],
+            None,
+        );
+        let out = kix_owned_manifests_against([live], &by_hash).remove(0);
+        assert_eq!(diff_paths(&built, &out), vec!["$.spec.postgres.flavour"]);
+    }
+
+    /// A value a mutating webhook overwrote on apply reads as changed, while
+    /// the field it added beside it still does not show.
+    #[test]
+    fn a_value_a_webhook_overwrote_shows_in_the_comparison() {
+        let built = built_cluster(
+            json!({"postgres": {"extensions": [{"name": "cube", "version": "1.5"}]}}),
+            json!({keys::IDENTITY_HASH: "h-pg"}),
+        );
+        let by_hash: HashMap<String, &Value> = [("h-pg".to_string(), &built)].into();
+        let live = webhook_defaulted_cluster(
+            json!([{"name": "cube", "version": "1.6", "publisher": "com.ongres"}]),
+            None,
+        );
+        let out = kix_owned_manifests_against([live], &by_hash).remove(0);
+        assert_eq!(
+            out["spec"]["postgres"]["extensions"][0]["version"],
+            json!("1.6")
+        );
+        assert!(
+            diff_paths(&built, &out)
+                .contains(&"$.spec.postgres.extensions[cube].version".to_string())
+        );
+    }
+
+    /// The identity and applied-content hashes leave out `kix.run/*`
+    /// annotations, so a package move or a hand-edited stamp keeps both. The
+    /// comparison carries the live stamps and shows the change.
+    #[test]
+    fn a_changed_stamp_annotation_shows_in_the_comparison() {
+        let spec = json!({"postgres": {"extensions": [{"name": "cube"}]}});
+        let built = built_cluster(
+            spec.clone(),
+            json!({keys::IDENTITY_HASH: "h-pg", keys::PACKAGE: "postgres-new"}),
+        );
+        let by_hash: HashMap<String, &Value> = [("h-pg".to_string(), &built)].into();
+
+        let moved = applied_cluster(
+            spec.clone(),
+            &[
+                (keys::IDENTITY_HASH, "h-pg"),
+                (keys::PACKAGE, "postgres-old"),
+            ],
+            None,
+        );
+        let out = kix_owned_manifests_against([moved], &by_hash).remove(0);
+        assert_eq!(
+            out["metadata"]["annotations"][keys::PACKAGE],
+            json!("postgres-old")
+        );
+
+        let extra = applied_cluster(
+            spec,
+            &[
+                (keys::IDENTITY_HASH, "h-pg"),
+                (keys::PACKAGE, "postgres-new"),
+                (keys::LIFECYCLE, "stateful"),
+            ],
+            None,
+        );
+        let out = kix_owned_manifests_against([extra], &by_hash).remove(0);
+        assert_eq!(
+            out["metadata"]["annotations"][keys::LIFECYCLE],
+            json!("stateful")
+        );
     }
 
     #[test]
