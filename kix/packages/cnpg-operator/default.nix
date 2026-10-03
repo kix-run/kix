@@ -1,0 +1,691 @@
+# cnpg-operator: the CloudNativePG operator, which runs PostgreSQL clusters
+# declared as postgresql.cnpg.io custom resources.
+#
+# The package applies the postgresql.cnpg.io CustomResourceDefinitions
+# (crds/, vendored from the release manifest), the operator's ClusterRole
+# (rbac/, from the same manifest), the operator Deployment, the webhook
+# Service, and the two admission webhook configurations with every entry.
+# When it starts, the operator creates its CA and serving certificate in the
+# Secrets cnpg-ca-secret and cnpg-webhook-cert and writes the certificate
+# into each webhook entry's `clientConfig.caBundle`. Kix never sets
+# caBundle, so the operator is its only writer. The Deployment requires the
+# two configurations, because the operator fails to start when it cannot
+# read them.
+#
+# Every webhook entry has failurePolicy Fail, and until the operator has
+# written its caBundle the API server cannot call it, so a custom resource
+# created in that window is refused. Every CRD handle in `out.crds`
+# therefore adds the webhook-check Job to the requires of each custom
+# resource built from it. The Job runs a server-side dry-run create of a
+# Cluster, which succeeds only once the mutating and validating webhooks for
+# Cluster both answer.
+#
+# A cluster runs one instance (`conflictsWith`): the definitions and webhook
+# configurations are cluster-wide, and the operator fixes the names of the
+# webhook Service (cnpg-webhook-service), its certificate Secrets, and, with
+# ENABLE_WEBHOOK_NAMESPACE_SUFFIX off, the webhook configurations
+# (internal/cmd/manager/controller/controller.go and
+# internal/configuration/configuration.go upstream). The operator watches
+# every namespace, as upstream ships it; WATCH_NAMESPACE is refused because
+# the ClusterRole and the webhooks stay cluster-wide.
+#
+# The operator labels the Secrets it creates as owned by its Deployment,
+# which it finds by the label app.kubernetes.io/name=cloudnative-pg in its
+# namespace, so the pods carry that label and no other Deployment in the
+# namespace may.
+#
+# Minimal instance:
+#
+#   instances.cnpg-system.cnpg-operator.package = packages.cnpg-operator;
+#
+# DI deps: none.
+#
+# Replicas: one at availability none and pod, two from node up. The
+# replicas elect a leader for reconciling, and each serves the webhooks.
+#
+# Escape hatches: `env` (operator variables from
+# internal/configuration/configuration.go, such as INSTANCES_ROLLOUT_DELAY
+# or DRAIN_TAINTS), `webhookCheck.image`, and the instance's
+# `partsOverlays`.
+#
+# Exposes:
+#   out.crds.<Kind>   CRD handles for scope.mkCR: Cluster, Database,
+#                     DatabaseRole, ImageCatalog, ClusterImageCatalog,
+#                     Publication, and Subscription.
+#                       scope.mkCR cnpgOperator.out.crds.Cluster { ... }
+#   out.operandSelectors.cluster crName
+#                     the labels of a Cluster's instance and Job pods.
+#   out.podSelector   the operator pods' labels.
+#   out.release       the CloudNativePG release.
+#
+# Network policy: the webhook intent admits the API server on TCP 9443 to
+# every pod of the package, the webhook-check Job's included, where nothing
+# listens on that port.
+#
+# Limits: Backup, ScheduledBackup, and Pooler have definitions (the operator
+# watches them) and no handle, so no package builds them. The operator's
+# own metrics are not scraped and the package ships no alerts. Network
+# policy for operand pods comes from cnpg-cluster.
+#
+# root = the operator Deployment; the webhook check runs after it.
+#
+# Moving to another release: set `release` and the digest of `image`
+# (`crane digest ghcr.io/cloudnative-pg/cloudnative-pg:<release>`), move the
+# tag in crds/sources.txt and rbac/sources.txt, run
+# `uv run scripts/vendor-crds.py cnpg-operator`, compare the webhook entries
+# below with the release manifest's webhook configurations, then run the
+# kix-lib test cnpg-operator-sources-match-release and
+# every-package-evaluates.
+
+{
+  scope,
+  lib,
+  kix,
+  availability,
+}:
+
+let
+  # meta.version, the default image.tag, and the tag in crds/sources.txt and
+  # rbac/sources.txt.
+  release = "1.30.1";
+  minorOf = lib.versions.majorMinor;
+
+  name = scope.instanceName;
+  ns = scope.namespaceName;
+  who = "cnpg-operator ${ns}/${name}";
+
+  group = "postgresql.cnpg.io";
+  vendored = file: (builtins.fromJSON (builtins.readFile ./crds/${file})).spec;
+  readJSON = file: builtins.fromJSON (builtins.readFile file);
+
+  # The operator finds its own Deployment by this label
+  # (OperatorDeploymentLabelSelector in controller.go).
+  podLabels = {
+    "app.kubernetes.io/name" = "cloudnative-pg";
+    "app.kubernetes.io/instance" = name;
+  };
+
+  # Fixed by the operator: it issues its serving certificate for this
+  # Service and reads the configurations by these names.
+  webhookServiceName = "cnpg-webhook-service";
+  mutatingConfigName = "cnpg-mutating-webhook-configuration";
+  validatingConfigName = "cnpg-validating-webhook-configuration";
+  webhookPort = 9443;
+
+  # The release manifest's webhook entries: each admits CREATE and UPDATE
+  # of one kind, served at /<mutate|validate>-postgresql-cnpg-io-v1-<kind>.
+  mutatingKinds = [
+    "backup"
+    "cluster"
+    "database"
+    "scheduledbackup"
+  ];
+  validatingKinds = [
+    "backup"
+    "cluster"
+    "database"
+    "pooler"
+    "scheduledbackup"
+  ];
+
+  # The instance pods carry cnpg.io/podRole=instance as well; this selects
+  # the initdb and join Job pods of the Cluster too.
+  operandSelectors.cluster = crName: { "cnpg.io/cluster" = crName; };
+
+  fieldRef = path: { valueFrom.fieldRef.fieldPath = path; };
+
+  ready.condition = {
+    type = "Ready";
+    status = "True";
+  };
+  # Database, DatabaseRole, Publication, and Subscription report the result
+  # of their last reconcile as the boolean status.applied.
+  applied = {
+    path = "/status/applied";
+    equals = "true";
+  };
+in
+{
+  meta = {
+    version = release;
+    description = "CloudNativePG operator: runs PostgreSQL clusters declared as postgresql.cnpg.io resources";
+    owner = "platform";
+    defaultAliases = [ "cnpgOperator" ];
+    conflictsWith = [ "cluster:cnpgOperator" ];
+    # The release's supported Kubernetes versions start at 1.31
+    # (docs/src/supported_releases.md upstream); the definitions use CEL
+    # validation rules.
+    k8s.minVersion = "1.31";
+    network.intents.webhooks.ingress = [
+      {
+        from = "apiserver";
+        ports = [
+          {
+            port = webhookPort;
+            protocol = "TCP";
+          }
+        ];
+      }
+    ];
+  };
+
+  assertions =
+    { config, ... }:
+    [
+      {
+        assertion = minorOf config.image.tag == minorOf release;
+        message = "image.tag \"${config.image.tag}\" is not a CloudNativePG ${minorOf release} release, and the definitions under kix/packages/cnpg-operator/crds and the ClusterRole under rbac are vendored from ${release}. Set image.tag to a ${minorOf release}.x tag, or move the package to another release as its header describes.";
+      }
+    ];
+
+  options = {
+    image = kix.options.image {
+      repository = "ghcr.io/cloudnative-pg/cloudnative-pg";
+      tag = release;
+      digest = "sha256:923c267ec29636db3bee20f993d0ec4973fa22998e1adad37da79e4d32b5bc07";
+      description = "Operator image. Its major.minor must be the package's release. The operator also runs it as the init container of every PostgreSQL pod (OPERATOR_IMAGE_NAME).";
+    };
+
+    # The release manifest's values.
+    resources = kix.options.resources {
+      requests = {
+        cpu = "100m";
+        memory = "100Mi";
+      };
+      limits = {
+        cpu = "100m";
+        memory = "200Mi";
+      };
+    };
+
+    webhookCheck.image = kix.options.image {
+      repository = "registry.k8s.io/kubectl";
+      tag = "v1.37.1";
+      digest = "sha256:b7cab618e281b1ee7484e7b706a96e2135fbb6e072c2a573a7dab4e87d7f2385";
+      description = "Image of the webhook-check Job. Its entrypoint must be kubectl.";
+    };
+
+    env = kix.options.env // {
+      description = "Extra operator environment variables from CloudNativePG's operator configuration, such as INSTANCES_ROLLOUT_DELAY or DRAIN_TAINTS. A value is a string, a `fieldRef`, or `kix.untrackedRef`. The variables the package sets or refuses fail with the reason.";
+    };
+  };
+
+  build =
+    {
+      self,
+      config,
+      clusterConfig,
+      ...
+    }:
+    let
+      env = kix.mkEnvVars (
+        kix.mergeEnv {
+          inherit who;
+          owned = [
+            {
+              vars = {
+                OPERATOR_IMAGE_NAME = kix.image.ref config.image;
+                OPERATOR_NAMESPACE = fieldRef "metadata.namespace";
+              };
+              from = "the image option and the instance's namespace";
+              fix = "Set image instead.";
+            }
+            {
+              vars.KUBERNETES_CLUSTER_DOMAIN = clusterConfig.clusterDomain;
+              from = "the cluster's clusterDomain";
+              fix = "Remove it.";
+            }
+            {
+              names = [ "WATCH_NAMESPACE" ];
+              from = "this package, which leaves it unset so the operator watches every namespace";
+              fix = "The ClusterRole and the webhooks stay cluster-wide, and a cluster runs one CloudNativePG operator. Remove it.";
+            }
+            {
+              names = [
+                "WEBHOOK_CERT_DIR"
+                "MANAGE_WEBHOOK_CONFIGURATIONS"
+                "ENABLE_WEBHOOK_NAMESPACE_SUFFIX"
+              ];
+              from = "this package: the webhook configurations it renders carry no caBundle and the operator's default names, so the operator must issue its certificate and write caBundle into them";
+              fix = "Remove it.";
+            }
+            {
+              names = [
+                "INHERITED_ANNOTATIONS"
+                "INHERITED_LABELS"
+              ];
+              from = "this package: the operator would copy matching Kix annotations from a Cluster to its pods and claims, and `kix gc` treats an object carrying a Kix identity hash as its own";
+              fix = "Set spec.inheritedMetadata in the cnpg-cluster's extraSpec instead.";
+            }
+          ];
+        } config.env
+      );
+
+      inherit (scope.rbac)
+        allow
+        grant
+        mkClusterRoleSet
+        mkRoleSet
+        ;
+
+      subjects = [
+        {
+          kind = "ServiceAccount";
+          name = self.serviceAccount.out.name;
+          namespace = ns;
+        }
+      ];
+
+      webhookEntry =
+        type: kind:
+        let
+          prefix = if type == "mutate" then "m" else "v";
+        in
+        {
+          name = "${prefix}${kind}.cnpg.io";
+          admissionReviewVersions = [ "v1" ];
+          # The fixed name, without the Service's context: the Deployment
+          # requires these configurations, and the Service selects the
+          # Deployment's pods, so a reference would close a cycle.
+          clientConfig.service = {
+            name = webhookServiceName;
+            namespace = ns;
+            path = "/${type}-postgresql-cnpg-io-v1-${kind}";
+            port = 443;
+          };
+          failurePolicy = "Fail";
+          rules = [
+            {
+              apiGroups = [ group ];
+              apiVersions = [ "v1" ];
+              operations = [
+                "CREATE"
+                "UPDATE"
+              ];
+              resources = [ "${kind}s" ];
+            }
+          ];
+          sideEffects = "None";
+        };
+
+      # The webhook check. With both configurations in place from the start,
+      # a dry-run create of a Cluster succeeds only when the API server can
+      # call both Cluster webhooks and trusts the operator's certificate.
+      # kubectl exits non-zero otherwise, and the Job retries.
+      checkName = "${name}-webhook-check";
+      checkLabels."app.kubernetes.io/name" = checkName;
+      checkFile = "cluster.json";
+      checkCluster = builtins.toJSON {
+        apiVersion = "${group}/v1";
+        kind = "Cluster";
+        # A fixed name fails the dry-run when a Cluster of that name exists.
+        metadata = {
+          generateName = "${checkName}-";
+          namespace = ns;
+        };
+        spec = {
+          instances = 1;
+          storage.size = "1Gi";
+        };
+      };
+
+      # Each handle adds the webhook check to the requires of every custom
+      # resource built from it.
+      withCheck = args: args // { requires = (args.requires or [ ]) ++ [ self.webhookCheck ]; };
+      gate =
+        crd:
+        crd
+        // {
+          out = crd.out // {
+            cr = args: crd.out.cr (withCheck args);
+            mkCR = consumerScope: args: crd.out.mkCR consumerScope (withCheck args);
+          };
+        };
+    in
+    {
+      serviceAccount = scope.mkResource {
+        apiVersion = "v1";
+        kind = "ServiceAccount";
+        inherit name;
+      };
+
+      clusterRole = mkClusterRoleSet scope {
+        inherit subjects;
+        roles.${name} = (readJSON ./rbac/clusterrole-cnpg-manager.json).rules;
+      };
+
+      # The operator watches every kind, so every definition is applied,
+      # with or without a handle.
+      crds = {
+        backups = scope.mkCRD { spec = vendored "backups.${group}.json"; };
+        scheduledBackups = scope.mkCRD { spec = vendored "scheduledbackups.${group}.json"; };
+        poolers = scope.mkCRD { spec = vendored "poolers.${group}.json"; };
+        failoverQuorums = scope.mkCRD { spec = vendored "failoverquorums.${group}.json"; };
+        clusters = gate (
+          scope.mkCRD {
+            spec = vendored "clusters.${group}.json";
+            readiness = ready;
+            # The instances dial the hosts a Cluster names (externalClusters).
+            factBehavior = {
+              endpoint = "terminate";
+              podSelector = cr: operandSelectors.cluster cr.metadata.name;
+            };
+          }
+        );
+        databases = gate (
+          scope.mkCRD {
+            spec = vendored "databases.${group}.json";
+            readiness = applied;
+          }
+        );
+        databaseRoles = gate (
+          scope.mkCRD {
+            spec = vendored "databaseroles.${group}.json";
+            readiness = applied;
+          }
+        );
+        publications = gate (
+          scope.mkCRD {
+            spec = vendored "publications.${group}.json";
+            readiness = applied;
+          }
+        );
+        subscriptions = gate (
+          scope.mkCRD {
+            spec = vendored "subscriptions.${group}.json";
+            readiness = applied;
+          }
+        );
+        imageCatalogs = gate (scope.mkCRD { spec = vendored "imagecatalogs.${group}.json"; });
+        clusterImageCatalogs = gate (scope.mkCRD { spec = vendored "clusterimagecatalogs.${group}.json"; });
+      };
+
+      webhookService = scope.mkResource {
+        apiVersion = "v1";
+        kind = "Service";
+        name = webhookServiceName;
+        spec = {
+          selector = self.operatorDeployment.out.selector;
+          ports = [
+            {
+              name = "webhook";
+              port = 443;
+              targetPort = webhookPort;
+              protocol = "TCP";
+            }
+          ];
+        };
+      };
+
+      mutatingWebhook = scope.mkClusterResource {
+        apiVersion = "admissionregistration.k8s.io/v1";
+        kind = "MutatingWebhookConfiguration";
+        name = mutatingConfigName;
+        extra.webhooks = map (webhookEntry "mutate") mutatingKinds;
+      };
+      validatingWebhook = scope.mkClusterResource {
+        apiVersion = "admissionregistration.k8s.io/v1";
+        kind = "ValidatingWebhookConfiguration";
+        name = validatingConfigName;
+        extra.webhooks = map (webhookEntry "validate") validatingKinds;
+      };
+
+      operatorDeployment = scope.mkDeployment {
+        inherit name;
+        requires = [
+          self.mutatingWebhook
+          self.validatingWebhook
+        ]
+        ++ builtins.attrValues self.crds
+        ++ builtins.attrValues self.clusterRole;
+        spec = {
+          replicas = kix.availability.pick availability {
+            none = 1;
+            pod = 1;
+            node = 2;
+            zone = 2;
+          };
+          selector.matchLabels = podLabels;
+          template = {
+            metadata.labels = podLabels;
+            spec = {
+              serviceAccount = self.serviceAccount;
+              # The release manifest's value.
+              terminationGracePeriodSeconds = 10;
+              securityContext = {
+                runAsNonRoot = true;
+                seccompProfile.type = "RuntimeDefault";
+              };
+              containers = [
+                (
+                  {
+                    name = "manager";
+                    image = kix.image.ref config.image;
+                    command = [ "/manager" ];
+                    args = [
+                      "controller"
+                      "--leader-elect"
+                      "--max-concurrent-reconciles=10"
+                      "--webhook-port=${toString webhookPort}"
+                    ];
+                    inherit env;
+                    ports = [
+                      (kix.port "metrics" 8080)
+                      (kix.port "webhook-server" webhookPort)
+                    ];
+                    startupProbe = {
+                      httpGet = {
+                        path = "/readyz";
+                        port = webhookPort;
+                        scheme = "HTTPS";
+                      };
+                      periodSeconds = 5;
+                      failureThreshold = 6;
+                    };
+                    livenessProbe.httpGet = {
+                      path = "/readyz";
+                      port = webhookPort;
+                      scheme = "HTTPS";
+                    };
+                    readinessProbe.httpGet = {
+                      path = "/readyz";
+                      port = webhookPort;
+                      scheme = "HTTPS";
+                    };
+                    resources = config.resources;
+                    # The image's user; the operator writes only under
+                    # /controller and reads its certificates.
+                    securityContext = {
+                      allowPrivilegeEscalation = false;
+                      capabilities.drop = [ "ALL" ];
+                      readOnlyRootFilesystem = true;
+                      runAsUser = 10001;
+                      runAsGroup = 10001;
+                    };
+                    volumeMounts = [
+                      {
+                        name = "scratch-data";
+                        mountPath = "/controller";
+                      }
+                      {
+                        name = "webhook-certificates";
+                        mountPath = "/run/secrets/cnpg.io/webhook";
+                        readOnly = true;
+                      }
+                    ];
+                  }
+                  // lib.optionalAttrs (config.image.pullPolicy != null) {
+                    imagePullPolicy = config.image.pullPolicy;
+                  }
+                )
+              ];
+              volumes = [
+                {
+                  name = "scratch-data";
+                  emptyDir = { };
+                }
+                {
+                  name = "webhook-certificates";
+                  secret = {
+                    # The operator creates this Secret when it starts.
+                    secretName = kix.untrackedRef {
+                      name = "cnpg-webhook-cert";
+                      by = "self";
+                    };
+                    optional = true;
+                  };
+                }
+              ];
+            };
+          };
+        };
+      };
+
+      webhookCheckServiceAccount = scope.mkResource {
+        apiVersion = "v1";
+        kind = "ServiceAccount";
+        name = checkName;
+        labels = checkLabels;
+        extra.automountServiceAccountToken = true;
+      };
+
+      # A dry-run create needs the create verb; the API server persists
+      # nothing.
+      webhookCheckRole = mkRoleSet scope {
+        subjects = [
+          {
+            kind = "ServiceAccount";
+            name = self.webhookCheckServiceAccount.out.name;
+            namespace = ns;
+          }
+        ];
+        labels = checkLabels;
+        roles.${checkName} = grant [
+          (allow [ "create" ] (scope.rbac.group group [ "clusters" ]).clusters)
+        ];
+      };
+
+      webhookCheckManifest = scope.mkResource {
+        apiVersion = "v1";
+        kind = "ConfigMap";
+        name = checkName;
+        labels = checkLabels;
+        data.${checkFile} = checkCluster;
+      };
+
+      webhookCheckMount = kix.mount.configMap self.webhookCheckManifest {
+        mountPath = "/check";
+        readOnly = true;
+      };
+
+      webhookCheck =
+        {
+          name = checkName;
+          labels = checkLabels;
+          # A Job's pod template is immutable, so a changed check replaces
+          # the Job.
+          annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
+          requires = [
+            self.operatorDeployment
+            self.webhookService
+            self.crds.clusters
+          ]
+          ++ builtins.attrValues self.webhookCheckRole;
+          spec = {
+            # The kubelet restarts the container with a growing delay (10 s
+            # doubling to 5 min), so eight attempts span about 15 minutes.
+            backoffLimit = 8;
+            template = {
+              metadata.labels = checkLabels;
+              spec = {
+                restartPolicy = "OnFailure";
+                serviceAccount = self.webhookCheckServiceAccount;
+                enableServiceLinks = false;
+                # The image's default user is root; kubectl needs none.
+                securityContext = {
+                  runAsNonRoot = true;
+                  runAsUser = 65532;
+                  runAsGroup = 65532;
+                  seccompProfile.type = "RuntimeDefault";
+                };
+                containers = [
+                  (
+                    {
+                      name = "webhook-check";
+                      image = kix.image.ref config.webhookCheck.image;
+                      args = [
+                        "create"
+                        "--dry-run=server"
+                        "--output=name"
+                        "--filename=/check/${checkFile}"
+                      ];
+                      # kubectl writes its discovery cache under $HOME.
+                      env = [
+                        {
+                          name = "HOME";
+                          value = "/tmp";
+                        }
+                      ];
+                      securityContext = {
+                        allowPrivilegeEscalation = false;
+                        capabilities.drop = [ "ALL" ];
+                        readOnlyRootFilesystem = true;
+                      };
+                      # A ResourceQuota on requests or limits refuses a pod
+                      # that does not set them, and every CloudNativePG
+                      # custom resource waits on this Job.
+                      resources = {
+                        requests = {
+                          cpu = "10m";
+                          memory = "32Mi";
+                        };
+                        limits = {
+                          cpu = "200m";
+                          memory = "128Mi";
+                        };
+                      };
+                      volumeMounts = [
+                        {
+                          name = "tmp";
+                          mountPath = "/tmp";
+                        }
+                      ];
+                    }
+                    // lib.optionalAttrs (config.webhookCheck.image.pullPolicy != null) {
+                      imagePullPolicy = config.webhookCheck.image.pullPolicy;
+                    }
+                  )
+                ];
+                volumes = [
+                  {
+                    name = "tmp";
+                    emptyDir = { };
+                  }
+                ];
+              };
+            };
+          };
+        }
+        |> kix.withMounts [ self.webhookCheckMount ]
+        |> scope.mkJob;
+
+      root = {
+        resource = self.operatorDeployment;
+        requires = [ self.webhookService ];
+        postHooks = [ self.webhookCheck ];
+        out = {
+          crds = {
+            Cluster = self.crds.clusters;
+            Database = self.crds.databases;
+            DatabaseRole = self.crds.databaseRoles;
+            Publication = self.crds.publications;
+            Subscription = self.crds.subscriptions;
+            ImageCatalog = self.crds.imageCatalogs;
+            ClusterImageCatalog = self.crds.clusterImageCatalogs;
+          };
+          inherit operandSelectors release;
+          podSelector = self.operatorDeployment.out.selector;
+        };
+      };
+    };
+}

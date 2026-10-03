@@ -397,7 +397,11 @@ edge but NO netpol hole. Consequences when authoring:
   when the operator writes its webhook entries after it reports ready:
   a CRD reference is satisfied once the definition is Established, which
   can be seconds before the webhook admits anything
-  (`stackgres-operator`, `webhookCheck`).
+  (`stackgres-operator`, `webhookCheck`), or before the operator has
+  written the caBundle into configurations Kix rendered (`cnpg-operator`).
+  A boolean or number status field compares by its JSON text:
+  `readiness = { path = "/status/applied"; equals = "true"; }`
+  (`cnpg-operator` for Database and DatabaseRole).
 
 ### Composition helpers (kix.*)
 
@@ -572,6 +576,14 @@ Each module file receives `{ config, lib, ref, packages, ... }` and can declare 
   };
 }
 ```
+
+CloudNativePG is the alternative PostgreSQL provider: `cnpg-operator` (one
+per cluster), `cnpg-cluster` in place of `stackgres-cluster`, and
+`cnpg-database` in place of `stackgres-database`, with the same `out` and
+credentials keys, so the application package does not change
+(`clusters/test-postgres-swap`). `cnpg-database` takes no `owner` or
+`bootstrap.*` options: CloudNativePG creates the role and database itself,
+and the role always owns the database.
 
 ### Instance-level options
 

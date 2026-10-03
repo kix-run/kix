@@ -60,10 +60,13 @@ let
 
   # Auto-instantiation refuses a key that two shelf packages answer, so the
   # shelf keeps one implementation per contested required key: the
-  # single-node clickhouse for `clickhouse`. clickhouse-cluster is still
-  # evaluated as its own instance.
+  # single-node clickhouse for `clickhouse`, and StackGres for `postgres`
+  # and `database`. The packages left out are still evaluated as their own
+  # instances.
   availablePackages = removeAttrs packages [
     "clickhouse-cluster"
+    "cnpg-cluster"
+    "cnpg-database"
   ];
 
   # A `credentials` secret for packages that read one.
@@ -139,6 +142,16 @@ let
     };
     clickhouse-operator.instances = { inherit credentials; };
     cloudflared.config.token = "eval-only";
+    # A Prometheus provider, so the PodMonitor is built.
+    cnpg-cluster.instances.prometheus-operator.package = packages.prometheus-operator;
+    # cnpg-cluster is off the shelf, so the database's cluster is declared.
+    cnpg-database = {
+      config = {
+        password = "password";
+        extensions = [ "citext" ];
+      };
+      instances.postgres.package = packages.cnpg-cluster;
+    };
     cluster-issuer.config.spec.selfSigned = { };
     # A real Prometheus provider, so the ServiceMonitor, the alert rules,
     # and the Service's metrics port are built against its builders.
