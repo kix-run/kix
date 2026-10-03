@@ -71,6 +71,7 @@
         metrics-server = ./test-metrics-server.nix;
         keycloak = ./test-keycloak.nix;
         monitoring-netpol = ./test-monitoring-netpol.nix;
+        tempo = ./test-tempo.nix;
       };
     };
 }

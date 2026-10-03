@@ -27,6 +27,11 @@
 #                                `out.serviceUrl`.
 #   alertmanager (optional)      an Alertmanager datasource.
 #   loki (optional)              a Loki datasource.
+#   tempo (optional)             a Tempo datasource, from `out.queryUrl`.
+#                                With `loki` also wired, a span links to
+#                                the logs of its pod, matched on the
+#                                `namespace` and `pod` labels that
+#                                loki-logs writes.
 #   prometheus (optional)        the operator whose ServiceMonitor scrapes
 #                                Grafana while `metrics.enabled`.
 #
@@ -46,9 +51,9 @@
 # in place of the SOPS file.
 #
 # Each wired datasource has a fixed uid, set by `prometheusDatasource`,
-# `alertmanagerDatasource`, and `lokiDatasource`, so a dashboard that names
-# it by uid works on every cluster. `datasources` adds more; a name or uid
-# that clashes with a wired one is refused.
+# `alertmanagerDatasource`, `lokiDatasource`, and `tempoDatasource`, so a
+# dashboard that names it by uid works on every cluster. `datasources` adds
+# more; a name or uid that clashes with a wired one is refused.
 #
 # The dashboards sidecar watches ConfigMaps labelled `grafana_dashboard: "1"`
 # in every namespace; the datasources sidecar watches `grafana_datasource:
@@ -292,6 +297,7 @@ in
       autoDatasourceOption "Alertmanager" "alertmanager" "Alertmanager"
         "alertmanager";
     lokiDatasource = autoDatasourceOption "Loki" "loki" "Loki" "loki";
+    tempoDatasource = autoDatasourceOption "Tempo" "tempo" "Tempo" "tempo";
     datasources = lib.mkOption {
       type = lib.types.listOf (
         lib.types.submodule {
@@ -361,6 +367,7 @@ in
         prometheusServer ? null,
         alertmanager ? null,
         loki ? null,
+        tempo ? null,
         ...
       }:
       let
@@ -418,6 +425,34 @@ in
               loki.out.serviceUrl
                 or (throw "${who}: deps.loki resolved to an instance without out.serviceUrl, the base URL of Loki's HTTP API. Wire a loki instance, or set out.serviceUrl in the kix.mkImport that answers loki.");
             access = "proxy";
+          }
+          ++ lib.optional (tempo != null) {
+            inherit (config.tempoDatasource) name uid;
+            type = "tempo";
+            url =
+              tempo.out.queryUrl
+                or (throw "${who}: deps.tempo resolved to an instance without out.queryUrl, the base URL of Tempo's query API. Wire a tempo instance, or set out.queryUrl in the kix.mkImport that answers tempo.");
+            access = "proxy";
+            # A span's "Logs for this span" link queries Loki for the trace
+            # ID within the span's pod. OpenTelemetry's k8s attributes map
+            # to the stream labels loki-logs writes; a span without them
+            # gets no link.
+            jsonData = lib.optionalAttrs (loki != null) {
+              tracesToLogsV2 = {
+                datasourceUid = config.lokiDatasource.uid;
+                filterByTraceID = true;
+                tags = [
+                  {
+                    key = "k8s.namespace.name";
+                    value = "namespace";
+                  }
+                  {
+                    key = "k8s.pod.name";
+                    value = "pod";
+                  }
+                ];
+              };
+            };
           };
 
         clashes =
@@ -459,7 +494,7 @@ in
           else if clashing != [ ] then
             throw "${who}: datasources reuses ${
               lib.concatMapStringsSep ", " (v: "\"${v}\"") clashing
-            }, the name or uid of a datasource wired from a dependency. Rename the entry, or change prometheusDatasource, alertmanagerDatasource, or lokiDatasource."
+            }, the name or uid of a datasource wired from a dependency. Rename the entry, or change prometheusDatasource, alertmanagerDatasource, lokiDatasource, or tempoDatasource."
           else
             wiredDatasources ++ map (lib.filterAttrs (_: v: v != null)) config.datasources;
 

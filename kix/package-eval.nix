@@ -376,6 +376,11 @@ let
         client_secret = "secret";
       };
     };
+    # A Prometheus provider, so the ServiceMonitor is built.
+    tempo.instances = {
+      inherit storage;
+      prometheus-operator.package = packages.prometheus-operator;
+    };
     valkey.instances.valkey-password = valkeyPassword;
     # Nothing routes to the instance here, so the URL comes from `domain`.
     vaultwarden = {
