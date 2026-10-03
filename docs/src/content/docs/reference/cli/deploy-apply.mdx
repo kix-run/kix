@@ -161,18 +161,31 @@ edited after it was written and is refused. The deploy prints the file's
 SHA-256 so an approval system can check it used the file it approved.
 
 A refusal lists what differs and exits `4`. `kix deploy --plan plan.json
---dry-run` makes the same comparison and exits `0` or `4` without deploying;
-with `--output json` it prints `{ plan_sha256, matches, mismatches, skipped, kix_differs }`.
+--dry-run` makes the same comparison without deploying. It exits `4` when the
+plan no longer matches, `3` when it matches but the deploy would stop on a
+refused write or a migration not accepted, and `0` otherwise. With
+`--output json` it prints `{ plan_sha256, matches, mismatches, skipped, kix_differs }`.
 
 A plan saved from [`kix diff`](/docs/reference/cli/diff/) against the cluster
-can be used too. A diff checks no refusals or prune deletes, so those are
-not compared and the output says so; the deploy still makes its own dry run
-first. A deploy from a diff plan refuses `--prune`, `--force-conflicts`, and
-`--reconcile`. A plan that compared two builds without reading the cluster
-(`made_by: builds`) is refused.
+can be used too, when the deployed build was available to it, so its drift
+section is checked. A diff checks no refusals, prune deletes, or objects a
+dry run cannot reach, so those are not compared and the output says so; the
+deploy still makes its own dry run first. A deploy from a diff plan refuses
+`--prune`, `--force-conflicts`, `--reconcile`, and `--accept-migrations`,
+since the diff shows no reviewer what they would do. Refused outright: a
+plan that compared two builds without reading the cluster
+(`made_by: builds`), and a `kix diff` of a snapshot or export, or one made
+without the deployed build, since neither shows drift.
 
-When the plan was made by another Kix binary, the deploy prints a note and
-does not refuse.
+The checks above catch an edited plan only when its sections contradict how
+it says it was made. Adding items to a list, or marking a drift section not
+checked, makes the comparison weaker without making the file inconsistent,
+so an approval system should check the SHA-256 the deploy prints against the
+file it approved.
+
+When the plan was made by a Kix binary at another Nix store path, or of
+another version, the deploy prints a note and does not refuse. Two binaries
+built outside the store with the same version print no note.
 
 ## Examples
 

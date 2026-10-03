@@ -105,6 +105,15 @@ pub fn unusable(reviewed: &Plan) -> Option<String> {
                 .into(),
         );
     }
+    if reviewed.made_by == MadeBy::LiveRead && !matches!(reviewed.drift, Checked::Checked { .. }) {
+        return Some(
+            "the plan is a `kix diff` that did not compare with the deployed build (a diff \
+             of a snapshot or export, or one made without the deployed build), so it shows \
+             no drift the deploy would revert; save a `kix diff` against the cluster with the \
+             deployed build available, or a `kix plan`"
+                .into(),
+        );
+    }
     if reviewed.made_by == MadeBy::Builds {
         return Some(
             "the plan compared two builds without reading the cluster, so it says nothing \
@@ -126,6 +135,7 @@ pub fn flags_for(reviewed: &Plan, given: &PlanFlags) -> Result<PlanFlags, String
             (given.prune, "--prune"),
             (given.force_conflicts, "--force-conflicts"),
             (given.reconcile, "--reconcile"),
+            (given.accept_migrations, "--accept-migrations"),
         ]
         .into_iter()
         .filter_map(|(set, flag)| set.then_some(flag))
@@ -637,6 +647,18 @@ mod tests {
         let c = compare(&diff, &plan());
         assert!(c.matches, "{c:?}");
         assert_eq!(c.skipped, vec![Rule::NewRefusal, Rule::NewPruneDelete]);
+        assert!(unusable(&diff).is_none());
+
+        // A diff of a snapshot shows no drift, so it cannot hold rule 6.
+        let mut snapshot = diff.clone();
+        snapshot.drift = Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable);
+        assert!(unusable(&snapshot).is_some());
+
+        let accepting = PlanFlags {
+            accept_migrations: true,
+            ..plan().flags.unwrap()
+        };
+        assert!(flags_for(&diff, &accepting).is_err());
 
         let given = PlanFlags {
             prune: true,

@@ -405,6 +405,20 @@ fn check_saved_plan(saved: &SavedPlan, ctx: &mut CommandContext) -> Result<()> {
     if !comparison.matches {
         std::process::exit(plan::saved::EXIT_STALE);
     }
+    // A matching plan can still be one the deploy stops on, as `kix plan`
+    // exits 3 for: a refused write, or migrations not accepted.
+    let migrations_refused = !doc.migrations.items().is_empty() && !saved.args.accept_migrations;
+    if doc.stops() || migrations_refused {
+        if format == crate::cli::OutputFormat::Text {
+            eprintln!(
+                "{}",
+                output::yellow(
+                    "The deploy would stop: the plan has a refused write or a migration not accepted."
+                )
+            );
+        }
+        std::process::exit(super::plan::EXIT_WOULD_STOP);
+    }
     Ok(())
 }
 

@@ -141,7 +141,8 @@ Review a new plan, or deploy without --plan.
   skips the dry run because there is nothing to apply or prune, F's
   write-path sections read as checked and empty. As implemented that is
   kept: with no write and no delete there is nothing to refuse, revert, or
-  delete, so rules 5 to 7 hold.
+  delete. The exception is a failed rerun Job, which the deploy recreates
+  anyway (housekeeping `deploy-plan-does-not-compare-rerun-jobs`).
 - The kind integration test: plan, save, deploy with `--plan` (matches);
   plan, `kubectl scale`, deploy with `--plan` (exits 4 on rule 6); plan,
   deploy, deploy the old plan again (exits 4 on rule 3).

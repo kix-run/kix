@@ -288,7 +288,9 @@ fn deploy_and_gc() {
     std::fs::create_dir_all(&dir).unwrap();
     let unforced = dir.join("unforced.json");
     let forced = dir.join("forced.json");
+    let diffed = dir.join("diff.json");
     std::fs::write(&unforced, &plan.stdout).expect("write the saved plan");
+    std::fs::write(&diffed, &diff.stdout).expect("write the saved diff");
     let check = |saved: &Path, extra: &[&str]| {
         let mut args = vec![
             "deploy",
@@ -321,6 +323,15 @@ fn deploy_and_gc() {
         String::from_utf8_lossy(&current.stderr)
     );
 
+    let from_diff = check(&diffed, &[]);
+    assert_eq!(
+        from_diff.status.code(),
+        Some(0),
+        "a saved kix diff matches: {}{}",
+        String::from_utf8_lossy(&from_diff.stdout),
+        String::from_utf8_lossy(&from_diff.stderr)
+    );
+
     let contradicted = check(&unforced, &["--prune"]);
     assert_eq!(contradicted.status.code(), Some(1));
     assert!(
@@ -345,6 +356,42 @@ fn deploy_and_gc() {
         String::from_utf8_lossy(&stale.stderr)
     );
     assert_eq!(mismatched_rules(&stale), vec!["new_refusal"]);
+
+    // The deploy itself refuses the stale plan and applies nothing.
+    let refused = kix(KIND_CLUSTER)
+        .args([
+            "deploy",
+            "kind-v2",
+            "--plan",
+            unforced.to_str().unwrap(),
+            "--yes",
+        ])
+        .output()
+        .expect("deploy --plan should run");
+    assert_eq!(refused.status.code(), Some(4));
+    let replicas = kubectl_stdout(
+        KUBE_CTX,
+        &[
+            "get",
+            &deployment,
+            "-n",
+            "echo",
+            "-o",
+            "jsonpath={.spec.replicas}",
+        ],
+    );
+    assert_eq!(replicas.trim(), "3", "a refused deploy applies nothing");
+
+    // A diff checks no refusals, so the saved diff still matches, and the
+    // check says the deploy would stop on the new conflict.
+    let stops = check(&diffed, &[]);
+    assert_eq!(
+        stops.status.code(),
+        Some(3),
+        "{}{}",
+        String::from_utf8_lossy(&stops.stdout),
+        String::from_utf8_lossy(&stops.stderr)
+    );
 
     let forced_plan = kix(KIND_CLUSTER)
         .args(["plan", "kind-v2", "--force-conflicts", "-o", "json"])
