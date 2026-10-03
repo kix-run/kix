@@ -739,7 +739,8 @@ rec {
         ${context}: readiness declaration for ${groupKind} must be one of
           { path = "/status/..."; equals = "<value>"; }
           { condition = { type = "<Type>"; status = "True"; }; }
-        (path: a JSON pointer string starting with "/"; every value a string; no other keys)
+        (path: a JSON pointer string starting with "/"; every value a string, and
+        equals = "true" or "3" also matches a JSON true or 3 at the path; no other keys)
       ''
     else
       readiness;
@@ -772,7 +773,8 @@ rec {
       #   readiness = { path = "/status/updateStatus"; equals = "operational"; }
       #   readiness = { condition = { type = "Bootstrapped"; status = "True"; }; }
       # path is a JSON pointer into the live object; readiness requires its
-      # value to equal the string in equals. The condition form requires an
+      # value to equal the string in equals, or, for a JSON boolean or
+      # number, its JSON text to equal it: `equals = "true"` matches `true`. The condition form requires an
       # entry in status.conditions whose type and status both match.
       readiness ? null,
     }:

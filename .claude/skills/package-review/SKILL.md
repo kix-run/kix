@@ -387,7 +387,7 @@ lead, not a finding.
 ```bash
 PKG=kix/packages/<name>
 while read -r id re; do
-  rg -n --no-heading -g '!crds/**' -g '!rbac/**' -e "$re" "$PKG" | sed "s|^|$id |"
+  rg -n --no-heading -g '!**/crds/**' -g '!**/rbac/**' -e "$re" "$PKG" | sed "s|^|$id |"
 done <<'EOF'
 O1 types\.(anything|unspecified|attrs)\b
 O3 resources = (lib\.)?mkOption

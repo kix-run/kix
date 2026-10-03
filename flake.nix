@@ -39,6 +39,9 @@
           clickhouse-operator = ./clusters/test-clickhouse-operator.nix;
           clickhouse-swap-bare = ./clusters/test-clickhouse-swap/bare.nix;
           clickhouse-swap-replicated = ./clusters/test-clickhouse-swap/replicated.nix;
+          cnpg = ./clusters/test-cnpg.nix;
+          postgres-swap-stackgres = ./clusters/test-postgres-swap/stackgres.nix;
+          postgres-swap-cnpg = ./clusters/test-postgres-swap/cnpg.nix;
           kind = ./clusters/test-kind.nix;
           metrics-server = ./clusters/test-metrics-server.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
@@ -213,6 +216,47 @@
             touch $out
           '';
       });
+
+      # One Metabase, built once on stackgres-database and once on
+      # cnpg-database (clusters/test-postgres-swap). Metabase's manifests and
+      # the facade's credentials Secret in the consumer's namespace must come
+      # out the same but for the PostgreSQL hostname. Also set aside: Kix's
+      # dependency bookkeeping, which names what is upstream; the
+      # `checksum/database` annotation, the identity hash of the credentials
+      # Secret, which holds the hostname; and the facade's package-name
+      # label.
+      postgresSwap = lib.genAttrs systems (system: {
+        postgres-swap =
+          let
+            pkgs = inputs.nixpkgs.legacyPackages.${system};
+            built = name: clusterOutputs.packages.${system}."cluster-postgres-swap-${name}";
+          in
+          pkgs.runCommand "postgres-swap" { } ''
+            normalise() {
+              mkdir -p "$2"
+              for f in "$1"/app/metabase-*.yaml; do
+                case "$(basename "$f")" in
+                  metabase-db-packageinstance.yaml) continue ;;
+                esac
+                sed -E \
+                  -e 's/pg(-rw)?\.db\.svc\.cluster\.local/POSTGRES_HOST/g' \
+                  -e '/kix\.run\/(depends-on|identity-hash|closure-hash)/d' \
+                  -e 's/(checksum\/database:).*/\1 CREDENTIALS_HASH/' \
+                  -e 's/(app\.kubernetes\.io\/name:) (stackgres|cnpg)-database/\1 DATABASE_PACKAGE/' \
+                  "$f" > "$2/$(basename "$f")"
+              done
+            }
+            normalise ${built "stackgres"} stackgres
+            normalise ${built "cnpg"} cnpg
+            if ! diff -ru stackgres cnpg; then
+              echo "the consumer's manifests changed with the PostgreSQL provider" >&2
+              exit 1
+            fi
+            grep -rq POSTGRES_HOST stackgres || { echo "no PostgreSQL address reached the consumer" >&2; exit 1; }
+            echo "$(ls stackgres | wc -l) consumer manifests identical across both providers"
+            touch $out
+          '';
+      });
     in
     clusterOutputs
     // {
@@ -228,6 +272,7 @@
         clusterChecks
         // (libTests.${system} or { })
         // (clickhouseSwap.${system} or { })
+        // (postgresSwap.${system} or { })
         // (packageEval.${system} or { })
       ) clusterOutputs.checks;
 
