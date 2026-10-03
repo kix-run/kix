@@ -55,7 +55,7 @@ the result. CI can check a reviewed plan is still current without
 deploying.
 
 `--plan` and `--current-activation` together are refused: an offline plan
-cannot see the cluster's current record, so rule 2 below could not hold.
+cannot see the cluster's current record, so rule 3 below could not hold.
 
 ### What "differs" means
 
@@ -65,22 +65,27 @@ skipped and named in the output, never passed silently.
 
 | # | Rule | Compared on | Why |
 |---|------|-------------|-----|
-| 1 | Same Kix | `kix.store_path` when both have one, else `kix.version` | A newer Kix can compute a different plan from the same builds. Kix Enterprise runs plan and deploy from one commit, so this costs it nothing |
-| 2 | Same cluster | `cluster` | A plan for one Kix cluster cannot approve another |
-| 3 | Same new build | `build.identity_hash` | The reviewer approved these manifests. The store path only finds the build; a rebuild on another machine can land at another path with the same manifests |
-| 4 | Same deployed build | `deployed.identity_hash`, both `null` on a first deploy | The intended changes are exactly the difference between the deployed and the new build, so rules 3 and 4 together pin them, without comparing lossy values. A deploy that landed between review and apply fails this rule, and the message names both records |
-| 5 | Same flags | `flags` | `--prune`, `--reconcile`, `--force-conflicts` and `--accept-migrations` each change what the deploy writes or deletes |
-| 6 | No new refusal | conflicts by resource; admission refusals by resource and `reason` | Messages are left out of the key, since apiserver wording varies between versions and webhook runs |
-| 7 | No new reverted drift | `drift` items with `reverted: true`, by resource and path | Otherwise the deploy undoes a hand edit nobody reviewed. The live value is left out of the key, so a controller rewriting a field it already drifted does not refuse the deploy |
-| 8 | No new prune delete | `prune` items with fate `delete`, by resource | Deletes are the most destructive write, and they can change without either build changing: an orphan shared with another Kix cluster becomes deletable when that cluster stops claiming it |
+| 1 | Same cluster | `cluster` | A plan for one Kix cluster cannot approve another |
+| 2 | Same new build | `build.identity_hash` | The reviewer approved these manifests. The store path only finds the build; a rebuild on another machine can land at another path with the same manifests |
+| 3 | Same deployed build | `deployed.identity_hash`, both `null` on a first deploy | The intended changes are exactly the difference between the deployed and the new build, so rules 2 and 3 together pin them, without comparing lossy values. A deploy that landed between review and apply fails this rule, and the message names both records |
+| 4 | Same flags | `flags` | `--prune`, `--reconcile`, `--force-conflicts` and `--accept-migrations` each change what the deploy writes or deletes |
+| 5 | No new refusal | conflicts by resource; admission refusals by resource and `reason` | Messages are left out of the key, since apiserver wording varies between versions and webhook runs |
+| 6 | No new reverted drift | `drift` items with `reverted: true`, by resource and path | Otherwise the deploy undoes a hand edit nobody reviewed. The live value is left out of the key, so a controller rewriting a field it already drifted does not refuse the deploy |
+| 7 | No new prune delete | `prune` items with fate `delete`, by resource | Deletes are the most destructive write, and they can change without either build changing: an orphan shared with another Kix cluster becomes deletable when that cluster stops claiming it |
+
+A different Kix is reported, not refused: the output names both binaries
+(`kix.store_path`, else `kix.version`) when they differ. Kix has no
+versioning process yet. `kix.version` does not move with every commit, and
+a store path changes with any source change, so neither says whether two
+binaries plan the same way. Revisit once Kix has releases.
 
 Everything else is ignored: `resourceVersion`s, timestamps, `drift_kept`,
 fields other managers own that the deploy does not touch, objects that
 moved between `not_checked` and checked, and the order of any list.
 Migrations need no rule of their own: they are computed from the deployed
-and new manifests, which rules 3 and 4 pin.
+and new manifests, which rules 2 and 3 pin.
 
-Rules 6 to 8 only refuse on what is new in F. Something in R that is gone
+Rules 5 to 7 only refuse on what is new in F. Something in R that is gone
 from F (a conflict someone resolved, drift someone reverted) does not
 refuse: the deploy now does less than was approved, never more.
 
@@ -89,19 +94,18 @@ refuse: the deploy now does less than was approved, never more.
 A plan with `made_by: live_read` can be saved too. Kix Enterprise falls
 back to it on clusters where a dry run of every review is too expensive.
 
-- Rules 1 to 4 and 7 apply. The deployed record comes from the live
+- Rules 1 to 3 and 6 apply. The deployed record comes from the live
   Activation record in both plans.
-- Rules 6 and 8 are skipped: a diff does not check conflicts, admission,
+- Rules 5 and 7 are skipped: a diff does not check conflicts, admission,
   or prune. The output says so. The deploy still runs its own dry run
   first, so a refusal still stops it under `--on-error stop`; the dry run
   was just not part of what was reviewed.
-- Rule 5: a diff plans no deploy, so its `flags` is `null`. A deploy from a
+- Rule 4: a diff plans no deploy, so its `flags` is `null`. A deploy from a
   diff plan refuses `--prune`, `--force-conflicts`, and `--reconcile`,
   since no reviewer saw what they would do. `--accept-migrations` is
   allowed, because the diff lists migrations.
 - Plans with `made_by: builds` (`kix plan --current-activation`, `kix diff
-  --from <build>`) are refused: no cluster was read, so rule 4 and rule 7
-  have nothing to stand on.
+  --from <build>`) are refused: no cluster was read, so rules 3 and 6 have nothing to stand on.
 
 ### Output
 
@@ -132,11 +136,12 @@ Review a new plan, or deploy without --plan.
   before `prepare`, call `compare` after `plan::document`. When the deploy
   skips the dry run (nothing to apply or prune), F's write-path sections
   read as checked and empty today; for `--plan` they must read
-  `not_checked` so rules 6 and 8 are skipped honestly
+  `not_checked` so rules 5 and 7 are skipped
+  honestly
   (housekeeping `deploy-plan-without-dry-run-says-checked`).
 - The kind integration test: plan, save, deploy with `--plan` (matches);
-  plan, `kubectl scale`, deploy with `--plan` (exits 4 on rule 7); plan,
-  deploy, deploy the old plan again (exits 4 on rule 4).
+  plan, `kubectl scale`, deploy with `--plan` (exits 4 on rule 6); plan,
+  deploy, deploy the old plan again (exits 4 on rule 3).
 
 ## Alternatives considered
 
@@ -145,7 +150,7 @@ Review a new plan, or deploy without --plan.
   differ, and server-normalised values make it refuse when nothing
   differs.
 - **Compare the `intended` field changes** (#185's first rule 2).
-  Replaced by rule 4: same builds on both sides imply the same intended
+  Replaced by rule 3: same builds on both sides imply the same intended
   changes, and a deploy landing in between is named directly instead of
   showing as a list of changed fields.
 - **Apply the stored plan, Terraform style.** Kix has no plan artifact to
@@ -162,21 +167,23 @@ Both wait for the in-cluster plan and deploy doc (157 §6):
 
 - **A `resourceVersion` precondition** on each apply that reverts drift,
   so a hand edit between the fresh plan and the apply is rejected by the
-  apiserver (409) instead of reverted. Rules 6 to 8 hold at plan time
+  apiserver (409) instead of reverted. Rules 5 to 7 hold at plan time
   only until then.
 - **Deploying from a binary cache**: `kix deploy --plan` realising
-  `build.store_path` instead of rebuilding, which makes rule 3 hold by
+  `build.store_path` instead of rebuilding, which makes rule 2 hold by
   construction.
 
-## Open questions
+## Decisions on the draft's open questions
 
-1. **A Kix binary outside the Nix store** (`kix.store_path: null`, a
-   `cargo build`): rule 1 falls back to `kix.version`, which does not move
-   with every commit. Good enough for development, or refuse `--plan`
-   unless both plans name a store path?
-2. **Conflict identity**: rule 6 keys a conflict on its resource. A new
-   field in conflict on an object that already had one does not refuse.
-   Key on resource and field paths instead? The paths are in `owners`.
-3. **Exit code `4`** versus reusing `3` ("the deploy would stop"). `4`
-   keeps "stale review" apart from "the cluster would refuse", which are
-   different calls for a person to make.
+1. **Kix version** (the draft's rule 1): reported, not refused, until Kix
+   has a versioning process.
+2. **Conflicts are keyed on the resource, not its field paths.** A
+   conflict refuses the whole apply of that object, so a new conflicting
+   field on an object that already had one changes nothing the deploy
+   does. Under `--on-error stop` any conflict stops the deploy anyway.
+   Under `--force-conflicts` the fields are taken instead, and those show
+   as reverted drift, which rule 6 keys by path.
+3. **A refusal exits `4`**, not `3`. `3` from `kix plan` means "the cluster
+   would refuse this deploy": fix the cluster or the build. `4` means "the
+   review is out of date": make and review a new plan. CI and Kix
+   Enterprise act differently on the two.
