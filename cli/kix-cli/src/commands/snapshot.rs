@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use kix::cluster::fetch;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
+use kube::api::DynamicObject;
 
 use crate::cli::{SnapshotArgs, SnapshotCommand, SnapshotSaveArgs};
 
@@ -69,14 +70,7 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
                 eprintln!("{note}");
             }
         }
-        let objects = sweep.managed;
-
-        // The kix-owned view of each object (same recipe as `kix diff`), so
-        // a snapshot compares to a build the way the live cluster does.
-        let resources: Vec<(ResourceId, Value)> = fetch::kix_owned_manifests(objects)
-            .into_iter()
-            .map(|value| (ResourceId::from_value(&value), value))
-            .collect();
+        let resources = snapshot_resources(sweep.managed);
 
         // Write to temp dir, then atomic swap
         let parent = out_dir.parent().unwrap_or(Path::new("."));
@@ -85,23 +79,7 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
         let tmp_dir = tempfile::tempdir_in(parent).into_diagnostic()?;
         let tmp_path = tmp_dir.path();
 
-        let mut written = 0usize;
-        for (id, value) in &resources {
-            let ns_dir = if id.namespace == CLUSTER_SCOPED {
-                CLUSTER_SCOPED.to_string()
-            } else {
-                id.namespace.clone()
-            };
-            let file_dir = tmp_path.join(&ns_dir);
-            std::fs::create_dir_all(&file_dir).into_diagnostic()?;
-
-            let filename = format!("{}-{}.yaml", id.name, id.kind.to_lowercase());
-            let filepath = file_dir.join(&filename);
-
-            let yaml = serde_yml::to_string(&value).into_diagnostic()?;
-            std::fs::write(&filepath, &yaml).into_diagnostic()?;
-            written += 1;
-        }
+        let written = write_resources(tmp_path, &resources)?;
 
         // Write README
         let timestamp = chrono_timestamp();
@@ -134,6 +112,35 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
 
         Ok(())
     })
+}
+
+/// The kix-owned view of each object (same recipe as `kix diff`), so a
+/// snapshot compares to a build the way the live cluster does. A Secret's
+/// view holds no live value (`fetch::kix_owned_view`).
+fn snapshot_resources(objects: Vec<DynamicObject>) -> Vec<(ResourceId, Value)> {
+    fetch::kix_owned_manifests(objects)
+        .into_iter()
+        .map(|value| (ResourceId::from_value(&value), value))
+        .collect()
+}
+
+/// Write each resource to `<dir>/<namespace>/<name>-<kind>.yaml` and return
+/// how many were written.
+fn write_resources(dir: &Path, resources: &[(ResourceId, Value)]) -> Result<usize> {
+    for (id, value) in resources {
+        let ns_dir = if id.namespace == CLUSTER_SCOPED {
+            CLUSTER_SCOPED.to_string()
+        } else {
+            id.namespace.clone()
+        };
+        let file_dir = dir.join(&ns_dir);
+        std::fs::create_dir_all(&file_dir).into_diagnostic()?;
+
+        let filename = format!("{}-{}.yaml", id.name, id.kind.to_lowercase());
+        let yaml = serde_yml::to_string(&value).into_diagnostic()?;
+        std::fs::write(file_dir.join(&filename), &yaml).into_diagnostic()?;
+    }
+    Ok(resources.len())
 }
 
 fn chrono_timestamp() -> String {
@@ -178,4 +185,61 @@ fn chrono_timestamp() -> String {
 
 fn is_leap(y: i64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kix::cluster::fake_api::FakeApi;
+    use kix::manifest::keys;
+    use kix::manifest::lifecycle::RECORD_KIND;
+    use serde_json::json;
+
+    /// A Secret of cluster `a` with no kix Apply entry: its live values must
+    /// not reach the files a snapshot writes.
+    #[tokio::test]
+    async fn a_snapshot_writes_no_live_secret_value() {
+        let api = FakeApi::new([
+            json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": RECORD_KIND,
+                "metadata": {
+                    "name": "rec-a1",
+                    "labels": {
+                        "app.kubernetes.io/managed-by": "kix",
+                        (keys::CLUSTER_LABEL): "a",
+                    },
+                    "annotations": { (keys::IDENTITY_HASH): "a1" },
+                },
+                "status": { "phase": "Active" },
+            }),
+            json!({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {
+                    "name": "creds",
+                    "namespace": "app",
+                    "labels": { "app.kubernetes.io/managed-by": "kix" },
+                    "annotations": {
+                        (keys::IDENTITY_HASH): "h-creds",
+                        (keys::ACTIVATIONS): "a1",
+                    },
+                },
+                // "hunter2"
+                "data": { "password": "aHVudGVyMg==" },
+            }),
+        ]);
+        let client = api.client();
+        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let sweep = fetch::sweep_managed(&client, &discovery, fetch::SweepScope::Cluster("a"))
+            .await
+            .unwrap();
+        let resources = snapshot_resources(sweep.managed);
+        let dir = tempfile::tempdir().unwrap();
+        write_resources(dir.path(), &resources).unwrap();
+
+        let text = std::fs::read_to_string(dir.path().join("app/creds-secret.yaml")).unwrap();
+        assert!(text.contains(fetch::HIDDEN_SECRET_VALUE), "{text}");
+        assert!(!text.contains("aHVudGVyMg=="), "{text}");
+    }
 }

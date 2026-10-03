@@ -1,6 +1,6 @@
 //! An in-memory apiserver for tests of code that takes a `kube::Client`.
 //!
-//! It serves discovery for a fixed set of kinds (ConfigMap, Namespace,
+//! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
 //! ClusterRole, Kix's Activation), and GET, LIST (with an equality label
 //! selector) and DELETE (honouring `preconditions`) on the objects it holds.
 //! Every object gets a uid and a resourceVersion when it is added, and a new
@@ -24,6 +24,7 @@ use crate::manifest::lifecycle::RECORD_KIND;
 /// `(group, version, kind, plural, namespaced)` of every kind served.
 const KINDS: &[(&str, &str, &str, &str, bool)] = &[
     ("", "v1", "ConfigMap", "configmaps", true),
+    ("", "v1", "Secret", "secrets", true),
     ("", "v1", "Namespace", "namespaces", false),
     (
         "rbac.authorization.k8s.io",

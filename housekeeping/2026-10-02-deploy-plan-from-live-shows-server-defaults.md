@@ -2,4 +2,4 @@
 
 When the previous activation's store path is gone, `reconstruct_old_from_live` reads the old side through `fetch::kix_owned_manifests`. `kix diff` now uses `fetch::kix_owned_manifests_against`, which compares an object unchanged since its apply as its build manifest. The deploy plan does not, so a webhook default such as the StackGres extension `publisher` can still show there as a change the deploy will make.
 
-The same applies to a Secret kix applied with literal `stringData`. The plain view carries no Secret values, so the plan shows that `stringData` as added. It shows no live value.
+The same applies to a Secret. The plain view hides every Secret value, so the plan shows each literal `data` or `stringData` value as changed. It shows no live value.
