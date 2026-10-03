@@ -32,6 +32,11 @@
       binding = lib.mkDefault "shadowable";
       provider = lib.mkDefault "gcp-network-lb";
     };
+    # GKE runs a managed metrics-server in kube-system.
+    metricsApi = {
+      binding = lib.mkDefault "exclusive";
+      provider = lib.mkDefault "metrics-server (gke-managed)";
+    };
   };
 
   cluster.capabilities = {

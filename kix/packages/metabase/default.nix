@@ -8,9 +8,9 @@
 # are stateless.
 #
 # Dependencies:
-#   database (required)       a PostgreSQL database and role with
-#                             `out.{host,port,database}` and `out.credentials`
-#                             (keys `username` and `password`), such as
+#   database (required)       a PostgreSQL database and role honouring the
+#                             Postgres database contract
+#                             (kix.contracts.postgresDatabase), such as
 #                             stackgres-database. The package asks it for the
 #                             citext extension, which Metabase's first
 #                             migration creates. A database from
@@ -102,8 +102,11 @@ in
     owner = "app-team";
   };
 
-  # Metabase's first migration runs CREATE EXTENSION citext.
-  deps.database.config.extensions = [ "citext" ];
+  deps.database = {
+    # Metabase's first migration runs CREATE EXTENSION citext.
+    config.extensions = [ "citext" ];
+    assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
+  };
 
   options = {
     image = kix.options.image {

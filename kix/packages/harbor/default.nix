@@ -7,11 +7,13 @@
 # (BEST-PRACTICES §12.5).
 #
 # Dependencies:
-#   database (required)       a logical PostgreSQL database: stackgres-database,
-#                             or anything publishing out.{host,port,database,
-#                             username,credentials} with a `password` key on the
-#                             credentials, and out.tls (whether the server
-#                             speaks TLS). Without out.tls, set database.sslmode.
+#   database (required)       a logical PostgreSQL database honouring the
+#                             Postgres database contract
+#                             (kix.contracts.postgresDatabase), such as
+#                             stackgres-database, that also publishes
+#                             out.username. Harbor reads out.tls (whether the
+#                             server speaks TLS); without it, set
+#                             database.sslmode.
 #   valkey (required)         Redis-compatible cache and job queue
 #                             (out.{fqdn,port,authSecret,authPasswordKey}),
 #                             reached through Sentinel when the instance
@@ -287,6 +289,15 @@ in
       }
     ];
   };
+
+  # Harbor also reads out.username, which the contract lets an import omit.
+  deps.database.assertions =
+    dep:
+    kix.contracts.postgresDatabase.assertions who dep
+    ++ lib.optional (!(dep.out ? username)) {
+      assertion = false;
+      message = "${who}: deps.database publishes no out.username, which Harbor sets as POSTGRESQL_USERNAME and HARBOR_DATABASE_USERNAME. Set out.username to the role name on that instance.";
+    };
 
   options = {
     externalURL = lib.mkOption {

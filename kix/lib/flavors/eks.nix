@@ -29,6 +29,8 @@
     };
     dns.binding = lib.mkDefault "shadowable";
     storageClasses.binding = lib.mkDefault "absent";
+    # EKS does not deploy metrics-server; it is an optional community add-on.
+    metricsApi.binding = lib.mkDefault "absent";
     loadBalancer = {
       binding = lib.mkDefault "shadowable";
       provider = lib.mkDefault "aws-cloud-provider";

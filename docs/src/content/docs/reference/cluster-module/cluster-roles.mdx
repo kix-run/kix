@@ -36,6 +36,7 @@ or imported.
 | `dns` | `fqdn` | `coredns` |
 | `storageClasses` | `storageClassName`, the class a claim gets when it names none | `storage-classes` |
 | `loadBalancer` | none; a provider's presence allows `type: LoadBalancer` Services | none |
+| `metricsApi` | none; a provider's presence allows HorizontalPodAutoscalers on resource metrics and the descheduler's `KubernetesMetrics` source | `metrics-server` |
 | `snapshotController` | `crds`, the VolumeSnapshotClass, VolumeSnapshotContent, and VolumeSnapshot handles for `scope.mkCR` | `snapshot-controller` |
 
 A CSI driver package such as `zfs-localpv` does not claim `storageClasses`.
@@ -45,25 +46,33 @@ A consumer names the driver instance with
 `zfsLocalPv` in that list: the package's one-instance-per-cluster check
 matches on it.
 
+No package takes `loadBalancer` or `metricsApi` as a dependency; evaluation
+checks the resources that need them. With the binding `absent` and no provider
+instance, a `type: LoadBalancer` Service fails evaluation, and so do a
+HorizontalPodAutoscaler that reads metrics.k8s.io (autoscaling/v1, an
+autoscaling/v2 HPA with no `metrics`, or a `Resource` or `ContainerResource`
+metric) and a descheduler whose `policy.metricsProviders` lists
+`KubernetesMetrics`. With the binding `null`, they evaluate with a warning.
+
 ## Flavour bindings
 
 Each cell is the flavour's default `binding`. "import" means the flavour also
 declares a platform import in `kube-system` that provides the role.
 
-| Flavour | `cni` | `dns` | `storageClasses` | `loadBalancer` | `snapshotController` |
-|---|---|---|---|---|---|
-| `aks` | exclusive | shadowable, import | shadowable, import | shadowable | null |
-| `eks` | exclusive | shadowable, import | absent | shadowable | null |
-| `gke` | exclusive | shadowable, import | shadowable, import | shadowable | null |
-| `gke-autopilot` | exclusive | shadowable, import | shadowable, import | exclusive | null |
-| `k3s` | exclusive | shadowable, import | shadowable, import | exclusive | null |
-| `kind` | exclusive | shadowable, import | shadowable, import | absent | absent |
-| `kubeadm` | absent | shadowable, import | absent | absent | null |
-| `openshift` | exclusive | shadowable, import | absent | absent | null |
-| `ovh` | exclusive | shadowable, import | shadowable, import | shadowable | null |
-| `rke2` | follows `cluster.flavor.rke2.cni` (cilium: shadowable, import) | shadowable, import | absent | absent | exclusive, import |
-| `scaleway` | exclusive | shadowable, import | shadowable, import | shadowable | null |
-| `talos` | exclusive | shadowable, import | absent | absent | null |
+| Flavour | `cni` | `dns` | `storageClasses` | `loadBalancer` | `snapshotController` | `metricsApi` |
+|---|---|---|---|---|---|---|
+| `aks` | exclusive | shadowable, import | shadowable, import | shadowable | null | exclusive |
+| `eks` | exclusive | shadowable, import | absent | shadowable | null | absent |
+| `gke` | exclusive | shadowable, import | shadowable, import | shadowable | null | exclusive |
+| `gke-autopilot` | exclusive | shadowable, import | shadowable, import | exclusive | null | exclusive |
+| `k3s` | exclusive | shadowable, import | shadowable, import | exclusive | null | exclusive |
+| `kind` | exclusive | shadowable, import | shadowable, import | absent | absent | absent |
+| `kubeadm` | absent | shadowable, import | absent | absent | null | absent |
+| `openshift` | exclusive | shadowable, import | absent | absent | null | null |
+| `ovh` | exclusive | shadowable, import | shadowable, import | shadowable | null | null |
+| `rke2` | follows `cluster.flavor.rke2.cni` (cilium: shadowable, import) | shadowable, import | absent | absent | exclusive, import | exclusive |
+| `scaleway` | exclusive | shadowable, import | shadowable, import | shadowable | null | null |
+| `talos` | exclusive | shadowable, import | absent | absent | null | absent |
 
 No flavour binds `network-policy-enforcer`.
 
@@ -76,4 +85,11 @@ charts runs its own controller:
 ```nix
 cluster.roles.snapshotController.binding = "absent";
 instances.storage.snapshot-controller.package = packages.snapshot-controller;
+```
+
+A k3s server started with `--disable=metrics-server` runs its own:
+
+```nix
+cluster.roles.metricsApi.binding = "absent";
+instances.metrics-server.metrics-server.package = packages.metrics-server;
 ```

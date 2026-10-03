@@ -36,6 +36,13 @@
       binding = lib.mkDefault "exclusive";
       provider = lib.mkDefault "servicelb (klipper)";
     };
+    # k3s deploys metrics-server as a packaged component. A server started
+    # with `--disable=metrics-server` sets the binding to "absent" and runs a
+    # metrics-server instance.
+    metricsApi = {
+      binding = lib.mkDefault "exclusive";
+      provider = lib.mkDefault "metrics-server (k3s packaged component)";
+    };
   };
 
   cluster.capabilities = {

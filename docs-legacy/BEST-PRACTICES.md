@@ -505,9 +505,26 @@ the regression test, not the definition. Reference: the `clickhouse`
 packages (`v2_discussions/148`, `kix/packages/clickhouse/contract.nix`,
 `checks.clickhouse-swap`).
 
+A contract that consumers across the catalogue read lives in the library
+instead, where a provider outside kixpkgs can reach it. The Postgres
+`database` contract is `kix.contracts.postgresDatabase`
+(`kix/lib/vocab/postgres-database.nix`): `stackgres-database` and
+`cnpg-database` pass their `out` through `check`, and every package that
+takes `deps.database` (harbor, immich, keycloak, metabase, n8n, vaultwarden)
+holds the dependency to it with `assertions`. `checks.postgres-swap` builds
+Metabase on each provider and requires the same manifests but for the
+host. Its consumer side requires only the connection fields (`host`,
+`port`, `database`, `credentials`), so a `kix.mkImport` of an external
+database works, while `check` requires `username`, `extensions`, and `tls`
+as well, so every provider package publishes the same `out`.
+
 When both implementations are on the shelf, auto-instantiation refuses a
 demanded alias until the cluster selects one with an optional instance
-named after the alias, which is created only when something depends on it:
+named after the alias, which is created only when something depends on it.
+On a cluster already deployed with an auto-instantiated provider, name the
+optional instance as auto-instantiation did (after its package, for example
+`stackgres-cluster`); a new name renders a new, empty server and orphans the
+old one:
 
 ```nix
 instances.data.clickhouse = {
@@ -538,7 +555,7 @@ gracefully omits resources when they're absent.
 
 Infrastructure-role owners claim their role from the closed registry in
 `kix/lib/eval/roles.nix` (currently: `network-policy-enforcer`, `dns`,
-`storageClasses`, `snapshotController`, `cni`, `loadBalancer`):
+`storageClasses`, `snapshotController`, `metricsApi`, `cni`, `loadBalancer`):
 
 ```nix
 # kix/packages/storage-classes/default.nix
@@ -852,7 +869,7 @@ that's the price of the workaround being visible.
 resolve via arg name → instance name → instance aliases (which *replace*
 package `defaultAliases` when non-empty). Roles are only for the registry's
 infrastructure slots (network-policy-enforcer, dns, storageClasses,
-snapshotController, cni, loadBalancer).
+snapshotController, metricsApi, cni, loadBalancer).
 
 ### 12.8 Backwards-compatibility shims
 

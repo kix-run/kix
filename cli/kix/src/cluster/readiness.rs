@@ -1334,8 +1334,13 @@ pub fn is_immediate_kind(kind: &str) -> bool {
 /// A readiness convention declared by the CRD-owning package and stamped on
 /// the CR as the `kix.run/readiness` annotation. Two JSON shapes:
 /// `{"path": "/status/...", "equals": "<value>"}` is ready when the string at
-/// `path` equals `equals`; `{"condition": {"type": "<Type>", "status": "True"}}`
-/// is ready when `status.conditions` holds an entry with that type and status.
+/// `path` equals `equals`, or the boolean or number there is written as
+/// `equals` (`true` matches "true", `3` matches "3", a float `1.0` matches
+/// only "1.0"), and `status.observedGeneration`, when present, has reached
+/// `metadata.generation`; `{"condition": {"type": "<Type>", "status": "True"}}`
+/// is ready when `status.conditions` holds an entry with that type and
+/// status whose own `observedGeneration`, when present, has reached
+/// `metadata.generation`.
 enum DeclaredReadiness {
     Path {
         path: String,
@@ -1385,15 +1390,24 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
     // package's declaration, not in this list.
     if let Some(rule) = declared_readiness(obj) {
         return match rule {
-            DeclaredReadiness::Path { path, equals } => obj
-                .data
-                .pointer(&path)
-                .and_then(Value::as_str)
-                .is_some_and(|v| v == equals),
+            DeclaredReadiness::Path { path, equals } => {
+                generation_observed(
+                    obj.metadata.generation,
+                    obj.data.pointer("/status/observedGeneration"),
+                ) && obj.data.pointer(&path).is_some_and(|v| match v {
+                    Value::String(s) => *s == equals,
+                    Value::Bool(b) => b.to_string() == equals,
+                    Value::Number(n) => n.to_string() == equals,
+                    _ => false,
+                })
+            }
             DeclaredReadiness::Condition {
                 condition_type,
                 status,
-            } => has_condition(&obj.data, &condition_type, &status),
+            } => find_condition(&obj.data, &condition_type).is_some_and(|c| {
+                c.get("status").and_then(Value::as_str) == Some(status.as_str())
+                    && generation_observed(obj.metadata.generation, c.get("observedGeneration"))
+            }),
         };
     }
 
@@ -1606,6 +1620,27 @@ fn find_condition<'a>(data: &'a Value, condition_type: &str) -> Option<&'a Value
         .find(|c| c.get("type").and_then(Value::as_str) == Some(condition_type))
 }
 
+/// Whether a status or condition `observedGeneration` has reached the
+/// object's `metadata.generation`, so the status describes the current
+/// spec. Either value missing imposes no guard: many operators report
+/// neither, and a declared rule must still settle for them.
+fn generation_observed(generation: Option<i64>, observed: Option<&Value>) -> bool {
+    match (generation, observed.and_then(Value::as_i64)) {
+        (Some(generation), Some(observed)) => observed >= generation,
+        _ => true,
+    }
+}
+
+/// The suffix a readiness message carries when the status predates the spec.
+fn stale_note(generation: Option<i64>, observed: Option<&Value>) -> String {
+    match (generation, observed.and_then(Value::as_i64)) {
+        (Some(generation), Some(observed)) if observed < generation => {
+            format!(", observed generation {observed} of {generation}")
+        }
+        _ => String::new(),
+    }
+}
+
 fn has_condition(data: &Value, condition_type: &str, expected_status: &str) -> bool {
     find_condition(data, condition_type)
         .and_then(|c| c.get("status"))
@@ -1619,17 +1654,24 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
     if let Some(rule) = declared_readiness(obj) {
         return match rule {
             DeclaredReadiness::Path { path, equals } => {
-                // Distinguish an absent path from a non-string value because
-                // declared readiness compares strings only.
+                // Distinguish an absent path from a value of a type declared
+                // readiness does not compare (null, objects, lists).
                 let current = match obj.data.pointer(&path) {
                     None => "<absent>".to_string(),
                     Some(Value::String(v)) => format!("\"{v}\""),
+                    Some(v @ (Value::Bool(_) | Value::Number(_))) => v.to_string(),
                     Some(other) => {
-                        format!("{other} (non-string; declared readiness compares strings)")
+                        format!(
+                            "{other} (declared readiness compares only strings, booleans, and numbers)"
+                        )
                     }
                 };
+                let stale = stale_note(
+                    obj.metadata.generation,
+                    obj.data.pointer("/status/observedGeneration"),
+                );
                 format!(
-                    "{kind}/{name}: declared readiness {path}=\"{equals}\", currently {current}"
+                    "{kind}/{name}: declared readiness {path}=\"{equals}\", currently {current}{stale}"
                 )
             }
             DeclaredReadiness::Condition {
@@ -1640,11 +1682,13 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                     None => format!("no {condition_type} condition yet"),
                     Some(c) => {
                         let actual = c.get("status").and_then(Value::as_str).unwrap_or("?");
+                        let stale =
+                            stale_note(obj.metadata.generation, c.get("observedGeneration"));
                         match c.get("message").and_then(Value::as_str) {
                             Some(msg) if !msg.is_empty() => {
-                                format!("{condition_type}={actual} ({msg})")
+                                format!("{condition_type}={actual} ({msg}){stale}")
                             }
-                            _ => format!("{condition_type}={actual}"),
+                            _ => format!("{condition_type}={actual}{stale}"),
                         }
                     }
                 };
@@ -1920,13 +1964,118 @@ mod tests {
         assert!(!check_readiness(&stamped, "VMCluster"));
     }
 
+    // A boolean or number at the path matches by its JSON text, as
+    // CloudNativePG's Database reports `status.applied` as a JSON boolean.
     #[test]
-    fn declared_readiness_non_string_value_never_matches() {
-        let rule = r#"{"path":"/status/replicas","equals":"3"}"#;
-        let obj = make_annotated_obj(rule, json!({"status": {"replicas": 3}}));
-        assert!(!check_readiness(&obj, "VMCluster"));
-        let msg = readiness_message(&obj, "VMCluster");
-        assert!(msg.contains("non-string"), "got: {msg}");
+    fn declared_readiness_matches_scalars_by_text() {
+        let applied = r#"{"path":"/status/applied","equals":"true"}"#;
+        let ready = make_annotated_obj(applied, json!({"status": {"applied": true}}));
+        assert!(check_readiness(&ready, "Database"));
+
+        let failed = make_annotated_obj(applied, json!({"status": {"applied": false}}));
+        assert!(!check_readiness(&failed, "Database"));
+        let msg = readiness_message(&failed, "Database");
+        assert!(
+            msg.contains(r#"declared readiness /status/applied="true", currently false"#),
+            "got: {msg}"
+        );
+
+        let replicas = r#"{"path":"/status/replicas","equals":"3"}"#;
+        let three = make_annotated_obj(replicas, json!({"status": {"replicas": 3}}));
+        assert!(check_readiness(&three, "VMCluster"));
+        let two = make_annotated_obj(replicas, json!({"status": {"replicas": 2}}));
+        assert!(!check_readiness(&two, "VMCluster"));
+
+        // A string still compares as a string.
+        let text = make_annotated_obj(applied, json!({"status": {"applied": "true"}}));
+        assert!(check_readiness(&text, "Database"));
+
+        // A missing path is not ready.
+        let fresh = make_annotated_obj(applied, json!({"status": {}}));
+        assert!(!check_readiness(&fresh, "Database"));
+        assert!(readiness_message(&fresh, "Database").contains("<absent>"));
+    }
+
+    fn with_generation(mut obj: DynamicObject, generation: i64) -> DynamicObject {
+        obj.metadata.generation = Some(generation);
+        obj
+    }
+
+    // A path rule waits until status.observedGeneration reaches
+    // metadata.generation, so a status left from the previous spec is not
+    // taken as ready; without status.observedGeneration there is no guard.
+    #[test]
+    fn declared_path_readiness_waits_for_observed_generation() {
+        let applied = r#"{"path":"/status/applied","equals":"true"}"#;
+        let stale = with_generation(
+            make_annotated_obj(
+                applied,
+                json!({"status": {"applied": true, "observedGeneration": 1}}),
+            ),
+            2,
+        );
+        assert!(!check_readiness(&stale, "Database"));
+        let msg = readiness_message(&stale, "Database");
+        assert!(msg.contains("observed generation 1 of 2"), "got: {msg}");
+
+        let current = with_generation(
+            make_annotated_obj(
+                applied,
+                json!({"status": {"applied": true, "observedGeneration": 2}}),
+            ),
+            2,
+        );
+        assert!(check_readiness(&current, "Database"));
+        assert!(!readiness_message(&current, "Database").contains("observed generation"));
+
+        let absent = with_generation(
+            make_annotated_obj(applied, json!({"status": {"applied": true}})),
+            2,
+        );
+        assert!(check_readiness(&absent, "Database"));
+    }
+
+    // A condition rule waits until the condition's own observedGeneration
+    // reaches metadata.generation; a condition without one has no guard.
+    #[test]
+    fn declared_condition_readiness_waits_for_observed_generation() {
+        let rule = r#"{"condition":{"type":"Ready","status":"True"}}"#;
+        let condition = |extra: Value| {
+            let mut c = json!({"type": "Ready", "status": "True"});
+            if let (Some(c), Some(extra)) = (c.as_object_mut(), extra.as_object()) {
+                c.extend(extra.clone());
+            }
+            json!({"status": {"conditions": [c]}})
+        };
+
+        let stale = with_generation(
+            make_annotated_obj(rule, condition(json!({"observedGeneration": 3}))),
+            4,
+        );
+        assert!(!check_readiness(&stale, "Cluster"));
+        let msg = readiness_message(&stale, "Cluster");
+        assert!(msg.contains("observed generation 3 of 4"), "got: {msg}");
+
+        let current = with_generation(
+            make_annotated_obj(rule, condition(json!({"observedGeneration": 4}))),
+            4,
+        );
+        assert!(check_readiness(&current, "Cluster"));
+
+        let absent = with_generation(make_annotated_obj(rule, condition(json!({}))), 4);
+        assert!(check_readiness(&absent, "Cluster"));
+    }
+
+    #[test]
+    fn declared_readiness_object_never_matches() {
+        let rule = r#"{"path":"/status/applied","equals":"true"}"#;
+        let obj = make_annotated_obj(rule, json!({"status": {"applied": {"value": true}}}));
+        assert!(!check_readiness(&obj, "Database"));
+        let msg = readiness_message(&obj, "Database");
+        assert!(
+            msg.contains("only strings, booleans, and numbers"),
+            "got: {msg}"
+        );
         assert!(!msg.contains("<absent>"), "got: {msg}");
     }
 

@@ -41,7 +41,8 @@
 #     DB_PASSWORD = "password";
 #   });
 #
-# Exposes:
+# Exposes the Postgres database contract (kix/lib/vocab/postgres-database.nix,
+# `kix.contracts.postgresDatabase`), which root.out passes through `check`:
 #   out.host, out.port      the cluster's primary Service. They carry the
 #                           Job, so a consumer's workload waits for it and
 #                           gets network policy to PostgreSQL.
@@ -482,7 +483,7 @@ in
           # and can be applied before the Job runs.
           postHooks = [ bootstrapJob ];
 
-          out = {
+          out = kix.contracts.postgresDatabase.check who {
             host = self.pg.fqdn;
             port = self.pg.port;
             database = dbName;
