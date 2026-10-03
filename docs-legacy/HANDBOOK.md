@@ -1191,6 +1191,7 @@ The storage, snapshot, and Cilium imports are not optional. Packages take `stora
 - hostNetwork pods bypass CNI policy (warning emitted).
 - Pods an operator creates at runtime (proxies, nameservers, data-path pods). The package writes their policies with `kix.operandPolicy`; see §16.6.
 - A scraper's connections to its targets, which no workload names. The netpol plugin derives them for Prometheus from the monitors it selects; see §16.8.
+- Addresses a package's passthrough config dials that no dependency supplies (an otel-collector exporter written in `settings`, a Vector sink endpoint the instance overrides where unlocked). An address from `dep.out` written into a ConfigMap the pod mounts does carry the edge; one typed into `settings` does not, and under default deny the instance needs its own policy for it.
 
 A host-network pod gets no derived edge. Its traffic reaches other pods as from the host or a remote node, so the rules derived from the addresses it dials admit nothing. A package whose host-network pods talk to its own pods declares the ports once as an intent (§16.5), as mayastor's `hostNetworkPeers` does: `meta.network.intents.hostNetworkPeers = { ingress = [ { from = "all-pods"; ports = [ { port = 2379; protocol = "TCP"; } ]; } ]; egress = [ ... ]; };`. `all-pods` is Cilium's `cluster` entity, which includes `host` and `remote-node`.
 

@@ -307,6 +307,13 @@ let
         };
       };
     };
+    # The collector refuses to start without a pipeline, and the events
+    # pipeline needs no dependency. A Prometheus provider, so the metrics
+    # port and the ServiceMonitor are built.
+    otel-collector = {
+      config.events.enabled = true;
+      instances.prometheus-operator.package = packages.prometheus-operator;
+    };
     persistent-volume-claim.config.size = "1Gi";
     priority-class.config.value = 1000;
     secret.config.stringData.password = "password";

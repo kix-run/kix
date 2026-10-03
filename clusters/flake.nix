@@ -70,6 +70,7 @@
         metabase = ./test-metabase.nix;
         metrics-server = ./test-metrics-server.nix;
         keycloak = ./test-keycloak.nix;
+        otel-collector = ./test-otel-collector.nix;
         monitoring-netpol = ./test-monitoring-netpol.nix;
       };
     };
