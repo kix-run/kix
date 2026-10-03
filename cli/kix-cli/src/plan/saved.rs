@@ -759,7 +759,7 @@ mod tests {
         assert!(unusable(&builds).is_some());
         assert!(unusable(&plan()).is_none());
         let mut future = plan();
-        future.schema_version += 1;
+        future.schema_version = "2099-01-01".into();
         assert!(unusable(&future).is_some());
     }
 }
