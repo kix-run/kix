@@ -44,6 +44,7 @@
           postgres-swap-cnpg = ./clusters/test-postgres-swap/cnpg.nix;
           kind = ./clusters/test-kind.nix;
           metrics-server = ./clusters/test-metrics-server.nix;
+          otel-collector = ./clusters/test-otel-collector.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
           monitoring-loki = ./clusters/test-monitoring-loki.nix;
           victoria-metrics = ./clusters/test-victoria-metrics.nix;

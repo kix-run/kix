@@ -1,0 +1,3 @@
+# 2026-10-03 · `kix/packages/otel-collector` · The package has only been evaluated, never deployed, so its rendered collector configuration is unproven.
+
+`nix build .#cluster-otel-collector` builds, but no collector has loaded the configuration the package writes. Three things rest on reading upstream source, not on a run. The `file/events` exporter opens `/dev/stdout` again by path, as uid 10001, and that open fails if the container runtime's stdout pipe is owned by root with mode 0600. The `otlp_grpc` exporter must accept an `http://` endpoint with `tls.insecure`. The `service.telemetry.metrics.readers` block must serve 8888 in 0.161.0. Deploy `clusters/test-otel-collector.nix` on kind with a log shipper, and check that one Event appears as one log line.
