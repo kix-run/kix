@@ -56,7 +56,9 @@ default is not suitable. PostgreSQL parameters go in `postgresqlConf`, and any o
 
 Apps should not read the superuser Secret. Give each app a
 `stackgres-database` instance, which creates a role and a database on the
-cluster and puts the credentials in the app's namespace.
+cluster and puts the credentials in the app's namespace. Its `out` follows the
+Postgres database contract, `kix.contracts.postgresDatabase`, which the
+packages that take a `database` dependency check at evaluation.
 
 ## Back up to object storage
 
