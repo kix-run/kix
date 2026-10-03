@@ -1396,7 +1396,8 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
                     obj.data.pointer("/status/observedGeneration"),
                 ) && obj.data.pointer(&path).is_some_and(|v| match v {
                     Value::String(s) => *s == equals,
-                    Value::Bool(_) | Value::Number(_) => v.to_string() == equals,
+                    Value::Bool(b) => b.to_string() == equals,
+                    Value::Number(n) => n.to_string() == equals,
                     _ => false,
                 })
             }
