@@ -185,8 +185,8 @@ pub(crate) fn dry_run(
             observer.clone(),
         )
         .await;
-        // The interrupt listener holds Ctrl-C until its token is cancelled.
-        // A deploy asks for confirmation next, where Ctrl-C must exit.
+        // Cancelling the token ends its interrupt watcher, so Ctrl-C at the
+        // deploy's confirmation exits the process.
         let interrupted = config.cancel.is_cancelled();
         config.cancel.cancel();
         observer.finish();
@@ -385,10 +385,19 @@ pub(crate) fn document(
         .map(|rid| rid.name)
         .collect();
     let served = report.map(|r| &r.served_kinds);
+    let changed_crds = changed_crds(answers);
+    // An immutable-field refusal is followed by a recreate when the engine
+    // may delete the object; the deploy recreates it rather than stopping.
+    let recreated: HashSet<&ResourceId> = answers
+        .iter()
+        .filter(|a| matches!(a.outcome, DryRunOutcome::Recreated { .. }))
+        .map(|a| &a.rid)
+        .collect();
 
     for answer in answers {
         let resource = answer.rid.display_id();
         let refusal = match &answer.outcome {
+            DryRunOutcome::Refused(_) if recreated.contains(&answer.rid) => continue,
             DryRunOutcome::Refused(r) => r,
             DryRunOutcome::Pruned(a) => {
                 prune_answers.insert(answer.rid.clone(), a.clone());
@@ -419,9 +428,23 @@ pub(crate) fn document(
                 reason: UncheckedReason::WebhookNoDryRun,
                 detail: message.clone(),
             }),
+            Refusal::UnknownKind { .. } | Refusal::Invalid { .. } | Refusal::Other { .. }
+                if manifests
+                    .get(&answer.rid)
+                    .and_then(|m| crd_key(m))
+                    .is_some_and(|k| changed_crds.contains(&k)) =>
+            {
+                not_checked.push(UncheckedObject {
+                    resource: resource.clone(),
+                    reason: UncheckedReason::CrdChangedByThisDeploy,
+                    detail: "checked against the CRD now on the cluster, which this deploy \
+                             changes"
+                        .into(),
+                })
+            }
             Refusal::UnknownKind { kind }
                 if !served.is_some_and(|s| s.contains(kind))
-                    && crds.brings(kind, manifests.get(&answer.rid).copied()) =>
+                    && crds.brings(manifests.get(&answer.rid).copied()) =>
             {
                 not_checked.push(UncheckedObject {
                     resource: resource.clone(),
@@ -510,11 +533,46 @@ pub(crate) fn document(
     doc
 }
 
-/// The custom resource kinds a build brings: the kinds of the CRDs it
-/// contains, and the API groups of the CRDs its import markers say
+/// The API group and kind a manifest is of.
+fn crd_key(manifest: &Value) -> Option<(String, String)> {
+    let kind = manifest.get("kind").and_then(Value::as_str)?;
+    let api_version = manifest.get("apiVersion").and_then(Value::as_str)?;
+    let group = api_version.split_once('/').map_or("", |(g, _)| g);
+    Some((group.to_string(), kind.to_string()))
+}
+
+/// The group and kind a CRD manifest defines.
+fn defined_by(crd: &Value) -> Option<(String, String)> {
+    let group = crd.pointer("/spec/group").and_then(Value::as_str)?;
+    let kind = crd.pointer("/spec/names/kind").and_then(Value::as_str)?;
+    Some((group.to_string(), kind.to_string()))
+}
+
+/// The kinds whose CRD this deploy creates or changes, by the dry run's
+/// answers. A custom resource of such a kind was checked against the CRD as
+/// it is now, so a refusal of it may not happen on the deploy.
+fn changed_crds(answers: &[DryRunAnswer]) -> HashSet<(String, String)> {
+    answers
+        .iter()
+        .filter(|a| a.rid.kind == "CustomResourceDefinition")
+        .filter_map(|a| match &a.outcome {
+            DryRunOutcome::Applied(p) => {
+                let unchanged = p
+                    .live
+                    .as_ref()
+                    .is_some_and(|live| comparable(live) == comparable(&p.result));
+                (!unchanged).then(|| defined_by(&p.result)).flatten()
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The custom resource kinds a build brings: the group and kind of each CRD
+/// it contains, and the API groups of the CRDs its import markers say
 /// something it installs creates (an operator that writes its own CRDs).
 struct BuildCrds {
-    kinds: HashSet<String>,
+    kinds: HashSet<(String, String)>,
     groups: HashSet<String>,
 }
 
@@ -523,8 +581,7 @@ impl BuildCrds {
         let kinds = manifests
             .iter()
             .filter(|m| m.get("kind").and_then(Value::as_str) == Some("CustomResourceDefinition"))
-            .filter_map(|m| m.pointer("/spec/names/kind").and_then(Value::as_str))
-            .map(str::to_string)
+            .filter_map(defined_by)
             .collect();
         let groups = manifests
             .iter()
@@ -535,14 +592,11 @@ impl BuildCrds {
         BuildCrds { kinds, groups }
     }
 
-    /// Whether `kind`, as `manifest` uses it, is one the build brings.
-    fn brings(&self, kind: &str, manifest: Option<&Value>) -> bool {
-        let group = manifest
-            .and_then(|m| m.get("apiVersion"))
-            .and_then(Value::as_str)
-            .and_then(|av| av.split_once('/'))
-            .map(|(group, _)| group);
-        self.kinds.contains(kind) || group.is_some_and(|g| self.groups.contains(g))
+    /// Whether the kind `manifest` is of is one the build brings.
+    fn brings(&self, manifest: Option<&Value>) -> bool {
+        manifest
+            .and_then(crd_key)
+            .is_some_and(|key| self.groups.contains(&key.0) || self.kinds.contains(&key))
     }
 }
 
@@ -668,8 +722,8 @@ pub(crate) fn print_text(p: &Prepared, doc: &Plan, args: &PlanArgs, verbose: boo
     } else {
         format!("kept; {}", deploy::KEPT_ORPHANS_HINT)
     };
+    // Shared orphans are listed with the prune section of `render::render_text`.
     print!("{}", deploy::render_plan_orphans(&p.orphan_rids, &fate));
-    super::shared_orphans::print(&p.shared_orphans);
 
     // Where the extra work in this plan came from. Without this the reader
     // sees a deploy of an unchanged config proposing changes, and has no way
@@ -718,4 +772,55 @@ fn markdown(p: &Prepared, doc: &Plan) -> String {
     }
     out.push_str(&render::render_markdown(doc));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kix::cluster::apply::ApplyPreview;
+    use serde_json::json;
+
+    fn crd(group: &str, kind: &str, version: &str) -> Value {
+        json!({
+            "apiVersion": "apiextensions.k8s.io/v1",
+            "kind": "CustomResourceDefinition",
+            "metadata": {"name": format!("{}s.{group}", kind.to_lowercase())},
+            "spec": {"group": group, "names": {"kind": kind}, "versions": [{"name": version}]},
+        })
+    }
+
+    fn applied(manifest: &Value, live: Option<Value>) -> DryRunAnswer {
+        DryRunAnswer {
+            rid: ResourceId::from_value(manifest),
+            outcome: DryRunOutcome::Applied(Box::new(ApplyPreview {
+                live,
+                result: manifest.clone(),
+            })),
+        }
+    }
+
+    /// Only a CRD the dry run would change marks its kind; one that holds
+    /// live already does not.
+    #[test]
+    fn a_crd_the_deploy_changes_marks_its_kind() {
+        let new = crd("example.com", "Widget", "v2");
+        let same = crd("example.com", "Gadget", "v1");
+        let answers = vec![
+            applied(&new, Some(crd("example.com", "Widget", "v1"))),
+            applied(&same, Some(same.clone())),
+        ];
+        let changed = changed_crds(&answers);
+        assert!(changed.contains(&("example.com".into(), "Widget".into())));
+        assert!(!changed.contains(&("example.com".into(), "Gadget".into())));
+    }
+
+    /// A build CRD covers its own group and kind, not the same kind name in
+    /// another group.
+    #[test]
+    fn build_crds_match_group_and_kind() {
+        let crds = BuildCrds::of(&[crd("example.com", "Widget", "v1")]);
+        let widget = |api: &str| json!({"apiVersion": api, "kind": "Widget"});
+        assert!(crds.brings(Some(&widget("example.com/v1"))));
+        assert!(!crds.brings(Some(&widget("other.io/v1"))));
+    }
 }

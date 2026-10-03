@@ -875,6 +875,11 @@
           "type": "string"
         },
         {
+          "const": "crd_changed_by_this_deploy",
+          "description": "Its kind's CRD is changed by this deploy, and the dry run checked\nthe object against the CRD on the cluster now.",
+          "type": "string"
+        },
+        {
           "const": "namespace_created_by_this_deploy",
           "description": "Its namespace is created by this deploy.",
           "type": "string"

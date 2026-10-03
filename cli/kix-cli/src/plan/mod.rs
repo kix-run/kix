@@ -707,6 +707,11 @@ fn hide_secrets(is_secret: bool, path: &str, value: &mut Value, old: Option<&Val
 /// Whether the value at `path` is secret. Annotation keys contain dots and
 /// slashes, and diff paths do not escape them, so a key is matched by its
 /// prefix after `annotations.`.
+///
+/// On a Secret this covers `kubectl.kubernetes.io/last-applied-configuration`,
+/// which holds the whole Secret as `kubectl apply` last sent it, and the
+/// content and applied hashes under every domain Kix has stamped, since a
+/// live object can still carry a retired spelling.
 pub(crate) fn is_secret_path(is_secret: bool, path: &str) -> bool {
     if path.contains(".annotations.checksum/") {
         return true;
@@ -717,12 +722,20 @@ pub(crate) fn is_secret_path(is_secret: bool, path: &str) -> bool {
     let under = |field: &str| {
         path.starts_with(&format!("{field}.")) || path.starts_with(&format!("{field}["))
     };
-    under("$.data")
-        || under("$.stringData")
-        || [keys::CONTENT_HASH, keys::APPLIED_HASH]
-            .iter()
-            .any(|k| path == format!("$.metadata.annotations.{k}"))
+    let Some(annotation) = path.strip_prefix("$.metadata.annotations.") else {
+        return under("$.data") || under("$.stringData");
+    };
+    annotation == LAST_APPLIED
+        || [keys::CONTENT_HASH, keys::APPLIED_HASH].iter().any(|k| {
+            annotation == *k
+                || kix::legacy_domain::legacy_spellings(k)
+                    .iter()
+                    .any(|l| annotation == l)
+        })
 }
+
+/// The annotation `kubectl apply` keeps the whole applied object in.
+pub(crate) const LAST_APPLIED: &str = "kubectl.kubernetes.io/last-applied-configuration";
 
 fn render_change_markdown(out: &mut String, c: &PackageChangeDiff) {
     use std::fmt::Write;
@@ -2104,6 +2117,32 @@ mod diff_graph_tests {
         let dep = &shown["Deployment/web@app"];
         assert_eq!(dep.old, None);
         assert_eq!(dep.new, Some(json!({"spec": {"replicas": 5}})));
+    }
+
+    /// A Secret once applied with kubectl carries its whole data in
+    /// `last-applied-configuration`; the manifests hide it, under the
+    /// retired domain's hash spellings too.
+    #[test]
+    fn manifests_hide_a_secret_in_last_applied_and_legacy_hashes() {
+        let (old_graph, new_graph) = graphs_of(&baseline(), &baseline());
+        let mut index = ManifestIndex::new(&old_graph, &new_graph);
+        let rid = ResourceId {
+            kind: "Secret".into(),
+            namespace: "app".into(),
+            name: "s".into(),
+        };
+        let legacy = kix::legacy_domain::legacy_spellings(keys::CONTENT_HASH)
+            .pop()
+            .expect("a retired domain");
+        let live = json!({"kind": "Secret", "metadata": {"name": "s", "annotations": {
+            LAST_APPLIED: "{\"data\":{\"p\":\"cGxhaW4=\"}}",
+            legacy.clone(): "sha256-legacy-hash"}},
+            "data": {"p": "b2xk"}});
+        index.answered(&rid, Some(live.clone()), Some(live));
+        let text = serde_json::to_string(&index.render([&rid])).unwrap();
+        for leaked in ["cGxhaW4=", "b2xk", "sha256-legacy-hash"] {
+            assert!(!text.contains(leaked), "{leaked} in {text}");
+        }
     }
 
     /// A manifest too large to show is replaced by its size.

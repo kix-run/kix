@@ -160,10 +160,20 @@ impl Refusal {
             .immutable_if(matches!(err, ApplyError::ImmutableConflict { .. }))
     }
 
+    /// The message leaves out the hashes of a [`SecretError::HashMismatch`]:
+    /// the actual one is a hash of the decrypted data, and a plan is meant
+    /// to be shared.
     pub fn of_hydration(err: &SecretError) -> Refusal {
-        Refusal::Hydration {
-            message: err.to_string(),
-        }
+        let message = match err {
+            SecretError::HashMismatch { name, .. } => format!(
+                "content hash mismatch for secret '{name}': the SOPS file does not hold \
+                 the data the build expects. Check that you are using the intended SOPS \
+                 file. If the change is intentional, update the secret's hash in its Nix \
+                 definition and rebuild."
+            ),
+            _ => err.to_string(),
+        };
+        Refusal::Hydration { message }
     }
 
     /// Classify an apiserver error status by its code and message. The

@@ -115,15 +115,22 @@ are skipped; `plan::document` turns the result into the `Plan` document.
   object is an addition; an object with no change drops out; a package the
   build comparison called unchanged becomes changed when the server says so.
 - **Not checked.** `plan::document` files an unknown kind whose CRD the
-  build brings (a CRD manifest of that kind, or a `crd-ref-*` import
-  marker for a CRD in its API group), a missing namespace the build creates,
-  a webhook without dry-run support, and a node the engine never tried
-  under `not_checked`, not as refusals. A first deploy is mostly this.
+  build brings (a CRD manifest of that group and kind, or a `crd-ref-*`
+  import marker for a CRD in its API group), an unknown-kind, invalid, or
+  other refusal of an object whose CRD the dry run would change
+  (`changed_crds`: the object was checked against the CRD now served), a
+  missing namespace the build creates, a webhook without dry-run support,
+  and a node the engine never tried under `not_checked`, not as refusals. A
+  first deploy is mostly this. An immutable-field refusal followed by a
+  `Recreated` answer for the same object is dropped, since the deploy
+  recreates it. A recreated object stays in `packages` as changed, with the
+  build comparison's field changes when the create could not be dry-run.
 - **Deploy stops first.** When the plan has a conflict, a refused write, or a
   refused prune delete and `--on-error stop` (the default), `kix deploy`
   exits 1 before applying anything. `--on-error continue` applies the rest.
 - **Exit status.** `kix plan` exits 0 when nothing would change, 2 when
-  something would, and 3 when the deploy would stop (a refusal, or a
+  something would (a prune `delete` fate counts, `Plan::has_changes`), and 3
+  when the deploy would stop (a refusal, or a
   stateful migration without `--accept-migrations`).
 - **Offline.** `--current-activation` connects to nothing: the plan
   compares the cached build with the new one, `made_by: builds`, and every

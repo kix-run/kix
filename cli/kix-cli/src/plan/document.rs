@@ -350,6 +350,9 @@ pub struct UncheckedObject {
 pub enum UncheckedReason {
     /// Its kind comes from a CRD this deploy creates.
     CrdCreatedByThisDeploy,
+    /// Its kind's CRD is changed by this deploy, and the dry run checked
+    /// the object against the CRD on the cluster now.
+    CrdChangedByThisDeploy,
     /// Its namespace is created by this deploy.
     NamespaceCreatedByThisDeploy,
     /// An admission webhook that would be called does not support dry run.
@@ -396,7 +399,7 @@ impl Plan {
         }
     }
 
-    /// Anything a deploy would change or stop on.
+    /// Anything a deploy would change or stop on, a prune delete included.
     pub fn has_changes(&self) -> bool {
         let p = &self.packages;
         !p.added.is_empty()
@@ -405,6 +408,11 @@ impl Plan {
             || p.cluster_level.is_some()
             || p.activation.is_some()
             || !self.migrations.items().is_empty()
+            || self
+                .prune
+                .items()
+                .iter()
+                .any(|p| p.fate == PruneFate::Delete)
             || self.stops()
     }
 
@@ -613,6 +621,34 @@ mod tests {
              Regenerate it with KIX_WRITE_PLAN_SCHEMA=1 cargo test -p kix-cli plan::document \
              and bump SCHEMA_VERSION if the change is not backward compatible."
         );
+    }
+
+    /// A prune delete is a change even when no package changes.
+    #[test]
+    fn a_prune_delete_alone_is_a_change() {
+        let empty = super::super::diff_graphs(
+            &kix::eval::store_graph::StoreGraph::empty("c"),
+            &kix::eval::store_graph::StoreGraph::empty("c"),
+        );
+        let mut plan = Plan::new(
+            MadeBy::DryRun,
+            "c",
+            &empty,
+            Detail::Plain,
+            &[],
+            NotCheckedReason::BuildsOnly,
+        );
+        assert!(!plan.has_changes());
+        let entry = |fate| PruneEntry {
+            resource: "ConfigMap/x@app".into(),
+            fate,
+            detail: None,
+        };
+        plan.prune = Checked::found(vec![entry(PruneFate::KeptWarnOnly)]);
+        assert!(!plan.has_changes());
+        plan.prune = Checked::found(vec![entry(PruneFate::Delete)]);
+        assert!(plan.has_changes());
+        assert!(!plan.stops());
     }
 
     #[test]

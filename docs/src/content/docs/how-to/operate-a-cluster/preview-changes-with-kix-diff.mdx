@@ -32,9 +32,11 @@ on: a field another manager owns, a webhook or admission policy denial, a
 validation error, an immutable field, or an RBAC refusal. Every refusal is
 listed, so you can fix them all before deploying.
 
-The plan exits `0` when the deploy would change nothing, `2` when it would
-change something, and `3` when it would stop. In CI, branch on `3` to block a
-deploy that the cluster would refuse.
+The plan exits `0` when the deploy would change and delete nothing, `2` when
+it would change or delete something, and `3` when it would stop. In CI, treat
+`0` and `2` as success and block on `3`, a deploy the cluster would refuse;
+[`kix plan`](/docs/reference/cli/plan/#exit-status) has a script that does
+this.
 
 Objects whose CRD or namespace the same deploy creates cannot be checked by a
 dry run. The plan lists them under "Not checked by the dry run" with the

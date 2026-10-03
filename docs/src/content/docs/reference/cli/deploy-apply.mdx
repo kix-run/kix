@@ -35,7 +35,7 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
 | `--timeout <DURATION>` | How long to wait for each resource to become ready: `5m`, `300s`, or a bare number of seconds. Default `180s`. |
 | `--on-error <MODE>` | `stop` (default) stops before applying anything when the plan shows a refused write, and halts the run at the first failure and cancels what has not started. `continue` applies the plan even when it shows refused writes, cancels only the dependents of a failed resource, and carries on with the rest. Either way, a run in which any resource failed exits `1`. |
 | `--reconcile` | Re-apply every resource, including those whose identity hash matches the running activation. Use it to put back fields that were changed on the cluster. |
-| `--force-conflicts` | Take ownership of fields another field manager owns. Without it, a conflict fails that resource and names the fields and their current owner. |
+| `--force-conflicts` | Take ownership of fields another field manager owns. Without it, a conflict is a refused write in the plan, naming the fields and their current owner, and under `--on-error stop` the deploy stops before applying anything. |
 | `--accept-migrations` | Proceed when the plan removes and adds stateful resources in the same slot. Without it such a deploy stops, even with `--yes`. Kix does not copy data. |
 | `--current-activation` | Take the previous activation from the local cache instead of the cluster. The plan is computed offline, so it cannot see deploys that stopped part way or orphans that earlier deploys kept; the new Activation lists the builds those orphans came from again, so a later plain deploy can prune them. With `--dry-run` nothing contacts the cluster. Without `--dry-run`, the deploy refuses before applying anything when the cached build is not the Active build of the cluster in the current context: the cache is keyed by cluster name only, so another context's cluster of the same name can have written it. |
 | `--operator` | Hand the build to the Kix operator instead of applying it from this machine. See [Operator mode](/docs/reference/cli/operator-mode/). |
@@ -62,8 +62,10 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--prune | --prune-mode default|no]
    the plan: they are re-applied or reported as orphans.
 4. Sends every write and prune delete of the plan as a server-side dry run,
    the way [`kix plan`](/docs/reference/cli/plan/) does, and prints the
-   result: field changes, the writes the cluster would refuse, prune fates,
-   drift, and the objects the dry run could not check. It also prints
+   result: the changed resources (with field changes under `-v`), the
+   writes the cluster would refuse, prune fates, drift, and the objects the
+   dry run could not check. The dry run is skipped when there is nothing to
+   apply or prune. It also prints
    warnings for node labels that `DoNotSchedule` spread or affinity rules
    need but no schedulable node carries, and whether the working tree has
    uncommitted changes. Under `--on-error stop`, a plan with a refused write

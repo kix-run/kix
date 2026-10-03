@@ -2002,8 +2002,8 @@ installs, or whose namespace the deploy creates, because a dry run persists
 neither. Those objects are listed under `not_checked` with their changes
 from the build comparison; most of a first deploy is in that list.
 
-`kix plan` exits 0 when the deploy would change nothing, 2 when it would
-change something, and 3 when it would stop. `kix deploy` makes the same plan
+`kix plan` exits 0 when the deploy would change and delete nothing, 2 when
+it would change or delete something, and 3 when it would stop. `kix deploy` makes the same plan
 before it asks for confirmation, and under `--on-error stop` it stops before
 applying anything when the plan shows a refused write.
 

@@ -631,10 +631,10 @@ pub struct PlanArgs {
     ///
     /// Plans entirely offline, so it cannot see the records of deploys that
     /// stopped part way and will not reconcile what they left behind, and it
-    /// cannot see orphans that earlier deploys kept. It records those builds
-    /// on the new activation again, so a later plain `kix deploy --prune` or
-    /// `kix gc` still deletes their orphans. `kix plan` with it compares two
-    /// builds and checks nothing with the apiserver.
+    /// cannot see orphans that earlier deploys kept. A deploy records those
+    /// builds on the new activation again, so a later plain `kix deploy
+    /// --prune` or `kix gc` still deletes their orphans. `kix plan` with it
+    /// compares two builds and checks nothing with the apiserver.
     #[arg(long)]
     pub current_activation: bool,
 
@@ -643,8 +643,9 @@ pub struct PlanArgs {
     pub reconcile: bool,
 
     /// Delete orphaned resources (in the old activation, or kept by an earlier
-    /// deploy, and not in the new one). Without it they are listed, kept, and
-    /// recorded on the new activation for a later `--prune` or `kix gc`
+    /// deploy, and not in the new one); `kix plan` sends each delete as a dry
+    /// run. Without it they are listed, kept, and recorded on the new
+    /// activation for a later `--prune` or `kix gc`
     #[arg(long)]
     pub prune: bool,
 
@@ -658,10 +659,10 @@ pub struct PlanArgs {
     #[arg(long)]
     pub force_conflicts: bool,
 
-    /// Acknowledge detected stateful migration pairs and proceed. Without
-    /// this flag, a deploy that would remove + add stateful resources in
-    /// the same logical slot is rejected (even with --yes) to prevent
-    /// silent data loss. Kix does not copy data between them.
+    /// Acknowledge detected stateful migration pairs. Without this flag, a
+    /// deploy that would remove and add stateful resources in the same
+    /// logical slot is rejected (even with --yes) to prevent silent data
+    /// loss, and `kix plan` exits 3. Kix does not copy data between them.
     #[arg(long)]
     pub accept_migrations: bool,
 }
@@ -726,7 +727,7 @@ pub enum LogFormat {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum PruneMode {
-    /// Prune orphans after all apply waves complete (default)
+    /// Prune orphans after every apply has finished (default)
     Default,
     /// Skip pruning entirely, defer to `kix gc`
     No,

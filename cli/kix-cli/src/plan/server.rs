@@ -37,9 +37,6 @@ const SERVER_METADATA: &[&str] = &[
 /// a DaemonSet's template generation moves with every template change.
 const SERVER_ANNOTATIONS: &[&str] = &["deprecated.daemonset.template.generation"];
 
-/// Annotations whose value can carry a Secret's data in plain text.
-const SECRET_ANNOTATIONS: &[&str] = &["kubectl.kubernetes.io/last-applied-configuration"];
-
 /// `obj` without server-maintained metadata, or `status`, which an apply
 /// does not write.
 pub fn comparable(obj: &Value) -> Value {
@@ -66,22 +63,12 @@ pub fn field_changes(rid: &ResourceId, live: &Value, result: &Value) -> Vec<Diff
     let config = DiffConfig::new("live", "planned");
     let mut diffs = structural_diff(&comparable(live), &comparable(result), "$", &config);
     let is_secret = rid.kind == "Secret";
+    let max = super::MAX_SHOWN_VALUE_BYTES;
     for d in &mut diffs {
-        let hide = is_secret
-            && SECRET_ANNOTATIONS
-                .iter()
-                .any(|a| d.path == format!("$.metadata.annotations.{a}"));
         let old = d.a_value.clone();
-        let max = super::MAX_SHOWN_VALUE_BYTES;
         for (side, before) in [(&mut d.a_value, None), (&mut d.b_value, old.as_ref())] {
             if let Some(v) = side.as_mut() {
-                *v = if hide && before.is_some_and(|b| b != v) {
-                    Value::String(super::SECRET_CHANGED_NOT_SHOWN.into())
-                } else if hide {
-                    Value::String(super::SECRET_NOT_SHOWN.into())
-                } else {
-                    super::shown_value(is_secret, &d.path, v, before, max)
-                };
+                *v = super::shown_value(is_secret, &d.path, v, before, max);
             }
         }
     }
@@ -117,6 +104,7 @@ impl Overlay<'_> {
             if lifecycle::is_record_kind(&rid.kind) {
                 continue;
             }
+            let recreated = matches!(answer.outcome, DryRunOutcome::Recreated { .. });
             let (live, result) = match &answer.outcome {
                 DryRunOutcome::Applied(p) => (p.live.clone(), Some(p.result.clone())),
                 DryRunOutcome::Recreated { live, result } => (live.clone(), result.clone()),
@@ -142,6 +130,15 @@ impl Overlay<'_> {
             let Some(entry) = entry(diff, key, version.clone()) else {
                 continue;
             };
+            // Recreated, and the create could not be dry-run because the
+            // object still exists: keep the build comparison.
+            if let (true, Some(_), None) = (recreated, &live, &result) {
+                if !entry.resource_diffs.iter().any(|(id, _)| id == rid) {
+                    forget(entry, rid);
+                    entry.resource_diffs.push((rid.clone(), Vec::new()));
+                }
+                continue;
+            }
             forget(entry, rid);
             match (live, result) {
                 (None, _) => entry.added_resources.push(rid.clone()),
@@ -170,12 +167,14 @@ impl Overlay<'_> {
                             }));
                         }
                         entry.resource_diffs.push((rid.clone(), real));
+                    } else if recreated {
+                        // A rerun Job deleted and created again with the
+                        // same spec is still a change.
+                        entry.resource_diffs.push((rid.clone(), Vec::new()));
                     } else if !propagation.is_empty() {
                         entry.dep_affected_resources.push(rid.clone());
                     }
                 }
-                // Recreated, and the create could not be dry-run because the
-                // object still exists: keep the build comparison.
                 (Some(_), None) => {}
             }
         }
@@ -423,6 +422,47 @@ mod tests {
         assert!(web.resource_diffs.is_empty(), "{:?}", web.resource_diffs);
         assert_eq!(web.dep_affected_resources, vec![rid("a")]);
         assert_eq!(web.added_resources, vec![rid("b")]);
+    }
+
+    /// A recreate stays in the plan: with no dry-run result the build
+    /// comparison is kept, and a recreate with nothing to change is still
+    /// listed, since the deploy deletes and creates the object.
+    #[test]
+    fn a_recreated_object_stays_a_change() {
+        let old = vec![
+            configmap("app", "a", &"a".repeat(32), json!({"k": "1"})),
+            configmap("app", "b", &"b".repeat(32), json!({"k": "1"})),
+        ];
+        let new = vec![
+            configmap("app", "a", &"c".repeat(32), json!({"k": "2"})),
+            old[1].clone(),
+        ];
+        let new_graph = StoreGraph::synthesize(&new, &StoreGraph::empty("c"));
+        let old_graph = StoreGraph::synthesize(&old, &new_graph);
+        let mut diff = super::super::diff_graphs(&old_graph, &new_graph);
+        let recreated = |name: &str, live: &Value, result: Option<Value>| DryRunAnswer {
+            rid: rid(name),
+            outcome: DryRunOutcome::Recreated {
+                live: Some(served(live)),
+                result,
+            },
+        };
+        let answers = vec![
+            recreated("a", &old[0], None),
+            recreated("b", &old[1], Some(served(&old[1]))),
+        ];
+        Overlay {
+            new_graph: &new_graph,
+            deployed: None,
+        }
+        .apply(&mut diff, &answers);
+        let web = &diff.changed[0];
+        let listed: Vec<(&ResourceId, usize)> = web
+            .resource_diffs
+            .iter()
+            .map(|(id, d)| (id, d.len()))
+            .collect();
+        assert_eq!(listed, vec![(&rid("a"), 1), (&rid("b"), 0)], "{listed:?}");
     }
 
     #[test]

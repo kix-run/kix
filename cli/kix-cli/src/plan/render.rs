@@ -218,7 +218,7 @@ fn write_prune(out: &mut String, plan: &Plan) {
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "{} {} orphans stay, found when the prune came to delete them:",
+        "{} {} orphans stay:",
         output::bold("Prune:"),
         shared.len()
     );
@@ -254,6 +254,9 @@ fn write_not_checked(out: &mut String, plan: &Plan) {
         for (reason, names) in groups {
             let why = match reason {
                 UncheckedReason::CrdCreatedByThisDeploy => "its CRD is created by this deploy",
+                UncheckedReason::CrdChangedByThisDeploy => {
+                    "its CRD is changed by this deploy, and was checked as it is now"
+                }
                 UncheckedReason::NamespaceCreatedByThisDeploy => {
                     "its namespace is created by this deploy"
                 }
@@ -320,7 +323,13 @@ pub fn render_markdown(plan: &Plan) -> String {
     let mut out = String::new();
     let conflicts = plan.conflicts.items();
     let refusals = plan.admission.items();
-    if !conflicts.is_empty() || !refusals.is_empty() {
+    let prune_refused: Vec<_> = plan
+        .prune
+        .items()
+        .iter()
+        .filter(|p| p.fate == PruneFate::DeleteRefused)
+        .collect();
+    if !conflicts.is_empty() || !refusals.is_empty() || !prune_refused.is_empty() {
         let _ = writeln!(out, "#### :x: The deploy would stop on these writes");
         let _ = writeln!(out);
         for c in conflicts {
@@ -339,6 +348,12 @@ pub fn render_markdown(plan: &Plan) -> String {
         for r in refusals {
             let _ = writeln!(out, "- `{}`: {}", r.resource, refusal_title(r));
             let _ = writeln!(out, "  > {}", r.message.replace('\n', " "));
+        }
+        for p in prune_refused {
+            let _ = writeln!(out, "- `{}`: prune delete refused", p.resource);
+            if let Some(why) = &p.detail {
+                let _ = writeln!(out, "  > {}", why.replace('\n', " "));
+            }
         }
         let _ = writeln!(out);
     }
