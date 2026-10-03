@@ -223,6 +223,27 @@ let
       };
       prometheus-operator.package = packages.prometheus-operator;
     };
+    # Nothing routes to the instance here, so the URL comes from
+    # env.KC_HOSTNAME. A Prometheus provider, so the metrics port and the
+    # ServiceMonitor are built.
+    keycloak = {
+      config.env.KC_HOSTNAME = "https://auth.example.com";
+      instances = {
+        prometheus-operator.package = packages.prometheus-operator;
+        database = {
+          package = packages.stackgres-database;
+          config.password = "password";
+        };
+        bootstrap-admin = {
+          package = packages.secret;
+          aliases = [ "bootstrapAdmin" ];
+          config.stringData = {
+            username = "admin";
+            password = "password";
+          };
+        };
+      };
+    };
     loki.instances = { inherit storage; };
     # loki-logs auto-instantiates loki, which needs a claim.
     loki-logs.instances = { inherit storage; };

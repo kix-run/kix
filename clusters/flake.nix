@@ -65,6 +65,7 @@
         mayastor = ./test-mayastor.nix;
         virtualization = ./test-virtualization.nix;
         metabase = ./test-metabase.nix;
+        keycloak = ./test-keycloak.nix;
         monitoring-netpol = ./test-monitoring-netpol.nix;
       };
     };
