@@ -336,8 +336,7 @@ in
         # applied first.
         postHooks = [ self.database ];
 
-        # TODO: out = kix.contracts.postgresDatabase.check who { ... } once the contract lands.
-        out = {
+        out = kix.contracts.postgresDatabase.check who {
           host = self.pg.fqdn;
           port = self.pg.port;
           database = dbName;
