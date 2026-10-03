@@ -779,8 +779,9 @@ rec {
       # `true`. The condition form requires an entry in status.conditions
       # whose type and status both match. Both forms wait while the
       # operator's observedGeneration (status.observedGeneration for a
-      # path, the condition's own for a condition) is below
-      # metadata.generation, and impose no such wait when it is absent.
+      # path; for a condition, its own, else status.observedGeneration) is
+      # below metadata.generation, and impose no such wait when it is
+      # absent.
       readiness ? null,
     }:
     let

@@ -1339,8 +1339,9 @@ pub fn is_immediate_kind(kind: &str) -> bool {
 /// only "1.0"), and `status.observedGeneration`, when present, has reached
 /// `metadata.generation`; `{"condition": {"type": "<Type>", "status": "True"}}`
 /// is ready when `status.conditions` holds an entry with that type and
-/// status whose own `observedGeneration`, when present, has reached
-/// `metadata.generation`.
+/// status whose `observedGeneration` has reached `metadata.generation`. A
+/// condition without its own `observedGeneration` is judged by
+/// `status.observedGeneration`; with neither there is no guard.
 enum DeclaredReadiness {
     Path {
         path: String,
@@ -1406,7 +1407,10 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
                 status,
             } => find_condition(&obj.data, &condition_type).is_some_and(|c| {
                 c.get("status").and_then(Value::as_str) == Some(status.as_str())
-                    && generation_observed(obj.metadata.generation, c.get("observedGeneration"))
+                    && generation_observed(
+                        obj.metadata.generation,
+                        condition_observed_generation(&obj.data, c),
+                    )
             }),
         };
     }
@@ -1631,6 +1635,15 @@ fn generation_observed(generation: Option<i64>, observed: Option<&Value>) -> boo
     }
 }
 
+/// The generation a condition describes: its own `observedGeneration`, or
+/// `status.observedGeneration` when the operator stamps only the status (the
+/// RabbitMQ Cluster Operator does this for `AllReplicasReady`).
+fn condition_observed_generation<'a>(data: &'a Value, condition: &'a Value) -> Option<&'a Value> {
+    condition
+        .get("observedGeneration")
+        .or_else(|| data.pointer("/status/observedGeneration"))
+}
+
 /// The suffix a readiness message carries when the status predates the spec.
 fn stale_note(generation: Option<i64>, observed: Option<&Value>) -> String {
     match (generation, observed.and_then(Value::as_i64)) {
@@ -1682,8 +1695,10 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                     None => format!("no {condition_type} condition yet"),
                     Some(c) => {
                         let actual = c.get("status").and_then(Value::as_str).unwrap_or("?");
-                        let stale =
-                            stale_note(obj.metadata.generation, c.get("observedGeneration"));
+                        let stale = stale_note(
+                            obj.metadata.generation,
+                            condition_observed_generation(&obj.data, c),
+                        );
                         match c.get("message").and_then(Value::as_str) {
                             Some(msg) if !msg.is_empty() => {
                                 format!("{condition_type}={actual} ({msg}){stale}")
@@ -2064,6 +2079,33 @@ mod tests {
 
         let absent = with_generation(make_annotated_obj(rule, condition(json!({}))), 4);
         assert!(check_readiness(&absent, "Cluster"));
+    }
+
+    // A condition without its own observedGeneration falls back to
+    // status.observedGeneration; the condition's own value wins when present.
+    #[test]
+    fn declared_condition_readiness_falls_back_to_status_generation() {
+        let rule = r#"{"condition":{"type":"AllReplicasReady","status":"True"}}"#;
+        let obj = |condition: Value, observed: i64| {
+            with_generation(
+                make_annotated_obj(
+                    rule,
+                    json!({"status": {"observedGeneration": observed, "conditions": [condition]}}),
+                ),
+                5,
+            )
+        };
+        let bare = json!({"type": "AllReplicasReady", "status": "True"});
+
+        let stale = obj(bare.clone(), 4);
+        assert!(!check_readiness(&stale, "RabbitmqCluster"));
+        let msg = readiness_message(&stale, "RabbitmqCluster");
+        assert!(msg.contains("observed generation 4 of 5"), "got: {msg}");
+
+        assert!(check_readiness(&obj(bare, 5), "RabbitmqCluster"));
+
+        let own = json!({"type": "AllReplicasReady", "status": "True", "observedGeneration": 5});
+        assert!(check_readiness(&obj(own, 4), "RabbitmqCluster"));
     }
 
     #[test]

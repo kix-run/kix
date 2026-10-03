@@ -404,8 +404,9 @@ edge but NO netpol hole. Consequences when authoring:
   (`cnpg-operator` for Database and DatabaseRole). Neither form trusts a
   status older than the spec: a path rule also waits for
   `status.observedGeneration`, and a condition rule for the condition's
-  own `observedGeneration`, to reach `metadata.generation` when the
-  operator reports it. An operator that reports neither (CloudNativePG's
+  own `observedGeneration` (or `status.observedGeneration` when the
+  condition has none, as with RabbitMQ's `AllReplicasReady`), to reach
+  `metadata.generation` when the operator reports it. An operator that reports neither (CloudNativePG's
   Cluster) can still read as ready from its previous status right after
   a spec change.
 
