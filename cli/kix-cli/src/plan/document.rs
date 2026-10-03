@@ -234,7 +234,8 @@ pub struct ConflictOwner {
 pub struct AdmissionRefusal {
     pub resource: String,
     pub reason: RefusalReason,
-    /// The admission webhook that answered, when one did.
+    /// The admission webhook or ValidatingAdmissionPolicy that answered,
+    /// when one did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook: Option<String>,
     pub message: String,
@@ -245,6 +246,9 @@ pub struct AdmissionRefusal {
 pub enum RefusalReason {
     /// An admission webhook denied the write.
     WebhookDenied,
+    /// A ValidatingAdmissionPolicy denied the write; `webhook` names the
+    /// policy.
+    PolicyDenied,
     /// The object fails validation: schema or a CRD's rules.
     Invalid,
     /// A changed field cannot be modified; the object must be deleted and

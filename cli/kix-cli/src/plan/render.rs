@@ -109,6 +109,8 @@ fn refusal_title(r: &AdmissionRefusal) -> String {
     match (r.reason, &r.webhook) {
         (RefusalReason::WebhookDenied, Some(w)) => format!("denied by admission webhook {w}"),
         (RefusalReason::WebhookDenied, None) => "denied by an admission webhook".into(),
+        (RefusalReason::PolicyDenied, Some(p)) => format!("denied by admission policy {p}"),
+        (RefusalReason::PolicyDenied, None) => "denied by an admission policy".into(),
         (RefusalReason::Invalid, _) => "invalid".into(),
         (RefusalReason::ImmutableField, _) => {
             "changes a field that cannot be modified; delete and recreate it".into()
@@ -178,18 +180,32 @@ fn write_drift(out: &mut String, plan: &Plan) {
     }
 }
 
+/// A value short enough for one drift line: its first line, cut at 60
+/// characters, with the full size when anything was cut.
 fn compact(v: Option<&serde_json::Value>) -> String {
-    match v {
-        None => "(absent)".into(),
-        Some(serde_json::Value::String(s)) => format!("{s:?}"),
-        Some(other) => {
-            let s = other.to_string();
-            if s.len() > 60 {
-                format!("{}…", &s[..s.floor_char_boundary(59)])
-            } else {
-                s
-            }
-        }
+    const WIDTH: usize = 60;
+    let Some(v) = v else {
+        return "(absent)".into();
+    };
+    let full = match v {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let first = full.lines().next().unwrap_or_default();
+    let cut = if first.len() > WIDTH {
+        &first[..first.floor_char_boundary(WIDTH)]
+    } else {
+        first
+    };
+    let shown = if v.is_string() {
+        format!("{cut:?}")
+    } else {
+        cut.to_string()
+    };
+    if cut.len() == full.len() {
+        shown
+    } else {
+        format!("{shown}… ({} bytes)", full.len())
     }
 }
 

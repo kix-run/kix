@@ -29,7 +29,7 @@
           "type": "string"
         },
         "webhook": {
-          "description": "The admission webhook that answered, when one did.",
+          "description": "The admission webhook or ValidatingAdmissionPolicy that answered,\nwhen one did.",
           "type": [
             "string",
             "null"
@@ -738,6 +738,11 @@
         {
           "const": "webhook_denied",
           "description": "An admission webhook denied the write.",
+          "type": "string"
+        },
+        {
+          "const": "policy_denied",
+          "description": "A ValidatingAdmissionPolicy denied the write; `webhook` names the\npolicy.",
           "type": "string"
         },
         {

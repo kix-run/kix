@@ -381,6 +381,11 @@ pub(crate) fn document(p: &mut Prepared, report: Option<&DryRunReport>, args: &P
                 webhook.clone(),
                 message.clone(),
             )),
+            Refusal::PolicyDenied { policy, message } => admission.push(refused(
+                RefusalReason::PolicyDenied,
+                policy.clone(),
+                message.clone(),
+            )),
             Refusal::Invalid { immutable, message } => admission.push(refused(
                 if *immutable {
                     RefusalReason::ImmutableField

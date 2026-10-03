@@ -65,6 +65,11 @@ pub enum Refusal {
         webhook: Option<String>,
         message: String,
     },
+    /// A ValidatingAdmissionPolicy denied the request.
+    PolicyDenied {
+        policy: Option<String>,
+        message: String,
+    },
     /// An admission webhook that is not declared free of side effects would
     /// be called, so the apiserver refuses the dry run. A real apply is not
     /// refused for this, so the object was not checked.
@@ -113,6 +118,7 @@ impl Refusal {
         match self {
             Refusal::Conflict { message, .. }
             | Refusal::WebhookDenied { message, .. }
+            | Refusal::PolicyDenied { message, .. }
             | Refusal::WebhookNoDryRun { message, .. }
             | Refusal::Invalid { message, .. }
             | Refusal::Forbidden { message }
@@ -177,13 +183,20 @@ impl Refusal {
                 message,
             });
         }
+        if message.contains("ValidatingAdmissionPolicy") && message.contains("denied request") {
+            return Some(Refusal::PolicyDenied {
+                policy: quoted_after_with(&message, "ValidatingAdmissionPolicy ", '\''),
+                message,
+            });
+        }
         match code {
             409 => Some(Refusal::Conflict {
                 owners: conflict_owners(&message),
                 message,
             }),
             422 => Some(Refusal::Invalid {
-                immutable: false,
+                immutable: message.contains("immutable")
+                    || message.contains("Forbidden: updates to"),
                 message,
             }),
             403 => Some(Refusal::Forbidden { message }),
@@ -207,9 +220,15 @@ impl Refusal {
 
 /// The double-quoted name right after `prefix`: `admission webhook "x"`.
 fn quoted_after(message: &str, prefix: &str) -> Option<String> {
+    quoted_after_with(message, prefix, '"')
+}
+
+/// The name in `quote` characters right after `prefix`. The apiserver
+/// quotes a ValidatingAdmissionPolicy's name with `'`.
+fn quoted_after_with(message: &str, prefix: &str, quote: char) -> Option<String> {
     let rest = &message[message.find(prefix)? + prefix.len()..];
-    let rest = rest.strip_prefix('"')?;
-    Some(rest[..rest.find('"')?].to_string())
+    let rest = rest.strip_prefix(quote)?;
+    Some(rest[..rest.find(quote)?].to_string())
 }
 
 /// The managers and fields of an SSA conflict message. One conflict reads
@@ -311,6 +330,38 @@ mod tests {
         assert!(matches!(
             Refusal::of_status(400, no_dry_run),
             Some(Refusal::WebhookNoDryRun { webhook: Some(w), .. }) if w == "policy.example.com"
+        ));
+    }
+
+    #[test]
+    fn an_admission_policy_denial_names_the_policy() {
+        let msg = "configmaps \"grafana-config\" is forbidden: ValidatingAdmissionPolicy 'freeze' with binding 'freeze-b' denied request: frozen";
+        assert_eq!(
+            Refusal::of_status(403, msg),
+            Some(Refusal::PolicyDenied {
+                policy: Some("freeze".into()),
+                message: msg.into(),
+            })
+        );
+    }
+
+    #[test]
+    fn an_immutable_spec_is_told_apart_from_other_validation() {
+        let pvc = "PersistentVolumeClaim \"data\" is invalid: spec: Forbidden: spec is immutable after creation except resources.requests";
+        assert!(matches!(
+            Refusal::of_status(422, pvc),
+            Some(Refusal::Invalid {
+                immutable: true,
+                ..
+            })
+        ));
+        let schema = "Deployment.apps \"web\" is invalid: spec.replicas: Invalid value: -1";
+        assert!(matches!(
+            Refusal::of_status(422, schema),
+            Some(Refusal::Invalid {
+                immutable: false,
+                ..
+            })
         ));
     }
 

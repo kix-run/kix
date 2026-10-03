@@ -447,4 +447,82 @@ mod tests {
             }
         }
     }
+
+    /// The object lists of a plan's packages section, by bucket.
+    fn objects(p: &super::super::document::Packages) -> Vec<(String, Vec<String>)> {
+        let mut out = Vec::new();
+        for c in p.changed.iter().chain(p.cluster_level.iter()) {
+            let mut modified: Vec<String> = c
+                .modified_resources
+                .iter()
+                .map(|m| m.resource.clone())
+                .collect();
+            modified.sort();
+            out.push((format!("{} added", c.key), c.added_resources.clone()));
+            out.push((format!("{} removed", c.key), c.removed_resources.clone()));
+            out.push((format!("{} modified", c.key), modified));
+        }
+        out.sort();
+        out
+    }
+
+    /// A `kix plan` and a `kix diff` against the same live state, which
+    /// holds the deployed build exactly, list the same objects; both
+    /// documents parse back into `Plan`.
+    #[test]
+    fn plan_and_diff_agree_on_the_objects_they_both_checked() {
+        use super::super::document::{MadeBy, NotCheckedReason, Plan};
+        let deployed = vec![
+            configmap("app", "a", &"a".repeat(32), json!({"k": "1"})),
+            configmap("app", "b", &"b".repeat(32), json!({"k": "1"})),
+            configmap("app", "gone", &"g".repeat(32), json!({"k": "1"})),
+        ];
+        let new = vec![
+            configmap("app", "a", &"c".repeat(32), json!({"k": "2"})),
+            deployed[1].clone(),
+            configmap("app", "d", &"d".repeat(32), json!({"k": "1"})),
+        ];
+        let new_graph = StoreGraph::synthesize(&new, &StoreGraph::empty("c"));
+        let deployed_graph = StoreGraph::synthesize(&deployed, &new_graph);
+
+        // kix diff: the live view is the deployed build.
+        let diff_side = super::super::diff_graphs(&deployed_graph, &new_graph);
+        let diff_doc = Plan::new(
+            MadeBy::LiveRead,
+            "c",
+            &diff_side,
+            &[],
+            NotCheckedReason::ReadOnly,
+        );
+
+        // kix plan: the server applies the new build onto that live state.
+        let mut plan_side = super::super::diff_graphs(&deployed_graph, &new_graph);
+        let answers = vec![
+            applied("a", Some(served(&deployed[0])), served(&new[0])),
+            applied("d", None, served(&new[2])),
+        ];
+        Overlay {
+            new_graph: &new_graph,
+            deployed: Some(
+                deployed
+                    .iter()
+                    .map(|m| (ResourceId::from_value(m), m))
+                    .collect(),
+            ),
+        }
+        .apply(&mut plan_side, &answers);
+        let plan_doc = Plan::new(
+            MadeBy::DryRun,
+            "c",
+            &plan_side,
+            &[],
+            NotCheckedReason::ReadOnly,
+        );
+
+        assert_eq!(objects(&plan_doc.packages), objects(&diff_doc.packages));
+        for doc in [&plan_doc, &diff_doc] {
+            let parsed: Plan = serde_json::from_str(&doc.to_json()).unwrap();
+            assert_eq!(&parsed, doc);
+        }
+    }
 }
