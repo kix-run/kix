@@ -28,6 +28,7 @@ let
   barmanPackage = import ../../../packages/cnpg-barman-cloud;
   poolerPackage = import ../../../packages/cnpg-pooler;
   certManagerPackage = import ../../../packages/cert-manager;
+  ciliumPackage = import ../../../packages/cilium;
   secretPackage = import ../../../packages/secret;
 
   # A package's failed assertion messages for `config`, evaluated against
@@ -616,7 +617,10 @@ in
         {
           name = "barman-cloud.cloudnative-pg.io";
           isWALArchiver = true;
-          parameters.barmanObjectName = "postgres-backup";
+          parameters = {
+            barmanObjectName = "postgres-backup";
+            serverName = "data-postgres";
+          };
         }
       ]
       &&
@@ -706,8 +710,9 @@ in
     || throw "backup dependencies: a missing dependency or key passed, or the control failed";
 
   # backup.extraSpec cannot set the paths the package writes, and the
-  # Cluster's extraSpec cannot set `plugins` while backups are on; other
-  # paths pass.
+  # Cluster's extraSpec cannot set `plugins` or `backup.barmanObjectStore`
+  # while backups are on; other paths, and barmanObjectStore without
+  # `backup`, pass.
   cnpg-cluster-backup-extra-spec-locks =
     let
       withExtra =
@@ -724,6 +729,12 @@ in
       && evalFails (withExtra { configuration.s3Credentials.inheritFromIAMRole = true; })
       && evalFails (withExtra { retentionPolicy = "7d"; })
       && evalFails (backups { clusterExtraSpec.plugins = [ ]; })
+      && evalFails (backups { clusterExtraSpec.backup.barmanObjectStore.destinationPath = "s3://other"; })
+      && !evalFails (backups {
+        backup = null;
+        clusterExtraSpec.backup.barmanObjectStore.destinationPath = "s3://other";
+      })
+      && !evalFails (backups { clusterExtraSpec.backup.target = "primary"; })
       && !evalFails (withExtra {
         configuration.wal.compression = "gzip";
         instanceSidecarConfiguration.logLevel = "debug";
@@ -732,9 +743,12 @@ in
     || throw "backup extraSpec locks: a locked path passed, or the control failed";
 
   # With an in-cluster store as endpointService, the ObjectStore's
-  # endpointURL is the store's Service, which the instance pods get egress
-  # to, and backup.extraSpec may not set another endpoint. A store outside
-  # the cluster opens no in-cluster path.
+  # endpointURL is the store's Service, with the scheme from
+  # backup.endpointScheme, which the instance pods get egress to, and
+  # backup.extraSpec may not set another endpoint. A store outside the
+  # cluster opens no in-cluster path. Without endpointService, an
+  # endpointURL naming a Service in the cluster, with or without the cluster
+  # domain, is refused, and so is endpointScheme.
   cnpg-cluster-backup-endpoint-service =
     let
       # An S3 store whose root is its Service, listening on TCP 7070.
@@ -788,6 +802,25 @@ in
         destinationPath = "s3://backups/pg";
       });
       store = byName "postgres-backup" (ofKind "ObjectStore" all);
+      storeUrl = store.spec.configuration.endpointURL;
+      httpsUrl =
+        (byName "postgres-backup" (
+          ofKind "ObjectStore" (
+            ms (withStore {
+              destinationPath = "s3://backups/pg";
+              endpointScheme = "https";
+            })
+          )
+        )).spec.configuration.endpointURL;
+      # The store's address as a literal endpointURL, without endpointService.
+      literal =
+        url:
+        backups {
+          backup = {
+            destinationPath = "s3://backups/pg";
+            extraSpec.configuration.endpointURL = url;
+          };
+        };
       policies = ofKind "CiliumNetworkPolicy" all;
       toStore = builtins.filter (
         p:
@@ -796,12 +829,23 @@ in
       ) policies;
     in
     (
-      lib.hasPrefix "http://s3.data.svc." store.spec.configuration.endpointURL
+      lib.hasPrefix "http://s3.data.svc." storeUrl
+      && httpsUrl == "https://${lib.removePrefix "http://" storeUrl}"
       && toStore != [ ]
       && byName "postgres-backup-egress" policies == null
       && evalFails (withStore {
         destinationPath = "s3://backups/pg";
         extraSpec.configuration.endpointURL = "https://s3.example.com";
+      })
+      && evalFails (literal storeUrl)
+      && evalFails (literal "http://s3.data.svc:7070")
+      && evalFails (literal "http://S3.data.svc.:7070/bucket")
+      && !evalFails (literal "http://s3.data.example.com:7070")
+      && evalFails (backups {
+        backup = {
+          destinationPath = "s3://backups/pg";
+          endpointScheme = "https";
+        };
       })
     )
     || throw "endpointService: ${
@@ -812,9 +856,9 @@ in
     }";
 
   # The schedule, destination, and retention checks: a five-field crontab,
-  # a destination that is not an s3:// URL, a malformed retention, and an
-  # endpoint that is not a URL are refused; six fields and a descriptor
-  # pass.
+  # a descriptor robfig/cron does not know, a destination that is not an
+  # s3:// URL, a malformed retention, and an endpoint that is not a URL are
+  # refused; six fields and the known descriptors pass.
   cnpg-cluster-backup-refusals =
     let
       scheduleMessages =
@@ -830,6 +874,10 @@ in
       fiveFields = scheduleMessages "0 2 * * *";
       sixFields = scheduleMessages "0 0 2 * * *";
       descriptor = scheduleMessages "@every 12h";
+      everyMixed = scheduleMessages "@every 1h30m";
+      daily = scheduleMessages "@midnight";
+      reboot = scheduleMessages "@reboot";
+      everyBad = scheduleMessages "@every day";
       withBackup =
         backup:
         backups {
@@ -843,12 +891,110 @@ in
       says ''backup.schedule "0 2 * * *" has 5 fields'' fiveFields
       && sixFields == [ ]
       && descriptor == [ ]
+      && everyMixed == [ ]
+      && daily == [ ]
+      && says ''backup.schedule "@reboot" is not a descriptor'' reboot
+      && says ''backup.schedule "@every day" is not a descriptor'' everyBad
       && evalFails (withBackup { destinationPath = "gs://backups/pg"; })
       && evalFails (withBackup { retention = "30 days"; })
       && evalFails (withBackup { extraSpec.configuration.endpointURL = "s3.example.com"; })
       && !evalFails (withBackup { retention = "4w"; })
     )
-    || throw "backup refusals: ${builtins.toJSON { inherit fiveFields sixFields descriptor; }}";
+    || throw "backup refusals: ${
+      builtins.toJSON {
+        inherit
+          fiveFields
+          sixFields
+          descriptor
+          everyMixed
+          daily
+          reboot
+          everyBad
+          ;
+      }
+    }";
+
+  # The plugin's serverName defaults to <namespace>-<instance>, so
+  # same-named instances in two namespaces archive to different folders;
+  # backup.serverName replaces it, and a name with a slash is refused.
+  cnpg-cluster-backup-server-name =
+    let
+      serverNameOf =
+        backup:
+        (builtins.head (clusterSpec (backups {
+          backup = {
+            destinationPath = "s3://backups/pg";
+          }
+          // backup;
+        })).plugins).parameters.serverName;
+      default = serverNameOf { };
+      set = serverNameOf { serverName = "postgres"; };
+    in
+    (
+      default == "data-postgres"
+      && set == "postgres"
+      && evalFails (
+        backups {
+          backup = {
+            destinationPath = "s3://backups/pg";
+            serverName = "a/b";
+          };
+        }
+      )
+    )
+    || throw "backup serverName: ${builtins.toJSON { inherit default set; }}";
+
+  # Under Cilium, the world egress rule for a store outside the cluster
+  # opens the endpointURL's port, or 443 without an endpointURL, to the
+  # instance pods.
+  cnpg-cluster-backup-world-egress-port =
+    let
+      egressOf =
+        backup:
+        let
+          all = ms (backups {
+            backup = {
+              destinationPath = "s3://backups/pg";
+            }
+            // backup;
+            modules = [
+              {
+                cluster.roles.cni = {
+                  binding = "shadowable";
+                  provider = "cilium (environment)";
+                };
+                networkPolicy.enable = true;
+                instances.net.cilium.package = ciliumPackage;
+                instances.net.platform-cilium.package = eval.mkImport {
+                  roles = [ "cni" ];
+                  out.helmChartConfig = null;
+                };
+              }
+            ];
+          });
+        in
+        (byName "postgres-backup-egress" (ofKind "CiliumNetworkPolicy" all)).spec.egress;
+      explicit = egressOf { extraSpec.configuration.endpointURL = "https://s3.example.com:9000/x"; };
+      byScheme = egressOf { extraSpec.configuration.endpointURL = "http://s3.example.com"; };
+      aws = egressOf { };
+      rule = port: [
+        {
+          toEntities = [ "world" ];
+          toPorts = [
+            {
+              ports = [
+                {
+                  inherit port;
+                  protocol = "TCP";
+                }
+              ];
+            }
+          ];
+        }
+      ];
+    in
+    (explicit == rule "9000" && byScheme == rule "80" && aws == rule "443")
+    || throw "backup world egress: ${builtins.toJSON { inherit explicit byScheme aws; }}";
 
   # mkObjectStore refuses a Secret selector named by a literal string and
   # accepts one marked with kix.untrackedRef.

@@ -7,8 +7,8 @@
 # field. kix.expose holds its `gateway` dependency to the contract through
 # `require`, which requires the fields marked `required` and checks the
 # shape of the others when they are present, so a kix.mkImport stand-in may
-# publish only `gatewayRef`. A package that reads `gateway` itself uses
-# `assertions`. Packages reach this file as `kix.contracts.gateway`.
+# publish only `gatewayRef`. Packages reach this file as
+# `kix.contracts.gateway`.
 { lib }:
 let
   isString = builtins.isString;
@@ -30,7 +30,10 @@ let
         builtins.isList v
         && lib.all (
           l:
-          builtins.isAttrs l && isString (l.name or null) && builtins.isInt (l.port or null) && isString (l.protocol or null)
+          builtins.isAttrs l
+          && isString (l.name or null)
+          && builtins.isInt (l.port or null)
+          && isString (l.protocol or null)
         ) v;
     };
     # The data-plane pods, for the policy kix.expose writes so they can
@@ -104,20 +107,20 @@ in
     else
       throw "${who}: root.out does not honour the gateway contract: ${lib.concatStringsSep "; " found} (${here})";
 
-  # For a package that reads `gateway` itself:
-  # `deps.gateway.assertions = dep: kix.contracts.gateway.assertions who dep;`.
-  assertions =
-    who: dep:
+  # Whether `dep` offers itself as a gateway: its out has `gatewayRef`, or
+  # the instance or its package names the `gateway` alias. A dependency
+  # argument also resolves by instance name, so an unrelated instance named
+  # `gateway` claims nothing and kix.expose ignores it.
+  claims =
+    dep:
     let
-      found = problemsWith false (dep.out or { });
+      meta = dep._meta or { };
+      aliases = (meta.aliases or [ ]) ++ ((meta.packageMeta or { }).defaultAliases or [ ]);
     in
-    lib.optional (found != [ ]) {
-      assertion = false;
-      message = consumerMessage who dep found;
-    };
+    (dep.out or { }) ? gatewayRef || builtins.elem "gateway" aliases;
 
   # For kix.expose, which has no assertion hook: returns `dep`, or throws
-  # with the message `assertions` would give.
+  # naming the provider and every missing or misshapen field.
   require =
     who: dep:
     let

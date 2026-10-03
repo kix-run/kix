@@ -317,10 +317,10 @@ in
       default = [ ];
       example = [
         {
-          name = "Tempo";
-          type = "tempo";
-          uid = "tempo";
-          url = "http://tempo.tracing.svc:3200";
+          name = "Pyroscope";
+          type = "grafana-pyroscope-datasource";
+          uid = "pyroscope";
+          url = "https://pyroscope.example.com";
           access = "proxy";
         }
       ];

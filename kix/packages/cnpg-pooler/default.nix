@@ -2,7 +2,7 @@
 # cluster's primary, as one postgresql.cnpg.io Pooler of type `rw`.
 #
 # The operator creates a Deployment of PgBouncer pods and a Service, both
-# named after the Pooler, in the cluster's namespace. PgBouncer
+# named after the Pooler, in the cluster's namespace. By default PgBouncer
 # authenticates each client with the client's own role through an auth
 # query the operator sets up, so every role and database of the cluster is
 # reachable through the pooler. The package references the Service, so
@@ -53,7 +53,13 @@
 #
 # Escape hatch: `extraSpec`, merged over the Pooler spec, for `pgbouncer`
 # (`poolMode`, `parameters`, `pg_hba`), `serviceTemplate`, and
-# `deploymentStrategy`. `cluster`, `type`, `instances`, and `template` are
+# `deploymentStrategy`. Setting `pgbouncer.authQuery`,
+# `pgbouncer.authQuerySecret`, or `pgbouncer.serverTLSSecret` hands
+# PgBouncer's authentication to the user: the operator then creates neither
+# the auth role nor its query function (IsAutomatedIntegration in
+# api/v1/pooler_funcs.go upstream). A Cluster whose client CA Secret has no
+# private key needs them, because the operator cannot issue the auth role's
+# client certificate. `cluster`, `type`, `instances`, and `template` are
 # refused, and so is `monitoring.enablePodMonitor`, which has the operator
 # create a PodMonitor outside Kix. The pod template goes through the
 # instance's `partsOverlays.pooler`.
@@ -184,6 +190,10 @@ in
         works with; under `transaction`, clients share server connections
         between transactions and must not depend on session state such as
         `SET` or advisory locks.
+        `pgbouncer.authQuery`, `pgbouncer.authQuerySecret`, and
+        `pgbouncer.serverTLSSecret` hand authentication to the user: the
+        operator then sets up no auth role or query, and the user must
+        create them on the Cluster.
       '';
     };
   };

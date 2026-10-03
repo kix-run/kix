@@ -118,7 +118,9 @@ let
         else
           null;
 
-      hasGateway = gateway != null;
+      # The `gateway` argument also resolves to any instance named
+      # `gateway`, such as an OpenTelemetry Collector, which is no gateway.
+      hasGateway = gateway != null && gatewayContract.claims gateway;
       # Read through `listener`, which the HTTPRoute forces, so the contract
       # is checked whenever a gateway route renders.
       checkedGateway =
@@ -1683,8 +1685,8 @@ rec {
 
       wantsControllerEdge = hasExposure && scope.networkPolicyEnforcer != null;
 
-      # A policy requires the controller pod selector and namespace. Warn when
-      # the controller package does not expose them.
+      # A policy requires the router's pod selector and namespace. Warn when
+      # the ingress controller or gateway package does not publish them.
       _controllerEdgeWarn =
         if wantsControllerEdge && useIngress && controllerSelector == null then
           lib.warn (
@@ -1692,6 +1694,17 @@ rec {
             + "and `out.podNamespace`, so no network policy opens the backend to it. Under "
             + "default deny every request through this Ingress will time out. Add both to the "
             + "controller package's root `out`."
+          )
+        else if wantsControllerEdge && useGateway && controllerSelector == null then
+          let
+            gw = gateway.out.gatewayRef;
+          in
+          lib.warn (
+            "kix.expose (${scope.namespaceName}/${name}): Gateway ${gw.namespace}/${gw.name} publishes "
+            + "no `out.podSelector`, so no network policy opens the backend to its data-plane pods. "
+            + "Under default deny every request through this HTTPRoute will time out. Write a policy "
+            + "outside Kix that admits the gateway's proxy pods to the backend, or use a gateway "
+            + "package that publishes its pods (traefik)."
           )
         else
           lib.id;
@@ -1717,7 +1730,7 @@ rec {
             name = "${b.svc.name}-from-${if useGateway then "gateway" else "ingress-controller"}";
             labels = {
               ${kixKeys.derived} = "true";
-              ${kixKeys.policyType} = "ingress-controller";
+              ${kixKeys.policyType} = if useGateway then "gateway" else "ingress-controller";
             };
             spec = {
               endpointSelector.matchLabels = b.svc.rawManifest.spec.selector or { };
@@ -1811,6 +1824,7 @@ rec {
                 )
                 |> scope.mkCR routeCrd
             )
+            |> _controllerEdgeWarn
 
           else if hasExposure && useIngress then
             (

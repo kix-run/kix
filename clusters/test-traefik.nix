@@ -11,7 +11,7 @@
 # before deploy:
 #   kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.6.1/standard-install.yaml
 #
-# Build:  nix build .#cluster-traefik --extra-experimental-features pipe-operators
+# Build:  nix build ./clusters#cluster-traefik --extra-experimental-features pipe-operators
 
 { kix, packages }:
 

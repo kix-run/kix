@@ -1,7 +1,9 @@
 # Tests for kix/packages/otel-collector: the pipelines each dependency and
 # toggle adds, the refusal of a configuration without a pipeline, events in
-# daemonset mode, the locked settings paths and owned flags, the daemonset
-# Service, replicas under events, and the metrics toggle. The collector runs
+# daemonset mode, the events receiver's objects, the locked settings paths,
+# the refused Kubernetes components, and owned flags, the OTLP addresses in
+# `out`, the daemonset Service, replicas under events, and the metrics
+# toggle. The collector runs
 # in namespace `otel` with an OTLP endpoint stub answering `otlp`.
 
 {
@@ -124,6 +126,7 @@ in
         {
           name = "events";
           mode = "watch";
+          exclude_watch_type = [ "DELETED" ];
         }
       ]
       && map (r: r.resources) role.rules == [ [ "events" ] ]
@@ -195,16 +198,48 @@ in
     )
     || throw "otel-collector traces: ${builtins.toJSON plain}";
 
-  # out publishes the Service's OTLP addresses.
+  # out publishes the Service's OTLP addresses while a pipeline lists the
+  # otlp receiver. With only events, reading them fails, and so does an
+  # agent that forwards to that instance; the same agent forwarding to a
+  # gateway with a traces pipeline evaluates.
   otel-collector-out =
     let
-      out = (clusterWith events).instances.otel.collector.out;
+      out = (clusterWith (events // { traces = false; })).instances.otel.collector.out;
+      eventsOnly = (clusterWith events).instances.otel.collector.out;
+      # The gateway binds the backend through the otlp alias when one is
+      # present; the agent names the gateway.
+      withAgent =
+        backend:
+        mkCluster [
+          (
+            { ref, ... }:
+            {
+              instances.otel = {
+                gateway = {
+                  package = otelPackage;
+                  config = events.config;
+                };
+                agent = {
+                  package = otelPackage;
+                  config.mode = "daemonset";
+                  deps.otlp = ref.otel.gateway;
+                };
+              }
+              // lib.optionalAttrs backend { backend.package = tracesPackage false; };
+            }
+          )
+        ];
     in
     (
       lib.hasPrefix "http://collector.otel.svc." out.otlpGrpcUrl
       && lib.hasSuffix ":4317" out.otlpGrpcUrl
       && lib.hasSuffix ":4318" out.otlpHttpUrl
       && out.tls == false
+      && !(builtins.tryEval eventsOnly.otlpGrpcUrl).success
+      && !(builtins.tryEval eventsOnly.otlpHttpUrl).success
+      && eventsOnly.tls == false
+      && !(evalFails (withAgent true))
+      && evalFails (withAgent false)
     )
     || throw "otel-collector out: ${builtins.toJSON out}";
 
@@ -228,7 +263,6 @@ in
         { service.telemetry.metrics.readers = [ ]; }
         { exporters."otlp_grpc/traces".endpoint = "elsewhere:4317"; }
         { exporters."file/events".path = "/tmp/events"; }
-        { receivers.k8s_objects.objects = [ { name = "pods"; } ]; }
         { exporters = null; }
       ];
       merged = configOf (withSettings {
@@ -250,6 +284,99 @@ in
       })
     )
     || throw "otel-collector settings accepted locked paths: ${builtins.toJSON accepted}";
+
+  # settings may replace the events receiver's objects to narrow the watch,
+  # as long as every entry is core/v1 events; any other resource, group, or
+  # an empty list is refused, as is a second k8s_objects receiver without
+  # events.enabled.
+  otel-collector-events-objects =
+    let
+      withObjects =
+        objects:
+        clusterWith {
+          config = events.config // {
+            settings.receivers.k8s_objects = { inherit objects; };
+          };
+        };
+      narrowed = [
+        {
+          name = "events";
+          mode = "watch";
+          field_selector = "type=Warning";
+          namespaces = [ "apps" ];
+        }
+      ];
+    in
+    (
+      (configOf (withObjects narrowed)).receivers.k8s_objects.objects == narrowed
+      && evalFails (withObjects [ { name = "pods"; } ])
+      && evalFails (withObjects [
+        {
+          name = "events";
+          group = "events.k8s.io";
+        }
+      ])
+      && evalFails (withObjects [ ])
+      && evalFails (clusterWith {
+        traces = false;
+        config.settings.receivers."k8s_objects/pods".objects = [ { name = "events"; } ];
+      })
+    )
+    || throw "otel-collector events objects: ${builtins.toJSON (configOf (withObjects narrowed)).receivers}";
+
+  # Components that need a token and RBAC the package does not render are
+  # refused, under any key suffix and with events on. A partsOverlays entry
+  # that replaces the configMap part clears the refusal, as the message says.
+  otel-collector-k8s-components-refused =
+    let
+      withSettings =
+        settings:
+        clusterWith {
+          traces = false;
+          config = { inherit settings; };
+        };
+      accepted = builtins.filter (s: !(evalFails (withSettings s))) [
+        { processors.k8sattributes = { }; }
+        { processors."k8sattributes/pods" = { }; }
+        { receivers.k8s_cluster = { }; }
+        { receivers.k8s_events = { }; }
+        { receivers.kubeletstats = { }; }
+      ];
+      overlaid = mkCluster [
+        {
+          instances.otel = {
+            backend.package = tracesPackage false;
+            collector = {
+              package = otelPackage;
+              config.settings.processors.k8sattributes = { };
+              partsOverlays = [
+                (
+                  scope: self: base: {
+                    configMap = scope.mkResource {
+                      apiVersion = "v1";
+                      kind = "ConfigMap";
+                      name = "collector-config";
+                      data."config.yaml" = "{}";
+                    };
+                  }
+                )
+              ];
+            };
+          };
+        }
+      ];
+    in
+    (
+      accepted == [ ]
+      && evalFails (clusterWith {
+        traces = false;
+        config = events.config // {
+          settings.processors.k8sattributes = { };
+        };
+      })
+      && !(evalFails overlaid)
+    )
+    || throw "otel-collector k8s components accepted: ${builtins.toJSON accepted}";
 
   # --config and --set are refused; other flags follow --config.
   otel-collector-owned-args-refused =

@@ -287,7 +287,9 @@ in
           let
             first = lib.findFirst (l: l.port == port) null activeListeners;
           in
-          if builtins.match "[a-z]([-a-z0-9]{0,13}[a-z0-9])?" first.name != null && first.name != "traefik" then
+          if
+            builtins.match "[a-z]([-a-z0-9]{0,13}[a-z0-9])?" first.name != null && first.name != "traefik"
+          then
             first.name
           else
             "port-${toString port}";
@@ -301,15 +303,20 @@ in
             l:
             lib.optional (l.port == internalPort)
               "listener \"${l.name}\" uses port ${toString internalPort}, Traefik's internal entrypoint for ping and metrics. Choose another port."
-            ++ lib.optional (builtins.elem l.protocol [
-              "TCP"
-              "UDP"
-            ]) "listener \"${l.name}\" has protocol ${l.protocol}, which this package does not serve. Use HTTP, HTTPS, or TLS."
+            ++
+              lib.optional
+                (builtins.elem l.protocol [
+                  "TCP"
+                  "UDP"
+                ])
+                "listener \"${l.name}\" has protocol ${l.protocol}, which this package does not serve. Use HTTP, HTTPS, or TLS."
             ++
               lib.optional (scope.networkPolicyEnforcer != null && !(builtins.elem l.port openPorts))
                 "listener \"${l.name}\" uses port ${toString l.port}, but under network policy the package opens only ports 80 and 443 to clients. Use one of those."
           ) activeListeners
-          ++ lib.optional (activeListeners == [ ]) "no listener is rendered (an HTTPS listener needs tls.certificateRefs). Add an HTTP listener or set certificateRefs.";
+          ++
+            lib.optional (activeListeners == [ ])
+              "no listener is rendered (an HTTPS listener needs tls.certificateRefs). Add an HTTP listener or set certificateRefs.";
 
         serviceType = config.service.spec.type;
         serviceSpecOwned = {
@@ -350,10 +357,20 @@ in
               }
               (lib.filterAttrs (_: v: v != null) config.service.spec);
 
-        # Traefik matches flag names in any case, and setting any key under
-        # a provider turns that provider on, so kix.guardArgs, which matches
-        # exact flags, cannot express these rules.
-        flagOf = arg: lib.toLower (builtins.head (lib.splitString "=" arg));
+        # Traefik matches flag names in any case, accepts one or two leading
+        # dashes (paerser flag/flagparser.go), and turns a provider on when
+        # any key under it is set, so kix.guardArgs, which matches exact
+        # flags, cannot express these rules. flagOf gives "--<lowercase
+        # name>" for a flag and null for a value argument.
+        flagOf =
+          arg:
+          let
+            name = builtins.head (lib.splitString "=" arg);
+          in
+          if lib.hasPrefix "-" name then
+            "--${lib.toLower (lib.removePrefix "-" (lib.removePrefix "-" name))}"
+          else
+            null;
         ownedFlags =
           lib.listToAttrs (
             map (
@@ -389,8 +406,7 @@ in
             "the Ingress provider needs RBAC the package does not grant; route through the Gateway with kix.expose.";
           "--providers.kubernetesingressnginx" =
             "the ingress-nginx provider needs RBAC the package does not grant; route through the Gateway with kix.expose.";
-          "--providers.knative" =
-            "the Knative provider needs RBAC the package does not grant; remove it.";
+          "--providers.knative" = "the Knative provider needs RBAC the package does not grant; remove it.";
         };
         reasonFor =
           arg:
@@ -400,7 +416,9 @@ in
               builtins.attrNames refusedFamilies
             );
           in
-          if ownedFlags ? ${flag} then
+          if flag == null then
+            null
+          else if ownedFlags ? ${flag} then
             "which the package owns: ${ownedFlags.${flag}}"
           else if family != null then
             "which this package refuses: ${refusedFamilies.${family}}"
@@ -450,7 +468,13 @@ in
           ];
           labels = selectorLabels;
           roles.${clusterName} = grant [
-            (core.namespaces |> allow [ "list" "watch" ])
+            (
+              core.namespaces
+              |> allow [
+                "list"
+                "watch"
+              ]
+            )
             # A listener's certificateRefs and a BackendTLSPolicy's CA may
             # name Secrets and ConfigMaps in any namespace a ReferenceGrant
             # admits.
@@ -462,7 +486,13 @@ in
               ]
               |> watch
             )
-            (disco.endpointslices |> allow [ "list" "watch" ])
+            (
+              disco.endpointslices
+              |> allow [
+                "list"
+                "watch"
+              ]
+            )
             (map (k: gwApi.${k}) watchedKinds |> watch)
             (
               map (k: gwApi "${k}/status") (builtins.filter (k: k != "referencegrants") watchedKinds)

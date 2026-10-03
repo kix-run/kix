@@ -27,9 +27,9 @@
 #                    of Tempo's query API, for a Grafana datasource
 #
 # `multitenancy_enabled` is locked to false, so senders and Grafana send no
-# `X-Scope-OrgID` header. The instance answers both `tempo` and `otlp`; in a
-# namespace that also holds an OpenTelemetry collector, wire each consumer's
-# `otlp` dependency with `ref`.
+# `X-Scope-OrgID` header. The instance answers `tempo` only. A sender's
+# `otlp` dependency names it with `deps.otlp = ref.<ns>.<instance>`, or the
+# cluster adds `aliases = [ "otlp" ]` to the instance.
 #
 # Escape hatches:
 #   settings       Tempo's `tempo.yaml` keys, merged over `builtinConfig`
@@ -64,11 +64,27 @@ let
   dataPath = "/var/tempo";
   configDir = "/etc/tempo";
 
-  # A Go duration with at least one non-zero digit. Tempo reads a zero
-  # per-tenant retention as "use the compaction default" (14 days).
-  durationType = lib.types.addCheck (lib.types.strMatching "([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+") (
+  # The grammar of Prometheus `model.ParseDuration`, which parses
+  # `block_retention`: whole numbers, units from largest to smallest, each
+  # unit once. At least one digit must be non-zero, because Tempo reads a
+  # zero per-tenant retention as "use the compaction default" (14 days).
+  durationType = lib.types.addCheck (lib.types.strMatching "([0-9]+y)?([0-9]+w)?([0-9]+d)?([0-9]+h)?([0-9]+m)?([0-9]+s)?([0-9]+ms)?") (
     s: builtins.match ".*[1-9].*" s != null
   );
+
+  # Tempo runs with `-config.expand-env=true`, and its envsubst reads `\\`
+  # in the rendered JSON as an escape, so a backslash in a value breaks the
+  # file. Returns the dotted paths of the strings that hold one.
+  backslashPaths =
+    path: v:
+    if builtins.isString v then
+      lib.optional (lib.hasInfix "\\" v) (lib.concatStringsSep "." path)
+    else if builtins.isAttrs v then
+      lib.concatLists (lib.mapAttrsToList (k: backslashPaths (path ++ [ k ])) v)
+    else if builtins.isList v then
+      lib.concatLists (lib.imap0 (i: backslashPaths (path ++ [ "[${toString i}]" ])) v)
+    else
+      [ ];
 
   builtinConfig = retention: {
     target = "all";
@@ -88,14 +104,15 @@ let
       grpc.endpoint = "0.0.0.0:${toString otlpGrpcPort}";
       http.endpoint = "0.0.0.0:${toString otlpHttpPort}";
     };
-    # The querier reaches the live store at its ring address. On loopback
-    # that traffic never leaves the pod, so network policy has no
-    # pod-to-itself rule to allow. Single-binary mode already points the
-    # querier and backend worker at 127.0.0.1 (cmd/tempo/app/modules.go).
-    live_store.ring.instance_addr = "127.0.0.1";
+    # In single-binary mode Tempo forces the live store's ring address to
+    # 127.0.0.1 (cmd/tempo/main.go), so the querier's traffic stays in the pod.
+    live_store = {
+      wal.path = "${dataPath}/live-store/traces";
+      shutdown_marker_dir = "${dataPath}/live-store/shutdown-marker";
+    };
+    backend_scheduler.local_work_path = "${dataPath}/backend-scheduler";
     storage.trace = {
       backend = "local";
-      wal.path = "${dataPath}/wal";
       local.path = "${dataPath}/blocks";
     };
     overrides.defaults.compaction.block_retention = retention;
@@ -130,22 +147,26 @@ let
       "http"
       "endpoint"
     ]
+    # The claim is the only writable path that survives a restart. The live
+    # store's write-ahead log, its shutdown marker, the backend scheduler's
+    # job cache, and the blocks live there.
     [
       "live_store"
-      "ring"
-      "instance_addr"
+      "wal"
+      "path"
     ]
-    # The claim is the only writable path that survives a restart.
+    [
+      "live_store"
+      "shutdown_marker_dir"
+    ]
+    [
+      "backend_scheduler"
+      "local_work_path"
+    ]
     [
       "storage"
       "trace"
       "backend"
-    ]
-    [
-      "storage"
-      "trace"
-      "wal"
-      "path"
     ]
     [
       "storage"
@@ -175,8 +196,11 @@ let
         "-http-api-prefix" = locks "http_api_prefix";
         "-server.http-listen-port" = locks "server.http_listen_port";
         "-storage.trace.backend" = locks "storage.trace.backend";
-        "-storage.trace.wal.path" = locks "storage.trace.wal.path";
         "-storage.trace.local.path" = locks "storage.trace.local.path";
+        "-live-store.wal.path" = locks "live_store.wal.path";
+        "-live-store.shutdown_marker_dir" = locks "live_store.shutdown_marker_dir";
+        # Tempo 3.1.0 registers this flag with its prefix doubled.
+        "-backend-schedulerbackend-scheduler.local-work-path" = locks "backend_scheduler.local_work_path";
       };
     in
     flags // lib.mapAttrs' (flag: lib.nameValuePair "-${flag}") flags;
@@ -186,10 +210,7 @@ in
     version = release;
     description = "Grafana Tempo trace store, single binary on one volume";
     owner = "platform";
-    defaultAliases = [
-      "tempo"
-      kix.contracts.otlpEndpoint.alias
-    ];
+    defaultAliases = [ "tempo" ];
     # One process owns the volume (write-ahead logs and blocks). A second
     # replica has no volume of its own and no shared store to read.
     availability.max = "none";
@@ -207,10 +228,12 @@ in
       default = "168h";
       example = "720h";
       description = ''
-        How long Tempo keeps a trace block, as a Go duration (`168h`,
-        `720h`). The default of seven days matches the loki package's, so a
-        trace's links to its logs stay valid for as long as the trace.
-        Rendered as `overrides.defaults.compaction.block_retention`.
+        How long Tempo keeps a trace block, as a Prometheus duration: whole
+        numbers with units `y`, `w`, `d`, `h`, `m`, `s`, and `ms`, largest
+        first (`168h`, `7d`, `4w2d`). The default of seven days matches the
+        loki package's, so a trace's links to its logs stay valid for as
+        long as the trace. Rendered as
+        `overrides.defaults.compaction.block_retention`.
       '';
     };
 
@@ -227,14 +250,16 @@ in
         `multitenancy_enabled`, `auth_enabled`, `http_api_prefix`,
         `server.http_listen_port`, the OTLP receiver endpoints under
         `distributor.receivers.otlp.protocols`,
-        `live_store.ring.instance_addr`, `storage.trace.backend`,
-        `storage.trace.wal.path`, `storage.trace.local.path`, and
+        `live_store.wal.path`, `live_store.shutdown_marker_dir`,
+        `backend_scheduler.local_work_path`, `storage.trace.backend`,
+        `storage.trace.local.path`, and
         `overrides.defaults.compaction.block_retention` (set `retention`);
         setting one, or replacing a key above it, fails evaluation.
 
         Tempo runs with `-config.expand-env=true`, so `''${NAME}` in a value
         reads the container's env var NAME (set it through `env`); an unset
         variable becomes an empty string. Write `$$` for a literal `$`.
+        A backslash in a value is refused, because the expansion consumes it.
       '';
     };
 
@@ -247,17 +272,16 @@ in
         its config file, so the flags that would override a locked
         `settings` path (`-auth.enabled`, `-multitenancy.enabled`,
         `-http-api-prefix`, `-server.http-listen-port`,
-        `-storage.trace.{backend,wal.path,local.path}`), `-config.file`,
-        `-config.expand-env`, and `-target` fail evaluation.
+        `-storage.trace.{backend,local.path}`, and the live store and backend
+        scheduler path flags), `-config.file`, `-config.expand-env`, and
+        `-target` fail evaluation.
       '';
     };
 
     env = kix.options.env;
 
-    # Tempo 3.1.0 with this config, run outside Kubernetes: about 90 MB
-    # resident when idle. The live store holds up to 250 MB of live traces
-    # by default (`live_store.max_live_traces_bytes`), and GOMEMLIMIT
-    # follows the limit.
+    # The live store holds up to 250 MB of live traces by default
+    # (`live_store.max_live_traces_bytes`), and GOMEMLIMIT follows the limit.
     resources = kix.options.resources {
       requests = {
         cpu = "100m";
@@ -283,12 +307,18 @@ in
         ...
       }:
       let
+        backslashes = backslashPaths [ "settings" ] config.settings;
+        settings =
+          if backslashes == [ ] then
+            config.settings
+          else
+            throw "${who}: ${lib.concatStringsSep ", " backslashes} holds a backslash. Tempo expands environment variables in its config file and reads a backslash as an escape, which breaks the file. Remove the backslash from the value.";
         mergedConfig = lib.filterAttrsRecursive (_: v: v != null) (
           kix.mergeGuarded {
             inherit who;
             what = "settings";
             locked = lockedPaths;
-          } (builtinConfig config.retention) config.settings
+          } (builtinConfig config.retention) settings
         );
 
         args = [

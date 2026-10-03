@@ -33,8 +33,9 @@
 #                              whose root is its S3 Service. Read only
 #                              while `backup` is set: the package sets the
 #                              ObjectStore's endpointURL to the Service's
-#                              URL, and the instance pods get network
-#                              policy to the store. No package has the
+#                              URL (scheme from `backup.endpointScheme`),
+#                              and the instance pods get network policy
+#                              to the store. No package has the
 #                              alias, so wire it with
 #                              deps.endpointService = ref.<ns>.<instance>.
 #
@@ -62,11 +63,12 @@
 # ScheduledBackup named after the instance that takes a base backup at
 # `backup.schedule` and once right after it is created. The plugin's
 # sidecar in each instance pod writes under `backup.destinationPath`, in a
-# folder named after the Cluster, and deletes what falls outside
-# `backup.retention`. Without endpointService, the instance pods may open
-# connections outside the cluster on the port of
-# `backup.extraSpec.configuration.endpointURL` (from its scheme when it
-# names none), or on 443 when it is unset, as for AWS S3.
+# folder named by `backup.serverName` (`<namespace>-<instance>` by default),
+# and deletes what falls outside `backup.retention`. Without
+# endpointService, the instance pods may open connections outside the
+# cluster on the port of `backup.extraSpec.configuration.endpointURL` (from
+# its scheme when it names none), or on 443 when it is unset, as for AWS
+# S3; an endpointURL that names a Service in the cluster is refused.
 #
 #   backup = {
 #     destinationPath = "s3://pg-backups/main";
@@ -83,9 +85,10 @@
 # `monitoring.enablePodMonitor`, which has the operator create a PodMonitor
 # outside Kix.
 #
-# Limits: the package ships no alerts. `backup` writes S3 credentials
-# only; Azure and Google Cloud Storage are not modelled. Recovery from a
-# backup into a new Cluster is not modelled.
+# Limits: the package ships no alerts. `backup` writes S3 access keys
+# only; IAM-role credentials (`s3Credentials.inheritFromIAMRole`), Azure,
+# and Google Cloud Storage are not modelled. Recovery from a backup into a
+# new Cluster is not modelled.
 #
 # Exposes:
 #   out.name, out.fqdn, out.port  the -rw Service (port 5432).
@@ -134,13 +137,19 @@ let
     ]
   ];
 
-  # CloudNativePG parses a schedule with robfig/cron's Parse, which takes
-  # six fields with seconds first and reads a five-field expression as one
-  # with no day-of-week field (internal/webhook/v1/scheduledbackup_webhook.go
-  # upstream).
+  # CloudNativePG parses a schedule with robfig/cron v1.2.0's Parse, which
+  # takes six fields with seconds first and reads a five-field expression as
+  # one with no day-of-week field (internal/webhook/v1/scheduledbackup_webhook.go
+  # upstream). A schedule starting with `@` is one of the descriptors in
+  # parseDescriptor (parser.go in robfig/cron), `@every` taking a Go duration.
   scheduleFields =
     schedule: builtins.length (builtins.filter builtins.isString (builtins.split "[[:space:]]+" (lib.trim schedule)));
-  scheduleOk = schedule: lib.hasPrefix "@" schedule || scheduleFields schedule == 6;
+  descriptorOk =
+    schedule:
+    builtins.match "@(yearly|annually|monthly|weekly|daily|midnight|hourly)" schedule != null
+    || builtins.match "@every ([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+" schedule != null;
+  scheduleOk =
+    schedule: if lib.hasPrefix "@" schedule then descriptorOk schedule else scheduleFields schedule == 6;
 
   # The S3 credential selectors every ObjectStore names. Each reads the
   # Secret key of its own name unless backup.credentialKeys names another;
@@ -150,11 +159,24 @@ let
     "secretAccessKey"
   ];
 
+  # An http or https URL as [ scheme host _ port rest ], or null.
+  matchUrl = builtins.match "(https?)://(\\[[^]]*]|[^]/:?#[]*)(:([0-9]+))?([/?#].*)?";
+
+  # Whether a URL's host is a Service name: `<svc>.<ns>.svc`, with or
+  # without the cluster domain and a trailing dot.
+  urlHostInCluster =
+    clusterDomain: url:
+    let
+      m = matchUrl url;
+      host = lib.toLower (lib.removeSuffix "." (builtins.elemAt m 1));
+    in
+    m != null && (lib.hasSuffix ".svc" host || lib.hasSuffix ".svc.${lib.toLower clusterDomain}" host);
+
   # The port of an http or https URL: the explicit one, else the scheme's.
   urlPort =
     url:
     let
-      m = builtins.match "(https?)://(\\[[^]]*]|[^]/:?#[]*)(:([0-9]+))?([/?#].*)?" url;
+      m = matchUrl url;
     in
     if m == null then
       throw "${who}: backup.extraSpec.configuration.endpointURL \"${url}\" is not an http or https URL, so the package cannot tell which port the store listens on. Write it as https://<host>[:<port>]."
@@ -188,7 +210,13 @@ in
         message = "image.tag \"${config.image.tag}\" does not start with a PostgreSQL version. CloudNativePG reads the version from the tag and refuses `latest`; use a tag such as \"18.6-standard-trixie\".";
       }
       {
-        assertion = config.backup == null || scheduleOk config.backup.schedule;
+        assertion =
+          config.backup == null || !lib.hasPrefix "@" config.backup.schedule || scheduleOk config.backup.schedule;
+        message = "backup.schedule \"${config.backup.schedule}\" is not a descriptor CloudNativePG accepts. Use @yearly, @annually, @monthly, @weekly, @daily, @midnight, @hourly, or @every followed by a duration such as 12h or 1h30m.";
+      }
+      {
+        assertion =
+          config.backup == null || lib.hasPrefix "@" config.backup.schedule || scheduleOk config.backup.schedule;
         message = "backup.schedule \"${config.backup.schedule}\" has ${toString (scheduleFields config.backup.schedule)} fields. CloudNativePG reads six cron fields with seconds first and reads a five-field crontab as one without a day-of-week field, so it would run at other times than a crontab does. Add the seconds field (\"0 0 2 * * *\" for 02:00 every day), or use a descriptor such as \"@daily\".";
       }
       {
@@ -261,12 +289,37 @@ in
             destinationPath = lib.mkOption {
               type = lib.types.strMatching "s3://[^/]+(/.*)?";
               example = "s3://pg-backups/main";
-              description = "Where WAL and base backups go, as `s3://<bucket>[/<prefix>]` (the ObjectStore's `configuration.destinationPath`). The bucket must exist. The plugin writes under a folder named after the Cluster, so clusters may share a path.";
+              description = "Where WAL and base backups go, as `s3://<bucket>[/<prefix>]` (the ObjectStore's `configuration.destinationPath`). The bucket must exist. The plugin writes under a folder named `serverName`, so clusters with different server names may share a path.";
+            };
+            serverName = lib.mkOption {
+              type = lib.types.nullOr (lib.types.strMatching "[A-Za-z0-9][-A-Za-z0-9._]*");
+              default = null;
+              example = "pg";
+              description = ''
+                Folder under `destinationPath` that this Cluster archives to
+                (the plugin's `serverName` parameter). Null uses
+                `<namespace>-<instance>`, so same-named instances in two
+                namespaces do not share an archive. A new Cluster refuses to
+                archive into a folder that already holds WAL, so a Cluster
+                re-created over an old archive needs another name. Set it to
+                the Cluster's name to keep the archive of a Cluster that
+                already archives under CloudNativePG's default.
+              '';
             };
             schedule = lib.mkOption {
               type = lib.types.nonEmptyStr;
               default = "0 0 0 * * *";
-              description = "When to take a base backup (the ScheduledBackup's `spec.schedule`): six cron fields with seconds first, or a descriptor such as `@daily` or `@every 12h`. A five-field crontab is refused. The default is midnight every day.";
+              description = "When to take a base backup (the ScheduledBackup's `spec.schedule`): six cron fields with seconds first, or one of the descriptors `@yearly`, `@annually`, `@monthly`, `@weekly`, `@daily`, `@midnight`, `@hourly`, and `@every <duration>` (`@every 12h`). A five-field crontab is refused. The default is midnight every day.";
+            };
+            endpointScheme = lib.mkOption {
+              type = lib.types.nullOr (
+                lib.types.enum [
+                  "http"
+                  "https"
+                ]
+              );
+              default = null;
+              description = "Scheme of the endpointService dependency's URL in the ObjectStore's `configuration.endpointURL`. Null means `http`. Set only with an endpointService dependency; for a store that serves TLS with a private CA, also set `extraSpec.configuration.endpointCA`.";
             };
             retention = lib.mkOption {
               type = lib.types.nullOr (lib.types.strMatching "[1-9][0-9]*[dwm]");
@@ -307,7 +360,10 @@ in
                 `configuration.destinationPath`,
                 `configuration.s3Credentials`, `retentionPolicy`, and, with
                 an endpointService dependency, `configuration.endpointURL`.
-                A Secret selector must name a secret dependency's Secret.
+                An `endpointURL` whose host is a Service name in the cluster
+                (ending in `.svc` or `.svc.<cluster domain>`) is refused, so
+                wire that store as endpointService. A Secret selector must
+                name a secret dependency's Secret.
               '';
             };
           };
@@ -332,7 +388,7 @@ in
         `imageCatalogRef`, `resources`, `storage.size`,
         `storage.storageClass`, `affinity.enablePodAntiAffinity`,
         `monitoring.enablePodMonitor`, and, while `backup` is set,
-        `plugins`. `topologySpreadConstraints` replaces
+        `plugins` and `backup.barmanObjectStore`. `topologySpreadConstraints` replaces
         the spread the package derives from the availability level, and
         `enablePDB` the package's choice.
       '';
@@ -438,18 +494,34 @@ in
             (endpointService.out.url
               or (throw "${who}: deps.endpointService has no out.url. Wire an instance whose root is its S3 Service.")
             )
-              { };
+              { scheme = if bk.endpointScheme != null then bk.endpointScheme else "http"; };
         };
       }
       // lib.optionalAttrs (bk.retention != null) { retentionPolicy = bk.retention; };
 
+      serverName = if bk.serverName != null then bk.serverName else "${ns}-${name}";
+
+      _endpointScheme =
+        if !inClusterStore && bk.endpointScheme != null then
+          throw "${who}: backup.endpointScheme is set and no endpointService dependency resolved, so nothing reads it. Wire the in-cluster store with deps.endpointService = ref.<namespace>.<instance>, or remove backup.endpointScheme and give the scheme in backup.extraSpec.configuration.endpointURL."
+        else
+          null;
+
       # The store's port outside the cluster; null for an in-cluster store,
-      # whose address reaches the instance pods through the Cluster.
+      # whose address reaches the instance pods through the Cluster. A world
+      # egress rule does not reach pods, so an endpointURL naming a Service
+      # is refused.
       storeWorldPort =
         if inClusterStore then
           null
         else if objectStoreSpec.configuration ? endpointURL then
-          urlPort objectStoreSpec.configuration.endpointURL
+          let
+            url = objectStoreSpec.configuration.endpointURL;
+          in
+          if urlHostInCluster clusterConfig.clusterDomain url then
+            throw "${who}: backup.extraSpec.configuration.endpointURL \"${url}\" names a Service in the cluster, and the instance pods get network policy only to stores outside it. Wire the store with deps.endpointService = ref.<namespace>.<instance> and remove endpointURL; set backup.endpointScheme = \"https\" if it serves TLS."
+          else
+            urlPort url
         else
           443;
 
@@ -474,7 +546,10 @@ in
           {
             name = plugin.pluginName;
             isWALArchiver = true;
-            parameters.barmanObjectName = self.objectStore.out.name;
+            parameters = {
+              barmanObjectName = self.objectStore.out.name;
+              inherit serverName;
+            };
           }
         ];
       };
@@ -485,6 +560,10 @@ in
           throw "${who}: extraSpec sets imageCatalogRef, and the package sets imageName from the image option. Set image instead."
         else if (config.extraSpec.affinity or { }) ? enablePodAntiAffinity then
           throw "${who}: extraSpec sets affinity.enablePodAntiAffinity, which the package sets to false: the pods spread by the topologySpreadConstraints derived from the availability level. Remove it, or set topologySpreadConstraints in extraSpec."
+        # CloudNativePG refuses a WAL archiver plugin beside the in-tree
+        # barmanObjectStore (internal/webhook/v1/cluster_webhook.go upstream).
+        else if backupOn && (config.extraSpec.backup or { }) ? barmanObjectStore then
+          throw "${who}: extraSpec sets backup.barmanObjectStore while the backup option enables the Barman Cloud plugin as WAL archiver, and CloudNativePG refuses both on one Cluster. Remove backup.barmanObjectStore and configure the store through the backup option."
         else
           null;
 
@@ -533,10 +612,12 @@ in
 
       objectStore =
         if backupOn then
-          plugin.mkObjectStore scope {
-            name = "${name}-backup";
-            spec = objectStoreSpec;
-          }
+          builtins.seq _endpointScheme (
+            plugin.mkObjectStore scope {
+              name = "${name}-backup";
+              spec = objectStoreSpec;
+            }
+          )
         else
           null;
 

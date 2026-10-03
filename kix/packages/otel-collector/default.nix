@@ -29,20 +29,28 @@
 #                           endpoint serves TLS), such as a trace backend or
 #                           another otel-collector. Adds the
 #                           `otlp_grpc/traces` exporter and a `traces`
-#                           pipeline from the `otlp` receiver. Any instance
-#                           answering `otlp` binds it (Tempo does); wire a
-#                           specific one with `deps.otlp = ref.<ns>.<instance>`.
-#                           This package does not answer `otlp`, so an agent
-#                           names its gateway explicitly.
+#                           pipeline from the `otlp` receiver. An instance
+#                           the cluster aliases `otlp` binds it; otherwise
+#                           wire one with `deps.otlp = ref.<ns>.<instance>`.
+#                           Neither this package nor tempo answers `otlp` by
+#                           default, so left unwired the dependency stays
+#                           unbound and no traces pipeline is added.
 #   prometheus (optional)   a ServiceMonitor on the metrics port and the
 #                           alert below.
 #
 # Kubernetes events (`events.enabled`): a `k8s_objects` receiver watches
 # core/v1 Events in every namespace, and a `logs/events` pipeline writes each
-# one as a line of OTLP JSON to the collector's stdout, where a pod log
-# shipper (clickhouse-logs, loki-logs) collects it with the other pod logs.
-# The package grants get, list, and watch on events. Only `deployment` mode
-# runs it, at one replica, so each event is written once. Two instances with
+# watch notification as a line of OTLP JSON to the collector's stdout, where
+# a pod log shipper (clickhouse-logs, loki-logs) collects it with the other
+# pod logs. An Event is written when it is created and again each time it
+# changes (its `count` rises); the deletion the API server sends when an
+# Event's TTL expires is excluded (`exclude_watch_type`). `settings` may
+# replace `receivers.k8s_objects.objects` to set `field_selector`,
+# `namespaces`, or the watch types, as long as every entry watches core
+# `events`, the only resource the package grants get, list, and watch on.
+# Only `deployment` mode runs the receiver, at one replica, so one pod writes
+# each notification; during a rolling update the old and new pod both watch
+# for a few seconds and may both write it. Two instances with
 # `events.enabled` each write every event; nothing refuses that.
 #
 # Minimal instance, forwarding traces to a backend in the cluster:
@@ -54,9 +62,10 @@
 #
 # `out`: `otlpGrpcUrl` and `otlpHttpUrl`, the Service's OTLP addresses
 # (`http://<service fqdn>:4317` and `:4318`) for instrumented workloads, and
-# `tls = false`. The receivers accept a signal only once a pipeline uses
-# them, so an instance with only `events.enabled` publishes addresses
-# nothing answers on.
+# `tls = false`. The collector opens the `otlp` receiver only when a
+# pipeline lists it, so in an instance where none does (only
+# `events.enabled`), reading either address fails evaluation naming the
+# instance.
 #
 # Alerts, scoped to this instance's Service: a collector is not scraped for
 # 5 minutes.
@@ -69,7 +78,13 @@
 # mounted through `partsOverlays` and `settings`. Metrics and logs from the
 # `otlp` receiver have no exporter dependency yet, so pipelines for them go
 # in `settings`, and under default deny their egress needs a policy of the
-# instance's own.
+# instance's own. The package renders no RBAC for the components that read
+# pods, nodes, or the kubelet (`k8sattributes`, `k8s_cluster`, `k8s_events`,
+# `kubeletstats`), and mounts a ServiceAccount token only with
+# `events.enabled`, so `settings` refuses them. Running one takes a
+# `partsOverlays` entry that replaces the `configMap` part (the refusal lives
+# in it) and the `workload` (to mount the token), and adds a ClusterRole and
+# binding.
 
 {
   scope,
@@ -166,10 +181,12 @@ in
         `receivers.otlp.protocols.{grpc,http}.endpoint` (the Service),
         `service.telemetry.metrics.readers` (the metrics port),
         `exporters."otlp_grpc/traces".endpoint` (from `deps.otlp`),
-        `exporters."file/events".path`, and `receivers.k8s_objects.objects`
-        (the RBAC grants events only); `receivers.k8s_objects` needs
-        `events.enabled`. `health_check` is always in
-        `service.extensions`. Setting a locked path fails evaluation.
+        and `exporters."file/events".path`. Setting a locked path fails
+        evaluation. A `k8s_objects` receiver needs `events.enabled`, and
+        each entry of its `objects` must watch core `events` (the RBAC
+        grants nothing else). `k8sattributes`, `k8s_cluster`, `k8s_events`,
+        and `kubeletstats` are refused: the package renders no RBAC for
+        them. `health_check` is always in `service.extensions`.
       '';
     };
 
@@ -233,11 +250,13 @@ in
           }
           // lib.optionalAttrs events {
             # Watch from the current resourceVersion: only Events created or
-            # changed after the collector starts.
+            # changed after the collector starts. DELETED arrives for every
+            # Event when its TTL (the API server's --event-ttl) expires.
             k8s_objects.objects = [
               {
                 name = "events";
                 mode = "watch";
+                exclude_watch_type = [ "DELETED" ];
               }
             ];
           };
@@ -350,21 +369,81 @@ in
               "file/events"
               "path"
             ]
-            (
-              if events then
-                [
-                  "receivers"
-                  "k8s_objects"
-                  "objects"
-                ]
-              else
-                [
-                  "receivers"
-                  "k8s_objects"
-                ]
-            )
           ];
         } builtinSettings config.settings;
+
+        # A component's type is its key up to the first `/`.
+        ofType =
+          type: section:
+          let
+            components = merged.${section} or { };
+          in
+          if builtins.isAttrs components then
+            builtins.filter (key: key == type || lib.hasPrefix "${type}/" key) (builtins.attrNames components)
+          else
+            [ ];
+
+        # Components that read pods, nodes, or the kubelet. The package
+        # renders no RBAC for them and mounts a token only for events.
+        unsupported =
+          builtins.concatMap
+            (
+              { section, type }:
+              map (key: "${section}.${key}") (ofType type section)
+            )
+            [
+              {
+                section = "processors";
+                type = "k8sattributes";
+              }
+              {
+                section = "receivers";
+                type = "k8s_cluster";
+              }
+              {
+                section = "receivers";
+                type = "k8s_events";
+              }
+              {
+                section = "receivers";
+                type = "kubeletstats";
+              }
+            ];
+
+        # The ClusterRole grants core/v1 events only, so every object a
+        # k8s_objects receiver lists must be that resource.
+        watchesEvents =
+          o: builtins.isAttrs o && (o.name or null) == "events" && (o.group or "") == "";
+        objectsReceivers = ofType "k8s_objects" "receivers";
+        badObjects = builtins.filter (
+          key:
+          let
+            objects = merged.receivers.${key}.objects or null;
+          in
+          !(builtins.isList objects && objects != [ ] && builtins.all watchesEvents objects)
+        ) objectsReceivers;
+
+        refusals =
+          lib.optional (unsupported != [ ])
+            "settings sets ${lib.concatStringsSep ", " unsupported}, which needs a ServiceAccount token and RBAC this package does not render. Remove it, or replace the configMap and workload parts and add a ClusterRole through partsOverlays."
+          ++ lib.optional (objectsReceivers != [ ] && !events)
+            "settings sets receivers.${builtins.head objectsReceivers}, which needs events.enabled = true (the ServiceAccount token and the events RBAC)."
+          ++ lib.optional (events && badObjects != [ ])
+            "receivers.${builtins.head badObjects}.objects must be a non-empty list whose entries all have name = \"events\" and no group other than \"\" (core/v1 Events), the only resource the package's ClusterRole grants.";
+
+        # The configMap part throws, so a partsOverlays entry that replaces
+        # it also clears the refusal.
+        checkedConfig =
+          if refusals == [ ] then
+            collectorConfig
+          else
+            throw "${who}: ${lib.concatStringsSep " " refusals}";
+
+        # The collector opens the otlp receiver only when a pipeline lists it.
+        otlpServed = builtins.any (p: builtins.elem "otlp" (p.receivers or [ ])) (
+          builtins.attrValues pipelines
+        );
+        notServed = throw "${who}: no pipeline lists the otlp receiver, so nothing answers on its OTLP addresses. Add a pipeline that receives from otlp (deps.otlp adds one), or send to another endpoint.";
 
         userExtensions = merged.service.extensions or [ ];
         collectorConfig =
@@ -474,7 +553,7 @@ in
             apiVersion = "v1";
             kind = "ConfigMap";
             name = "${name}-config";
-            data.${configFile} = builtins.toJSON collectorConfig;
+            data.${configFile} = builtins.toJSON checkedConfig;
           };
 
           configMount = kix.mount.configMap self.configMap {
@@ -541,11 +620,21 @@ in
               (self.serviceMonitor or null)
               (self.prometheusRules or null)
             ];
-            out = kix.contracts.otlpEndpoint.check who {
-              otlpGrpcUrl = self.service.out.url { port = grpcPort; };
-              otlpHttpUrl = self.service.out.url { port = httpPort; };
-              tls = false;
-            };
+            # Without the receiver the addresses throw when a consumer reads
+            # them; `check` would force them here.
+            out =
+              if otlpServed then
+                kix.contracts.otlpEndpoint.check who {
+                  otlpGrpcUrl = self.service.out.url { port = grpcPort; };
+                  otlpHttpUrl = self.service.out.url { port = httpPort; };
+                  tls = false;
+                }
+              else
+                {
+                  otlpGrpcUrl = notServed;
+                  otlpHttpUrl = notServed;
+                  tls = false;
+                };
           };
         }
         # The role name joins the namespace and the instance with a dot,
