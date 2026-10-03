@@ -81,21 +81,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     // from the flake rather than from `new_graph`.
     let cluster = ctx.cluster_identity(&args.cluster);
 
-    // 1. Load old activation (from last deploy)
-    let old_path = store::load_activation_path(&cluster);
-    let Some(old_result_dir) = old_path else {
-        if !ctx.global.quiet {
-            println!(
-                "No previous activation saved for '{}'. Run {} first, or use {}.",
-                output::bold(&cluster),
-                output::bold("kix deploy"),
-                output::bold("kix gc --hard"),
-            );
-        }
-        return Ok(());
-    };
-
-    // 2. Activation records under the retention policy. Needs the cluster;
+    // 1. Activation records under the retention policy. Needs the cluster;
     //    done before the build so an unreachable cluster fails fast and the
     //    connection is reused for the deletes.
     let policy = retention_policy(args)?;
@@ -103,6 +89,34 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let records = ctx
         .runtime
         .block_on(plan_record_retirement(&global, &cluster, &policy))?;
+
+    // 2. The old build: the Active record's. The local cache is keyed by
+    //    cluster name only, and a build another context deployed under the
+    //    same name would make this context's objects look like garbage.
+    let (old_path, warning) = baseline::active_build_dir(
+        &cluster,
+        store::load_activation_path(&cluster),
+        records.active.as_ref(),
+    );
+    if let Some(warning) = warning {
+        eprintln!("{} {warning}", output::yellow("warning:"));
+    }
+    let Some(old_result_dir) = old_path else {
+        if !ctx.global.quiet {
+            let what = if records.active.is_some() {
+                "The Active build of"
+            } else {
+                "No Active record, so no previous build, for"
+            };
+            println!(
+                "{what} '{}' is not on this machine. Run {} first, or use {}.",
+                output::bold(&cluster),
+                output::bold("kix deploy"),
+                output::bold("kix gc --hard"),
+            );
+        }
+        return Ok(());
+    };
 
     if !ctx.global.quiet {
         println!("Loading old activation...");

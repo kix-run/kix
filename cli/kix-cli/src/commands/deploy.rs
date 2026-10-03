@@ -542,6 +542,11 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         activation_manifest,
         &failed_baseline.consumed,
         kept_orphans,
+        if args.current_activation {
+            active_hash.as_deref()
+        } else {
+            None
+        },
     ))?;
 
     // Save activation path for next deploy's diff and for soft `kix gc`.
@@ -643,6 +648,42 @@ fn cached_as_active(cluster: &str, manifests: &[Value]) -> Option<activation::Ac
             .map(|p| p.to_string_lossy().into_owned()),
         orphans_kept_from: Vec::new(),
     })
+}
+
+/// Refuse a `--current-activation` plan whose cached build is not the Active
+/// build of `cluster` in the context this run connected to.
+///
+/// The activation cache is keyed by cluster name alone, so another context
+/// that deploys a cluster of the same name can have written it. A plan made
+/// against that build computes another environment's objects as orphans,
+/// and the prune deletes by name. The plan has already been confirmed, so
+/// this refuses rather than planning again from the cluster's record.
+async fn check_cached_baseline(
+    client: &kube::Client,
+    discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
+    cluster: &str,
+    cached_hash: &str,
+) -> Result<()> {
+    let active = match activation::find_activation_ar(discovery).map_err(|e| miette!("{e}"))? {
+        Some((ar, _)) => activation::find_active(client, ar, cluster)
+            .await
+            .map_err(|e| miette!("failed to find the active activation: {e}"))?,
+        None => None,
+    };
+    let active_hash = active.as_ref().and_then(|a| a.identity_hash.as_deref());
+    if active_hash == Some(cached_hash) {
+        return Ok(());
+    }
+    let short = |h: &str| h[..8.min(h.len())].to_string();
+    let found = match active_hash {
+        Some(h) => format!("its Active build is {}...", short(h)),
+        None => "it has no Active record".to_string(),
+    };
+    Err(miette!(
+        "the cached build {}... that --current-activation planned against is not the Active build of cluster '{cluster}' in this context: {found}. \
+         Nothing was applied. Rerun without --current-activation to plan against this context's record.",
+        short(cached_hash),
+    ))
 }
 
 /// Connect to cluster, fetch Active Activation, resolve to local store graph.
@@ -1200,6 +1241,7 @@ async fn run_deploy_async(
     activation_manifest: Option<&Value>,
     consumed_failed: &[String],
     kept_orphans: activation::KeptOrphans,
+    cached_baseline: Option<&str>,
 ) -> Result<RunEnd> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
 
@@ -1239,6 +1281,10 @@ async fn run_deploy_async(
             .collect::<Vec<_>>(),
     )
     .map_err(|e| miette!("{e}"))?;
+
+    if let Some(hash) = cached_baseline {
+        check_cached_baseline(&client, &discovery, cluster_name, hash).await?;
+    }
 
     // The engine would refuse each of these on its own, part way through
     // the run; refusing here applies nothing.
@@ -2137,6 +2183,31 @@ mod rebuild_from_live_tests {
                 },
             },
         })
+    }
+
+    /// A cached build of another context's cluster `a` (hash `p9`) is
+    /// refused against this context's Active record (`a2`), and so is any
+    /// cached build when the context has no Active record for the cluster.
+    #[tokio::test]
+    async fn a_cached_build_must_be_the_contexts_active_build() {
+        let api = FakeApi::new([record("a", "a2", PHASE_ACTIVE)]);
+        let client = api.client();
+        let discovery = fetch::discover_resources(&client).await.unwrap();
+        assert!(
+            check_cached_baseline(&client, &discovery, "a", "a2")
+                .await
+                .is_ok()
+        );
+        let err = check_cached_baseline(&client, &discovery, "a", "p9")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Active build is a2"), "{err}");
+        let err = check_cached_baseline(&client, &discovery, "b", "p9")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no Active record"), "{err}");
     }
 
     /// The previous state of `a`, rebuilt from live objects, is the closures

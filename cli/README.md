@@ -40,6 +40,12 @@ writes into `kix-packages.json` (`StoreGraph::cluster_name`) and the
 Activation record's `kix.run/cluster` label. Every lookup of cluster state
 uses that name: the Activation records, the `SweepScope::Cluster` sweep, and
 the local cache files `~/.cache/kix/activations/<name>.{path,root,kept-*}`.
+The cache file carries no kube context, so two contexts deploying clusters
+of the same name share it. Soft gc takes the old build from the Active
+record (`baseline::active_build_dir`, which uses the cache only when
+`store::build_hash_of` matches the record's hash), and `kix deploy
+--current-activation` refuses after connecting when the cached build is not
+the context's Active build (`check_cached_baseline`).
 `kix deploy` and `kix gc --hard` take it from the build, and `kix status`
 and `kix inspect` from the evaluated `ClusterOutput::cluster_name()` (the
 build's record label; `ClusterOutput::name` is the attribute). Commands that

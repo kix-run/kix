@@ -132,6 +132,10 @@ fn sync_kept_roots_in(
 
 /// Load the previously saved activation result directory path.
 /// Returns None if no previous deploy is recorded.
+///
+/// The file is keyed by cluster name only, so two kube contexts that deploy
+/// clusters of the same name share it. Check the build against the Active
+/// record of the context in use (`build_hash_of`) before planning from it.
 pub fn load_activation_path(cluster: &str) -> Option<PathBuf> {
     let file = activations_dir().join(format!("{cluster}.path"));
     std::fs::read_to_string(&file)
@@ -147,18 +151,10 @@ pub fn load_activation_path(cluster: &str) -> Option<PathBuf> {
 /// Returns None if the store path is gone (e.g. nix-collect-garbage ran).
 pub fn resolve_activation_by_hash(cluster: &str, identity_hash: &str) -> Option<PathBuf> {
     // Fast path: check if the cached result dir matches this hash
-    if let Some(cached_dir) = load_activation_path(cluster) {
-        let activation_link = cached_dir.join("activation");
-        if let Ok(target) = std::fs::read_link(&activation_link) {
-            let target_hash = target
-                .file_name()
-                .and_then(|n| n.to_str())
-                .filter(|n| n.len() >= 32)
-                .map(|n| &n[..32]);
-            if target_hash == Some(identity_hash) {
-                return Some(cached_dir);
-            }
-        }
+    if let Some(cached_dir) = load_activation_path(cluster)
+        && build_hash_of(&cached_dir).as_deref() == Some(identity_hash)
+    {
+        return Some(cached_dir);
     }
 
     // Slow path: find a matching store path and check if it has a result dir structure
@@ -183,6 +179,15 @@ pub fn resolve_activation_by_hash(cluster: &str, identity_hash: &str) -> Option<
     }
 
     None
+}
+
+/// The identity hash of the Activation a result dir holds: the first 32
+/// characters of the store path its `activation` link points at, which is
+/// the hash the Activation record carries. `None` when the link is missing.
+pub fn build_hash_of(result_dir: &Path) -> Option<String> {
+    let target = std::fs::read_link(result_dir.join("activation")).ok()?;
+    let name = target.file_name()?.to_str()?;
+    name.get(..32).map(str::to_string)
 }
 
 fn dirs_fallback_home() -> PathBuf {

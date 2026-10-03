@@ -124,6 +124,49 @@ fn result_dir(
         .or_else(|| kix::eval::store::resolve_activation_by_hash(cluster, identity_hash))
 }
 
+/// The result dir of the build the Active record `active` names, for a plan
+/// that uses it as the old state, with a warning to print when the local
+/// activation cache was set aside.
+///
+/// The cache (`store::load_activation_path`) is keyed by cluster name alone,
+/// so it can hold the build another kube context deployed under the same
+/// name. It is used only when its identity hash is the Active record's.
+/// Otherwise the build comes from the record (`built_via`, else the store by
+/// hash). With no Active record there is no old build.
+pub fn active_build_dir(
+    cluster: &str,
+    cached: Option<std::path::PathBuf>,
+    active: Option<&ActiveActivation>,
+) -> (Option<std::path::PathBuf>, Option<String>) {
+    let cached_hash = cached.as_deref().and_then(kix::eval::store::build_hash_of);
+    let Some(hash) = active.and_then(|a| a.identity_hash.as_deref()) else {
+        let warning = cached.map(|dir| {
+            format!(
+                "cluster '{cluster}' has no Active record in this context, so the cached build {} is not used",
+                dir.display()
+            )
+        });
+        return (None, warning);
+    };
+    if cached_hash.as_deref() == Some(hash) {
+        return (cached, None);
+    }
+    let warning = cached.map(|dir| {
+        format!(
+            "the cached build {} ({}) is not the Active build of cluster '{cluster}' in this context ({}); using the Active record's build",
+            dir.display(),
+            short(cached_hash.as_deref().unwrap_or("no identity hash")),
+            short(hash),
+        )
+    });
+    let built_via = active.and_then(|a| a.built_via.as_deref());
+    (result_dir(cluster, hash, built_via), warning)
+}
+
+fn short(hash: &str) -> &str {
+    &hash[..8.min(hash.len())]
+}
+
 /// The stamped manifests of a build, from `built_via` when that store path
 /// is on this machine, else through the local activation cache by identity
 /// hash. `None` when neither is available or the build will not load.
@@ -466,5 +509,54 @@ mod tests {
             &KeptBaseline::default(),
         );
         assert_eq!(names(&got.found), vec!["f1"]);
+    }
+
+    /// A result dir whose `activation` link names build `hash`.
+    fn result_dir_of(root: &std::path::Path, hash: &str) -> std::path::PathBuf {
+        let dir = root.join(hash);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("kix-packages.json"), "{}").unwrap();
+        let target = format!("/nix/store/{hash}-activation");
+        std::os::unix::fs::symlink(target, dir.join("activation")).unwrap();
+        dir
+    }
+
+    fn active_of(hash: &str, built_via: Option<&std::path::Path>) -> ActiveActivation {
+        ActiveActivation {
+            name: format!("rec-{hash}"),
+            identity_hash: Some(hash.to_string()),
+            built_via: built_via.map(|p| p.to_string_lossy().into_owned()),
+            orphans_kept_from: Vec::new(),
+        }
+    }
+
+    const PROD: &str = "pppppppppppppppppppppppppppppppp";
+    const STAGING: &str = "ssssssssssssssssssssssssssssssss";
+
+    /// The cache holds prod's build of a cluster staging deploys under the
+    /// same name. Against staging's Active record it is set aside with a
+    /// warning, and the record's own build is used.
+    #[test]
+    fn a_cached_build_of_another_context_is_not_the_old_build() {
+        let root = tempfile::tempdir().unwrap();
+        let prod = result_dir_of(root.path(), PROD);
+        let staging = result_dir_of(root.path(), STAGING);
+
+        let (dir, warning) = active_build_dir(
+            "web",
+            Some(prod.clone()),
+            Some(&active_of(STAGING, Some(&staging))),
+        );
+        assert_eq!(dir, Some(staging));
+        assert!(warning.unwrap().contains("is not the Active build"));
+
+        let (dir, warning) = active_build_dir("web", Some(prod.clone()), None);
+        assert_eq!(dir, None);
+        assert!(warning.unwrap().contains("no Active record"));
+
+        let (dir, warning) =
+            active_build_dir("web", Some(prod.clone()), Some(&active_of(PROD, None)));
+        assert_eq!(dir, Some(prod));
+        assert_eq!(warning, None);
     }
 }

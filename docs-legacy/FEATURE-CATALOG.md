@@ -392,7 +392,7 @@ Wave-based deployment with confirmation.
 - `--on-error <MODE>` — stop (default) or continue. Any failed resource exits 1 under both.
 - `--timeout <DURATION>` — Readiness timeout (default: 5m).
 - `--skip-import-checks` — Skip pre-deploy import verification.
-- `--current-activation` — Use local cache instead of fetching from cluster.
+- `--current-activation` — Use local cache instead of fetching from cluster. Refused before applying when the cached build is not the Active build of the cluster in the current context.
 - An `OnDelete` DaemonSet is ready when its pods are; pods on a previous template are reported as pending a manual restart (`NodeDetail::PendingRestart`). A CRD import whose live CRD does not serve a declared version stops the deploy with `ImportMismatch`.
 - `--operator` — Delegate to kix-operator (creates/patches Activation CR, waits for operator reconcile).
 
