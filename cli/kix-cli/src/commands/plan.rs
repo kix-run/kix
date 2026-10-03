@@ -42,7 +42,7 @@ use super::deploy::{self, Prepared};
 
 /// Exit status when the deploy would stop: a refused write, or a stateful
 /// migration not accepted with `--accept-migrations`.
-const EXIT_WOULD_STOP: i32 = 3;
+pub(crate) const EXIT_WOULD_STOP: i32 = 3;
 /// Exit status when the deploy would change something.
 const EXIT_CHANGES: i32 = 2;
 
@@ -83,7 +83,7 @@ pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Resu
     Ok(())
 }
 
-fn flags_of(args: &PlanArgs) -> PlanFlags {
+pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
     PlanFlags {
         prune: args.prune,
         prune_mode: args.prune_mode.map(|m| match m {

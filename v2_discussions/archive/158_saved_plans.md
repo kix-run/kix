@@ -1,6 +1,6 @@
 # 158: Saved plans, `kix deploy --plan`
 
-**Status:** Design (first draft, rules agreed in kixpkgs#185)
+**Status:** Implemented (`cli/kix-cli/src/plan/saved.rs`, `kix deploy --plan`). The `resourceVersion` precondition and deploying from a binary cache are open in `ROADMAP.md`.
 **Related:** `archive/157_kix_plan_primary_preview.md` (§5, the goal), kixpkgs#185 (the rules), kixpkgs#186 (the document fields this relies on)
 
 ## Context
@@ -17,8 +17,11 @@ Two facts shape the design:
 
 - **`kix deploy` builds from source.** It never applies a stored plan. It
   rebuilds, plans again, and compares. A saved plan restricts a deploy; it
-  never supplies its content. A tampered `plan.json` can at worst make the
-  deploy refuse.
+  never supplies its content. An edited `plan.json` can still loosen the
+  comparison (mark a section not checked, add known items, set flags), so
+  the deploy refuses a plan whose sections do not match its `made_by` and
+  prints the file's SHA-256, which an approval system checks against the
+  file it approved.
 - **The document is lossy on purpose.** Secret values read `(secret, not
   shown)` and values over 16 KiB read `(N bytes, not shown)`. Two plans
   can print the same field change for different values, so the comparison
@@ -39,9 +42,10 @@ kix deploy <cluster> --plan plan.json --dry-run
 1. Read `plan.json` into `plan::document::Plan`. Refuse a `schema_version`
    this Kix does not know, and a document that does not parse.
 2. Take the planning flags from the saved plan's `flags`. A planning flag
-   given on the command line that contradicts it is an error before any
-   build: `--prune` against a plan made without it, or the reverse.
-   Repeating a flag the plan already has is allowed.
+   given on the command line that the plan was made without is an error
+   before any build. A flag the plan has and the command line omits is
+   taken from the plan, and the apply reads every planning flag from the
+   merged set, never from the command line.
 3. `deploy::prepare` with those flags, then the dry-run pass and
    `plan::document`, as every `kix deploy` does today.
 4. `plan::saved::compare(&reviewed, &fresh)` returns the mismatches. Any
@@ -134,11 +138,11 @@ Review a new plan, or deploy without --plan.
   conflict check, and `--plan` with `--current-activation` refused.
 - `cli/kix-cli/src/commands/deploy.rs`: load, merge flags into `PlanArgs`
   before `prepare`, call `compare` after `plan::document`. When the deploy
-  skips the dry run (nothing to apply or prune), F's write-path sections
-  read as checked and empty today; for `--plan` they must read
-  `not_checked` so rules 5 and 7 are skipped
-  honestly
-  (housekeeping `deploy-plan-without-dry-run-says-checked`).
+  skips the dry run because there is nothing to apply or prune, F's
+  write-path sections read as checked and empty. As implemented that is
+  kept: with no write and no delete there is nothing to refuse, revert, or
+  delete. The exception is a failed rerun Job, which the deploy recreates
+  anyway (housekeeping `deploy-plan-does-not-compare-rerun-jobs`).
 - The kind integration test: plan, save, deploy with `--plan` (matches);
   plan, `kubectl scale`, deploy with `--plan` (exits 4 on rule 6); plan,
   deploy, deploy the old plan again (exits 4 on rule 3).

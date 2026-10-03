@@ -276,6 +276,176 @@ fn deploy_and_gc() {
     );
 
     // =========================================================================
+    // Phase 2c: A saved plan gates the deploy. A plan goes stale when a
+    // hand edit makes a new conflict; the deploy of a plan made with
+    // --force-conflicts takes the plan's flags, so it succeeds without the
+    // flag on the command line; and the plan is stale once the cluster runs
+    // that build.
+    // =========================================================================
+    eprintln!("\n=== Phase 2c: kix deploy --plan ===");
+
+    let dir = std::env::temp_dir().join(format!("kix-saved-plan-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let unforced = dir.join("unforced.json");
+    let forced = dir.join("forced.json");
+    let diffed = dir.join("diff.json");
+    std::fs::write(&unforced, &plan.stdout).expect("write the saved plan");
+    std::fs::write(&diffed, &diff.stdout).expect("write the saved diff");
+    let check = |saved: &Path, extra: &[&str]| {
+        let mut args = vec![
+            "deploy",
+            "kind-v2",
+            "--plan",
+            saved.to_str().unwrap(),
+            "--dry-run",
+        ];
+        args.extend_from_slice(extra);
+        kix(KIND_CLUSTER)
+            .args(&args)
+            .output()
+            .expect("deploy --plan should run")
+    };
+    let mismatched_rules = |out: &std::process::Output| -> Vec<String> {
+        let c: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        c["mismatches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["rule"].as_str().map(str::to_string))
+            .collect()
+    };
+
+    let current = check(&unforced, &["-o", "json"]);
+    assert_eq!(
+        current.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&current.stderr)
+    );
+
+    let from_diff = check(&diffed, &[]);
+    assert_eq!(
+        from_diff.status.code(),
+        Some(0),
+        "a saved kix diff matches: {}{}",
+        String::from_utf8_lossy(&from_diff.stdout),
+        String::from_utf8_lossy(&from_diff.stderr)
+    );
+
+    let contradicted = check(&unforced, &["--prune"]);
+    assert_eq!(contradicted.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&contradicted.stderr).contains("--prune"),
+        "{}",
+        String::from_utf8_lossy(&contradicted.stderr)
+    );
+
+    // A hand edit of a field the deploy sets: kubectl now owns replicas.
+    let deployment = kubectl_stdout(KUBE_CTX, &["get", "deploy", "-n", "echo", "-o", "name"]);
+    let deployment = deployment.lines().next().expect("a Deployment").to_string();
+    let scaled = kubectl(
+        KUBE_CTX,
+        &["scale", &deployment, "-n", "echo", "--replicas=3"],
+    );
+    assert!(scaled.status.success());
+    let stale = check(&unforced, &["-o", "json"]);
+    assert_eq!(
+        stale.status.code(),
+        Some(4),
+        "{}",
+        String::from_utf8_lossy(&stale.stderr)
+    );
+    assert_eq!(mismatched_rules(&stale), vec!["new_refusal"]);
+
+    // The deploy itself refuses the stale plan and applies nothing.
+    let refused = kix(KIND_CLUSTER)
+        .args([
+            "deploy",
+            "kind-v2",
+            "--plan",
+            unforced.to_str().unwrap(),
+            "--yes",
+        ])
+        .output()
+        .expect("deploy --plan should run");
+    assert_eq!(refused.status.code(), Some(4));
+    let replicas = kubectl_stdout(
+        KUBE_CTX,
+        &[
+            "get",
+            &deployment,
+            "-n",
+            "echo",
+            "-o",
+            "jsonpath={.spec.replicas}",
+        ],
+    );
+    assert_eq!(replicas.trim(), "3", "a refused deploy applies nothing");
+
+    // A diff checks no refusals, so the saved diff still matches, and the
+    // check says the deploy would stop on the new conflict.
+    let stops = check(&diffed, &[]);
+    assert_eq!(
+        stops.status.code(),
+        Some(3),
+        "{}{}",
+        String::from_utf8_lossy(&stops.stdout),
+        String::from_utf8_lossy(&stops.stderr)
+    );
+
+    let forced_plan = kix(KIND_CLUSTER)
+        .args(["plan", "kind-v2", "--force-conflicts", "-o", "json"])
+        .output()
+        .expect("plan should run");
+    assert_eq!(forced_plan.status.code(), Some(2));
+    std::fs::write(&forced, &forced_plan.stdout).unwrap();
+    let deployed = kix(KIND_CLUSTER)
+        .args([
+            "deploy",
+            "kind-v2",
+            "--plan",
+            forced.to_str().unwrap(),
+            "--yes",
+        ])
+        .output()
+        .expect("deploy --plan should run");
+    assert!(
+        deployed.status.success(),
+        "the apply takes --force-conflicts from the plan: {}{}",
+        String::from_utf8_lossy(&deployed.stdout),
+        String::from_utf8_lossy(&deployed.stderr)
+    );
+    assert!(String::from_utf8_lossy(&deployed.stderr).contains("The reviewed plan matches"));
+    let replicas = kubectl_stdout(
+        KUBE_CTX,
+        &[
+            "get",
+            &deployment,
+            "-n",
+            "echo",
+            "-o",
+            "jsonpath={.spec.replicas}",
+        ],
+    );
+    assert_eq!(replicas.trim(), "2", "the build's replicas, not kubectl's");
+
+    let stale = check(&forced, &["-o", "json"]);
+    assert_eq!(stale.status.code(), Some(4));
+    assert_eq!(mismatched_rules(&stale), vec!["deployed_build"]);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Put the first build back for the phases below.
+    let back = kix(KIND_CLUSTER)
+        .args(["deploy", KIX_CLUSTER, "--yes", "--prune"])
+        .output()
+        .expect("deploy should run");
+    assert!(
+        back.status.success(),
+        "{}",
+        String::from_utf8_lossy(&back.stderr)
+    );
+
+    // =========================================================================
     // Phase 3: Soft GC — no garbage (same activation)
     // =========================================================================
     eprintln!("\n=== Phase 3: Soft GC (no garbage expected) ===");
