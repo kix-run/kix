@@ -66,7 +66,7 @@ let
 
   # Each package that reads deps.database, with the arguments its top level
   # takes.
-  consumers = lib.genAttrs [ "harbor" "immich" "metabase" "n8n" "vaultwarden" ] (
+  consumers = lib.genAttrs [ "harbor" "immich" "keycloak" "metabase" "n8n" "vaultwarden" ] (
     pname:
     let
       package = import ../../../packages/${pname};

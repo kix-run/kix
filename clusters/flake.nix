@@ -66,6 +66,7 @@
         virtualization = ./test-virtualization.nix;
         metabase = ./test-metabase.nix;
         metrics-server = ./test-metrics-server.nix;
+        keycloak = ./test-keycloak.nix;
         monitoring-netpol = ./test-monitoring-netpol.nix;
       };
     };

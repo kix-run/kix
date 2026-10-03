@@ -1,0 +1,4 @@
+# 2026-10-03 · `kix/lib/plugins/netpol/derive.nix` · Pods of a Deployment that talk to each other get no derived peer rule, so the package must write its own policy for that traffic.
+
+`buildWorkloadCnps` adds the self ingress and egress rules (`mkSelfRules`) only when `workloadKind == "StatefulSet"`, and a package intent can name `all-pods` but not the instance's own pods. `kix/packages/keycloak` runs a `Recreate` Deployment whose replicas form an Infinispan cluster on TCP 7800 and 57800, so a package intent could only admit those ports from every pod in the cluster. An intent target such as `self`, or a workload flag that asks for the peer rules, would cover it.
+- Worked around in `kix/packages/keycloak` with a `kix.operandPolicy` part (`<instance>-jgroups`) built from `mkCallerIngressRule` and `mkServiceEgressRule` over the Deployment's selector, rendered when replicas > 1.
