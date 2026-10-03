@@ -117,6 +117,8 @@ env = kix.mkEnvVars {
 };
 ```
 
+An operator that syncs a Secret from an external store has a builder that does this for you: `external-secrets` (`out.mkExternalSecret`, HANDBOOK §21.9) and `infisical-operator` (`out.mkInfisicalStaticSecret`, §21.8) return `out.secretRef { keys; }`, a `mkSecretRef` ordered after the custom resource. Prefer them to a hand-made `mkSecretRef` with `requires`.
+
 That is also how a `kix.healthCheck` probe gets a credential: its `env` callback returns an attrset that goes through `mkEnvVars`, so `CLICKHOUSE_PASSWORD = self.credentials.out.keyRef "password";` gives the probe Job the value, the dependency edge and the key check. Never render a password into the probe's ConfigMap or its `out`.
 
 ## Standalone packages for DI

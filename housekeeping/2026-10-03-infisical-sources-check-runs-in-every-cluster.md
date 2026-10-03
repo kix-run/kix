@@ -1,0 +1,3 @@
+# 2026-10-03 · `kix/packages/infisical-operator` · The check that crds/sources.txt matches `release` sits in the package's `assertions`, so every cluster evaluates it.
+
+package-review P12 says a package-internal consistency check belongs in a lib test or the vendoring script. Every cluster that runs the operator reads and splits `crds/sources.txt` at evaluation for a fact only a package author can break. `kix/packages/external-secrets` keeps the same check as the kix-lib test `external-secrets-sources-match-release`; infisical's second assertion (default.nix, `sourceUrls`) could move the same way.

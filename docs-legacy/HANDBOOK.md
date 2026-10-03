@@ -1636,6 +1636,38 @@ Known limit: `kix deploy` writes its bookkeeping annotations in a second request
 
 Under egress enforcement the package's network intent opens only TCP 443 to destinations outside the cluster. An `address` inside the cluster or on another port fails the build until a `networkPolicy.platformIntents` entry selects the operator's pods and reaches the address; the error prints the entry to add.
 
+### 21.9 Secrets synced by External Secrets Operator
+
+`external-secrets` builds the SecretStore and ExternalSecret, and returns a `scope.mkSecretRef` for the Secret the controller writes through `out.secretRef`, ordered after the ExternalSecret:
+
+```nix
+# deps: externalSecrets, vaultToken (a secret dependency declaring `token`)
+store = externalSecrets.out.mkSecretStore scope {
+  name = "vault";
+  spec.provider.vault = {
+    server = "https://vault.example.com";
+    path = "secret";
+    version = "v2";
+    auth.tokenSecretRef = (vaultToken.out.keyRef "token").valueFrom.secretKeyRef;
+  };
+};
+sync = externalSecrets.out.mkExternalSecret scope {
+  name = "billing";
+  spec = {
+    secretStoreRef = { name = self.store.out.name; kind = "SecretStore"; };
+    refreshInterval = "1h";
+    data = [ { secretKey = "API_KEY"; remoteRef = { key = "billing"; property = "api-key"; }; } ];
+  };
+};
+credentials = self.sync.out.secretRef { keys = [ "API_KEY" ]; };   # then self.credentials.out.mkEnv { ... }
+```
+
+`out.mkSecretStore` refuses any `{ name; key; }` Secret selector in the spec whose name is a literal string, as `cluster-issuer` does (§21.7); `kix.untrackedRef` opts out for a Secret created outside Kix. `out.mkExternalSecret` sets `spec.target.template.metadata` to `{ }` when the spec has none: without a template the controller copies the ExternalSecret's labels and annotations, Kix's identity annotation included, onto the Secret, and `kix gc` would delete it. It refuses `spec.target.manifest`, since the package grants no RBAC for generic targets. `out.secretRef` refuses creationPolicy None, and, when the spec has no `dataFrom` or `templateFrom`, a key the ExternalSecret does not write. There is no `out.crds` handle for ExternalSecret or SecretStore; `out.crds` covers ClusterSecretStore, ClusterExternalSecret, PushSecret, ClusterPushSecret, ClusterGenerator, and the generator kinds (a Password generator feeds an ExternalSecret through `dataFrom[].sourceRef.generatorRef`, and `out.secretRef` then takes the keys the generator writes).
+
+The admission webhook validates ExternalSecrets, SecretStores, and ClusterSecretStores with failurePolicy Fail, and the cert-controller injects the webhook's CA after it starts. Every custom resource built from `out` therefore requires the package's webhook check Job, which succeeds once the API server admits a server-side dry-run create of an ExternalSecret.
+
+The controller reads and writes Secrets in every namespace, so a cluster runs one instance. Its network intent opens TCP 443 to destinations outside the cluster; a provider inside the cluster or on another port needs a `networkPolicy.platformIntents` entry for the controller's pods.
+
 ## 22. CRDs
 
 Pipe-friendly builders in `scope.crd` (or top-level `kix.crd`):

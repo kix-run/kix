@@ -44,6 +44,7 @@
           monitoring-loki = ./clusters/test-monitoring-loki.nix;
           victoria-metrics = ./clusters/test-victoria-metrics.nix;
           victoria-metrics-crd-ref = ./clusters/test-victoria-metrics-crd-ref.nix;
+          external-secrets = ./clusters/test-external-secrets.nix;
           doc-how-tos = ./clusters/test-doc-how-tos.nix;
 
           # Register documented examples so routine builds catch evaluation
