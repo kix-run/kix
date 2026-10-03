@@ -11,3 +11,4 @@ alike, so these warnings stay in every package-eval run and a new,
 accidental literal selector is lost among them.
 
 - Hit again 2026-10-02 by `kix/packages/mayastor`: the etcd headless Service selects with the StatefulSet's `rawSelector` because the members' env reads its `out.fqdn`, and `architecture.selectorCoherence` warns on it in every build.
+- Hit again 2026-10-03 by `kix/packages/spegel`: the `<name>-bootstrap` headless Service selects with the DaemonSet's `rawSelector` because the registry's `--dns-bootstrap-domain` reads its `out.fqdn`, and the rule warns on it in every build.

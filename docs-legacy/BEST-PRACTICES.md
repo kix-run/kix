@@ -567,7 +567,7 @@ gracefully omits resources when they're absent.
 
 Infrastructure-role owners claim their role from the closed registry in
 `kix/lib/eval/roles.nix` (currently: `network-policy-enforcer`, `dns`,
-`storageClasses`, `snapshotController`, `metricsApi`, `cni`, `loadBalancer`):
+`storageClasses`, `snapshotController`, `metricsApi`, `registryMirror`, `cni`, `loadBalancer`):
 
 ```nix
 # kix/packages/storage-classes/default.nix
@@ -896,7 +896,7 @@ that's the price of the workaround being visible.
 resolve via arg name → instance name → instance aliases (which *replace*
 package `defaultAliases` when non-empty). Roles are only for the registry's
 infrastructure slots (network-policy-enforcer, dns, storageClasses,
-snapshotController, metricsApi, cni, loadBalancer).
+snapshotController, metricsApi, registryMirror, cni, loadBalancer).
 
 ### 12.8 Backwards-compatibility shims
 

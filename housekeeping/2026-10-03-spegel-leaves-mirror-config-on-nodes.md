@@ -1,0 +1,3 @@
+# 2026-10-03 · `kix/packages/spegel` · Removing a spegel instance leaves its `hosts.toml` files in every node's containerd registry config directory.
+
+Upstream's chart removes them with a post-delete DaemonSet (`charts/spegel/templates/post-delete-hook.yaml`), and Kix has no hook that runs when an instance is pruned. containerd then tries the dead mirrors at `<node IP>:30020` and `:30021` before each pull, gets connection refused, and falls back to the upstream registry, so pulls still work with a short delay. A later instance on another port would leave stale entries in the files it does not rewrite.

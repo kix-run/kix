@@ -1174,6 +1174,8 @@ The storage, snapshot, and Cilium imports are not optional. Packages take `stora
 
 **Resource metrics API.** The `metricsApi` role stands for metrics.k8s.io and has no out contract. rke2, k3s, gke, gke-autopilot, and aks bind it `exclusive` (their environment runs metrics-server; no import); kind, kubeadm, talos, and eks bind it `absent`; openshift, ovh, and scaleway leave it `null`. `scope.mkResource` checks every HorizontalPodAutoscaler that reads the API (autoscaling/v1, autoscaling/v2 with no `metrics`, or a `Resource` or `ContainerResource` metric) against the role, the way `checkLoadBalancer` checks LoadBalancer Services: `absent` with no provider instance is an evaluation error, `null` a warning. A package that reads the API from a config file calls `scope.requireMetricsApi "<what reads it>"` (the descheduler does, for a `KubernetesMetrics` provider). The `metrics-server` package claims the role: `instances.metrics-server.metrics-server.package = packages.metrics-server;`, plus `config.extraArgs = [ "--kubelet-insecure-tls" ];` where kubelets serve self-signed certificates (kind, Talos without kubelet certificate rotation).
 
+**Registry mirror and containerd.** The `registryMirror` role stands for a node-local OCI registry mirror that containerd tries first, and has no out contract. k3s and rke2 bind it `exclusive` (both embed Spegel, turned on with `embedded-registry: true`), kind binds it `absent`, and the rest leave it `null`. The `spegel` package claims it. Kix cannot read or change the nodes' containerd configuration, so `cluster.containerd` declares it: `socket`, `registryConfigPath` (the CRI `config_path`), and `contentPath` default to containerd's paths, Talos and GKE move `registryConfigPath`, and `discardUnpackedLayers` is `true` on kind, Talos, EKS, and GKE, `false` on AKS and Scaleway, and `null` (unknown) elsewhere. Spegel serves layers that containerd keeps, and a pod becomes ready only once it has a peer, so the package refuses `discardUnpackedLayers = true` and `cluster.capabilities.multiNode = false`, and warns on `null`. A kind cluster for Spegel has a worker node and a `containerdConfigPatches` entry setting `discard_unpacked_layers = false`, and declares both facts (`clusters/test-spegel.nix`).
+
 ## 16. Network policy auto-derivation
 
 `CiliumNetworkPolicy` is auto-derived from the DI graph — packages don't author netpol manifests. Enable with `networkPolicy.enable = true`. See `kix/lib/architecture.md` "Netpol is derived, not declared" + v2_discussions/83.
@@ -1511,7 +1513,27 @@ A CSI driver package (`zfs-localpv`) publishes its class through `out.storageCla
 
 `mayastor` renders replicated NVMe-oF block storage: StorageClasses through `kix.types.storageClass`/`kix.storage.mkClasses` with a required `parameters.repl`, VolumeSnapshotClasses through the `snapshotController` dependency, and DiskPools as `diskPools.<name> = { node; disks; }`. Its etcd takes its class from the `storageClasses` dependency or `etcd.storage.storageClassName`, and evaluation refuses one of Mayastor's own classes: etcd on a Mayastor volume cannot start after a full restart. `out.storageClassName` has the shape `storage-classes` gives, so `deps.storageClasses = ref.<ns>.<mayastor>` works for consumers. Neither driver claims the `storageClasses` role.
 
-### 20.3 PriorityClasses
+### 20.3 Volume replication (VolSync)
+
+`volsync` runs the VolSync operator, one per cluster. It needs the `snapshotController` role whatever the copy method, because the operator watches VolumeSnapshots and does not start without their CRD. A consumer that takes `volsync` as a dependency backs up a claim with restic:
+
+```nix
+backup = volsync.out.mkReplicationSource scope {
+  name = "data";                 # at most 51 characters
+  claim = storage;               # a storage dependency or a PVC part
+  schedule = "0 3 * * *";        # five cron fields or @daily and friends
+  copyMethod = "Snapshot";       # Direct, Clone, or Snapshot
+  restic = {
+    repository = resticRepository;  # secret with RESTIC_REPOSITORY, RESTIC_PASSWORD, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+    endpointService = s3;           # in-cluster store; or null with storePort for one outside
+  };
+};
+root.requires = [ self.backup.replicationSource ];
+```
+
+The result is a folder: `replicationSource` and `egress`. VolSync's restic mover reads every value from the one Secret named in `restic.repository`, so the store credentials go there too, and Kix cannot check that `RESTIC_REPOSITORY` names `endpointService`. The CRDs declare `factBehavior.endpoint = "terminate"` with the mover pods' selector (`app.kubernetes.io/created-by: volsync`, `batch.kubernetes.io/job-name: volsync-src-<name>`); the builder attaches the store's address to the repository name, so the movers get egress to the store and the store ingress from them. Without `endpointService`, `egress` opens DNS and TCP `storePort` (443 by default) to the world. Both kinds are ready when `status.latestMoverStatus.result` is `Successful`; VolSync runs the first sync on creation, so the deploy waits for the first backup.
+
+### 20.4 PriorityClasses
 
 `priority-class` creates one PriorityClass per instance, named after the instance. The class is cluster-scoped, and the instance may live in any namespace the cluster deploys, such as its main consumer's. The instance's namespace holds only its PackageInstance record. A workload takes the class as an optional dependency, which also applies the workload after the class:
 

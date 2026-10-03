@@ -37,6 +37,7 @@ or imported.
 | `storageClasses` | `storageClassName`, the class a claim gets when it names none | `storage-classes` |
 | `loadBalancer` | none; a provider's presence allows `type: LoadBalancer` Services | none |
 | `metricsApi` | none; a provider's presence allows HorizontalPodAutoscalers on resource metrics and the descheduler's `KubernetesMetrics` source | `metrics-server` |
+| `registryMirror` | none; the role exists so that an environment that embeds a mirror refuses a second one | `spegel` |
 | `snapshotController` | `crds`, the VolumeSnapshotClass, VolumeSnapshotContent, and VolumeSnapshot handles for `scope.mkCR` | `snapshot-controller` |
 
 A CSI driver package such as `zfs-localpv` does not claim `storageClasses`.
@@ -59,20 +60,20 @@ metric) and a descheduler whose `policy.metricsProviders` lists
 Each cell is the flavour's default `binding`. "import" means the flavour also
 declares a platform import in `kube-system` that provides the role.
 
-| Flavour | `cni` | `dns` | `storageClasses` | `loadBalancer` | `snapshotController` | `metricsApi` |
-|---|---|---|---|---|---|---|
-| `aks` | exclusive | shadowable, import | shadowable, import | shadowable | null | exclusive |
-| `eks` | exclusive | shadowable, import | absent | shadowable | null | absent |
-| `gke` | exclusive | shadowable, import | shadowable, import | shadowable | null | exclusive |
-| `gke-autopilot` | exclusive | shadowable, import | shadowable, import | exclusive | null | exclusive |
-| `k3s` | exclusive | shadowable, import | shadowable, import | exclusive | null | exclusive |
-| `kind` | exclusive | shadowable, import | shadowable, import | absent | absent | absent |
-| `kubeadm` | absent | shadowable, import | absent | absent | null | absent |
-| `openshift` | exclusive | shadowable, import | absent | absent | null | null |
-| `ovh` | exclusive | shadowable, import | shadowable, import | shadowable | null | null |
-| `rke2` | follows `cluster.flavor.rke2.cni` (cilium: shadowable, import) | shadowable, import | absent | absent | exclusive, import | exclusive |
-| `scaleway` | exclusive | shadowable, import | shadowable, import | shadowable | null | null |
-| `talos` | exclusive | shadowable, import | absent | absent | null | absent |
+| Flavour | `cni` | `dns` | `storageClasses` | `loadBalancer` | `snapshotController` | `metricsApi` | `registryMirror` |
+|---|---|---|---|---|---|---|---|
+| `aks` | exclusive | shadowable, import | shadowable, import | shadowable | null | exclusive | null |
+| `eks` | exclusive | shadowable, import | absent | shadowable | null | absent | null |
+| `gke` | exclusive | shadowable, import | shadowable, import | shadowable | null | exclusive | null |
+| `gke-autopilot` | exclusive | shadowable, import | shadowable, import | exclusive | null | exclusive | null |
+| `k3s` | exclusive | shadowable, import | shadowable, import | exclusive | null | exclusive | exclusive |
+| `kind` | exclusive | shadowable, import | shadowable, import | absent | absent | absent | absent |
+| `kubeadm` | absent | shadowable, import | absent | absent | null | absent | null |
+| `openshift` | exclusive | shadowable, import | absent | absent | null | null | null |
+| `ovh` | exclusive | shadowable, import | shadowable, import | shadowable | null | null | null |
+| `rke2` | follows `cluster.flavor.rke2.cni` (cilium: shadowable, import) | shadowable, import | absent | absent | exclusive, import | exclusive | exclusive |
+| `scaleway` | exclusive | shadowable, import | shadowable, import | shadowable | null | null | null |
+| `talos` | exclusive | shadowable, import | absent | absent | null | absent | null |
 
 No flavour binds `network-policy-enforcer`.
 

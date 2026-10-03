@@ -328,6 +328,12 @@ let
     # A Prometheus provider, so the metrics Service and the ServiceMonitor
     # are built.
     snapshot-controller.instances.prometheus-operator.package = packages.prometheus-operator;
+    # The kind flavour declares one node and containerd's discard of
+    # unpacked layers, which the package refuses.
+    spegel.module = _: {
+      cluster.capabilities.multiNode = true;
+      cluster.containerd.discardUnpackedLayers = false;
+    };
     # Backups to an object storage, so the SGObjectStorage reference, the
     # backups entries, and archive_timeout are built; a pooler and a script,
     # so the SGPoolingConfig and the SGScript are built.
@@ -406,6 +412,8 @@ let
       };
       config.domain = "https://vault.example.com";
     };
+    # The operator needs the VolumeSnapshot API, which kind does not ship.
+    volsync.instances.snapshot-controller.package = packages.snapshot-controller;
     velero = {
       config.backupStorageLocation.objectStorage.bucket = "backups";
       instances = {

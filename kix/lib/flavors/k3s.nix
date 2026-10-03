@@ -43,6 +43,14 @@
       binding = lib.mkDefault "exclusive";
       provider = lib.mkDefault "metrics-server (k3s packaged component)";
     };
+    # k3s embeds Spegel, turned on with `embedded-registry: true` in the
+    # server config. Its containerd lives under /var/lib/rancher/k3s and
+    # /run/k3s, so a cluster that runs a spegel instance instead sets the
+    # binding to "absent" and the cluster.containerd paths.
+    registryMirror = {
+      binding = lib.mkDefault "exclusive";
+      provider = lib.mkDefault "embedded Spegel (embedded-registry)";
+    };
   };
 
   cluster.capabilities = {

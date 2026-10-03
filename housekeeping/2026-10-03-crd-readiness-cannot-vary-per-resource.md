@@ -1,0 +1,3 @@
+# 2026-10-03 · `kix/lib/core/resource.nix` · A CRD handle's `readiness` applies to every resource of that kind, and a resource cannot override it, so a kind whose health depends on its spec has no right declaration.
+
+`mkCRDBuilders` writes `kix.run/readiness` after the caller's annotations, so the handle wins. VolSync's ReplicationSource and ReplicationDestination report `status.latestMoverStatus.result` for restic, rclone, and rsync movers, which `kix/packages/volsync` declares; a Syncthing source and an rsync destination waiting for its remote source never report it, so the deploy times out on them. The builder cannot refuse them either, because `scope.mkCR volsync.out.crds.<Kind>` bypasses it.

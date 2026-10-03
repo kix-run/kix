@@ -69,6 +69,8 @@
         virtualization = ./test-virtualization.nix;
         metabase = ./test-metabase.nix;
         metrics-server = ./test-metrics-server.nix;
+        spegel = ./test-spegel.nix;
+        volsync = ./test-volsync.nix;
         keycloak = ./test-keycloak.nix;
         otel-collector = ./test-otel-collector.nix;
         traefik = ./test-traefik.nix;
