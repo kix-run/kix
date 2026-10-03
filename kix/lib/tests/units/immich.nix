@@ -29,7 +29,7 @@ let
 
   databaseOut = {
     host = "db.example.net";
-    port = 5432;
+    port = "5432";
     database = "immich";
     credentials.out.keyRef = key: {
       valueFrom.secretKeyRef = {
@@ -102,7 +102,8 @@ let
       }) (builtins.head d.spec.template.spec.containers).env
     );
 
-  # The database assertion's failed messages for a dependency publishing `out`.
+  # The database assertion's failed messages for a dependency publishing
+  # databaseOut with `out` over it.
   databaseMessages =
     out:
     let
@@ -116,7 +117,7 @@ let
       };
     in
     map (a: a.message) (
-      builtins.filter (a: !a.assertion) (attrs.deps.database.assertions { inherit out; })
+      builtins.filter (a: !a.assertion) (attrs.deps.database.assertions { out = databaseOut // out; })
     );
 
   # The ServiceMonitor endpoints kix.monitor builds for `metrics`, with a

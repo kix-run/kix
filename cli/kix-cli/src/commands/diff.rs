@@ -17,11 +17,11 @@ use kix::manifest::serialize::load_manifests_from_dir;
 use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
 
-use crate::cli::{DiffArgs, OutputFormat};
+use crate::cli::{Detail as DetailArg, DiffArgs, OutputFormat};
 use crate::output;
-use crate::plan::document::{Checked, MadeBy, NotCheckedReason, Plan};
+use crate::plan::document::{Checked, Detail, MadeBy, NotCheckedReason, Plan};
 use crate::plan::origin::{self, Sides};
-use crate::plan::{self, PackageDiff, render};
+use crate::plan::{self, ManifestIndex, PackageDiff, render};
 
 use super::CommandContext;
 
@@ -98,7 +98,13 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
         )
     };
 
-    let result = diff_graphs(&old_graph, &new_graph, &side);
+    let index = ManifestIndex::new(&old_graph, &new_graph);
+    let detail = match args.detail {
+        DetailArg::Plain => Detail::Plain,
+        DetailArg::Fields => Detail::Fields,
+        DetailArg::Manifests => Detail::Manifests(&index),
+    };
+    let result = diff_graphs(&old_graph, &new_graph, &side, detail);
 
     match ctx.output_format(OutputFormat::Text) {
         OutputFormat::Json => println!("{}", result.doc.to_json()),
@@ -159,7 +165,7 @@ fn set_spinner(spinner: &Option<indicatif::ProgressBar>, msg: &str) {
     }
 }
 
-fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide) -> DiffResult {
+fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detail) -> DiffResult {
     let new_manifests: Vec<Value> = new.resources.values().map(|n| n.manifest.clone()).collect();
     let old_manifests: Vec<Value> = old.resources.values().map(|n| n.manifest.clone()).collect();
     // Fail-closed: live objects that predate the lifecycle stamp carry no
@@ -175,6 +181,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide) -> DiffResult
                 MadeBy::Builds,
                 cluster,
                 &packages,
+                detail,
                 &migration_pairs,
                 NotCheckedReason::BuildsOnly,
             )
@@ -184,6 +191,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide) -> DiffResult
                 MadeBy::LiveRead,
                 cluster,
                 &packages,
+                detail,
                 &migration_pairs,
                 NotCheckedReason::ReadOnly,
             );
@@ -206,6 +214,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide) -> DiffResult
                 MadeBy::LiveRead,
                 cluster,
                 &packages,
+                detail,
                 &migration_pairs,
                 NotCheckedReason::ReadOnly,
             );

@@ -122,16 +122,34 @@ Use JSON when another program will process the result:
 
 `kix diff` and `kix plan` print the same JSON document, so one consumer can
 read either. The checks a read-only diff cannot make read
-`{ "status": "not_checked", "reason": "read_only" }`. Each modified resource
-lists its field changes under `changes`, old to new:
+`{ "status": "not_checked", "reason": "read_only" }`. By default the JSON
+names each changed resource and counts its changed fields. Add
+`--detail fields` to list each field change, old to new:
+
+<Command
+  commands={["kix diff how-to-application --output json --detail fields > kix-diff.json"]}
+  cwd="kix-examples/"
+/>
 
 ```json
 { "path": "$.spec.replicas", "change": "changed", "old": 2, "new": 3, "labels": ["intended"] }
 ```
 
 `change` is `added`, `removed`, or `changed`. `labels` is present when the
-deployed build is on this machine. Secret values, and hashes of
-them, read `(secret, not shown)`. A value larger than 16 KiB reads
+deployed build is on this machine. Add `--detail manifests` to also include,
+under `manifests` on each package, the old and new manifest of every resource
+that changes, is added, or is removed, for a tool that shows a line-by-line
+diff. In `kix plan` the two manifests of an object the cluster checked are
+the live object and the cluster's dry-run result:
+
+<Command
+  commands={["kix diff how-to-application --output json --detail manifests > kix-diff.json"]}
+  cwd="kix-examples/"
+/>
+
+At both levels, Secret values and hashes of them read `(secret, not shown)`,
+or `(secret, changed, not shown)` on the new side when the value changes. A
+field value larger than 16 KiB, or a manifest larger than 256 KiB, reads
 `(N bytes, not shown)`. A password written as a literal container `env`
 value or into a ConfigMap is shown as it is, so keep secrets in Secrets.
 

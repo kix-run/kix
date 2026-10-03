@@ -156,6 +156,13 @@ rec {
 
         mkResource = scopeMkResource;
 
+        # `subject` (a string naming what reads metrics.k8s.io) -> null.
+        # Throws when the cluster binds the metricsApi role absent and no
+        # instance provides it, and traces a warning when the binding is
+        # unknown. For a consumer that reads the API from a config file
+        # (the descheduler); scope.mkResource checks HPAs itself.
+        requireMetricsApi = validators.requireMetricsApi;
+
         # Internal: the hook emission facade (see builders.nix). Not part of
         # the package-authoring surface; hooks receive it as ctx.emit.
         _emit = emit;

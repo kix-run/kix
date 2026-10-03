@@ -45,6 +45,11 @@ rec {
       outContract = [ ];
     };
 
+    metricsApi = {
+      description = "The resource metrics API (metrics.k8s.io), one per cluster. Presence (managed provider or environment binding) gates HorizontalPodAutoscalers on resource metrics and the descheduler's KubernetesMetrics source. An environment that runs its own metrics-server binds the role exclusive, so a second APIService for metrics.k8s.io is refused at eval.";
+      outContract = [ ];
+    };
+
     snapshotController = {
       description = "CSI snapshot controller and the snapshot.storage.k8s.io API, one per cluster. Consumers build VolumeSnapshotClass and VolumeSnapshot through out.crds. An environment that runs its own controller binds the role exclusive, so a second, managed controller is refused at eval.";
       outContract = [ "crds" ];

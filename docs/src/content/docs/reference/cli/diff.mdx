@@ -21,6 +21,7 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 
 ```text
 kix diff <CLUSTER> [--from <DIR>] [-o text|json|yaml|markdown]
+         [--detail plain|fields|manifests]
          [--flake <FLAKE>] [--context <CONTEXT>]
 ```
 
@@ -29,6 +30,7 @@ kix diff <CLUSTER> [--from <DIR>] [-o text|json|yaml|markdown]
 | `<CLUSTER>` | Cluster name to evaluate and build from the flake. This is the new side of the comparison. |
 | `--from <DIR>` | Use a directory as the old side instead of the live cluster. See [Old side](#old-side). |
 | `-o`, `--output` | `text` (default), `json`, `yaml` (the JSON document as YAML), or `markdown` for pull request comments. |
+| `--detail <LEVEL>` | How much `json` and `yaml` say about each change: `plain` (default) names each changed resource and counts its changed fields, `fields` also lists each field change, and `manifests` also includes the old and new manifest of each changed, added, or removed resource. Text and Markdown are the same at every level. |
 | `--flake <FLAKE>` | Flake to evaluate. Defaults to the current directory. |
 | `--context <CONTEXT>` | Kubeconfig context for the live cluster. Ignored with `--from`. |
 
@@ -150,9 +152,10 @@ describes the top-level keys, the checked-section shape, and the
 | Key | Content |
 | --- | --- |
 | `packages.summary` | Counts of `added`, `removed`, `changed`, and `unchanged` packages |
-| `packages.added`, `packages.removed` | Arrays of `{ key, version, resources, kept_resources }`. `resources` counts every resource in the package; `kept_resources` lists the resources that stay on the cluster: Namespaces, CustomResourceDefinitions, and objects another Kix cluster's current build contains (always empty on `added`) |
-| `packages.changed` | Array of package changes: `key`, `old_version`, `new_version`, `added_resources`, `removed_resources`, `kept_resources`, `modified_resources`, `dep_affected_resources`. A resource that left the build and stays on the cluster is listed in `kept_resources`, not `removed_resources` |
-| `packages.changed[].modified_resources` | Array of `{ resource, diff_count, changes }`. Each entry of `changes` is `{ path, change, old, new, labels }`; `change` is `added`, `removed`, or `changed`, `old` or `new` is absent when that side has no value, and `labels` is absent when the deployed build is not on this machine |
+| `packages.added`, `packages.removed` | Arrays of `{ key, version, resources, kept_resources, manifests }`. `resources` counts every resource in the package; `kept_resources` lists the resources that stay on the cluster: Namespaces, CustomResourceDefinitions, and objects another Kix cluster's current build contains (always empty on `added`). `manifests` is present at `--detail manifests`: the new manifest of each resource of an added package, or the old manifest of each resource a removed package deletes |
+| `packages.changed` | Array of package changes: `key`, `old_version`, `new_version`, `added_resources`, `removed_resources`, `kept_resources`, `modified_resources`, `dep_affected_resources`, and at `--detail manifests` `manifests`. A resource that left the build and stays on the cluster is listed in `kept_resources`, not `removed_resources` |
+| `packages.changed[].manifests` | Object keyed by resource, each `{ old, new }`, for every modified, added, and removed resource. A side is absent when the resource does not exist there |
+| `packages.changed[].modified_resources` | Array of `{ resource, diff_count, changes }`. `changes` is present at `--detail fields` and `--detail manifests`. Each entry of `changes` is `{ path, change, old, new, labels }`; `change` is `added`, `removed`, or `changed`, `old` or `new` is absent when that side has no value, and `labels` is absent when the deployed build is not on this machine |
 | `packages.cluster_level` | The same shape as one changed package, with key `_cluster`, or `null` |
 | `packages.activation` | `{ old, new }` record names, or `null` when unchanged |
 | `packages.unchanged` | Number of unchanged packages |
@@ -160,8 +163,10 @@ describes the top-level keys, the checked-section shape, and the
 Stateful migrations are under the top-level `migrations` section, each
 `{ slot, source, target, reason }`.
 
-A Secret value, or a hash of one, reads `(secret, not shown)`. A value larger
-than 16 KiB reads `(N bytes, not shown)`.
+A Secret value, or a hash of one, reads `(secret, not shown)`, or
+`(secret, changed, not shown)` on the new side when the value changes. A
+field value larger than 16 KiB, or a manifest larger than 256 KiB, reads
+`(N bytes, not shown)`.
 
 Resource identifiers have the form `Kind/name@namespace`. Package keys have
 the form `namespace/name`.

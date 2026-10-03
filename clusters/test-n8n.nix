@@ -3,7 +3,8 @@
 #
 # The n8n namespace declares n8n, its database, its encryption key, and the
 # password of the valkey that auto-instantiation adds beside it. The
-# stackgres-cluster behind the database is auto-instantiated too.
+# stackgres-cluster behind the database is an optional instance, created
+# because the database depends on it.
 # ingress-nginx routes n8n.localtest.me, a name that resolves to 127.0.0.1.
 #
 # Build:   nix build .#cluster-n8n --extra-experimental-features pipe-operators
@@ -38,6 +39,12 @@ kix.buildCluster {
 
       # Test values only; they protect nothing.
       instances.n8n = {
+        # StackGres and CloudNativePG both answer `postgres`; this
+        # optional instance picks StackGres for the database below.
+        stackgres-cluster = {
+          package = packages.stackgres-cluster;
+          optional = true;
+        };
         n8n = {
           package = packages.n8n;
           config = {

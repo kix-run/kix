@@ -71,12 +71,16 @@ pub fn field_changes(rid: &ResourceId, live: &Value, result: &Value) -> Vec<Diff
             && SECRET_ANNOTATIONS
                 .iter()
                 .any(|a| d.path == format!("$.metadata.annotations.{a}"));
-        for side in [&mut d.a_value, &mut d.b_value] {
+        let old = d.a_value.clone();
+        let max = super::MAX_SHOWN_VALUE_BYTES;
+        for (side, before) in [(&mut d.a_value, None), (&mut d.b_value, old.as_ref())] {
             if let Some(v) = side.as_mut() {
-                *v = if hide {
+                *v = if hide && before.is_some_and(|b| b != v) {
+                    Value::String(super::SECRET_CHANGED_NOT_SHOWN.into())
+                } else if hide {
                     Value::String(super::SECRET_NOT_SHOWN.into())
                 } else {
-                    super::shown_value(is_secret, &d.path, v)
+                    super::shown_value(is_secret, &d.path, v, before, max)
                 };
             }
         }
@@ -485,7 +489,7 @@ mod tests {
     /// documents parse back into `Plan`.
     #[test]
     fn plan_and_diff_agree_on_the_objects_they_both_checked() {
-        use super::super::document::{MadeBy, NotCheckedReason, Plan};
+        use super::super::document::{Detail, MadeBy, NotCheckedReason, Plan};
         let deployed = vec![
             configmap("app", "a", &"a".repeat(32), json!({"k": "1"})),
             configmap("app", "b", &"b".repeat(32), json!({"k": "1"})),
@@ -505,6 +509,7 @@ mod tests {
             MadeBy::LiveRead,
             "c",
             &diff_side,
+            Detail::Fields,
             &[],
             NotCheckedReason::ReadOnly,
         );
@@ -529,6 +534,7 @@ mod tests {
             MadeBy::DryRun,
             "c",
             &plan_side,
+            Detail::Fields,
             &[],
             NotCheckedReason::ReadOnly,
         );

@@ -41,6 +41,9 @@
         clickhouse-operator = ./test-clickhouse-operator.nix;
         clickhouse-swap-bare = ./test-clickhouse-swap/bare.nix;
         clickhouse-swap-replicated = ./test-clickhouse-swap/replicated.nix;
+        cnpg = ./test-cnpg.nix;
+        postgres-swap-stackgres = ./test-postgres-swap/stackgres.nix;
+        postgres-swap-cnpg = ./test-postgres-swap/cnpg.nix;
         kind = ./test-kind.nix;
         spread = ./test-spread.nix;
         monitoring-native = ./test-monitoring-native.nix;
@@ -65,6 +68,8 @@
         mayastor = ./test-mayastor.nix;
         virtualization = ./test-virtualization.nix;
         metabase = ./test-metabase.nix;
+        metrics-server = ./test-metrics-server.nix;
+        keycloak = ./test-keycloak.nix;
         monitoring-netpol = ./test-monitoring-netpol.nix;
       };
     };

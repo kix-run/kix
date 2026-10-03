@@ -267,7 +267,7 @@ pub enum Command {
     /// Exits 0 when the deploy would change nothing, 2 when it would change
     /// something, and 3 when it would stop on a refused write or a stateful
     /// migration not accepted with --accept-migrations.
-    Plan(PlanArgs),
+    Plan(PlanCommandArgs),
 
     /// Evaluate a cluster and report build-time checks and scorecard findings
     ///
@@ -344,7 +344,7 @@ impl Command {
         match self {
             Command::Build(a) => Some(&a.cluster),
             Command::Diff(a) => Some(&a.cluster),
-            Command::Plan(a) => Some(&a.cluster),
+            Command::Plan(a) => Some(&a.plan.cluster),
             Command::Check(a) => Some(&a.cluster),
             Command::Deploy(a) => Some(&a.plan.cluster),
             Command::Status(a) => Some(&a.cluster),
@@ -578,6 +578,24 @@ pub struct DiffArgs {
     /// written by `kix snapshot save` or `kix export`
     #[arg(long, value_name = "DIR")]
     pub from: Option<String>,
+
+    /// How much of each change `--output json` and `--output yaml` include.
+    /// Text and Markdown output are the same at every level.
+    #[arg(long, value_enum, default_value_t = Detail::Plain)]
+    pub detail: Detail,
+}
+
+/// What the JSON and YAML of `kix diff` and `kix plan` say about each
+/// changed resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Detail {
+    /// Which resources change, and how many fields of each.
+    Plain,
+    /// Also each changed field, with its old and new value.
+    Fields,
+    /// Also the old and new manifest of each changed, added, or removed
+    /// resource.
+    Manifests,
 }
 
 #[derive(clap::Args)]
@@ -588,6 +606,17 @@ pub struct CheckArgs {
     /// Output SARIF 2.1.0 JSON (for GitHub Code Scanning integration)
     #[arg(long)]
     pub sarif: bool,
+}
+
+#[derive(clap::Args)]
+pub struct PlanCommandArgs {
+    #[command(flatten)]
+    pub plan: PlanArgs,
+
+    /// How much of each change `--output json` and `--output yaml` include.
+    /// Text and Markdown output are the same at every level.
+    #[arg(long, value_enum, default_value_t = Detail::Plain)]
+    pub detail: Detail,
 }
 
 /// What a deploy plans from: the cluster and the flags that change which

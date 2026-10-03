@@ -23,7 +23,8 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
 ```text
 kix plan <CLUSTER> [--prune | --prune-mode default|no] [--reconcile]
          [--force-conflicts] [--accept-migrations] [--current-activation]
-         [-o text|json|yaml|markdown] [--flake <FLAKE>] [--context <CONTEXT>]
+         [-o text|json|yaml|markdown] [--detail plain|fields|manifests]
+         [--flake <FLAKE>] [--context <CONTEXT>]
 ```
 
 | Argument or flag | Meaning |
@@ -36,6 +37,7 @@ kix plan <CLUSTER> [--prune | --prune-mode default|no] [--reconcile]
 | `--accept-migrations` | Accept the stateful migrations the plan lists, so they do not count as a reason the deploy would stop. |
 | `--current-activation` | Take the previous activation from the local cache and connect to nothing. The plan compares the cached build with the new one, and every write-path check reads `not_checked`. See [Offline plans](#offline-plans). |
 | `-o`, `--output` | `text` (default), `json`, `yaml`, or `markdown`. With anything but `text`, progress lines go to stderr so stdout holds the document alone. |
+| `--detail <LEVEL>` | How much `json` and `yaml` say about each change, as for [`kix diff`](/docs/reference/cli/diff/#json-and-yaml). At `manifests`, the two manifests of an object the cluster checked are the live object and the dry-run result, with server-maintained metadata and `status` left out. |
 | `--flake`, `--context`, `--override-input` | See [Global flags](/docs/reference/cli/global-flags/). |
 
 The planning flags are the ones `kix deploy` takes, so a plan made with the

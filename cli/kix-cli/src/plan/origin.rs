@@ -133,12 +133,14 @@ impl ThreeWay<'_> {
                     Some(served) => value_at(served, &d.path).cloned(),
                     None => d.b_value.clone(),
                 };
-                let shown =
-                    |v: Option<Value>| v.map(|v| super::shown_value(self.secret, &d.path, &v));
+                let max = super::MAX_SHOWN_VALUE_BYTES;
+                let shown = |v: Option<Value>, before: Option<&Value>| {
+                    v.map(|v| super::shown_value(self.secret, &d.path, &v, before, max))
+                };
                 Drifted {
                     path: d.path.clone(),
-                    deployed: shown(d.a_value.clone()),
-                    live: shown(live),
+                    deployed: shown(d.a_value.clone(), None),
+                    live: shown(live, d.a_value.as_ref()),
                     managers,
                 }
             })

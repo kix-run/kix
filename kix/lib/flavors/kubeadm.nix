@@ -21,6 +21,7 @@
     dns.binding = lib.mkDefault "shadowable";
     storageClasses.binding = lib.mkDefault "absent"; # no default StorageClass
     loadBalancer.binding = lib.mkDefault "absent";
+    metricsApi.binding = lib.mkDefault "absent"; # kubeadm installs no metrics-server
   };
 
   cluster.capabilities = {

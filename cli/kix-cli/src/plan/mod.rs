@@ -521,8 +521,93 @@ pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
 /// Render a `PackageDiff` as the `packages` section of the plan document
 /// ([`document::Packages`]).
 #[cfg(test)]
-pub fn render_package_diff_json(diff: &PackageDiff) -> Value {
-    serde_json::to_value(document::Packages::from(diff)).expect("packages serialize")
+pub fn render_package_diff_json(diff: &PackageDiff, detail: document::Detail) -> Value {
+    serde_json::to_value(document::Packages::of(diff, detail)).expect("packages serialize")
+}
+
+/// The side of a diff a manifest comes from.
+#[derive(Clone, Copy)]
+pub enum Side {
+    Old,
+    New,
+}
+
+/// The old and new manifest of every resource a diff compared, by resource
+/// id, for `--detail manifests`. Built from the two graphs; `kix plan`
+/// replaces each object the apiserver answered with the live object and the
+/// dry-run result ([`ManifestIndex::answered`]).
+pub struct ManifestIndex<'a> {
+    old_graph: &'a StoreGraph,
+    new_graph: &'a StoreGraph,
+    old: HashMap<ResourceId, Value>,
+    new: HashMap<ResourceId, Value>,
+}
+
+impl<'a> ManifestIndex<'a> {
+    pub fn new(old_graph: &'a StoreGraph, new_graph: &'a StoreGraph) -> Self {
+        let index = |g: &StoreGraph| {
+            g.resources
+                .values()
+                .map(|node| {
+                    (
+                        ResourceId::from_value(&node.manifest),
+                        node.manifest.clone(),
+                    )
+                })
+                .collect()
+        };
+        Self {
+            old_graph,
+            new_graph,
+            old: index(old_graph),
+            new: index(new_graph),
+        }
+    }
+
+    /// Show `live` as the old side of `rid` and `result` as the new side,
+    /// each side absent when `None`.
+    pub fn answered(&mut self, rid: &ResourceId, live: Option<Value>, result: Option<Value>) {
+        for (side, value) in [(&mut self.old, live), (&mut self.new, result)] {
+            match value {
+                Some(v) => side.insert(rid.clone(), v),
+                None => side.remove(rid),
+            };
+        }
+    }
+
+    /// The resources of the package `key` (`namespace/name`) on one side,
+    /// its PackageInstance included.
+    pub fn package_resources(&self, key: &str, side: Side) -> Vec<ResourceId> {
+        let graph = match side {
+            Side::Old => self.old_graph,
+            Side::New => self.new_graph,
+        };
+        graph
+            .packages
+            .values()
+            .find(|p| format!("{}/{}", p.namespace, p.instance_name) == key)
+            .map(|p| resource_map_for_package(p, graph).into_keys().collect())
+            .unwrap_or_default()
+    }
+
+    /// The old and new manifest of each of `ids`, each side present when
+    /// that side holds the resource.
+    pub fn render<'i>(
+        &self,
+        ids: impl IntoIterator<Item = &'i ResourceId>,
+    ) -> BTreeMap<String, document::ManifestSides> {
+        ids.into_iter()
+            .map(|id| {
+                let old = self.old.get(id);
+                let is_secret = id.kind == "Secret";
+                let sides = document::ManifestSides {
+                    old: old.map(|o| shown_manifest(is_secret, o, None)),
+                    new: self.new.get(id).map(|n| shown_manifest(is_secret, n, old)),
+                };
+                (id.display_id(), sides)
+            })
+            .collect()
+    }
 }
 
 /// Stands in for a value the JSON diff leaves out because it is secret: a
@@ -532,49 +617,87 @@ pub fn render_package_diff_json(diff: &PackageDiff) -> Value {
 /// hash of a weak secret can be brute-forced).
 pub const SECRET_NOT_SHOWN: &str = "(secret, not shown)";
 
+/// Stands in for a secret value on the new side when the old side has a
+/// different value at the same path, so a line diff of the two manifests
+/// still shows the line as changed.
+pub const SECRET_CHANGED_NOT_SHOWN: &str = "(secret, changed, not shown)";
+
+/// A manifest larger than this, serialized, is left out of the JSON diff
+/// at `--detail manifests`.
+pub const MAX_SHOWN_MANIFEST_BYTES: usize = 256 * 1024;
+
 /// A value larger than this, serialized, is left out of the JSON diff, so
 /// a changed CRD schema or a large ConfigMap file does not swell a plan
 /// that CI uploads.
 pub const MAX_SHOWN_VALUE_BYTES: usize = 16 * 1024;
 
-/// `value`, found at `path`, with every secret value in it replaced by
-/// [`SECRET_NOT_SHOWN`], or a size note when it is too large to show.
-pub(crate) fn shown_value(is_secret: bool, path: &str, value: &Value) -> Value {
+/// A whole manifest, hidden and capped as [`shown_value`] does, at
+/// [`MAX_SHOWN_MANIFEST_BYTES`].
+fn shown_manifest(is_secret: bool, manifest: &Value, old: Option<&Value>) -> Value {
+    shown_value(is_secret, "$", manifest, old, MAX_SHOWN_MANIFEST_BYTES)
+}
+
+/// `value`, found at `path`, with every secret value in it hidden (see
+/// [`hide_secrets`]), or a size note when it is larger than `max_bytes`.
+/// `old` is the old side's value at the same path, given for a new value.
+pub(crate) fn shown_value(
+    is_secret: bool,
+    path: &str,
+    value: &Value,
+    old: Option<&Value>,
+    max_bytes: usize,
+) -> Value {
     let mut value = value.clone();
-    hide_secrets(is_secret, path, &mut value);
+    hide_secrets(is_secret, path, &mut value, old);
     let bytes = value.to_string().len();
-    if bytes > MAX_SHOWN_VALUE_BYTES {
+    if bytes > max_bytes {
         return Value::String(format!("({bytes} bytes, not shown)"));
     }
     value
 }
 
-/// `d` with the values [`is_secret_path`] covers replaced by
-/// [`SECRET_NOT_SHOWN`], for the text plan. Unlike the JSON it keeps large
-/// values, which the text diff prints line by line.
+/// `d` with the values [`is_secret_path`] covers hidden, for the text plan.
+/// Unlike the JSON it keeps large values, which the text diff prints line
+/// by line.
 fn without_secrets(id: &ResourceId, d: &Difference) -> Difference {
     let mut d = d.clone();
     let is_secret = id.kind == "Secret";
-    for value in [&mut d.a_value, &mut d.b_value].into_iter().flatten() {
-        hide_secrets(is_secret, &d.path, value);
+    let old = d.a_value.clone();
+    if let Some(value) = &mut d.a_value {
+        hide_secrets(is_secret, &d.path, value, None);
+    }
+    if let Some(value) = &mut d.b_value {
+        hide_secrets(is_secret, &d.path, value, old.as_ref());
     }
     d
 }
 
-fn hide_secrets(is_secret: bool, path: &str, value: &mut Value) {
+/// Replace every secret value in `value` with [`SECRET_NOT_SHOWN`]. When
+/// `old` (the old side's value at the same path) holds a different value
+/// there, the replacement is [`SECRET_CHANGED_NOT_SHOWN`]. Array elements
+/// are matched to `old` by position.
+fn hide_secrets(is_secret: bool, path: &str, value: &mut Value, old: Option<&Value>) {
     if is_secret_path(is_secret, path) {
-        *value = Value::String(SECRET_NOT_SHOWN.into());
+        let changed = old.is_some_and(|o| o != value);
+        let marker = if changed {
+            SECRET_CHANGED_NOT_SHOWN
+        } else {
+            SECRET_NOT_SHOWN
+        };
+        *value = Value::String(marker.into());
         return;
     }
     match value {
         Value::Object(map) => {
             for (key, child) in map.iter_mut() {
-                hide_secrets(is_secret, &format!("{path}.{key}"), child);
+                let old_child = old.and_then(|o| o.get(key));
+                hide_secrets(is_secret, &format!("{path}.{key}"), child, old_child);
             }
         }
         Value::Array(items) => {
             for (i, child) in items.iter_mut().enumerate() {
-                hide_secrets(is_secret, &format!("{path}[{i}]"), child);
+                let old_child = old.and_then(|o| o.get(i));
+                hide_secrets(is_secret, &format!("{path}[{i}]"), child, old_child);
             }
         }
         _ => {}
@@ -1183,9 +1306,15 @@ mod diff_graph_tests {
     /// New side is a build; old side is whatever the cluster (or a
     /// snapshot) said, synthesized against that build.
     fn diff_of(old: &[Value], new: &[Value]) -> PackageDiff {
+        let (old_graph, new_graph) = graphs_of(old, new);
+        diff_graphs(&old_graph, &new_graph)
+    }
+
+    /// The old and new graphs [`diff_of`] compares.
+    fn graphs_of(old: &[Value], new: &[Value]) -> (StoreGraph, StoreGraph) {
         let new_graph = StoreGraph::synthesize(new, &StoreGraph::empty("c"));
         let old_graph = StoreGraph::synthesize(old, &new_graph);
-        diff_graphs(&old_graph, &new_graph)
+        (old_graph, new_graph)
     }
 
     fn baseline() -> Vec<Value> {
@@ -1535,7 +1664,7 @@ mod diff_graph_tests {
             "{md}"
         );
 
-        let json = render_package_diff_json(&d);
+        let json = render_package_diff_json(&d, document::Detail::Plain);
         let web = &json["changed"][0];
         assert_eq!(web["removed_resources"], json!([]));
         assert_eq!(
@@ -1578,7 +1707,7 @@ mod diff_graph_tests {
                 )),
                 "{md}"
             );
-            let json = render_package_diff_json(&d);
+            let json = render_package_diff_json(&d, document::Detail::Plain);
             assert_eq!(
                 json["removed"][0]["kept_resources"],
                 json!(["CustomResourceDefinition/widgets.example.com"])
@@ -1592,7 +1721,7 @@ mod diff_graph_tests {
     fn an_added_package_has_an_empty_kept_list() {
         let mut new = baseline();
         new.push(package_instance("app", "api", "2.0.0", &h("pi2")));
-        let json = render_package_diff_json(&diff_of(&baseline(), &new));
+        let json = render_package_diff_json(&diff_of(&baseline(), &new), document::Detail::Plain);
         assert_eq!(json["added"][0]["kept_resources"], json!([]));
     }
 
@@ -1634,7 +1763,7 @@ mod diff_graph_tests {
         new[1] = cluster_level("Namespace", "app", &h("ns2"), json!({"finalizers": ["x"]}));
         let d = diff_of(&baseline(), &new);
 
-        let json = render_package_diff_json(&d);
+        let json = render_package_diff_json(&d, document::Detail::Plain);
         assert_eq!(json["cluster_level"]["key"], json!(CLUSTER_LEVEL_KEY));
         assert_eq!(json["activation"]["old"], json!("c-old"));
         assert_eq!(json["activation"]["new"], json!("c-new"));
@@ -1646,7 +1775,7 @@ mod diff_graph_tests {
 
     /// The `changes` of the modified resource named `resource` in `web`.
     fn json_changes(d: &PackageDiff, resource: &str) -> Value {
-        let json = render_package_diff_json(d);
+        let json = render_package_diff_json(d, document::Detail::Fields);
         let web = json["changed"]
             .as_array()
             .unwrap()
@@ -1729,7 +1858,7 @@ mod diff_graph_tests {
             json!({"template": {"metadata": {"annotations": {"checksum/secret": "abc123"}}}}),
         );
         let d = diff_of(&old, &new);
-        let text = render_package_diff_json(&d).to_string();
+        let text = render_package_diff_json(&d, document::Detail::Fields).to_string();
         for leaked in [
             "b2xkLXBhc3M=",
             "bmV3LXBhc3M=",
@@ -1753,7 +1882,7 @@ mod diff_graph_tests {
         assert_eq!(
             by_path("$.data.password"),
             json!({"path": "$.data.password", "change": "changed",
-                   "old": SECRET_NOT_SHOWN, "new": SECRET_NOT_SHOWN})
+                   "old": SECRET_NOT_SHOWN, "new": SECRET_CHANGED_NOT_SHOWN})
         );
         assert_eq!(
             by_path("$.stringData")["new"],
@@ -1783,6 +1912,224 @@ mod diff_graph_tests {
         assert_eq!(
             changes[0]["new"],
             json!(format!("({} bytes, not shown)", MAX_SHOWN_VALUE_BYTES + 3))
+        );
+    }
+    /// The default level names the changes and counts the fields, but does
+    /// not list them.
+    #[test]
+    fn json_plain_counts_fields_without_listing_them() {
+        let mut new = baseline();
+        new[3] = stamped(
+            "ConfigMap",
+            "app",
+            "web",
+            ("app", "web"),
+            &h("cm2"),
+            json!({"k": "wanted"}),
+        );
+        let json = render_package_diff_json(&diff_of(&baseline(), &new), document::Detail::Plain);
+        let modified = &json["changed"][0]["modified_resources"][0];
+        assert_eq!(modified["diff_count"], json!(1));
+        assert!(modified.get("changes").is_none(), "{modified}");
+        assert!(json["changed"][0].get("manifests").is_none(), "{json}");
+    }
+
+    /// The manifests level adds the old and new manifest of every modified,
+    /// added, and removed resource, and of an added package's resources.
+    #[test]
+    fn json_manifests_carry_each_side_that_exists() {
+        let mut new = baseline();
+        new[3] = stamped(
+            "ConfigMap",
+            "app",
+            "web",
+            ("app", "web"),
+            &h("cm2"),
+            json!({"k": "wanted"}),
+        );
+        new.remove(4);
+        new.push(stamped(
+            "Service",
+            "app",
+            "web",
+            ("app", "web"),
+            &h("svc"),
+            json!({"port": 80}),
+        ));
+        new.push(package_instance("app", "api", "2.0.0", &h("pi2")));
+        new.push(stamped(
+            "ConfigMap",
+            "app",
+            "api",
+            ("app", "api"),
+            &h("api-cm"),
+            json!({"a": "b"}),
+        ));
+        let (old_graph, new_graph) = graphs_of(&baseline(), &new);
+        let d = diff_graphs(&old_graph, &new_graph);
+        let json = render_package_diff_json(
+            &d,
+            document::Detail::Manifests(&ManifestIndex::new(&old_graph, &new_graph)),
+        );
+        let web = json["changed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["key"] == "app/web")
+            .expect("web changed");
+        assert!(
+            web["modified_resources"][0].get("changes").is_some(),
+            "fields come with manifests: {web}"
+        );
+        let manifests = &web["manifests"];
+        let cm = &manifests["ConfigMap/web@app"];
+        assert_eq!(cm["old"]["spec"]["k"], json!("v"));
+        assert_eq!(cm["new"]["spec"]["k"], json!("wanted"));
+        let svc = &manifests["Service/web@app"];
+        assert!(svc.get("old").is_none(), "{svc}");
+        assert_eq!(svc["new"]["spec"]["port"], json!(80));
+        let dep = &manifests["Deployment/web@app"];
+        assert_eq!(dep["old"]["spec"]["replicas"], json!(2));
+        assert!(dep.get("new").is_none(), "{dep}");
+
+        let api = &json["added"][0];
+        assert_eq!(api["key"], json!("app/api"));
+        assert_eq!(
+            api["manifests"]["ConfigMap/api@app"]["new"]["spec"]["a"],
+            json!("b")
+        );
+        assert!(
+            api["manifests"]["PackageInstance/api@app"]
+                .get("new")
+                .is_some(),
+            "{api}"
+        );
+    }
+
+    /// No Secret value or hash of one reaches the manifests, and a hidden
+    /// value that changed reads differently on the new side, so a line diff
+    /// of the two manifests shows it.
+    #[test]
+    fn json_manifests_hide_secrets_and_mark_the_changed_ones() {
+        let secret = |hash: &str, fields: Value| web_resource("Secret", hash, fields);
+        let mut old = baseline();
+        old.push(secret(
+            &h("s1"),
+            json!({"data": {"password": "b2xkLXBhc3M=", "user": "YWRtaW4="}}),
+        ));
+        let mut new = baseline();
+        let mut s = secret(
+            &h("s2"),
+            json!({
+                "data": {"password": "bmV3LXBhc3M=", "user": "YWRtaW4="},
+                "stringData": {"token": "plain-token"},
+            }),
+        );
+        s["metadata"]["annotations"][keys::CONTENT_HASH] = json!("content-hash-value");
+        new.push(s);
+        new[4] = stamped(
+            "Deployment",
+            "app",
+            "web",
+            ("app", "web"),
+            &h("dep2"),
+            json!({"template": {"metadata": {"annotations": {"checksum/secret": "abc123"}}}}),
+        );
+        let (old_graph, new_graph) = graphs_of(&old, &new);
+        let d = diff_graphs(&old_graph, &new_graph);
+        let json = render_package_diff_json(
+            &d,
+            document::Detail::Manifests(&ManifestIndex::new(&old_graph, &new_graph)),
+        );
+        let text = json.to_string();
+        for leaked in [
+            "b2xkLXBhc3M=",
+            "bmV3LXBhc3M=",
+            "YWRtaW4=",
+            "plain-token",
+            "content-hash-value",
+            "abc123",
+        ] {
+            assert!(!text.contains(leaked), "{leaked} in {text}");
+        }
+        let secret = &json["changed"][0]["manifests"]["Secret/web@app"];
+        assert_eq!(secret["old"]["data"]["password"], json!(SECRET_NOT_SHOWN));
+        assert_eq!(
+            secret["new"]["data"]["password"],
+            json!(SECRET_CHANGED_NOT_SHOWN)
+        );
+        assert_eq!(secret["new"]["data"]["user"], json!(SECRET_NOT_SHOWN));
+        assert_eq!(
+            secret["new"]["stringData"]["token"],
+            json!(SECRET_NOT_SHOWN)
+        );
+        assert_eq!(
+            secret["new"]["metadata"]["annotations"][keys::CONTENT_HASH],
+            json!(SECRET_NOT_SHOWN)
+        );
+        let dep = &json["changed"][0]["manifests"]["Deployment/web@app"];
+        assert_eq!(
+            dep["new"]["spec"]["template"]["metadata"]["annotations"]["checksum/secret"],
+            json!(SECRET_NOT_SHOWN)
+        );
+    }
+
+    /// An answered object's sides replace the graphs' manifests: a live
+    /// object and a dry-run result, or no old side when nothing is live.
+    #[test]
+    fn answered_objects_show_the_live_object_and_the_dry_run_result() {
+        let mut new = baseline();
+        new[3] = stamped(
+            "ConfigMap",
+            "app",
+            "web",
+            ("app", "web"),
+            &h("cm2"),
+            json!({"k": "wanted"}),
+        );
+        let (old_graph, new_graph) = graphs_of(&baseline(), &new);
+        let mut index = ManifestIndex::new(&old_graph, &new_graph);
+        let cm = ResourceId::from_value(&new[3]);
+        let dep = ResourceId::from_value(&new[4]);
+        index.answered(
+            &cm,
+            Some(json!({"spec": {"k": "live"}})),
+            Some(json!({"spec": {"k": "server"}})),
+        );
+        index.answered(&dep, None, Some(json!({"spec": {"replicas": 5}})));
+        let shown = index.render([&cm, &dep]);
+        let cm = &shown["ConfigMap/web@app"];
+        assert_eq!(cm.old, Some(json!({"spec": {"k": "live"}})));
+        assert_eq!(cm.new, Some(json!({"spec": {"k": "server"}})));
+        let dep = &shown["Deployment/web@app"];
+        assert_eq!(dep.old, None);
+        assert_eq!(dep.new, Some(json!({"spec": {"replicas": 5}})));
+    }
+
+    /// A manifest too large to show is replaced by its size.
+    #[test]
+    fn json_manifests_leave_out_a_large_manifest() {
+        let mut new = baseline();
+        new[3] = stamped(
+            "ConfigMap",
+            "app",
+            "web",
+            ("app", "web"),
+            &h("cm2"),
+            json!({"k": "x".repeat(MAX_SHOWN_MANIFEST_BYTES)}),
+        );
+        let (old_graph, new_graph) = graphs_of(&baseline(), &new);
+        let d = diff_graphs(&old_graph, &new_graph);
+        let json = render_package_diff_json(
+            &d,
+            document::Detail::Manifests(&ManifestIndex::new(&old_graph, &new_graph)),
+        );
+        let cm = &json["changed"][0]["manifests"]["ConfigMap/web@app"];
+        assert_eq!(cm["old"]["spec"]["k"], json!("v"));
+        let note = cm["new"].as_str().expect("a size note");
+        assert!(
+            note.starts_with('(') && note.ends_with(" bytes, not shown)"),
+            "{note}"
         );
     }
 }

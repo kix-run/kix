@@ -96,6 +96,16 @@
         "key": {
           "type": "string"
         },
+        "manifests": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ManifestSides"
+          },
+          "description": "At `--detail manifests`: the old and new manifest of each modified,\nadded, and removed resource. Kept resources are left out.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "modified_resources": {
           "items": {
             "$ref": "#/$defs/ModifiedResource"
@@ -455,7 +465,7 @@
       "type": "object"
     },
     "FieldChange": {
-      "description": "One field change, old to new. A secret value reads\n[`super::SECRET_NOT_SHOWN`]; a value over [`super::MAX_SHOWN_VALUE_BYTES`]\nreads `\"(N bytes, not shown)\"`.",
+      "description": "One field change, old to new. A secret value reads\n[`super::SECRET_NOT_SHOWN`], or [`super::SECRET_CHANGED_NOT_SHOWN`] on the\nnew side when the old side differs; a value over\n[`super::MAX_SHOWN_VALUE_BYTES`] reads `\"(N bytes, not shown)\"`.",
       "properties": {
         "change": {
           "$ref": "#/$defs/ChangeKind"
@@ -506,6 +516,18 @@
         }
       ]
     },
+    "ManifestSides": {
+      "description": "One resource's manifest on each side, hidden as a [`FieldChange`] value\nis. A manifest over [`super::MAX_SHOWN_MANIFEST_BYTES`] reads\n`\"(N bytes, not shown)\"`. `kix plan` shows the live object and the\ndry-run result of each object the apiserver answered for.",
+      "properties": {
+        "new": {
+          "description": "Absent when the resource does not exist on the new side."
+        },
+        "old": {
+          "description": "Absent when the resource does not exist on the old side."
+        }
+      },
+      "type": "object"
+    },
     "Migration": {
       "properties": {
         "reason": {
@@ -533,10 +555,14 @@
     "ModifiedResource": {
       "properties": {
         "changes": {
+          "description": "Each field change, at `--detail fields` and `--detail manifests`.",
           "items": {
             "$ref": "#/$defs/FieldChange"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "diff_count": {
           "format": "uint",
@@ -549,8 +575,7 @@
       },
       "required": [
         "resource",
-        "diff_count",
-        "changes"
+        "diff_count"
       ],
       "type": "object"
     },
@@ -591,6 +616,16 @@
         "key": {
           "description": "`namespace/name`.",
           "type": "string"
+        },
+        "manifests": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ManifestSides"
+          },
+          "description": "At `--detail manifests`: the new manifest of each resource of an\nadded package, or the old manifest of each resource a removed\npackage deletes.",
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "resources": {
           "description": "Every resource of the package, including `kept_resources`.",

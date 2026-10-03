@@ -92,6 +92,32 @@ in
           ) null
         else
           null;
+
+      # `subject` names what reads metrics.k8s.io, for the message.
+      requireMetricsApi =
+        subject:
+        let
+          status = roleStatus "metricsApi";
+          desc = "[${instanceName}] ${subject} reads the resource metrics API (metrics.k8s.io)";
+        in
+        if capabilities == { } then
+          null
+        else if status == "absent" then
+          throw (
+            desc
+            + " but nothing serves it (cluster.roles.metricsApi.binding = \"absent\", no provider instance). "
+            + "Add a metrics-server instance, or configure cluster.roles.metricsApi.binding to match your environment."
+          )
+        else if status == "unknown" then
+          builtins.trace (
+            "[kix] warning: "
+            + desc
+            + " but Kix cannot verify that this cluster serves it. Set "
+            + "cluster.roles.metricsApi.binding to match your environment, or add a metrics-server instance."
+          ) null
+        else
+          null;
+
       _checkDuplicateNames =
         { includeEnv }:
         templateSpec:
@@ -182,6 +208,8 @@ in
         builtins.foldl' (acc: check: builtins.seq check acc) null allChecks;
     in
     {
+      inherit requireMetricsApi;
+
       # Structural authoring rule (v2_discussions/128 mechanism 1): raw PVCs
       # are a cluster-operator concern. Packages request storage via DI and
       # the `persistent-volume-claim` package is the canonical claim author.
@@ -280,6 +308,26 @@ in
             ) null
           else
             null
+        else
+          null;
+
+      # An autoscaling/v1 HPA scales on CPU, and an autoscaling/v2 HPA with
+      # no `metrics` defaults to 80% CPU; both read metrics.k8s.io, as do
+      # Resource and ContainerResource metrics. Pods, Object, and External
+      # metrics come from the custom and external metrics APIs.
+      checkHorizontalPodAutoscaler =
+        args:
+        let
+          spec = args.spec or (args.extra.spec or { });
+          metrics = spec.metrics or [ ];
+          readsResourceMetrics =
+            (args.apiVersion or "") == "autoscaling/v1"
+            || metrics == [ ]
+            || metrics == null
+            || builtins.any (m: builtins.elem (m.type or "") [ "Resource" "ContainerResource" ]) metrics;
+        in
+        if (args.kind or "") == "HorizontalPodAutoscaler" && readsResourceMetrics then
+          requireMetricsApi "HorizontalPodAutoscaler '${args.name or "unknown"}'"
         else
           null;
 

@@ -23,17 +23,18 @@ use kix::cluster::stream::{
     CancelReason, DeployEvent, DeployObserver, NodeId, TransitionKind, Verdict,
 };
 use kix::cluster::watchdog::StallPolicy;
+use kix::eval::store_graph::StoreGraph;
 use kix::manifest::lifecycle;
 use kix::manifest::types::ResourceId;
 
-use crate::cli::{OutputFormat, PlanArgs, PruneMode};
+use crate::cli::{Detail as DetailArg, OutputFormat, PlanArgs, PruneMode};
 use crate::output;
 use crate::plan::document::{
-    AdmissionRefusal, Checked, Conflict, ConflictOwner, MadeBy, NotCheckedReason, Plan, PruneEntry,
-    PruneFate, RefusalReason, UncheckedObject, UncheckedReason,
+    AdmissionRefusal, Checked, Conflict, ConflictOwner, Detail, MadeBy, NotCheckedReason, Plan,
+    PruneEntry, PruneFate, RefusalReason, UncheckedObject, UncheckedReason,
 };
-use crate::plan::server::Overlay;
-use crate::plan::{self, render};
+use crate::plan::server::{Overlay, comparable};
+use crate::plan::{self, ManifestIndex, render};
 
 use super::CommandContext;
 use super::deploy::{self, Prepared};
@@ -44,7 +45,7 @@ const EXIT_WOULD_STOP: i32 = 3;
 /// Exit status when the deploy would change something.
 const EXIT_CHANGES: i32 = 2;
 
-pub fn run(args: &PlanArgs, ctx: &mut CommandContext) -> Result<()> {
+pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Result<()> {
     let format = ctx.output_format(OutputFormat::Text);
     if format != OutputFormat::Text {
         output::progress_to_stderr();
@@ -56,7 +57,7 @@ pub fn run(args: &PlanArgs, ctx: &mut CommandContext) -> Result<()> {
         Some(client) => Some(dry_run(&p, args, client.clone(), ctx)?),
         None => None,
     };
-    let doc = document(&mut p, report.as_ref(), args);
+    let doc = document(&mut p, report.as_ref(), args, detail);
 
     match format {
         OutputFormat::Json => println!("{}", doc.to_json()),
@@ -79,6 +80,29 @@ pub fn run(args: &PlanArgs, ctx: &mut CommandContext) -> Result<()> {
         std::process::exit(EXIT_CHANGES);
     }
     Ok(())
+}
+
+/// The graphs' manifests, with each object the apiserver answered for shown
+/// as the live object and the dry-run result. A refused write keeps the
+/// build's manifest, which is what the deploy would send.
+fn manifest_index<'a>(
+    old: &'a StoreGraph,
+    new: &'a StoreGraph,
+    answers: &[DryRunAnswer],
+) -> ManifestIndex<'a> {
+    let mut index = ManifestIndex::new(old, new);
+    for answer in answers {
+        let (live, result) = match &answer.outcome {
+            DryRunOutcome::Applied(p) => (p.live.as_ref(), Some(&p.result)),
+            DryRunOutcome::Recreated {
+                live,
+                result: Some(result),
+            } => (live.as_ref(), Some(result)),
+            _ => continue,
+        };
+        index.answered(&answer.rid, live.map(comparable), result.map(comparable));
+    }
+    index
 }
 
 /// What the engine and the apiserver said during a dry run.
@@ -279,7 +303,12 @@ impl DeployObserver for PlanObserver {
 
 /// Make the plan document, and overlay the apiserver's answers on
 /// `p.pkg_diff`, which the text renderers read.
-pub(crate) fn document(p: &mut Prepared, report: Option<&DryRunReport>, args: &PlanArgs) -> Plan {
+pub(crate) fn document(
+    p: &mut Prepared,
+    report: Option<&DryRunReport>,
+    args: &PlanArgs,
+    detail: DetailArg,
+) -> Plan {
     let connected = p.pre_client.is_some();
     let made_by = if connected {
         MadeBy::DryRun
@@ -305,10 +334,32 @@ pub(crate) fn document(p: &mut Prepared, report: Option<&DryRunReport>, args: &P
     }
     .apply(&mut p.pkg_diff, answers);
 
+    // Built only for `--detail manifests`. Without the deployed build the
+    // old side is rebuilt from the old manifests, as `deploy::prepare` does.
+    let rebuilt;
+    let index = if detail == DetailArg::Manifests {
+        let old = match &p.old_graph {
+            Some(old) => old,
+            None => {
+                rebuilt = StoreGraph::synthesize(&p.old_manifests, &p.new_graph);
+                &rebuilt
+            }
+        };
+        Some(manifest_index(old, &p.new_graph, answers))
+    } else {
+        None
+    };
+    let detail = match (detail, &index) {
+        (_, Some(index)) => Detail::Manifests(index),
+        (DetailArg::Fields | DetailArg::Manifests, None) => Detail::Fields,
+        (DetailArg::Plain, None) => Detail::Plain,
+    };
+
     let mut doc = Plan::new(
         made_by,
         &p.cluster,
         &p.pkg_diff,
+        detail,
         &p.migration_pairs,
         NotCheckedReason::BuildsOnly,
     );

@@ -68,7 +68,7 @@ let
             resource = self.credentials;
             out = {
               host = "db.bi.svc";
-              port = 5432;
+              port = "5432";
               database = "metabase";
               credentials = self.credentials;
             };

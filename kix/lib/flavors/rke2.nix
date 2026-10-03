@@ -142,6 +142,13 @@ in
         binding = lib.mkDefault "exclusive";
         provider = lib.mkDefault "rke2-snapshot-controller";
       };
+      # RKE2 installs metrics-server (the rke2-metrics-server chart). A
+      # cluster that disables the chart sets the binding to "absent" and runs
+      # a metrics-server instance.
+      metricsApi = {
+        binding = lib.mkDefault "exclusive";
+        provider = lib.mkDefault "rke2-metrics-server";
+      };
     };
 
     cluster.capabilities = {

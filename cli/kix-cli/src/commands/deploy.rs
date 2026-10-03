@@ -37,7 +37,7 @@ use kix::manifest::lifecycle;
 use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
 
-use crate::cli::{DeployArgs, OnError, PlanArgs, PruneMode};
+use crate::cli::{DeployArgs, Detail, OnError, PlanArgs, PruneMode};
 use crate::output;
 use crate::plan;
 
@@ -48,7 +48,7 @@ use kix::manifest::keys;
 pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // A dry run is the plan, made by the same code with the same flags.
     if args.dry_run {
-        return super::plan::run(&args.plan, ctx);
+        return super::plan::run(&args.plan, Detail::Plain, ctx);
     }
     if args.operator {
         return run_operator(args, ctx);
@@ -103,7 +103,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
         _ => None,
     };
-    let doc = super::plan::document(&mut p, report.as_ref(), &args.plan);
+    let doc = super::plan::document(&mut p, report.as_ref(), &args.plan, Detail::Plain);
 
     if !ctx.global.quiet {
         super::plan::print_text(&p, &doc, &args.plan, ctx.global.verbose > 0);

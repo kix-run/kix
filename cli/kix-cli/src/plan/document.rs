@@ -12,7 +12,7 @@
 //! disagree. Bump [`SCHEMA_VERSION`] when a change is not backward
 //! compatible: a field removed or renamed, or a value's meaning changed.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use kix::cluster::migrate::MigrationPair;
 use kix::manifest::diff::{DiffKind, Difference};
@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::origin::ChangeLabel;
-use super::{PackageChangeDiff, PackageDiff, PackageInfo};
+use super::{ManifestIndex, PackageChangeDiff, PackageDiff, PackageInfo, Side};
 
 /// Version of the document's shape. Readers should refuse a version they do
 /// not know.
@@ -142,6 +142,11 @@ pub struct PackageEntry {
     pub resources: usize,
     /// For a removed package, the resources that stay on the cluster.
     pub kept_resources: Vec<String>,
+    /// At `--detail manifests`: the new manifest of each resource of an
+    /// added package, or the old manifest of each resource a removed
+    /// package deletes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifests: Option<BTreeMap<String, ManifestSides>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -157,18 +162,39 @@ pub struct ChangedPackage {
     pub modified_resources: Vec<ModifiedResource>,
     /// Resources whose only change is a dependency's propagated hash.
     pub dep_affected_resources: Vec<String>,
+    /// At `--detail manifests`: the old and new manifest of each modified,
+    /// added, and removed resource. Kept resources are left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifests: Option<BTreeMap<String, ManifestSides>>,
+}
+
+/// One resource's manifest on each side, hidden as a [`FieldChange`] value
+/// is. A manifest over [`super::MAX_SHOWN_MANIFEST_BYTES`] reads
+/// `"(N bytes, not shown)"`. `kix plan` shows the live object and the
+/// dry-run result of each object the apiserver answered for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ManifestSides {
+    /// Absent when the resource does not exist on the old side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old: Option<Value>,
+    /// Absent when the resource does not exist on the new side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ModifiedResource {
     pub resource: String,
     pub diff_count: usize,
-    pub changes: Vec<FieldChange>,
+    /// Each field change, at `--detail fields` and `--detail manifests`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes: Option<Vec<FieldChange>>,
 }
 
 /// One field change, old to new. A secret value reads
-/// [`super::SECRET_NOT_SHOWN`]; a value over [`super::MAX_SHOWN_VALUE_BYTES`]
-/// reads `"(N bytes, not shown)"`.
+/// [`super::SECRET_NOT_SHOWN`], or [`super::SECRET_CHANGED_NOT_SHOWN`] on the
+/// new side when the old side differs; a value over
+/// [`super::MAX_SHOWN_VALUE_BYTES`] reads `"(N bytes, not shown)"`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct FieldChange {
     pub path: String,
@@ -334,12 +360,24 @@ pub enum UncheckedReason {
     DependencyNotChecked,
 }
 
+/// How much the `packages` section says about each change.
+#[derive(Clone, Copy)]
+pub enum Detail<'a> {
+    /// Which resources change, and `diff_count` for each modified one.
+    Plain,
+    /// Also `changes`: each modified resource's field changes.
+    Fields,
+    /// Also `manifests` on each package entry.
+    Manifests(&'a ManifestIndex<'a>),
+}
+
 impl Plan {
     /// A plan with every check not run for `reason`, migrations aside.
     pub fn new(
         made_by: MadeBy,
         cluster: &str,
         packages: &PackageDiff,
+        detail: Detail,
         migrations: &[MigrationPair],
         reason: NotCheckedReason,
     ) -> Plan {
@@ -347,7 +385,7 @@ impl Plan {
             schema_version: SCHEMA_VERSION,
             made_by,
             cluster: cluster.to_string(),
-            packages: Packages::from(packages),
+            packages: Packages::of(packages, detail),
             migrations: Checked::found(migrations.iter().map(Migration::from).collect()),
             conflicts: Checked::not_checked(reason),
             admission: Checked::not_checked(reason),
@@ -409,21 +447,28 @@ impl From<&MigrationPair> for Migration {
     }
 }
 
-impl From<&PackageDiff> for Packages {
-    fn from(diff: &PackageDiff) -> Self {
+impl Packages {
+    pub fn of(diff: &PackageDiff, detail: Detail) -> Self {
         let labels = diff.labelled.then_some(&diff.labels);
+        let manifests = match detail {
+            Detail::Manifests(index) => Some(index),
+            Detail::Plain | Detail::Fields => None,
+        };
+        let fields = !matches!(detail, Detail::Plain);
+        let changed = |c| ChangedPackage::of(c, fields, labels, manifests);
         Packages {
-            added: diff.added.iter().map(PackageEntry::from).collect(),
-            removed: diff.removed.iter().map(PackageEntry::from).collect(),
-            changed: diff
-                .changed
+            added: diff
+                .added
                 .iter()
-                .map(|c| ChangedPackage::of(c, labels))
+                .map(|p| PackageEntry::of(p, manifests, Side::New))
                 .collect(),
-            cluster_level: diff
-                .cluster_level
-                .as_ref()
-                .map(|c| ChangedPackage::of(c, labels)),
+            removed: diff
+                .removed
+                .iter()
+                .map(|p| PackageEntry::of(p, manifests, Side::Old))
+                .collect(),
+            changed: diff.changed.iter().map(changed).collect(),
+            cluster_level: diff.cluster_level.as_ref().map(changed),
             activation: diff.activation.as_ref().map(|a| ActivationChange {
                 old: a.old.clone(),
                 new: a.new.clone(),
@@ -439,13 +484,23 @@ impl From<&PackageDiff> for Packages {
     }
 }
 
-impl From<&PackageInfo> for PackageEntry {
-    fn from(p: &PackageInfo) -> Self {
+impl PackageEntry {
+    /// `side` is the side the package exists on: new for an added package,
+    /// old for a removed one.
+    fn of(p: &PackageInfo, manifests: Option<&ManifestIndex>, side: Side) -> Self {
         PackageEntry {
             key: p.key.clone(),
             version: p.version.clone(),
             resources: p.resource_count,
             kept_resources: p.kept.iter().map(|id| id.display_id()).collect(),
+            manifests: manifests.map(|index| {
+                let ids: Vec<ResourceId> = index
+                    .package_resources(&p.key, side)
+                    .into_iter()
+                    .filter(|id| !p.kept.contains(id))
+                    .collect();
+                index.render(&ids)
+            }),
         }
     }
 }
@@ -453,7 +508,9 @@ impl From<&PackageInfo> for PackageEntry {
 impl ChangedPackage {
     fn of(
         c: &PackageChangeDiff,
+        fields: bool,
         labels: Option<&HashMap<ResourceId, Vec<Vec<ChangeLabel>>>>,
+        manifests: Option<&ManifestIndex>,
     ) -> Self {
         let (removed, kept) = c.removed_and_kept();
         ChangedPackage {
@@ -471,16 +528,19 @@ impl ChangedPackage {
                     ModifiedResource {
                         resource: id.display_id(),
                         diff_count: diffs.len(),
-                        changes: diffs
-                            .iter()
-                            .enumerate()
-                            .map(|(i, d)| {
-                                let mut change = FieldChange::of(id, d);
-                                change.labels = resource_labels
-                                    .map(|l| l.and_then(|l| l.get(i)).cloned().unwrap_or_default());
-                                change
-                            })
-                            .collect(),
+                        changes: fields.then(|| {
+                            diffs
+                                .iter()
+                                .enumerate()
+                                .map(|(i, d)| {
+                                    let mut change = FieldChange::of(id, d);
+                                    change.labels = resource_labels.map(|l| {
+                                        l.and_then(|l| l.get(i)).cloned().unwrap_or_default()
+                                    });
+                                    change
+                                })
+                                .collect()
+                        }),
                     }
                 })
                 .collect(),
@@ -489,6 +549,15 @@ impl ChangedPackage {
                 .iter()
                 .map(|id| id.display_id())
                 .collect(),
+            manifests: manifests.map(|index| {
+                index.render(
+                    c.resource_diffs
+                        .iter()
+                        .map(|(id, _)| id)
+                        .chain(&c.added_resources)
+                        .chain(removed.iter().copied()),
+                )
+            }),
         }
     }
 }
@@ -505,15 +574,16 @@ impl FieldChange {
             DiffKind::ValueMismatch | DiffKind::TypeMismatch => ChangeKind::Changed,
         };
         let is_secret = id.kind == "Secret";
-        let shown = |v: &Option<Value>| {
-            v.as_ref()
-                .map(|v| super::shown_value(is_secret, &d.path, v))
-        };
+        let max = super::MAX_SHOWN_VALUE_BYTES;
+        let old = d.a_value.as_ref();
         FieldChange {
             path: d.path.clone(),
             change,
-            old: shown(&d.a_value),
-            new: shown(&d.b_value),
+            old: old.map(|v| super::shown_value(is_secret, &d.path, v, None, max)),
+            new: d
+                .b_value
+                .as_ref()
+                .map(|v| super::shown_value(is_secret, &d.path, v, old, max)),
             labels: None,
         }
     }

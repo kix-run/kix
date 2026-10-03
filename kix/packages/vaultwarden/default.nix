@@ -8,9 +8,9 @@
 # Dependencies:
 #   storage (required)    a claim, mounted at /data, for attachments, icons,
 #                         and keys
-#   database (required)   a PostgreSQL database and role with
-#                         `out.{host,port,database}` and `out.credentials`
-#                         (keys `username` and `password`), such as
+#   database (required)   a PostgreSQL database and role honouring the
+#                         Postgres database contract
+#                         (kix.contracts.postgresDatabase), such as
 #                         stackgres-database
 #
 # Minimal instance, with a stackgres-cluster `postgres` elsewhere:
@@ -65,6 +65,9 @@ in
     description = "Vaultwarden: Bitwarden-compatible password manager";
     owner = "app-team";
   };
+
+  deps.database.assertions =
+    dep: kix.contracts.postgresDatabase.assertions "vaultwarden ${scope.namespaceName}/${name}" dep;
 
   # Printed on the build that passes too, as the reminder to undo the
   # override afterwards.
@@ -139,8 +142,9 @@ in
 
         # DB_USERNAME and DB_PASSWORD come from the database's credentials
         # Secret; Kubernetes substitutes $(VAR) from variables defined
-        # earlier in the list.
-        databaseUrl = "postgresql://$(DB_USERNAME):$(DB_PASSWORD)@${database.out.host}:${database.out.port}/${database.out.database}";
+        # earlier in the list. toString lets an integer port reach the
+        # contract assertion, which names it, instead of failing here.
+        databaseUrl = "postgresql://$(DB_USERNAME):$(DB_PASSWORD)@${database.out.host}:${toString database.out.port}/${database.out.database}";
 
         dataMount = kix.mount.pvc storage { mountPath = "/data"; };
       in
