@@ -1334,7 +1334,9 @@ pub fn is_immediate_kind(kind: &str) -> bool {
 /// A readiness convention declared by the CRD-owning package and stamped on
 /// the CR as the `kix.run/readiness` annotation. Two JSON shapes:
 /// `{"path": "/status/...", "equals": "<value>"}` is ready when the string at
-/// `path` equals `equals`; `{"condition": {"type": "<Type>", "status": "True"}}`
+/// `path` equals `equals`, or the boolean or number there is written as
+/// `equals` (`true` matches "true", `3` matches "3");
+/// `{"condition": {"type": "<Type>", "status": "True"}}`
 /// is ready when `status.conditions` holds an entry with that type and status.
 enum DeclaredReadiness {
     Path {
@@ -1385,11 +1387,13 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
     // package's declaration, not in this list.
     if let Some(rule) = declared_readiness(obj) {
         return match rule {
-            DeclaredReadiness::Path { path, equals } => obj
-                .data
-                .pointer(&path)
-                .and_then(Value::as_str)
-                .is_some_and(|v| v == equals),
+            DeclaredReadiness::Path { path, equals } => {
+                obj.data.pointer(&path).is_some_and(|v| match v {
+                    Value::String(s) => *s == equals,
+                    Value::Bool(_) | Value::Number(_) => v.to_string() == equals,
+                    _ => false,
+                })
+            }
             DeclaredReadiness::Condition {
                 condition_type,
                 status,
@@ -1619,13 +1623,16 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
     if let Some(rule) = declared_readiness(obj) {
         return match rule {
             DeclaredReadiness::Path { path, equals } => {
-                // Distinguish an absent path from a non-string value because
-                // declared readiness compares strings only.
+                // Distinguish an absent path from a value of a type declared
+                // readiness does not compare (null, objects, lists).
                 let current = match obj.data.pointer(&path) {
                     None => "<absent>".to_string(),
                     Some(Value::String(v)) => format!("\"{v}\""),
+                    Some(v @ (Value::Bool(_) | Value::Number(_))) => v.to_string(),
                     Some(other) => {
-                        format!("{other} (non-string; declared readiness compares strings)")
+                        format!(
+                            "{other} (declared readiness compares only strings, booleans, and numbers)"
+                        )
                     }
                 };
                 format!(
@@ -1920,13 +1927,48 @@ mod tests {
         assert!(!check_readiness(&stamped, "VMCluster"));
     }
 
+    // A boolean or number at the path matches by its JSON text, as
+    // CloudNativePG's Database reports `status.applied` as a JSON boolean.
     #[test]
-    fn declared_readiness_non_string_value_never_matches() {
-        let rule = r#"{"path":"/status/replicas","equals":"3"}"#;
-        let obj = make_annotated_obj(rule, json!({"status": {"replicas": 3}}));
-        assert!(!check_readiness(&obj, "VMCluster"));
-        let msg = readiness_message(&obj, "VMCluster");
-        assert!(msg.contains("non-string"), "got: {msg}");
+    fn declared_readiness_matches_scalars_by_text() {
+        let applied = r#"{"path":"/status/applied","equals":"true"}"#;
+        let ready = make_annotated_obj(applied, json!({"status": {"applied": true}}));
+        assert!(check_readiness(&ready, "Database"));
+
+        let failed = make_annotated_obj(applied, json!({"status": {"applied": false}}));
+        assert!(!check_readiness(&failed, "Database"));
+        let msg = readiness_message(&failed, "Database");
+        assert!(
+            msg.contains(r#"declared readiness /status/applied="true", currently false"#),
+            "got: {msg}"
+        );
+
+        let replicas = r#"{"path":"/status/replicas","equals":"3"}"#;
+        let three = make_annotated_obj(replicas, json!({"status": {"replicas": 3}}));
+        assert!(check_readiness(&three, "VMCluster"));
+        let two = make_annotated_obj(replicas, json!({"status": {"replicas": 2}}));
+        assert!(!check_readiness(&two, "VMCluster"));
+
+        // A string still compares as a string.
+        let text = make_annotated_obj(applied, json!({"status": {"applied": "true"}}));
+        assert!(check_readiness(&text, "Database"));
+
+        // A missing path is not ready.
+        let fresh = make_annotated_obj(applied, json!({"status": {}}));
+        assert!(!check_readiness(&fresh, "Database"));
+        assert!(readiness_message(&fresh, "Database").contains("<absent>"));
+    }
+
+    #[test]
+    fn declared_readiness_object_never_matches() {
+        let rule = r#"{"path":"/status/applied","equals":"true"}"#;
+        let obj = make_annotated_obj(rule, json!({"status": {"applied": {"value": true}}}));
+        assert!(!check_readiness(&obj, "Database"));
+        let msg = readiness_message(&obj, "Database");
+        assert!(
+            msg.contains("only strings, booleans, and numbers"),
+            "got: {msg}"
+        );
         assert!(!msg.contains("<absent>"), "got: {msg}");
     }
 
