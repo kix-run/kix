@@ -1,0 +1,3 @@
+# 2026-10-03 · `kix/lib/plugins/netpol` · A cluster-scoped custom resource with `endpoint = "terminate"` gets its operand policies in the wrong namespaces.
+
+Setting `cluster.factBehavior."external-secrets.io/ClusterSecretStore"` to `terminate` with the external-secrets controller's labels as `podSelector` rendered `app-secrets-clustersecretstore-openbao-app-egress` in namespace `app` (where the building package lives, not where the controller runs) and an ingress rule into OpenBao from namespace `_cluster_`. Neither selects the controller pods in `external-secrets`, so the derived policies allow nothing. The plugin has no way to learn the namespace of a cluster-scoped kind's controller.
