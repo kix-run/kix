@@ -111,11 +111,16 @@ let
         config.keys = [ "github_token" ];
       };
     };
-    caddy.module = _: {
-      cluster.roles.loadBalancer = {
-        binding = "exclusive";
-        provider = "test";
+    # The HorizontalPodAutoscaler scales on CPU, which needs a metricsApi
+    # provider.
+    caddy = {
+      module = _: {
+        cluster.roles.loadBalancer = {
+          binding = "exclusive";
+          provider = "test";
+        };
       };
+      instances.metrics-server.package = packages.metrics-server;
     };
     cilium.module = _: {
       cluster.roles.cni = {

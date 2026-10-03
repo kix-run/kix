@@ -79,19 +79,21 @@ in
         builtins.seq (validators.checkResourceName args) (
           builtins.seq (validators.checkRawPvc args) (
             builtins.seq (validators.checkLoadBalancer args) (
-              k8s.mkResource (
-                removeAttrs args [ "labels" ]
+              builtins.seq (validators.checkHorizontalPodAutoscaler args) (
+                k8s.mkResource (
+                  removeAttrs args [ "labels" ]
+                  // {
+                    namespace = namespaceResource;
+                    inherit clusterDomain;
+                    labels = clusterLabels // instanceLabels // labels;
+                    factBehavior = behavior;
+                    requires = (args.requires or [ ]) ++ dnsRequires;
+                  }
+                )
                 // {
-                  namespace = namespaceResource;
-                  inherit clusterDomain;
-                  labels = clusterLabels // instanceLabels // labels;
-                  factBehavior = behavior;
-                  requires = (args.requires or [ ]) ++ dnsRequires;
+                  packageLabels = labels;
                 }
               )
-              // {
-                packageLabels = labels;
-              }
             )
           )
         );

@@ -289,6 +289,9 @@ rec {
           "cluster-admin"
           "edit"
           "view"
+          # The kube-system Role that reads the extension-apiserver-authentication
+          # ConfigMap, which an aggregated API server needs.
+          "extension-apiserver-authentication-reader"
         ];
 
       # A Service (or PodDisruptionBudget) kix renders over pods an operator

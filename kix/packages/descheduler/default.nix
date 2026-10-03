@@ -17,6 +17,10 @@
 # Lease named after the instance in the instance's namespace, so the
 # replicas the availability level gives run the policy one at a time.
 #
+# A KubernetesMetrics entry in `policy.metricsProviders` reads
+# metrics.k8s.io, so evaluation refuses it on a cluster that binds the
+# metricsApi role absent with no metrics-server instance.
+#
 # No dependency or option is required:
 #
 #   instances.descheduler.descheduler = {
@@ -260,12 +264,24 @@ in
           inherit name;
         };
 
-        policyConfigMap = scope.mkResource {
-          apiVersion = "v1";
-          kind = "ConfigMap";
-          name = "${name}-policy";
-          data."policy.yaml" = builtins.toJSON (policyLib.render config.policy);
-        };
+        # A KubernetesMetrics provider makes the descheduler read
+        # metrics.k8s.io, which the cluster's metricsApi role must serve.
+        policyConfigMap =
+          builtins.seq
+            (
+              if config.policy.metricsProviders != [ ] then
+                scope.requireMetricsApi "policy.metricsProviders (KubernetesMetrics)"
+              else
+                null
+            )
+            (
+              scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "${name}-policy";
+                data."policy.yaml" = builtins.toJSON (policyLib.render config.policy);
+              }
+            );
 
         policyMount = kix.mount.configMap self.policyConfigMap {
           mountPath = policyDir;

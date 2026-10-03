@@ -30,6 +30,11 @@
       binding = lib.mkDefault "shadowable";
       provider = lib.mkDefault "azure-lb";
     };
+    # AKS runs a managed metrics-server in kube-system.
+    metricsApi = {
+      binding = lib.mkDefault "exclusive";
+      provider = lib.mkDefault "metrics-server (aks-managed)";
+    };
   };
 
   cluster.capabilities = {
