@@ -31,7 +31,10 @@
 #                                With `loki` also wired, a span links to
 #                                the logs of its pod, matched on the
 #                                `namespace` and `pod` labels that
-#                                loki-logs writes.
+#                                loki-logs writes. With `prometheusServer`
+#                                also wired, the service graph reads the
+#                                Prometheus datasource, where Tempo's
+#                                metrics generator writes.
 #   prometheus (optional)        the operator whose ServiceMonitor scrapes
 #                                Grafana while `metrics.enabled`.
 #   oidcProvider, oidcClient (with `oidc.enabled`)
@@ -502,26 +505,32 @@ in
               tempo.out.queryUrl
                 or (throw "${who}: deps.tempo resolved to an instance without out.queryUrl, the base URL of Tempo's query API. Wire a tempo instance, or set out.queryUrl in the kix.mkImport that answers tempo.");
             access = "proxy";
-            # A span's "Logs for this span" link queries Loki for the trace
-            # ID within the span's pod. OpenTelemetry's k8s attributes map
-            # to the stream labels loki-logs writes; a span without them
-            # gets no link.
-            jsonData = lib.optionalAttrs (loki != null) {
-              tracesToLogsV2 = {
-                datasourceUid = config.lokiDatasource.uid;
-                filterByTraceID = true;
-                tags = [
-                  {
-                    key = "k8s.namespace.name";
-                    value = "namespace";
-                  }
-                  {
-                    key = "k8s.pod.name";
-                    value = "pod";
-                  }
-                ];
+            jsonData =
+              # The service graph queries the series Tempo's metrics
+              # generator writes; without them the graph is empty.
+              lib.optionalAttrs (prometheusServer != null) {
+                serviceMap.datasourceUid = config.prometheusDatasource.uid;
+              }
+              # A span's "Logs for this span" link queries Loki for the
+              # trace ID within the span's pod. OpenTelemetry's k8s
+              # attributes map to the stream labels loki-logs writes; a span
+              # without them gets no link.
+              // lib.optionalAttrs (loki != null) {
+                tracesToLogsV2 = {
+                  datasourceUid = config.lokiDatasource.uid;
+                  filterByTraceID = true;
+                  tags = [
+                    {
+                      key = "k8s.namespace.name";
+                      value = "namespace";
+                    }
+                    {
+                      key = "k8s.pod.name";
+                      value = "pod";
+                    }
+                  ];
+                };
               };
-            };
           };
 
         clashes =

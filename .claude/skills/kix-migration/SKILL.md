@@ -753,7 +753,7 @@ for that shape (design: `v2_discussions/133`, shipped 2026-09-07):
   package does not render Services over the operator's pods. It uses
   `scope.mkServiceRef` for the Services the operator creates
   (`vmselect-<name>`, `vminsert-<name>`), and builds `out.serviceUrl` /
-  `out.insertUrl` on the ref's `out.fqdn` so consumers keep dependency
+  `out.remoteWriteUrl` on the ref's `out.fqdn` so consumers keep dependency
   context. A Service Kix renders itself over operator pods declares the CR
   with
   `metadata.annotations."kix.run/operand-of" = "<group>/<Kind>/<name>"`;

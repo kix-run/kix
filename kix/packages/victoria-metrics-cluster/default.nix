@@ -27,8 +27,8 @@
 #   out.serviceUrl: "http://vmselect-<name>.<ns>.svc:8481/select/0/prometheus" (the operator's Service)
 #     Prometheus-compatible read path; Grafana auto-wires any
 #     `prometheusServer`-aliased instance exposing this.
-#   out.insertUrl: ".../insert/0/prometheus/api/v1/write" full
-#     remote-write URL (vmagent wants the full path).
+#   out.remoteWriteUrl: ".../insert/0/prometheus/api/v1/write", the full
+#     Prometheus remote-write URL (vmagent and tempo read it).
 #   out.insertBaseUrl: ".../insert/0/prometheus" (vmalert appends
 #     /api/v1/write itself).
 #   out.scrapeInterval: the interval dedup is calibrated to; scrapers
@@ -402,7 +402,7 @@ in
           # URLs are built on the refs' fqdn, so they carry the marker's
           # dependency context and the endpoint fact.
           serviceUrl = "http://${self.selectService.out.fqdn}:8481/select/0/prometheus";
-          insertUrl = "http://${self.insertService.out.fqdn}:8480/insert/0/prometheus/api/v1/write";
+          remoteWriteUrl = "http://${self.insertService.out.fqdn}:8480/insert/0/prometheus/api/v1/write";
           insertBaseUrl = "http://${self.insertService.out.fqdn}:8480/insert/0/prometheus";
           inherit (config) scrapeInterval;
           # Operand images are reconciled by the operator, not in any
