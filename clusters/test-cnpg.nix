@@ -5,7 +5,9 @@
 # cnpg-cluster with metrics (a PodMonitor through prometheus-operator) and
 # an extraSpec parameter, and `pg-replicated` runs two instances, which
 # turns on the operator's PodDisruptionBudgets. `app-db` is a cnpg-database
-# on `pg` with an extension by name and one by `{ name; version; }`.
+# on `pg` with an extension by name and one by `{ name; version; }`, and
+# Metabase reads it through `deps.database`, which gives Metabase egress
+# and the PostgreSQL pods ingress on TCP 5432 under default deny.
 #
 # Build:  nix build .#cluster-cnpg --extra-experimental-features pipe-operators
 # Deploy: kix deploy cnpg --flake ./clusters --context <kind context>
@@ -64,6 +66,16 @@ kix.buildCluster {
               # Test values only.
               password = "test-cnpg-password";
             };
+          };
+          metabase = {
+            package = packages.metabase;
+            deps.database = ref.data.app-db;
+          };
+          metabase-encryption-key = {
+            package = packages.secret;
+            aliases = [ "encryptionKey" ];
+            # Test values only.
+            config.stringData.key = "0123456789abcdef0123456789abcdef";
           };
         };
       }

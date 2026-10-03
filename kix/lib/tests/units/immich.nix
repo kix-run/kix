@@ -29,7 +29,7 @@ let
 
   databaseOut = {
     host = "db.example.net";
-    port = 5432;
+    port = "5432";
     database = "immich";
     credentials.out.keyRef = key: {
       valueFrom.secretKeyRef = {

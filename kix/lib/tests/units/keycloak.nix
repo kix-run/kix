@@ -1,7 +1,8 @@
 # Tests for kix/packages/keycloak: the variables and flags the package owns,
-# the public URL and the issuer URLs, the bootstrapAdmin key check, the
-# metrics toggle and the prometheus dependency, and the JGroups peer policy. Keycloak runs in namespace
-# `auth` with a database stub and a `secret` bootstrap administrator.
+# the public URL and the issuer URLs, the database sslmode, the
+# bootstrapAdmin key check, the metrics toggle and the prometheus
+# dependency, and the JGroups peer policy. Keycloak runs in namespace `auth`
+# with a database stub and a `secret` bootstrap administrator.
 # Nothing routes to the instance, so the URL comes from env.KC_HOSTNAME.
 
 {
@@ -20,8 +21,10 @@ let
   keycloakPackage = import ../../../packages/keycloak;
   secretPackage = import ../../../packages/secret;
 
-  # A `database` provider with stackgres-database's out shape.
+  # A `database` provider with stackgres-database's out shape. `tls` is
+  # published only when it is not "absent".
   databasePackage =
+    tls:
     { ... }:
     {
       meta = {
@@ -48,10 +51,11 @@ let
             resource = self.credentials;
             out = {
               host = "db.auth.svc";
-              port = 5432;
+              port = "5432";
               database = "keycloak";
               credentials = self.credentials;
-            };
+            }
+            // lib.optionalAttrs (tls != "absent") { inherit tls; };
           };
         };
     };
@@ -71,6 +75,7 @@ let
       prometheus ? false,
       availability ? null,
       netpol ? false,
+      dbTls ? "absent",
     }:
     mkCluster [
       {
@@ -84,7 +89,7 @@ let
               env = env // (config.env or { });
             };
           };
-          keycloak-db.package = databasePackage;
+          keycloak-db.package = databasePackage dbTls;
           keycloak-admin = {
             package = secretPackage;
             aliases = [ "bootstrapAdmin" ];
@@ -120,7 +125,8 @@ let
 in
 {
   # The default instance evaluates; it is the positive control for every
-  # refusal below. KC_HOSTNAME comes from env without a trailing slash.
+  # refusal below. KC_HOSTNAME comes from env without a trailing slash, and
+  # the bootstrap secret adds no checksum annotation.
   keycloak-defaults =
     let
       c = clusterWith {
@@ -138,6 +144,7 @@ in
       && e.KC_METRICS_ENABLED == "true"
       && (containerOf c).args == [ "start" ]
       && (deploymentOf c).spec.strategy.type == "Recreate"
+      && !((deploymentOf c).spec.template.metadata.annotations or { } ? "checksum/bootstrap-admin")
     )
     || throw "keycloak defaults: env ${builtins.toJSON e}";
 
@@ -195,6 +202,10 @@ in
             "KC_CACHE"
             "KC_CACHE_STACK"
             "KC_CACHE_EMBEDDED_NETWORK_BIND_ADDRESS"
+            "KC_CACHE_EMBEDDED_NETWORK_BIND_PORT"
+            "KC_CACHE_EMBEDDED_NETWORK_EXTERNAL_PORT"
+            "KC_CACHE_EMBEDDED_NETWORK_EXTERNAL_ADDRESS"
+            "KC_CACHE_CONFIG_FILE"
             "KC_METRICS_ENABLED"
           ];
     in
@@ -226,6 +237,8 @@ in
             "--db"
             "--db-url=jdbc:postgresql://x/y"
             "--cache-stack=kubernetes"
+            "--cache-embedded-network-bind-port=7900"
+            "--cache-config-file=cache.xml"
             "--http-relative-path=/auth"
             "--optimized"
             "--hostname=https://x.example.com"
@@ -242,6 +255,30 @@ in
       ]
     )
     || throw "keycloak extraArgs: accepted ${builtins.toJSON accepted}, args ${builtins.toJSON args}";
+
+  # The database's out.tls = true sets and owns sslmode=require. false,
+  # null, and an absent field leave the driver default and let env set
+  # KC_DB_URL_PROPERTIES.
+  keycloak-db-sslmode =
+    let
+      props = dbTls: (envOf (clusterWith { inherit dbTls; })).KC_DB_URL_PROPERTIES or null;
+      withEnv =
+        dbTls:
+        clusterWith {
+          inherit dbTls;
+          config.env.KC_DB_URL_PROPERTIES = "?sslmode=verify-full";
+        };
+    in
+    (
+      props true == "?sslmode=require"
+      && props false == null
+      && props null == null
+      && props "absent" == null
+      && evalFails (withEnv true)
+      && (envOf (withEnv false)).KC_DB_URL_PROPERTIES == "?sslmode=verify-full"
+      && (envOf (withEnv null)).KC_DB_URL_PROPERTIES == "?sslmode=verify-full"
+    )
+    || throw "keycloak sslmode: tls=true gives ${builtins.toJSON (props true)}";
 
   # A bootstrapAdmin secret without the key `password` fails the build.
   keycloak-bootstrap-admin-checked = evalFails (clusterWith {

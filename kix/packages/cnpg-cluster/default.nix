@@ -45,8 +45,9 @@
 # `monitoring.enablePodMonitor`, which has the operator create a PodMonitor
 # outside Kix.
 #
-# Limits: backups are not modelled, and the package ships no alerts. The operator's Pooler pods, if one is
-# created outside this package, get no network policy.
+# Limits: backups are not modelled, and the package ships no alerts. The
+# operator's Pooler pods, if one is created outside this package, get no
+# network policy.
 #
 # Exposes:
 #   out.name, out.fqdn, out.port  the -rw Service (port 5432).

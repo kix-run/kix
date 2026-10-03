@@ -4,7 +4,10 @@
 # The package applies the postgresql.cnpg.io CustomResourceDefinitions
 # (crds/, vendored from the release manifest), the operator's ClusterRole
 # (rbac/, from the same manifest), the operator Deployment, the webhook
-# Service, and the two admission webhook configurations with every entry.
+# Service, the two admission webhook configurations with every entry, and
+# the default monitoring queries (monitoring/, from the same manifest),
+# which the operator copies into the namespace of each Cluster for the
+# instance manager's exporter.
 # When it starts, the operator creates its CA and serving certificate in the
 # Secrets cnpg-ca-secret and cnpg-webhook-cert and writes the certificate
 # into each webhook entry's `clientConfig.caBundle`. Kix never sets
@@ -72,8 +75,11 @@
 # Moving to another release: set `release` and the digest of `image`
 # (`crane digest ghcr.io/cloudnative-pg/cloudnative-pg:<release>`), move the
 # tag in crds/sources.txt and rbac/sources.txt, run
-# `uv run scripts/vendor-crds.py cnpg-operator`, compare the webhook entries
-# below with the release manifest's webhook configurations, then run the
+# `uv run scripts/vendor-crds.py cnpg-operator`, replace
+# monitoring/configmap-cnpg-default-monitoring.json with the manifest's
+# ConfigMap cnpg-default-monitoring (the script vendors only definitions
+# and roles), compare the webhook entries below with the release manifest's
+# webhook configurations, then run the
 # kix-lib test cnpg-operator-sources-match-release and
 # every-package-evaluates.
 
@@ -112,6 +118,11 @@ let
   validatingConfigName = "cnpg-validating-webhook-configuration";
   webhookPort = 9443;
 
+  # The release manifest's ConfigMap cnpg-default-monitoring: its `queries`
+  # and the cnpg.io/reload label, which has the operator refresh its copies
+  # when the queries change.
+  defaultMonitoring = readJSON ./monitoring/configmap-cnpg-default-monitoring.json;
+
   # The release manifest's webhook entries: each admits CREATE and UPDATE
   # of one kind, served at /<mutate|validate>-postgresql-cnpg-io-v1-<kind>.
   mutatingKinds = [
@@ -134,6 +145,9 @@ let
 
   fieldRef = path: { valueFrom.fieldRef.fieldPath = path; };
 
+  # CloudNativePG writes no observedGeneration on the Cluster's Ready
+  # condition (SetClusterReadyCondition in pkg/resources/status), so right
+  # after a spec change the deploy can read the previous Ready=True.
   ready.condition = {
     type = "Ready";
     status = "True";
@@ -229,6 +243,11 @@ in
               };
               from = "the image option and the instance's namespace";
               fix = "Set image instead.";
+            }
+            {
+              vars.MONITORING_QUERIES_CONFIGMAP = self.defaultMonitoring.out.name;
+              from = "the package's default monitoring queries";
+              fix = "Add queries to a Cluster with spec.monitoring.customQueriesConfigMap in the cnpg-cluster's extraSpec instead.";
             }
             {
               vars.KUBERNETES_CLUSTER_DOMAIN = clusterConfig.clusterDomain;
@@ -398,6 +417,14 @@ in
         );
         imageCatalogs = gate (scope.mkCRD { spec = vendored "imagecatalogs.${group}.json"; });
         clusterImageCatalogs = gate (scope.mkCRD { spec = vendored "clusterimagecatalogs.${group}.json"; });
+      };
+
+      defaultMonitoring = scope.mkResource {
+        apiVersion = "v1";
+        kind = "ConfigMap";
+        name = "${name}-default-monitoring";
+        inherit (defaultMonitoring.metadata) labels;
+        inherit (defaultMonitoring) data;
       };
 
       webhookService = scope.mkResource {

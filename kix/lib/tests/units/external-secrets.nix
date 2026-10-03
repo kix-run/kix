@@ -21,8 +21,7 @@ let
   secretRefPackage = import ../../../packages/secret-ref;
 
   # The package header's consumer pattern, plus a Password generator, an
-  # ExternalSecret reading it through dataFrom, and a ClusterSecretStore
-  # built from out.crds. `extraParts` adds parts for the refusal cases.
+  # ExternalSecret reading it through dataFrom, and a ClusterSecretStore. `extraParts` adds parts for the refusal cases.
   mkConsumer =
     {
       extraParts ? _: { },
@@ -103,7 +102,7 @@ let
           };
           dbPassword = self.generated.out.secretRef { keys = [ "password" ]; };
 
-          clusterStore = scope.mkCR externalSecrets.out.crds.ClusterSecretStore {
+          clusterStore = externalSecrets.out.mkClusterSecretStore scope {
             name = "fake";
             spec.provider.fake.data = [
               {
@@ -201,8 +200,9 @@ in
     (builtins.all (m: m != null) crs && ungated == [ ])
     || throw "external-secrets gate: job ${job}, ungated ${builtins.toJSON (map (m: m.metadata) ungated)}";
 
-  # ExternalSecret and SecretStore have no handle, so their custom resources
-  # always go through the builders; GeneratorState is the controller's.
+  # ExternalSecret, SecretStore, and ClusterSecretStore have no handle, so
+  # their custom resources always go through the builders; GeneratorState is
+  # the controller's.
   external-secrets-out-crds =
     let
       names = builtins.attrNames cluster.instances.external-secrets.external-secrets.raw.root.out.crds;
@@ -213,7 +213,6 @@ in
         "ClusterExternalSecret"
         "ClusterGenerator"
         "ClusterPushSecret"
-        "ClusterSecretStore"
         "ECRAuthorizationToken"
         "Fake"
         "GCRAccessToken"
@@ -358,6 +357,32 @@ in
     )
     || throw "external-secrets metrics: monitors ${builtins.toJSON (map (m: m.spec.selector) monitors)}";
 
+  # The definitions keep the vendored label the cert-controller's partial
+  # cache selects, and the check Job dry-runs one object per webhook
+  # configuration.
+  external-secrets-cert-controller-cache =
+    let
+      crds = builtins.filter (c: lib.hasSuffix "external-secrets.io" c.spec.group) (
+        ofKind "CustomResourceDefinition" ms
+      );
+      unlabelled = builtins.filter (
+        c: (c.metadata.labels or { })."external-secrets.io/component" or null != "controller"
+      ) crds;
+      certArgs = (builtins.head (find "Deployment" "external-secrets-cert-controller").spec.template.spec.containers).args;
+      checkFiles = builtins.attrNames (find "ConfigMap" "external-secrets-webhook-check").data;
+      checkKinds = map (f: (builtins.fromJSON (find "ConfigMap" "external-secrets-webhook-check").data.${f}).kind) checkFiles;
+    in
+    (
+      builtins.length crds == 25
+      && unlabelled == [ ]
+      && builtins.elem "--enable-partial-cache=true" certArgs
+      && checkKinds == [
+        "ExternalSecret"
+        "SecretStore"
+      ]
+    )
+    || throw "external-secrets cert-controller cache: unlabelled ${builtins.toJSON (map (c: c.metadata.name) unlabelled)}, args ${builtins.toJSON certArgs}, check ${builtins.toJSON checkKinds}";
+
   # crds/sources.txt fetches the release the package pins.
   external-secrets-sources-match-release =
     let
@@ -418,6 +443,25 @@ in
             };
           }
         );
+      clusterStore =
+        tokenSecretRef:
+        withParts (
+          { externalSecrets, scope, ... }:
+          {
+            extraClusterStore = externalSecrets.out.mkClusterSecretStore scope {
+              name = "extra";
+              spec.provider.vault = {
+                server = "https://vault.example.com";
+                path = "secret";
+                auth.tokenSecretRef = tokenSecretRef;
+              };
+            };
+          }
+        );
+      untracked = kixlib.untrackedRef {
+        name = "vault-token";
+        kind = "Secret";
+      };
       externalSecret =
         target: refArgs:
         withParts (
@@ -461,6 +505,29 @@ in
             key = "token";
           };
         };
+        clusterStoreLiteral = {
+          bad = clusterStore {
+            name = "vault-token";
+            key = "token";
+            namespace = "app";
+          };
+          good = clusterStore {
+            name = untracked;
+            key = "token";
+            namespace = "app";
+          };
+        };
+        clusterStoreNoNamespace = {
+          bad = clusterStore {
+            name = untracked;
+            key = "token";
+          };
+          good = clusterStore {
+            name = untracked;
+            key = "token";
+            namespace = "app";
+          };
+        };
         manifestTarget = {
           bad = externalSecret {
             manifest = {
@@ -477,6 +544,11 @@ in
         unknownKey = {
           bad = externalSecret { } { keys = [ "B" ]; };
           good = externalSecret { } { keys = [ "A" ]; };
+        };
+        # Merge keeps the keys another writer put in the Secret.
+        unknownKeyUnlessMerge = {
+          bad = externalSecret { creationPolicy = "Owner"; } { keys = [ "B" ]; };
+          good = externalSecret { creationPolicy = "Merge"; } { keys = [ "B" ]; };
         };
         templateReplacesKeys = {
           bad = externalSecret { template.data.URL = "https://{{ .A }}"; } { keys = [ "A" ]; };

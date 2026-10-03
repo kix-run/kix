@@ -33,7 +33,7 @@ let
   # What a kix.mkImport stand-in must publish.
   importOut = {
     host = "db.example.net";
-    port = 5432;
+    port = "5432";
     database = "app";
     credentials = credentials [
       "username"
@@ -207,16 +207,21 @@ in
     messagesOf (consumers.harbor.deps.database.assertions (depOf importOut))
   );
 
-  # Metabase builds on a provider whose port is a list (it calls toString
-  # on it), so the refusal comes from the contract. The positive control
-  # builds with an integer port.
+  # Metabase calls toString on the port, so its build succeeds on an
+  # integer port and only the contract refuses it. Metabase's assertion
+  # reports the port, and the cluster with that provider fails while the
+  # same cluster with a string port builds.
   postgres-database-cluster-refuses-misshapen-provider =
-    ofKind "Deployment" (
-      manifests (metabaseCluster {
-        port = 5432;
-      })
-    ) != [ ]
+    let
+      portMessages = messagesOf (
+        consumers.metabase.deps.database.assertions (depOf (importOut // { port = 5432; }))
+      );
+    in
+    builtins.length portMessages == 1
+    && lib.hasInfix "port is not the PostgreSQL port as a string" (builtins.head portMessages)
+    && lib.hasInfix "toString" (builtins.head portMessages)
+    && ofKind "Deployment" (manifests (metabaseCluster { port = "5432"; })) != [ ]
     && evalFails (metabaseCluster {
-      port = [ 5432 ];
+      port = 5432;
     });
 }

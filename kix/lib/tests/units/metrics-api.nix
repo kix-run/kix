@@ -290,8 +290,8 @@ in
     };
   };
 
-  # extraArgs may not move the port the Service, probes, and network
-  # policy use; other flags pass through.
+  # extraArgs may not set the secure port, kubelet port, certificate
+  # directory, or bind address; other flags pass through.
   metrics-api-owned-flags = check "metrics-server extraArgs" {
     secure-port = {
       cluster = kindCluster {
@@ -307,6 +307,24 @@ in
         instances.metrics-server.metrics-server = {
           package = metricsServerPackage;
           config.extraArgs = [ "--kubelet-port=10255" ];
+        };
+      };
+      builds = false;
+    };
+    cert-dir = {
+      cluster = kindCluster {
+        instances.metrics-server.metrics-server = {
+          package = metricsServerPackage;
+          config.extraArgs = [ "--cert-dir=/certs" ];
+        };
+      };
+      builds = false;
+    };
+    bind-address = {
+      cluster = kindCluster {
+        instances.metrics-server.metrics-server = {
+          package = metricsServerPackage;
+          config.extraArgs = [ "--bind-address=127.0.0.1" ];
         };
       };
       builds = false;

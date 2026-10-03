@@ -15,8 +15,9 @@
 # on 443; and APIService v1beta1.metrics.k8s.io pointing at the Service.
 #
 # The instance claims the `metricsApi` role, and the APIService name is
-# fixed, so a cluster runs one. Flavours whose environment runs its own
-# metrics-server (rke2, k3s, GKE, AKS) bind the role `exclusive`, so this
+# fixed, so a cluster runs one. Flavours whose environment serves
+# metrics.k8s.io itself (rke2, k3s, GKE, AKS, OpenShift) bind the role
+# `exclusive`, so this
 # package is refused there at evaluation. No dependency or option is
 # required:
 #
@@ -28,8 +29,11 @@
 #
 # Kubelet TLS: metrics-server verifies each kubelet's serving certificate
 # against the cluster CA. Where kubelets serve self-signed certificates
-# (kind, and Talos without kubelet certificate rotation), add
-# `extraArgs = [ "--kubelet-insecure-tls" ];` (clusters/test-metrics-server.nix).
+# (kind, kubeadm without `serverTLSBootstrap: true` in its
+# KubeletConfiguration, and Talos without kubelet certificate rotation),
+# either have the kubelets request CA-signed serving certificates and
+# approve their CSRs, or add `extraArgs = [ "--kubelet-insecure-tls" ];`
+# (clusters/test-metrics-server.nix).
 #
 # out: none beyond what root (the Deployment) provides; consumers find the
 # API through the cluster's metricsApi role.
@@ -46,6 +50,8 @@
 #   address. `--kubelet-use-node-status-port` takes each kubelet's port from
 #   its Node status, so a kubelet on another port is unreachable under
 #   default deny.
+# - The secure port is fixed at 10250, which EKS reserves on Fargate nodes,
+#   so the pods cannot run on Fargate.
 # - No ServiceMonitor: /metrics is served on the secure port behind
 #   delegated authorization, and the package grants no scraper access.
 
@@ -78,6 +84,8 @@ in
     # The role admits one managed claimant per cluster, which also keeps a
     # second APIService v1beta1.metrics.k8s.io out.
     roles = [ "metricsApi" ];
+    # metrics-server README compatibility matrix: 0.9.x supports 1.34+.
+    k8s.minVersion = "1.34";
     network.intents = {
       # The API server proxies metrics.k8s.io requests to the pods.
       aggregatedApi.ingress = [
@@ -202,6 +210,9 @@ in
               # The server holds no state; 30 is the Kubernetes default,
               # written out for the reliability.gracefulShutdown rule.
               terminationGracePeriodSeconds = 30;
+              # HPAs stop scaling while metrics-server is preempted; upstream
+              # components.yaml sets the same class.
+              priorityClassName = "system-cluster-critical";
               securityContext = {
                 runAsNonRoot = true;
                 runAsUser = 1000;

@@ -113,6 +113,16 @@ in
     { config, ... }:
     [
       {
+        # The Database CRD's validation rules on spec.name.
+        assertion =
+          !builtins.elem config.database [
+            "postgres"
+            "template0"
+            "template1"
+          ];
+        message = "database \"${config.database}\" is reserved by PostgreSQL (postgres, template0, and template1), and CloudNativePG refuses a Database of that name. Set database to another name; it defaults to the instance name.";
+      }
+      {
         assertion = !reservedRole config.user;
         message = "user \"${config.user}\" is reserved by CloudNativePG (postgres, streaming_replica, and names starting with pg_ or cnpg_). Choose another role name.";
       }
@@ -123,7 +133,7 @@ in
       type = identifier;
       default = name;
       defaultText = lib.literalMD "the instance name";
-      description = "PostgreSQL database name to create: a letter or underscore, then up to 62 letters, digits, underscores, or hyphens.";
+      description = "PostgreSQL database name to create: a letter or underscore, then up to 62 letters, digits, underscores, or hyphens. postgres, template0, and template1 are refused.";
     };
 
     user = lib.mkOption {
@@ -160,7 +170,7 @@ in
     };
 
     password = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
+      type = lib.types.nullOr lib.types.nonEmptyStr;
       default = null;
       description = ''
         Literal password (development only). Mutually exclusive with

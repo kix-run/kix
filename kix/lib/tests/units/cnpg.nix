@@ -214,7 +214,7 @@ in
         WATCH_NAMESPACE = "data";
       })
       && evalFails (withEnv {
-        INHERITED_ANNOTATIONS = "kix.run/*";
+        INHERITED_ANNOTATIONS = "example.com/*";
       })
       && evalFails (withEnv {
         MANAGE_WEBHOOK_CONFIGURATIONS = "false";
@@ -402,13 +402,25 @@ in
     )
     || throw "cnpg-database resources: ${builtins.toJSON { inherit role database secret; }}";
 
-  # The password checks of stackgres-database, and the reserved role names.
+  # The password checks of stackgres-database, and the reserved role and
+  # database names.
   cnpg-database-refusals =
     let
       reserved = failedMessages {
         package = databasePackage;
         instanceName = "app-db";
         config.user = "pg_app";
+      };
+      reservedDatabase = failedMessages {
+        package = databasePackage;
+        instanceName = "app-db";
+        config.database = "template1";
+      };
+      # The database defaults to the instance name.
+      reservedByName = failedMessages {
+        package = databasePackage;
+        instanceName = "postgres";
+        config.user = "app";
       };
       fine = failedMessages {
         package = databasePackage;
@@ -418,6 +430,8 @@ in
     in
     (
       says ''user "pg_app" is reserved by CloudNativePG'' reserved
+      && says ''database "template1" is reserved by PostgreSQL'' reservedDatabase
+      && says ''database "postgres" is reserved by PostgreSQL'' reservedByName
       && fine == [ ]
       && evalFails (cnpg {
         database = { };
@@ -439,7 +453,16 @@ in
         };
       })
     )
-    || throw "cnpg-database refusals: ${builtins.toJSON { inherit reserved fine; }}";
+    || throw "cnpg-database refusals: ${
+      builtins.toJSON {
+        inherit
+          reserved
+          reservedDatabase
+          reservedByName
+          fine
+          ;
+      }
+    }";
 
   # A cnpg-database on a stackgres-cluster is refused; the same database on
   # a cnpg-cluster (cnpg-database-resources) evaluates.

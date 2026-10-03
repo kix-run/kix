@@ -31,6 +31,11 @@
     dns.binding = lib.mkDefault "shadowable";
     storageClasses.binding = lib.mkDefault "absent"; # cloud installs override
     loadBalancer.binding = lib.mkDefault "absent"; # cloud installs override
+    # The cluster monitoring stack in openshift-monitoring serves metrics.k8s.io.
+    metricsApi = {
+      binding = lib.mkDefault "exclusive";
+      provider = lib.mkDefault "openshift-monitoring";
+    };
   };
 
   cluster.capabilities = {

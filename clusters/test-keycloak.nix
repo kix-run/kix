@@ -4,8 +4,9 @@
 # Every optional dependency is wired: ingress-nginx and a host give the
 # route and `KC_HOSTNAME`, and prometheus-operator gives the Service its
 # metrics port and a ServiceMonitor. The database is a stackgres-database on
-# a one-instance stackgres-cluster. kind offers availability `none`, so one
-# Keycloak replica runs and the `jgroups` intent carries no peer traffic.
+# a one-instance stackgres-cluster, which publishes `out.tls = true`, so
+# Keycloak connects with `sslmode=require`. kind offers availability `none`,
+# so one Keycloak replica runs and no `keycloak-jgroups` policy renders.
 #
 # Build:  nix build ./clusters#cluster-keycloak --extra-experimental-features pipe-operators
 # Deploy: kix deploy keycloak --flake ./clusters --context <kind context> --timeout 20m

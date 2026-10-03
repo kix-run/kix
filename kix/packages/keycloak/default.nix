@@ -12,15 +12,20 @@
 #                              `out.{host,port,database}` and
 #                              `out.credentials` (keys `username` and
 #                              `password`), such as stackgres-database.
-#                              The JDBC driver's default sslmode `prefer`
-#                              uses TLS when the server offers it.
+#                              When `out.tls` is true, the package sets
+#                              `KC_DB_URL_PROPERTIES` to
+#                              `?sslmode=require`. When it is false, null,
+#                              or absent, the JDBC driver's default sslmode
+#                              `prefer` applies, and `env` may set
+#                              `KC_DB_URL_PROPERTIES`.
 #   bootstrapAdmin (required)  a secret with keys `username` and
 #                              `password`. Keycloak creates this temporary
 #                              administrator in the master realm only when
 #                              the master realm does not exist yet, on the
 #                              first start against an empty database.
-#                              Changing the secret later does not change
-#                              or rotate that administrator; manage
+#                              Keycloak reads the secret only then, and a
+#                              changed secret does not restart the pods or
+#                              rotate that administrator; manage
 #                              administrators in Keycloak itself.
 #   prometheus (optional)      adds the management port to the Service as
 #                              `metrics` and a ServiceMonitor. Keycloak
@@ -88,8 +93,9 @@
 #
 # Keycloak runs `start` without `--optimized`: the stock image is built for
 # other build-time options (database vendor, health, metrics), so every
-# start re-runs Keycloak's build step before it serves. The startup probe and the progress deadline allow 15 minutes,
-# which also covers the first start's schema creation.
+# start re-runs Keycloak's build step before it serves. The startup probe
+# and the progress deadline allow 15 minutes, which also covers the first
+# start's schema creation.
 #
 # Network policy covers the database, the route, the scrape, and the peers.
 # Identity brokering, user federation (LDAP), and email (SMTP) dial
@@ -232,6 +238,11 @@ in
           else
             throw "${who}: Keycloak needs its public URL, and nothing routes to this instance. Set ingress.host (or cluster.domain) with an ingress controller or a gateway in the cluster, or set env.KC_HOSTNAME to the URL clients reach, such as \"https://auth.example.com\".";
 
+        # The contract's `tls` is true, false, or null (the provider cannot
+        # tell). Only true is acted on: `prefer` would accept a plaintext
+        # connection from a server that should speak TLS.
+        dbTls = (database.out.tls or null) == true;
+
         ownedGroups = [
           {
             vars = {
@@ -241,11 +252,14 @@ in
               KC_DB_URL_DATABASE = database.out.database;
               KC_DB_USERNAME = database.out.credentials.out.keyRef "username";
               KC_DB_PASSWORD = database.out.credentials.out.keyRef "password";
-            };
+            }
+            // lib.optionalAttrs dbTls { KC_DB_URL_PROPERTIES = "?sslmode=require"; };
             # KC_DB_URL replaces the host, port, and database above.
             names = [ "KC_DB_URL" ];
             from = "the database dependency";
-            fix = "Wire a different database instance through deps.database instead.";
+            fix =
+              "Wire a different database instance through deps.database instead."
+              + lib.optionalString dbTls " KC_DB_URL_PROPERTIES is set because the database's out.tls is true.";
           }
           {
             vars = {
@@ -288,6 +302,16 @@ in
                 valueFrom.fieldRef.fieldPath = "status.podIP";
               };
             };
+            # The peer policy opens the default JGroups ports between pod
+            # IPs. A moved port, an advertised external address, or a
+            # custom Infinispan stack would leave the pods unable to reach
+            # each other under default deny.
+            names = [
+              "KC_CACHE_EMBEDDED_NETWORK_BIND_PORT"
+              "KC_CACHE_EMBEDDED_NETWORK_EXTERNAL_PORT"
+              "KC_CACHE_EMBEDDED_NETWORK_EXTERNAL_ADDRESS"
+              "KC_CACHE_CONFIG_FILE"
+            ];
             from = "the package, which clusters the replicas through the database (jdbc-ping) on the ports its <instance>-jgroups policy opens";
             fix = "Remove it from env.";
           }
@@ -351,12 +375,12 @@ in
               strategy.type = "Recreate";
               progressDeadlineSeconds = startupSeconds + 60;
               selector.matchLabels = scope.selectorLabels;
-              # A changed database password or bootstrap secret restarts
-              # the pods, which read both once at start. A `secret-ref` has
-              # no content hash.
+              # A changed database password restarts the pods, which read
+              # it once at start. A `secret-ref` has no content hash. The
+              # bootstrap secret has no annotation: Keycloak reads it only
+              # on the first start, so a restart for it would change nothing.
               template.metadata.annotations = lib.filterAttrs (_: v: v != null) {
                 "checksum/database" = database.out.credentials.out.identityHash or null;
-                "checksum/bootstrap-admin" = admin.out.identityHash or null;
               };
               template.spec = {
                 automountServiceAccountToken = false;

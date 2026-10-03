@@ -31,10 +31,12 @@ let
       shape = "the PostgreSQL Service FQDN";
       test = isString;
     };
+    # A string, because consumers interpolate it into URLs and env values,
+    # where Nix cannot coerce an integer.
     port = {
       required = true;
-      shape = "the PostgreSQL port, as an integer or a string";
-      test = v: builtins.isInt v || isString v;
+      shape = "the PostgreSQL port as a string (pass an integer through toString)";
+      test = isString;
     };
     database = {
       required = true;

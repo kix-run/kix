@@ -16,7 +16,8 @@
 # ClusterSecretStores with failurePolicy Fail, and the API server refuses
 # those writes until the CA is in place. Every custom resource built from
 # `out` therefore requires the check Job, which succeeds once the API server
-# admits a server-side dry-run create of an ExternalSecret.
+# admits a server-side dry-run create of an ExternalSecret and of a
+# SecretStore.
 #
 # The controller reads and writes Secrets in every namespace, reads
 # ConfigMaps, and mints ServiceAccount tokens (for the Kubernetes provider
@@ -49,6 +50,10 @@
 #       literal string, so each credential comes from a secret dependency
 #       (`(dep.out.keyRef "<key>").valueFrom.secretKeyRef`), which orders the
 #       store after the Secret and checks the key.
+#   out.mkClusterSecretStore scope { name; spec; }
+#       Builds a ClusterSecretStore with the same refusal, and also refuses a
+#       selector without `namespace`, which the controller would read from
+#       each ExternalSecret's namespace.
 #   out.mkExternalSecret scope { name; spec; }
 #       Builds an ExternalSecret. Sets `spec.target.template.metadata` to `{ }`
 #       unless the spec sets it: without a template the controller copies the
@@ -63,12 +68,12 @@
 #       Secret receives are known (no `dataFrom` or `templateFrom`), a key
 #       the ExternalSecret does not write.
 #   out.crds.<Kind>
-#       For `scope.mkCR`: ClusterSecretStore, ClusterExternalSecret,
-#       PushSecret, ClusterPushSecret, ClusterGenerator, and the generator
-#       kinds (Password, UUID, Fake, VaultDynamicSecret, ...). There are no
-#       handles for ExternalSecret and SecretStore, which go through the
-#       builders above, and none for GeneratorState, which the controller
-#       manages.
+#       For `scope.mkCR`: ClusterExternalSecret, PushSecret,
+#       ClusterPushSecret, ClusterGenerator, and the generator kinds
+#       (Password, UUID, Fake, VaultDynamicSecret, ...). There are no handles
+#       for ExternalSecret, SecretStore, and ClusterSecretStore, which go
+#       through the builders above, and none for GeneratorState, which the
+#       controller manages.
 #
 # Consumer pattern, in an instance that depends on `externalSecrets` and on
 # a secret dependency `vaultToken` declaring key `token`:
@@ -140,6 +145,7 @@ let
     grant
     full
     watch
+    finalize
     allow
     emit
     restrictTo
@@ -156,7 +162,8 @@ let
   crdFiles = builtins.attrNames (
     lib.filterAttrs (f: type: type == "regular" && lib.hasSuffix ".json" f) (builtins.readDir ./crds)
   );
-  crdSpecs = map (f: (builtins.fromJSON (builtins.readFile ./crds/${f})).spec) crdFiles;
+  crdDocs = map (f: builtins.fromJSON (builtins.readFile ./crds/${f})) crdFiles;
+  crdSpecs = map (doc: doc.spec) crdDocs;
   kindOf = spec: spec.names.kind;
   pluralOf = spec: spec.names.plural;
   isGenerator = spec: spec.group == "generators.external-secrets.io";
@@ -177,6 +184,7 @@ let
 
   # Kinds the builders cover, and the kind the controller writes itself.
   unexposedKinds = [
+    "ClusterSecretStore"
     "ExternalSecret"
     "GeneratorState"
     "SecretStore"
@@ -187,10 +195,11 @@ let
   releaseMinor = lib.take 2 (versionParts release);
   releaseMinorText = lib.concatStringsSep "." releaseMinor;
 
-  # Paths of Secret selectors (`{ name; key; namespace?; }`, the upstream
-  # SecretKeySelector) whose name is a literal string. A name from a secret
-  # dependency's `keyRef` or from `kix.untrackedRef` carries string context.
-  literalSelectors =
+  # Secret selectors (`{ name; key; namespace?; }`, the upstream
+  # SecretKeySelector) in a store spec, with their paths. `literal` is true
+  # when the name is a plain string; a name from a secret dependency's
+  # `keyRef` or from `kix.untrackedRef` carries string context.
+  secretSelectors =
     path: v:
     if builtins.isAttrs v then
       let
@@ -205,14 +214,18 @@ let
           ]) (builtins.attrNames v);
       in
       if isSelector then
-        lib.optional (!builtins.hasContext v.name) {
-          inherit path;
-          inherit (v) name key;
-        }
+        [
+          {
+            inherit path;
+            inherit (v) name key;
+            literal = !builtins.hasContext v.name;
+            hasNamespace = v ? namespace;
+          }
+        ]
       else
-        lib.concatLists (lib.mapAttrsToList (k: literalSelectors "${path}.${k}") v)
+        lib.concatLists (lib.mapAttrsToList (k: secretSelectors "${path}.${k}") v)
     else if builtins.isList v then
-      lib.concatLists (lib.imap0 (i: literalSelectors "${path}[${toString i}]") v)
+      lib.concatLists (lib.imap0 (i: secretSelectors "${path}[${toString i}]") v)
     else
       [ ];
 in
@@ -320,7 +333,7 @@ in
         cpu = "200m";
         memory = "256Mi";
       };
-      description = "Resource requests and limits for the cert-controller container. It caches every CustomResourceDefinition and ValidatingWebhookConfiguration in the cluster. Each field keeps its default until set, and null removes a default.";
+      description = "Resource requests and limits for the cert-controller container. Each field keeps its default until set, and null removes a default.";
     };
 
     extraArgs = lib.mkOption {
@@ -406,6 +419,27 @@ in
         # custom resource.
         crName = consumerScope: kind: args: "${kind} ${consumerScope.namespaceName}/${args.name}";
 
+        # Returns `result` once every Secret selector in the store's spec has
+        # a tracked name and, when `needNamespace`, a namespace. A
+        # ClusterSecretStore selector without one is read from each
+        # ExternalSecret's namespace (referent authentication), which Kix
+        # can neither order nor check.
+        checkStoreSelectors =
+          what: needNamespace: args: result:
+          let
+            selectors = secretSelectors "spec" (args.spec or { });
+            literal = builtins.filter (sel: sel.literal) selectors;
+            noNamespace = builtins.filter (sel: !sel.hasNamespace) selectors;
+            first = builtins.head literal;
+            firstNoNamespace = builtins.head noNamespace;
+          in
+          if literal != [ ] then
+            throw "${who}: ${what} names Secret \"${first.name}\" at ${first.path} by a literal string, so Kix neither orders the store after the Secret nor checks that it holds key \"${first.key}\". Use (<secret dependency>.out.keyRef \"${first.key}\").valueFrom.secretKeyRef, or, for a Secret created outside Kix, name = kix.untrackedRef { name = \"${first.name}\"; kind = \"Secret\"; }."
+          else if needNamespace && noNamespace != [ ] then
+            throw "${who}: ${what} names Secret \"${firstNoNamespace.name}\" at ${firstNoNamespace.path} without a namespace, so the controller reads it from the namespace of each ExternalSecret that uses the store, and Kix can neither order the store after it nor check its keys. Add namespace = scope.namespaceName to the selector (the namespace of this instance's secret dependency)."
+          else
+            result;
+
         controllerArgs = [
           "--enable-leader-election=true"
           "--metrics-addr=:${toString ports.metrics}"
@@ -429,7 +463,11 @@ in
         } config.extraArgs;
 
         # From deploy/charts/external-secrets/templates/rbac.yaml at the
-        # release tag, with every reconciler enabled.
+        # release tag, with every reconciler and openshiftFinalizers enabled
+        # (the chart defaults). The controller sets owner references with
+        # blockOwnerDeletion, which the OwnerReferencesPermissionEnforcement
+        # admission plugin allows only with update on the owner's
+        # finalizers subresource.
         controllerRbac = mkClusterRoleSet scope {
           subjects = subjectsFor self.serviceAccount;
           roles."${name}-controller" = grant [
@@ -469,6 +507,17 @@ in
                 "update"
                 "patch"
               ]
+            )
+            (
+              map es [
+                "clusterexternalsecrets"
+                "clusterpushsecrets"
+                "clustersecretstores"
+                "externalsecrets"
+                "pushsecrets"
+                "secretstores"
+              ]
+              |> finalize
             )
             (
               generators "generatorstates"
@@ -646,31 +695,49 @@ in
           else
             null;
 
-        # The check: a server-side dry-run create of an ExternalSecret. With
-        # failurePolicy Fail the API server admits it only after calling the
-        # webhook and trusting its certificate, which also needs the CA in
-        # the configuration. Until then kubectl fails and the Job restarts
-        # the container.
+        # The check: a server-side dry-run create of an ExternalSecret and of
+        # a SecretStore, one per webhook configuration, since the
+        # cert-controller injects the CA into each separately. With
+        # failurePolicy Fail the API server admits each only after calling
+        # the webhook and trusting its certificate, which also needs the CA
+        # in that configuration. Until then kubectl fails and the Job
+        # restarts the container.
         checkName = "${name}-webhook-check";
         checkLabels = labelsFor "webhook-check";
-        checkManifest = builtins.toJSON {
-          apiVersion = "external-secrets.io/v1";
-          kind = "ExternalSecret";
-          # A fixed name would fail with AlreadyExists when an ExternalSecret
-          # of that name exists.
-          metadata = {
-            generateName = "${checkName}-";
-            namespace = ns;
-          };
-          spec = {
-            secretStoreRef = {
-              name = checkName;
-              kind = "SecretStore";
+        # A fixed name would fail with AlreadyExists when an object of that
+        # name exists.
+        checkMetadata = {
+          generateName = "${checkName}-";
+          namespace = ns;
+        };
+        checkManifests = {
+          "externalsecret.json" = builtins.toJSON {
+            apiVersion = "external-secrets.io/v1";
+            kind = "ExternalSecret";
+            metadata = checkMetadata;
+            spec = {
+              secretStoreRef = {
+                name = checkName;
+                kind = "SecretStore";
+              };
+              data = [
+                {
+                  secretKey = "check";
+                  remoteRef.key = "check";
+                }
+              ];
             };
-            data = [
+          };
+          # The fake provider needs no credentials; its webhook validation
+          # requires a non-empty key and value in each entry.
+          "secretstore.json" = builtins.toJSON {
+            apiVersion = "external-secrets.io/v1";
+            kind = "SecretStore";
+            metadata = checkMetadata;
+            spec.provider.fake.data = [
               {
-                secretKey = "check";
-                remoteRef.key = "check";
+                key = "check";
+                value = "check";
               }
             ];
           };
@@ -712,11 +779,14 @@ in
             dataKeys = map (d: d.secretKey) (spec.data or [ ]);
             templateKeys = builtins.attrNames (template.data or { });
             # The Secret's keys, or null when dataFrom or templateFrom adds
-            # keys only the store knows. Template data replaces the synced
+            # keys only the store knows, or when creationPolicy Merge keeps
+            # the keys another writer put in the Secret. Template data replaces the synced
             # keys unless mergePolicy is Merge (ApplyTemplate in
             # pkg/controllers/externalsecret/externalsecret_controller_template.go).
             knownKeys =
-              if (spec.dataFrom or [ ]) != [ ] || (template.templateFrom or [ ]) != [ ] then
+              if
+                policy == "Merge" || (spec.dataFrom or [ ]) != [ ] || (template.templateFrom or [ ]) != [ ]
+              then
                 null
               else if templateKeys == [ ] then
                 dataKeys
@@ -771,16 +841,19 @@ in
         certControllerRoleBinding = certControllerRoles."${name}-cert-controller-binding";
 
         # The controller lists every kind at start, generators included.
+        # The vendored label `external-secrets.io/component: controller` is
+        # what the cert-controller's partial cache selects definitions by.
         crds = builtins.listToAttrs (
           map (
-            spec:
-            lib.nameValuePair (pluralOf spec) (
+            doc:
+            lib.nameValuePair (pluralOf doc.spec) (
               gate (
                 scope.mkCRD (
                   {
-                    inherit spec;
+                    inherit (doc) spec;
+                    labels = doc.metadata.labels or { };
                   }
-                  // lib.optionalAttrs (builtins.elem (kindOf spec) readyKinds) {
+                  // lib.optionalAttrs (builtins.elem (kindOf doc.spec) readyKinds) {
                     readiness.condition = {
                       type = "Ready";
                       status = "True";
@@ -789,7 +862,7 @@ in
                 )
               )
             )
-          ) crdSpecs
+          ) crdDocs
         );
 
         deployment = scope.mkDeployment {
@@ -898,12 +971,24 @@ in
                         (kix.port "webhook" ports.webhook)
                         (kix.port "ready" ports.webhookHealth)
                       ];
+                      # The health server starts only after the webhook has
+                      # waited up to 2 minutes for a valid certificate in
+                      # certDir (waitForCerts in cmd/controller/webhook.go),
+                      # so the startup probe allows 150 s before liveness
+                      # applies.
+                      startupProbe = {
+                        httpGet = {
+                          path = "/healthz";
+                          port = "ready";
+                        };
+                        periodSeconds = 5;
+                        failureThreshold = 30;
+                      };
                       livenessProbe = {
                         httpGet = {
                           path = "/healthz";
                           port = "ready";
                         };
-                        initialDelaySeconds = 20;
                         periodSeconds = 5;
                       };
                       # Ready once the certificate in certDir is valid for
@@ -1003,6 +1088,11 @@ in
                     "--metrics-addr=:${toString ports.metrics}"
                     "--healthz-addr=:${toString ports.webhookHealth}"
                     "--enable-leader-election=true"
+                    # Caches only definitions labelled
+                    # external-secrets.io/component=controller and webhook
+                    # configurations labelled =webhook, instead of every one
+                    # in the cluster.
+                    "--enable-partial-cache=true"
                   ];
                   ports = [
                     (kix.port "metrics" ports.metrics)
@@ -1048,7 +1138,15 @@ in
         webhookCheckRbac = mkRoleSet scope {
           subjects = subjectsFor self.webhookCheckServiceAccount;
           labels = checkLabels;
-          roles.${checkName} = grant [ (es "externalsecrets" |> allow [ "create" ]) ];
+          roles.${checkName} = grant [
+            (
+              map es [
+                "externalsecrets"
+                "secretstores"
+              ]
+              |> allow [ "create" ]
+            )
+          ];
         };
 
         webhookCheckManifest = scope.mkResource {
@@ -1056,7 +1154,7 @@ in
           kind = "ConfigMap";
           name = checkName;
           labels = checkLabels;
-          data."externalsecret.json" = checkManifest;
+          data = checkManifests;
         };
 
         webhookCheck =
@@ -1085,12 +1183,13 @@ in
                 self.secretStoreWebhook
                 self.externalSecretWebhook
                 (crdOf "ExternalSecret")
+                (crdOf "SecretStore")
               ]
               ++ builtins.attrValues self.webhookCheckRbac;
               spec = {
                 # The container restarts with the kubelet's back-off (10 s,
-                # doubling), so six restarts wait about five minutes for the
-                # cert-controller to inject the CA.
+                # doubling, capped at 300 s), so six restarts wait about ten
+                # minutes for the cert-controller to inject the CA.
                 backoffLimit = 6;
                 template = {
                   metadata = {
@@ -1116,7 +1215,9 @@ in
                           args = [
                             "create"
                             "--dry-run=server"
-                            "--filename=/check/externalsecret.json"
+                          ]
+                          ++ map (f: "--filename=/check/${f}") (builtins.attrNames checkManifests)
+                          ++ [
                             "--output=name"
                           ];
                           # kubectl writes its discovery cache under $HOME.
@@ -1187,14 +1288,15 @@ in
 
             mkSecretStore =
               consumerScope: args:
-              let
-                literal = literalSelectors "spec" (args.spec or { });
-                first = builtins.head literal;
-              in
-              if literal != [ ] then
-                throw "${who}: ${crName consumerScope "SecretStore" args} names Secret \"${first.name}\" at ${first.path} by a literal string, so Kix neither orders the store after the Secret nor checks that it holds key \"${first.key}\". Use (<secret dependency>.out.keyRef \"${first.key}\").valueFrom.secretKeyRef, or, for a Secret created outside Kix, name = kix.untrackedRef { name = \"${first.name}\"; kind = \"Secret\"; }."
-              else
-                (crdOf "SecretStore").out.mkCR consumerScope args;
+              checkStoreSelectors (crName consumerScope "SecretStore" args) false args (
+                (crdOf "SecretStore").out.mkCR consumerScope args
+              );
+
+            mkClusterSecretStore =
+              consumerScope: args:
+              checkStoreSelectors "ClusterSecretStore ${args.name}" true args (
+                (crdOf "ClusterSecretStore").out.mkCR consumerScope args
+              );
 
             mkExternalSecret =
               consumerScope: args:

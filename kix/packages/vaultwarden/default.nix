@@ -142,8 +142,9 @@ in
 
         # DB_USERNAME and DB_PASSWORD come from the database's credentials
         # Secret; Kubernetes substitutes $(VAR) from variables defined
-        # earlier in the list.
-        databaseUrl = "postgresql://$(DB_USERNAME):$(DB_PASSWORD)@${database.out.host}:${database.out.port}/${database.out.database}";
+        # earlier in the list. toString lets an integer port reach the
+        # contract assertion, which names it, instead of failing here.
+        databaseUrl = "postgresql://$(DB_USERNAME):$(DB_PASSWORD)@${database.out.host}:${toString database.out.port}/${database.out.database}";
 
         dataMount = kix.mount.pvc storage { mountPath = "/data"; };
       in

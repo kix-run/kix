@@ -232,6 +232,8 @@
             built = name: clusterOutputs.packages.${system}."cluster-postgres-swap-${name}";
           in
           pkgs.runCommand "postgres-swap" { } ''
+            # $3 is the provider's own host, so a wrong host from either
+            # provider (CloudNativePG serves no Service named pg) differs.
             normalise() {
               mkdir -p "$2"
               for f in "$1"/app/metabase-*.yaml; do
@@ -239,15 +241,15 @@
                   metabase-db-packageinstance.yaml) continue ;;
                 esac
                 sed -E \
-                  -e 's/pg(-rw)?\.db\.svc\.cluster\.local/POSTGRES_HOST/g' \
+                  -e "s/$3/POSTGRES_HOST/g" \
                   -e '/kix\.run\/(depends-on|identity-hash|closure-hash)/d' \
                   -e 's/(checksum\/database:).*/\1 CREDENTIALS_HASH/' \
                   -e 's/(app\.kubernetes\.io\/name:) (stackgres|cnpg)-database/\1 DATABASE_PACKAGE/' \
                   "$f" > "$2/$(basename "$f")"
               done
             }
-            normalise ${built "stackgres"} stackgres
-            normalise ${built "cnpg"} cnpg
+            normalise ${built "stackgres"} stackgres 'pg\.db\.svc\.cluster\.local'
+            normalise ${built "cnpg"} cnpg 'pg-rw\.db\.svc\.cluster\.local'
             if ! diff -ru stackgres cnpg; then
               echo "the consumer's manifests changed with the PostgreSQL provider" >&2
               exit 1

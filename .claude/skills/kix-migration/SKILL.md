@@ -401,7 +401,13 @@ edge but NO netpol hole. Consequences when authoring:
   written the caBundle into configurations Kix rendered (`cnpg-operator`).
   A boolean or number status field compares by its JSON text:
   `readiness = { path = "/status/applied"; equals = "true"; }`
-  (`cnpg-operator` for Database and DatabaseRole).
+  (`cnpg-operator` for Database and DatabaseRole). Neither form trusts a
+  status older than the spec: a path rule also waits for
+  `status.observedGeneration`, and a condition rule for the condition's
+  own `observedGeneration`, to reach `metadata.generation` when the
+  operator reports it. An operator that reports neither (CloudNativePG's
+  Cluster) can still read as ready from its previous status right after
+  a spec change.
 
 ### Composition helpers (kix.*)
 
