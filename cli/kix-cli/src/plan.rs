@@ -548,9 +548,100 @@ fn render_change_json(c: &PackageChangeDiff) -> Value {
         "modified_resources": c.resource_diffs.iter().map(|(id, diffs)| serde_json::json!({
             "resource": id.display_id(),
             "diff_count": diffs.len(),
+            "changes": diffs.iter().map(|d| render_field_change_json(id, d)).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "dep_affected_resources": c.dep_affected_resources.iter().map(|id| id.display_id()).collect::<Vec<_>>(),
     })
+}
+
+/// Stands in for a value the JSON diff leaves out because it is secret: a
+/// Secret's `data` and `stringData` values, a Secret's
+/// `kix.run/content-hash` and `kix.run/applied-hash`, and every
+/// `checksum/*` annotation (Helm charts put a hash of a Secret there, and a
+/// hash of a weak secret can be brute-forced).
+pub const SECRET_NOT_SHOWN: &str = "(secret, not shown)";
+
+/// A value larger than this, serialized, is left out of the JSON diff, so
+/// a changed CRD schema or a large ConfigMap file does not swell a plan
+/// that CI uploads.
+pub const MAX_SHOWN_VALUE_BYTES: usize = 16 * 1024;
+
+/// One field change of a modified resource: `path` as the text diff prints
+/// it, `change` (`added`, `removed`, or `changed`), and the `old` and `new`
+/// values, each absent when that side has no value. A secret value reads
+/// [`SECRET_NOT_SHOWN`]; a value over [`MAX_SHOWN_VALUE_BYTES`] reads
+/// `"(N bytes, not shown)"`.
+///
+/// Other values are shown as the build and the cluster hold them. A
+/// password written as a literal container `env` value, or into a
+/// ConfigMap, is not recognised as secret.
+fn render_field_change_json(id: &ResourceId, d: &Difference) -> Value {
+    use kix::manifest::diff::DiffKind;
+    let change = match d.kind {
+        DiffKind::MissingInB => "removed",
+        DiffKind::ExtraInB => "added",
+        DiffKind::ValueMismatch | DiffKind::TypeMismatch => "changed",
+    };
+    let mut out = serde_json::json!({ "path": d.path, "change": change });
+    let is_secret = id.kind == "Secret";
+    for (side, value) in [("old", &d.a_value), ("new", &d.b_value)] {
+        if let Some(value) = value {
+            out[side] = shown_value(is_secret, &d.path, value);
+        }
+    }
+    out
+}
+
+/// `value`, found at `path`, with every secret value in it replaced by
+/// [`SECRET_NOT_SHOWN`], or a size note when it is too large to show.
+fn shown_value(is_secret: bool, path: &str, value: &Value) -> Value {
+    let mut value = value.clone();
+    hide_secrets(is_secret, path, &mut value);
+    let bytes = value.to_string().len();
+    if bytes > MAX_SHOWN_VALUE_BYTES {
+        return Value::String(format!("({bytes} bytes, not shown)"));
+    }
+    value
+}
+
+fn hide_secrets(is_secret: bool, path: &str, value: &mut Value) {
+    if is_secret_path(is_secret, path) {
+        *value = Value::String(SECRET_NOT_SHOWN.into());
+        return;
+    }
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                hide_secrets(is_secret, &format!("{path}.{key}"), child);
+            }
+        }
+        Value::Array(items) => {
+            for (i, child) in items.iter_mut().enumerate() {
+                hide_secrets(is_secret, &format!("{path}[{i}]"), child);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether the value at `path` is secret. Annotation keys contain dots and
+/// slashes, and diff paths do not escape them, so a key is matched by its
+/// prefix after `annotations.`.
+fn is_secret_path(is_secret: bool, path: &str) -> bool {
+    if path.contains(".annotations.checksum/") {
+        return true;
+    }
+    if !is_secret {
+        return false;
+    }
+    let under = |field: &str| {
+        path.starts_with(&format!("{field}.")) || path.starts_with(&format!("{field}["))
+    };
+    under("$.data")
+        || under("$.stringData")
+        || [keys::CONTENT_HASH, keys::APPLIED_HASH]
+            .iter()
+            .any(|k| path == format!("$.metadata.annotations.{k}"))
 }
 
 fn render_change_markdown(out: &mut String, c: &PackageChangeDiff) {
@@ -1577,6 +1668,148 @@ mod diff_graph_tests {
         let md = render_package_diff_markdown(&d);
         assert!(md.contains("#### Cluster-level resources"), "{md}");
         assert!(md.contains("**Activation:** `c-old` → `c-new`"), "{md}");
+    }
+
+    /// The `changes` of the modified resource named `resource` in `web`.
+    fn json_changes(d: &PackageDiff, resource: &str) -> Value {
+        let json = render_package_diff_json(d);
+        let web = json["changed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["key"] == "app/web")
+            .expect("web changed")
+            .clone();
+        let modified = web["modified_resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["resource"] == resource)
+            .unwrap_or_else(|| panic!("{resource} modified: {web}"))
+            .clone();
+        assert_eq!(
+            modified["diff_count"].as_u64(),
+            Some(modified["changes"].as_array().unwrap().len() as u64)
+        );
+        modified["changes"].clone()
+    }
+
+    fn web_resource(kind: &str, hash: &str, fields: Value) -> Value {
+        let mut v = stamped(kind, "app", "web", ("app", "web"), hash, json!(null));
+        let map = v.as_object_mut().unwrap();
+        map.remove("spec");
+        for (k, field) in fields.as_object().unwrap() {
+            map.insert(k.clone(), field.clone());
+        }
+        v
+    }
+
+    /// Each field change reads old to new, with an absent side left out.
+    #[test]
+    fn json_lists_each_field_change() {
+        let mut new = baseline();
+        new[3] = stamped(
+            "ConfigMap",
+            "app",
+            "web",
+            ("app", "web"),
+            &h("cm2"),
+            json!({"k": "wanted", "extra": 1}),
+        );
+        let changes = json_changes(&diff_of(&baseline(), &new), "ConfigMap/web@app");
+        assert_eq!(
+            changes,
+            json!([
+                {"path": "$.spec.extra", "change": "added", "new": 1},
+                {"path": "$.spec.k", "change": "changed", "old": "v", "new": "wanted"},
+            ])
+        );
+    }
+
+    /// No Secret value, and no hash of one, reaches the JSON.
+    #[test]
+    fn json_hides_secret_values_and_their_hashes() {
+        let secret = |hash: &str, fields: Value| web_resource("Secret", hash, fields);
+        let mut old = baseline();
+        old.push(secret(
+            &h("s1"),
+            json!({"data": {"password": "b2xkLXBhc3M="}, "type": "Opaque"}),
+        ));
+        let mut new = baseline();
+        let mut s = secret(
+            &h("s2"),
+            json!({
+                "data": {"password": "bmV3LXBhc3M="},
+                "stringData": {"token": "plain-token"},
+                "type": "kubernetes.io/basic-auth",
+            }),
+        );
+        s["metadata"]["annotations"][keys::CONTENT_HASH] = json!("content-hash-value");
+        new.push(s);
+        new[4] = stamped(
+            "Deployment",
+            "app",
+            "web",
+            ("app", "web"),
+            &h("dep2"),
+            json!({"template": {"metadata": {"annotations": {"checksum/secret": "abc123"}}}}),
+        );
+        let d = diff_of(&old, &new);
+        let text = render_package_diff_json(&d).to_string();
+        for leaked in [
+            "b2xkLXBhc3M=",
+            "bmV3LXBhc3M=",
+            "plain-token",
+            "content-hash-value",
+            "abc123",
+        ] {
+            assert!(!text.contains(leaked), "{leaked} in {text}");
+        }
+
+        let changes = json_changes(&d, "Secret/web@app");
+        let by_path = |p: &str| {
+            changes
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["path"] == p)
+                .unwrap_or_else(|| panic!("{p} in {changes}"))
+                .clone()
+        };
+        assert_eq!(
+            by_path("$.data.password"),
+            json!({"path": "$.data.password", "change": "changed",
+                   "old": SECRET_NOT_SHOWN, "new": SECRET_NOT_SHOWN})
+        );
+        assert_eq!(
+            by_path("$.stringData")["new"],
+            json!({"token": SECRET_NOT_SHOWN})
+        );
+        assert_eq!(by_path("$.type")["new"], json!("kubernetes.io/basic-auth"));
+
+        let changes = json_changes(&d, "Deployment/web@app");
+        assert!(changes.to_string().contains(SECRET_NOT_SHOWN), "{changes}");
+    }
+
+    /// A value too large to show is replaced by its size.
+    #[test]
+    fn json_leaves_out_a_large_value() {
+        let big = "x".repeat(MAX_SHOWN_VALUE_BYTES + 1);
+        let mut new = baseline();
+        new[3] = stamped(
+            "ConfigMap",
+            "app",
+            "web",
+            ("app", "web"),
+            &h("cm2"),
+            json!({"k": big}),
+        );
+        let changes = json_changes(&diff_of(&baseline(), &new), "ConfigMap/web@app");
+        assert_eq!(changes[0]["old"], json!("v"));
+        assert_eq!(
+            changes[0]["new"],
+            json!(format!("({} bytes, not shown)", MAX_SHOWN_VALUE_BYTES + 3))
+        );
     }
 }
 
