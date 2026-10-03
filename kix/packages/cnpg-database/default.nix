@@ -14,9 +14,13 @@
 # password, a DatabaseRole, and a Database only in the Cluster's namespace.
 #
 # DI deps:
-#   postgres (required)      a cnpg-cluster. The package reads its -rw
-#                            Service and its Cluster's name, so an import
-#                            without out.clusterName is refused.
+#   postgres (required)      a cnpg-cluster, or a cnpg-pooler in front of
+#                            one. The package reads its Service and its
+#                            Cluster's name, so an import without
+#                            out.clusterName is refused. With a pooler,
+#                            `out.host` is the pooler's Service and the
+#                            role and database are created on its
+#                            Cluster.
 #   cnpgOperator (required)  the cnpg-operator whose DatabaseRole and
 #                            Database handles the package builds from.
 #
@@ -43,10 +47,12 @@
 #   });
 #
 # Exposes:
-#   out.host, out.port      the cluster's -rw Service. They carry the
-#                           Database, so a consumer's workload waits until
-#                           the operator reports it applied and gets
-#                           network policy to PostgreSQL.
+#   out.host, out.port      the postgres dependency's Service: the
+#                           cluster's -rw Service, or the pooler's. They
+#                           carry the Database, so a consumer's workload
+#                           waits until the operator reports it applied
+#                           and gets network policy to that Service's
+#                           pods.
 #   out.database            the database name.
 #   out.username            the role name.
 #   out.extensions          the `extensions` option.
@@ -216,7 +222,7 @@ in
         if postgres.out ? clusterName then
           postgres.out
         else
-          throw "${who}: the postgres dependency publishes no out.clusterName, as with an import or a stackgres-cluster. This package creates a DatabaseRole and a Database for a cnpg-cluster; wire one with deps.postgres = ref.<namespace>.<instance>.";
+          throw "${who}: the postgres dependency publishes no out.clusterName, as with an import or a stackgres-cluster. This package creates a DatabaseRole and a Database for a cnpg-cluster; wire one, or a cnpg-pooler in front of one, with deps.postgres = ref.<namespace>.<instance>.";
       crds =
         if cnpgOperator.out ? crds then
           cnpgOperator.out.crds

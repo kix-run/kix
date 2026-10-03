@@ -42,9 +42,12 @@
           cnpg = ./clusters/test-cnpg.nix;
           postgres-swap-stackgres = ./clusters/test-postgres-swap/stackgres.nix;
           postgres-swap-cnpg = ./clusters/test-postgres-swap/cnpg.nix;
+          gateway-swap-envoy = ./clusters/test-gateway-swap/envoy.nix;
+          gateway-swap-traefik = ./clusters/test-gateway-swap/traefik.nix;
           kind = ./clusters/test-kind.nix;
           kind-v2 = ./clusters/test-kind-v2.nix;
           metrics-server = ./clusters/test-metrics-server.nix;
+          otel-collector = ./clusters/test-otel-collector.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
           monitoring-loki = ./clusters/test-monitoring-loki.nix;
           victoria-metrics = ./clusters/test-victoria-metrics.nix;
@@ -260,6 +263,43 @@
             touch $out
           '';
       });
+
+      # One File Browser, built once behind envoy-gateway and once behind
+      # traefik (clusters/test-gateway-swap). Its manifests must come out the
+      # same but for the HTTPRoute's parentRef, which names each
+      # implementation's Gateway (envoy-system/envoy, traefik-system/traefik).
+      # Also set aside: Kix's dependency bookkeeping, which names what is
+      # upstream. Network policy is off in both builds, because only traefik
+      # publishes its data-plane pods, and with policy on File Browser gets a
+      # policy admitting them that the envoy-gateway build lacks.
+      gatewaySwap = lib.genAttrs systems (system: {
+        gateway-swap =
+          let
+            pkgs = inputs.nixpkgs.legacyPackages.${system};
+            built = name: clusterOutputs.packages.${system}."cluster-gateway-swap-${name}";
+          in
+          pkgs.runCommand "gateway-swap" { } ''
+            # $3 and $4 are the Gateway's name and namespace in the parentRef.
+            normalise() {
+              mkdir -p "$2"
+              for f in "$1"/files/*.yaml; do
+                sed -E \
+                  -e "/parentRefs:/,/namespace:/{s/name: $3\$/name: GATEWAY_NAME/;s/namespace: $4\$/namespace: GATEWAY_NAMESPACE/}" \
+                  -e '/kix\.run\/(depends-on|identity-hash|closure-hash)/d' \
+                  "$f" > "$2/$(basename "$f")"
+              done
+            }
+            normalise ${built "envoy"} envoy envoy envoy-system
+            normalise ${built "traefik"} traefik traefik traefik-system
+            if ! diff -ru envoy traefik; then
+              echo "the consumer's manifests changed with the gateway implementation" >&2
+              exit 1
+            fi
+            grep -rq GATEWAY_NAMESPACE envoy || { echo "no parentRef reached the consumer" >&2; exit 1; }
+            echo "$(ls envoy | wc -l) consumer manifests identical across both implementations"
+            touch $out
+          '';
+      });
     in
     clusterOutputs
     // {
@@ -276,6 +316,7 @@
         // (libTests.${system} or { })
         // (clickhouseSwap.${system} or { })
         // (postgresSwap.${system} or { })
+        // (gatewaySwap.${system} or { })
         // (packageEval.${system} or { })
       ) clusterOutputs.checks;
 

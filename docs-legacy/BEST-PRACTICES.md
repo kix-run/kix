@@ -513,10 +513,22 @@ instead, where a provider outside kixpkgs can reach it. The Postgres
 takes `deps.database` (harbor, immich, keycloak, metabase, n8n, vaultwarden)
 holds the dependency to it with `assertions`. `checks.postgres-swap` builds
 Metabase on each provider and requires the same manifests but for the
-host. Its consumer side requires only the connection fields (`host`,
+host. A connection pooler fits the same contract: `cnpg-database` with a
+`cnpg-pooler` as its `postgres` dependency publishes the pooler's Service as
+`host`, and the consumer does not change. Its consumer side requires only the connection fields (`host`,
 `port`, `database`, `credentials`), so a `kix.mkImport` of an external
 database works, while `check` requires `username`, `extensions`, and `tls`
 as well, so every provider package publishes the same `out`.
+
+The `gateway` contract, `kix.contracts.gateway`
+(`kix/lib/vocab/gateway.nix`), works the same way for Gateway API
+implementations: envoy-gateway and traefik pass their `out` through
+`check`, and `kix.expose` holds its `gateway` dependency to it.
+`checks.gateway-swap` builds File Browser behind each and requires the
+same manifests but for the HTTPRoute's parentRef. Prefer traefik on a
+cluster with default-deny network policy: it publishes its pods, so
+`kix.expose` opens each backend to them, while Envoy Gateway's proxy pods
+are placed by its controller and get no derived policy.
 
 When both implementations are on the shelf, auto-instantiation refuses a
 demanded alias until the cluster selects one with an optional instance

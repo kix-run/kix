@@ -157,6 +157,12 @@ let
       };
       instances.postgres.package = packages.cnpg-cluster;
     };
+    # cnpg-cluster is off the shelf, so the pooled cluster is declared, and
+    # a Prometheus provider, so the PodMonitor is built.
+    cnpg-pooler.instances = {
+      postgres.package = packages.cnpg-cluster;
+      prometheus-operator.package = packages.prometheus-operator;
+    };
     cluster-issuer.config.spec.selfSigned = { };
     # A real Prometheus provider, so the ServiceMonitor, the alert rules,
     # and the Service's metrics port are built against its builders.
@@ -307,6 +313,13 @@ let
         };
       };
     };
+    # The collector refuses to start without a pipeline, and the events
+    # pipeline needs no dependency. A Prometheus provider, so the metrics
+    # port and the ServiceMonitor are built.
+    otel-collector = {
+      config.events.enabled = true;
+      instances.prometheus-operator.package = packages.prometheus-operator;
+    };
     persistent-volume-claim.config.size = "1Gi";
     priority-class.config.value = 1000;
     secret.config.stringData.password = "password";
@@ -375,6 +388,11 @@ let
         client_id = "id";
         client_secret = "secret";
       };
+    };
+    # A Prometheus provider, so the ServiceMonitor is built.
+    tempo.instances = {
+      inherit storage;
+      prometheus-operator.package = packages.prometheus-operator;
     };
     valkey.instances.valkey-password = valkeyPassword;
     # Nothing routes to the instance here, so the URL comes from `domain`.

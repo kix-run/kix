@@ -128,8 +128,10 @@ says `http`. Packages that read the URL take an override for that case
 With ingress-nginx and a network-policy provider, Kix derives an ingress rule
 from the controller pods to each backend. The ingress controller package must
 export `out.podSelector` and `out.podNamespace`; Kix warns when it cannot
-derive the rule. Gateway mode does not derive this rule because the Gateway
-reference does not describe its data-plane pods.
+derive the rule. In Gateway mode the rule comes from the gateway's
+`out.podSelector` and `out.podNamespace`: traefik publishes its pods, and
+envoy-gateway publishes null because Envoy Gateway's controller places the
+proxy pods, so its backends get no rule.
 
 :::tip[Use it in a task]
 See [Expose a Service with Ingress](/docs/how-to/platform-capabilities/expose-a-service-with-ingress/),

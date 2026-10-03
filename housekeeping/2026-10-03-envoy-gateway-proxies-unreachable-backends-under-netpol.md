@@ -1,0 +1,3 @@
+# 2026-10-03 · `kix/packages/envoy-gateway` · Under default-deny network policy, Envoy proxies cannot reach the backends kix.expose routes to.
+
+envoy-gateway publishes `out.podSelector = null`. Envoy Gateway labels its proxy pods `gateway.envoyproxy.io/owning-gateway-name` and `gateway.envoyproxy.io/owning-gateway-namespace`, but by default runs them in the controller's namespace, which the package does not know. `kix.expose` therefore writes no `<service>-from-gateway` policy, and a cluster with an enforcer needs a policy written outside Kix, or every HTTPRoute request times out. `ludo/variants/_kind-gateway-modules.nix` turns network policy on with envoy-gateway, so `ludo-kind-gateway` is affected. The `traefik` package publishes its pods and gets the policy.

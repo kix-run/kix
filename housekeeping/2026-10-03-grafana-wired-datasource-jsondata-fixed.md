@@ -1,0 +1,3 @@
+# 2026-10-03 · `kix/packages/grafana` · A wired datasource's `jsonData` cannot be changed, so the Tempo span-to-logs link only works with loki-logs' labels.
+
+The Tempo datasource wired from `deps.tempo` maps `k8s.namespace.name` and `k8s.pod.name` to the Loki labels `namespace` and `pod`, which loki-logs writes. A Loki fed by another shipper with other label names gets a link that finds nothing, and `datasources` refuses an entry that reuses the wired uid, so there is no way to change the mapping short of turning the dependency off and writing the datasource by hand. The same holds for every wired datasource's `jsonData`.

@@ -54,7 +54,8 @@
 # Exposes:
 #   out.crds.<Kind>   CRD handles for scope.mkCR: Cluster, Database,
 #                     DatabaseRole, ImageCatalog, ClusterImageCatalog,
-#                     Publication, and Subscription.
+#                     Publication, Subscription, ScheduledBackup, and
+#                     Pooler.
 #                       scope.mkCR cnpgOperator.out.crds.Cluster { ... }
 #   out.operandSelectors.cluster crName
 #                     the labels of a Cluster's instance and Job pods.
@@ -65,10 +66,10 @@
 # every pod of the package, the webhook-check Job's included, where nothing
 # listens on that port.
 #
-# Limits: Backup, ScheduledBackup, and Pooler have definitions (the operator
-# watches them) and no handle, so no package builds them. The operator's
+# Limits: Backup and FailoverQuorum have definitions (the operator watches
+# them) and no handle, so no package builds them. The operator's
 # own metrics are not scraped and the package ships no alerts. Network
-# policy for operand pods comes from cnpg-cluster.
+# policy for operand pods comes from cnpg-cluster and cnpg-pooler.
 #
 # root = the operator Deployment; the webhook check runs after it.
 #
@@ -166,6 +167,9 @@ in
     owner = "platform";
     defaultAliases = [ "cnpgOperator" ];
     conflictsWith = [ "cluster:cnpgOperator" ];
+    # The operator reads cnpg.io annotations on Clusters and their objects,
+    # and on the Services that register plugins.
+    annotationDomains = [ "cnpg.io" ];
     # The release's supported Kubernetes versions start at 1.31
     # (docs/src/supported_releases.md upstream); the definitions use CEL
     # validation rules.
@@ -377,8 +381,10 @@ in
       # with or without a handle.
       crds = {
         backups = scope.mkCRD { spec = vendored "backups.${group}.json"; };
-        scheduledBackups = scope.mkCRD { spec = vendored "scheduledbackups.${group}.json"; };
-        poolers = scope.mkCRD { spec = vendored "poolers.${group}.json"; };
+        # A ScheduledBackup and a Pooler report no conditions; a Pooler's
+        # consumers wait on its Service's endpoints instead.
+        scheduledBackups = gate (scope.mkCRD { spec = vendored "scheduledbackups.${group}.json"; });
+        poolers = gate (scope.mkCRD { spec = vendored "poolers.${group}.json"; });
         failoverQuorums = scope.mkCRD { spec = vendored "failoverquorums.${group}.json"; };
         clusters = gate (
           scope.mkCRD {
@@ -707,6 +713,8 @@ in
             DatabaseRole = self.crds.databaseRoles;
             Publication = self.crds.publications;
             Subscription = self.crds.subscriptions;
+            ScheduledBackup = self.crds.scheduledBackups;
+            Pooler = self.crds.poolers;
             ImageCatalog = self.crds.imageCatalogs;
             ClusterImageCatalog = self.crds.clusterImageCatalogs;
           };
