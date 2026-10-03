@@ -11,9 +11,11 @@
 # 127.0.0.1 only.
 #
 # Dependencies:
-#   database (required)       a `stackgres-database` instance (alias
-#                             `database`); n8n reads its host, port,
-#                             database name, and credentials.
+#   database (required)       a PostgreSQL database honouring the Postgres
+#                             database contract
+#                             (kix.contracts.postgresDatabase), such as a
+#                             `stackgres-database` instance; n8n reads its
+#                             host, port, database name, and credentials.
 #   valkey (required)         a `valkey` in this namespace, or a
 #                             `kix.mkImport` of one. n8n has no Sentinel
 #                             client, so the package turns Sentinel off on
@@ -186,6 +188,8 @@ in
     # `world` does not include endpoints inside the cluster.
     network.intents.workflows.egress = [ { to = "world"; } ];
   };
+
+  deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
 
   # n8n has no Sentinel client, and with Sentinel the valkey Service also
   # routes to read-only replicas, so n8n asks its valkey for a standalone
