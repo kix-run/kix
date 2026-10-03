@@ -61,7 +61,7 @@ use super::CommandContext;
 
 pub fn run(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     if args.operator {
-        let cluster = ctx.cluster_identity(&args.cluster);
+        let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
         return ctx.runtime.block_on(run_operator(args, &cluster, ctx));
     }
     if args.hard {
@@ -79,7 +79,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let flake_path = resolve_flake_path(&ctx.global.flake)?;
     // The cache and the records are read before the build, so the name comes
     // from the flake rather than from `new_graph`.
-    let cluster = ctx.cluster_identity(&args.cluster);
+    let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
 
     // 1. Activation records under the retention policy. Needs the cluster;
     //    done before the build so an unreachable cluster fails fast and the
@@ -146,6 +146,17 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     stamp_annotations(&mut new_graph);
     if !ctx.global.quiet {
         eprint!("\r\x1b[2K");
+    }
+    // The records and the old build were read under the name resolved before
+    // the build. Under any other name they belong to another cluster, and
+    // the comparison would list this cluster's objects as garbage.
+    if new_graph.cluster_name != cluster {
+        return Err(miette!(
+            "flake attribute '{}' builds cluster '{}', but the Activation records read before the build are those of cluster '{}'. Nothing was deleted.",
+            args.cluster,
+            new_graph.cluster_name,
+            cluster,
+        ));
     }
 
     // 4. Diff: resources in the old build that the new build no longer has.
@@ -221,7 +232,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let (ordered_rids, shared) = ctx.runtime.block_on(super::shared_orphans::keep_shared(
         &client,
-        &cluster,
+        &new_graph.cluster_name,
         ordered_rids,
     ))?;
 
@@ -271,9 +282,11 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     }
 
-    let done = ctx
-        .runtime
-        .block_on(delete_resources(&client, &cluster, &ordered_rids))?;
+    let done = ctx.runtime.block_on(delete_resources(
+        &client,
+        &new_graph.cluster_name,
+        &ordered_rids,
+    ))?;
     let (retired, records_failed) = ctx.runtime.block_on(delete_records(&global, &records))?;
     if done.failed == 0 && done.changed == 0 {
         ctx.runtime.block_on(clear_kept(

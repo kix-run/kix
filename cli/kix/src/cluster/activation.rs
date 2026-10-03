@@ -208,6 +208,35 @@ pub(crate) fn find_current_activation_ar(
     })
 }
 
+/// Whether any Activation record carries `cluster` in its `kix.run/cluster`
+/// label, in any phase. Needs no discovery: the record kind is Kix's own. A
+/// cluster without Kix's CRD has no records, so a 404 is `false`.
+pub async fn records_exist(client: &Client, cluster: &str) -> Result<bool, ActivationError> {
+    let version = keys::API_VERSION
+        .rsplit_once('/')
+        .map_or(keys::API_VERSION, |(_, v)| v);
+    let ar = ApiResource::from_gvk_with_plural(
+        &kube::api::GroupVersionKind::gvk(
+            keys::GROUP,
+            version,
+            crate::manifest::lifecycle::RECORD_KIND,
+        ),
+        "activations",
+    );
+    let api: Api<DynamicObject> = Api::all_with(client.clone(), &ar);
+    let lp = ListParams::default()
+        .labels(&format!(
+            "app.kubernetes.io/managed-by=kix,{}={cluster}",
+            keys::CLUSTER_LABEL
+        ))
+        .limit(1);
+    match api.list(&lp).await {
+        Ok(list) => Ok(!list.items.is_empty()),
+        Err(kube::Error::Api(e)) if e.code == 404 => Ok(false),
+        Err(e) => Err(ActivationError::ListFailed(e)),
+    }
+}
+
 /// Every record this cluster owns, whatever its phase.
 ///
 /// One place that knows the label selector, so a new phase reader does not
@@ -2167,5 +2196,31 @@ mod tenancy_tests {
         let t = Tenancy::from_records(&records, "");
         assert!(t.own.is_empty());
         assert!(t.others_current.contains("e1"));
+    }
+}
+
+#[cfg(test)]
+mod records_exist_tests {
+    use super::*;
+
+    /// Records are found by their cluster label, in any phase, and a cluster
+    /// label nothing carries finds none.
+    #[tokio::test]
+    async fn records_exist_finds_records_by_their_cluster_label() {
+        let api = crate::cluster::fake_api::FakeApi::new([serde_json::json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": crate::manifest::lifecycle::RECORD_KIND,
+            "metadata": {
+                "name": "rec-a1",
+                "labels": {
+                    "app.kubernetes.io/managed-by": "kix",
+                    (keys::CLUSTER_LABEL): "test-harbor",
+                },
+            },
+            "status": { "phase": PHASE_SUPERSEDED },
+        })]);
+        let client = api.client();
+        assert!(records_exist(&client, "test-harbor").await.unwrap());
+        assert!(!records_exist(&client, "harbor").await.unwrap());
     }
 }

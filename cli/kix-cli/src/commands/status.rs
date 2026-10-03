@@ -217,14 +217,14 @@ pub fn run(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
     let built = ctx.eval_cluster_or_suggest(&args.cluster)?;
     let cluster = match built.cluster_name() {
         Some(name) => name.to_string(),
-        None => ctx.cluster_identity(&args.cluster),
+        None => ctx.cluster_identity(&args.cluster, super::Lookup::ReadOnly)?,
     };
     let global = ctx.global.clone();
     ctx.runtime.block_on(run_flat_async(&cluster, &global))
 }
 
 fn run_operator(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
-    let cluster = ctx.cluster_identity(&args.cluster);
+    let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::ReadOnly)?;
     let global = ctx.global.clone();
     ctx.runtime.block_on(run_operator_async(&cluster, &global))
 }

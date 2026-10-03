@@ -33,7 +33,12 @@ use super::CommandContext;
 use kix::manifest::keys;
 
 pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<()> {
-    let cluster = ctx.cluster_identity(&args.cluster);
+    let lookup = if args.list {
+        super::Lookup::ReadOnly
+    } else {
+        super::Lookup::Mutating
+    };
+    let cluster = ctx.cluster_identity(&args.cluster, lookup)?;
     if args.list {
         return ctx.runtime.block_on(run_list_async(&cluster, ctx));
     }

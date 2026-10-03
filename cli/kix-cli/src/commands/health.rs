@@ -124,7 +124,7 @@ impl PackageHealth {
 }
 
 pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
-    let cluster = ctx.cluster_identity(&args.cluster);
+    let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::ReadOnly)?;
 
     // 1. Connect to cluster
     if !ctx.global.quiet {

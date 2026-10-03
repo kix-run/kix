@@ -41,23 +41,36 @@ writes into `kix-packages.json` (`StoreGraph::cluster_name`) and the
 Activation record's `kix.run/cluster` label. Every lookup of cluster state
 uses that name: the Activation records, the `SweepScope::Cluster` sweep, and
 the local cache files `~/.cache/kix/activations/<name>.{path,root,kept-*}`.
+`kix deploy` and `kix gc --hard` take the name from the build, and `kix status`
+and `kix inspect` from the evaluated `ClusterOutput::cluster_name()` (the
+build's record label; `ClusterOutput::name` is the attribute). Commands that
+read state without building, or before building (health, rollback,
+`status --operator`, soft gc, gc `--operator`, compliance attest
+`--from-cluster`), call `CommandContext::cluster_identity(arg, Lookup)`.
+Evaluating `kixClusters.<attr>.name` forces the definition's `buildCluster`
+call, nearly a whole cluster evaluation that needs the flake's inputs, so it
+is the last step: with no flake (`--flake` names a directory without
+`flake.nix`) the argument is the name; when an Activation record in the
+current context carries the argument as its `kix.run/cluster` label
+(`activation::records_exist`, one LIST with no discovery) the argument is the
+name; otherwise `kix::eval::eval_cluster_name()` evaluates it, and a flake
+that does not define the attribute or has no `kixClusters` leaves the
+argument. The flake reference goes into the installable
+(`<flake>#legacyPackages...`, `eval::cluster_name_command`), so `--flake
+github:...` works. When the evaluation fails, `Lookup::Mutating` (rollback,
+soft gc, gc `--operator`) is an error naming the attribute and the failure;
+`Lookup::ReadOnly` prints a warning and uses the argument. Soft gc refuses
+when the build's `cluster_name` differs from the name it resolved before the
+build, and passes the build's name to `keep_shared` and `delete_resources`.
+`kix snapshot save` and `kix drift --cluster` need no flake and take the name
+itself.
+
 The cache file carries no kube context, so two contexts deploying clusters
 of the same name share it. Soft gc takes the old build from the Active
 record (`baseline::active_build_dir`, which uses the cache only when
 `store::build_hash_of` matches the record's hash), and `kix deploy
 --current-activation` refuses after connecting when the cached build is not
 the context's Active build (`check_cached_baseline`).
-`kix deploy` and `kix gc --hard` take it from the build, and `kix status`
-and `kix inspect` from the evaluated `ClusterOutput::cluster_name()` (the
-build's record label; `ClusterOutput::name` is the attribute). Commands that
-read state without building, or before building (health, rollback,
-`status --operator`, soft gc, gc `--operator`, compliance attest
-`--from-cluster`), call `CommandContext::cluster_identity()`, which evaluates
-`kixClusters.<attr>.name` with `kix::eval::eval_cluster_name()` and uses the
-argument unchanged when the flake does not define it, defines no
-`kixClusters`, or there is no flake.
-`kix snapshot save` and `kix drift --cluster` need no flake and take the name
-itself.
 
 Doc 99 ("graph streaming") replaced the wave-barrier executor with the
 DAG-streaming `scheduler`. Each node becomes eligible the moment its direct

@@ -27,7 +27,7 @@ use crate::commands::CommandContext;
 
 pub fn run(args: &ComplianceAttestArgs, ctx: &mut CommandContext) -> Result<()> {
     let statement = if args.from_cluster {
-        let cluster = ctx.cluster_identity(&args.cluster);
+        let cluster = ctx.cluster_identity(&args.cluster, crate::commands::Lookup::ReadOnly)?;
         let record = ctx
             .runtime
             .block_on(fetch_receipt(&cluster, ctx.global.context.as_deref()))?;
