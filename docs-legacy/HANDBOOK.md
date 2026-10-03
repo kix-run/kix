@@ -1705,6 +1705,46 @@ The admission webhook validates ExternalSecrets, SecretStores, and ClusterSecret
 
 The controller reads and writes Secrets in every namespace, so a cluster runs one instance. Its network intent opens TCP 443 to destinations outside the cluster; a provider inside the cluster or on another port needs a `networkPolicy.platformIntents` entry for the controller's pods.
 
+### 21.10 Secrets stored in OpenBao
+
+`openbao` runs OpenBao 2.7 as a StatefulSet on integrated Raft storage, one pod at availability `none` and three from `pod` up, with TLS from a cert-manager CA it creates. It takes a required `certManager` dependency and, with the default `seal.type = "static"`, a required `unsealKey` secret with key `key` (32 bytes as raw, hex, or base64 text, with no trailing newline). OpenBao unseals itself with that key on every start. Anyone who can read the `unsealKey` Secret and a Raft volume can decrypt the data, so protection at rest is no stronger than the RBAC on Secrets in that namespace and the cluster's etcd encryption. `seal.type = "shamir"` keeps the unseal keys out of the cluster: a person runs `bao operator init` once and `bao operator unseal` on every pod after each start. Transit and cloud KMS seals are not supported.
+
+With the static seal, pod 0 initializes OpenBao on its first start through OpenBao's declarative self-initialization: it enables Kubernetes auth and creates the policy and role `kix-reconcile`, bound only to the ServiceAccount of the package's reconcile Job. The root token is revoked and no recovery keys exist. The reconcile Job then writes `policies` (HCL by name), `kubernetesAuth.roles` (the body of `auth/kubernetes/role/<name>`), and `secretsEngines` (the body of `sys/mounts/<path>`) on every change. It never deletes: its log lists the policies and roles OpenBao holds that are not declared, and an existing secrets engine is left unchanged. The Job can rewrite any policy, its own included, so its ServiceAccount is as powerful as a root token. In shamir mode no Job runs, and declaring any of the three options is an evaluation error.
+
+```nix
+# OpenBao, in namespace `secrets`
+openbao = {
+  package = packages.openbao;
+  config = {
+    secretsEngines.secret = { type = "kv"; options.version = "2"; };
+    policies.app-read = ''path "secret/data/app/*" { capabilities = ["read"] }'';
+    kubernetesAuth.roles.app = {
+      bound_service_account_names = [ "openbao-store" ];
+      bound_service_account_namespaces = [ "app" ];
+      token_policies = [ "app-read" ];
+    };
+  };
+};
+
+# In a package in namespace `app`, with deps externalSecrets and openbao
+storeServiceAccount = scope.mkResource { apiVersion = "v1"; kind = "ServiceAccount"; name = "openbao-store"; };
+store = externalSecrets.out.mkClusterSecretStore scope {
+  name = "openbao-app";
+  spec = {
+    provider = openbao.out.externalSecretsProvider scope {
+      serviceAccount = self.storeServiceAccount;
+      role = "app";
+      mount = "secret";
+    };
+    conditions = [ { namespaces = [ scope.namespaceName ]; } ];
+  };
+};
+```
+
+`out.externalSecretsProvider` returns the `vault` provider: the Service URL, the CA from the `<instance>-tls` Secret in OpenBao's namespace, the mount and its KV version, and Kubernetes auth with a token of the given ServiceAccount. It refuses a role that `kubernetesAuth.roles` does not declare or that does not bind that ServiceAccount and namespace (`*` binds any), and a mount that is not a declared `kv` engine. The role name it writes carries the reconcile Job, so the store is applied after the Job has written the role. A namespaced SecretStore cannot read the CA Secret from OpenBao's namespace, so the provider is for a ClusterSecretStore, limited to its namespaces with `conditions`. `clusters/test-openbao.nix` evaluates this shape.
+
+Kix derives no network policy between the external-secrets controller and OpenBao, because the address reaches the controller through the ClusterSecretStore. Under default deny, add policies that admit the controller's pods to port 8200 of the OpenBao pods.
+
 ## 22. CRDs
 
 Pipe-friendly builders in `scope.crd` (or top-level `kix.crd`):

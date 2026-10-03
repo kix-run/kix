@@ -80,6 +80,7 @@
         monitoring-netpol = ./test-monitoring-netpol.nix;
         tempo = ./test-tempo.nix;
         tempo-generator = ./test-tempo-generator.nix;
+        openbao = ./test-openbao.nix;
       };
     };
 }

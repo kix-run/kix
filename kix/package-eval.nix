@@ -328,6 +328,27 @@ let
         };
       };
     };
+    # The static seal, the default, needs the key. A declared policy, role,
+    # and engine give the reconcile Job data to apply.
+    openbao = {
+      instances.openbao-unseal = {
+        package = packages.secret;
+        aliases = [ "unsealKey" ];
+        config.stringData.key = "0123456789abcdef0123456789abcdef";
+      };
+      config = {
+        policies.app-read = ''path "secret/data/app/*" { capabilities = ["read"] }'';
+        kubernetesAuth.roles.app = {
+          bound_service_account_names = [ "app" ];
+          bound_service_account_namespaces = [ "app" ];
+          token_policies = [ "app-read" ];
+        };
+        secretsEngines.secret = {
+          type = "kv";
+          options.version = "2";
+        };
+      };
+    };
     # The collector refuses to start without a pipeline, and the events
     # pipeline needs no dependency. A Prometheus provider, so the metrics
     # port and the ServiceMonitor are built.

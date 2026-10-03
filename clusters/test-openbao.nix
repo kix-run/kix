@@ -1,0 +1,132 @@
+# clusters/test-openbao.nix: OpenBao feeding External Secrets Operator on
+# kind, under Cilium network policy.
+#
+# OpenBao runs with the static seal from a `secret` instance and declares a
+# kv engine, a read policy, and a Kubernetes auth role bound to the
+# ServiceAccount of the `app` namespace's store. The `app-secrets` package
+# builds that ServiceAccount, a ClusterSecretStore from
+# `openbao.out.externalSecretsProvider` limited to its namespace by
+# `conditions`, an ExternalSecret, and a reference to the Secret it writes. kind
+# offers availability `none`, so one OpenBao pod runs.
+#
+# OpenBao starts empty: the ExternalSecret becomes ready only after a value
+# is written to `secret/app/credentials` (key `password`), for example with
+# `bao kv put` under a role and policy that allow it.
+#
+# The refusals of the package and of `out.externalSecretsProvider` are
+# covered by kix/lib/tests/units/openbao.nix.
+#
+# Build:  nix build .#cluster-openbao --extra-experimental-features pipe-operators
+
+{ kix, packages }:
+
+let
+  appSecretsPackage = {
+    meta = {
+      description = "A ClusterSecretStore on OpenBao and an ExternalSecret";
+      owner = "app-team";
+    };
+    build =
+      {
+        self,
+        scope,
+        externalSecrets,
+        openbao,
+        ...
+      }:
+      {
+        storeServiceAccount = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ServiceAccount";
+          name = "openbao-store";
+        };
+
+        store = externalSecrets.out.mkClusterSecretStore scope {
+          name = "openbao-app";
+          spec = {
+            provider = openbao.out.externalSecretsProvider scope {
+              serviceAccount = self.storeServiceAccount;
+              role = "app";
+              mount = "secret";
+            };
+            conditions = [ { namespaces = [ scope.namespaceName ]; } ];
+          };
+        };
+
+        sync = externalSecrets.out.mkExternalSecret scope {
+          name = "app-credentials";
+          spec = {
+            secretStoreRef = {
+              name = self.store.out.name;
+              kind = "ClusterSecretStore";
+            };
+            refreshInterval = "1h";
+            data = [
+              {
+                secretKey = "password";
+                remoteRef = {
+                  key = "app/credentials";
+                  property = "password";
+                };
+              }
+            ];
+          };
+        };
+
+        credentials = self.sync.out.secretRef { keys = [ "password" ]; };
+
+        root = self.credentials;
+      };
+  };
+in
+kix.buildCluster {
+  name = "test-openbao";
+  specialArgs = { inherit packages kix; };
+  modules = [
+    kix.flavors.kind
+
+    {
+      availablePackages = packages;
+      networkPolicy.enable = true;
+      # kind runs with the default CNI disabled, so the managed cilium
+      # instance fills the cni role.
+      cluster.roles.cni = {
+        binding = "absent";
+        provider = null;
+      };
+      instances.kube-system.cilium.package = packages.cilium;
+
+      instances.cert-manager.cert-manager.package = packages.cert-manager;
+      instances.external-secrets.external-secrets.package = packages.external-secrets;
+
+      instances.secrets = {
+        openbao = {
+          package = packages.openbao;
+          config = {
+            secretsEngines.secret = {
+              type = "kv";
+              options.version = "2";
+            };
+            policies.app-read = ''
+              path "secret/data/app/*" { capabilities = ["read"] }
+            '';
+            kubernetesAuth.roles.app = {
+              bound_service_account_names = [ "openbao-store" ];
+              bound_service_account_namespaces = [ "app" ];
+              token_policies = [ "app-read" ];
+              token_ttl = "1h";
+            };
+          };
+        };
+        # Test value only.
+        openbao-unseal = {
+          package = packages.secret;
+          aliases = [ "unsealKey" ];
+          config.stringData.key = "6f70656e62616f2d746573742d6f6e6c792d6b65792d6e6f742d736563726574";
+        };
+      };
+
+      instances.app.app-secrets.package = appSecretsPackage;
+    }
+  ];
+}

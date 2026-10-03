@@ -57,6 +57,7 @@
           victoria-metrics = ./clusters/test-victoria-metrics.nix;
           victoria-metrics-crd-ref = ./clusters/test-victoria-metrics-crd-ref.nix;
           external-secrets = ./clusters/test-external-secrets.nix;
+          openbao = ./clusters/test-openbao.nix;
           doc-how-tos = ./clusters/test-doc-how-tos.nix;
 
           # Register documented examples so routine builds catch evaluation
