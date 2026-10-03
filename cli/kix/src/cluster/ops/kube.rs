@@ -28,7 +28,8 @@ use super::{ClusterOps, Finalized, OnStatus};
 /// Shared discovery cache: every kind the cluster serves, refreshed after
 /// CRDs land. Refreshes MERGE (see `fetch::merge_discovery`): the aggregated
 /// discovery document churns after CRD writes and can transiently omit
-/// unrelated groups, so a refresh must never forget a kind already seen.
+/// unrelated groups, so a refresh must never forget a kind already seen, and
+/// one that skipped a group version never replaces a cached kind.
 pub type DiscoveryCache = Arc<RwLock<Vec<(ApiResource, Scope)>>>;
 
 /// Wall-clock bound for waiting on the live resource to disappear during an
@@ -230,55 +231,73 @@ impl KubeOps {
             .map(|(ar, s)| (ar.clone(), s.clone()))
     }
 
-    /// Kind lookup with refresh-on-miss.
+    /// Kind lookup with refresh-on-miss, for applies.
     ///
     /// Dependents of a CRD do not run until the CRD is Ready and discovery
     /// has been refreshed, so the kind is normally in the cache. HA
     /// apiservers can serve discovery from different replicas with a few
-    /// hundred ms of skew, so retry with a targeted group fetch, then a full
-    /// one, before failing the node.
+    /// hundred ms of skew, so [`Self::refresh_until_found`] asks again
+    /// before the node fails.
     async fn resolve_kind(&self, manifest: &Value) -> Result<(ApiResource, Scope), ApplyError> {
-        const RETRIES: u32 = 4;
-        const INTERVAL: Duration = Duration::from_millis(500);
         let kind = manifest.get("kind").and_then(Value::as_str).unwrap_or("");
-        for attempt in 0..=RETRIES {
-            if let Some(found) = self.cached_kind(kind).await {
-                return Ok(found);
-            }
-            if attempt == RETRIES {
-                break;
-            }
+        let group = manifest
+            .get("apiVersion")
+            .and_then(Value::as_str)
+            .map(|av| av.split_once('/').map_or("", |(g, _)| g));
+        self.refresh_until_found(kind, group)
+            .await
+            .ok_or_else(|| ApplyError::UnknownKind {
+                kind: kind.to_string(),
+            })
+    }
+
+    /// The cached entry for `kind`, refreshing discovery on a miss up to
+    /// `REFRESH_ATTEMPTS` times with backoff (under 4 s of waiting between
+    /// requests). With a `group`, each refresh fetches that group alone and
+    /// falls back to a full walk only when the group fetch fails; without
+    /// one, each refresh is a full walk. A full walk here is a single pass
+    /// ([`fetch::discover_resources_once`]), so an unrelated group version
+    /// that answers 404 does not add [`fetch::DISCOVERY_SETTLE`] to each
+    /// attempt. Refreshes merge into the cache.
+    async fn refresh_until_found(
+        &self,
+        kind: &str,
+        group: Option<&str>,
+    ) -> Option<(ApiResource, Scope)> {
+        const REFRESH_ATTEMPTS: u32 = 5;
+        const BACKOFF_START: Duration = Duration::from_millis(250);
+        const BACKOFF_MAX: Duration = Duration::from_secs(2);
+        if let Some(found) = self.cached_kind(kind).await {
+            return Some(found);
+        }
+        let mut delay = BACKOFF_START;
+        for attempt in 1..=REFRESH_ATTEMPTS {
             tracing::debug!(
                 kind,
-                attempt = attempt + 1,
+                attempt,
                 "kind missing from discovery cache, refreshing"
             );
-            let group = manifest
-                .get("apiVersion")
-                .and_then(Value::as_str)
-                .map(|av| {
-                    av.split('/')
-                        .next()
-                        .filter(|_| av.contains('/'))
-                        .unwrap_or("")
-                })
-                .unwrap_or("");
-            // Targeted single-group fetch first: the bulk sweep can drop whole
-            // groups under load (see fetch::discover_group).
-            if let Ok(new) = fetch::discover_group(&self.client, group).await {
-                let mut d = self.discovery.write().await;
-                *d = fetch::merge_discovery(&d, new);
-                continue;
-            }
-            if let Ok(new) = fetch::discover_resources(&self.client).await {
+            let targeted = match group {
+                Some(g) => fetch::discover_group(&self.client, g).await.ok(),
+                None => None,
+            };
+            let fresh = match targeted {
+                Some(new) => Some(new),
+                None => fetch::discover_resources_once(&self.client).await.ok(),
+            };
+            if let Some(new) = fresh {
                 let mut d = self.discovery.write().await;
                 *d = fetch::merge_discovery(&d, new);
             }
-            tokio::time::sleep(INTERVAL).await;
+            if let Some(found) = self.cached_kind(kind).await {
+                return Some(found);
+            }
+            if attempt < REFRESH_ATTEMPTS {
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(BACKOFF_MAX);
+            }
         }
-        Err(ApplyError::UnknownKind {
-            kind: kind.to_string(),
-        })
+        None
     }
 
     fn api_for(&self, ar: &ApiResource, scope: &Scope, rid: &ResourceId) -> Api<DynamicObject> {
@@ -403,18 +422,11 @@ impl ClusterOps for KubeOps {
 
     async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, String> {
         // Refresh on a miss, as apply does: discovery can lag a CRD apply.
-        let found = match self.cached_kind(&rid.kind).await {
-            Some(found) => Some(found),
-            None => {
-                if let Ok(new) = fetch::discover_resources(&self.client).await {
-                    let mut d = self.discovery.write().await;
-                    *d = fetch::merge_discovery(&d, new);
-                }
-                self.cached_kind(&rid.kind).await
-            }
-        };
-        let (ar, scope) =
-            found.ok_or_else(|| format!("kind {} not in discovery cache", rid.kind))?;
+        // A ResourceId carries no group, so each refresh is a full walk.
+        let (ar, scope) = self
+            .refresh_until_found(&rid.kind, None)
+            .await
+            .ok_or_else(|| format!("kind {} not in discovery cache", rid.kind))?;
         let api = self.api_for(&ar, &scope, rid);
         api.get_opt(&rid.name)
             .await
@@ -550,7 +562,11 @@ impl ClusterOps for KubeOps {
     }
 
     async fn rediscover(&self) -> Result<(), FetchError> {
-        let new = fetch::discover_resources(&self.client).await?;
+        // A settled walk: every listed group version answered.
+        let new = fetch::DiscoveryPass {
+            resources: fetch::discover_resources(&self.client).await?,
+            missing: Vec::new(),
+        };
         {
             let mut d = self.discovery.write().await;
             *d = fetch::merge_discovery(&d, new);
@@ -786,5 +802,98 @@ mod prune_tests {
             Ok(Pruned::Kept(_))
         ));
         assert_eq!(api.names("ClusterRole"), vec!["shared"]);
+    }
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+    use crate::cluster::fake_api::FakeApi;
+    use crate::manifest::types::CLUSTER_SCOPED;
+    use serde_json::json;
+
+    const RBAC_V1: &str = "/apis/rbac.authorization.k8s.io/v1";
+
+    /// `ops` over `api` with an empty discovery cache, the state of a cache
+    /// that predates the group being served.
+    fn ops(api: &FakeApi) -> KubeOps {
+        KubeOps::new(
+            api.client(),
+            Arc::new(RwLock::new(Vec::new())),
+            KubeOpsConfig::default(),
+        )
+    }
+
+    async fn cached(ops: &KubeOps, kind: &str) -> bool {
+        ops.cached_kind(kind).await.is_some()
+    }
+
+    /// The CRD barrier's refresh succeeds when a listed group version
+    /// answers 404 a few times before it is served.
+    #[tokio::test(start_paused = true)]
+    async fn rediscover_waits_out_a_group_version_that_404s() {
+        let api = FakeApi::new([]);
+        api.fail_next(RBAC_V1, 3, 404);
+        let ops = ops(&api);
+        ops.rediscover().await.unwrap();
+        assert!(cached(&ops, "ClusterRole").await);
+    }
+
+    /// A group version that keeps answering 404 fails the refresh, and the
+    /// error names it.
+    #[tokio::test(start_paused = true)]
+    async fn rediscover_that_never_settles_names_the_group_version() {
+        let api = FakeApi::new([]);
+        api.fail_next(RBAC_V1, u32::MAX, 404);
+        let err = ops(&api).rediscover().await.unwrap_err();
+        assert!(err.to_string().contains(RBAC_V1), "{err}");
+    }
+
+    /// Kind resolution for an apply asks again while the kind's group
+    /// version answers 404.
+    #[tokio::test(start_paused = true)]
+    async fn apply_resolution_waits_out_a_group_version_that_404s() {
+        let api = FakeApi::new([]);
+        api.fail_next(RBAC_V1, 2, 404);
+        let manifest = json!({
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "ClusterRole",
+            "metadata": { "name": "r" },
+        });
+        let (ar, _) = ops(&api).resolve_kind(&manifest).await.unwrap();
+        assert_eq!(ar.kind, "ClusterRole");
+    }
+
+    /// `get_live` refreshes on a miss, and the refresh waits out a 404.
+    #[tokio::test(start_paused = true)]
+    async fn get_live_waits_out_a_group_version_that_404s() {
+        let api = FakeApi::new([]);
+        api.fail_next(RBAC_V1, 2, 404);
+        let rid = ResourceId {
+            kind: "ClusterRole".into(),
+            namespace: CLUSTER_SCOPED.into(),
+            name: "absent".into(),
+        };
+        assert_eq!(ops(&api).get_live(&rid).await, Ok(None));
+    }
+
+    /// A miss for a kind whose group answers is resolved at once when an
+    /// unrelated listed group version keeps answering 404.
+    #[tokio::test(start_paused = true)]
+    async fn get_live_does_not_wait_on_an_unrelated_group_version_that_404s() {
+        let api = FakeApi::new([]);
+        api.fail_next(
+            &format!("/apis/{}/v1alpha1", crate::manifest::keys::DOMAIN),
+            u32::MAX,
+            404,
+        );
+        let rid = ResourceId {
+            kind: "ClusterRole".into(),
+            namespace: CLUSTER_SCOPED.into(),
+            name: "absent".into(),
+        };
+        let start = tokio::time::Instant::now();
+        assert_eq!(ops(&api).get_live(&rid).await, Ok(None));
+        assert_eq!(start.elapsed(), Duration::ZERO);
     }
 }

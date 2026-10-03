@@ -308,6 +308,88 @@ impl NixBackend for CliNixBackend {
     }
 }
 
+/// The `name` of the cluster that flake attribute `attr` defines, or `None`
+/// when the flake's `kixClusters` has no such attribute or the flake has no
+/// `kixClusters` at all.
+///
+/// The name is what the cluster definition passes to `buildCluster`. The
+/// build writes it into the Activation record's `kix.run/cluster` label, so
+/// it, not `attr`, is what finds the cluster's records. The two differ when
+/// a flake maps `clusters.harbor = ./test-harbor.nix` and that file sets
+/// `name = "test-harbor"`. Nothing is built, but reading `name` evaluates
+/// the cluster definition's `buildCluster` call, which is close to a whole
+/// cluster evaluation and needs the flake's inputs.
+///
+/// `flake` is a flake reference: a local directory or a URL such as
+/// `github:org/repo`.
+pub fn eval_cluster_name(
+    flake: &str,
+    attr: &str,
+    input_overrides: &[(String, String)],
+) -> Result<Option<String>, KixEvalError> {
+    let Some(mut cmd) = cluster_name_command(flake, attr, input_overrides) else {
+        return Ok(None);
+    };
+    let output = cmd.output().map_err(|e| KixEvalError::StoreGraphError {
+        message: format!("failed to run nix eval: {e}"),
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Nix's wording when the flake has no `legacyPackages.<sys>.kixClusters`
+        // output: a flake that is not a kix flake defines no clusters.
+        if stderr.contains("does not provide attribute") {
+            return Ok(None);
+        }
+        return Err(KixEvalError::StoreGraphError {
+            message: format!(
+                "nix eval of the name of cluster '{attr}' failed: {}",
+                stderr.trim()
+            ),
+        });
+    }
+    serde_json::from_slice(&output.stdout).map_err(|e| KixEvalError::StoreGraphError {
+        message: format!("failed to parse the name of cluster '{attr}': {e}"),
+    })
+}
+
+/// The `nix eval` that reads the `name` of `kixClusters.<attr>` from `flake`,
+/// or `None` when `attr` is not a plain attribute name. The flake reference
+/// goes on the command line, so it works for a URL as well as a directory.
+pub fn cluster_name_command(
+    flake: &str,
+    attr: &str,
+    input_overrides: &[(String, String)],
+) -> Option<Command> {
+    // `attr` is spliced into a Nix string literal below.
+    if !attr
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+    let flake_attr = format!(
+        "{flake}#legacyPackages.{}.kixClusters",
+        current_nix_system()
+    );
+    let apply = format!(
+        "cs: if builtins.hasAttr \"{attr}\" cs then (builtins.getAttr \"{attr}\" cs).name else null"
+    );
+    let mut cmd = Command::new("nix");
+    cmd.args([
+        "eval",
+        &flake_attr,
+        "--apply",
+        &apply,
+        "--json",
+        "--extra-experimental-features",
+        "nix-command flakes pipe-operators",
+    ]);
+    for (name, url) in input_overrides {
+        cmd.arg("--override-input").arg(name).arg(url);
+    }
+    Some(cmd)
+}
+
 /// Determine the current Nix system string at compile time.
 fn current_nix_system() -> &'static str {
     if cfg!(all(target_arch = "x86_64", target_os = "linux")) {

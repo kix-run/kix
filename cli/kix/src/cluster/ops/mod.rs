@@ -110,7 +110,10 @@ pub trait ClusterOps: Send + Sync + 'static {
     ) -> Result<ReadinessResult, ReadinessError>;
 
     /// Refresh discovery after CRDs landed. An error stops the run: a stale
-    /// discovery view is a partial view (rule from kixpkgs#60).
+    /// discovery view is a partial view (rule from kixpkgs#60). `KubeOps`
+    /// first waits out listed group versions that answer 404
+    /// (`fetch::discover_resources`), so an error here means discovery did
+    /// not settle within `fetch::DISCOVERY_SETTLE` or failed outright.
     ///
     /// Also where a create deferred by [`ClusterOps::begin`] happens, since
     /// this is the first moment on a cluster's first deploy at which the

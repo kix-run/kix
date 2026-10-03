@@ -48,8 +48,11 @@ async fn probe_crd_discovery(client: &Client, crd: &Value) -> bool {
     };
     let deadline = Instant::now() + CRD_DISCOVERY_PROBE_BUDGET;
     loop {
-        if let Ok(resources) = fetch::discover_resources(client).await
-            && resources
+        // One group, not a full walk: a full walk waits out every listed
+        // group version that answers 404, which would outlast this budget.
+        if let Ok(walk) = fetch::discover_group(client, group).await
+            && walk
+                .resources
                 .iter()
                 .any(|(ar, _)| ar.group == group && ar.kind == kind)
         {
@@ -88,39 +91,55 @@ pub struct ImportTarget {
     /// `data`. Parsed from the `kix.run/import-secret-keys` annotation (comma
     /// separated). Empty = identity-only check (resource existence).
     pub expected_keys: Vec<String>,
-    /// For `CustomResourceDefinition` imports from a CRD ref marker, the API
-    /// versions the declaration says the CRD serves, from
-    /// `kix.run/crd-served-versions`. Each must be in the live CRD's
-    /// `spec.versions` with `served: true`. Empty = no version check.
+    /// For a CRD ref marker, the API versions the declaration says the CRD
+    /// serves, from `kix.run/crd-served-versions`. Each must be in the live
+    /// CRD's `spec.versions` with `served: true`. Never empty for a CRD ref
+    /// marker; empty for every other import, which gets no version check.
     pub served_versions: Vec<String>,
 }
 
+/// An import marker whose annotations the kix library would not have
+/// written. Planning a deploy refuses the build rather than deploying a
+/// marker whose checks would be skipped.
+#[derive(Debug, thiserror::Error)]
+#[error("{marker}: {reason}")]
+pub struct MalformedMarker {
+    /// The marker as `PackageInstance <namespace>/<name>`.
+    pub marker: String,
+    pub reason: String,
+}
+
 /// Extract an [`ImportTarget`] from a manifest if it is a PackageInstance
-/// import marker (`kix.run/mode: import`). Returns `None` for non-markers or
-/// for markers that don't have enough info to verify (no kind hint, etc.).
+/// import marker (`kix.run/mode: import`). Returns `Ok(None)` for non-markers
+/// or for markers that don't have enough info to verify (no kind hint, etc.).
+///
+/// A CRD ref marker is one that carries `kix.run/crd-kind`, as check 21 in
+/// `kix/lib/eval/validate.nix` identifies them. The library stamps
+/// `kix.run/crd-served-versions` on every one, so a CRD ref marker without
+/// a version in it is a [`MalformedMarker`].
 ///
 /// The target's namespace is sourced from the marker's own `metadata.namespace`
 /// for namespaced kinds. Cluster-scoped kinds (`CustomResourceDefinition`) set
 /// it to `None`. There is no `kix.run/import-namespace` annotation: an import
 /// always describes a resource in the marker's own namespace.
-pub fn import_target_from_manifest(manifest: &Value) -> Option<ImportTarget> {
+pub fn import_target_from_manifest(
+    manifest: &Value,
+) -> Result<Option<ImportTarget>, MalformedMarker> {
     if !crate::manifest::lifecycle::is_marker(manifest) {
-        return None;
+        return Ok(None);
     }
-    let annotations = manifest.pointer("/metadata/annotations")?;
+    let Some(annotations) = manifest.pointer("/metadata/annotations") else {
+        return Ok(None);
+    };
+    let annotation = |key: &str| annotations.get(key).and_then(Value::as_str);
 
-    let import_kind = annotations
-        .get(keys::IMPORT_KIND)
-        .and_then(Value::as_str)?
-        .to_string();
-    let import_api_version = annotations
-        .get(keys::IMPORT_API_VERSION)
-        .and_then(Value::as_str)?
-        .to_string();
-    let import_name = annotations
-        .get(keys::IMPORT_NAME)
-        .and_then(Value::as_str)?
-        .to_string();
+    let (Some(import_kind), Some(import_api_version), Some(import_name)) = (
+        annotation(keys::IMPORT_KIND),
+        annotation(keys::IMPORT_API_VERSION),
+        annotation(keys::IMPORT_NAME),
+    ) else {
+        return Ok(None);
+    };
 
     // Cluster-scoped imports (currently just CRDs) have no target namespace.
     // All other imports inherit the marker's own namespace.
@@ -147,29 +166,47 @@ pub fn import_target_from_manifest(manifest: &Value) -> Option<ImportTarget> {
         })
         .unwrap_or_default();
 
-    let served_versions = if import_kind == "CustomResourceDefinition" {
-        let listed = annotations
-            .get(keys::CRD_SERVED_VERSIONS)
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        listed
-            .split(',')
-            .map(str::trim)
-            .filter(|v| !v.is_empty())
-            .map(String::from)
-            .collect()
-    } else {
-        Vec::new()
+    let served_versions = match annotation(keys::CRD_KIND) {
+        None => Vec::new(),
+        Some(crd_kind) => {
+            let served: Vec<String> = annotation(keys::CRD_SERVED_VERSIONS)
+                .unwrap_or("")
+                .split(',')
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(String::from)
+                .collect();
+            if served.is_empty() {
+                return Err(MalformedMarker {
+                    marker: format!(
+                        "PackageInstance {}/{}",
+                        manifest
+                            .pointer("/metadata/namespace")
+                            .and_then(Value::as_str)
+                            .unwrap_or(""),
+                        manifest
+                            .pointer("/metadata/name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                    ),
+                    reason: format!(
+                        "CRD ref marker for {crd_kind} ({import_name}) lists no versions in {}. Builds from a kix library before 2026-10-02 lack it. Rebuild and deploy; a rollback or the operator cannot apply this build.",
+                        keys::CRD_SERVED_VERSIONS
+                    ),
+                });
+            }
+            served
+        }
     };
 
-    Some(ImportTarget {
-        kind: import_kind,
-        api_version: import_api_version,
-        name: import_name,
+    Ok(Some(ImportTarget {
+        kind: import_kind.to_string(),
+        api_version: import_api_version.to_string(),
+        name: import_name.to_string(),
         namespace,
         expected_keys,
         served_versions,
-    })
+    }))
 }
 
 /// Poll the cluster for the described [`ImportTarget`] until it exists and
@@ -2170,7 +2207,9 @@ mod tests {
                 }
             }
         });
-        let target = import_target_from_manifest(&manifest).expect("should parse");
+        let target = import_target_from_manifest(&manifest)
+            .unwrap()
+            .expect("should parse");
         assert_eq!(target.kind, "CustomResourceDefinition");
         assert_eq!(target.api_version, "apiextensions.k8s.io/v1");
         assert_eq!(target.name, "sgclusters.stackgres.io");
@@ -2199,7 +2238,9 @@ mod tests {
                 }
             }
         });
-        let target = import_target_from_manifest(&manifest).expect("should parse");
+        let target = import_target_from_manifest(&manifest)
+            .unwrap()
+            .expect("should parse");
         assert_eq!(target.kind, "Secret");
         assert_eq!(target.name, "db-creds");
         assert_eq!(target.namespace.as_deref(), Some("myapp"));
@@ -2221,7 +2262,9 @@ mod tests {
                 }
             }
         });
-        let target = import_target_from_manifest(&manifest).expect("should parse");
+        let target = import_target_from_manifest(&manifest)
+            .unwrap()
+            .expect("should parse");
         assert!(target.expected_keys.is_empty());
     }
 
@@ -2241,7 +2284,7 @@ mod tests {
                 }
             }
         });
-        assert!(import_target_from_manifest(&manifest).is_none());
+        assert!(import_target_from_manifest(&manifest).unwrap().is_none());
         // The marker itself is ready as soon as it exists.
         assert!(is_immediate_kind("PackageInstance"));
     }
@@ -2254,6 +2297,7 @@ mod tests {
                 keys::IMPORT_KIND: "CustomResourceDefinition",
                 keys::IMPORT_API_VERSION: "apiextensions.k8s.io/v1",
                 keys::IMPORT_NAME: "scrapeconfigs.monitoring.coreos.com",
+                keys::CRD_KIND: "ScrapeConfig",
                 keys::CRD_VERSION: "v1alpha1",
             });
             for (k, v) in extra.as_object().unwrap() {
@@ -2269,14 +2313,47 @@ mod tests {
                 }
             })
         };
-        // `crd-version` alone is the default version, not a served list.
-        let default_only = import_target_from_manifest(&marker(json!({}))).unwrap();
-        assert!(default_only.served_versions.is_empty());
         let listed = import_target_from_manifest(&marker(json!({
             keys::CRD_SERVED_VERSIONS: "v1alpha1,v1beta1"
         })))
+        .unwrap()
         .unwrap();
         assert_eq!(listed.served_versions, vec!["v1alpha1", "v1beta1"]);
+
+        // `crd-version` is the default version, not a served list, so a CRD
+        // ref marker without `crd-served-versions` is refused.
+        for extra in [json!({}), json!({ keys::CRD_SERVED_VERSIONS: "" })] {
+            let err = import_target_from_manifest(&marker(extra)).unwrap_err();
+            assert_eq!(
+                err.marker,
+                "PackageInstance monitoring/crd-ref-vm-scrapeconfigs-monitoring-coreos-com"
+            );
+            let message = err.to_string();
+            assert!(message.contains(keys::CRD_SERVED_VERSIONS), "{message}");
+            assert!(message.contains("ScrapeConfig"), "{message}");
+        }
+    }
+
+    #[test]
+    fn crd_import_that_is_not_a_crd_ref_has_no_served_versions() {
+        // `kix.mkImport { kind = "CustomResourceDefinition"; }` writes no
+        // `crd-kind`, so the deploy waits for the CRD without a version check.
+        let manifest = json!({
+            "kind": "PackageInstance",
+            "metadata": {
+                "name": "external-crds",
+                "namespace": "monitoring",
+                "annotations": {
+                    keys::MODE: "import",
+                    keys::IMPORT_KIND: "CustomResourceDefinition",
+                    keys::IMPORT_API_VERSION: "apiextensions.k8s.io/v1",
+                    keys::IMPORT_NAME: "scrapeconfigs.monitoring.coreos.com",
+                }
+            }
+        });
+        let target = import_target_from_manifest(&manifest).unwrap().unwrap();
+        assert!(target.served_versions.is_empty());
+        assert!(target.namespace.is_none());
     }
 
     #[test]
@@ -2295,7 +2372,7 @@ mod tests {
                 }
             }
         });
-        let target = import_target_from_manifest(&manifest).unwrap();
+        let target = import_target_from_manifest(&manifest).unwrap().unwrap();
         assert!(target.served_versions.is_empty());
     }
 
@@ -2317,7 +2394,7 @@ mod tests {
             unserved_crd_versions(&crd, &wanted(&["v1", "v1beta1", "v2"])),
             vec!["v1beta1", "v2"]
         );
-        // No declared versions (a marker without the annotation): nothing to check.
+        // No declared versions (an import that is not a CRD ref): nothing to check.
         assert!(unserved_crd_versions(&crd, &[]).is_empty());
         assert_eq!(served_crd_versions(&crd), vec!["v1"]);
     }
@@ -2330,7 +2407,7 @@ mod tests {
                 "annotations": { keys::MODE: "normal" }
             }
         });
-        assert!(import_target_from_manifest(&manifest).is_none());
+        assert!(import_target_from_manifest(&manifest).unwrap().is_none());
     }
 
     #[test]
@@ -2346,7 +2423,7 @@ mod tests {
                 }
             }
         });
-        assert!(import_target_from_manifest(&manifest).is_none());
+        assert!(import_target_from_manifest(&manifest).unwrap().is_none());
     }
 
     #[test]

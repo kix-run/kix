@@ -61,7 +61,8 @@ use super::CommandContext;
 
 pub fn run(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     if args.operator {
-        return ctx.runtime.block_on(run_operator(args, ctx));
+        let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
+        return ctx.runtime.block_on(run_operator(args, &cluster, ctx));
     }
     if args.hard {
         run_hard(args, ctx)
@@ -76,29 +77,46 @@ pub fn run(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 
 fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let flake_path = resolve_flake_path(&ctx.global.flake)?;
+    // The cache and the records are read before the build, so the name comes
+    // from the flake rather than from `new_graph`.
+    let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
 
-    // 1. Load old activation (from last deploy)
-    let old_path = store::load_activation_path(&args.cluster);
-    let Some(old_result_dir) = old_path else {
-        if !ctx.global.quiet {
-            println!(
-                "No previous activation saved for '{}'. Run {} first, or use {}.",
-                output::bold(&args.cluster),
-                output::bold("kix deploy"),
-                output::bold("kix gc --hard"),
-            );
-        }
-        return Ok(());
-    };
-
-    // 2. Activation records under the retention policy. Needs the cluster;
+    // 1. Activation records under the retention policy. Needs the cluster;
     //    done before the build so an unreachable cluster fails fast and the
     //    connection is reused for the deletes.
     let policy = retention_policy(args)?;
     let global = ctx.global.clone();
     let records = ctx
         .runtime
-        .block_on(plan_record_retirement(&global, &args.cluster, &policy))?;
+        .block_on(plan_record_retirement(&global, &cluster, &policy))?;
+
+    // 2. The old build: the Active record's. The local cache is keyed by
+    //    cluster name only, and a build another context deployed under the
+    //    same name would make this context's objects look like garbage.
+    let (old_path, warning) = baseline::active_build_dir(
+        &cluster,
+        store::load_activation_path(&cluster),
+        records.active.as_ref(),
+    );
+    if let Some(warning) = warning {
+        eprintln!("{} {warning}", output::yellow("warning:"));
+    }
+    let Some(old_result_dir) = old_path else {
+        if !ctx.global.quiet {
+            let what = if records.active.is_some() {
+                "The Active build of"
+            } else {
+                "No Active record, so no previous build, for"
+            };
+            println!(
+                "{what} '{}' is not on this machine. Run {} first, or use {}.",
+                output::bold(&cluster),
+                output::bold("kix deploy"),
+                output::bold("kix gc --hard"),
+            );
+        }
+        return Ok(());
+    };
 
     if !ctx.global.quiet {
         println!("Loading old activation...");
@@ -129,6 +147,17 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     if !ctx.global.quiet {
         eprint!("\r\x1b[2K");
     }
+    // The records and the old build were read under the name resolved before
+    // the build. Under any other name they belong to another cluster, and
+    // the comparison would list this cluster's objects as garbage.
+    if new_graph.cluster_name != cluster {
+        return Err(miette!(
+            "flake attribute '{}' builds cluster '{}', but the Activation records read before the build are those of cluster '{}'. Nothing was deleted.",
+            args.cluster,
+            new_graph.cluster_name,
+            cluster,
+        ));
+    }
 
     // 4. Diff: resources in the old build that the new build no longer has.
     let new_hashes: HashSet<String> = new_graph.resources.keys().map(|p| store_hash(p)).collect();
@@ -146,7 +175,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     // Orphans a warn-only deploy kept. The cached build is usually the one
     // that deploy made, so the diff above cannot see them.
     let kept_baseline = match &records.active {
-        Some(active) => baseline::load_kept(active, &args.cluster, ctx.global.quiet),
+        Some(active) => baseline::load_kept(active, &cluster, ctx.global.quiet),
         None => baseline::KeptBaseline::default(),
     };
     let kept_garbage = kept_garbage(
@@ -166,7 +195,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 
     if garbage_manifests.is_empty() && kept_garbage.is_empty() && records.plan.retire.is_empty() {
         ctx.runtime.block_on(clear_kept(
-            &args.cluster,
+            &cluster,
             &records,
             kept_baseline.unresolved.is_empty(),
             new_activation_hash.as_deref(),
@@ -261,7 +290,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let (retired, records_failed) = ctx.runtime.block_on(delete_records(&global, &records))?;
     if done.failed == 0 && done.changed == 0 {
         ctx.runtime.block_on(clear_kept(
-            &args.cluster,
+            &cluster,
             &records,
             kept_baseline.unresolved.is_empty(),
             new_activation_hash.as_deref(),
@@ -544,7 +573,7 @@ async fn run_hard_async(
 
     if garbage.is_empty() {
         clear_kept(
-            &args.cluster,
+            cluster_name,
             &records,
             examined_all,
             build_hash,
@@ -591,7 +620,7 @@ async fn run_hard_async(
     let (retired, records_failed) = delete_records(global, &records).await?;
     if done.failed == 0 && done.changed == 0 {
         clear_kept(
-            &args.cluster,
+            cluster_name,
             &records,
             examined_all,
             build_hash,
@@ -893,7 +922,7 @@ fn print_garbage_plan(garbage: &[GarbageEntry]) {
 // Operator-delegated GC: delete Superseded Activation CRs
 // ---------------------------------------------------------------------------
 
-async fn run_operator(args: &GcArgs, ctx: &CommandContext) -> Result<()> {
+async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Result<()> {
     let (client, ar) =
         super::operator::connect_and_verify(ctx.global.context.as_deref(), ctx.global.quiet)
             .await?;
@@ -909,7 +938,7 @@ async fn run_operator(args: &GcArgs, ctx: &CommandContext) -> Result<()> {
 
     // Superseded activations under the retention policy
     let policy = retention_policy(args)?;
-    let records = plan_records_with(&client, &discovery, &args.cluster, &policy).await?;
+    let records = plan_records_with(&client, &discovery, cluster, &policy).await?;
 
     if records.plan.retire.is_empty() {
         if !ctx.global.quiet {

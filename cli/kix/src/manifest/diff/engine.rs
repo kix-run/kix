@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 
+use super::equivalence::{equivalent_to_unset, is_quantity_field, same_quantity};
 use super::ignore::path_ignored;
 use super::keyed_lists::{path_leaf, try_key_lists};
 use super::{DiffConfig, Difference};
@@ -10,7 +11,8 @@ use super::{DiffConfig, Difference};
 ///
 /// Walks both trees in parallel, reporting differences by JSON path.
 /// Dict key ordering does not matter. Lists use keyed matching for
-/// known K8s fields, content-based matching otherwise.
+/// known K8s fields, content-based matching otherwise. Spellings the API
+/// server treats as equal are not differences: see [`super::equivalence`].
 pub fn structural_diff(a: &Value, b: &Value, path: &str, config: &DiffConfig) -> Vec<Difference> {
     if path_ignored(path, &config.ignore_paths) {
         return Vec::new();
@@ -26,6 +28,7 @@ pub fn structural_diff(a: &Value, b: &Value, path: &str, config: &DiffConfig) ->
             all_keys.sort();
             all_keys.dedup();
 
+            let parent = path_leaf(path);
             for key in all_keys {
                 let child_path = format!("{path}.{key}");
                 if path_ignored(&child_path, &config.ignore_paths) {
@@ -33,13 +36,23 @@ pub fn structural_diff(a: &Value, b: &Value, path: &str, config: &DiffConfig) ->
                 }
                 match (a_map.get(key), b_map.get(key)) {
                     (Some(av), Some(bv)) => {
+                        if (av.is_null() && equivalent_to_unset(&child_path, bv))
+                            || (bv.is_null() && equivalent_to_unset(&child_path, av))
+                            || (is_quantity_field(parent, key) && same_quantity(av, bv))
+                        {
+                            continue;
+                        }
                         diffs.extend(structural_diff(av, bv, &child_path, config));
                     }
                     (Some(av), None) => {
-                        diffs.push(Difference::missing_in_b(child_path, av.clone()));
+                        if !equivalent_to_unset(&child_path, av) {
+                            diffs.push(Difference::missing_in_b(child_path, av.clone()));
+                        }
                     }
                     (None, Some(bv)) => {
-                        diffs.push(Difference::extra_in_b(child_path, bv.clone()));
+                        if !equivalent_to_unset(&child_path, bv) {
+                            diffs.push(Difference::extra_in_b(child_path, bv.clone()));
+                        }
                     }
                     (None, None) => unreachable!(),
                 }
@@ -328,6 +341,141 @@ mod tests {
         assert_eq!(diffs.len(), 1);
         assert_eq!(diffs[0].path, "$.containers[app].image");
         assert_eq!(diffs[0].kind, DiffKind::ValueMismatch);
+    }
+
+    // The noise classes below were recorded by `kix diff` on a kind cluster
+    // right after a deploy that changed nothing. In each, `live` is the
+    // kix-owned view of the object and `built` is the manifest kix applied.
+
+    fn paths(diffs: &[Difference]) -> Vec<&str> {
+        diffs.iter().map(|d| d.path.as_str()).collect()
+    }
+
+    #[test]
+    fn a_defaulted_field_ref_api_version_is_not_a_difference() {
+        let env = |field_ref: Value| {
+            json!({"containers": [{"name": "app", "env": [
+                {"name": "POD", "valueFrom": {"fieldRef": field_ref}}
+            ]}]})
+        };
+        let live = env(json!({"apiVersion": "v1", "fieldPath": "metadata.name"}));
+        let built = env(json!({"fieldPath": "metadata.name"}));
+        assert!(structural_diff(&live, &built, "$", &cfg()).is_empty());
+
+        let other = env(json!({"apiVersion": "v2", "fieldPath": "metadata.name"}));
+        assert_eq!(
+            paths(&structural_diff(&other, &built, "$", &cfg())),
+            ["$.containers[app].env[POD].valueFrom.fieldRef.apiVersion"]
+        );
+    }
+
+    #[test]
+    fn empty_lists_and_nulls_the_server_drops_are_not_differences() {
+        let live = json!({"template": {"metadata": {"labels": {"a": "b"}},
+            "spec": {"containers": [{"name": "app", "image": "i"}]}}});
+        let built = json!({"template": {"metadata": {"labels": {"a": "b"}, "annotations": null},
+        "spec": {"initContainers": [], "containers": [
+            {"name": "app", "image": "i", "env": [], "envFrom": []}
+        ]}}});
+        assert!(structural_diff(&live, &built, "$", &cfg()).is_empty());
+        assert!(structural_diff(&built, &live, "$", &cfg()).is_empty());
+    }
+
+    #[test]
+    fn zero_values_the_server_omits_are_not_differences() {
+        let live = json!({"containers": [{"name": "app",
+            "volumeMounts": [{"name": "s", "mountPath": "/s"}],
+            "readinessProbe": {"httpGet": {"path": "/"}}}]});
+        let built = json!({"containers": [{"name": "app",
+            "volumeMounts": [{"name": "s", "mountPath": "/s", "readOnly": false}],
+            "readinessProbe": {"httpGet": {"path": "/"}, "initialDelaySeconds": 0}}]});
+        assert!(structural_diff(&live, &built, "$", &cfg()).is_empty());
+
+        let read_only = json!({"containers": [{"name": "app",
+            "volumeMounts": [{"name": "s", "mountPath": "/s", "readOnly": true}],
+            "readinessProbe": {"httpGet": {"path": "/"}}}]});
+        assert_eq!(
+            paths(&structural_diff(&live, &read_only, "$", &cfg())),
+            ["$.containers[app].volumeMounts[/s].readOnly"]
+        );
+    }
+
+    #[test]
+    fn a_null_probe_field_matches_its_default_and_nothing_else() {
+        let probe = |threshold: Value| json!({"containers": [{"name": "op", "readinessProbe": {"failureThreshold": threshold}}]});
+        let built = probe(json!(null));
+        assert!(structural_diff(&probe(json!(3)), &built, "$", &cfg()).is_empty());
+
+        let diffs = structural_diff(&probe(json!(5)), &built, "$", &cfg());
+        assert_eq!(
+            paths(&diffs),
+            ["$.containers[op].readinessProbe.failureThreshold"]
+        );
+        assert_eq!(diffs[0].kind, DiffKind::TypeMismatch);
+    }
+
+    #[test]
+    fn quantities_compare_by_amount_not_spelling() {
+        let limits = |cpu: Value| json!({"initContainers": [{"name": "cni", "resources": {"limits": {"cpu": cpu}}}]});
+        assert!(structural_diff(&limits(json!("1")), &limits(json!(1)), "$", &cfg()).is_empty());
+        assert!(
+            structural_diff(&limits(json!("500m")), &limits(json!(0.5)), "$", &cfg()).is_empty()
+        );
+        assert_eq!(
+            paths(&structural_diff(
+                &limits(json!("1")),
+                &limits(json!(2)),
+                "$",
+                &cfg()
+            )),
+            ["$.initContainers[cni].resources.limits.cpu"]
+        );
+        // Outside a quantity map a string and a number stay different.
+        let port = |p: Value| json!({"spec": {"targetPort": p}});
+        assert_eq!(
+            structural_diff(&port(json!("80")), &port(json!(80)), "$", &cfg())[0].kind,
+            DiffKind::TypeMismatch
+        );
+    }
+
+    #[test]
+    fn claim_templates_match_by_name_and_ignore_server_filled_fields() {
+        let live = json!({"volumeClaimTemplates": [{
+            "apiVersion": "v1",
+            "kind": "PersistentVolumeClaim",
+            "metadata": {"name": "data"},
+            "spec": {"accessModes": ["ReadWriteOnce"], "volumeMode": "Filesystem",
+                     "resources": {"requests": {"storage": "8Gi"}}},
+            "status": {"phase": "Pending"},
+        }]});
+        let built = |storage: &str| {
+            json!({"volumeClaimTemplates": [{
+                "metadata": {"name": "data"},
+                "spec": {"accessModes": ["ReadWriteOnce"],
+                         "resources": {"requests": {"storage": storage}}},
+            }]})
+        };
+        assert!(structural_diff(&live, &built("8Gi"), "$", &cfg()).is_empty());
+        assert_eq!(
+            paths(&structural_diff(&live, &built("16Gi"), "$", &cfg())),
+            ["$.volumeClaimTemplates[data].spec.resources.requests.storage"]
+        );
+    }
+
+    #[test]
+    fn a_field_an_operator_adds_to_named_list_items_reads_per_item() {
+        let live = json!({"extensions": [
+            {"name": "cube", "publisher": "com.ongres"},
+            {"name": "vector", "publisher": "com.ongres"},
+        ]});
+        let built = json!({"extensions": [{"name": "cube"}, {"name": "vector"}]});
+        assert_eq!(
+            paths(&structural_diff(&live, &built, "$", &cfg())),
+            [
+                "$.extensions[cube].publisher",
+                "$.extensions[vector].publisher"
+            ]
+        );
     }
 
     #[test]

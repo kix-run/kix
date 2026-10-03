@@ -44,6 +44,12 @@ source path or the local activation cache. A build made on another machine or
 removed by `nix-collect-garbage` cannot be rolled back to from here. How many
 records exist depends on `kix gc` retention.
 
+A build from a kix library before 2026-10-02 cannot be rolled back to if it
+imports a CRD (`scope.mkCRDRef`, or `kix.mkImport` with `crds`). Its CRD ref
+markers lack the `kix.run/crd-served-versions` annotation, and Kix refuses the
+build before applying anything (with `--operator`, the operator refuses it).
+Deploy a fresh build instead.
+
 The rollback waits up to 180 seconds for each resource to become ready and
 stops at the first failure.
 
@@ -60,7 +66,7 @@ stops at the first failure.
 | Code | Meaning |
 | --- | --- |
 | `0` | Rolled back, nothing to change, or the prompt was declined |
-| `1` | A resource failed; confirmation was needed on a non-interactive terminal; no target is available; the target build is not in the local store; or a cluster error |
+| `1` | A resource failed, including a prune delete; confirmation was needed on a non-interactive terminal; no target is available; the target build is not in the local store; or a cluster error |
 
 :::tip[Use it in a task]
 See [Roll back an activation](/docs/how-to/operate-a-cluster/roll-back-an-activation/)

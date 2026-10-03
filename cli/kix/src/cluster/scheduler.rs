@@ -82,7 +82,14 @@ impl DeployPlan {
     ///
     /// Orphans are not part of the plan. They are handed to the scheduler
     /// separately and pruned after every non-orphan node has terminated.
-    pub fn from_graph_and_changes(graph: &ResourceGraph, changes: &[ChangeAction]) -> Self {
+    ///
+    /// Fails on the first import marker the library would not have written
+    /// (see [`readiness::import_target_from_manifest`]), before anything is
+    /// applied.
+    pub fn from_graph_and_changes(
+        graph: &ResourceGraph,
+        changes: &[ChangeAction],
+    ) -> Result<Self, readiness::MalformedMarker> {
         // Index changes by K8s identity so we can look them up per-node.
         let mut by_id: HashMap<String, &ChangeAction> = HashMap::new();
         for action in changes {
@@ -121,7 +128,7 @@ impl DeployPlan {
             let meta = NodeMeta {
                 package: keys::get(&node.manifest, keys::PACKAGE).map(|s| s.to_string()),
                 namespace: (node.id.namespace != CLUSTER_SCOPED).then(|| node.id.namespace.clone()),
-                import_target: readiness::import_target_from_manifest(&node.manifest),
+                import_target: readiness::import_target_from_manifest(&node.manifest)?,
             };
 
             nodes.push(PlanNodeEntry {
@@ -146,7 +153,7 @@ impl DeployPlan {
             }
         }
 
-        DeployPlan { nodes, edges }
+        Ok(DeployPlan { nodes, edges })
     }
 
     fn to_plan_nodes(&self) -> Vec<PlanNode> {
@@ -259,6 +266,18 @@ pub enum DeployError {
         message: String,
         partial: DeployResult,
     },
+
+    /// Every node reached its verdict, but the Activation record could not be
+    /// finalized, so the record still reads Deploying and the previous
+    /// activation stays current.
+    #[error(
+        "the changes were applied, but the deployment record could not be finalized: {message}. \
+         The record may still read Deploying."
+    )]
+    FinalizeFailed {
+        message: String,
+        partial: DeployResult,
+    },
 }
 
 impl DeployError {
@@ -268,7 +287,8 @@ impl DeployError {
             DeployError::NodesFailed { partial, .. }
             | DeployError::DiscoveryFailed { partial, .. }
             | DeployError::Cancelled { partial, .. }
-            | DeployError::Internal { partial, .. } => Some(partial),
+            | DeployError::Internal { partial, .. }
+            | DeployError::FinalizeFailed { partial, .. } => Some(partial),
             DeployError::ActivationError(_) => None,
         }
     }
@@ -877,9 +897,8 @@ pub async fn run_deploy(
     // stays Active, so a prune here would delete objects the still current
     // closure cannot get back.
     //
-    // The run still returns `Ok`. `--on-error=continue` means the caller
-    // asked to push past failures, and it has always exited zero with a
-    // summary that names them; changing that is a separate decision.
+    // The run still returns `Ok` with the counts. Callers read `failed` and
+    // `cancelled` to decide the outcome; `kix deploy` exits non-zero.
     if !config.dry_run && result.cancelled > 0 {
         let reason = format!(
             "{} failed, {} never attempted",
@@ -1041,14 +1060,21 @@ pub async fn run_deploy(
                 previous: f.previous,
             }),
             Ok(Ok(None)) => {}
-            Ok(Err(message)) => emit(DeployEvent::BestEffortFailed {
-                what: "activation finalize".into(),
-                message,
-            }),
-            Err(_) => emit(DeployEvent::BestEffortFailed {
-                what: "activation finalize".into(),
-                message: format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
-            }),
+            // The record did not become current, so the run has not
+            // succeeded and its build must not be cached as the one the
+            // cluster runs.
+            Ok(Err(message)) => {
+                return Err(DeployError::FinalizeFailed {
+                    message,
+                    partial: result,
+                });
+            }
+            Err(_) => {
+                return Err(DeployError::FinalizeFailed {
+                    message: format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
+                    partial: result,
+                });
+            }
         }
     }
 
@@ -1776,7 +1802,7 @@ mod tests {
             .iter()
             .map(|m| ChangeAction::Apply(m.clone()))
             .collect();
-        let plan = DeployPlan::from_graph_and_changes(&graph, &changes);
+        let plan = DeployPlan::from_graph_and_changes(&graph, &changes).unwrap();
 
         assert_eq!(plan.nodes.len(), 3);
         assert_eq!(plan.edges.len(), 2);
@@ -1798,7 +1824,7 @@ mod tests {
             ChangeAction::Skip(ResourceId::from_value(&manifests[0])),
             ChangeAction::Apply(manifests[1].clone()),
         ];
-        let plan = DeployPlan::from_graph_and_changes(&graph, &changes);
+        let plan = DeployPlan::from_graph_and_changes(&graph, &changes).unwrap();
         assert_eq!(plan.nodes.len(), 2);
         let cm = plan
             .nodes
@@ -1812,6 +1838,46 @@ mod tests {
             .unwrap();
         assert!(matches!(cm.kind, TransitionKind::Skip));
         assert!(matches!(app.kind, TransitionKind::Apply));
+    }
+
+    /// A CRD ref marker without `kix.run/crd-served-versions` fails the
+    /// plan, whether or not it changed since the last deploy.
+    #[test]
+    fn plan_refuses_crd_ref_marker_without_served_versions() {
+        let mut marker = manifest(
+            "PackageInstance",
+            "crd-ref-vm-scrapeconfigs-monitoring-coreos-com",
+            "monitoring",
+            "h_marker",
+            "",
+        );
+        marker["apiVersion"] = json!(keys::API_VERSION);
+        let annotations = &mut marker["metadata"]["annotations"];
+        annotations[keys::MODE] = json!("import");
+        annotations[keys::IMPORT_KIND] = json!("CustomResourceDefinition");
+        annotations[keys::IMPORT_API_VERSION] = json!("apiextensions.k8s.io/v1");
+        annotations[keys::IMPORT_NAME] = json!("scrapeconfigs.monitoring.coreos.com");
+        annotations[keys::CRD_KIND] = json!("ScrapeConfig");
+        annotations[keys::CRD_VERSION] = json!("v1alpha1");
+        let manifests = vec![marker];
+        let graph = ResourceGraph::from_manifests(&manifests).unwrap();
+
+        for change in [
+            ChangeAction::Apply(manifests[0].clone()),
+            ChangeAction::Skip(ResourceId::from_value(&manifests[0])),
+        ] {
+            let err = DeployPlan::from_graph_and_changes(&graph, &[change]).unwrap_err();
+            assert!(err.to_string().contains(keys::CRD_SERVED_VERSIONS), "{err}");
+        }
+
+        let mut served = manifests;
+        served[0]["metadata"]["annotations"][keys::CRD_SERVED_VERSIONS] = json!("v1alpha1");
+        let graph = ResourceGraph::from_manifests(&served).unwrap();
+        let plan =
+            DeployPlan::from_graph_and_changes(&graph, &[ChangeAction::Apply(served[0].clone())])
+                .unwrap();
+        let target = plan.nodes[0].meta.import_target.as_ref().unwrap();
+        assert_eq!(target.served_versions, vec!["v1alpha1"]);
     }
 
     /// A manifest carrying `kix.run/rerun` is tagged Recreate when it
@@ -1831,7 +1897,7 @@ mod tests {
             ChangeAction::Skip(ResourceId::from_value(&same)),
             ChangeAction::Skip(ResourceId::from_value(&plain)),
         ];
-        let plan = DeployPlan::from_graph_and_changes(&graph, &changes);
+        let plan = DeployPlan::from_graph_and_changes(&graph, &changes).unwrap();
         let by_name = |name: &str| {
             plan.nodes
                 .iter()
@@ -1854,7 +1920,8 @@ mod tests {
         deploy["metadata"]["annotations"][keys::RERUN] = json!("on-change");
         let manifests = vec![deploy.clone()];
         let graph = ResourceGraph::from_manifests(&manifests).unwrap();
-        let plan = DeployPlan::from_graph_and_changes(&graph, &[ChangeAction::Apply(deploy)]);
+        let plan =
+            DeployPlan::from_graph_and_changes(&graph, &[ChangeAction::Apply(deploy)]).unwrap();
         assert!(matches!(plan.nodes[0].kind, TransitionKind::Apply));
         assert!(plan.nodes[0].rerun.is_none());
     }
@@ -1872,7 +1939,7 @@ mod tests {
             .iter()
             .map(|m| ChangeAction::Apply(m.clone()))
             .collect();
-        let plan = DeployPlan::from_graph_and_changes(&graph, &changes);
+        let plan = DeployPlan::from_graph_and_changes(&graph, &changes).unwrap();
 
         let mut state = SchedulerState::new(&plan);
         state.seed_ready();
@@ -1914,7 +1981,7 @@ mod tests {
             .iter()
             .map(|m| ChangeAction::Apply(m.clone()))
             .collect();
-        let plan = DeployPlan::from_graph_and_changes(&graph, &changes);
+        let plan = DeployPlan::from_graph_and_changes(&graph, &changes).unwrap();
         let mut state = SchedulerState::new(&plan);
         state.seed_ready();
         let _ns = state.pop_ready().unwrap();
@@ -2024,7 +2091,7 @@ mod engine_tests {
                 }
             })
             .collect();
-        DeployPlan::from_graph_and_changes(&graph, &changes)
+        DeployPlan::from_graph_and_changes(&graph, &changes).unwrap()
     }
 
     fn config(stall: StallPolicy) -> SchedulerConfig {

@@ -18,7 +18,7 @@ This page is hand-maintained. Check `GlobalArgs` and `SCOPED_GLOBALS` in
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `-o`, `--output <FORMAT>` | Varies by command | `text`, `json`, `yaml`, or `markdown`. See [Output formats](/docs/reference/cli/output-formats/) for which commands honour which values. |
-| `-v`, `--verbose` | Off | Log more to stderr. Repeat for more: `-v` logs Kix at info level, `-vv` at debug, `-vvv` everything at debug. |
+| `-v`, `--verbose` | Off | Log more to stderr. Repeat for more: `-v` logs Kix at info level, `-vv` at debug, `-vvv` everything at debug. Without it, warnings are logged, except those the Kubernetes client writes for an error response it then returns to Kix. |
 | `-q`, `--quiet` | Off | Suppress progress and informational output, and log errors only. Results still print. |
 | `--no-color` | Off | Disable coloured result output. Deploy and gc progress lines currently still use terminal clear-line control sequences. |
 | `--context <CONTEXT>` | Current kubeconfig context | Kubeconfig context for every command that talks to a cluster. `logs` and `pf` pass it to `kubectl`. |

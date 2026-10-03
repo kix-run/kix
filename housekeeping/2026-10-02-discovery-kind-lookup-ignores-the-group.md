@@ -1,0 +1,3 @@
+# 2026-10-02 · `cli/kix/src/cluster/ops/kube.rs` · Kind lookups in the discovery cache match on kind alone and ignore the group.
+
+`KubeOps::cached_kind`, `apply.rs` and `scheduler.rs` take the first cached entry whose `kind` matches, and `ResourceId` carries no group. When two groups serve one kind (`Event` in core v1 and `events.k8s.io/v1`, `Gateway` from Gateway API and from Istio), a manifest of the second group is applied, read and deleted through the first one's endpoint. The discovery walk now puts the core group first and keeps `/apis` order, so the choice is stable but still not the manifest's.

@@ -62,3 +62,56 @@ fn apply_alias_works() {
         .success()
         .stdout(predicate::str::contains("Dry run complete:"));
 }
+
+/// Flake attribute `minimal` builds the cluster named `test-minimal`. The
+/// local activation cache, like the Activation records, is keyed by that
+/// name, so a deploy of `minimal` finds the build cached as `test-minimal`
+/// and plans against it instead of reporting a first deploy.
+#[test]
+fn deploy_reads_the_cache_under_the_cluster_name_not_the_attribute() {
+    let built = std::process::Command::new("nix")
+        .args([
+            "build",
+            ".#cluster-minimal-activation",
+            "--no-link",
+            "--print-out-paths",
+            "--extra-experimental-features",
+            "nix-command flakes pipe-operators",
+        ])
+        .current_dir(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap(),
+        )
+        .output()
+        .expect("nix build runs");
+    assert!(
+        built.status.success(),
+        "nix build failed: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let result = String::from_utf8(built.stdout).unwrap();
+
+    let cache = tempfile::tempdir().unwrap();
+    let activations = cache.path().join("kix/activations");
+    std::fs::create_dir_all(&activations).unwrap();
+    std::fs::write(activations.join("test-minimal.path"), result.trim()).unwrap();
+
+    kix()
+        .env("XDG_CACHE_HOME", cache.path())
+        .args([
+            "deploy",
+            "minimal",
+            "--dry-run",
+            "--yes",
+            "--current-activation",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Loading previous activation from cache",
+        ))
+        .stdout(predicate::str::contains("First deploy").not());
+}

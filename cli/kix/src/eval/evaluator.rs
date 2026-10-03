@@ -15,7 +15,8 @@ use super::error::KixEvalError;
 /// Output from evaluating a cluster.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterOutput {
-    /// Cluster name (e.g. "nw1").
+    /// The flake attribute the cluster was evaluated as (e.g. "nw1"). See
+    /// [`Self::cluster_name`] for the name its records carry.
     pub name: String,
     /// Raw K8s manifests as JSON values (one per resource).
     pub raw_manifests: Vec<Value>,
@@ -25,6 +26,21 @@ pub struct ClusterOutput {
     /// Extra images declared by packages (operator-spawned, not in manifests).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_images: Option<Vec<ExtraImage>>,
+}
+
+impl ClusterOutput {
+    /// The name the cluster definition gives `buildCluster`: the
+    /// `kix.run/cluster` label of the build's Activation record, which is
+    /// what finds the cluster's records on Kubernetes and in the activation
+    /// cache. It differs from [`Self::name`] when a flake maps
+    /// `clusters.harbor = ./test-harbor.nix` and that file sets
+    /// `name = "test-harbor"`. `None` when the build has no record.
+    pub fn cluster_name(&self) -> Option<&str> {
+        crate::manifest::lifecycle::record_of(&self.raw_manifests)?
+            .pointer("/metadata/labels")?
+            .get(crate::manifest::keys::CLUSTER_LABEL)?
+            .as_str()
+    }
 }
 
 /// An extra image declared by a package via `root.out.extraImages`.
@@ -303,6 +319,30 @@ mod tests {
     use super::*;
     use crate::eval::mock::MockNixBackend;
     use serde_json::json;
+
+    #[test]
+    fn cluster_name_is_the_record_label_not_the_attribute() {
+        let output = |manifests: Vec<Value>| ClusterOutput {
+            name: "harbor".into(),
+            raw_manifests: manifests,
+            scorecard_report: None,
+            extra_images: None,
+        };
+        let record = json!({
+            "apiVersion": format!("{}/v1alpha1", crate::manifest::keys::DOMAIN),
+            "kind": crate::manifest::lifecycle::RECORD_KIND,
+            "metadata": {
+                "name": "test-harbor-abc",
+                "labels": { (crate::manifest::keys::CLUSTER_LABEL): "test-harbor" }
+            }
+        });
+        let ns = json!({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "x"}});
+        assert_eq!(
+            output(vec![ns.clone(), record]).cluster_name(),
+            Some("test-harbor")
+        );
+        assert_eq!(output(vec![ns]).cluster_name(), None);
+    }
 
     fn test_backend() -> MockNixBackend {
         let mut backend = MockNixBackend::new();

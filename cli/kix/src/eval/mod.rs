@@ -31,7 +31,7 @@ pub mod store_graph;
 pub mod value;
 
 pub use build::{build_cluster_activation, build_cluster_activation_with_status};
-pub use cli_backend::CliNixBackend;
+pub use cli_backend::{CliNixBackend, cluster_name_command, eval_cluster_name};
 pub use error::KixEvalError;
 pub use evaluator::{
     ClusterOutput, ClusterPackageInfo, InstanceInfo, KixEvaluator, NixBackend, PackageInfo,

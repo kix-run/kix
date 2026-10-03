@@ -17,14 +17,13 @@ use crate::output;
 
 use super::CommandContext;
 use kix::manifest::keys;
+use kix::manifest::lifecycle::declares_own_deletion;
 
 // Annotation keys
 const IDENTITY_HASH: &str = keys::IDENTITY_HASH;
 const DEPENDS_ON: &str = keys::DEPENDS_ON;
 const PACKAGE: &str = keys::PACKAGE;
 const PACKAGE_NAMESPACE: &str = keys::PACKAGE_NAMESPACE;
-// Both spellings mean the same thing; helm-imported hooks carry the helm one.
-const HOOK_DELETE_POLICY: [&str; 1] = ["helm.sh/hook-delete-policy"];
 
 /// A live resource with its parsed annotations.
 #[allow(dead_code)]
@@ -125,6 +124,8 @@ impl PackageHealth {
 }
 
 pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
+    let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::ReadOnly)?;
+
     // 1. Connect to cluster
     if !ctx.global.quiet {
         println!("Connecting to cluster...");
@@ -144,16 +145,16 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
             .map_err(|e| miette!("{e}"))?
             .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?;
 
-        let active = activation::find_active(&client, &activation_ar.0, &args.cluster)
+        let active = activation::find_active(&client, &activation_ar.0, &cluster)
             .await
             .map_err(|e| miette!("failed to find activation: {e}"))?
-            .ok_or_else(|| miette!("no active deployment record found for cluster '{}'", args.cluster))?;
+            .ok_or_else(|| miette!("no active deployment record found for cluster '{cluster}'"))?;
 
         // 3. Fetch this cluster's kix-managed resources
         let live_objects = fetch::fetch_managed_resources(
             &client,
             &discovery,
-            fetch::SweepScope::Cluster(&args.cluster),
+            fetch::SweepScope::Cluster(&cluster),
         )
         .await
         .map_err(|e| miette!("failed to fetch resources: {e}"))?;
@@ -391,32 +392,6 @@ fn walk_graph(
     }
 
     health
-}
-
-/// Does this manifest declare that it removes itself once it succeeds?
-///
-/// Two independent declarations, either of which makes absence expected:
-///   * `helm.sh/hook-delete-policy` containing `hook-succeeded` on a manifest
-///     rendered from a chart: Helm's convention, kept so imported hooks read
-///     the same way. Kix has no hook vocabulary of its own; a Job that
-///     must run again is the rerun rule's business (`kix.run/rerun`).
-///   * a Job's `spec.ttlSecondsAfterFinished`: Kubernetes' TTL controller
-///     deletes it some time after completion.
-fn declares_own_deletion(manifest: &serde_json::Value) -> bool {
-    let annotations = manifest.pointer("/metadata/annotations");
-    let deletes_on_success = HOOK_DELETE_POLICY.iter().any(|key| {
-        annotations
-            .and_then(|a| a.get(*key))
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|p| p.split(',').any(|s| s.trim() == "hook-succeeded"))
-    });
-
-    let ttl_reaped = manifest.get("kind").and_then(serde_json::Value::as_str) == Some("Job")
-        && manifest
-            .pointer("/spec/ttlSecondsAfterFinished")
-            .is_some_and(serde_json::Value::is_number);
-
-    deletes_on_success || ttl_reaped
 }
 
 /// BFS from a root hash to find all transitively reachable identity hashes.
@@ -812,66 +787,6 @@ fn summarize_issues(resources: &[(ResourceId, ResourceHealth)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn ttl_job_declares_own_deletion() {
-        assert!(declares_own_deletion(&json!({
-            "kind": "Job",
-            "metadata": { "name": "postgres-reflect" },
-            "spec": { "ttlSecondsAfterFinished": 600 },
-        })));
-    }
-
-    #[test]
-    fn zero_ttl_still_counts() {
-        assert!(declares_own_deletion(&json!({
-            "kind": "Job",
-            "spec": { "ttlSecondsAfterFinished": 0 },
-        })));
-    }
-
-    #[test]
-    fn hook_succeeded_policy_declares_own_deletion() {
-        for key in HOOK_DELETE_POLICY {
-            assert!(
-                declares_own_deletion(&json!({
-                    "kind": "Job",
-                    "metadata": { "annotations": { key: "before-hook-creation,hook-succeeded" } },
-                })),
-                "{key} should be honored"
-            );
-        }
-    }
-
-    #[test]
-    fn before_hook_creation_alone_does_not() {
-        // Deletion before the next run does not prove that this run succeeded; a job that is
-        // absent now is still a job that never ran.
-        assert!(!declares_own_deletion(&json!({
-            "kind": "Job",
-            "metadata": { "annotations": { "helm.sh/hook-delete-policy": "before-hook-creation" } },
-        })));
-    }
-
-    #[test]
-    fn plain_workload_does_not_declare_own_deletion() {
-        assert!(!declares_own_deletion(&json!({
-            "kind": "Deployment",
-            "metadata": { "name": "immich-server" },
-            "spec": { "replicas": 1 },
-        })));
-    }
-
-    #[test]
-    fn non_job_with_ttl_field_does_not() {
-        // ttlSecondsAfterFinished is a Job field; anything else carrying it
-        // is not making the same promise.
-        assert!(!declares_own_deletion(&json!({
-            "kind": "ConfigMap",
-            "spec": { "ttlSecondsAfterFinished": 600 },
-        })));
-    }
 
     #[test]
     fn reaped_counts_as_healthy() {

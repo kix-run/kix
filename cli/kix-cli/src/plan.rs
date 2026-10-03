@@ -1220,6 +1220,101 @@ mod diff_graph_tests {
         );
     }
 
+    /// The spellings `kix diff` reported on a converged kind cluster when
+    /// the live objects carried no applied-hash stamp to compare by: a
+    /// package whose live objects differ from its build only in them reads
+    /// unchanged.
+    #[test]
+    fn server_spellings_of_the_built_objects_read_unchanged() {
+        let pod = |live: bool| {
+            let mut container = json!({
+                "name": "app",
+                "image": "app:1",
+                "env": [{"name": "POD", "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}}}],
+                "resources": {"limits": {"cpu": 1}},
+                "readinessProbe": {"httpGet": {"path": "/"}, "failureThreshold": null},
+                "volumeMounts": [{"name": "s", "mountPath": "/s", "readOnly": false}],
+                "envFrom": [],
+            });
+            if live {
+                container["env"][0]["valueFrom"]["fieldRef"]["apiVersion"] = json!("v1");
+                container["resources"]["limits"]["cpu"] = json!("1");
+                container["readinessProbe"]["failureThreshold"] = json!(3);
+                let c = container.as_object_mut().unwrap();
+                c.remove("envFrom");
+                c["volumeMounts"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("readOnly");
+            }
+            let mut template =
+                json!({"metadata": {"annotations": null}, "spec": {"containers": [container]}});
+            if live {
+                template["metadata"] = json!({});
+            }
+            template
+        };
+        let claim = |live: bool| {
+            let mut claim = json!({
+                "metadata": {"name": "data"},
+                "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "8Gi"}}},
+            });
+            if live {
+                claim["apiVersion"] = json!("v1");
+                claim["kind"] = json!("PersistentVolumeClaim");
+                claim["spec"]["volumeMode"] = json!("Filesystem");
+                claim["status"] = json!({"phase": "Pending"});
+            }
+            claim
+        };
+        let side = |live: bool| {
+            vec![
+                record("c-1", &h("rec")),
+                package_instance("app", "web", "1.0.0", &h("pi")),
+                stamped(
+                    "StatefulSet",
+                    "app",
+                    "web",
+                    ("app", "web"),
+                    &h("sts"),
+                    json!({"template": pod(live), "volumeClaimTemplates": [claim(live)]}),
+                ),
+            ]
+        };
+        // A build names each store path by the resource's identity hash,
+        // which is how a live object finds the manifest it came from.
+        let synthetic = StoreGraph::synthesize(&side(false), &StoreGraph::empty("c"));
+        let rename = |p: &std::path::PathBuf| {
+            let manifest = &synthetic.resources[p].manifest;
+            let hash = keys::get(manifest, keys::IDENTITY_HASH).unwrap();
+            std::path::PathBuf::from(format!("/nix/store/{hash}-k8s"))
+        };
+        let mut build = StoreGraph::empty("c");
+        for (path, node) in &synthetic.resources {
+            let mut node = node.clone();
+            node.store_path = rename(path);
+            build.resources.insert(rename(path), node);
+        }
+        for (path, owner) in &synthetic.resource_owner {
+            build.resource_owner.insert(rename(path), rename(owner));
+        }
+        for (path, pkg) in &synthetic.packages {
+            let mut pkg = pkg.clone();
+            pkg.store_path = rename(path);
+            pkg.resource_paths = pkg.resource_paths.iter().map(&rename).collect();
+            build.packages.insert(rename(path), pkg);
+        }
+        let live = StoreGraph::synthesize(&side(true), &build);
+
+        let d = diff_graphs(&live, &build);
+        assert!(
+            !d.has_changes(),
+            "unexpected changes: {}",
+            render_package_plan(&d, true)
+        );
+        assert_eq!(d.unchanged, 1);
+    }
+
     #[test]
     fn identical_sides_have_nothing_to_report() {
         let d = diff_of(&baseline(), &baseline());

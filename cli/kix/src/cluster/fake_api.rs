@@ -1,13 +1,16 @@
 //! An in-memory apiserver for tests of code that takes a `kube::Client`.
 //!
-//! It serves discovery for a fixed set of kinds (ConfigMap, Namespace,
-//! ClusterRole, Kix's Activation), and GET, LIST (with an equality label
+//! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
+//! ClusterRole, Kix's Activation, and two kinds of a group served at two
+//! versions), and GET, LIST (with an equality label
 //! selector) and DELETE (honouring `preconditions`) on the objects it holds.
 //! Every object gets a uid and a resourceVersion when it is added, and a new
 //! resourceVersion on every change. Anything else answers 404.
 //!
 //! [`FakeApi::after_get`] changes an object right after the next GET of it
 //! is answered, which models a concurrent writer between a read and a delete.
+//! [`FakeApi::fail_next`] answers the next requests for one path with a
+//! plain-text error, as the apiserver does for a path it has not registered.
 
 use std::sync::{Arc, Mutex};
 
@@ -22,6 +25,7 @@ use crate::manifest::lifecycle::RECORD_KIND;
 /// `(group, version, kind, plural, namespaced)` of every kind served.
 const KINDS: &[(&str, &str, &str, &str, bool)] = &[
     ("", "v1", "ConfigMap", "configmaps", true),
+    ("", "v1", "Secret", "secrets", true),
     ("", "v1", "Namespace", "namespaces", false),
     (
         "rbac.authorization.k8s.io",
@@ -31,7 +35,16 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
         false,
     ),
     (keys::DOMAIN, "v1alpha1", RECORD_KIND, "activations", false),
+    // A group served at two versions, preferred first: `Gizmo` at both,
+    // `Gadget` only at the older one.
+    (TWO_VERSION_GROUP, "v1", "Gizmo", "gizmos", true),
+    (TWO_VERSION_GROUP, "v1beta1", "Gizmo", "gizmos", true),
+    (TWO_VERSION_GROUP, "v1beta1", "Gadget", "gadgets", true),
 ];
+
+/// The group [`KINDS`] serves at two versions. Its preferred version is
+/// `v1`, the first listed.
+pub const TWO_VERSION_GROUP: &str = "example.kix.test";
 
 type Hook = Box<dyn FnOnce(&mut Value) + Send>;
 
@@ -42,6 +55,9 @@ struct State {
     /// `METHOD path` of every request, in order, with `?query` when it has one.
     requests: Vec<String>,
     after_get: Vec<(String, Hook)>,
+    /// `(path, remaining, status)`: answer that many requests for `path`
+    /// with `status` and a plain-text body.
+    failures: Vec<(String, u32, u16)>,
 }
 
 impl State {
@@ -86,6 +102,18 @@ impl FakeApi {
             .push((name.to_string(), Box::new(f)));
     }
 
+    /// Answer the next `times` requests for `path` (no query string) with
+    /// `status` and a plain-text body. With 404 this is the apiserver's
+    /// `404 page not found` for a path nothing serves. `u32::MAX` keeps
+    /// failing.
+    pub fn fail_next(&self, path: &str, times: u32, status: u16) {
+        self.state
+            .lock()
+            .unwrap()
+            .failures
+            .push((path.to_string(), times, status));
+    }
+
     /// Names of the objects of `kind` still held, sorted.
     pub fn names(&self, kind: &str) -> Vec<String> {
         let st = self.state.lock().unwrap();
@@ -113,11 +141,11 @@ impl FakeApi {
                 let path = req.uri().path().to_string();
                 let query = req.uri().query().unwrap_or("").to_string();
                 let body = req.into_body().collect().await.unwrap().to_bytes();
-                let (status, value) = api.handle(&method, &path, &query, &body);
+                let (status, content_type, body) = api.respond(&method, &path, &query, &body);
                 let resp = http::Response::builder()
                     .status(status)
-                    .header("content-type", "application/json")
-                    .body(Full::new(Bytes::from(value.to_string())))
+                    .header("content-type", content_type)
+                    .body(Full::new(Bytes::from(body)))
                     .unwrap();
                 Ok::<_, std::convert::Infallible>(resp)
             }
@@ -125,14 +153,39 @@ impl FakeApi {
         Client::new(service, "default")
     }
 
+    fn respond(
+        &self,
+        method: &http::Method,
+        path: &str,
+        query: &str,
+        body: &[u8],
+    ) -> (u16, &'static str, String) {
+        {
+            let mut st = self.state.lock().unwrap();
+            let line = if query.is_empty() {
+                format!("{method} {path}")
+            } else {
+                format!("{method} {path}?{query}")
+            };
+            st.requests.push(line);
+            if let Some(f) = st
+                .failures
+                .iter_mut()
+                .find(|(p, remaining, _)| p == path && *remaining > 0)
+            {
+                if f.1 != u32::MAX {
+                    f.1 -= 1;
+                }
+                let code = f.2;
+                return (code, "text/plain", format!("{code} page not found\n"));
+            }
+        }
+        let (status, value) = self.handle(method, path, query, body);
+        (status, "application/json", value.to_string())
+    }
+
     fn handle(&self, method: &http::Method, path: &str, query: &str, body: &[u8]) -> (u16, Value) {
         let mut st = self.state.lock().unwrap();
-        let line = if query.is_empty() {
-            format!("{method} {path}")
-        } else {
-            format!("{method} {path}?{query}")
-        };
-        st.requests.push(line);
         if let Some(doc) = discovery(path) {
             return (200, doc);
         }
@@ -273,17 +326,24 @@ fn discovery(path: &str) -> Option<Value> {
         ),
         ["api", "v1"] => Some(resources("", "v1")),
         ["apis"] => {
-            let mut groups: Vec<(&str, &str)> = KINDS
-                .iter()
-                .filter(|(g, ..)| !g.is_empty())
-                .map(|(g, v, ..)| (*g, *v))
-                .collect();
-            groups.dedup();
+            // Each group once, its versions in the order KINDS first lists
+            // them; the first is the preferred version.
+            let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
+            for (g, v, ..) in KINDS.iter().filter(|(g, ..)| !g.is_empty()) {
+                match groups.iter_mut().find(|(name, _)| name == g) {
+                    Some((_, versions)) if !versions.contains(v) => versions.push(v),
+                    Some(_) => {}
+                    None => groups.push((g, vec![v])),
+                }
+            }
             let groups: Vec<Value> = groups
                 .into_iter()
-                .map(|(g, v)| {
-                    let gv = json!({ "groupVersion": format!("{g}/{v}"), "version": v });
-                    json!({ "name": g, "versions": [gv.clone()], "preferredVersion": gv })
+                .map(|(g, versions)| {
+                    let gvs: Vec<Value> = versions
+                        .iter()
+                        .map(|v| json!({ "groupVersion": format!("{g}/{v}"), "version": v }))
+                        .collect();
+                    json!({ "name": g, "versions": gvs, "preferredVersion": gvs[0] })
                 })
                 .collect();
             Some(json!({ "kind": "APIGroupList", "apiVersion": "v1", "groups": groups }))

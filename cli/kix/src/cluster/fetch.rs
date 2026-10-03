@@ -3,7 +3,7 @@
 //! Uses `kube` discovery to enumerate API resources, then parallel LIST
 //! calls with label selectors to fetch kix-managed resources.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use super::activation::{self, Tenancy};
@@ -17,7 +17,7 @@ use kube::{
     api::{Api, DynamicObject, ListParams},
     client::Client,
     config::{KubeConfigOptions, Kubeconfig},
-    discovery::{ApiResource, Discovery, Scope},
+    discovery::{ApiResource, Scope},
 };
 use thiserror::Error;
 use tokio::task::JoinSet;
@@ -55,6 +55,22 @@ pub enum FetchError {
 
     #[error("could not discover the resource types supported by the Kubernetes API: {}", super::errors::describe(.0))]
     DiscoveryError(#[source] kube::Error),
+
+    /// `/apis` kept listing group versions that answered 404 for
+    /// [`DISCOVERY_SETTLE`]. `missing` holds their paths.
+    #[error(
+        "could not discover the resource types supported by the Kubernetes API: \
+         the API server lists {} but answered 404 for {} for {}s. \
+         `kubectl get --raw {}` shows what it answers now.",
+        missing.join(", "),
+        if missing.len() == 1 { "it" } else { "them" },
+        waited.as_secs(),
+        missing.first().map_or("/apis", String::as_str)
+    )]
+    DiscoveryUnsettled {
+        missing: Vec<String>,
+        waited: Duration,
+    },
 
     #[error("failed to list {resource}: {}", super::errors::describe(source))]
     ListError {
@@ -209,83 +225,201 @@ fn server_responded(e: &kube::Error) -> bool {
     )
 }
 
+/// How long [`discover_resources`] keeps asking about group versions that
+/// `/apis` lists but that answer 404. On fresh kind clusters, a walk made
+/// just after new CRDs were Established has got a plain-text
+/// `404 page not found` for a listed group version, and a rerun of the
+/// same deploy got past that point.
+pub const DISCOVERY_SETTLE: Duration = Duration::from_secs(30);
+const DISCOVERY_BACKOFF_START: Duration = Duration::from_millis(250);
+const DISCOVERY_BACKOFF_MAX: Duration = Duration::from_secs(2);
+
 /// Run API discovery and return all listable resources with their scope.
+///
+/// The core group comes first, then the groups in the order `/apis` lists
+/// them, so a kind lookup that takes the first match is deterministic.
+///
+/// A listed group version that answers 404 makes the whole walk run again,
+/// with backoff, until every listed group version answers or
+/// [`DISCOVERY_SETTLE`] has passed ([`FetchError::DiscoveryUnsettled`]).
+/// The walk is repeated from `/apis` because a group that is going away
+/// stops being listed, and one that is arriving starts being served. Any
+/// other failure is returned at once: the transport has already retried it.
 pub async fn discover_resources(client: &Client) -> Result<Vec<(ApiResource, Scope)>, FetchError> {
-    let discovery = Discovery::new(client.clone())
-        .run()
+    let start = tokio::time::Instant::now();
+    let mut delay = DISCOVERY_BACKOFF_START;
+    loop {
+        let pass = discovery_pass(client).await?;
+        if pass.missing.is_empty() {
+            tracing::debug!(count = pass.resources.len(), "API resources discovered");
+            return Ok(pass.resources);
+        }
+        let waited = start.elapsed();
+        if waited >= DISCOVERY_SETTLE {
+            return Err(FetchError::DiscoveryUnsettled {
+                missing: pass.missing,
+                waited,
+            });
+        }
+        tracing::debug!(
+            missing = ?pass.missing,
+            "listed group versions answered 404, discovering again"
+        );
+        tokio::time::sleep(delay.min(DISCOVERY_SETTLE - waited)).await;
+        delay = (delay * 2).min(DISCOVERY_BACKOFF_MAX);
+    }
+}
+
+/// One discovery walk, for a caller that retries on its own: a listed group
+/// version that answers 404 is left out, named in `missing` and logged at
+/// debug, with no wait. Any other failure is returned.
+pub async fn discover_resources_once(client: &Client) -> Result<DiscoveryPass, FetchError> {
+    let pass = discovery_pass(client).await?;
+    if !pass.missing.is_empty() {
+        tracing::debug!(missing = ?pass.missing, "group versions answered 404");
+    }
+    Ok(pass)
+}
+
+/// One discovery walk. `missing` holds the path of every listed group
+/// version that answered 404; their resources are absent from `resources`,
+/// and a kind served there may appear at another version of its group.
+#[derive(Debug, Default)]
+pub struct DiscoveryPass {
+    pub resources: Vec<(ApiResource, Scope)>,
+    pub missing: Vec<String>,
+}
+
+async fn discovery_pass(client: &Client) -> Result<DiscoveryPass, FetchError> {
+    let mut pass = DiscoveryPass::default();
+    walk_core(client, &mut pass).await?;
+    let groups = client
+        .list_api_groups()
         .await
         .map_err(FetchError::DiscoveryError)?;
-
-    let mut resources = Vec::new();
-    for group in discovery.groups() {
-        resources.extend(collect_group_resources(group));
+    for g in groups.groups {
+        walk_api_group(client, g, &mut pass).await?;
     }
-    tracing::debug!(count = resources.len(), "API resources discovered");
-    Ok(resources)
+    Ok(pass)
 }
 
-/// Walk one ApiGroup's resources across EVERY served version.
+async fn walk_core(client: &Client, pass: &mut DiscoveryPass) -> Result<(), FetchError> {
+    let core = client
+        .list_core_api_versions()
+        .await
+        .map_err(FetchError::DiscoveryError)?;
+    walk_group(client, "", Some("v1"), core.versions, pass).await
+}
+
+async fn walk_api_group(
+    client: &Client,
+    g: k8s_openapi::apimachinery::pkg::apis::meta::v1::APIGroup,
+    pass: &mut DiscoveryPass,
+) -> Result<(), FetchError> {
+    let versions = g.versions.into_iter().map(|v| v.version).collect();
+    let preferred = g.preferred_version.map(|v| v.version);
+    walk_group(client, &g.name, preferred.as_deref(), versions, pass).await
+}
+
+/// Fetch each version of one group and add its listable resources to
+/// `pass`, recording versions that answer 404 in `pass.missing`.
 ///
-/// recommended_resources() only covers the group's preferred version. A group
-/// may serve different kinds at different versions, so using only the preferred
-/// version can hide kinds from the deploy scheduler. Walk every version,
-/// preferred first, and keep the first ApiResource seen per kind.
-fn collect_group_resources(group: &kube::discovery::ApiGroup) -> Vec<(ApiResource, Scope)> {
-    let mut resources = Vec::new();
-    let mut seen_kinds = std::collections::HashSet::new();
-    let preferred = group.preferred_version_or_latest();
-    let mut versions: Vec<&str> = vec![preferred];
-    versions.extend(group.versions().filter(|v| *v != preferred));
-    for ver in versions {
-        for (ar, caps) in group.versioned_resources(ver) {
-            if !seen_kinds.insert(ar.kind.clone()) {
-                continue;
-            }
-            // Only include listable resources
-            if !caps.supports_operation("list") {
-                continue;
-            }
-            resources.push((ar, caps.scope));
-        }
-    }
-    resources
-}
-
-/// Targeted single-group discovery is the fallback when the full
-/// sweep misses a kind. A bulk Discovery::run() under deploy load can
-/// transiently omit a group. Fetching one group uses a separate, smaller
-/// request. `group` is "" for the core group.
-pub async fn discover_group(
+/// Versions are walked preferred first, then newest first by Kubernetes
+/// version priority, and the first ApiResource seen per kind wins. Every
+/// served version is walked, not only the preferred one, because a group
+/// may serve some kinds only at an older version
+/// (operator.victoriametrics.com serves kinds at both v1 and v1beta1).
+async fn walk_group(
     client: &Client,
     group: &str,
-) -> Result<Vec<(ApiResource, Scope)>, FetchError> {
-    let ag = kube::discovery::group(client, group)
-        .await
-        .map_err(FetchError::DiscoveryError)?;
-    Ok(collect_group_resources(&ag))
-}
-
-/// Merge a fresh discovery result into an existing cache, unioned by
-/// (group, kind) with the fresh entry winning. Kubernetes' aggregated
-/// discovery document is rebuilt after CRD writes and can transiently omit
-/// unrelated groups.
-/// A refresh must therefore never *forget* kinds the cluster already
-/// proved it serves. Stale entries for genuinely deleted CRDs are
-/// harmless by comparison (their applies would fail anyway).
-pub fn merge_discovery(
-    existing: &[(ApiResource, Scope)],
-    fresh: Vec<(ApiResource, Scope)>,
-) -> Vec<(ApiResource, Scope)> {
-    let mut merged = fresh;
-    let known: HashSet<(String, String)> = merged
-        .iter()
-        .map(|(ar, _)| (ar.group.clone(), ar.kind.clone()))
-        .collect();
-    for (ar, scope) in existing {
-        if !known.contains(&(ar.group.clone(), ar.kind.clone())) {
-            merged.push((ar.clone(), scope.clone()));
+    preferred: Option<&str>,
+    mut versions: Vec<String>,
+    pass: &mut DiscoveryPass,
+) -> Result<(), FetchError> {
+    versions.sort_by_cached_key(|v| {
+        (
+            Some(v.as_str()) != preferred,
+            std::cmp::Reverse(kube::core::Version::parse(v).priority()),
+        )
+    });
+    let mut seen_kinds = HashSet::new();
+    for version in versions {
+        let gv = kube::core::GroupVersion::gv(group, &version);
+        let ag = match kube::discovery::pinned_group(client, &gv).await {
+            Ok(ag) => ag,
+            Err(kube::Error::Api(r)) if r.code == 404 => {
+                pass.missing.push(if group.is_empty() {
+                    format!("/api/{version}")
+                } else {
+                    format!("/apis/{group}/{version}")
+                });
+                continue;
+            }
+            Err(e) => return Err(FetchError::DiscoveryError(e)),
+        };
+        for (ar, caps) in ag.versioned_resources(&version) {
+            if seen_kinds.insert(ar.kind.clone()) && caps.supports_operation("list") {
+                pass.resources.push((ar, caps.scope));
+            }
         }
     }
+    Ok(())
+}
+
+/// Discovery of one group, the targeted fetch behind refresh-on-miss: a
+/// bulk walk under deploy load can transiently omit a group, and this is a
+/// smaller request. `group` is "" for the core group. A version that
+/// answers 404 is left out rather than failing the group, and named in
+/// `missing`, so the caller gets whatever the group serves now and can ask
+/// again.
+pub async fn discover_group(client: &Client, group: &str) -> Result<DiscoveryPass, FetchError> {
+    let mut pass = DiscoveryPass::default();
+    if group.is_empty() {
+        walk_core(client, &mut pass).await?;
+    } else {
+        let groups = client
+            .list_api_groups()
+            .await
+            .map_err(FetchError::DiscoveryError)?;
+        let Some(g) = groups.groups.into_iter().find(|g| g.name == group) else {
+            return Err(FetchError::DiscoveryError(kube::Error::Discovery(
+                kube::error::DiscoveryError::MissingApiGroup(group.to_string()),
+            )));
+        };
+        walk_api_group(client, g, &mut pass).await?;
+    }
+    if !pass.missing.is_empty() {
+        tracing::debug!(missing = ?pass.missing, "group versions answered 404");
+    }
+    Ok(pass)
+}
+
+/// Merge a fresh discovery walk into an existing cache, unioned by
+/// (group, kind). Kubernetes' aggregated discovery document is rebuilt
+/// after CRD writes and can transiently omit unrelated groups, so a refresh
+/// must never *forget* kinds the cluster already proved it serves. Stale
+/// entries for genuinely deleted CRDs are harmless by comparison (their
+/// applies would fail anyway).
+///
+/// When every listed group version answered, the fresh entry wins, so a
+/// kind whose preferred version changed moves to it. When the walk skipped
+/// a group version (`fresh.missing`), a kind it found may be one the
+/// skipped version also serves at a higher priority: the walk picks the
+/// next version that answered. The cached entry then wins, and the walk
+/// only adds (group, kind) keys the cache lacks, so a momentary 404 does not
+/// move a kind to an older version's URL.
+pub fn merge_discovery(
+    existing: &[(ApiResource, Scope)],
+    fresh: DiscoveryPass,
+) -> Vec<(ApiResource, Scope)> {
+    let key = |ar: &ApiResource| (ar.group.clone(), ar.kind.clone());
+    let (mut merged, rest) = if fresh.missing.is_empty() {
+        (fresh.resources, existing.to_vec())
+    } else {
+        (existing.to_vec(), fresh.resources)
+    };
+    let known: HashSet<(String, String)> = merged.iter().map(|(ar, _)| key(ar)).collect();
+    merged.extend(rest.into_iter().filter(|(ar, _)| !known.contains(&key(ar))));
     merged
 }
 
@@ -850,7 +984,21 @@ pub fn normalize_for_diff(obj: &mut DynamicObject) {
 ///
 /// Objects without a kix `Apply` entry (adopted externally, or predating SSA)
 /// fall back to the whole object with server metadata stripped.
+///
+/// A Secret's view holds no live value: every `data` key reads
+/// [`HIDDEN_SECRET_VALUE`] (see [`redact_secret`]). Values kix applied
+/// through `stringData` are absent, since the server stores them only in
+/// `data` and kix's fieldset lists `stringData`.
+/// [`kix_owned_manifests_against`] compares both against a build.
 pub fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
+    let mut view = unredacted_view(obj);
+    redact_secret(&mut view, obj, None);
+    view
+}
+
+/// [`kix_owned_view`] before [`redact_secret`]. A Secret's live values are
+/// still in it, so it must not leave this module.
+fn unredacted_view(obj: &DynamicObject) -> serde_json::Value {
     let Some(mut view) = super::fieldsv1::kix_owned_projection(obj) else {
         let mut fallback = obj.clone();
         normalize_for_diff(&mut fallback);
@@ -877,6 +1025,116 @@ pub fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
     view
 }
 
+/// Stands in for a live Secret value that differs from the build's, so a
+/// diff shows the key as changed without printing what the cluster holds.
+pub const HIDDEN_SECRET_VALUE: &str = "(live value differs from the build, not shown)";
+
+/// Keep every live value out of a Secret's view.
+///
+/// Each key under the view's `data` becomes the value `built` gives it when
+/// the decoded live value equals the build's: under `data` when the build
+/// declares the key there, under `stringData` when the build declares it
+/// there. Every other key reads [`HIDDEN_SECRET_VALUE`], as does every key
+/// when `built` is `None`.
+///
+/// The API server merges `stringData` into `data` and never stores it, so the
+/// projection of a Secret kix applied with `stringData` lists neither field.
+/// For each `stringData` key `built` declares and kix's fieldset lists, the
+/// decoded live `data` value is compared the same way and the key is added
+/// under `stringData`; a key whose live value is missing or is not
+/// base64-encoded UTF-8 is left out. A SOPS Secret's build manifest has no
+/// `stringData` (kix decrypts its values at deploy time), so none of its keys
+/// are restored and a value changed out of band does not show.
+///
+/// The view therefore never holds a value that is not already in the build.
+fn redact_secret(
+    view: &mut serde_json::Value,
+    obj: &DynamicObject,
+    built: Option<&serde_json::Value>,
+) {
+    use serde_json::{Map, Value};
+
+    if obj.data.get("kind").and_then(Value::as_str) != Some("Secret") {
+        return;
+    }
+    let hidden = || Value::String(HIDDEN_SECRET_VALUE.into());
+    let built_data = built.and_then(|b| b.get("data")).and_then(Value::as_object);
+    let built_string_data = built
+        .and_then(|b| b.get("stringData"))
+        .and_then(Value::as_object);
+    let live_data = obj.data.get("data").and_then(Value::as_object);
+    let live_text = |key: &str| -> Option<String> {
+        let bytes = decode_base64(live_data?.get(key)?.as_str()?)?;
+        String::from_utf8(bytes).ok()
+    };
+
+    let mut string_data: Map<String, Value> = Map::new();
+    let Some(map) = view.as_object_mut() else {
+        return;
+    };
+    // The server never returns `stringData`; hide anything found there.
+    if let Some(Value::Object(found)) = map.remove("stringData") {
+        string_data.extend(found.into_iter().map(|(k, _)| (k, hidden())));
+    }
+    if let Some(Value::Object(data)) = map.get_mut("data") {
+        let keys: Vec<String> = data.keys().cloned().collect();
+        for key in keys {
+            let live_bytes = live_data
+                .and_then(|d| d.get(&key))
+                .and_then(Value::as_str)
+                .and_then(decode_base64);
+            let from_data = built_data.and_then(|d| d.get(&key)).filter(|b| {
+                let built_bytes = b.as_str().and_then(decode_base64);
+                built_bytes.is_some() && built_bytes == live_bytes
+            });
+            if let Some(value) = from_data {
+                data.insert(key, value.clone());
+                continue;
+            }
+            let from_string_data = built_string_data
+                .and_then(|d| d.get(&key))
+                .filter(|b| b.as_str().is_some() && b.as_str() == live_text(&key).as_deref());
+            if let Some(value) = from_string_data {
+                data.remove(&key);
+                string_data.insert(key, value.clone());
+            } else {
+                data.insert(key, hidden());
+            }
+        }
+        if data.is_empty() {
+            map.remove("data");
+        }
+    }
+
+    let owned = super::fieldsv1::kix_fieldset(obj);
+    let owned = owned
+        .as_ref()
+        .and_then(|f| f.get("f:stringData"))
+        .and_then(Value::as_object);
+    if let (Some(declared), Some(owned)) = (built_string_data, owned) {
+        for (key, built_value) in declared {
+            if !owned.contains_key(&format!("f:{key}")) {
+                continue;
+            }
+            let Some(text) = live_text(key) else { continue };
+            let value = if built_value.as_str() == Some(text.as_str()) {
+                built_value.clone()
+            } else {
+                hidden()
+            };
+            string_data.insert(key.clone(), value);
+        }
+    }
+    if !string_data.is_empty() {
+        map.insert("stringData".into(), Value::Object(string_data));
+    }
+}
+
+fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.decode(text).ok()
+}
+
 /// The kix-owned view of every object in a sweep, brought to the current
 /// domain: what a build is compared against, whether the comparison runs
 /// now (`kix diff`), later from a directory (`kix snapshot save`), or as
@@ -896,6 +1154,141 @@ pub fn kix_owned_manifests(
             manifest
         })
         .collect()
+}
+
+/// [`kix_owned_manifests`] for comparison against a build, with each object
+/// that is unchanged since kix applied a manifest still in the build replaced
+/// by that manifest. `built` maps identity hash to the build's stamped
+/// manifest.
+///
+/// An object is unchanged when its `kix.run/identity-hash` names a manifest
+/// in `built`, [`super::drift::check_object`] finds it in sync, and every
+/// field that manifest sets holds the same value in the kix-owned view (see
+/// [`build_holds_in`]). The view may carry fields the build does not set,
+/// such as the `publisher` StackGres's mutating webhook adds to each
+/// extension; those are what the replacement hides. In sync alone is not
+/// enough: it means the live fields match the apply response, which already
+/// lacks a field the CRD schema pruned and already holds a value a webhook
+/// overwrote. The replacement keeps the live `kix.run/*` annotations, because
+/// both hashes leave them out and a package move would otherwise not show.
+///
+/// Every other object is compared through its view, with [`redact_secret`]
+/// run against the build manifest of the same name, so no live Secret value
+/// leaves this function. A Secret kix applied with `stringData` always takes
+/// that path (the server stores no `stringData`). A changed value shows there
+/// only when the build holds the plaintext: a literal `data` or `stringData`
+/// value, not a SOPS Secret's.
+pub fn kix_owned_manifests_against(
+    objects: impl IntoIterator<Item = DynamicObject>,
+    built: &HashMap<String, &serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    let by_id: HashMap<ResourceId, &serde_json::Value> = built
+        .values()
+        .map(|m| (ResourceId::from_value(m), *m))
+        .collect();
+    objects
+        .into_iter()
+        .map(|obj| {
+            let mut view = unredacted_view(&obj);
+            crate::legacy_domain::upgrade_manifest(&mut view);
+            if let Some(manifest) = unchanged_since_apply(&obj, &view, built) {
+                return manifest;
+            }
+            let build = by_id.get(&ResourceId::from_value(&view)).copied();
+            redact_secret(&mut view, &obj, build);
+            view
+        })
+        .collect()
+}
+
+/// The build manifest `obj` was applied from, with the live `kix.run/*`
+/// annotations of `view`, when nothing has changed it since. See
+/// [`kix_owned_manifests_against`].
+fn unchanged_since_apply(
+    obj: &DynamicObject,
+    view: &serde_json::Value,
+    built: &HashMap<String, &serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let hash = obj
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))?;
+    let manifest = *built.get(hash)?;
+    if super::drift::check_object(obj).verdict != super::drift::DriftVerdict::InSync
+        || !build_holds_in(manifest, view, "$")
+    {
+        return None;
+    }
+    let mut out = manifest.clone();
+    let live_stamps: Vec<(String, serde_json::Value)> = view
+        .pointer("/metadata/annotations")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(k, _)| keys::is_kix_key(k))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    super::normalize::strip_kix_annotations(&mut out);
+    if !live_stamps.is_empty()
+        && let Some(meta) = out.get_mut("metadata").and_then(|m| m.as_object_mut())
+        && let Some(annotations) = meta
+            .entry("annotations")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+    {
+        annotations.extend(live_stamps);
+    }
+    Some(out)
+}
+
+/// Whether every field `build` sets is present in `live` with an equal
+/// value, using the same equivalences as the diff engine (a server default
+/// or empty list for an absent field, quantity spellings). `live` may hold
+/// fields `build` does not. Lists match by the diff engine's keys, or by
+/// position, and must have the same length. `path` is the diff path of
+/// `build`, which the equivalence rules match on.
+fn build_holds_in(build: &serde_json::Value, live: &serde_json::Value, path: &str) -> bool {
+    use crate::manifest::diff::equivalence::{
+        equivalent_to_unset, is_quantity_field, same_quantity,
+    };
+    use crate::manifest::diff::keyed_lists::{path_leaf, try_key_lists};
+    use serde_json::Value;
+
+    match (build, live) {
+        (Value::Object(b), Value::Object(l)) => {
+            let parent = path_leaf(path);
+            b.iter().all(|(key, bv)| {
+                let child = format!("{path}.{key}");
+                match l.get(key) {
+                    None => equivalent_to_unset(&child, bv),
+                    Some(lv) => {
+                        (bv.is_null() && equivalent_to_unset(&child, lv))
+                            || (is_quantity_field(parent, key) && same_quantity(bv, lv))
+                            || build_holds_in(bv, lv, &child)
+                    }
+                }
+            })
+        }
+        (Value::Array(b), Value::Array(l)) => {
+            if b.len() != l.len() {
+                return false;
+            }
+            match try_key_lists(path_leaf(path), b, l) {
+                Some((b_map, l_map)) => b_map.iter().all(|(key, bv)| {
+                    l_map
+                        .get(key)
+                        .is_some_and(|lv| build_holds_in(bv, lv, &format!("{path}[{key}]")))
+                }),
+                None => b
+                    .iter()
+                    .zip(l)
+                    .enumerate()
+                    .all(|(i, (bv, lv))| build_holds_in(bv, lv, &format!("{path}[{i}]"))),
+            }
+        }
+        _ => build == live,
+    }
 }
 
 /// Serialise a fetched object into a whole-manifest `Value`.
@@ -1050,7 +1443,7 @@ fn absorb(
 mod tests {
     use super::*;
     use kube::api::ObjectMeta;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn managed(
         manager: &str,
@@ -1200,6 +1593,413 @@ mod tests {
                 }
             })
         );
+    }
+
+    /// A live Secret kix applied with `stringData`: the server stored only
+    /// `data`, under the given base64 password and `other`, which is not kix's.
+    fn string_data_secret(password_b64: &str, annotations: Value) -> DynamicObject {
+        let annotation_fields: serde_json::Map<String, Value> = annotations
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(k, _)| (format!("f:{k}"), json!({})))
+            .collect();
+        DynamicObject {
+            metadata: ObjectMeta {
+                name: Some("creds".into()),
+                namespace: Some("app".into()),
+                annotations: Some(
+                    annotations
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))
+                        .collect(),
+                ),
+                managed_fields: Some(vec![managed(
+                    "kix",
+                    "Apply",
+                    None,
+                    json!({
+                        "f:metadata": {"f:annotations": annotation_fields},
+                        "f:stringData": {".": {}, "f:password": {}, "f:user": {}},
+                        "f:type": {}
+                    }),
+                )]),
+                ..Default::default()
+            },
+            types: None,
+            data: json!({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "type": "Opaque",
+                // "admin", the given password, and "x".
+                "data": {"user": "YWRtaW4=", "password": password_b64, "other": "eA=="}
+            }),
+        }
+    }
+
+    #[test]
+    fn kix_owned_view_of_a_string_data_secret_holds_no_values() {
+        let view = kix_owned_view(&string_data_secret("ZGV2LXBhc3N3b3Jk", json!({})));
+        assert!(view.get("stringData").is_none());
+        assert!(view.get("data").is_none());
+    }
+
+    /// A live SGCluster after an apply: the operator's webhook added
+    /// `publisher` to each extension, inside a list kix owns whole.
+    fn webhook_defaulted_cluster(extensions: Value, applied_hash: Option<&str>) -> DynamicObject {
+        applied_cluster(
+            json!({"postgres": {"extensions": extensions}}),
+            &[(keys::IDENTITY_HASH, "h-pg")],
+            applied_hash,
+        )
+    }
+
+    /// A live SGCluster whose kix Apply entry owns the given annotations and
+    /// `spec.postgres.extensions`. The applied-content hash is computed from
+    /// the object unless `applied_hash` overrides it.
+    fn applied_cluster(
+        spec: Value,
+        owned_annotations: &[(&str, &str)],
+        applied_hash: Option<&str>,
+    ) -> DynamicObject {
+        let mut annotations: BTreeMap<String, String> = owned_annotations
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let annotation_fields: serde_json::Map<String, Value> = owned_annotations
+            .iter()
+            .map(|(k, _)| (format!("f:{k}"), json!({})))
+            .collect();
+        let mut obj = DynamicObject {
+            metadata: ObjectMeta {
+                name: Some("postgres".into()),
+                namespace: Some("data".into()),
+                annotations: Some(annotations.clone()),
+                managed_fields: Some(vec![managed(
+                    "kix",
+                    "Apply",
+                    None,
+                    json!({
+                        "f:metadata": {"f:annotations": annotation_fields},
+                        "f:spec": {"f:postgres": {"f:extensions": {}}}
+                    }),
+                )]),
+                ..Default::default()
+            },
+            types: None,
+            data: json!({
+                "apiVersion": "stackgres.io/v1",
+                "kind": "SGCluster",
+                "spec": spec
+            }),
+        };
+        let hash = match applied_hash {
+            Some(h) => h.to_string(),
+            None => crate::cluster::fieldsv1::applied_content_hash(&obj).unwrap(),
+        };
+        annotations.insert(keys::APPLIED_HASH.to_string(), hash);
+        obj.metadata.annotations = Some(annotations);
+        obj
+    }
+
+    fn built_cluster(spec: Value, annotations: Value) -> Value {
+        json!({
+            "apiVersion": "stackgres.io/v1",
+            "kind": "SGCluster",
+            "metadata": {"name": "postgres", "namespace": "data", "annotations": annotations},
+            "spec": spec
+        })
+    }
+
+    fn diff_paths(built: &Value, compared: &Value) -> Vec<String> {
+        let config = crate::manifest::diff::DiffConfig::default();
+        crate::manifest::diff::engine::structural_diff(built, compared, "$", &config)
+            .into_iter()
+            .map(|d| d.path)
+            .collect()
+    }
+
+    /// A field the CRD schema pruned on apply is absent from the live object,
+    /// although drift finds it in sync. It shows as missing.
+    #[test]
+    fn a_field_pruned_on_apply_shows_in_the_comparison() {
+        let built = built_cluster(
+            json!({"postgres": {"extensions": [{"name": "cube"}], "flavour": "babelfish"}}),
+            json!({keys::IDENTITY_HASH: "h-pg"}),
+        );
+        let by_hash: HashMap<String, &Value> = [("h-pg".to_string(), &built)].into();
+        let live = applied_cluster(
+            json!({"postgres": {"extensions": [{"name": "cube"}]}}),
+            &[(keys::IDENTITY_HASH, "h-pg")],
+            None,
+        );
+        let out = kix_owned_manifests_against([live], &by_hash).remove(0);
+        assert_eq!(diff_paths(&built, &out), vec!["$.spec.postgres.flavour"]);
+    }
+
+    /// A value a mutating webhook overwrote on apply reads as changed, while
+    /// the field it added beside it still does not show.
+    #[test]
+    fn a_value_a_webhook_overwrote_shows_in_the_comparison() {
+        let built = built_cluster(
+            json!({"postgres": {"extensions": [{"name": "cube", "version": "1.5"}]}}),
+            json!({keys::IDENTITY_HASH: "h-pg"}),
+        );
+        let by_hash: HashMap<String, &Value> = [("h-pg".to_string(), &built)].into();
+        let live = webhook_defaulted_cluster(
+            json!([{"name": "cube", "version": "1.6", "publisher": "com.ongres"}]),
+            None,
+        );
+        let out = kix_owned_manifests_against([live], &by_hash).remove(0);
+        assert_eq!(
+            out["spec"]["postgres"]["extensions"][0]["version"],
+            json!("1.6")
+        );
+        assert!(
+            diff_paths(&built, &out)
+                .contains(&"$.spec.postgres.extensions[cube].version".to_string())
+        );
+    }
+
+    /// The identity and applied-content hashes leave out `kix.run/*`
+    /// annotations, so a package move or a hand-edited stamp keeps both. The
+    /// comparison carries the live stamps and shows the change.
+    #[test]
+    fn a_changed_stamp_annotation_shows_in_the_comparison() {
+        let spec = json!({"postgres": {"extensions": [{"name": "cube"}]}});
+        let built = built_cluster(
+            spec.clone(),
+            json!({keys::IDENTITY_HASH: "h-pg", keys::PACKAGE: "postgres-new"}),
+        );
+        let by_hash: HashMap<String, &Value> = [("h-pg".to_string(), &built)].into();
+
+        let moved = applied_cluster(
+            spec.clone(),
+            &[
+                (keys::IDENTITY_HASH, "h-pg"),
+                (keys::PACKAGE, "postgres-old"),
+            ],
+            None,
+        );
+        let out = kix_owned_manifests_against([moved], &by_hash).remove(0);
+        assert_eq!(
+            out["metadata"]["annotations"][keys::PACKAGE],
+            json!("postgres-old")
+        );
+
+        let extra = applied_cluster(
+            spec,
+            &[
+                (keys::IDENTITY_HASH, "h-pg"),
+                (keys::PACKAGE, "postgres-new"),
+                (keys::LIFECYCLE, "stateful"),
+            ],
+            None,
+        );
+        let out = kix_owned_manifests_against([extra], &by_hash).remove(0);
+        assert_eq!(
+            out["metadata"]["annotations"][keys::LIFECYCLE],
+            json!("stateful")
+        );
+    }
+
+    #[test]
+    fn an_object_unchanged_since_apply_compares_as_its_build_manifest() {
+        let built = json!({
+            "apiVersion": "stackgres.io/v1",
+            "kind": "SGCluster",
+            "metadata": {"name": "postgres", "namespace": "data",
+                         "annotations": {keys::IDENTITY_HASH: "h-pg"}},
+            "spec": {"postgres": {"extensions": [{"name": "cube"}]}}
+        });
+        let by_hash: HashMap<String, &Value> = [("h-pg".to_string(), &built)].into();
+        let live_extensions = json!([{"name": "cube", "publisher": "com.ongres"}]);
+
+        let in_sync = webhook_defaulted_cluster(live_extensions.clone(), None);
+        assert_eq!(
+            kix_owned_manifests_against([in_sync], &by_hash),
+            std::slice::from_ref(&built)
+        );
+
+        // Changed since the apply: the live view, webhook default and all.
+        let drifted = webhook_defaulted_cluster(live_extensions.clone(), Some("other"));
+        let out = kix_owned_manifests_against([drifted], &by_hash);
+        assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
+
+        // Applied from a manifest the build no longer has: the live view.
+        let in_sync = webhook_defaulted_cluster(live_extensions.clone(), None);
+        let out = kix_owned_manifests_against([in_sync], &HashMap::new());
+        assert_eq!(out[0]["spec"]["postgres"]["extensions"], live_extensions);
+    }
+
+    fn compare_with_build(live: DynamicObject, built: &Value) -> Value {
+        let by_hash: HashMap<String, &Value> = [("h-sec".to_string(), built)].into();
+        kix_owned_manifests_against([live], &by_hash).remove(0)
+    }
+
+    /// Literal `stringData` in the build: a live value equal to the build's
+    /// reads as the build's, a changed one is hidden, and one that does not
+    /// decode is left out. `other` is not in the build and never appears.
+    #[test]
+    fn a_secret_applied_with_string_data_compares_against_the_build() {
+        let built = json!({
+            "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+            "metadata": {"name": "creds", "namespace": "app"},
+            "stringData": {"user": "admin", "password": "dev-password"}
+        });
+
+        let same = compare_with_build(string_data_secret("ZGV2LXBhc3N3b3Jk", json!({})), &built);
+        assert_eq!(same, built);
+
+        // "rotated"
+        let changed = compare_with_build(string_data_secret("cm90YXRlZA==", json!({})), &built);
+        assert_eq!(
+            changed["stringData"],
+            json!({"user": "admin", "password": HIDDEN_SECRET_VALUE})
+        );
+        assert!(!changed.to_string().contains("rotated"));
+
+        let broken = compare_with_build(string_data_secret("not base64", json!({})), &built);
+        assert_eq!(broken["stringData"], json!({"user": "admin"}));
+    }
+
+    /// A SOPS Secret: the build has no `stringData`, and kix applied the
+    /// decrypted values through it. The live object reads as the build, and
+    /// no decrypted value appears in the comparison or the view.
+    #[test]
+    fn a_sops_secret_compares_unchanged_without_its_values() {
+        let annotations = json!({
+            keys::SOPS_SOURCE: "/nix/store/abc-secrets.yaml",
+            keys::IDENTITY_HASH: "h-sec"
+        });
+        let built = json!({
+            "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+            "metadata": {"name": "creds", "namespace": "app", "annotations": annotations}
+        });
+        // "s3cr3t-from-sops"
+        let live = || string_data_secret("czNjcjN0LWZyb20tc29wcw==", annotations.clone());
+
+        let compared = compare_with_build(live(), &built);
+        let config = crate::manifest::diff::DiffConfig::default();
+        assert_eq!(
+            crate::manifest::diff::engine::structural_diff(&built, &compared, "$", &config),
+            vec![]
+        );
+        for out in [compared, kix_owned_view(&live())] {
+            let text = out.to_string();
+            assert!(!text.contains("s3cr3t-from-sops"), "{text}");
+            assert!(!text.contains("admin"), "{text}");
+        }
+    }
+
+    /// A live Secret holding `data` user "admin", password "rotated" and
+    /// `other` "x", whose managedFields are `managed_fields`.
+    fn data_secret(
+        managed_fields: Vec<k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry>,
+    ) -> DynamicObject {
+        DynamicObject {
+            metadata: ObjectMeta {
+                name: Some("creds".into()),
+                namespace: Some("app".into()),
+                annotations: Some(
+                    [
+                        (keys::IDENTITY_HASH.to_string(), "h-sec".to_string()),
+                        (keys::APPLIED_HASH.to_string(), "drifted".to_string()),
+                    ]
+                    .into(),
+                ),
+                managed_fields: Some(managed_fields),
+                ..Default::default()
+            },
+            types: None,
+            data: json!({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "type": "Opaque",
+                "data": {"user": "YWRtaW4=", "password": "cm90YXRlZA==", "other": "eA=="}
+            }),
+        }
+    }
+
+    fn assert_no_live_value(out: &Value) {
+        let text = out.to_string();
+        for live in ["cm90YXRlZA==", "rotated", "eA=="] {
+            assert!(!text.contains(live), "{live} in {text}");
+        }
+    }
+
+    /// A Secret kix applied through `data` that has drifted since: no live
+    /// value is in its view, and against the build a key equal to the
+    /// build's reads as the build's while a changed one is hidden.
+    #[test]
+    fn a_secret_applied_with_data_holds_no_live_value() {
+        let live = || {
+            data_secret(vec![managed(
+                "kix",
+                "Apply",
+                None,
+                json!({"f:data": {".": {}, "f:user": {}, "f:password": {}}, "f:type": {}}),
+            )])
+        };
+        let view = kix_owned_view(&live());
+        assert_eq!(
+            view["data"],
+            json!({"user": HIDDEN_SECRET_VALUE, "password": HIDDEN_SECRET_VALUE})
+        );
+        assert_no_live_value(&view);
+
+        let built = json!({
+            "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+            "metadata": {"name": "creds", "namespace": "app",
+                         "annotations": {keys::IDENTITY_HASH: "h-sec"}},
+            // "admin", "dev-password"
+            "data": {"user": "YWRtaW4=", "password": "ZGV2LXBhc3N3b3Jk"}
+        });
+        let compared = compare_with_build(live(), &built);
+        assert_eq!(
+            compared["data"],
+            json!({"user": "YWRtaW4=", "password": HIDDEN_SECRET_VALUE})
+        );
+        assert_no_live_value(&compared);
+    }
+
+    /// A Secret with no kix Apply entry falls back to the whole object, and
+    /// still holds no live value: without a build every key is hidden, and a
+    /// key the build declares under `stringData` with the same value reads
+    /// as the build's.
+    #[test]
+    fn a_secret_without_an_apply_entry_holds_no_live_value() {
+        let live = || {
+            data_secret(vec![managed(
+                "kubectl-create",
+                "Update",
+                None,
+                json!({"f:data": {}}),
+            )])
+        };
+        let view = kix_owned_view(&live());
+        assert_eq!(
+            view["data"],
+            json!({"user": HIDDEN_SECRET_VALUE, "password": HIDDEN_SECRET_VALUE,
+                   "other": HIDDEN_SECRET_VALUE})
+        );
+        assert_no_live_value(&view);
+        assert_no_live_value(&kix_owned_manifests([live()]).remove(0));
+
+        let built = json!({
+            "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+            "metadata": {"name": "creds", "namespace": "app"},
+            "stringData": {"user": "admin", "password": "dev-password"}
+        });
+        let compared = compare_with_build(live(), &built);
+        assert_eq!(compared["stringData"], json!({"user": "admin"}));
+        assert_eq!(
+            compared["data"],
+            json!({"password": HIDDEN_SECRET_VALUE, "other": HIDDEN_SECRET_VALUE})
+        );
+        assert_no_live_value(&compared);
     }
 
     /// No kix Apply entry (adopted externally, or pre-SSA): the whole object,
@@ -1864,5 +2664,173 @@ mod tests {
         );
         assert_eq!(prune, vec![rid("ClusterRole", "once-shared")]);
         assert!(kept.is_empty());
+    }
+
+    const RBAC_V1: &str = "/apis/rbac.authorization.k8s.io/v1";
+
+    fn gets(api: &crate::cluster::fake_api::FakeApi, path: &str) -> usize {
+        let line = format!("GET {path}");
+        api.requests().iter().filter(|r| **r == line).count()
+    }
+
+    /// A group version that `/apis` lists but that answers 404, as a CRD's
+    /// group can for a moment after the CRD is Established, is fetched again
+    /// until it answers.
+    #[tokio::test(start_paused = true)]
+    async fn discovery_waits_for_a_listed_group_version_that_404s() {
+        use crate::cluster::fake_api::FakeApi;
+        let api = FakeApi::new([]);
+        api.fail_next(RBAC_V1, 2, 404);
+        let found = discover_resources(&api.client()).await.unwrap();
+        assert!(found.iter().any(|(ar, _)| ar.kind == "ClusterRole"));
+        assert_eq!(gets(&api, RBAC_V1), 3);
+    }
+
+    /// A group version that keeps answering 404 ends discovery after
+    /// `DISCOVERY_SETTLE`, and the error names it.
+    #[tokio::test(start_paused = true)]
+    async fn discovery_that_never_settles_names_the_group_version() {
+        use crate::cluster::fake_api::FakeApi;
+        let api = FakeApi::new([]);
+        api.fail_next(RBAC_V1, u32::MAX, 404);
+        let start = tokio::time::Instant::now();
+        let err = discover_resources(&api.client()).await.unwrap_err();
+        let waited = start.elapsed();
+        assert!(
+            waited >= DISCOVERY_SETTLE && waited <= DISCOVERY_SETTLE + DISCOVERY_BACKOFF_MAX,
+            "{waited:?}"
+        );
+        let msg = err.to_string();
+        assert!(msg.contains("rbac.authorization.k8s.io/v1"), "{msg}");
+        assert!(msg.contains("404"), "{msg}");
+    }
+
+    /// Only a 404 is waited out. Other failures have already been through
+    /// the transport's retries, so discovery reports them at once.
+    #[tokio::test(start_paused = true)]
+    async fn discovery_reports_other_failures_at_once() {
+        use crate::cluster::fake_api::FakeApi;
+        let api = FakeApi::new([]);
+        api.fail_next(RBAC_V1, u32::MAX, 403);
+        let start = tokio::time::Instant::now();
+        assert!(discover_resources(&api.client()).await.is_err());
+        assert_eq!(start.elapsed(), Duration::ZERO);
+        assert_eq!(gets(&api, RBAC_V1), 1);
+    }
+
+    /// The targeted fetch behind refresh-on-miss keeps the versions of a
+    /// group that answer when another one 404s.
+    #[tokio::test(start_paused = true)]
+    async fn group_discovery_skips_a_version_that_404s() {
+        use crate::cluster::fake_api::FakeApi;
+        let api = FakeApi::new([]);
+        api.fail_next(RBAC_V1, u32::MAX, 404);
+        let found = discover_group(&api.client(), "rbac.authorization.k8s.io")
+            .await
+            .unwrap();
+        assert!(found.resources.is_empty());
+        assert_eq!(found.missing, vec![RBAC_V1.to_string()]);
+        let core = discover_group(&api.client(), "").await.unwrap();
+        assert!(core.resources.iter().any(|(ar, _)| ar.kind == "ConfigMap"));
+    }
+
+    const TWO_V1: &str = "/apis/example.kix.test/v1";
+    const TWO_V1BETA1: &str = "/apis/example.kix.test/v1beta1";
+
+    /// `(kind, version)` of each resource of the two-version group.
+    fn versions_of(resources: &[(ApiResource, Scope)]) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = resources
+            .iter()
+            .filter(|(ar, _)| ar.group == crate::cluster::fake_api::TWO_VERSION_GROUP)
+            .map(|(ar, _)| (ar.kind.clone(), ar.version.clone()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn pair(kind: &str, version: &str) -> (String, String) {
+        (kind.to_string(), version.to_string())
+    }
+
+    /// A group's preferred version is fetched first, and the first version
+    /// that serves a kind wins: `Gizmo` at v1, `Gadget` from v1beta1.
+    #[tokio::test]
+    async fn group_discovery_walks_the_preferred_version_first() {
+        use crate::cluster::fake_api::{FakeApi, TWO_VERSION_GROUP};
+        let api = FakeApi::new([]);
+        let walk = discover_group(&api.client(), TWO_VERSION_GROUP)
+            .await
+            .unwrap();
+        assert_eq!(
+            versions_of(&walk.resources),
+            vec![pair("Gadget", "v1beta1"), pair("Gizmo", "v1")]
+        );
+        let order: Vec<String> = api
+            .requests()
+            .into_iter()
+            .filter(|r| r.ends_with(TWO_V1) || r.ends_with(TWO_V1BETA1))
+            .collect();
+        assert_eq!(
+            order,
+            vec![format!("GET {TWO_V1}"), format!("GET {TWO_V1BETA1}")]
+        );
+    }
+
+    /// When the preferred version 404s, the walk keeps what the other
+    /// version serves, `Gizmo` included at v1beta1, and says what it skipped.
+    #[tokio::test]
+    async fn group_discovery_keeps_the_versions_that_answer() {
+        use crate::cluster::fake_api::{FakeApi, TWO_VERSION_GROUP};
+        let api = FakeApi::new([]);
+        api.fail_next(TWO_V1, u32::MAX, 404);
+        let walk = discover_group(&api.client(), TWO_VERSION_GROUP)
+            .await
+            .unwrap();
+        assert_eq!(
+            versions_of(&walk.resources),
+            vec![pair("Gadget", "v1beta1"), pair("Gizmo", "v1beta1")]
+        );
+        assert_eq!(walk.missing, vec![TWO_V1.to_string()]);
+    }
+
+    /// A walk that skipped the preferred version does not move a cached kind
+    /// to the older version, but still adds a kind the cache lacks. A
+    /// complete walk replaces the cached entry.
+    #[tokio::test]
+    async fn a_partial_walk_does_not_downgrade_a_cached_kind() {
+        use crate::cluster::fake_api::{FakeApi, TWO_VERSION_GROUP};
+        let api = FakeApi::new([]);
+        let complete = discover_group(&api.client(), TWO_VERSION_GROUP)
+            .await
+            .unwrap();
+        let cached: Vec<(ApiResource, Scope)> = complete
+            .resources
+            .iter()
+            .filter(|(ar, _)| ar.kind == "Gizmo")
+            .cloned()
+            .collect();
+
+        api.fail_next(TWO_V1, 1, 404);
+        let partial = discover_group(&api.client(), TWO_VERSION_GROUP)
+            .await
+            .unwrap();
+        let merged = merge_discovery(&cached, partial);
+        assert_eq!(
+            versions_of(&merged),
+            vec![pair("Gadget", "v1beta1"), pair("Gizmo", "v1")]
+        );
+
+        let stale: Vec<(ApiResource, Scope)> = merged
+            .into_iter()
+            .map(|(mut ar, scope)| {
+                ar.version = "v1alpha1".into();
+                (ar, scope)
+            })
+            .collect();
+        let merged = merge_discovery(&stale, complete);
+        assert_eq!(
+            versions_of(&merged),
+            vec![pair("Gadget", "v1beta1"), pair("Gizmo", "v1")]
+        );
     }
 }

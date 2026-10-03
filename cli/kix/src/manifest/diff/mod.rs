@@ -5,6 +5,7 @@
 
 pub mod display;
 pub mod engine;
+pub mod equivalence;
 pub mod ignore;
 pub mod keyed_lists;
 pub mod rename;

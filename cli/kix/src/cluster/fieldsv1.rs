@@ -189,9 +189,14 @@ pub fn applied_content_hash(obj: &DynamicObject) -> Option<String> {
     // delegation drops the listed JSON pointers from the projection on both
     // the stamp and the check side, so expected co-owners (HPA on replicas,
     // cert-manager on Secret data) never enter the hash.
-    let mut projection = kix_owned_projection(obj)?;
+    kix_owned_projection(obj).map(projection_hash)
+}
+
+/// Steps 3 and 4 of [`applied_content_hash`], for a projection the caller
+/// has already built or edited.
+pub fn projection_hash(mut projection: Value) -> String {
     normalize::strip_kix_annotations(&mut projection);
-    Some(normalize::hash_value(&normalize::sort_keys(&projection)))
+    normalize::hash_value(&normalize::sort_keys(&projection))
 }
 
 /// The part of a live object kix's server-side apply owns: typed metadata

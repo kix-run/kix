@@ -30,8 +30,13 @@ pub enum DriftVerdict {
     InSync,
     /// The kix-owned projection no longer hashes to the stamp. Content
     /// changed under kix's ownership or ownership was taken by another
-    /// manager. `foreign` attributes the co-owners.
-    Drifted { foreign: Vec<ForeignOwner> },
+    /// manager. `foreign` lists the other managers' recorded fields;
+    /// `unrecorded_scale` is set when the change is a replicas write that
+    /// Kubernetes recorded no owner for.
+    Drifted {
+        foreign: Vec<ForeignOwner>,
+        unrecorded_scale: Option<UnrecordedScale>,
+    },
     /// No `kix.run/applied-hash` annotation: the resource predates stamping
     /// or the stamp patch was lost. This is restamped on the next deploy.
     Unstamped,
@@ -49,12 +54,48 @@ pub struct ForeignOwner {
     /// Subresource the write went through (e.g. "scale"). Status writes are
     /// excluded before this is ever constructed.
     pub subresource: Option<String>,
-    /// RFC 3339 timestamp of the entry's last write, as reported by the server.
+    /// RFC 3339 timestamp of the entry's last write, as reported by the
+    /// server. `None` for a `/scale` entry: the apiserver copies the scale
+    /// writer's fields onto the parent object without a time.
     pub time: Option<String>,
     /// Field paths the manager owns, e.g.
     /// `spec.template.spec.containers[name=web].image`.
     pub paths: Vec<String>,
 }
+
+/// A replicas change Kix can prove although no managedFields entry records
+/// it.
+///
+/// A write through the `/scale` subresource leaves `spec.replicas` with no
+/// owner in two cases: it sets 0, which the Scale object omits so the write
+/// counts as a removal, or no manager owned `spec.replicas` before it, which
+/// makes the apiserver skip tracking for the write. Either way Kix's `Apply`
+/// entry loses the field and no other entry gains it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnrecordedScale {
+    /// Field path, always `spec.replicas`.
+    pub path: String,
+    /// The value Kix applied, recovered from the `kix.run/applied-hash`
+    /// stamp.
+    pub deployed: i64,
+    /// The value on the live object.
+    pub live: i64,
+}
+
+/// Kinds whose `/scale` subresource writes `spec.replicas`, by API group and
+/// kind. A custom resource's scale subresource names its replicas path in its
+/// CRD, which this check does not read.
+const SCALE_KINDS: &[(&str, &str)] = &[
+    ("apps", "Deployment"),
+    ("apps", "ReplicaSet"),
+    ("apps", "StatefulSet"),
+    ("", "ReplicationController"),
+];
+
+/// The highest deployed replicas value [`unrecorded_scale`] tries. The stamp
+/// is a hash, so recovering the deployed value means hashing each candidate;
+/// the bound keeps that to about a thousand hashes per drifted workload.
+const SCALE_SEARCH_LIMIT: i64 = 1024;
 
 /// Drift report for a single resource.
 #[derive(Debug, Clone)]
@@ -139,19 +180,73 @@ pub fn check_object(obj: &DynamicObject) -> DriftReport {
             rid,
             verdict: DriftVerdict::Drifted {
                 foreign: foreign_owners(obj),
+                unrecorded_scale: unrecorded_scale(obj, &stamped),
             },
             clusters: Vec::new(),
         }
     }
 }
 
+/// Detect a replicas change that no managedFields entry records (see
+/// [`UnrecordedScale`]).
+///
+/// Applies to the kinds in [`SCALE_KINDS`] whose live `spec.replicas` no
+/// entry owns. Puts `spec.replicas` back into Kix's projection with each value
+/// from 0 to [`SCALE_SEARCH_LIMIT`] and returns the value whose hash equals
+/// `stamped`. A match proves Kix applied that value and that `spec.replicas`
+/// is the only field Kix owned that changed. Returns `None` when nothing
+/// matches, which includes a replicas change combined with any other change
+/// to Kix's fields.
+fn unrecorded_scale(obj: &DynamicObject, stamped: &str) -> Option<UnrecordedScale> {
+    if !serves_scale(obj) {
+        return None;
+    }
+    let live = obj.data.pointer("/spec/replicas")?.as_i64()?;
+    let entries = obj.metadata.managed_fields.as_deref()?;
+    let owned = entries.iter().any(|e| {
+        e.fields_v1
+            .as_ref()
+            .is_some_and(|f| f.0.pointer("/f:spec/f:replicas").is_some())
+    });
+    if owned {
+        return None;
+    }
+
+    let mut projection = fieldsv1::kix_owned_projection(obj)?;
+    // Indexing `projection["spec"]` below panics unless it is an object.
+    projection.get("spec")?.as_object()?;
+    let deployed = (0..=SCALE_SEARCH_LIMIT).find(|&candidate| {
+        projection["spec"]["replicas"] = Value::from(candidate);
+        fieldsv1::projection_hash(projection.clone()) == stamped
+    })?;
+    Some(UnrecordedScale {
+        path: "spec.replicas".to_string(),
+        deployed,
+        live,
+    })
+}
+
+fn serves_scale(obj: &DynamicObject) -> bool {
+    let api_version = obj
+        .data
+        .get("apiVersion")
+        .and_then(Value::as_str)
+        .or_else(|| obj.types.as_ref().map(|t| t.api_version.as_str()))
+        .unwrap_or_default();
+    let group = api_version.rsplit_once('/').map_or("", |(group, _)| group);
+    let kind = resource_id_kind(obj);
+    SCALE_KINDS.contains(&(group, kind))
+}
+
 /// Attribute co-ownership: flatten every OTHER manager's fieldsV1 into field
 /// paths with manager name, operation, subresource, and timestamp.
 ///
 /// Excludes entries with subresource == "status" because status writes are
-/// controller noise, never drift. Other subresources stay visible on purpose:
-/// autoscalers and `kubectl scale` write through the "/scale" subresource,
-/// which the check must attribute as scaling drift.
+/// controller noise, never drift. Other subresources stay in the list, so a
+/// `/scale` write that Kubernetes records appears here as its writer
+/// (subresource `scale`, owning `spec.replicas`, no time). Kubernetes records
+/// one only when the write sets a non-zero value and some manager owned
+/// `spec.replicas` before it; [`UnrecordedScale`] covers the other writes.
 pub fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
     let Some(entries) = obj.metadata.managed_fields.as_deref() else {
         return Vec::new();
@@ -235,15 +330,8 @@ fn format_list_key(key_json: &str) -> String {
 /// Build a `ResourceId` from typed metadata + the kind that
 /// `fetch_managed_resources` injects into raw data.
 fn resource_id(obj: &DynamicObject) -> ResourceId {
-    let kind = obj
-        .data
-        .get("kind")
-        .and_then(Value::as_str)
-        .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
-        .unwrap_or("Unknown")
-        .to_string();
     ResourceId {
-        kind,
+        kind: resource_id_kind(obj).to_string(),
         namespace: obj
             .metadata
             .namespace
@@ -251,6 +339,14 @@ fn resource_id(obj: &DynamicObject) -> ResourceId {
             .unwrap_or_else(|| crate::manifest::types::CLUSTER_SCOPED.to_string()),
         name: obj.metadata.name.clone().unwrap_or_default(),
     }
+}
+
+fn resource_id_kind(obj: &DynamicObject) -> &str {
+    obj.data
+        .get("kind")
+        .and_then(Value::as_str)
+        .or_else(|| obj.types.as_ref().map(|t| t.kind.as_str()))
+        .unwrap_or("Unknown")
 }
 
 #[cfg(test)]

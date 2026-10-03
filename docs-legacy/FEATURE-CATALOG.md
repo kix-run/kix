@@ -374,6 +374,7 @@ Colored diff of the build against the live cluster, or against a directory. Ever
 - Exit code 2 = differences found, 0 = identical.
 - Package-grouped output with resource-level diffs.
 - Warns on PVC modifications.
+- A converged cluster prints no differences. A live object that `kix drift` finds in sync with the manifest it was applied from, and that holds every field of that manifest unchanged, compares as that manifest, so fields the server or an operator's webhook added never show. A field the CRD schema pruned, a value a webhook overwrote, and a changed `kix.run/*` stamp still show. Otherwise the server's spellings count as equal: `null` or `[]` for an absent field, documented defaults such as `fieldRef.apiVersion: v1` or a probe's `failureThreshold: 3`, and quantities with the same amount. A Secret's literal `data` or `stringData` is compared with the decoded live `data`; a changed value shows as changed without printing what the cluster holds, and a SOPS Secret's decrypted values are never compared or printed. No live Secret value reaches `kix diff`, `kix snapshot save` or a deploy plan built from live objects. A Job its TTL removed after the deployed build ran it is not listed as added. The old activation is the cluster's current record.
 
 #### `kix check <CLUSTER>`
 Two steps: eval correctness, then the scorecard report. No schema or deprecated-API tool runs over the rendered manifests.
@@ -388,10 +389,10 @@ Wave-based deployment with confirmation.
 - `--reconcile` — Re-apply all resources (heal drift).
 - `--prune`: Delete orphaned resources. Without it the plan still lists every orphan by name and says they are kept, and the new Activation lists the builds they came from under `status.orphansKeptFrom`, so a later `kix deploy --prune` or soft `kix gc` still deletes them. The previous deploy record (Activation) is never an orphan.
 - `--prune-mode <MODE>` — default (after apply), no (skip).
-- `--on-error <MODE>` — stop (default) or continue.
+- `--on-error <MODE>` — stop (default) or continue. Any failed resource exits 1 under both.
 - `--timeout <DURATION>` — Readiness timeout (default: 5m).
 - `--skip-import-checks` — Skip pre-deploy import verification.
-- `--current-activation` — Use local cache instead of fetching from cluster.
+- `--current-activation` — Use local cache instead of fetching from cluster. Refused before applying when the cached build is not the Active build of the cluster in the current context.
 - An `OnDelete` DaemonSet is ready when its pods are; pods on a previous template are reported as pending a manual restart (`NodeDetail::PendingRestart`). A CRD import whose live CRD does not serve a declared version stops the deploy with `ImportMismatch`.
 - `--operator` — Delegate to kix-operator (creates/patches Activation CR, waits for operator reconcile).
 
