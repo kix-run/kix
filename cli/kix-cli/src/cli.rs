@@ -540,6 +540,23 @@ pub struct DiffArgs {
     /// written by `kix snapshot save` or `kix export`
     #[arg(long, value_name = "DIR")]
     pub from: Option<String>,
+
+    /// How much of each change `--output json` and `--output yaml` include.
+    /// Text and Markdown output are the same at every level.
+    #[arg(long, value_enum, default_value_t = DiffDetail::Plain)]
+    pub detail: DiffDetail,
+}
+
+/// What `kix diff --output json|yaml` says about each changed resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DiffDetail {
+    /// Which resources change, and how many fields of each.
+    Plain,
+    /// Also each changed field, with its old and new value.
+    Fields,
+    /// Also the old and new manifest of each changed, added, or removed
+    /// resource.
+    Manifests,
 }
 
 #[derive(clap::Args)]

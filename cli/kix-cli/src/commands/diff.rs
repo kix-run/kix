@@ -17,9 +17,9 @@ use kix::manifest::serialize::load_manifests_from_dir;
 use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
 
-use crate::cli::{DiffArgs, OutputFormat};
+use crate::cli::{DiffArgs, DiffDetail, OutputFormat};
 use crate::output;
-use crate::plan::{self, PackageDiff};
+use crate::plan::{self, JsonDetail, PackageDiff};
 
 use super::CommandContext;
 
@@ -81,10 +81,18 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     };
 
     let result = diff_graphs(&old_graph, &new_graph);
+    let detail = match args.detail {
+        DiffDetail::Plain => JsonDetail::Plain,
+        DiffDetail::Fields => JsonDetail::Fields,
+        DiffDetail::Manifests => JsonDetail::Manifests {
+            old: &old_graph,
+            new: &new_graph,
+        },
+    };
 
     match ctx.output_format(OutputFormat::Text) {
-        OutputFormat::Json => print_json_output(&result, false)?,
-        OutputFormat::Yaml => print_json_output(&result, true)?,
+        OutputFormat::Json => print_json_output(&result, detail, false)?,
+        OutputFormat::Yaml => print_json_output(&result, detail, true)?,
         OutputFormat::Markdown => print_markdown_output(&result),
         OutputFormat::Text => print_text_output(&result, &ctx.global),
     }
@@ -447,11 +455,11 @@ fn print_migration_pairs(pairs: &[MigrationPair]) {
     println!();
 }
 
-fn print_json_output(result: &DiffResult, as_yaml: bool) -> Result<()> {
+fn print_json_output(result: &DiffResult, detail: JsonDetail, as_yaml: bool) -> Result<()> {
     // Shared PackageDiff renderer used by deploy
     // modal and the CI PR-comment action. Migration pairs are appended.
     let mut output = serde_json::json!({
-        "packages": plan::render_package_diff_json(&result.packages),
+        "packages": plan::render_package_diff_json(&result.packages, detail),
     });
 
     if !result.migration_pairs.is_empty() {
