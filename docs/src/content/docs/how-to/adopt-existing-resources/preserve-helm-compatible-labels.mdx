@@ -56,12 +56,12 @@ labels, so the diff shows it as a new resource.
 Ask the API server to review the complete ownership change instead:
 
 <Command
-  commands={["kix deploy how-to-adoption --dry-run"]}
+  commands={["kix plan how-to-adoption"]}
   cwd="kix-examples/"
 />
 
-A selector mismatch fails there rather than reaching the cluster, because the
-field is immutable.
+Because the selector is immutable, a mismatch appears in the plan as a write
+the deploy would stop on, before anything reaches the cluster.
 
 :::caution
 `labelStyle = "helm"` generates the standard `app` and `release` pair. It

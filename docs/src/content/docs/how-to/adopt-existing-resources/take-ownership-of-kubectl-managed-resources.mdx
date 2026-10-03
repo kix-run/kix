@@ -67,20 +67,9 @@ The API server rejects a change when another field manager owns a field Kix is
 trying to change. The error identifies the resource and points to
 `--force-conflicts`.
 
-By default, the run stops after the first conflict and ends with `1 failed, 4
-cancelled`. The cancelled resources have not been checked. Run the dry run
-again with `--on-error continue` to find conflicts on the remaining resources:
-
-<Command
-  commands={[
-    "kix deploy how-to-adoption-takeover --dry-run -y --on-error continue",
-  ]}
-  cwd="kix-examples/"
-/>
-
-This still skips resources that depend on a failed resource, but continues
-checking independent branches of the dependency graph. Review every reported
-field against the saved resource before using `--force-conflicts`.
+The dry run carries on past a conflict, so the plan lists every conflicting
+resource with the manager that owns each field. Review every reported field
+against the saved resource before using `--force-conflicts`.
 
 ## Take ownership once
 

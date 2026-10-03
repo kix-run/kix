@@ -22,6 +22,10 @@ fn kix() -> Command {
     cmd
 }
 
+/// `deploy --dry-run` runs `kix plan`. With `--current-activation` and no
+/// cached build it compares the build with nothing, offline, so every
+/// package is added, the plan says no cluster was read, and the exit status
+/// is 2 because the plan has changes.
 #[test]
 fn deploy_dry_run_shows_plan() {
     kix()
@@ -33,19 +37,12 @@ fn deploy_dry_run_shows_plan() {
             "--current-activation",
         ])
         .assert()
-        .success()
+        .code(2)
         .stdout(predicate::str::contains("Plan:"))
-        // Offline-dry-run banner (kixpkgs#15): must lead the per-resource list.
+        .stdout(predicate::str::contains("added"))
         .stdout(predicate::str::contains(
-            "Dry run. No changes will be applied.",
-        ))
-        // No prior activation cache for the example flake → every Apply node
-        // classifies as Created and uses the runtime "created" verb (not the
-        // pre-fix "would create"). This pins the regression on #15.
-        .stdout(predicate::str::contains("created"))
-        // The "Dry run complete:" summary line (vs "Deploy complete:") is the
-        // single most-visible signal that the path was taken.
-        .stdout(predicate::str::contains("Dry run complete:"));
+            "Two builds compared; nothing was read from or sent to the cluster.",
+        ));
 }
 
 #[test]
@@ -59,8 +56,27 @@ fn apply_alias_works() {
             "--current-activation",
         ])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Dry run complete:"));
+        .code(2)
+        .stdout(predicate::str::contains("Two builds compared"));
+}
+
+/// `kix plan -o json` keeps stdout to the document: the progress lines go
+/// to stderr, and the output parses as a plan made from builds.
+#[test]
+fn plan_json_is_the_document_alone() {
+    let out = kix()
+        .args(["plan", "example", "--current-activation", "-o", "json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let doc: serde_json::Value = serde_json::from_slice(&out).expect("stdout is one JSON document");
+    assert_eq!(doc["made_by"], "builds");
+    assert_eq!(doc["conflicts"]["status"], "not_checked");
+    assert_eq!(doc["conflicts"]["reason"], "builds_only");
+    assert_eq!(doc["migrations"]["status"], "checked");
+    assert!(!doc["packages"]["added"].as_array().unwrap().is_empty());
 }
 
 /// Flake attribute `minimal` builds the cluster named `test-minimal`. The

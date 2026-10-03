@@ -38,3 +38,6 @@ ludo/node
 
 # Per-developer Claude Code settings
 .claude/settings.local.json
+
+# Core dumps from a crashed process
+core.[0-9]*

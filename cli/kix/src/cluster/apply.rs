@@ -147,6 +147,20 @@ pub struct ApplyResult {
     pub action: ApplyAction,
     /// The resource that was acted upon.
     pub resource_id: ResourceId,
+    /// What the apiserver answered to a dry-run apply. `None` for a real
+    /// apply, and for a dry run that never reached the apiserver.
+    pub preview: Option<Box<ApplyPreview>>,
+}
+
+/// The two objects a dry-run apply compares: the live object before the
+/// apply and the object the apiserver says the apply would produce. Both are
+/// whole objects as the apiserver serves them, `managedFields` and Secret
+/// values included, so a caller that shows them must hide what is secret.
+#[derive(Debug, Clone)]
+pub struct ApplyPreview {
+    /// `None` when the object does not exist, so the apply would create it.
+    pub live: Option<Value>,
+    pub result: Value,
 }
 
 /// The action taken during apply.
@@ -621,8 +635,10 @@ pub async fn apply_resource(
         pp = pp.dry_run();
     }
 
-    // Check if resource exists to determine Created vs Configured
-    let existed = api.get_opt(&name).await.is_ok_and(|o| o.is_some());
+    // Check if resource exists to determine Created vs Configured. A dry run
+    // keeps the live object for its preview.
+    let live = api.get_opt(&name).await.ok().flatten();
+    let existed = live.is_some();
 
     // Transient errors (429, 5xx, connection loss) are retried by the
     // client transport (cluster::client), not here. 409 conflicts are
@@ -701,9 +717,16 @@ pub async fn apply_resource(
 
     tracing::debug!(resource = %rid.display_id(), ?action, "server-side apply complete");
 
+    let preview = dry_run.then(|| {
+        Box::new(ApplyPreview {
+            live: live.and_then(|o| serde_json::to_value(o).ok()),
+            result: serde_json::to_value(&echo).unwrap_or(Value::Null),
+        })
+    });
     Ok(ApplyResult {
         action,
         resource_id: rid,
+        preview,
     })
 }
 
@@ -1134,6 +1157,7 @@ pub async fn apply_wave(
                         Ok(ApplyResult {
                             action: ApplyAction::Unchanged,
                             resource_id: rid,
+                            preview: None,
                         }),
                     )
                 });
@@ -1148,6 +1172,7 @@ pub async fn apply_wave(
                         Ok(ApplyResult {
                             action: ApplyAction::Skipped,
                             resource_id: rid,
+                            preview: None,
                         }),
                     )
                 });

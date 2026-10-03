@@ -10,9 +10,41 @@
 //! has one. The watchdog uses this to say "no progress for 10m" instead of
 //! the bare "cancelled".
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, Once};
 
 use tokio_util::sync::CancellationToken;
+
+/// Interrupt watchers from [`CancelToken::cancel_on_interrupt`] still
+/// waiting for a signal or past one, so the fallback leaves the signal to
+/// them.
+static WATCHING: AtomicUsize = AtomicUsize::new(0);
+static FALLBACK: Once = Once::new();
+
+/// Exit with the shell's code for the signal when no watcher is waiting
+/// for it. Tokio never gives a registered signal back to the OS default, so
+/// without this an interrupt after one run's watcher has ended (at `kix
+/// deploy`'s confirmation, after the plan's dry run) would be swallowed.
+fn exit_on_unwatched_interrupt() {
+    FALLBACK.call_once(|| {
+        tokio::spawn(async {
+            let Ok(mut terminate) =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            else {
+                return;
+            };
+            loop {
+                let code = tokio::select! {
+                    _ = tokio::signal::ctrl_c() => 130,
+                    _ = terminate.recv() => 143,
+                };
+                if WATCHING.load(Ordering::SeqCst) == 0 {
+                    std::process::exit(code);
+                }
+            }
+        });
+    });
+}
 
 /// Clone-safe cancellation flag.
 #[derive(Clone, Default, Debug)]
@@ -51,20 +83,26 @@ impl CancelToken {
     /// can sit through a 60 second bound. Exiting this way leaves the record
     /// `Deploying`, which the next deploy reports rather than guesses at.
     pub fn cancel_on_interrupt(&self) {
+        exit_on_unwatched_interrupt();
         let token = self.clone();
+        WATCHING.fetch_add(1, Ordering::SeqCst);
         tokio::spawn(async move {
             let mut terminate =
                 match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
                     Ok(s) => s,
                     Err(e) => {
                         tracing::debug!("cannot watch SIGTERM: {e}");
+                        WATCHING.fetch_sub(1, Ordering::SeqCst);
                         return;
                     }
                 };
             let reason = tokio::select! {
                 _ = tokio::signal::ctrl_c() => "interrupted",
                 _ = terminate.recv() => "terminated",
-                _ = token.cancelled() => return,
+                _ = token.cancelled() => {
+                    WATCHING.fetch_sub(1, Ordering::SeqCst);
+                    return;
+                }
             };
             tracing::info!(%reason, "cancelling the run");
             token.cancel_with_reason(reason);

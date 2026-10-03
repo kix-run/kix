@@ -1,6 +1,6 @@
 # 157: `kix plan` as the primary preview
 
-**Status:** RFC / Draft
+**Status:** Implemented (2026-10-03, branch `cli/kix-plan`). Sections 1 to 4 shipped: `kix plan`, `kix deploy` printing the plan and stopping before it applies a refused write, `kix deploy --dry-run` as an alias, the typed `Plan` document with its committed schema and agreement tests, and three-way labels. Section 5 (saved plans) and section 6's in-cluster execution did not; they and the remaining open questions are in `ROADMAP.md § Open design questions` ("`kix plan`, what doc 157 left open"). Answers given while implementing: a webhook without dry-run support is a `not_checked` object, not an error (Q2); unchanged objects skip the dry run because the engine skips them (Q3); Secret values are hidden in the field changes, both renderers, and drift values (Q4); without the deployed build nothing is labelled and drift is `not_checked` (Q5); `NotChecked` carries a reason (Q6). The shipped JSON names the refusal section `admission` and also files non-admission refusals there with a `reason`, and adds a third label, `drift_kept`, for drift on an object the deploy does not apply.
 **Related:** `111_operator_experience.md`, `122_runtime_content_drift.md`, `81_deploy_as_lifecycle_engine.md`, `64_init_and_ci_concerns.md`, `62_operator_production_implementation_plan.md`, `cli/kix-cli/src/commands/diff.rs`, `cli/kix-cli/src/commands/deploy.rs`, `cli/kix-cli/src/plan.rs`
 
 ## Problem

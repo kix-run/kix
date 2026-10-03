@@ -1,0 +1,3 @@
+# 2026-10-03 · `cli/kix/src/cluster/apply.rs` · `conflict_paths` cuts a conflict path at the comma inside a list key.
+
+`conflict_paths` splits the 409 message on whitespace and commas, so `.spec.ports[containerPort=53,protocol="UDP"].name` becomes `.spec.ports[containerPort=53` and `protocol="UDP"].name`. `without_ceded_conflicts` matches ceded declarations against those pieces, so a ceded field under a multi-key list element is not recognised and the deploy fails on a conflict it was told to accept. `preview::conflict_owners` parses the same messages with a bracket-aware splitter (`field_paths`); `conflict_paths` could use it.

@@ -78,6 +78,33 @@ fn clear_activation_cache(kix_cluster: &str) {
 }
 
 const KIND_CLUSTER: &str = "kix-integration";
+
+/// `package bucket resource` for every object a plan document's packages
+/// section lists as added, removed, or modified.
+fn package_objects(doc: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let packages = &doc["packages"];
+    let changed = packages["changed"].as_array().into_iter().flatten().chain(
+        packages["cluster_level"]
+            .as_object()
+            .map(|_| &packages["cluster_level"]),
+    );
+    for c in changed {
+        let key = c["key"].as_str().unwrap_or_default();
+        for bucket in ["added_resources", "removed_resources"] {
+            for r in c[bucket].as_array().into_iter().flatten() {
+                out.insert(format!("{key} {bucket} {}", r.as_str().unwrap_or_default()));
+            }
+        }
+        for m in c["modified_resources"].as_array().into_iter().flatten() {
+            out.insert(format!(
+                "{key} modified {}",
+                m["resource"].as_str().unwrap_or_default()
+            ));
+        }
+    }
+    out
+}
 const KUBE_CTX: &str = "kind-kix-integration";
 /// The kix cluster name (from clusters/test-kind.nix, registered as "kind" in flake.nix)
 const KIX_CLUSTER: &str = "kind";
@@ -106,6 +133,41 @@ fn deploy_and_gc() {
         }
     }
     let _guard = CleanupGuard;
+
+    // =========================================================================
+    // Phase 0: Plan before the first deploy. Nothing exists yet, so the
+    // objects in the namespace the deploy creates cannot be dry-run; the
+    // plan says so and writes nothing.
+    // =========================================================================
+    eprintln!("\n=== Phase 0: Plan a first deploy ===");
+
+    let plan0 = kix(KIND_CLUSTER)
+        .args(["plan", KIX_CLUSTER, "-o", "json"])
+        .output()
+        .expect("plan should run");
+    assert_eq!(
+        plan0.status.code(),
+        Some(2),
+        "a first deploy changes something"
+    );
+    let doc0: serde_json::Value =
+        serde_json::from_slice(&plan0.stdout).expect("plan prints one JSON document");
+    assert_eq!(doc0["made_by"], "dry_run");
+    assert_eq!(doc0["admission"]["items"], serde_json::json!([]));
+    assert!(
+        doc0["not_checked"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["reason"] == "namespace_created_by_this_deploy"),
+        "objects in the new namespace are not checked: {}",
+        doc0["not_checked"]
+    );
+    let records = kubectl_stdout(KUBE_CTX, &["get", keys::ACTIVATIONS_CRD, "-o", "name"]);
+    assert!(
+        records.trim().is_empty(),
+        "a plan writes no record: {records}"
+    );
 
     // =========================================================================
     // Phase 1: First deploy — everything created
@@ -159,12 +221,58 @@ fn deploy_and_gc() {
 
     assert!(second.status.success(), "second deploy should succeed");
     assert!(
-        stdout2.contains("Everything up to date"),
+        stdout2.contains("Nothing to apply"),
         "should detect everything unchanged via local DAG diff"
     );
     assert!(
-        stdout2.contains("Loading previous activation"),
-        "should load cached activation"
+        stdout2.contains("Active activation:"),
+        "should plan against the cluster's Active record"
+    );
+
+    // =========================================================================
+    // Phase 2b: Plan and diff of a changed build list the same objects, and
+    // the plan applies nothing.
+    // =========================================================================
+    eprintln!("\n=== Phase 2b: kix plan and kix diff agree ===");
+
+    let plan = kix(KIND_CLUSTER)
+        .args(["plan", "kind-v2", "-o", "json"])
+        .output()
+        .expect("plan should run");
+    let diff = kix(KIND_CLUSTER)
+        .args(["diff", "kind-v2", "-o", "json"])
+        .output()
+        .expect("diff should run");
+    assert_eq!(
+        plan.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    assert_eq!(
+        diff.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&diff.stderr)
+    );
+    let plan_doc: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
+    let diff_doc: serde_json::Value = serde_json::from_slice(&diff.stdout).unwrap();
+    assert_eq!(plan_doc["made_by"], "dry_run");
+    assert_eq!(diff_doc["made_by"], "live_read");
+    assert_eq!(diff_doc["conflicts"]["status"], "not_checked");
+    assert_eq!(
+        package_objects(&plan_doc),
+        package_objects(&diff_doc),
+        "plan and diff list different objects"
+    );
+    let unchanged = kix(KIND_CLUSTER)
+        .args(["plan", KIX_CLUSTER])
+        .output()
+        .expect("plan should run");
+    assert!(
+        unchanged.status.success(),
+        "the plan of the deployed build is empty after planning kind-v2: {}",
+        String::from_utf8_lossy(&unchanged.stdout)
     );
 
     // =========================================================================

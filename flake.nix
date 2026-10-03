@@ -43,6 +43,7 @@
           postgres-swap-stackgres = ./clusters/test-postgres-swap/stackgres.nix;
           postgres-swap-cnpg = ./clusters/test-postgres-swap/cnpg.nix;
           kind = ./clusters/test-kind.nix;
+          kind-v2 = ./clusters/test-kind-v2.nix;
           metrics-server = ./clusters/test-metrics-server.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
           monitoring-loki = ./clusters/test-monitoring-loki.nix;

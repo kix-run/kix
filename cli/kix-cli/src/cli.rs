@@ -79,6 +79,8 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
         &[
             "build",
             "diff",
+            "plan",
+            "deploy",
             "check",
             "status",
             "list",
@@ -96,6 +98,7 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
         "context",
         &[
             "diff",
+            "plan",
             "deploy",
             "status",
             "gc",
@@ -114,6 +117,7 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
         &[
             "build",
             "diff",
+            "plan",
             "check",
             "deploy",
             "status",
@@ -151,6 +155,7 @@ const SCOPED_GLOBALS: &[(&str, &[&str])] = &[
         &[
             "build",
             "diff",
+            "plan",
             "check",
             "deploy",
             "status",
@@ -229,8 +234,40 @@ pub enum Command {
     /// Render manifests to stdout
     Build(BuildArgs),
 
-    /// Colored diff against the live cluster, or against a directory with --from
+    /// Compare the build with the live cluster or a directory, read-only
+    ///
+    /// Compares the build with the live cluster's kix-owned view (needs only
+    /// get and list), with a snapshot from `kix snapshot save`, or with
+    /// another build (`--from <result>`, which needs no cluster access).
+    /// Field changes are labelled as the commit's or as drift when the
+    /// deployed build is on this machine.
+    ///
+    /// It cannot see what only shows on the write path: admission webhooks
+    /// that refuse or change an object, field ownership conflicts with
+    /// another manager, and what the deploy itself refuses. `kix plan`
+    /// checks those with a server-side dry run.
+    ///
+    /// Exits 2 when anything differs.
     Diff(DiffArgs),
+
+    /// Preview a deploy as a server-side dry run
+    ///
+    /// Runs the deploy pipeline with every write sent as a dry run, so the
+    /// apiserver answers for each object: the field changes it would make,
+    /// and the writes it would refuse (ownership conflicts, admission
+    /// webhooks, validation, RBAC). Also lists stateful migrations, drift
+    /// the deploy would revert, and what the prune would delete or keep.
+    /// `kix deploy` prints the same plan before it asks; `kix deploy
+    /// --dry-run` runs this command.
+    ///
+    /// A dry run is authorised like the write it simulates, so this needs
+    /// the deployer's permissions; `kix diff` is the read-only comparison.
+    /// No preview can say whether Pods will start.
+    ///
+    /// Exits 0 when the deploy would change nothing, 2 when it would change
+    /// something, and 3 when it would stop on a refused write or a stateful
+    /// migration not accepted with --accept-migrations.
+    Plan(PlanCommandArgs),
 
     /// Evaluate a cluster and report build-time checks and scorecard findings
     ///
@@ -307,8 +344,9 @@ impl Command {
         match self {
             Command::Build(a) => Some(&a.cluster),
             Command::Diff(a) => Some(&a.cluster),
+            Command::Plan(a) => Some(&a.plan.cluster),
             Command::Check(a) => Some(&a.cluster),
-            Command::Deploy(a) => Some(&a.cluster),
+            Command::Deploy(a) => Some(&a.plan.cluster),
             Command::Status(a) => Some(&a.cluster),
             Command::Graph(a) => Some(&a.cluster),
             Command::Inspect(a) => Some(&a.cluster),
@@ -543,13 +581,14 @@ pub struct DiffArgs {
 
     /// How much of each change `--output json` and `--output yaml` include.
     /// Text and Markdown output are the same at every level.
-    #[arg(long, value_enum, default_value_t = DiffDetail::Plain)]
-    pub detail: DiffDetail,
+    #[arg(long, value_enum, default_value_t = Detail::Plain)]
+    pub detail: Detail,
 }
 
-/// What `kix diff --output json|yaml` says about each changed resource.
+/// What the JSON and YAML of `kix diff` and `kix plan` say about each
+/// changed resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum DiffDetail {
+pub enum Detail {
     /// Which resources change, and how many fields of each.
     Plain,
     /// Also each changed field, with its old and new value.
@@ -570,43 +609,43 @@ pub struct CheckArgs {
 }
 
 #[derive(clap::Args)]
-pub struct DeployArgs {
+pub struct PlanCommandArgs {
+    #[command(flatten)]
+    pub plan: PlanArgs,
+
+    /// How much of each change `--output json` and `--output yaml` include.
+    /// Text and Markdown output are the same at every level.
+    #[arg(long, value_enum, default_value_t = Detail::Plain)]
+    pub detail: Detail,
+}
+
+/// What a deploy plans from: the cluster and the flags that change which
+/// objects it writes or deletes. Shared by `kix plan` and `kix deploy`, so a
+/// plan made with the same flags is the deploy's plan.
+#[derive(clap::Args, Clone, Debug)]
+pub struct PlanArgs {
     /// Cluster name
     pub cluster: String,
-
-    /// Skip confirmation prompt
-    #[arg(short, long)]
-    pub yes: bool,
-
-    /// Preview mode: show what would be applied without making changes
-    #[arg(long)]
-    pub dry_run: bool,
 
     /// Use local activation cache instead of fetching from cluster.
     ///
     /// Plans entirely offline, so it cannot see the records of deploys that
     /// stopped part way and will not reconcile what they left behind, and it
-    /// cannot see orphans that earlier deploys kept. It records those builds
-    /// on the new activation again, so a later plain `kix deploy --prune` or
-    /// `kix gc` still deletes their orphans.
+    /// cannot see orphans that earlier deploys kept. A deploy records those
+    /// builds on the new activation again, so a later plain `kix deploy
+    /// --prune` or `kix gc` still deletes their orphans. `kix plan` with it
+    /// compares two builds and checks nothing with the apiserver.
     #[arg(long)]
     pub current_activation: bool,
-
-    /// Behavior on error: stop or continue
-    #[arg(long, default_value = "stop")]
-    pub on_error: OnError,
-
-    /// Readiness timeout (e.g. "5m", "300s", or bare seconds)
-    #[arg(long, value_parser = validate_timeout)]
-    pub timeout: Option<String>,
 
     /// Re-apply all resources even if activation identity matches (heal drift)
     #[arg(long)]
     pub reconcile: bool,
 
     /// Delete orphaned resources (in the old activation, or kept by an earlier
-    /// deploy, and not in the new one). Without it they are listed, kept, and
-    /// recorded on the new activation for a later `--prune` or `kix gc`
+    /// deploy, and not in the new one); `kix plan` sends each delete as a dry
+    /// run. Without it they are listed, kept, and recorded on the new
+    /// activation for a later `--prune` or `kix gc`
     #[arg(long)]
     pub prune: bool,
 
@@ -614,22 +653,45 @@ pub struct DeployArgs {
     #[arg(long, value_name = "MODE")]
     pub prune_mode: Option<PruneMode>,
 
-    /// Delegate deployment to the kix operator instead of applying directly
-    #[arg(long)]
-    pub operator: bool,
-
     /// Take ownership of fields currently owned by other field managers (SSA conflict override).
     /// Without this, conflicts surface as a 409 with the conflicting field paths and current owner.
     /// Useful when migrating resources from kubectl/helm to kix for the first time.
     #[arg(long)]
     pub force_conflicts: bool,
 
-    /// Acknowledge detected stateful migration pairs and proceed. Without
-    /// this flag, a deploy that would remove + add stateful resources in
-    /// the same logical slot is rejected (even with --yes) to prevent
-    /// silent data loss. Kix does not copy data between them.
+    /// Acknowledge detected stateful migration pairs. Without this flag, a
+    /// deploy that would remove and add stateful resources in the same
+    /// logical slot is rejected (even with --yes) to prevent silent data
+    /// loss, and `kix plan` exits 3. Kix does not copy data between them.
     #[arg(long)]
     pub accept_migrations: bool,
+}
+
+#[derive(clap::Args)]
+pub struct DeployArgs {
+    #[command(flatten)]
+    pub plan: PlanArgs,
+
+    /// Skip confirmation prompt
+    #[arg(short, long)]
+    pub yes: bool,
+
+    /// Preview only: run `kix plan` with the same flags and change nothing
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Behavior on error: stop or continue. With `stop`, a deploy whose plan
+    /// shows a refused write stops before it applies anything
+    #[arg(long, default_value = "stop")]
+    pub on_error: OnError,
+
+    /// Readiness timeout (e.g. "5m", "300s", or bare seconds)
+    #[arg(long, value_parser = validate_timeout)]
+    pub timeout: Option<String>,
+
+    /// Delegate deployment to the kix operator instead of applying directly
+    #[arg(long)]
+    pub operator: bool,
 
     /// Render a live inline graph-streaming dashboard. Falls back to
     /// line-oriented output on non-interactive terminals.
@@ -665,7 +727,7 @@ pub enum LogFormat {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum PruneMode {
-    /// Prune orphans after all apply waves complete (default)
+    /// Prune orphans after every apply has finished (default)
     Default,
     /// Skip pruning entirely, defer to `kix gc`
     No,
@@ -1052,9 +1114,13 @@ mod tests {
 
     #[test]
     fn help_lists_the_globals_a_command_reads() {
+        // `deploy --dry-run` prints the plan, so deploy reads `--output`.
         let deploy = long_help(&["deploy"]);
         assert!(deploy.contains("--context") && deploy.contains("--flake"));
-        assert!(!deploy.contains("--output") && !deploy.contains("--no-cache"));
+        assert!(deploy.contains("--output") && !deploy.contains("--no-cache"));
+
+        let gc = long_help(&["gc"]);
+        assert!(!gc.contains("--output"));
 
         let drift = long_help(&["drift"]);
         assert!(drift.contains("--context") && drift.contains("--output"));

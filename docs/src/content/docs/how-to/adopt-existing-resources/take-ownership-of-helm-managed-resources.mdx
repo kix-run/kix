@@ -76,19 +76,9 @@ The conflict identifies fields still owned by Helm. Review those fields
 against the saved manifest and values. If the Kix output is not meant to
 replace them, change the Kix definition instead of forcing the deployment.
 
-By default, the run stops after the first conflict and ends with `1 failed, 6
-cancelled`. A chart takeover may conflict on several resources. Run the dry
-run again with `--on-error continue` to check the remaining resources:
-
-<Command
-  commands={[
-    "kix deploy how-to-helm-bridge --dry-run -y --on-error continue",
-  ]}
-  cwd="kix-examples/"
-/>
-
-This still skips resources that depend on a failed resource, but continues
-checking independent branches of the dependency graph.
+A chart takeover may conflict on several resources. The dry run carries on
+past a conflict, so the plan lists every conflicting resource with the
+manager that owns each field.
 
 ## Transfer resource ownership
 
