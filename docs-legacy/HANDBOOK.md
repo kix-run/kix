@@ -49,7 +49,8 @@ and [`FEATURE-CATALOG.md`](FEATURE-CATALOG.md) (breadth-first inventory).
 |---|---|
 | Build a cluster | `nix build ludo/#cluster-ludo-kind --extra-experimental-features pipe-operators` |
 | Diff vs live cluster | `kix diff <cluster>` (or `./scripts/kix-dump.py --all cluster-dump/ && ./scripts/kix-diff.py ./result cluster-dump/`) |
-| Deploy a cluster | `kix deploy <cluster>` (add `-y` to skip confirm; `--dry-run` to preview) |
+| Preview a deploy | `kix plan <cluster>` (server-side dry run; `kix deploy --dry-run` runs it) |
+| Deploy a cluster | `kix deploy <cluster>` (prints the plan first; add `-y` to skip confirm) |
 | Promote an image | `kix pin set <key> --tag <tag>` (§29) |
 | Check every pin still resolves | `kix pin check` |
 | See what was actually deployed | `kubectl get activation <name> -o jsonpath='{.status.receipt}'`, or `kix compliance attest <cluster> --from-cluster` (§30) |
@@ -177,7 +178,8 @@ ls result/
 | Command | Purpose | Key flags |
 |---|---|---|
 | `kix build <cluster>` | Render manifests to stdout (yaml/json) | `-o yaml|json` |
-| `kix diff <cluster>` | Diff vs live, or vs a directory (previous build result, snapshot, export) | `--from <dir>`, `-o markdown` |
+| `kix diff <cluster>` | Read-only diff vs live, or vs a directory (previous build result, snapshot, export) | `--from <dir>`, `-o json|yaml|markdown` |
+| `kix plan <cluster>` | What a deploy would do, as a server-side dry run: field changes, refused writes, drift, prune | `--prune`, `--reconcile`, `--force-conflicts`, `--current-activation`, `-o json|yaml|markdown` |
 | `kix check <cluster>` | Eval (constructor validators, cross-resource checks, scorecard errors) + scorecard report | `--sarif` |
 | `kix deploy <cluster>` (alias `apply`) | Wave-based apply with confirmation | `-y`, `--dry-run`, `--reconcile`, `--prune`, `--operator`, `--tui`, `--log-format=line|json|pretty` |
 | `kix status <cluster>` | Resource health table | `--operator` (group by package) |
@@ -1920,8 +1922,55 @@ Operator requires `nix-store` binary on the host and read access to `/nix/store/
 | Diff vs snapshot or export dir | `kix diff <cluster> --from <dir>` |
 | Diff between two builds | `kix diff <cluster> --from <result>` |
 | Save live state | `kix snapshot save <cluster> <dir>` (in-CLI; the named Kix cluster's objects, found by the `app.kubernetes.io/managed-by=kix` label and attributed through their `kix.run/activations`) or `./scripts/kix-dump.py --all <dir>` (Python; broader scope) |
-| Apply with planning | `kix deploy <cluster>` (use `--dry-run` first) |
+| Preview a deploy | `kix plan <cluster>` |
+| Apply with planning | `kix deploy <cluster>` (prints the same plan before it asks) |
 | Markdown for PR comments | `kix diff <cluster> -o markdown` |
+
+### 26.1 `kix plan` and `kix diff`
+
+`kix plan` runs the deploy pipeline with every write sent as `dryRun=All`,
+so the apiserver answers for each object. `kix diff` reads only. Both print
+the same document for `-o json` and `-o yaml`
+(`cli/kix-cli/schema/plan.schema.json`), so a consumer can read either.
+
+| | `kix plan` | `kix diff` |
+|---|---|---|
+| Permissions | the deployer's (a dry run is authorised like the write) | `get` and `list`; none with `--from <build>` |
+| Field changes | live object against the dry-run result | build against the kix-owned view of the live object |
+| Ownership conflicts, webhooks, admission policies, validation, RBAC | checked | `not_checked` (`read_only`) |
+| Prune fates | checked | `not_checked` |
+| Drift | fields the deploy reverts | every drifted field, with whether the deploy reverts it |
+| `made_by` | `dry_run` (`builds` with `--current-activation`) | `live_read`, or `builds` with `--from <build>` |
+
+Each section of the document is `{"status": "checked", "items": [...]}` or
+`{"status": "not_checked", "reason": ...}`, where the reason is
+`builds_only`, `read_only`, `deployed_build_unavailable`, or
+`not_previewable`. `readiness` is always `not_checked`: no preview can say
+whether Pods start.
+
+When the deployed build's store path is on this machine, each field change
+carries `labels`:
+
+- `intended`: the deployed build and the new build differ here.
+- `reverts_drift`: the live object differs from the deployed build here, and
+  the deploy applies the object, so it puts the deployed value back.
+- `drift_kept`: the live object differs from the deployed build here, and the
+  deploy leaves the object alone because its identity hash did not change.
+  `kix deploy --reconcile` applies it.
+
+A field another manager changed is usually also owned by that manager, so a
+plan reports it as an ownership conflict naming the manager; with
+`--force-conflicts` the plan shows it as `reverts_drift` instead.
+
+The dry run cannot check an object whose kind comes from a CRD the deploy
+installs, or whose namespace the deploy creates, because a dry run persists
+neither. Those objects are listed under `not_checked` with their changes
+from the build comparison; most of a first deploy is in that list.
+
+`kix plan` exits 0 when the deploy would change nothing, 2 when it would
+change something, and 3 when it would stop. `kix deploy` makes the same plan
+before it asks for confirmation, and under `--on-error stop` it stops before
+applying anything when the plan shows a refused write.
 
 Diff features:
 - Structural (path-based) differences with **keyed-list awareness** — containers→name, ports→name, env→name, volumeMounts→mountPath, subjects→kind:name. So reordering doesn't show as a diff.
@@ -2013,7 +2062,7 @@ Something outside the cluster definition sometimes decides an input to it: a
 CI build produces an image tag, or a person decides that this build is the one
 that goes to production. Kix has one channel for such a value, the definition
 itself, so the value is committed first and deployed second. There is no
-`--set` and no `--values`; §9.4 of BEST-PRACTICES explains why one would not
+`--set` and no `--values`; §9.5 of BEST-PRACTICES explains why one would not
 work even if we wanted it.
 
 ### 29.1 The file
@@ -2185,7 +2234,7 @@ Two separate questions, reported separately:
 - **Is it current?** `--source-rev <rev>` fails when a pin records a different
   source revision. This is the only check that catches a promotion step which
   silently did not run, and that failure is otherwise invisible: the deploy
-  succeeds, every rule passes, `--dry-run` says configured, the receipt is
+  succeeds, every rule passes, `kix plan` accepts it, the receipt is
   honest, and the cluster runs old code.
 Exit code 1 on any failure, 0 otherwise. `--offline` checks shape without
 contacting a registry.

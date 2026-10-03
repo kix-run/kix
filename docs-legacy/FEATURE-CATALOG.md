@@ -369,12 +369,24 @@ Kix-native packages whose `out` other packages build on. Each vendors its upstre
 Render all manifests to stdout. Default format: YAML multi-document. JSON outputs array of manifests.
 
 #### `kix diff <CLUSTER>`
-Colored diff of the build against the live cluster, or against a directory. Every mode is one comparison of two store graphs: the live side (and a snapshot or export) is the kix-owned view of each object, lifted into a graph by its package annotations, so the output is the same package-grouped plan `kix deploy` shows, with cluster-level resources and the activation rotation as their own sections.
+Read-only comparison of the build with the live cluster, or with a directory. Needs only `get` and `list`, or no cluster at all with `--from <build>`. It cannot see what only shows on the write path (admission webhooks, field ownership conflicts, and what the deploy itself refuses); `kix plan` checks those. Every mode is one comparison of two store graphs: the live side (and a snapshot or export) is the kix-owned view of each object, lifted into a graph by its package annotations, so the output is the same package-grouped plan `kix deploy` shows, with cluster-level resources and the activation rotation as their own sections.
 - `--from <DIR>` — Compare against a directory instead of the cluster: a previous build result (has `kix-packages.json`), or a manifest directory from `kix snapshot save` or `kix export`.
+- `-o json|yaml` prints the `Plan` document `kix plan` also prints (`made_by: live_read` or `builds`; the write-path checks read `not_checked`). Schema: `cli/kix-cli/schema/plan.schema.json`.
+- With the deployed build on this machine, each field change is labelled `intended` (the commit changes it), `reverts_drift` (live differs from the deployed build and the deploy puts it back), or `drift_kept` (live differs, and the deploy leaves the object alone because its identity hash did not change). The drift section names the field manager that made each drift. `--from <build>` labels every change `intended`.
 - Exit code 2 = differences found, 0 = identical.
 - Package-grouped output with resource-level diffs.
 - Warns on PVC modifications.
 - A converged cluster prints no differences. A live object that `kix drift` finds in sync with the manifest it was applied from, and that holds every field of that manifest unchanged, compares as that manifest, so fields the server or an operator's webhook added never show. A field the CRD schema pruned, a value a webhook overwrote, and a changed `kix.run/*` stamp still show. Otherwise the server's spellings count as equal: `null` or `[]` for an absent field, documented defaults such as `fieldRef.apiVersion: v1` or a probe's `failureThreshold: 3`, and quantities with the same amount. A Secret's literal `data` or `stringData` is compared with the decoded live `data`; a changed value shows as changed without printing what the cluster holds, and a SOPS Secret's decrypted values are never compared or printed. No live Secret value reaches `kix diff`, `kix snapshot save` or a deploy plan built from live objects. A Job its TTL removed after the deployed build ran it is not listed as added. The old activation is the cluster's current record.
+
+#### `kix plan <CLUSTER>`
+Preview a deploy as a server-side dry run. Runs the deploy pipeline with every write sent as `dryRun=All`, so the apiserver answers for each object. `kix deploy` prints the same plan before it asks; `kix deploy --dry-run` runs `kix plan`.
+- Each field change is the live object compared with the object the apiserver says the apply would produce, labelled as the commit's or as drift when the deployed build is on this machine.
+- Lists the writes the deploy would stop on: field ownership conflicts (with the manager that owns each field), admission webhook and ValidatingAdmissionPolicy denials, validation errors, immutable fields, RBAC refusals, and SOPS Secrets that do not decrypt. Every refusal shows, not only the first.
+- Lists what the prune deletes or keeps, stateful migrations, and the objects the dry run could not check: kinds whose CRD the deploy installs, objects in a namespace it creates, and webhooks without dry-run support.
+- Takes the deploy's planning flags: `--prune`, `--prune-mode`, `--reconcile`, `--force-conflicts`, `--accept-migrations`, `--current-activation` (compares with the cached build offline and checks nothing with the apiserver).
+- `-o json|yaml|markdown`. The JSON and YAML are the `Plan` document (`made_by`, `packages`, and `migrations`, `conflicts`, `admission`, `drift`, `prune`, `readiness`, each `checked` with items or `not_checked` with a reason); progress goes to stderr.
+- Needs the permissions of the deploy it previews: a dry run is authorised like the write.
+- Exit code 0 = nothing to change, 2 = changes, 3 = the deploy would stop.
 
 #### `kix check <CLUSTER>`
 Two steps: eval correctness, then the scorecard report. No schema or deprecated-API tool runs over the rendered manifests.
@@ -385,7 +397,8 @@ Two steps: eval correctness, then the scorecard report. No schema or deprecated-
 #### `kix deploy <CLUSTER>` (alias: `kix apply`)
 Wave-based deployment with confirmation.
 - `-y, --yes` — Skip confirmation.
-- `--dry-run` — Preview without applying.
+- `--dry-run` — Run `kix plan` with the same flags; nothing is applied.
+- Before it asks, the deploy runs the plan as a server-side dry run and prints it. Under `--on-error stop` (the default) a plan with a refused write stops the deploy before anything is applied.
 - `--reconcile` — Re-apply all resources (heal drift).
 - `--prune`: Delete orphaned resources. Without it the plan still lists every orphan by name and says they are kept, and the new Activation lists the builds they came from under `status.orphansKeptFrom`, so a later `kix deploy --prune` or soft `kix gc` still deletes them. The previous deploy record (Activation) is never an orphan.
 - `--prune-mode <MODE>` — default (after apply), no (skip).
