@@ -17,6 +17,9 @@ compose
   # Renders StorageClasses from kix.types.storageClass values and picks the
   # class for consumers that name none (vocab/storage-class.nix).
   storage.mkClasses = storageClass.mkClasses;
+  # The `out` a `database` provider publishes, with `check` for providers
+  # and `assertions` for consumers (vocab/postgres-database.nix).
+  contracts.postgresDatabase = import ./postgres-database.nix { inherit lib; };
   # Map availability levels to package replica counts and quorums:
   # kix.availability.pick level { none = 1; pod = 2; node = 2; zone = 3; }
   # kix.availability.atLeast "node" level

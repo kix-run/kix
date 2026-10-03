@@ -5,7 +5,8 @@
 # dependency, a ServiceMonitor scrapes the API and job metrics.
 #
 # Required dependencies:
-#   database  a PostgreSQL database with its own credentials, such as a
+#   database  a PostgreSQL database honouring the Postgres database
+#             contract (kix.contracts.postgresDatabase), such as a
 #             stackgres-database instance. The package adds the extensions
 #             Immich needs to that instance's `extensions`, and a
 #             stackgres-database forwards them to its stackgres-cluster.
@@ -137,7 +138,8 @@ in
         published = map extensionName (dep.out.extensions or [ ]);
         missing = builtins.filter (e: !(builtins.elem e published)) (map extensionName requiredExtensions);
       in
-      lib.optional (dep.out ? extensions && missing != [ ]) {
+      kix.contracts.postgresDatabase.assertions who dep
+      ++ lib.optional (dep.out ? extensions && missing != [ ]) {
         assertion = false;
         message = "the database needs the postgres extensions ${
           lib.concatMapStringsSep ", " extensionName requiredExtensions

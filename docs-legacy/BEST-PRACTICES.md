@@ -505,6 +505,17 @@ the regression test, not the definition. Reference: the `clickhouse`
 packages (`v2_discussions/148`, `kix/packages/clickhouse/contract.nix`,
 `checks.clickhouse-swap`).
 
+A contract that consumers across the catalogue read lives in the library
+instead, where a provider outside kixpkgs can reach it. The Postgres
+`database` contract is `kix.contracts.postgresDatabase`
+(`kix/lib/vocab/postgres-database.nix`): `stackgres-database` passes its
+`out` through `check`, and every package that takes `deps.database` (harbor,
+immich, metabase, n8n, vaultwarden) holds the dependency to it with
+`assertions`. Its consumer side requires only the connection fields (`host`,
+`port`, `database`, `credentials`), so a `kix.mkImport` of an external
+database works, while `check` requires `username`, `extensions`, and `tls`
+as well, so every provider package publishes the same `out`.
+
 When both implementations are on the shelf, auto-instantiation refuses a
 demanded alias until the cluster selects one with an optional instance
 named after the alias, which is created only when something depends on it:
