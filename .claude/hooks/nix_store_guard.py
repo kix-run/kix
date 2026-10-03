@@ -94,6 +94,19 @@ def nix_segments(command: str) -> list[list[str]]:
     return [t for t in segments(command) if pathlib.PurePath(t[0]).name in NIX_COMMANDS]
 
 
+# `nix store <sub>` commands that free space. The free-space refusal names
+# `nix store gc` as the remedy, so it must not refuse the remedy itself.
+RECLAIM_SUBCOMMANDS = {"gc", "delete", "optimise"}
+
+
+def reclaims_only(command: str) -> bool:
+    """Whether every Nix segment of `command` frees store space."""
+    nix = nix_segments(command)
+    return bool(nix) and all(
+        len(t) >= 3 and t[1] == "store" and t[2] in RECLAIM_SUBCOMMANDS for t in nix
+    )
+
+
 def project_root() -> pathlib.Path:
     return pathlib.Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
 
@@ -226,6 +239,8 @@ def bulk_remedy(root: pathlib.Path, worst: list[tuple[str, int]]) -> str:
 def findings(command: str | None) -> tuple[str | None, str | None]:
     """Return (deny_reason, warn_note). At most one of the two is set."""
     free = free_bytes()
+    if command is not None and reclaims_only(command):
+        return (None, None)
     if free is not None and free < DENY_FREE:
         return (
             f"Only {human(free)} free on the Nix store volume (refusing below "

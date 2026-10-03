@@ -168,7 +168,7 @@ cargo target dirs (16 GB). Nothing in the Nix output names the cause.
 
 `nix_store_guard.py` measures the gitignored bytes a `path:` copy would drag in
 and refuses past 2 GB, and refuses any Nix command with under 12 GB free on the
-store volume. The remedy it prints is usually to drop the `path:` prefix, since
+store volume, except `nix store gc`, `delete`, and `optimise`, which free space. The remedy it prints is usually to drop the `path:` prefix, since
 a plain directory makes Nix use the git fetcher, which skips gitignored files.
 Note that the git fetcher also skips untracked files, so `git add` anything new
 the evaluation must see.

@@ -43,6 +43,26 @@
       ],
       "type": "object"
     },
+    "Build": {
+      "description": "A cluster build.",
+      "properties": {
+        "identity_hash": {
+          "description": "The `identity-hash` annotation of the build's Activation record, a hash\nof every rendered manifest and what is upstream of it. Two builds with\nthe same identity hash deploy the same objects. `null` only for a\nbuild without an Activation record.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "store_path": {
+          "description": "The build's result directory, the path a deploy records in the\nActivation record's `built-via` annotation. It locates the build. It does not identify the\ncontent: two machines can build the same manifests at different\npaths.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "store_path"
+      ],
+      "type": "object"
+    },
     "ChangeKind": {
       "enum": [
         "added",
@@ -434,6 +454,33 @@
       ],
       "type": "object"
     },
+    "DeployedBuild": {
+      "description": "The build a cluster runs, as its Activation record names it.",
+      "properties": {
+        "activation": {
+          "description": "The Activation record's name.",
+          "type": "string"
+        },
+        "identity_hash": {
+          "description": "The record's `identity-hash` annotation, as [`Build::identity_hash`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "store_path": {
+          "description": "The record's `built-via` annotation, when it has one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "activation"
+      ],
+      "type": "object"
+    },
     "DriftChange": {
       "properties": {
         "deployed": true,
@@ -493,6 +540,26 @@
       "required": [
         "path",
         "change"
+      ],
+      "type": "object"
+    },
+    "KixBuild": {
+      "description": "A Kix binary, so a plan can be checked against the Kix that deploys it.",
+      "properties": {
+        "store_path": {
+          "description": "The Nix store path the running binary is in, `null` for a binary\noutside the store (a `cargo build`). Two binaries with the same store\npath are the same build.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "The crate version. It does not change with every commit.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version"
       ],
       "type": "object"
     },
@@ -708,6 +775,41 @@
       ],
       "type": "object"
     },
+    "PlanFlags": {
+      "description": "The planning flags of `kix plan` and `kix deploy`.",
+      "properties": {
+        "accept_migrations": {
+          "type": "boolean"
+        },
+        "force_conflicts": {
+          "type": "boolean"
+        },
+        "prune": {
+          "type": "boolean"
+        },
+        "prune_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PruneModeFlag"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`--prune-mode`, `null` when not given."
+        },
+        "reconcile": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "prune",
+        "reconcile",
+        "force_conflicts",
+        "accept_migrations"
+      ],
+      "type": "object"
+    },
     "PruneEntry": {
       "properties": {
         "detail": {
@@ -767,6 +869,13 @@
           "type": "string"
         }
       ]
+    },
+    "PruneModeFlag": {
+      "enum": [
+        "default",
+        "no"
+      ],
+      "type": "string"
     },
     "RefusalReason": {
       "oneOf": [
@@ -904,6 +1013,10 @@
       "$ref": "#/$defs/Checked3",
       "description": "Writes the apiserver, an admission webhook or the deploy itself would\nrefuse, other than ownership conflicts."
     },
+    "build": {
+      "$ref": "#/$defs/Build",
+      "description": "The build the plan is for: the new side."
+    },
     "cluster": {
       "description": "The name the build gives the Kix cluster, which its records carry.",
       "type": "string"
@@ -912,9 +1025,35 @@
       "$ref": "#/$defs/Checked2",
       "description": "Fields another field manager owns that the apply would set."
     },
+    "deployed": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DeployedBuild"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The build the plan compares against: the cluster's current\nActivation record for `kix plan` and `kix diff` against the cluster,\nthe cached record under `--current-activation`, the `--from` build,\nor the Activation record in a `--from` snapshot. `null` when there is\nnone: a first deploy, or a snapshot without a record."
+    },
     "drift": {
       "$ref": "#/$defs/Checked4",
       "description": "Fields where the live cluster differs from the deployed build and\nthat this change touches."
+    },
+    "flags": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PlanFlags"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The flags that change what the planned deploy writes or deletes.\n`null` from `kix diff`, which plans no deploy."
+    },
+    "kix": {
+      "$ref": "#/$defs/KixBuild",
+      "description": "The Kix that made the plan."
     },
     "made_by": {
       "$ref": "#/$defs/MadeBy"
@@ -950,7 +1089,9 @@
   "required": [
     "schema_version",
     "made_by",
+    "kix",
     "cluster",
+    "build",
     "packages",
     "migrations",
     "conflicts",

@@ -327,6 +327,8 @@ pub(crate) struct Prepared {
     /// `None` under `--current-activation`, which plans without connecting.
     pub pre_client: Option<kube::Client>,
     pub active_hash: Option<String>,
+    /// The Active record the plan compares against.
+    pub active: Option<activation::ActiveActivation>,
     pub failed_baseline: baseline::FailedBaseline,
     pub kept_orphans: activation::KeptOrphans,
     /// Against the Active closure only.
@@ -596,6 +598,7 @@ pub(crate) fn prepare(args: &PlanArgs, ctx: &mut CommandContext) -> Result<Optio
         old_manifests,
         pre_client,
         active_hash,
+        active,
         failed_baseline,
         kept_orphans,
         migration_pairs,

@@ -77,6 +77,17 @@ fn plan_json_is_the_document_alone() {
     assert_eq!(doc["conflicts"]["reason"], "builds_only");
     assert_eq!(doc["migrations"]["status"], "checked");
     assert!(!doc["packages"]["added"].as_array().unwrap().is_empty());
+    let store_path = doc["build"]["store_path"]
+        .as_str()
+        .expect("a build store path");
+    assert!(store_path.starts_with("/nix/store/"), "{store_path}");
+    assert!(
+        doc["build"]["identity_hash"].is_string(),
+        "{}",
+        doc["build"]
+    );
+    assert_eq!(doc["flags"]["prune"], false);
+    assert!(doc["kix"]["version"].is_string());
 }
 
 /// Flake attribute `minimal` builds the cluster named `test-minimal`. The

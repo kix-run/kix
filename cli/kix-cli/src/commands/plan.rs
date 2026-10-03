@@ -30,8 +30,9 @@ use kix::manifest::types::ResourceId;
 use crate::cli::{Detail as DetailArg, OutputFormat, PlanArgs, PruneMode};
 use crate::output;
 use crate::plan::document::{
-    AdmissionRefusal, Checked, Conflict, ConflictOwner, Detail, MadeBy, NotCheckedReason, Plan,
-    PruneEntry, PruneFate, RefusalReason, UncheckedObject, UncheckedReason,
+    AdmissionRefusal, Build, Checked, Conflict, ConflictOwner, DeployedBuild, Detail, MadeBy,
+    NotCheckedReason, Plan, PlanFlags, PruneEntry, PruneFate, PruneModeFlag, RefusalReason,
+    UncheckedObject, UncheckedReason,
 };
 use crate::plan::server::{Overlay, comparable};
 use crate::plan::{self, ManifestIndex, render};
@@ -80,6 +81,19 @@ pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Resu
         std::process::exit(EXIT_CHANGES);
     }
     Ok(())
+}
+
+fn flags_of(args: &PlanArgs) -> PlanFlags {
+    PlanFlags {
+        prune: args.prune,
+        prune_mode: args.prune_mode.map(|m| match m {
+            PruneMode::Default => PruneModeFlag::Default,
+            PruneMode::No => PruneModeFlag::No,
+        }),
+        reconcile: args.reconcile,
+        force_conflicts: args.force_conflicts,
+        accept_migrations: args.accept_migrations,
+    }
 }
 
 /// The graphs' manifests, with each object the apiserver answered for shown
@@ -358,11 +372,18 @@ pub(crate) fn document(
     let mut doc = Plan::new(
         made_by,
         &p.cluster,
+        Build::of(&p.new_graph),
         &p.pkg_diff,
         detail,
         &p.migration_pairs,
         NotCheckedReason::BuildsOnly,
     );
+    doc.deployed = p.active.as_ref().map(|a| DeployedBuild {
+        activation: a.name.clone(),
+        identity_hash: a.identity_hash.clone(),
+        store_path: a.built_via.clone(),
+    });
+    doc.flags = Some(flags_of(args));
     if !connected {
         return doc;
     }
