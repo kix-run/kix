@@ -42,6 +42,7 @@
         clickhouse-swap-bare = ./test-clickhouse-swap/bare.nix;
         clickhouse-swap-replicated = ./test-clickhouse-swap/replicated.nix;
         cnpg = ./test-cnpg.nix;
+        rabbitmq = ./test-rabbitmq.nix;
         postgres-swap-stackgres = ./test-postgres-swap/stackgres.nix;
         postgres-swap-cnpg = ./test-postgres-swap/cnpg.nix;
         kind = ./test-kind.nix;

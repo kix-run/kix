@@ -337,6 +337,15 @@ let
     };
     persistent-volume-claim.config.size = "1Gi";
     priority-class.config.value = 1000;
+    # A Prometheus provider, so the PodMonitor is built, and a settings
+    # entry, so additionalConfig is rendered.
+    rabbitmq-cluster = {
+      config.settings."vm_memory_high_watermark.relative" = "0.6";
+      instances.prometheus-operator.package = packages.prometheus-operator;
+    };
+    # A Prometheus provider, so the metrics Service and the ServiceMonitor
+    # are built.
+    rabbitmq-operator.instances.prometheus-operator.package = packages.prometheus-operator;
     secret.config.stringData.password = "password";
     secret-echo.instances = { inherit credentials; };
     secret-ref.config.keys = [ "password" ];

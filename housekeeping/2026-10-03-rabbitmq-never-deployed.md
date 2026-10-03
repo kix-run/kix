@@ -1,0 +1,3 @@
+# 2026-10-03 · `kix/packages/rabbitmq-operator`, `rabbitmq-cluster` · The RabbitMQ packages have only been evaluated, never deployed.
+
+`clusters/test-rabbitmq.nix` evaluates and builds, but no kind run has shown that cainjector fills the webhook `caBundle` before the check Job gives up, that the nodes form a cluster under Cilium default deny with only DNS, the API server, 4369, and 25672 open, that the operator reaches the management API on 15672, or that PerfTest connects with the default-user Secret. Deploy the cluster on kind and check `AllReplicasReady` on both RabbitmqClusters and PerfTest's publish rate.
