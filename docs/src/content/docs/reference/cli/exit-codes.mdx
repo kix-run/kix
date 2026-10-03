@@ -16,15 +16,16 @@ This page is hand-maintained. Check the `std::process::exit` calls in
 | --- | --- |
 | `0` | Success. Also printed help (`-h`, `--help`) and version (`-V`). |
 | `1` | An error, printed on stderr. |
-| `2` | The command line could not be parsed: an unknown flag, a missing argument, or an invalid value. `kix diff` also uses `2`, see below. |
+| `2` | The command line could not be parsed: an unknown flag, a missing argument, or an invalid value. `kix diff` and `kix plan` also use `2`, see below. |
 
 ## Per command
 
 | Command | Non-zero status beyond errors |
 | --- | --- |
 | `kix diff` | `2` when there is at least one difference or a stateful migration was detected. `0` means no differences. |
+| `kix plan`, `kix deploy --dry-run` | `2` when the deploy would change something. `3` when it would stop: a refused write, a refused prune delete, or a stateful migration without `--accept-migrations`. `0` means the deploy would change nothing. |
 | `kix check` | `1` when any step reports `fail`: cluster evaluation, which includes error-level scorecard findings, or the scorecard report. Applies with `--sarif` too. |
-| `kix deploy` | `1` when a resource operation fails (under `--on-error continue` too, and including a prune delete) or the run is stopped or cancelled, when stateful migrations are detected without `--accept-migrations`, or when confirmation is needed on a non-interactive terminal without `--yes`. With `--operator`, a `Degraded`, `Failed`, or unexpectedly `Superseded` Activation and a 10-minute wait timeout also exit `1`. |
+| `kix deploy` | `1` when a resource operation fails (under `--on-error continue` too, and including a prune delete) or the run is stopped or cancelled, when the plan shows a refused write under `--on-error stop`, when stateful migrations are detected without `--accept-migrations`, or when confirmation is needed on a non-interactive terminal without `--yes`. With `--operator`, a `Degraded`, `Failed`, or unexpectedly `Superseded` Activation and a 10-minute wait timeout also exit `1`. |
 | `kix rollback` | `1` when the rollback fails, including a failed prune delete or, with `--operator`, a `Degraded` Activation, or when confirmation is needed on a non-interactive terminal without `--yes`. |
 | `kix gc` | `1` when any deletion fails, or when confirmation is needed on a non-interactive terminal without `--yes`. |
 | `kix migrate domain` | `1` when confirmation is needed on a non-interactive terminal without `--yes`. |
@@ -36,9 +37,9 @@ This page is hand-maintained. Check the `std::process::exit` calls in
 Answering no to a confirmation prompt (`deploy`, `rollback`, `gc`,
 `migrate domain`) exits `0` without changing anything.
 
-A `kix diff` in CI cannot tell a difference from a usage error by the code
-alone. Check that the command line is valid in a step that does not branch on
-`2`, or read the JSON output.
+A `kix diff` or `kix plan` in CI cannot tell a difference from a usage error
+by the code alone. Check that the command line is valid in a step that does
+not branch on `2`, or read the JSON output.
 
 :::tip[Use it in a task]
 See [Run `kix check --sarif` in CI](/docs/how-to/policy-ci-and-compliance/run-kix-check-sarif-in-ci/)

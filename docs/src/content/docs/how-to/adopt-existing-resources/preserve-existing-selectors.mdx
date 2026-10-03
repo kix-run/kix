@@ -60,16 +60,17 @@ selectors.
 Ask the API server instead:
 
 <Command
-  commands={["kix deploy how-to-adoption --dry-run"]}
+  commands={["kix plan how-to-adoption"]}
   cwd="kix-examples/"
 />
 
 Deployment and StatefulSet selectors are immutable. A mismatch therefore
-fails the dry run, either as an immutable-field error or as a field-ownership
-conflict when another manager owns the selector.
+appears among the writes the deploy would stop on, either as an
+immutable-field refusal or as a field ownership conflict when another manager
+owns the selector.
 
 :::caution
 Do not deploy if the rendered `spec.selector.matchLabels` differs from the
-live one, or if the dry run reports the workload being replaced. Correct
+live one, or if the plan reports the workload being replaced. Correct
 `selectorLabels` first.
 :::

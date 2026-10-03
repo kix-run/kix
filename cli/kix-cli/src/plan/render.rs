@@ -261,7 +261,7 @@ fn write_not_checked(out: &mut String, plan: &Plan) {
                     "an admission webhook it calls does not support dry run"
                 }
                 UncheckedReason::DependencyNotChecked => {
-                    "something it depends on was refused or not checked"
+                    "the dry run did not reach it"
                 }
             };
             let _ = writeln!(out, "  {} {} {}:", output::dim("?"), names.len(), why);

@@ -328,8 +328,9 @@ pub enum UncheckedReason {
     NamespaceCreatedByThisDeploy,
     /// An admission webhook that would be called does not support dry run.
     WebhookNoDryRun,
-    /// An object it depends on was refused or not checked, so the engine did
-    /// not try it.
+    /// The engine never reached the object, for example because the dry run
+    /// was cancelled. A refused dependency does not cause this: a dry run
+    /// still tries the dependents of a refused object.
     DependencyNotChecked,
 }
 

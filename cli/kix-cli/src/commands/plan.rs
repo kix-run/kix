@@ -94,9 +94,9 @@ pub(crate) struct DryRunReport {
 
 /// Run the deploy's engine plan with every write sent as a dry run.
 ///
-/// The engine runs with `--on-error continue`, so one refused write does not
-/// hide the answers for the rest; nodes that depend on a refused one are
-/// still not tried. Nothing is persisted: `KubeOps` sends every write with
+/// The engine runs with `--on-error continue`, and under dry run it still
+/// tries the dependents of a refused node, so one refused write does not hide
+/// the answers for the rest. Nothing is persisted: `KubeOps` sends every write with
 /// `dryRun=All` and skips the Activation record's lifecycle writes.
 pub(crate) fn dry_run(
     p: &Prepared,

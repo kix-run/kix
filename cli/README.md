@@ -127,7 +127,7 @@ are skipped; `plan::document` turns the result into the `Plan` document.
   stateful migration without `--accept-migrations`).
 - **Offline.** `--current-activation` connects to nothing: the plan
   compares the cached build with the new one, `made_by: builds`, and every
-  write-path check is `not_checked` with reason `builds_only`.
+  write-path check, and drift, is `not_checked` with reason `builds_only`.
 - **Progress.** With `-o json|yaml|markdown`, `output::progress_to_stderr`
   sends the `crate::say!` progress lines of `prepare` to stderr so stdout is
   the document alone.

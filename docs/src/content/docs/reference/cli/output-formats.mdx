@@ -7,7 +7,8 @@ The global `-o`/`--output` flag takes `text`, `json`, `yaml`, or `markdown`.
 Each command chooses its own default and decides which values it supports. A
 value a command does not support is not an error: the command falls back to
 the output shown in the table below. Add `-q` when a script parses the result, so
-that progress lines do not mix with it.
+that progress lines do not mix with it. `kix plan` sends its progress lines to
+stderr for every format except `text`.
 
 This page is hand-maintained. Check the `output_format` and
 `global.output` reads in `cli/kix-cli/src/commands/` when in doubt.
@@ -17,7 +18,8 @@ This page is hand-maintained. Check the `output_format` and
 | Command | Default | `text` | `json` | `yaml` | `markdown` |
 | --- | --- | --- | --- | --- | --- |
 | `build` | `yaml` | YAML | JSON | YAML | YAML |
-| `diff` | `text` | Text | JSON | JSON document as YAML | Markdown for pull request comments |
+| `diff` | `text` | Text | `Plan` document as JSON | `Plan` document as YAML | Markdown for pull request comments |
+| `plan`, `deploy --dry-run` | `text` | Text | `Plan` document as JSON | `Plan` document as YAML | Markdown for pull request comments |
 | `check` | `text` | Text | JSON | YAML | Text |
 | `list clusters`, `list packages` | `text` | Text | JSON | YAML | Text |
 | `graph` | `text` (tree) | Tree | JSON | YAML | Tree |
@@ -39,7 +41,7 @@ Command-specific flags take priority over `-o`:
 
 | Command | Output |
 | --- | --- |
-| `deploy` | A deploy event stream selected by `--log-format pretty\|line\|json`. See [`kix deploy`](/docs/reference/cli/deploy-apply/). |
+| `deploy` (without `--dry-run`) | A deploy event stream selected by `--log-format pretty\|line\|json`. See [`kix deploy`](/docs/reference/cli/deploy-apply/). |
 | `rollback` (without `--list`), `gc`, `migrate domain` | Plan, prompt, and progress text |
 | `health` | Text |
 | `export`, `snapshot save`, `compliance audit` | Files in a directory |
@@ -55,8 +57,10 @@ clear-line control sequences with `--no-color`; redirecting stderr may
 therefore preserve those sequences.
 
 :::note[Reference]
-See [`kix diff`](/docs/reference/cli/diff/#output-formats) for the JSON and
-Markdown diff schemas.
+See [`kix plan`](/docs/reference/cli/plan/#json-and-yaml) for the `Plan`
+document that `kix plan` and `kix diff` print as JSON and YAML, and
+[`kix diff`](/docs/reference/cli/diff/#output-formats) for the values a
+read-only comparison fills in.
 :::
 
 :::tip[Use it in a task]

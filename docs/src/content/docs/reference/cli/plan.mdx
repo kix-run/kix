@@ -1,0 +1,247 @@
+---
+title: "`plan`"
+description: "Preview a deploy as a server-side dry run: the field changes the apiserver would make, the writes it would refuse, prune fates, migrations, and drift."
+---
+
+import Command from '/src/components/Command.astro';
+
+`kix plan` runs the deploy pipeline with every write sent as `dryRun=All`, so
+the apiserver answers for each object. It builds the cluster, reads the
+running activation, computes the same plan `kix deploy` computes, and sends
+each apply and prune delete as a dry run. Nothing is written, and no
+Activation record is created or changed.
+
+`kix deploy` prints the same plan before it asks for confirmation, and
+`kix deploy --dry-run` runs `kix plan` with the same flags.
+
+This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
+`cli/kix-cli/src/commands/plan.rs`, and
+`cli/kix-cli/schema/plan.schema.json` when in doubt.
+
+## Synopsis
+
+```text
+kix plan <CLUSTER> [--prune | --prune-mode default|no] [--reconcile]
+         [--force-conflicts] [--accept-migrations] [--current-activation]
+         [-o text|json|yaml|markdown] [--flake <FLAKE>] [--context <CONTEXT>]
+```
+
+| Argument or flag | Meaning |
+| --- | --- |
+| `<CLUSTER>` | Cluster name to build from the flake. |
+| `--prune` | Plan the prune a `kix deploy --prune` would run: each orphan's delete is sent as a dry run. Without it, orphans are listed as kept. |
+| `--prune-mode <MODE>` | `default` prunes according to `--prune`. `no` plans no prune, even with `--prune`. |
+| `--reconcile` | Plan a re-apply of every resource, including those whose identity hash matches the running activation. |
+| `--force-conflicts` | Plan the apply with forced field ownership. Fields another manager owns show as drift the deploy reverts instead of as conflicts. |
+| `--accept-migrations` | Accept the stateful migrations the plan lists, so they do not count as a reason the deploy would stop. |
+| `--current-activation` | Take the previous activation from the local cache and connect to nothing. The plan compares the cached build with the new one, and every write-path check reads `not_checked`. See [Offline plans](#offline-plans). |
+| `-o`, `--output` | `text` (default), `json`, `yaml`, or `markdown`. With anything but `text`, progress lines go to stderr so stdout holds the document alone. |
+| `--flake`, `--context`, `--override-input` | See [Global flags](/docs/reference/cli/global-flags/). |
+
+The planning flags are the ones `kix deploy` takes, so a plan made with the
+same flags is the plan the deploy runs.
+
+## Permissions
+
+A dry run is authorised like the write it simulates, so `kix plan` needs the
+permissions of the deploy it previews. A user who may only `get` and `list`
+gets `forbidden` refusals. Use [`kix diff`](/docs/reference/cli/diff/) for a
+read-only comparison.
+
+## What it reports
+
+| Section | Content |
+| --- | --- |
+| Field changes | For each object the dry run answered, the live object compared with the object the apiserver says the apply would produce. Server-maintained metadata and `status` are left out, and Secret values are not shown. A package the build comparison called unchanged becomes changed when the apiserver says it would change. |
+| Writes the deploy would stop on | Field ownership conflicts, with the manager that owns each field; admission webhook denials; ValidatingAdmissionPolicy denials; validation errors; changes to immutable fields; RBAC refusals; missing namespaces and unknown kinds the build does not create; SOPS Secrets that do not decrypt; and refused prune deletes. |
+| Prune | Each orphan and what the deploy does with it. See [Prune fates](#prune-fates). |
+| Stateful migrations | Stateful resources the change removes and adds in the same slot. A deploy stops on them unless run with `--accept-migrations`. |
+| Drift | Fields where the live object differs from the deployed build, the managers that own them live, and whether the deploy puts the deployed value back. |
+| Not checked | Objects the dry run could not check. See [Objects not checked](#objects-not-checked). |
+
+Every refusal shows, not only the first. The dry run carries on past a
+refused write and still tries the objects that depend on it, since nothing a
+dry run writes persists.
+
+No preview can say whether Pods start, pull their images, and pass their
+probes, so `readiness` is always `not_checked`.
+
+## Output formats
+
+### Text
+
+The package-grouped plan `kix deploy` prints, with every field change shown.
+A change that puts back a drifted field is tagged `(reverts drift)`, and one
+the deploy leaves alone is tagged `(drift; deploy leaves this object alone)`.
+After the packages come these sections, each only when it has something to
+say:
+
+- `The deploy would stop on N writes:`, one line per conflict, refusal, or
+  refused prune delete, with the owning manager and fields or the
+  apiserver's message.
+- `Drift:`, one line per drifted field with its live and deployed values,
+  the managers that set it, and whether the deploy reverts it.
+- `Prune:`, orphans that stay because another Kix cluster deploys them or
+  they changed since they were read.
+- `Not checked by the dry run (N)`, grouped by reason, five names per group.
+- A closing note that no preview checks whether Pods start.
+
+### JSON and YAML
+
+The `Plan` document. `kix diff` prints the same document, so a consumer can
+read either. Its JSON Schema is
+`cli/kix-cli/schema/plan.schema.json`.
+
+| Key | Content |
+| --- | --- |
+| `schema_version` | Integer. It increases when a change is not backward compatible. |
+| `made_by` | `dry_run` from `kix plan`; `builds` from `kix plan --current-activation` or `kix diff --from <build>`; `live_read` from `kix diff` against the cluster or a snapshot. |
+| `cluster` | The name the build gives the Kix cluster. |
+| `packages` | The package-grouped changes, described under [`kix diff`](/docs/reference/cli/diff/#json-and-yaml). |
+| `migrations` | Checked section of `{ slot, source, target, reason }`. |
+| `conflicts` | Checked section of `{ resource, owners, message }`, each owner `{ manager, fields }`. |
+| `admission` | Checked section of `{ resource, reason, webhook, message }`. See [Refusal reasons](#refusal-reasons). |
+| `drift` | Checked section of `{ resource, path, live, deployed, managers, reverted }`. `reverted` is false when the deploy leaves the object alone. |
+| `prune` | Checked section of `{ resource, fate, detail }`. See [Prune fates](#prune-fates). |
+| `readiness` | Always `{ "status": "not_checked", "reason": "not_previewable" }`. |
+| `not_checked` | Array of `{ resource, reason, detail }`. Empty unless `made_by` is `dry_run`. |
+
+Each checked section is one of:
+
+```json
+{ "status": "checked", "items": [ ... ] }
+{ "status": "not_checked", "reason": "read_only" }
+```
+
+| `reason` | Meaning |
+| --- | --- |
+| `builds_only` | Two builds were compared and no cluster was read. `kix plan` against the cluster checks it. |
+| `read_only` | A read-only comparison cannot see it, because it shows only on the write path. `kix plan` checks it. |
+| `deployed_build_unavailable` | The deployed build's manifests are not on this machine, so a change the commit makes cannot be told apart from drift. |
+| `not_previewable` | No preview can tell. |
+
+Resource identifiers have the form `Kind/name@namespace`.
+
+### Markdown
+
+GitHub-flavoured Markdown for pull request comments: the package plan, then
+the writes the deploy would stop on, and the objects the dry run did not
+check in a `<details>` block.
+
+## Field change labels
+
+Each field change under `packages.changed[].modified_resources[].changes[]`
+is `{ path, change, old, new, labels }`. `change` is `added`, `removed`, or
+`changed`; `old` or `new` is absent when that side has no value. When the
+deployed build's manifests are on this machine, `labels` says what made the
+change:
+
+| Label | Meaning |
+| --- | --- |
+| `intended` | The deployed build and the new build differ here. |
+| `reverts_drift` | The live object differs from the deployed build here, and the deploy applies the object, so it puts the deployed value back. |
+| `drift_kept` | The live object differs from the deployed build here, and the deploy leaves the object alone because its identity hash did not change. `kix deploy --reconcile` applies it. |
+
+A change can carry both `intended` and a drift label when the commit changes
+a field that was also changed on the cluster. Without the deployed build,
+`labels` is absent and `drift` is `not_checked` with reason
+`deployed_build_unavailable`.
+
+A field another manager changed is usually also owned by that manager, so a
+plan reports it as an ownership conflict naming the manager. With
+`--force-conflicts` the plan shows it as `reverts_drift` instead.
+
+## Refusal reasons
+
+| `reason` | Meaning |
+| --- | --- |
+| `webhook_denied` | An admission webhook denied the write. `webhook` names it when the apiserver did. |
+| `policy_denied` | A ValidatingAdmissionPolicy denied the write. `webhook` names the policy. |
+| `invalid` | The object fails validation against the schema or a CRD's rules. |
+| `immutable_field` | A changed field cannot be modified; the object must be deleted and created again. |
+| `forbidden` | RBAC or an admission plugin forbids the write. |
+| `namespace_missing` | The namespace does not exist and the build does not create it. |
+| `unknown_kind` | The apiserver does not serve the kind and the build has no CRD for it. |
+| `decryption` | A SOPS Secret could not be decrypted. |
+| `other` | The deploy refuses the object before sending it, or the apiserver gave another error. |
+
+## Prune fates
+
+| `fate` | Meaning |
+| --- | --- |
+| `delete` | `--prune` deletes it, and the dry-run delete was accepted. |
+| `delete_refused` | `--prune` would delete it, but the dry-run delete was refused. The deploy would stop on it. |
+| `kept_warn_only` | Kept by a deploy without `--prune`, and recorded on the new Activation for a later `--prune` or `kix gc`. |
+| `kept_skipped` | Kept by `--prune-mode no`. |
+| `kept_never_pruned` | A Namespace or CustomResourceDefinition, which Kix never deletes automatically. |
+| `kept_shared` | Another Kix cluster's current build contains it. |
+| `kept_changed` | It changed since it was read; the next prune checks it again. |
+
+## Objects not checked
+
+A dry run persists nothing, so an object that needs something the same
+deploy creates cannot be checked. These objects are listed under
+`not_checked`, not as refusals, and their entries in `packages` come from
+comparing builds. Most of a cluster's first deploy is in this list.
+
+| `reason` | Meaning |
+| --- | --- |
+| `crd_created_by_this_deploy` | Its kind comes from a CRD this deploy creates. |
+| `namespace_created_by_this_deploy` | Its namespace is created by this deploy. |
+| `webhook_no_dry_run` | An admission webhook that would be called does not support dry run. |
+| `dependency_not_checked` | The engine did not try the object, for example because the dry run was cancelled. `detail` names the object it waited on when there is one. |
+
+## Offline plans
+
+With `--current-activation`, `kix plan` connects to nothing. It compares the
+cached build with the new one, `made_by` is `builds`, and `conflicts`,
+`admission`, `drift`, and `prune` are `not_checked` with reason
+`builds_only`. The
+cache is keyed by cluster name only; see
+[`kix deploy`](/docs/reference/cli/deploy-apply/) for what an offline plan
+cannot see.
+
+## Exit status
+
+| Code | Meaning |
+| --- | --- |
+| `0` | The deploy would change nothing |
+| `2` | The deploy would change something |
+| `3` | The deploy would stop: a refused write, a refused prune delete, or a stateful migration without `--accept-migrations` |
+| `1` | Evaluation, build, or cluster error |
+
+The status is the same for every output format. A command line that cannot
+be parsed also exits `2`; see [Exit codes](/docs/reference/cli/exit-codes/).
+
+## Relation to `kix diff` and `kix deploy`
+
+| | `kix plan` | `kix diff` |
+| --- | --- | --- |
+| Permissions | The deployer's | `get` and `list`; none with `--from <build>` |
+| Field changes | Live object against the dry-run result | Build against the Kix-owned view of the live object |
+| Ownership conflicts, webhooks, admission policies, validation, RBAC | Checked | `not_checked` (`read_only`) |
+| Prune fates | Checked | `not_checked` |
+| Drift | Fields the deploy touches | Every drifted field, with whether the deploy reverts it |
+| `made_by` | `dry_run` (`builds` with `--current-activation`) | `live_read`, or `builds` with `--from <build>` |
+
+Use `kix plan` to preview a deploy you are about to run. Use `kix diff` when
+the job has read-only credentials or no cluster at all, such as a pull
+request check against a snapshot.
+
+`kix deploy` makes the same plan before it asks for confirmation. Under
+`--on-error stop`, the default, it stops before applying anything when the
+plan shows a refused write. See [`kix deploy`](/docs/reference/cli/deploy-apply/).
+
+## Examples
+
+<Command commands={[
+  "kix plan demo",
+  "kix plan demo --prune --reconcile",
+  "kix plan demo -o json > plan.json",
+  "kix plan demo -o markdown > plan.md",
+]} />
+
+:::tip[Use it in a task]
+See [Preview changes with `kix diff`](/docs/how-to/operate-a-cluster/preview-changes-with-kix-diff/)
+for when to use each preview.
+:::

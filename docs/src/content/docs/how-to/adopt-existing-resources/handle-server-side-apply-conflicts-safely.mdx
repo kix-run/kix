@@ -23,8 +23,8 @@ Run a reconciled API-server dry run:
 <Command {...conflict} />
 
 `--reconcile` makes Kix check every resource even when the activation itself
-has not changed. `--dry-run` asks the API server to validate the apply without
-persisting it.
+has not changed. `--dry-run` runs [`kix plan`](/docs/reference/cli/plan/),
+which asks the API server to validate each apply without persisting it.
 
 Read the conflict message closely. It identifies three things:
 
@@ -32,19 +32,11 @@ Read the conflict message closely. It identifies three things:
 - the other field manager, `autoscaler`;
 - the overlapping field, `.spec.replicas`.
 
-By default, the run stops after this conflict and ends with `1 failed, 4
-cancelled`. The cancelled resources have not been checked. To find conflicts
-on the remaining resources, run the dry run again with `--on-error continue`:
-
-<Command
-  commands={[
-    "kix deploy how-to-adoption-takeover --reconcile --dry-run -y --on-error continue",
-  ]}
-  cwd="kix-examples/"
-/>
-
-This still skips resources that depend on a failed resource, but continues
-checking independent branches of the dependency graph.
+The dry run carries on past a conflict and still checks the resources that
+depend on the conflicting one, so the plan lists every conflict in one run.
+It exits `3`, the status for a deploy that would stop. A real deploy with the
+same conflicts stops before applying anything under the default
+`--on-error stop`.
 
 ## Inspect the other manager
 
