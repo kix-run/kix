@@ -13,11 +13,14 @@
 #
 # Resources: EnvoyProxy (optional), GatewayClass, Gateway, plus CRD refs
 # for the two Gateway API kinds and, with an EnvoyProxy, for EnvoyProxy.
-# root = Gateway, with out.gatewayRef and out.listeners for kix.expose.
+# root = Gateway, with out.gatewayRef and out.listeners for kix.expose
+# (kix.contracts.gateway). out.podSelector is null, so under default-deny
+# network policy nothing admits the proxy pods to exposed backends.
 
 {
   scope,
   lib,
+  kix,
 }:
 
 let
@@ -27,67 +30,7 @@ let
   # Gateway extension and means nothing to another implementation.
   envoyGatewayController = "gateway.envoyproxy.io/gatewayclass-controller";
 
-  inherit (lib) mkOption types;
-  optional =
-    type:
-    mkOption {
-      type = types.nullOr type;
-      default = null;
-    };
-
-  # Gateway API v1 Listener. Fields left null are not rendered.
-  listenerType = types.submodule {
-    options = {
-      name = mkOption { type = types.str; };
-      port = mkOption { type = types.port; };
-      protocol = mkOption {
-        type = types.enum [
-          "HTTP"
-          "HTTPS"
-          "TLS"
-          "TCP"
-          "UDP"
-        ];
-      };
-      hostname = optional types.str;
-      tls = optional (
-        types.submodule {
-          options = {
-            mode = optional (
-              types.enum [
-                "Terminate"
-                "Passthrough"
-              ]
-            );
-            certificateRefs = optional (types.listOf (types.attrsOf types.anything));
-            frontendValidation = optional (types.attrsOf types.anything);
-            options = optional (types.attrsOf types.str);
-          };
-        }
-      );
-      allowedRoutes = optional (
-        types.submodule {
-          options = {
-            namespaces = optional (
-              types.submodule {
-                options = {
-                  from = optional (
-                    types.enum [
-                      "All"
-                      "Same"
-                      "Selector"
-                    ]
-                  );
-                  selector = optional (types.attrsOf types.anything);
-                };
-              }
-            );
-            kinds = optional (types.listOf (types.attrsOf types.anything));
-          };
-        }
-      );
-    };
-  };
+  gatewayListeners = import ./listeners.nix { inherit lib; };
 in
 
 {
@@ -124,25 +67,8 @@ in
     };
 
     listeners = lib.mkOption {
-      type = lib.types.listOf listenerType;
-      default = [
-        {
-          name = "http";
-          port = 80;
-          protocol = "HTTP";
-          allowedRoutes.namespaces.from = "All";
-        }
-        {
-          name = "https";
-          port = 443;
-          protocol = "HTTPS";
-          tls = {
-            mode = "Terminate";
-            certificateRefs = [ ];
-          };
-          allowedRoutes.namespaces.from = "All";
-        }
-      ];
+      type = lib.types.listOf gatewayListeners.type;
+      default = gatewayListeners.defaults;
       description = ''
         Gateway API v1 `Listener` entries for the Gateway's `spec.listeners`,
         with the upstream field names. An HTTPS listener with no
@@ -223,17 +149,7 @@ in
         "app.kubernetes.io/component" = "gateway";
       };
 
-      # An HTTPS listener without certificateRefs is a placeholder the
-      # cluster operator has not configured yet. Unset fields are dropped
-      # here rather than at rendering, so they stay out of the Gateway's
-      # identity hash.
-      activeListeners = map (lib.filterAttrsRecursive (_: v: v != null)) (
-        builtins.filter (
-          l:
-          l.protocol != "HTTPS"
-          || (l.tls != null && l.tls.certificateRefs != null && l.tls.certificateRefs != [ ])
-        ) config.listeners
-      );
+      activeListeners = gatewayListeners.active config.listeners;
 
       haveProxy = config.proxySpec != null;
 
@@ -322,8 +238,9 @@ in
       # --- Entry point ---
       root = {
         resource = self.gateway;
-        out = {
-          # The DI contract consumed by kix.expose: a reference to this Gateway.
+        # The gateway contract (kix/lib/vocab/gateway.nix), read by
+        # kix.expose.
+        out = kix.contracts.gateway.check "envoy-gateway ${scope.namespaceName}/${name}" {
           gatewayRef = {
             name = self.gateway.out.name;
             namespace = scope.namespaceName;
@@ -331,9 +248,11 @@ in
           # kix.expose matches a route's host and namespace against these
           # to pick the URL scheme and port.
           listeners = activeListeners;
-          # Selector for network policies: matches the envoy proxy pods
-          # spawned by the controller for this Gateway.
-          selector = selectorLabels;
+          # Envoy Gateway's controller creates the proxy pods, by default in
+          # its own namespace, which this package does not know. Without a
+          # selector kix.expose writes no policy admitting them to backends.
+          podSelector = null;
+          podNamespace = null;
         };
       };
     };

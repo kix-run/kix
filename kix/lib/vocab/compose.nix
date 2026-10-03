@@ -10,6 +10,8 @@ let
 
   quantity = import ./quantity.nix { inherit lib; };
 
+  gatewayContract = import ./gateway.nix { inherit lib; };
+
   # Resource names a ResourceRequirements map may use besides cpu, memory
   # and ephemeral-storage.
   isResourceName =
@@ -116,7 +118,14 @@ let
         else
           null;
 
-      hasGateway = gateway != null && gateway ? out.gatewayRef;
+      hasGateway = gateway != null;
+      # Read through `listener`, which the HTTPRoute forces, so the contract
+      # is checked whenever a gateway route renders.
+      checkedGateway =
+        if hasGateway then
+          gatewayContract.require "kix.expose (${scope.namespaceName}/${name})" gateway
+        else
+          null;
       hasIngress = ingressNginx != null;
       mode =
         if hasGateway then
@@ -140,8 +149,8 @@ let
               name
               host
               scope
-              gateway
               ;
+            gateway = checkedGateway;
           }
         else
           null;
@@ -160,7 +169,7 @@ let
       ) ":${toString listener.port}";
 
       urlOrNull = if scheme == null then null else "${scheme}://${host}${portSuffix}";
-      gwRef = gateway.out.gatewayRef;
+      gwRef = checkedGateway.out.gatewayRef;
       missing =
         if mode == null then
           "nothing routes to it: wire a gateway or ingressNginx dependency"
@@ -1641,12 +1650,12 @@ rec {
           }
         ];
 
-      # Under default-deny policy, allow the ingress controller to reach each
-      # backend on the routed pod port. kix.expose has both the backend Service
-      # and the controller dependency needed to derive this rule.
-      #
-      # Gateway API is excluded because gateway.out supplies a parentRef, not
-      # the data-plane pod selector and namespace required by this rule.
+      # Under default-deny policy, allow the ingress controller or the
+      # gateway's data plane to reach each backend on the routed pod port.
+      # kix.expose has both the backend Service and the dependency needed to
+      # derive this rule. A gateway whose out.podSelector is null (its
+      # implementation places the data plane where the package cannot see)
+      # gets no rule.
       backends =
         if paths != null then
           map (p: {
@@ -1662,15 +1671,22 @@ rec {
             }
           ];
 
-      controllerSelector = (ingressNginx.out or { }).podSelector or null;
-      controllerNamespace = (ingressNginx.out or { }).podNamespace or null;
+      routerOut =
+        if useGateway then
+          gateway.out
+        else if useIngress then
+          ingressNginx.out or { }
+        else
+          { };
+      controllerSelector = routerOut.podSelector or null;
+      controllerNamespace = routerOut.podNamespace or null;
 
-      wantsControllerEdge = hasExposure && useIngress && scope.networkPolicyEnforcer != null;
+      wantsControllerEdge = hasExposure && scope.networkPolicyEnforcer != null;
 
       # A policy requires the controller pod selector and namespace. Warn when
       # the controller package does not expose them.
       _controllerEdgeWarn =
-        if wantsControllerEdge && controllerSelector == null then
+        if wantsControllerEdge && useIngress && controllerSelector == null then
           lib.warn (
             "kix.expose (${name}): the ingress controller does not publish `out.podSelector` "
             + "and `out.podNamespace`, so no network policy opens the backend to it. Under "
@@ -1698,7 +1714,7 @@ rec {
           extraArgs = {
             # The Service's own name, not the part's: a part name is a
             # Nix identifier and `coreService` is not a legal object name.
-            name = "${b.svc.name}-from-ingress-controller";
+            name = "${b.svc.name}-from-${if useGateway then "gateway" else "ingress-controller"}";
             labels = {
               ${kixKeys.derived} = "true";
               ${kixKeys.policyType} = "ingress-controller";
