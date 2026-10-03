@@ -43,6 +43,9 @@
     # kind ships no snapshot CRDs or controller; a snapshot-controller
     # instance provides them.
     snapshotController.binding = lib.mkDefault "absent";
+    # kind ships no metrics-server; a metrics-server instance provides
+    # metrics.k8s.io.
+    metricsApi.binding = lib.mkDefault "absent";
   };
 
   cluster.capabilities = {

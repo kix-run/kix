@@ -65,6 +65,7 @@
         mayastor = ./test-mayastor.nix;
         virtualization = ./test-virtualization.nix;
         metabase = ./test-metabase.nix;
+        metrics-server = ./test-metrics-server.nix;
         monitoring-netpol = ./test-monitoring-netpol.nix;
       };
     };
