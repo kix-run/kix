@@ -70,6 +70,7 @@
         metabase = ./test-metabase.nix;
         metrics-server = ./test-metrics-server.nix;
         keycloak = ./test-keycloak.nix;
+        keycloak-oidc = ./test-keycloak-oidc.nix;
         otel-collector = ./test-otel-collector.nix;
         traefik = ./test-traefik.nix;
         monitoring-netpol = ./test-monitoring-netpol.nix;

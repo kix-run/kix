@@ -6,6 +6,7 @@ let
   storageClass = import ./storage-class.nix { inherit lib; };
   availability = import ../core/availability.nix { inherit lib; };
   scorecard = import ../scorecard.nix { inherit lib; };
+  oidcProvider = import ./oidc-provider.nix { inherit lib; };
 in
 compose
 // {
@@ -26,6 +27,15 @@ compose
   # The `out` a `gateway` provider publishes, with `check` for providers;
   # kix.expose holds its gateway to it (vocab/gateway.nix).
   contracts.gateway = import ./gateway.nix { inherit lib; };
+  # The `out` an `oidcProvider` publishes, its issuer and endpoints per
+  # realm, with `check`, `assertions`, and `requireClient`
+  # (vocab/oidc-provider.nix).
+  contracts.oidcProvider = oidcProvider;
+  # The `oidc` option of an application that signs users in through an
+  # oidcProvider: kix.options.oidc { scopes; autoLogin; }.
+  options = compose.options // {
+    oidc = oidcProvider.clientOptions;
+  };
   # Map availability levels to package replica counts and quorums:
   # kix.availability.pick level { none = 1; pod = 2; node = 2; zone = 3; }
   # kix.availability.atLeast "node" level

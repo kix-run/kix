@@ -104,13 +104,23 @@
 # CiliumNetworkPolicy that selects this instance's pods and allows that
 # egress.
 #
-# `out`:
+# `out`, checked by `kix.contracts.oidcProvider`:
 #   url          the public URL, `KC_HOSTNAME`.
 #   issuerUrl    a function from a realm name to that realm's OpenID
 #                Connect issuer, `<url>/realms/<realm>`.
-# OIDC clients such as Grafana (`auth.generic_oauth`), Immich
-# (`settings.oauth.issuerUrl`), and Harbor read these through their own
-# settings; none takes a keycloak dependency yet.
+#   endpoints    a function from a realm name to `{ authorizationUrl;
+#                tokenUrl; userinfoUrl; }`. The authorization URL is
+#                public, for the browser. The token and userinfo URLs are
+#                the Service's in-cluster address, so an application that
+#                dials them gets derived egress to Keycloak. They are plain
+#                HTTP (port 8080), so the client secret crosses the pod
+#                network unencrypted.
+# grafana, harbor, and immich take an instance as their `oidcProvider`
+# dependency when their `oidc.enabled` is set; each package header names the
+# redirect URI to register. The package answers no alias by default, because
+# two Keycloak instances answering one would fail every such application in
+# the cluster. Wire it with `deps.oidcProvider = ref.<ns>.<instance>`, or
+# give the one instance `aliases = [ "oidcProvider" ]`.
 #
 # Escape hatches: `env` for Keycloak options (`KC_*`), `extraArgs` for
 # options of `kc.sh start`, and the instance's `partsOverlays` for probes,
@@ -357,6 +367,13 @@ in
           };
         } config.extraArgs;
 
+        realmPath =
+          field: realm:
+          if builtins.isString realm && builtins.match "[^/?#[:space:]]+" realm != null then
+            "/realms/${realm}"
+          else
+            throw "${who}: ${field} takes a realm name without '/', '?', '#', or spaces; got ${builtins.toJSON realm}.";
+
         httpProbe = path: {
           httpGet = {
             inherit path;
@@ -508,14 +525,22 @@ in
             (self.serviceMonitor or null)
             (self.prometheusRules or null)
           ];
-          out = {
+          out = kix.contracts.oidcProvider.check who {
             url = hostname;
-            issuerUrl =
+            issuerUrl = realm: "${hostname}${realmPath "out.issuerUrl" realm}";
+            # Keycloak computes every URL it issues from KC_HOSTNAME, so a
+            # token from the in-cluster address carries the public issuer.
+            endpoints =
               realm:
-              if builtins.isString realm && builtins.match "[^/?#[:space:]]+" realm != null then
-                "${hostname}/realms/${realm}"
-              else
-                throw "${who}: out.issuerUrl takes a realm name without '/', '?', '#', or spaces; got ${builtins.toJSON realm}.";
+              let
+                path = realmPath "out.endpoints" realm;
+                internal = self.service.out.url { port = httpPort; };
+              in
+              {
+                authorizationUrl = "${hostname}${path}/protocol/openid-connect/auth";
+                tokenUrl = "${internal}${path}/protocol/openid-connect/token";
+                userinfoUrl = "${internal}${path}/protocol/openid-connect/userinfo";
+              };
           };
         };
       }
