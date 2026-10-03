@@ -57,7 +57,11 @@ in
     replicas = lib.mkOption {
       type = lib.types.ints.positive;
       default = 3;
-      description = "Keeper replicas. Odd, and three or more to survive the loss of one.";
+      description = ''
+        Keeper replicas: 1, or an odd number. Three is the smallest quorum
+        that survives the loss of one. An even count is refused, since it
+        survives no more losses than one fewer replica.
+      '';
     };
 
     storage = {
@@ -176,6 +180,11 @@ in
           // spec;
         };
     in
+    # Raft needs a majority. Two replicas stop when either one is lost, and
+    # every ReplicatedMergeTree table on the servers goes read-only with them.
+    if lib.mod config.replicas 2 == 0 then
+      throw "clickhouse-keeper (${name}): replicas is ${toString config.replicas}. A Keeper quorum needs a majority, so an even count survives no more losses than one fewer replica. Set config.replicas to 1 or an odd number (3 survives the loss of one)."
+    else
     {
       keeper = clickhouseOperator.out.mkKeeperInstallation scope {
         inherit name;

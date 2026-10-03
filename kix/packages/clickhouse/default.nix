@@ -14,6 +14,12 @@
 # replicated DDL (`ON CLUSTER '{cluster}'`, `ReplicatedMergeTree`) and it
 # works here exactly as it does on a real cluster.
 #
+# Embedded Keeper runs inside the server process, so it shares the server's
+# memory and CPU limits. A server overloaded by queries or merges slows its
+# own Keeper, and when the Keeper session is lost every replicated table
+# goes read-only. Nor is there a second copy of the data. For either, use
+# clickhouse-cluster with a clickhouse-keeper quorum.
+#
 # Configuration is ClickHouse's own vocabulary. `serverConfig` and
 # `usersConfig` are attrsets of fragments, each rendered as a YAML file into
 # config.d/ or users.d/, where ClickHouse merges them over its shipped
@@ -175,7 +181,7 @@ in
       enabled = lib.mkOption {
         type = lib.types.bool;
         default = true;
-        description = "Run the post-deploy probe. It checks login, that a login with no password is refused, and that replicated DDL can work.";
+        description = "Run the post-deploy probe. It checks login, that a login with no password is refused, that replicated DDL can work, and that no replicated table is read-only.";
       };
     };
   };
@@ -565,6 +571,7 @@ in
           CLICKHOUSE_USER = self.root.out.username;
           CLICKHOUSE_PASSWORD = self.root.out.authSecret.out.keyRef self.root.out.authPasswordKey;
           CLICKHOUSE_CLUSTER = self.root.out.clusterName;
+          CLICKHOUSE_REPLICA_URLS = self.root.out.httpUrl;
         };
       script = builtins.readFile ./health-check.py;
     })
