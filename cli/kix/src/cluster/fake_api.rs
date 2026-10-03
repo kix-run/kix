@@ -1,7 +1,8 @@
 //! An in-memory apiserver for tests of code that takes a `kube::Client`.
 //!
 //! It serves discovery for a fixed set of kinds (ConfigMap, Secret, Namespace,
-//! ClusterRole, Kix's Activation), and GET, LIST (with an equality label
+//! ClusterRole, Kix's Activation, and two kinds of a group served at two
+//! versions), and GET, LIST (with an equality label
 //! selector) and DELETE (honouring `preconditions`) on the objects it holds.
 //! Every object gets a uid and a resourceVersion when it is added, and a new
 //! resourceVersion on every change. Anything else answers 404.
@@ -34,7 +35,16 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
         false,
     ),
     (keys::DOMAIN, "v1alpha1", RECORD_KIND, "activations", false),
+    // A group served at two versions, preferred first: `Gizmo` at both,
+    // `Gadget` only at the older one.
+    (TWO_VERSION_GROUP, "v1", "Gizmo", "gizmos", true),
+    (TWO_VERSION_GROUP, "v1beta1", "Gizmo", "gizmos", true),
+    (TWO_VERSION_GROUP, "v1beta1", "Gadget", "gadgets", true),
 ];
+
+/// The group [`KINDS`] serves at two versions. Its preferred version is
+/// `v1`, the first listed.
+pub const TWO_VERSION_GROUP: &str = "example.kix.test";
 
 type Hook = Box<dyn FnOnce(&mut Value) + Send>;
 
@@ -316,17 +326,24 @@ fn discovery(path: &str) -> Option<Value> {
         ),
         ["api", "v1"] => Some(resources("", "v1")),
         ["apis"] => {
-            let mut groups: Vec<(&str, &str)> = KINDS
-                .iter()
-                .filter(|(g, ..)| !g.is_empty())
-                .map(|(g, v, ..)| (*g, *v))
-                .collect();
-            groups.dedup();
+            // Each group once, its versions in the order KINDS first lists
+            // them; the first is the preferred version.
+            let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
+            for (g, v, ..) in KINDS.iter().filter(|(g, ..)| !g.is_empty()) {
+                match groups.iter_mut().find(|(name, _)| name == g) {
+                    Some((_, versions)) if !versions.contains(v) => versions.push(v),
+                    Some(_) => {}
+                    None => groups.push((g, vec![v])),
+                }
+            }
             let groups: Vec<Value> = groups
                 .into_iter()
-                .map(|(g, v)| {
-                    let gv = json!({ "groupVersion": format!("{g}/{v}"), "version": v });
-                    json!({ "name": g, "versions": [gv.clone()], "preferredVersion": gv })
+                .map(|(g, versions)| {
+                    let gvs: Vec<Value> = versions
+                        .iter()
+                        .map(|v| json!({ "groupVersion": format!("{g}/{v}"), "version": v }))
+                        .collect();
+                    json!({ "name": g, "versions": gvs, "preferredVersion": gvs[0] })
                 })
                 .collect();
             Some(json!({ "kind": "APIGroupList", "apiVersion": "v1", "groups": groups }))

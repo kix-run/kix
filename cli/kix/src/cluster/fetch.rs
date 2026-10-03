@@ -271,24 +271,23 @@ pub async fn discover_resources(client: &Client) -> Result<Vec<(ApiResource, Sco
 }
 
 /// One discovery walk, for a caller that retries on its own: a listed group
-/// version that answers 404 is left out and logged at debug, with no wait.
-/// Any other failure is returned.
-pub async fn discover_resources_once(
-    client: &Client,
-) -> Result<Vec<(ApiResource, Scope)>, FetchError> {
+/// version that answers 404 is left out, named in `missing` and logged at
+/// debug, with no wait. Any other failure is returned.
+pub async fn discover_resources_once(client: &Client) -> Result<DiscoveryPass, FetchError> {
     let pass = discovery_pass(client).await?;
     if !pass.missing.is_empty() {
         tracing::debug!(missing = ?pass.missing, "group versions answered 404");
     }
-    Ok(pass.resources)
+    Ok(pass)
 }
 
 /// One discovery walk. `missing` holds the path of every listed group
-/// version that answered 404; their resources are absent from `resources`.
-#[derive(Default)]
-struct DiscoveryPass {
-    resources: Vec<(ApiResource, Scope)>,
-    missing: Vec<String>,
+/// version that answered 404; their resources are absent from `resources`,
+/// and a kind served there may appear at another version of its group.
+#[derive(Debug, Default)]
+pub struct DiscoveryPass {
+    pub resources: Vec<(ApiResource, Scope)>,
+    pub missing: Vec<String>,
 }
 
 async fn discovery_pass(client: &Client) -> Result<DiscoveryPass, FetchError> {
@@ -370,12 +369,10 @@ async fn walk_group(
 /// Discovery of one group, the targeted fetch behind refresh-on-miss: a
 /// bulk walk under deploy load can transiently omit a group, and this is a
 /// smaller request. `group` is "" for the core group. A version that
-/// answers 404 is left out rather than failing the group, so the caller
-/// gets whatever the group serves now and can ask again.
-pub async fn discover_group(
-    client: &Client,
-    group: &str,
-) -> Result<Vec<(ApiResource, Scope)>, FetchError> {
+/// answers 404 is left out rather than failing the group, and named in
+/// `missing`, so the caller gets whatever the group serves now and can ask
+/// again.
+pub async fn discover_group(client: &Client, group: &str) -> Result<DiscoveryPass, FetchError> {
     let mut pass = DiscoveryPass::default();
     if group.is_empty() {
         walk_core(client, &mut pass).await?;
@@ -394,30 +391,35 @@ pub async fn discover_group(
     if !pass.missing.is_empty() {
         tracing::debug!(missing = ?pass.missing, "group versions answered 404");
     }
-    Ok(pass.resources)
+    Ok(pass)
 }
 
-/// Merge a fresh discovery result into an existing cache, unioned by
-/// (group, kind) with the fresh entry winning. Kubernetes' aggregated
-/// discovery document is rebuilt after CRD writes and can transiently omit
-/// unrelated groups.
-/// A refresh must therefore never *forget* kinds the cluster already
-/// proved it serves. Stale entries for genuinely deleted CRDs are
-/// harmless by comparison (their applies would fail anyway).
+/// Merge a fresh discovery walk into an existing cache, unioned by
+/// (group, kind). Kubernetes' aggregated discovery document is rebuilt
+/// after CRD writes and can transiently omit unrelated groups, so a refresh
+/// must never *forget* kinds the cluster already proved it serves. Stale
+/// entries for genuinely deleted CRDs are harmless by comparison (their
+/// applies would fail anyway).
+///
+/// When every listed group version answered, the fresh entry wins, so a
+/// kind whose preferred version changed moves to it. When the walk skipped
+/// a group version (`fresh.missing`), a kind it found may be one the
+/// skipped version also serves at a higher priority: the walk picks the
+/// next version that answered. The cached entry then wins, and the walk
+/// only adds (group, kind) keys the cache lacks, so a momentary 404 does not
+/// move a kind to an older version's URL.
 pub fn merge_discovery(
     existing: &[(ApiResource, Scope)],
-    fresh: Vec<(ApiResource, Scope)>,
+    fresh: DiscoveryPass,
 ) -> Vec<(ApiResource, Scope)> {
-    let mut merged = fresh;
-    let known: HashSet<(String, String)> = merged
-        .iter()
-        .map(|(ar, _)| (ar.group.clone(), ar.kind.clone()))
-        .collect();
-    for (ar, scope) in existing {
-        if !known.contains(&(ar.group.clone(), ar.kind.clone())) {
-            merged.push((ar.clone(), scope.clone()));
-        }
-    }
+    let key = |ar: &ApiResource| (ar.group.clone(), ar.kind.clone());
+    let (mut merged, rest) = if fresh.missing.is_empty() {
+        (fresh.resources, existing.to_vec())
+    } else {
+        (existing.to_vec(), fresh.resources)
+    };
+    let known: HashSet<(String, String)> = merged.iter().map(|(ar, _)| key(ar)).collect();
+    merged.extend(rest.into_iter().filter(|(ar, _)| !known.contains(&key(ar))));
     merged
 }
 
@@ -2726,8 +2728,109 @@ mod tests {
         let found = discover_group(&api.client(), "rbac.authorization.k8s.io")
             .await
             .unwrap();
-        assert!(found.is_empty());
+        assert!(found.resources.is_empty());
+        assert_eq!(found.missing, vec![RBAC_V1.to_string()]);
         let core = discover_group(&api.client(), "").await.unwrap();
-        assert!(core.iter().any(|(ar, _)| ar.kind == "ConfigMap"));
+        assert!(core.resources.iter().any(|(ar, _)| ar.kind == "ConfigMap"));
+    }
+
+    const TWO_V1: &str = "/apis/example.kix.test/v1";
+    const TWO_V1BETA1: &str = "/apis/example.kix.test/v1beta1";
+
+    /// `(kind, version)` of each resource of the two-version group.
+    fn versions_of(resources: &[(ApiResource, Scope)]) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = resources
+            .iter()
+            .filter(|(ar, _)| ar.group == crate::cluster::fake_api::TWO_VERSION_GROUP)
+            .map(|(ar, _)| (ar.kind.clone(), ar.version.clone()))
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn pair(kind: &str, version: &str) -> (String, String) {
+        (kind.to_string(), version.to_string())
+    }
+
+    /// A group's preferred version is fetched first, and the first version
+    /// that serves a kind wins: `Gizmo` at v1, `Gadget` from v1beta1.
+    #[tokio::test]
+    async fn group_discovery_walks_the_preferred_version_first() {
+        use crate::cluster::fake_api::{FakeApi, TWO_VERSION_GROUP};
+        let api = FakeApi::new([]);
+        let walk = discover_group(&api.client(), TWO_VERSION_GROUP)
+            .await
+            .unwrap();
+        assert_eq!(
+            versions_of(&walk.resources),
+            vec![pair("Gadget", "v1beta1"), pair("Gizmo", "v1")]
+        );
+        let order: Vec<String> = api
+            .requests()
+            .into_iter()
+            .filter(|r| r.ends_with(TWO_V1) || r.ends_with(TWO_V1BETA1))
+            .collect();
+        assert_eq!(
+            order,
+            vec![format!("GET {TWO_V1}"), format!("GET {TWO_V1BETA1}")]
+        );
+    }
+
+    /// When the preferred version 404s, the walk keeps what the other
+    /// version serves, `Gizmo` included at v1beta1, and says what it skipped.
+    #[tokio::test]
+    async fn group_discovery_keeps_the_versions_that_answer() {
+        use crate::cluster::fake_api::{FakeApi, TWO_VERSION_GROUP};
+        let api = FakeApi::new([]);
+        api.fail_next(TWO_V1, u32::MAX, 404);
+        let walk = discover_group(&api.client(), TWO_VERSION_GROUP)
+            .await
+            .unwrap();
+        assert_eq!(
+            versions_of(&walk.resources),
+            vec![pair("Gadget", "v1beta1"), pair("Gizmo", "v1beta1")]
+        );
+        assert_eq!(walk.missing, vec![TWO_V1.to_string()]);
+    }
+
+    /// A walk that skipped the preferred version does not move a cached kind
+    /// to the older version, but still adds a kind the cache lacks. A
+    /// complete walk replaces the cached entry.
+    #[tokio::test]
+    async fn a_partial_walk_does_not_downgrade_a_cached_kind() {
+        use crate::cluster::fake_api::{FakeApi, TWO_VERSION_GROUP};
+        let api = FakeApi::new([]);
+        let complete = discover_group(&api.client(), TWO_VERSION_GROUP)
+            .await
+            .unwrap();
+        let cached: Vec<(ApiResource, Scope)> = complete
+            .resources
+            .iter()
+            .filter(|(ar, _)| ar.kind == "Gizmo")
+            .cloned()
+            .collect();
+
+        api.fail_next(TWO_V1, 1, 404);
+        let partial = discover_group(&api.client(), TWO_VERSION_GROUP)
+            .await
+            .unwrap();
+        let merged = merge_discovery(&cached, partial);
+        assert_eq!(
+            versions_of(&merged),
+            vec![pair("Gadget", "v1beta1"), pair("Gizmo", "v1")]
+        );
+
+        let stale: Vec<(ApiResource, Scope)> = merged
+            .into_iter()
+            .map(|(mut ar, scope)| {
+                ar.version = "v1alpha1".into();
+                (ar, scope)
+            })
+            .collect();
+        let merged = merge_discovery(&stale, complete);
+        assert_eq!(
+            versions_of(&merged),
+            vec![pair("Gadget", "v1beta1"), pair("Gizmo", "v1")]
+        );
     }
 }

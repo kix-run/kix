@@ -28,7 +28,8 @@ use super::{ClusterOps, Finalized, OnStatus};
 /// Shared discovery cache: every kind the cluster serves, refreshed after
 /// CRDs land. Refreshes MERGE (see `fetch::merge_discovery`): the aggregated
 /// discovery document churns after CRD writes and can transiently omit
-/// unrelated groups, so a refresh must never forget a kind already seen.
+/// unrelated groups, so a refresh must never forget a kind already seen, and
+/// one that skipped a group version never replaces a cached kind.
 pub type DiscoveryCache = Arc<RwLock<Vec<(ApiResource, Scope)>>>;
 
 /// Wall-clock bound for waiting on the live resource to disappear during an
@@ -561,7 +562,11 @@ impl ClusterOps for KubeOps {
     }
 
     async fn rediscover(&self) -> Result<(), FetchError> {
-        let new = fetch::discover_resources(&self.client).await?;
+        // A settled walk: every listed group version answered.
+        let new = fetch::DiscoveryPass {
+            resources: fetch::discover_resources(&self.client).await?,
+            missing: Vec::new(),
+        };
         {
             let mut d = self.discovery.write().await;
             *d = fetch::merge_discovery(&d, new);
