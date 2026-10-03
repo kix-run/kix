@@ -473,7 +473,7 @@ Parameters, every callback taking `{ self, config, deps }` (`deps` is every DI p
 The script gives up once `RETRY_FOR` seconds have passed and keeps one round of checks under the round budget. It reads what it expects off resources (`self.vmAgent.out.replicas`, a structural output), never off the option that produced them. The Job carries `kix.run/rerun: on-change` (`kix/lib/core/annotations.nix`): the deploy engine recreates it when its identity hash changed or the last run failed, so the probe runs again when it, or anything upstream of what it checks, changes. Keep the script a file next to `default.nix` so it can be linted and run from a laptop through `kubectl proxy`. Example: `packages/victoria-metrics-agent/`. A probe that must log in takes the credential the same way a container does: `env = { self, ... }: { CLICKHOUSE_PASSWORD = self.credentials.out.keyRef "password"; ... }` (see `SECRETS.md`). Example: `packages/clickhouse/`.
 
 **Cluster-side wiring:**
-- Gateway API: instantiate `packages/envoy-gateway` with alias `"gateway"`
+- Gateway API: instantiate `packages/traefik` or `packages/envoy-gateway`, which answer the `"gateway"` alias and honour `kix.contracts.gateway` (`kix/lib/vocab/gateway.nix`)
 - Ingress: instantiate `packages/ingress-nginx` with alias `"ingressNginx"`
 
 #### Utility helpers

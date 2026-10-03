@@ -23,6 +23,9 @@ compose
   # The `out` an `otlp` provider publishes, its OTLP/gRPC and OTLP/HTTP
   # base URLs, with `check` and `assertions` (vocab/otlp-endpoint.nix).
   contracts.otlpEndpoint = import ./otlp-endpoint.nix { inherit lib; };
+  # The `out` a `gateway` provider publishes, with `check` for providers;
+  # kix.expose holds its gateway to it (vocab/gateway.nix).
+  contracts.gateway = import ./gateway.nix { inherit lib; };
   # Map availability levels to package replica counts and quorums:
   # kix.availability.pick level { none = 1; pod = 2; node = 2; zone = 3; }
   # kix.availability.atLeast "node" level

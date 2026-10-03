@@ -11,3 +11,4 @@ and the user adds a namespace NetworkPolicy for the port.
 - Hit again 2026-10-02 by `kix/packages/arc`: the controller's GitHub egress is fixed at TCP 443, so it cannot reach a GitHub Enterprise Server on another port under an enforcer.
 - Hit again 2026-10-02 by `kix/packages/immich`: its `external-https` intent opens TCP 443 to the world, but SMTP notifications configured in `settings` (`notifications.smtp.transport.port`, usually 465 or 587) are dropped under an enforcer.
 - Hit again 2026-10-02 by `kix/packages/metabase`: an instance cannot declare egress to its own data sources, which differ per instance, so under default-deny Metabase reaches only its application database. `kix/packages/immich` has the same need.
+- Hit again 2026-10-03 by `kix/packages/traefik`: its client ingress intents are fixed at TCP 80 and 443, but each Gateway listener port becomes an entrypoint, so the package refuses any other listener port while an enforcer is present.
