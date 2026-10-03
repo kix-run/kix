@@ -149,7 +149,7 @@ in
     owner = "platform";
   };
 
-  # TODO(merge): deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
+  deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
 
   options = {
     image = kix.options.image {
