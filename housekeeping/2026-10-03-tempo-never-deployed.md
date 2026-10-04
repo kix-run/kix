@@ -1,3 +1,0 @@
-# 2026-10-03 · `kix/packages/tempo` · The package has only been evaluated, never deployed, so its pod has not been seen to start in Kubernetes.
-
-`nix build ./clusters#cluster-tempo` builds, and the rendered `tempo.yaml` was run with the Tempo 3.1.0 binary outside Kubernetes: `/ready` answered, an OTLP/HTTP push was accepted, and the trace came back from `/api/v2/traces/<id>`. No kind run has shown the pod starting as uid 10001 on the claim, the querier reaching the live store at `127.0.0.1` under Cilium default deny, Grafana's Tempo datasource answering, or retention deleting a block. Deploy `clusters/test-tempo.nix` on kind and send a span to `out.otlpHttpUrl`.

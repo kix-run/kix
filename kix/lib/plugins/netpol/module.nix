@@ -135,6 +135,7 @@ in
           inherit (ctx)
             emit
             instanceName
+            namespaceName
             allPartResources
             packageMeta
             ;

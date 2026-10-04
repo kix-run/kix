@@ -1,0 +1,3 @@
+# 2026-10-03 · `kix/packages/openbao` · Changing the `unsealKey` value restarts OpenBao with a key that cannot unseal its data.
+
+The StatefulSet carries a `checksum/unsealKey` annotation, so a new key value rolls every pod, and each restarted pod fails to unseal until the old value is restored. The static seal's `previous_key` and `previous_key_id` would allow a rotation, but the package refuses them in `settings` and `env` and offers no dependency for them, and nothing warns before the deploy. When OpenBao rewraps the stored keys to the new key, and so when the previous key can be dropped, has not been checked.

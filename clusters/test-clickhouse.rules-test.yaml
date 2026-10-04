@@ -1,0 +1,241 @@
+# promtool unit tests for the ClickHouse alert rules test-clickhouse.nix
+# renders: the bare package's (analytics/clickhouse, scraped through its
+# Service) and clickhouse-cluster's (analytics-ha/ch, scraped through a
+# PodMonitor, two replicas). Both come from kix/packages/clickhouse/alerts.nix.
+# The rules-cluster-clickhouse check runs them from the rendered rules, so
+# each rule_files entry is <namespace>/<file> in the cluster's manifests.
+#
+# Thresholds the fixtures cross, from the packages' defaults: a 2Gi memory
+# limit gives a 1843 MiB server cap and a MemoryTracking threshold of
+# 1739461754 bytes; parts_to_delay_insert 1000 gives a parts threshold of
+# 500; metrics.maxReplicationLag is 300 seconds.
+rule_files:
+  - analytics/clickhouse-alerts-prometheusrule.yaml
+  - analytics-ha/ch-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # Healthy servers on both instances fire nothing. The 70m evaluation is
+  # past every `for` and the one-hour data-loss window.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '1x80'
+      - series: 'ClickHouseMetrics_ReadonlyReplica{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '0x80'
+      - series: 'ClickHouseMetrics_ZooKeeperSession{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '1x80'
+      - series: 'ClickHouseMetrics_MemoryTracking{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '500000000x80'
+      - series: 'ClickHouseAsyncMetrics_MaxPartCountForPartition{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '20x80'
+      - series: 'ClickHouseProfileEvents_RejectedInserts{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '0x80'
+      - series: 'ClickHouseProfileEvents_ReplicatedDataLoss{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '0x80'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-0-0",instance="10.0.1.1:9363"}'
+        values: '1x80'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-1-0",instance="10.0.1.2:9363"}'
+        values: '1x80'
+      - series: 'ClickHouseMetrics_ReadonlyReplica{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-0-0",instance="10.0.1.1:9363"}'
+        values: '0x80'
+      - series: 'ClickHouseMetrics_ZooKeeperSession{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-0-0",instance="10.0.1.1:9363"}'
+        values: '1x80'
+      - series: 'ClickHouseMetrics_MemoryTracking{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-0-0",instance="10.0.1.1:9363"}'
+        values: '500000000x80'
+      - series: 'ClickHouseAsyncMetrics_MaxPartCountForPartition{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-0-0",instance="10.0.1.1:9363"}'
+        values: '20x80'
+      - series: 'ClickHouseAsyncMetrics_ReplicasMaxAbsoluteDelay{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-0-0",instance="10.0.1.1:9363"}'
+        values: '0x80'
+      - series: 'ClickHouseProfileEvents_RejectedInserts{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-0-0",instance="10.0.1.1:9363"}'
+        values: '0x80'
+      - series: 'ClickHouseProfileEvents_ReplicatedDataLoss{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-0-0",instance="10.0.1.1:9363"}'
+        values: '0x80'
+      - series: 'ClickHouseProfileEvents_ReplicatedPartFailedFetches{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-0-0",instance="10.0.1.1:9363"}'
+        values: '3x80'
+    alert_rule_test:
+      - { eval_time: 70m, alertname: ClickHouseDown, exp_alerts: [] }
+      - { eval_time: 70m, alertname: ClickHouseMetricsMissing, exp_alerts: [] }
+      - { eval_time: 70m, alertname: ClickHouseReplicaReadOnly, exp_alerts: [] }
+      - { eval_time: 70m, alertname: ClickHouseKeeperSessionLost, exp_alerts: [] }
+      - { eval_time: 70m, alertname: ClickHouseInsertsRejected, exp_alerts: [] }
+      - { eval_time: 70m, alertname: ClickHouseTooManyParts, exp_alerts: [] }
+      - { eval_time: 70m, alertname: ClickHouseReplicatedDataLoss, exp_alerts: [] }
+      - { eval_time: 70m, alertname: ClickHouseMemoryNearLimit, exp_alerts: [] }
+      - { eval_time: 70m, alertname: ClickHouseReplicationLag, exp_alerts: [] }
+      - { eval_time: 70m, alertname: ClickHouseReplicatedFetchesFailing, exp_alerts: [] }
+
+  # The bare server's target goes down.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '1 1 0x20'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-0-0",instance="10.0.1.1:9363"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ClickHouseDown
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: analytics, service: clickhouse }
+            exp_annotations:
+              summary: ClickHouse is down.
+              description: Prometheus has scraped no ClickHouse server of analytics/clickhouse for 10 minutes, so it serves no queries and accepts no inserts. Check its pods and their logs.
+
+  # No target at all for the replicated installation: the absent() branch
+  # keeps namespace and job from the selector.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ClickHouseDown
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: analytics-ha, job: analytics-ha/ch }
+            exp_annotations:
+              summary: ClickHouse is down.
+              description: Prometheus has scraped no ClickHouse server of analytics-ha/ch for 10 minutes, so it serves no queries and accepts no inserts. Check its pods and their logs.
+
+  # One replica of two down leaves the installation serving; TargetDown
+  # reports it, ClickHouseDown does not.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-0-0",instance="10.0.1.1:9363"}'
+        values: '0x20'
+      - series: 'up{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-1-0",instance="10.0.1.2:9363"}'
+        values: '1x20'
+      - series: 'up{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '1x20'
+    alert_rule_test:
+      - { eval_time: 15m, alertname: ClickHouseDown, exp_alerts: [] }
+
+  # The target answers but the async metrics section is off.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '1x20'
+      - series: 'ClickHouseMetrics_ReadonlyReplica{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '0x20'
+      - series: 'ClickHouseProfileEvents_RejectedInserts{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ClickHouseMetricsMissing
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: analytics, service: clickhouse }
+            exp_annotations:
+              summary: ClickHouse is scraped but lacks series its alerts read.
+              description: The metrics endpoint of analytics/clickhouse answers but lacks ClickHouseMetrics_, ClickHouseAsyncMetrics_, or ClickHouseProfileEvents_ series, so its other alerts cannot fire. Check the prometheus section of its server config for metrics, asynchronous_metrics, and events.
+
+  # Read-only tables and no Keeper session on one replica.
+  - interval: 1m
+    input_series:
+      - series: 'ClickHouseMetrics_ReadonlyReplica{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-1-0",instance="10.0.1.2:9363"}'
+        values: '2x20'
+      - series: 'ClickHouseMetrics_ZooKeeperSession{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-1-0",instance="10.0.1.2:9363"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ClickHouseReplicaReadOnly
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: analytics-ha, job: analytics-ha/ch, pod: chi-ch-default-0-1-0 }
+            exp_annotations:
+              summary: ClickHouse has read-only replicated tables.
+              description: 2 replicated tables on chi-ch-default-0-1-0 of analytics-ha/ch are read-only, so inserts into them fail. Check the server's Keeper session and its log for ZooKeeper errors.
+      - eval_time: 10m
+        alertname: ClickHouseKeeperSessionLost
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: analytics-ha, job: analytics-ha/ch, pod: chi-ch-default-0-1-0 }
+            exp_annotations:
+              summary: ClickHouse has no Keeper session.
+              description: chi-ch-default-0-1-0 of analytics-ha/ch has had no Keeper session for 5 minutes, so replicated tables and ON CLUSTER DDL do not work. Check that Keeper is up and reachable from the pod.
+
+  # A read-only state shorter than `for` (a server starting) fires nothing.
+  - interval: 1m
+    input_series:
+      - series: 'ClickHouseMetrics_ReadonlyReplica{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '3 3 3 0x20'
+    alert_rule_test:
+      - { eval_time: 10m, alertname: ClickHouseReplicaReadOnly, exp_alerts: [] }
+
+  # Inserts rejected at one a minute, and a partition over half of
+  # parts_to_delay_insert.
+  - interval: 1m
+    input_series:
+      - series: 'ClickHouseProfileEvents_RejectedInserts{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '0+1x30'
+      - series: 'ClickHouseAsyncMetrics_MaxPartCountForPartition{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '600x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ClickHouseInsertsRejected
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: analytics, service: clickhouse, pod: clickhouse-0 }
+            exp_annotations:
+              summary: ClickHouse rejects inserts with Too many parts.
+              description: clickhouse-0 of analytics/clickhouse rejected 10 inserts in 10 minutes because a partition reached parts_to_throw_insert. Merges are behind the insert rate; check system.parts for the partition and batch the inserts into fewer, larger ones.
+      - eval_time: 20m
+        alertname: ClickHouseTooManyParts
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: analytics, service: clickhouse, pod: clickhouse-0 }
+            exp_annotations:
+              summary: A ClickHouse partition has many active parts.
+              description: A partition on clickhouse-0 of analytics/clickhouse has 600 active parts. Inserts are throttled at 1000 and refused at parts_to_throw_insert. Check system.parts for the table and whether its inserts are small and frequent.
+
+  # Memory over 90% of the server cap on the bare server, and on a replica.
+  - interval: 1m
+    input_series:
+      - series: 'ClickHouseMetrics_MemoryTracking{namespace="analytics",service="clickhouse",job="clickhouse",pod="clickhouse-0",instance="10.0.0.1:9363"}'
+        values: '1800000000x20'
+      - series: 'ClickHouseMetrics_MemoryTracking{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-0-0",instance="10.0.1.1:9363"}'
+        values: '1800000000x20'
+      - series: 'ClickHouseMetrics_MemoryTracking{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-1-0",instance="10.0.1.2:9363"}'
+        values: '1700000000x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ClickHouseMemoryNearLimit
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: analytics, service: clickhouse, pod: clickhouse-0 }
+            exp_annotations:
+              summary: ClickHouse memory use is near its server cap.
+              description: clickhouse-0 of analytics/clickhouse tracks 1.676GiB, over 90% of its 1843 MiB cap. Queries and merges past the cap fail with MEMORY_LIMIT_EXCEEDED. Check system.processes and system.merges, or raise resources.limits.memory.
+          - exp_labels: { severity: warning, namespace: analytics-ha, job: analytics-ha/ch, pod: chi-ch-default-0-0-0 }
+            exp_annotations:
+              summary: ClickHouse memory use is near its server cap.
+              description: chi-ch-default-0-0-0 of analytics-ha/ch tracks 1.676GiB, over 90% of its 1843 MiB cap. Queries and merges past the cap fail with MEMORY_LIMIT_EXCEEDED. Check system.processes and system.merges, or raise resources.limits.memory.
+
+  # Parts lost: one a minute keeps the hour's increase at 60.
+  - interval: 1m
+    input_series:
+      - series: 'ClickHouseProfileEvents_ReplicatedDataLoss{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-0-0",instance="10.0.1.1:9363"}'
+        values: '0+1x80'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: ClickHouseReplicatedDataLoss
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: analytics-ha, job: analytics-ha/ch, pod: chi-ch-default-0-0-0 }
+            exp_annotations:
+              summary: ClickHouse lost replicated data parts.
+              description: chi-ch-default-0-0-0 of analytics-ha/ch wanted 60 parts in the last hour that no replica has. That data is lost. Check the server log for the table and part names, and the history of the replicas that held them.
+
+  # A replica ten minutes behind, and fetches failing for half an hour.
+  - interval: 1m
+    input_series:
+      - series: 'ClickHouseAsyncMetrics_ReplicasMaxAbsoluteDelay{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-1-0",instance="10.0.1.2:9363"}'
+        values: '600x40'
+      - series: 'ClickHouseProfileEvents_ReplicatedPartFailedFetches{namespace="analytics-ha",job="analytics-ha/ch",pod="chi-ch-default-0-1-0",instance="10.0.1.2:9363"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: ClickHouseReplicationLag
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: analytics-ha, job: analytics-ha/ch, pod: chi-ch-default-0-1-0 }
+            exp_annotations:
+              summary: A ClickHouse replica is behind.
+              description: chi-ch-default-0-1-0 of analytics-ha/ch is 10m 0s behind the newest part of a replicated table. Check system.replication_queue on it for entries with errors.
+      - eval_time: 35m
+        alertname: ClickHouseReplicatedFetchesFailing
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: analytics-ha, job: analytics-ha/ch, pod: chi-ch-default-0-1-0 }
+            exp_annotations:
+              summary: A ClickHouse replica keeps failing to fetch parts.
+              description: chi-ch-default-0-1-0 of analytics-ha/ch failed 15 part fetches from other replicas in 15 minutes, for at least 15 minutes. Check the server log for the fetch error and the interserver port between replicas.

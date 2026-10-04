@@ -47,6 +47,9 @@
     };
   };
 
+  # The node image keeps unpacked layers, so peers can serve them.
+  cluster.containerd.discardUnpackedLayers = lib.mkDefault false;
+
   cluster.capabilities = {
     multiNode = lib.mkDefault true; # node pools
     managedControlPlane = lib.mkDefault true; # Scaleway runs the control plane

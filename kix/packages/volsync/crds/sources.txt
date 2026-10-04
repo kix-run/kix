@@ -1,0 +1,4 @@
+# backube/volsync at the tag `release` in default.nix names (image.tag is
+# checked against it).
+https://raw.githubusercontent.com/backube/volsync/v0.16.0/config/crd/bases/volsync.backube_replicationdestinations.yaml
+https://raw.githubusercontent.com/backube/volsync/v0.16.0/config/crd/bases/volsync.backube_replicationsources.yaml

@@ -35,8 +35,9 @@ rec {
         touch $out
       '';
 
-  # Run promtool over the alert rules in a manifest directory. A
-  # PrometheusRule's `spec` is a Prometheus rule file, so each one is written
+  # Run promtool over the alert rules in a manifest directory. The `spec` of
+  # a PrometheusRule or a VictoriaMetrics VMRule is a Prometheus rule file,
+  # so each one is written
   # to rules/<namespace>/<file> and checked with `promtool check rules`.
   # `ruleTests`, when not null, is a `promtool test rules` file; it runs from
   # rules/, so its `rule_files` entries are `<namespace>/<file>` as in the
@@ -54,9 +55,9 @@ rec {
         ''
           mkdir rules
           count=0
-          # A top-level `kind:` line; the PrometheusRule CRD names the kind
-          # only indented under `names`.
-          for f in $(grep -rlx --include='*.yaml' 'kind: PrometheusRule' ${drv} || true); do
+          # A top-level `kind:` line; the CRDs name their kind only indented
+          # under `names`.
+          for f in $(grep -rlxE --include='*.yaml' 'kind: (PrometheusRule|VMRule)' ${drv} || true); do
             rel=''${f#${drv}/}
             mkdir -p "rules/$(dirname "$rel")"
             yq '.spec' "$f" > "rules/$rel"
@@ -65,7 +66,7 @@ rec {
           if [ "$count" -gt 0 ]; then
             find rules -name '*.yaml' -print0 | xargs -0 promtool check rules
           fi
-          echo "${name}: $count PrometheusRule(s) checked."
+          echo "${name}: $count rule resource(s) checked."
         ''
         + lib.optionalString (ruleTests != null) ''
           cp ${ruleTests} rules/rules-test.yaml
@@ -80,7 +81,7 @@ rec {
           yq '.rule_files[]' rules/rules-test.yaml | while IFS= read -r g; do
             set -- rules/$g
             if [ ! -e "$1" ]; then
-              echo "${name}: rule_files entry '$g' in ${baseNameOf (toString ruleTests)} matches no rendered PrometheusRule. Rendered: $(cd rules && find . -name '*.yaml' ! -name rules-test.yaml | sed 's|^\./||' | tr '\n' ' ')" >&2
+              echo "${name}: rule_files entry '$g' in ${baseNameOf (toString ruleTests)} matches no rendered PrometheusRule or VMRule. Rendered: $(cd rules && find . -name '*.yaml' ! -name rules-test.yaml | sed 's|^\./||' | tr '\n' ' ')" >&2
               exit 1
             fi
           done

@@ -35,6 +35,27 @@
 #                           the server as an env var that users.d reads with
 #                           `from_env`, so it never lands in a ConfigMap.
 #   prometheus (optional)   ServiceMonitor on the built-in /metrics endpoint
+#                           (:9363), and the alerts below. Removing the
+#                           `prometheus` fragment drops both.
+#
+# Alerts (./alerts.nix, shared with clickhouse-cluster):
+#   ClickHouseDown                no target up (critical)
+#   ClickHouseMetricsMissing      target up, but a metrics section the rules
+#                                 read is off (warning)
+#   ClickHouseReplicaReadOnly     replicated tables read-only (critical)
+#   ClickHouseKeeperSessionLost   no session to embedded Keeper (warning)
+#   ClickHouseInsertsRejected     inserts refused with Too many parts
+#                                 (critical)
+#   ClickHouseTooManyParts        a partition over half of
+#                                 merge_tree.parts_to_delay_insert (warning)
+#   ClickHouseReplicatedDataLoss  a part no replica holds (critical)
+#   ClickHouseMemoryNearLimit     MemoryTracking over 90% of the server cap
+#                                 derived from resources.limits.memory
+#                                 (warning)
+# Left to the kube-prometheus rules: OOM kills and crash loops
+# (KubePodCrashLooping), the volume filling (KubePersistentVolumeFillingUp,
+# which needs CSI volume stats). Left to dashboards: slow queries,
+# connections, merge and mutation backlogs, and detached parts.
 #
 # Exposes (the contract, shared with clickhouse-cluster):
 #   out.httpUrl         "http://<fqdn>:8123"
@@ -86,6 +107,15 @@ let
   mergeFragments =
     builtin: overrides:
     lib.filterAttrsRecursive (_: v: v != null) (lib.recursiveUpdate builtin overrides);
+
+  # A null `prometheus` fragment, or a null `prometheus.prometheus` key in
+  # it, removes the metrics endpoint, so nothing is left to scrape or alert on.
+  metricsEndpointOn =
+    serverConfig:
+    let
+      f = serverConfig.prometheus or { };
+    in
+    f != null && (f.prometheus or { }) != null;
 in
 {
   meta = {
@@ -539,7 +569,13 @@ in
 
           root = {
             resource = self.service;
-            requires = [ self.headlessService ];
+            requires = [
+              self.headlessService
+            ]
+            ++ builtins.filter (p: p != null) [
+              (self.serviceMonitor or null)
+              (self.prometheusRules or null)
+            ];
             out = contract.check "clickhouse (${name})" {
               httpUrl = "http://${self.service.out.fqdn}:${toString ports.http}";
               nativeEndpoint = "${self.service.out.fqdn}:${toString ports.native}";
@@ -558,10 +594,33 @@ in
         }
     )
 
-    (kix.monitor {
-      service = "service";
-      port = "metrics";
-    })
+    # kix.monitor reads `scope`, `lib`, and `prometheus` from the arguments
+    # it is called with, so the wrapper names them for the build to pass.
+    # Without the metrics endpoint it gets no `prometheus`, which drops the
+    # ServiceMonitor and the rules. The package's own fragments set none of
+    # the keys alerts.nix reads, so it is given the instance's serverConfig
+    # alone.
+    (
+      {
+        self,
+        config,
+        scope,
+        lib,
+        prometheus ? null,
+        ...
+      }@args:
+      kix.monitor {
+        service = "service";
+        port = "metrics";
+        alerts = import ./alerts.nix { inherit lib kix; } {
+          sel = ''namespace="${scope.namespaceName}",service="${self.service.out.name}"'';
+          by = "namespace, service";
+          instance = "${scope.namespaceName}/${name}";
+          memoryLimit = config.resources.limits.memory or null;
+          fragments = config.serverConfig;
+        };
+      } (args // lib.optionalAttrs (!metricsEndpointOn config.serverConfig) { prometheus = null; })
+    )
 
     (kix.healthCheck {
       env =

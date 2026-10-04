@@ -2,7 +2,8 @@
 # kix.availability.spreadConstraints (the spread rule for operator-placed
 # operands), the refusals of stackgres-operator, stackgres-cluster, and
 # stackgres-object-storage, the operand image table, the rendered
-# SGCluster, and the webhook check that StackGres custom resources wait for.
+# SGCluster, the webhook check that StackGres custom resources wait for, and
+# stackgres-cluster's alert rules and what each is gated on.
 
 {
   lib,
@@ -16,6 +17,9 @@
   evalFails,
   singleNode,
   multiZone,
+  alertRulesOf,
+  allSelect,
+  prometheusStub,
   ...
 }:
 
@@ -510,4 +514,55 @@ in
       && portOf storage == 443
     )
     || throw "stackgres-object-storage refusals: ${builtins.toJSON got}";
+
+  # The rules select on the PodMonitor's job and render only with a
+  # prometheus dependency, metrics on, and the exporter sidecar on, which
+  # either of two extraSpec keys turns off. The replication rules need more
+  # than one instance, WAL archiving needs `backups`, and a standby cluster
+  # (`extraSpec.replicateFrom`) gets no StackGresClusterNoPrimary.
+  stackgres-cluster-alerts =
+    let
+      withPrometheus.instances.monitoring.prometheus.package = prometheusStub;
+      rulesOf =
+        args:
+        alertRulesOf "PrometheusRule" "postgres" (
+          manifests (sgCluster ({ extra = withPrometheus; } // args))
+        );
+      one = rulesOf { config.instances = 1; };
+      two = rulesOf { config.instances = 2; };
+      backedUp = rulesOf {
+        config.backups = [ { compression = "zstd"; } ];
+        objectStorage = storage;
+      };
+      standby = rulesOf {
+        config.extraSpec.replicateFrom.instance.external = {
+          host = "primary.example.com";
+          port = 5432;
+        };
+      };
+      replication = [
+        "StackGresClusterMultiplePrimaries"
+        "StackGresStandbysNotStreaming"
+        "StackGresReplicationLagHigh"
+      ];
+      hasAll = names: rules: lib.all (n: rules ? ${n}) names;
+      hasNone = names: rules: !lib.any (n: rules ? ${n}) names;
+    in
+    (
+      allSelect ''namespace="data",job="data/postgres"'' two
+      && allSelect ''namespace="data",job="data/postgres"'' backedUp
+      && one ? StackGresClusterDown
+      && one ? StackGresClusterNoPrimary
+      && hasNone replication one
+      && hasAll replication two
+      && !(two ? StackGresWALArchivingFailing)
+      && backedUp ? StackGresWALArchivingFailing
+      && standby ? StackGresClusterDown
+      && !(standby ? StackGresClusterNoPrimary)
+      && rulesOf { extra = { }; } == null
+      && rulesOf { config.metrics.enabled = false; } == null
+      && rulesOf { config.extraSpec.pods.disableMetricsExporter = true; } == null
+      && rulesOf { config.extraSpec.configurations.observability.disableMetrics = true; } == null
+    )
+    || throw "stackgres-cluster alerts: one ${builtins.toJSON (builtins.attrNames one)}, two ${builtins.toJSON (builtins.attrNames two)}, backups ${builtins.toJSON (builtins.attrNames backedUp)}";
 }

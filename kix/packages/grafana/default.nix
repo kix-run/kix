@@ -31,9 +31,15 @@
 #                                With `loki` also wired, a span links to
 #                                the logs of its pod, matched on the
 #                                `namespace` and `pod` labels that
-#                                loki-logs writes.
+#                                loki-logs writes. With `prometheusServer`
+#                                also wired, the service graph reads the
+#                                series Tempo's metrics generator writes
+#                                to that datasource's store when enabled;
+#                                without them the graph is empty.
 #   prometheus (optional)        the operator whose ServiceMonitor scrapes
 #                                Grafana while `metrics.enabled`.
+#   oidcProvider, oidcClient (with `oidc.enabled`)
+#                                single sign-on; see below.
 #
 # Minimal instances:
 #
@@ -72,6 +78,37 @@
 # <host>/metrics once `ingress.host` is set. To keep them private on a
 # routed instance, set `settings.metrics.enabled = false` and
 # `metrics.enabled = false`, which also stops the scrape.
+#
+# Single sign-on: with `oidc.enabled`, Grafana signs users in through
+# `auth.generic_oauth` against the `oidcProvider` dependency
+# (`kix.contracts.oidcProvider`, such as a keycloak instance) in the realm
+# `oidc.realm`. `oidcClient` is a secret with keys `clientId` and
+# `clientSecret`, which reach Grafana as GF_AUTH_GENERIC_OAUTH_CLIENT_ID
+# and GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET. Register a confidential client
+# with the redirect URI `<root_url>/login/generic_oauth`; evaluation fails
+# without a `root_url`.
+# The package sets the authorization, token, and userinfo URLs from the
+# provider's `out.endpoints`, PKCE, `oidc.scopes`, and `oidc.autoLogin`,
+# and refuses those keys in `settings` and `env`. Map roles with
+# `settings."auth.generic_oauth".role_attribute_path`, a JMESPath over the
+# token claims (Keycloak puts realm roles under `realm_access.roles`).
+# The browser opens the public authorization URL. Grafana's server dials the
+# token and userinfo URLs, which keycloak gives as its Service address, so
+# Grafana gets derived egress to Keycloak and needs no route to its public
+# URL. clusters/test-keycloak-oidc.nix evaluates this wiring.
+#
+#   grafana = {
+#     package = packages.grafana;
+#     config.ingress.host = "grafana.example.com";
+#     config.oidc = {
+#       enabled = true;
+#       realm = "main";
+#     };
+#     config.settings."auth.generic_oauth".role_attribute_path =
+#       "contains(realm_access.roles[*], 'admin') && 'Admin' || 'Viewer'";
+#     deps.oidcProvider = ref.auth.keycloak;
+#     deps.oidcClient = ref.monitoring-system.grafana-oidc;
+#   };
 #
 # `out`: the Service's `name`, `fqdn`, and `port` (80).
 #
@@ -355,7 +392,17 @@ in
       };
     };
     metrics = kix.options.monitor;
+    oidc = kix.options.oidc {
+      scopes = [
+        "openid"
+        "profile"
+        "email"
+      ];
+      autoLogin = "`auth.generic_oauth.auto_login`";
+    };
   };
+
+  deps.oidcProvider.assertions = dep: kix.contracts.oidcProvider.assertions who dep;
 
   build = [
     (
@@ -368,9 +415,29 @@ in
         alertmanager ? null,
         loki ? null,
         tempo ? null,
+        oidcProvider ? null,
+        oidcClient ? null,
         ...
       }:
       let
+        oidcOn = config.oidc.enabled;
+        oidcProviderInfo = kix.contracts.oidcProvider.requireClient {
+          inherit who;
+          inherit (config) oidc;
+          provider = oidcProvider;
+          client = oidcClient;
+        };
+        # Forcing oidcProviderInfo first reports a missing dependency by
+        # name rather than as a missing attribute of null.
+        oidcCredentials = builtins.seq oidcProviderInfo (
+          kix.checkSecretKeys {
+            inherit who;
+            arg = "oidcClient";
+            dep = oidcClient;
+            keys = kix.contracts.oidcProvider.clientKeys;
+          }
+        );
+
         admin = kix.checkSecretKeys {
           inherit who;
           arg = "grafanaAdmin";
@@ -433,26 +500,33 @@ in
               tempo.out.queryUrl
                 or (throw "${who}: deps.tempo resolved to an instance without out.queryUrl, the base URL of Tempo's query API. Wire a tempo instance, or set out.queryUrl in the kix.mkImport that answers tempo.");
             access = "proxy";
-            # A span's "Logs for this span" link queries Loki for the trace
-            # ID within the span's pod. OpenTelemetry's k8s attributes map
-            # to the stream labels loki-logs writes; a span without them
-            # gets no link.
-            jsonData = lib.optionalAttrs (loki != null) {
-              tracesToLogsV2 = {
-                datasourceUid = config.lokiDatasource.uid;
-                filterByTraceID = true;
-                tags = [
-                  {
-                    key = "k8s.namespace.name";
-                    value = "namespace";
-                  }
-                  {
-                    key = "k8s.pod.name";
-                    value = "pod";
-                  }
-                ];
+            jsonData =
+              # The service graph queries the series Tempo's metrics
+              # generator writes there when enabled; without them the graph
+              # is empty.
+              lib.optionalAttrs (prometheusServer != null) {
+                serviceMap.datasourceUid = config.prometheusDatasource.uid;
+              }
+              # A span's "Logs for this span" link queries Loki for the
+              # trace ID within the span's pod. OpenTelemetry's k8s
+              # attributes map to the stream labels loki-logs writes; a span
+              # without them gets no link.
+              // lib.optionalAttrs (loki != null) {
+                tracesToLogsV2 = {
+                  datasourceUid = config.lokiDatasource.uid;
+                  filterByTraceID = true;
+                  tags = [
+                    {
+                      key = "k8s.namespace.name";
+                      value = "namespace";
+                    }
+                    {
+                      key = "k8s.pod.name";
+                      value = "pod";
+                    }
+                  ];
+                };
               };
-            };
           };
 
         clashes =
@@ -519,7 +593,37 @@ in
           };
           log.mode = "console";
         }
-        // lib.optionalAttrs (rootUrl != null) { server.root_url = rootUrl; };
+        // lib.optionalAttrs (rootUrl != null) { server.root_url = rootUrl; }
+        // lib.optionalAttrs oidcOn {
+          "auth.generic_oauth" =
+            let
+              e = oidcProviderInfo.endpoints;
+            in
+            {
+              enabled = true;
+              auth_url = e.authorizationUrl;
+              token_url = e.tokenUrl;
+              api_url = e.userinfoUrl;
+              scopes = lib.concatStringsSep " " config.oidc.scopes;
+              use_pkce = true;
+              auto_login = config.oidc.autoLogin;
+            };
+        };
+
+        # The keys the oidc option and the oidcClient dependency own while
+        # oidc.enabled is set. Grafana reads GF_<SECTION>_<KEY> over
+        # grafana.ini, so env is locked for them too.
+        oidcKeys = [
+          "enabled"
+          "client_id"
+          "client_secret"
+          "auth_url"
+          "token_url"
+          "api_url"
+          "scopes"
+          "use_pkce"
+          "auto_login"
+        ];
 
         ini = lib.mapAttrs (_: lib.filterAttrs (_: v: v != null)) (
           kix.mergeGuarded {
@@ -539,9 +643,22 @@ in
                 "security"
                 "admin_password"
               ]
-            ];
+            ]
+            ++ lib.optionals oidcOn (
+              map (k: [
+                "auth.generic_oauth"
+                k
+              ]) oidcKeys
+            );
           } defaultIni config.settings
         );
+
+        # The redirect URI Grafana sends the provider is built from root_url.
+        oidcRootUrlCheck =
+          if oidcOn && (ini.server.root_url or null) == null then
+            throw "${who}: oidc.enabled is true, but Grafana has no root_url, from which it builds the redirect URI <root_url>/login/generic_oauth. Set ingress.host with an ingress controller or a gateway in the cluster, or set settings.server.root_url to the URL users open."
+          else
+            null;
 
         renderIniValue = v: if builtins.isBool v then lib.boolToString v else toString v;
 
@@ -552,7 +669,9 @@ in
         iniProblems = lib.concatLists (
           lib.mapAttrsToList (
             section: keys:
-            lib.optional (hasLineBreak section || lib.hasInfix "]" section) "section name ${builtins.toJSON section}"
+            lib.optional (
+              hasLineBreak section || lib.hasInfix "]" section
+            ) "section name ${builtins.toJSON section}"
             ++ lib.concatLists (
               lib.mapAttrsToList (
                 k: v:
@@ -563,7 +682,9 @@ in
           ) ini
         );
         iniText =
-          if iniProblems != [ ] then
+          if oidcRootUrlCheck != null then
+            oidcRootUrlCheck
+          else if iniProblems != [ ] then
             throw "${who}: settings: ${lib.concatStringsSep ", " iniProblems} would break a grafana.ini line, so the file would carry sections or keys that settings does not show. Keep values on one line, and leave line breaks and `]` out of section names and line breaks and `=` out of keys."
           else
             lib.concatStringsSep "\n" (
@@ -600,7 +721,23 @@ in
                 from = "the package, so the Service and probes match the container";
                 fix = "Remove it from env.";
               }
-            ];
+            ]
+            ++ lib.optional oidcOn {
+              vars = {
+                GF_AUTH_GENERIC_OAUTH_CLIENT_ID = oidcCredentials.out.keyRef "clientId";
+                GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET = oidcCredentials.out.keyRef "clientSecret";
+              };
+              names =
+                map (k: "GF_AUTH_GENERIC_OAUTH_${lib.toUpper k}") (
+                  lib.subtractLists [ "client_id" "client_secret" ] oidcKeys
+                )
+                ++ [
+                  "GF_AUTH_GENERIC_OAUTH_CLIENT_ID__FILE"
+                  "GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET__FILE"
+                ];
+              from = "the oidc option and the oidcClient dependency";
+              fix = "Set the oidc option, or wire another secret through deps.oidcClient.";
+            };
           } config.env
         );
 
@@ -856,6 +993,7 @@ in
               "checksum/datasources" = self.datasourcesConfigMap.out.identityHash;
               "checksum/config" = self.configMap.out.identityHash;
               "checksum/grafana-admin" = admin.out.identityHash or null;
+              "checksum/oidc-client" = if oidcOn then oidcCredentials.out.identityHash or null else null;
             };
             template.spec = {
               serviceAccountName = self.serviceAccount.out.name;

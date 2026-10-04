@@ -31,6 +31,15 @@
     metricsApi.binding = lib.mkDefault "absent"; # Talos installs no metrics-server
   };
 
+  # Talos keeps CRI registry hosts under /etc/cri/conf.d/hosts and turns
+  # discard_unpacked_layers on. A machine config that adds
+  # /etc/cri/conf.d/20-customization.part with discard_unpacked_layers =
+  # false sets this to false.
+  cluster.containerd = {
+    registryConfigPath = lib.mkDefault "/etc/cri/conf.d/hosts";
+    discardUnpackedLayers = lib.mkDefault true;
+  };
+
   cluster.capabilities = {
     managedControlPlane = lib.mkDefault false;
     nodeAutoscaling = lib.mkDefault false;
