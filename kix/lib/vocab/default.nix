@@ -3,13 +3,14 @@
 { lib }:
 let
   compose = import ./compose.nix { inherit lib; };
+  durations = import ./durations.nix { inherit lib; };
   storageClass = import ./storage-class.nix { inherit lib; };
   availability = import ../core/availability.nix { inherit lib; };
   scorecard = import ../scorecard.nix { inherit lib; };
 in
 compose
 // {
-  types = compose.types // {
+  types = compose.types // durations.types // {
     # StorageClass fields as a submodule: kix.types.storageClass { }
     # (vocab/storage-class.nix).
     storageClass = storageClass.type;
@@ -81,6 +82,9 @@ compose
         maxSeverity = sc.maxSeverity or "error";
         inherit namespaceName owner;
       };
+  # Prometheus durations as seconds, and the age past which a scheduled
+  # job's last success is stale (vocab/durations.nix).
+  inherit (durations) durations schedules;
   pins = import ./pins.nix {
     inherit lib;
     inherit (compose) image;
