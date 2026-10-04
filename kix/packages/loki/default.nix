@@ -287,7 +287,7 @@ in
 
     metrics = kix.options.monitor // {
       maxCompactionAge = lib.mkOption {
-        type = lib.types.nullOr (lib.types.strMatching "([0-9]+(ms|s|m|h|d|w|y))+");
+        type = lib.types.nullOr kix.types.promDuration;
         default = null;
         example = "6h";
         description = "How long Loki may go without a successful compaction, or with retention on, a successful retention run, before LokiCompactionStale or LokiRetentionStale fires, as a Prometheus duration. Null derives each rule's threshold from the merged settings: twice `compactor.compaction_interval` (or `compactor.apply_retention_interval` for retention) plus one hour, and at least 3h, the Loki mixin's threshold. At the default 10m interval both are 3h.";
@@ -501,18 +501,10 @@ in
         # or "1h30m", which is how Loki's settings write intervals.
         intervalSeconds =
           path: default:
-          let
-            v = setting path default (
+          kix.durations.toSeconds (
+            setting path default (
               v: builtins.isString v && builtins.match "([0-9]+[hms])+" v != null
-            ) "a duration in hours, minutes, and seconds, such as \"10m\" or \"1h30m\"";
-            unit = {
-              h = 3600;
-              m = 60;
-              s = 1;
-            };
-          in
-          lib.foldl' (acc: p: acc + lib.toInt (builtins.elemAt p 0) * unit.${builtins.elemAt p 1}) 0 (
-            builtins.filter builtins.isList (builtins.split "([0-9]+)([hms])" v)
+            ) "a duration in hours, minutes, and seconds, such as \"10m\" or \"1h30m\""
           );
         compactionInterval = intervalSeconds [ "compactor" "compaction_interval" ] "10m";
         # Loki's default of 0 applies retention on every compaction run.
@@ -521,21 +513,13 @@ in
             r = intervalSeconds [ "compactor" "apply_retention_interval" ] "0s";
           in
           if r > 0 then r else compactionInterval;
-        promDuration =
-          secs:
-          if lib.mod secs 3600 == 0 then
-            "${toString (secs / 3600)}h"
-          else if lib.mod secs 60 == 0 then
-            "${toString (secs / 60)}m"
-          else
-            "${toString secs}s";
         # One missed run does not fire; the hour covers a slow run.
         staleAfter =
           interval:
           if config.metrics.maxCompactionAge != null then
             config.metrics.maxCompactionAge
           else
-            promDuration (lib.max (3 * 3600) (2 * interval + 3600));
+            kix.durations.fromSeconds (lib.max (3 * 3600) (2 * interval + 3600));
         compactionAge = staleAfter compactionInterval;
         retentionAge = staleAfter retentionInterval;
 

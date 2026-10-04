@@ -756,14 +756,16 @@ expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
 # A metric the other alerts rely on disappeared while the target is up.
 expr = "count by (namespace, service) (up{${sel}} == 1) unless on (namespace, service) count by (namespace, service) (foo_ready{${sel}})";
 
-# Last success too old. The threshold comes from the package's schedule and
-# allows at least two missed runs. The gauge's own window is the age, so a
-# short `for` only rides out a scrape gap.
-expr = "time() - max by (namespace, service, schedule) (foo_last_success_timestamp_seconds{${sel}}) > ${toString maxAgeSeconds}";
+# Last success too old. `kix.schedules.staleAfter schedule` gives two periods
+# plus two hours as a duration ("50h" for a daily schedule), or null when the
+# period cannot be read; make a threshold option required then. One missed
+# run stays quiet while the failure alert reports it. The gauge's own window
+# is the age, so a short `for` only rides out a scrape gap.
+expr = "time() - max by (namespace, service, schedule) (foo_last_success_timestamp_seconds{${sel}}) > ${toString (kix.durations.toSeconds maxAge)}";
 "for" = "5m";
 ```
 
-A last-success alert evaluates to nothing when its series is missing, and the down alert does not fire while the target is up. Pair it with the missing-metric pattern over the same series. Some programs publish the timestamp only after their first success since start (Velero does), so a missing-metric alert would fire after every restart. Build the alert from the success and attempt counters instead, as `VeleroBackupMissing` does.
+A last-success alert evaluates to nothing when its series is missing, and the down alert does not fire while the target is up. Pair it with the missing-metric pattern over the same series. Some programs publish the timestamp only after their first success since start (Velero does), so a missing-metric alert would fire after every restart. Build the alert from the success and attempt counters instead, but only for an age that fits inside the Prometheus retention (7d by default), since `offset` and `increase` see no older sample. `VeleroBackupMissing` uses the counters up to 6d and the timestamp past that, where it stays silent after a restart until the next success.
 
 The down pattern fires only when every target is down. One replica of several down is left to kube-prometheus's `TargetDown` (`warning`, more than 10% of a job's targets down for 10 minutes). A per-target `up == 0` alert at `critical` on a DaemonSet pages for one node, which the generic node alerts already report. When the component can run with zero replicas by design, or its metrics Service can be switched off, gate the rule on the same configuration, or `absent()` fires.
 
@@ -773,14 +775,14 @@ Apply `rate()` or `increase()` to the raw counter first and aggregate second: `s
 
 **`for`.** Use at least `5m`, so a restart or a rollout does not fire the alert. A down alert uses `10m`, like kube-prometheus's `TargetDown`. A threshold on a gauge that moves around uses `15m`. Leave `for` out only when the expression already spans a long window, such as `increase(foo_failures_total[1h]) > 0`, and say so in a comment. `keep_firing_for` holds an alert after its condition clears, which stops a flapping condition from resolving and refiring. Prometheus 2.42, prometheus-operator 0.66, and vmalert all support it.
 
-**Thresholds.** Derive a threshold from evaluated configuration where the package has one: `resources.limits.memory` through `kix.parseQuantity "memory"`, a replica count, or a schedule. Otherwise extend the monitor options with a typed threshold, as velero does:
+**Thresholds.** Derive a threshold from evaluated configuration where the package has one: `resources.limits.memory` through `kix.parseQuantity "memory"`, a replica count, or a schedule. Otherwise extend the monitor options with a typed threshold, as cnpg-cluster does, and derive its default where the configuration allows:
 
 ```nix
 metrics = kix.options.monitor // {
   maxBackupAge = lib.mkOption {
-    type = lib.types.strMatching "([0-9]+(ms|s|m|h|d|w|y))+";
-    default = "26h";
-    description = "How long a schedule may go without a successful backup before VeleroBackupMissing fires ...";
+    type = lib.types.nullOr kix.types.promDuration;
+    default = null;
+    description = "How long the cluster may go without a completed base backup before CNPGBackupMissing fires ... Null derives it from `backup.schedule` with `kix.schedules.staleAfter` ...";
   };
 };
 ```

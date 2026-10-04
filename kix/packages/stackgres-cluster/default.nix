@@ -261,21 +261,6 @@ let
   # The PodMonitor's name. Its series carry job="<namespace>/<name>", which
   # the alerts select on.
   podMonitorName = name;
-
-  # A Prometheus duration such as "5m" or "1h30m", in seconds.
-  durationType = lib.types.strMatching "([0-9]+[smhdw])+";
-  durationUnits = {
-    s = 1;
-    m = 60;
-    h = 3600;
-    d = 86400;
-    w = 604800;
-  };
-  durationSeconds =
-    d:
-    lib.foldl' (
-      acc: p: acc + lib.toInt (builtins.elemAt p 0) * durationUnits.${builtins.elemAt p 1}
-    ) 0 (builtins.filter builtins.isList (builtins.split "([0-9]+)([smhdw])" d));
 in
 {
   meta = {
@@ -535,7 +520,7 @@ in
 
     metrics = kix.options.monitor // {
       maxReplicationLag = lib.mkOption {
-        type = durationType;
+        type = kix.types.promDuration;
         default = "5m";
         example = "30s";
         description = "How far a standby's replay may fall behind the primary before StackGresReplicationLagHigh fires, as a Prometheus duration. A standby that cannot keep up loses that much committed data if it is promoted. The default is the threshold of CloudNativePG's sample rules, as in cnpg-cluster.";
@@ -1031,7 +1016,7 @@ in
             # The lag is 0 while a standby has replayed all it received, so
             # an idle primary does not raise it.
             StackGresReplicationLagHigh = {
-              expr = "max by (namespace, job, pod) (pg_replication_lag_seconds{${sel}}) > ${toString (durationSeconds lag)}";
+              expr = "max by (namespace, job, pod) (pg_replication_lag_seconds{${sel}}) > ${toString (kix.durations.toSeconds lag)}";
               "for" = "15m";
               severity = "warning";
               summary = "A StackGres standby is far behind the primary.";

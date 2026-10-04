@@ -106,18 +106,6 @@ let
     "metrics-address"
   ];
 
-  intervalSeconds =
-    interval:
-    let
-      m = builtins.match "([0-9]+)([smh])" interval;
-      unit = {
-        s = 1;
-        m = 60;
-        h = 3600;
-      };
-    in
-    lib.toInt (builtins.elemAt m 0) * unit.${builtins.elemAt m 1};
-
   # "CF_API_TOKEN, or CF_API_KEY and CF_API_EMAIL"
   describeKeySets = sets: lib.concatMapStringsSep ", or " (lib.concatStringsSep " and ") sets;
   listOrNone = names: if names == [ ] then "nothing" else lib.concatStringsSep ", " names;
@@ -640,7 +628,7 @@ in
         # Three synchronization intervals, at least 15 minutes, so a long
         # interval set to stay under a provider's rate limit does not keep
         # the alert firing.
-        staleAfter = lib.max 900 (3 * intervalSeconds config.interval);
+        staleAfter = lib.max 900 (3 * kix.durations.toSeconds config.interval);
         forMinutes = 5;
         # Rounded down: when the alert fires, the last synchronization is at
         # least `staleAfter` seconds plus `forMinutes` old.

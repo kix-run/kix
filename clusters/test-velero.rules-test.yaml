@@ -1,0 +1,133 @@
+# promtool unit tests for the Velero alert rules test-velero.nix renders.
+# The rules-cluster-velero check runs them from the rendered rules, so each
+# rule_files entry is <namespace>/<file> in the cluster's manifests.
+# The `daily` schedule (@every 24h) gets the derived age 50h and the counter
+# form of VeleroBackupMissing; the `weekly` schedule (a day of the week)
+# gets 338h, over 6d, and the timestamp form. `smoke-daily`, built through
+# out.mkSchedule, takes metrics.otherSchedulesMaxAge (50h).
+rule_files:
+  - velero/velero-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # A healthy server fires nothing: it is scraped, the daily schedule
+  # succeeds once a day, nothing fails, and the weekly schedule last
+  # succeeded at the start of the test.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085"}'
+        values: '1x4600'
+      - series: 'velero_backup_attempt_total{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085",schedule="daily"}'
+        values: '0x1440 1x1440 2x1440 3x300'
+      - series: 'velero_backup_success_total{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085",schedule="daily"}'
+        values: '0x1440 1x1440 2x1440 3x300'
+      - series: 'velero_backup_failure_total{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085",schedule="daily"}'
+        values: '0x4600'
+      - series: 'velero_backup_partial_failure_total{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085",schedule="daily"}'
+        values: '0x4600'
+      - series: 'velero_backup_last_successful_timestamp{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085",schedule="weekly"}'
+        values: '0x4600'
+    alert_rule_test:
+      - eval_time: 75h
+        alertname: VeleroBackupFailed
+        exp_alerts: []
+      - eval_time: 75h
+        alertname: VeleroBackupMissing
+        exp_alerts: []
+      - eval_time: 75h
+        alertname: VeleroServerDown
+        exp_alerts: []
+
+  # The server is not scraped, a daily backup fails every minute, and the
+  # daily schedule has counted no success in 50h.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085"}'
+        values: '0x4600'
+      - series: 'velero_backup_attempt_total{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085",schedule="daily"}'
+        values: '0+1x4600'
+      - series: 'velero_backup_success_total{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085",schedule="daily"}'
+        values: '0x4600'
+      - series: 'velero_backup_failure_total{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085",schedule="daily"}'
+        values: '0+1x4600'
+      - series: 'velero_backup_partial_failure_total{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085",schedule="daily"}'
+        values: '0x4600'
+    alert_rule_test:
+      - eval_time: 75h
+        alertname: VeleroBackupFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: velero
+              schedule: daily
+            exp_annotations:
+              summary: A Velero backup failed or partly failed in the last hour
+              description: Velero in velero recorded a failed or partially failed backup for schedule daily. Run velero backup describe on its latest backup.
+      - eval_time: 75h
+        alertname: VeleroBackupMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: velero
+              schedule: daily
+            exp_annotations:
+              summary: A Velero schedule has no successful backup within its metrics.maxBackupAge
+              description: Schedule daily of Velero in velero has not completed a backup within its threshold (daily 50h, weekly 338h, other schedules 50h). Check the backup location with velero backup-location get and the schedule's latest backups.
+      # absent() of a comparison keeps no labels of the selector, so this
+      # alert has no namespace label (housekeeping/2026-10-04-absent-up-alerts-lose-namespace-label.md).
+      - eval_time: 75h
+        alertname: VeleroServerDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: The Velero server is not being scraped
+              description: Prometheus has scraped no running Velero server in velero for 15 minutes, so no backup runs. Check deployment/velero.
+
+  # The weekly schedule last succeeded at the start of the test. Its alert
+  # is quiet at 337h and fires once the success is over 338h old and `for`
+  # (15m) has passed.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085"}'
+        values: '1x20400'
+      - series: 'velero_backup_last_successful_timestamp{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085",schedule="weekly"}'
+        values: '0x20400'
+    alert_rule_test:
+      - eval_time: 337h
+        alertname: VeleroBackupMissing
+        exp_alerts: []
+      - eval_time: 339h
+        alertname: VeleroBackupMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: velero
+              schedule: weekly
+            exp_annotations:
+              summary: A Velero schedule has no successful backup within its metrics.maxBackupAge
+              description: Schedule weekly of Velero in velero has not completed a backup within its threshold (daily 50h, weekly 338h, other schedules 50h). Check the backup location with velero backup-location get and the schedule's latest backups.
+
+  # A Schedule built through out.mkSchedule with no success in 50h fires
+  # under metrics.otherSchedulesMaxAge.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085"}'
+        values: '1x4600'
+      - series: 'velero_backup_attempt_total{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085",schedule="smoke-daily"}'
+        values: '0x4600'
+      - series: 'velero_backup_success_total{namespace="velero",service="velero",job="velero",instance="10.0.0.1:8085",schedule="smoke-daily"}'
+        values: '0x4600'
+    alert_rule_test:
+      - eval_time: 49h
+        alertname: VeleroBackupMissing
+        exp_alerts: []
+      - eval_time: 51h
+        alertname: VeleroBackupMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: velero
+              schedule: smoke-daily
+            exp_annotations:
+              summary: A Velero schedule has no successful backup within its metrics.maxBackupAge
+              description: Schedule smoke-daily of Velero in velero has not completed a backup within its threshold (daily 50h, weekly 338h, other schedules 50h). Check the backup location with velero backup-location get and the schedule's latest backups.
