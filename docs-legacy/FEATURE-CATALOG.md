@@ -302,9 +302,12 @@ rather than a second one.
   by label and the operator expands it to every replica's pod FQDN, so this
   is alertmanager HA fan-out rather than a load-balanced Service.
 
-Readiness is declared, not hardcoded: the CRDs carry
-`readiness = { path; equals; }` (`status.updateStatus == operational`), which
-the CLI evaluates generically. Controllers that report a condition instead
+Readiness is declared, not hardcoded: the operand CRDs carry
+`readiness = { path; equals; }` (`status.updateStatus == operational`), and
+the configuration CRDs (scrapes, VMRule, VMAlertmanagerConfig, VMUser), whose
+status only a selecting VMAgent, VMAlert, VMAlertmanager or VMAuth writes,
+carry `readiness = { path; notEquals = "failed"; }`, which the CLI evaluates
+generically. Controllers that report a condition instead
 declare `readiness = { condition = { type; status; }; }`; a boolean or
 number status field compares by its JSON text (`readiness = { path = "/status/applied"; equals =
 "true"; }` for CloudNativePG's Database). StackGres clusters

@@ -401,7 +401,12 @@ edge but NO netpol hole. Consequences when authoring:
   written the caBundle into configurations Kix rendered (`cnpg-operator`).
   A boolean or number status field compares by its JSON text:
   `readiness = { path = "/status/applied"; equals = "true"; }`
-  (`cnpg-operator` for Database and DatabaseRole). Neither form trusts a
+  (`cnpg-operator` for Database and DatabaseRole). A resource whose status
+  only a consumer writes, and which may have no consumer, declares
+  `readiness = { path = "/status/updateStatus"; notEquals = "failed"; }`:
+  ready while the field is absent or holds another value
+  (`victoria-metrics-operator` for VMServiceScrape, VMRule and the other
+  configuration kinds). No form trusts a
   status older than the spec: a path rule also waits for
   `status.observedGeneration`, and a condition rule for the condition's
   own `observedGeneration` (or `status.observedGeneration` when the

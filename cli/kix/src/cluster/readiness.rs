@@ -1332,12 +1332,15 @@ pub fn is_immediate_kind(kind: &str) -> bool {
 }
 
 /// A readiness convention declared by the CRD-owning package and stamped on
-/// the CR as the `kix.run/readiness` annotation. Two JSON shapes:
+/// the CR as the `kix.run/readiness` annotation. Three JSON shapes:
 /// `{"path": "/status/...", "equals": "<value>"}` is ready when the string at
 /// `path` equals `equals`, or the boolean or number there is written as
 /// `equals` (`true` matches "true", `3` matches "3", a float `1.0` matches
 /// only "1.0"), and `status.observedGeneration`, when present, has reached
-/// `metadata.generation`; `{"condition": {"type": "<Type>", "status": "True"}}`
+/// `metadata.generation`; `{"path": "/status/...", "notEquals": "<value>"}`
+/// is ready when the value at `path` is absent or anything but `notEquals`,
+/// under the same generation guard, for a resource whose status only a
+/// consumer that may not exist writes; `{"condition": {"type": "<Type>", "status": "True"}}`
 /// is ready when `status.conditions` holds an entry with that type and
 /// status whose `observedGeneration` has reached `metadata.generation`. A
 /// condition without its own `observedGeneration` is judged by
@@ -1346,6 +1349,10 @@ enum DeclaredReadiness {
     Path {
         path: String,
         equals: String,
+    },
+    PathNot {
+        path: String,
+        not_equals: String,
     },
     Condition {
         condition_type: String,
@@ -1368,10 +1375,28 @@ fn declared_readiness(obj: &DynamicObject) -> Option<DeclaredReadiness> {
             status: condition.get("status")?.as_str()?.to_string(),
         });
     }
+    let path = v.get("path")?.as_str()?.to_string();
+    if let Some(not_equals) = v.get("notEquals") {
+        return Some(DeclaredReadiness::PathNot {
+            path,
+            not_equals: not_equals.as_str()?.to_string(),
+        });
+    }
     Some(DeclaredReadiness::Path {
-        path: v.get("path")?.as_str()?.to_string(),
+        path,
         equals: v.get("equals")?.as_str()?.to_string(),
     })
+}
+
+/// A scalar status value as the text a readiness rule compares: a string
+/// itself, a boolean or number by its JSON text. Other JSON types have none.
+fn scalar_text(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
 }
 
 /// Synchronous readiness check for a single resource.
@@ -1395,12 +1420,21 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
                 generation_observed(
                     obj.metadata.generation,
                     obj.data.pointer("/status/observedGeneration"),
-                ) && obj.data.pointer(&path).is_some_and(|v| match v {
-                    Value::String(s) => *s == equals,
-                    Value::Bool(b) => b.to_string() == equals,
-                    Value::Number(n) => n.to_string() == equals,
-                    _ => false,
-                })
+                ) && obj
+                    .data
+                    .pointer(&path)
+                    .and_then(scalar_text)
+                    .is_some_and(|t| t == equals)
+            }
+            DeclaredReadiness::PathNot { path, not_equals } => {
+                generation_observed(
+                    obj.metadata.generation,
+                    obj.data.pointer("/status/observedGeneration"),
+                ) && obj
+                    .data
+                    .pointer(&path)
+                    .and_then(scalar_text)
+                    .is_none_or(|t| t != not_equals)
             }
             DeclaredReadiness::Condition {
                 condition_type,
@@ -1687,6 +1721,19 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                     "{kind}/{name}: declared readiness {path}=\"{equals}\", currently {current}{stale}"
                 )
             }
+            DeclaredReadiness::PathNot { path, not_equals } => {
+                let current = match obj.data.pointer(&path) {
+                    None => "<absent>".to_string(),
+                    Some(v) => v.to_string(),
+                };
+                let stale = stale_note(
+                    obj.metadata.generation,
+                    obj.data.pointer("/status/observedGeneration"),
+                );
+                format!(
+                    "{kind}/{name}: declared readiness {path}!=\"{not_equals}\", currently {current}{stale}"
+                )
+            }
             DeclaredReadiness::Condition {
                 condition_type,
                 status,
@@ -1855,8 +1902,58 @@ mod tests {
                 assert_eq!(path, "/status/updateStatus");
                 assert_eq!(equals, "operational");
             }
-            DeclaredReadiness::Condition { .. } => panic!("parsed as condition form"),
+            _ => panic!("parsed as another form"),
         }
+    }
+
+    const VM_CHILD_RULE: &str = r#"{"path":"/status/updateStatus","notEquals":"failed"}"#;
+
+    // A VMServiceScrape gets updateStatus only from a VMAgent that selects
+    // it: absent with no consumer, `failed` when the consumer rejects it.
+    #[test]
+    fn declared_not_equals_readiness_accepts_absent_and_refuses_the_value() {
+        match declared_readiness(&make_annotated_obj(VM_CHILD_RULE, json!({})))
+            .expect("should parse")
+        {
+            DeclaredReadiness::PathNot { path, not_equals } => {
+                assert_eq!(path, "/status/updateStatus");
+                assert_eq!(not_equals, "failed");
+            }
+            _ => panic!("parsed as another form"),
+        }
+
+        let unclaimed = make_annotated_obj(VM_CHILD_RULE, json!({}));
+        assert!(check_readiness(&unclaimed, "VMServiceScrape"));
+        let applied = make_annotated_obj(
+            VM_CHILD_RULE,
+            json!({"status": {"updateStatus": "operational"}}),
+        );
+        assert!(check_readiness(&applied, "VMServiceScrape"));
+
+        let failed =
+            make_annotated_obj(VM_CHILD_RULE, json!({"status": {"updateStatus": "failed"}}));
+        assert!(!check_readiness(&failed, "VMServiceScrape"));
+        let msg = readiness_message(&failed, "VMServiceScrape");
+        assert!(
+            msg.contains(
+                r#"declared readiness /status/updateStatus!="failed", currently "failed""#
+            ),
+            "got: {msg}"
+        );
+
+        // The generation guard applies as for `equals`.
+        let stale = with_generation(
+            make_annotated_obj(
+                VM_CHILD_RULE,
+                json!({"status": {"updateStatus": "operational", "observedGeneration": 1}}),
+            ),
+            2,
+        );
+        assert!(!check_readiness(&stale, "VMServiceScrape"));
+
+        // A non-string notEquals is malformed and ignored.
+        let bad = make_annotated_obj(r#"{"path":"/status/x","notEquals":true}"#, json!({}));
+        assert!(declared_readiness(&bad).is_none());
     }
 
     #[test]
@@ -1902,7 +1999,7 @@ mod tests {
                 assert_eq!(condition_type, "Bootstrapped");
                 assert_eq!(status, "True");
             }
-            DeclaredReadiness::Path { .. } => panic!("parsed as path form"),
+            _ => panic!("parsed as a path form"),
         }
         for bad in [
             r#"{"condition":{"type":"Bootstrapped"}}"#, // missing status
