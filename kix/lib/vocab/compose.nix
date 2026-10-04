@@ -1947,9 +1947,10 @@ rec {
   #
   # `scheme`, `tlsConfig` (a ServiceMonitor endpoint `tlsConfig`), and
   # `params` (query parameters, as a ServiceMonitor endpoint's `params`:
-  # an attrset of string lists) apply to the primary endpoint only. Each of `extraEndpoints` is a ServiceMonitor
-  # endpoint over the defaults `scheme = "http"`, `path = "/metrics"`, and the
-  # instance's `metrics.interval` when that is set.
+  # an attrset of string lists) apply to the primary endpoint only. Each of
+  # `extraEndpoints` is a ServiceMonitor endpoint over the defaults
+  # `scheme = "http"`, `path = "/metrics"`, and the instance's
+  # `metrics.interval` when that is set.
   monitor =
     {
       service,

@@ -144,6 +144,56 @@ tests:
       - eval_time: 7m
         alertname: OpenBaoNoActiveNode
         exp_alerts: []
+  # Every pod is unsealed and each instance has an active pod. Each pod also
+  # still exports the vault_core_unsealed 0 without a cluster label that it
+  # reported before its first unseal.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="secrets",service="openbao-metrics",job="openbao-metrics",pod="openbao-0",instance="10.0.0.1:8202"}'
+        values: '1x20'
+      - series: 'vault_core_unsealed{namespace="secrets",service="openbao-metrics",job="openbao-metrics",pod="openbao-0",instance="10.0.0.1:8202"}'
+        values: '0x20'
+      - series: 'vault_core_unsealed{namespace="secrets",service="openbao-metrics",job="openbao-metrics",pod="openbao-0",instance="10.0.0.1:8202",cluster="vault-cluster-0a1b2c3d"}'
+        values: '1x20'
+      - series: 'vault_core_active{namespace="secrets",service="openbao-metrics",job="openbao-metrics",pod="openbao-0",instance="10.0.0.1:8202",cluster="vault-cluster-0a1b2c3d"}'
+        values: '1x20'
+      - series: 'up{namespace="secrets-ha",service="openbao-ha-metrics",job="openbao-ha-metrics",pod="openbao-ha-0",instance="10.0.1.1:8202"}'
+        values: '1x20'
+      - series: 'vault_core_unsealed{namespace="secrets-ha",service="openbao-ha-metrics",job="openbao-ha-metrics",pod="openbao-ha-0",instance="10.0.1.1:8202"}'
+        values: '0x20'
+      - series: 'vault_core_unsealed{namespace="secrets-ha",service="openbao-ha-metrics",job="openbao-ha-metrics",pod="openbao-ha-0",instance="10.0.1.1:8202",cluster="vault-cluster-0a1b2c3d"}'
+        values: '1x20'
+      - series: 'vault_core_active{namespace="secrets-ha",service="openbao-ha-metrics",job="openbao-ha-metrics",pod="openbao-ha-0",instance="10.0.1.1:8202",cluster="vault-cluster-0a1b2c3d"}'
+        values: '1x20'
+      - series: 'up{namespace="secrets-ha",service="openbao-ha-metrics",job="openbao-ha-metrics",pod="openbao-ha-1",instance="10.0.1.2:8202"}'
+        values: '1x20'
+      - series: 'vault_core_unsealed{namespace="secrets-ha",service="openbao-ha-metrics",job="openbao-ha-metrics",pod="openbao-ha-1",instance="10.0.1.2:8202"}'
+        values: '0x20'
+      - series: 'vault_core_unsealed{namespace="secrets-ha",service="openbao-ha-metrics",job="openbao-ha-metrics",pod="openbao-ha-1",instance="10.0.1.2:8202",cluster="vault-cluster-0a1b2c3d"}'
+        values: '1x20'
+      - series: 'vault_core_active{namespace="secrets-ha",service="openbao-ha-metrics",job="openbao-ha-metrics",pod="openbao-ha-1",instance="10.0.1.2:8202",cluster="vault-cluster-0a1b2c3d"}'
+        values: '0x20'
+      - series: 'up{namespace="secrets-ha",service="openbao-ha-metrics",job="openbao-ha-metrics",pod="openbao-ha-2",instance="10.0.1.3:8202"}'
+        values: '1x20'
+      - series: 'vault_core_unsealed{namespace="secrets-ha",service="openbao-ha-metrics",job="openbao-ha-metrics",pod="openbao-ha-2",instance="10.0.1.3:8202"}'
+        values: '0x20'
+      - series: 'vault_core_unsealed{namespace="secrets-ha",service="openbao-ha-metrics",job="openbao-ha-metrics",pod="openbao-ha-2",instance="10.0.1.3:8202",cluster="vault-cluster-0a1b2c3d"}'
+        values: '1x20'
+      - series: 'vault_core_active{namespace="secrets-ha",service="openbao-ha-metrics",job="openbao-ha-metrics",pod="openbao-ha-2",instance="10.0.1.3:8202",cluster="vault-cluster-0a1b2c3d"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: OpenBaoAllSealed
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: OpenBaoSealed
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: OpenBaoNoActiveNode
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: OpenBaoMetricsMissing
+        exp_alerts: []
   # Every request openbao audits fails to log, one a minute.
   - interval: 1m
     input_series:
@@ -160,8 +210,8 @@ tests:
               namespace: "secrets"
               service: "openbao-metrics"
             exp_annotations:
-              summary: "An OpenBao audit device fails to log."
-              description: "OpenBao secrets/openbao has failed to write audit entries in the last 10 minutes. OpenBao refuses a request that no audit device can log. Check the audit devices (`bao audit list`) and the space or endpoint they write to."
+              summary: "OpenBao refuses requests it cannot audit."
+              description: "No audit device of OpenBao secrets/openbao could log some requests in the last 10 minutes, so OpenBao refused them. Check the audit devices (`bao audit list`) and the space or endpoint they write to."
   # Audited requests, none failed.
   - interval: 1m
     input_series:

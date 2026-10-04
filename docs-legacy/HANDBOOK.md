@@ -1865,6 +1865,8 @@ store = externalSecrets.out.mkClusterSecretStore scope {
 
 The store carries the OpenBao Service's address, so the external-secrets store definitions' `factBehavior` (§21.9) gives the controller egress to port 8200 of the OpenBao pods and those pods ingress from the controller.
 
+Metrics. With a `prometheus` dependency and `metrics.enabled` (the default), each pod opens a second listener on TCP 8202 that serves only `/v1/sys/metrics`, over plain HTTP and without a token, so standbys and sealed pods report too. The output names mount paths, auth methods, and policies. Under network policy only the Prometheus scrape and the other OpenBao pods reach the port; on a cluster without an enforcer any pod can read it. Set `metrics.enabled = false` to close the listener, which also drops the ServiceMonitor and the alert rules.
+
 Known limits. If self-initialization fails on pod 0's first start, OpenBao has already initialized the volume and revoked the root token, and it refuses to unseal on every later start; delete the claim `data-<instance>-0` and the pod and let it start again (self-initialization runs only on an empty volume). The static key cannot be rotated: a changed `unsealKey` value restarts the pods, and they cannot unseal the existing data until the old value is restored.
 
 ## 22. CRDs

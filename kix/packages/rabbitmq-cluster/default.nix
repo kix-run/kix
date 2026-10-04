@@ -69,11 +69,21 @@
 #                                          fewer than a majority of
 #                                          `replicas` nodes answer, so
 #                                          quorum queues and the metadata
-#                                          store cannot commit.
+#                                          store cannot commit. The
+#                                          majority comes from `replicas`,
+#                                          not from the nodes that run:
+#                                          after a refused lower
+#                                          `replicas` (see below) the rule
+#                                          needs fewer nodes than the
+#                                          running cluster does, and can
+#                                          miss a lost majority.
 #   RabbitMQClusterIdentityMismatch (critical, replicas > 1)
 #                                          the nodes report more than one
 #                                          cluster ID, so a node formed a
 #                                          cluster of its own.
+#   RabbitMQDistributionLinksMissing (warning, replicas > 1)
+#                                          a node is connected to fewer than
+#                                          `replicas - 1` other nodes.
 #   RabbitMQMemoryAlarm (critical)         a node's memory alarm blocks
 #                                          publishers on every node.
 #   RabbitMQDiskAlarm (critical)           a node's free disk alarm does
@@ -89,13 +99,16 @@
 #   RabbitMQAlarmMetricsMissing (warning)  a node is scraped but reports no
 #                                          alarm metrics, so the alarm
 #                                          alerts cannot fire for it.
+# The operator sets the free disk limit to 2GB. On a volume under 5GB
+# RabbitMQDiskNearAlarm can fire while the cluster is idle and healthy, and
+# at 2GB or less RabbitMQDiskAlarm fires too and publishers are blocked
+# from the first boot. Evaluation warns about such a `storage.size`.
 # The rules derive from the cluster-operator 2.23.0 rules in
 # observability/prometheus/rules/rabbitmq, rewritten to select the instance.
 # Left out: the file descriptor alarm rule, whose metric RabbitMQ 4.3.6 no
 # longer reports; queues without consumers, growing queues, unroutable
 # messages, and connection churn, which need per-queue metrics or depend on
-# the application; Erlang distribution links, whose metric the aggregated
-# endpoint does not report; and nodes not ready, full volumes, and crash
+# the application; and nodes not ready, full volumes, and crash
 # loops, which prometheus-default-rules reports
 # (KubeStatefulSetReplicasMismatch, KubePersistentVolumeFillingUp,
 # KubePodCrashLooping). A queue that lost its leader shows only in
@@ -104,9 +117,10 @@
 # Limits: TLS, the Vault and external-Secret backends, and the ports of
 # additional plugins (MQTT, STOMP, streams) are not modelled; network
 # policy opens AMQP only. Queues, users, and vhosts are not modelled, so
-# every consumer shares the default user and the default vhost. The operator copies the RabbitmqCluster's Kix annotations
-# to the objects it creates; it drops the app.kubernetes.io labels, so
-# `kix gc` does not list those objects as its own.
+# every consumer shares the default user and the default vhost. The
+# operator copies the RabbitmqCluster's Kix annotations to the objects it
+# creates; it drops the app.kubernetes.io labels, so `kix gc` does not list
+# those objects as its own.
 #
 # Changes the operator refuses: it sets `ReconcileSuccess=False` and does
 # not advance `status.observedGeneration`, so the deploy waits on
@@ -474,6 +488,11 @@ in
           inherit who locked;
         } baseSpec config.extraSpec;
 
+        # The operator writes `disk_free_limit.absolute = 2GB` into every
+        # node's rabbitmq.conf. Below 5GB a fresh volume leaves too little
+        # headroom over twice that limit, where RabbitMQDiskNearAlarm fires.
+        smallVolume = kix.parseQuantity "storage" config.storage.size < 5 * 1000 * 1000 * 1000;
+
         # Read only when the scope has an enforcer (kix.operandPolicy).
         netpol = scope.networkPolicyEnforcer.netpol;
         tcp = port: {
@@ -488,10 +507,15 @@ in
         operatorNamespace = (scope.forService rabbitmqOperator).namespaceName;
       in
       {
-        cluster = scope.mkCR operator.crds.RabbitmqCluster {
-          inherit name spec;
-          annotations."rabbitmq.com/disable-default-topology-spread-constraints" = "true";
-        };
+        cluster =
+          lib.warnIf smallVolume
+            "${who}: storage.size is ${toString config.storage.size}, under 5GB. The operator sets RabbitMQ's disk_free_limit to 2GB, so RabbitMQDiskNearAlarm can fire on this volume while the cluster is idle, and a volume of 2GB or less starts in the free disk alarm, which blocks every publisher. Use at least 5Gi."
+            (
+              scope.mkCR operator.crds.RabbitmqCluster {
+                inherit name spec;
+                annotations."rabbitmq.com/disable-default-topology-spread-constraints" = "true";
+              }
+            );
 
         client = scope.mkServiceRef {
           inherit name;
@@ -717,6 +741,18 @@ in
             severity = "critical";
             summary = "A RabbitMQ cluster has lost its majority.";
             description = "{{ $value }} of the ${toString config.replicas} nodes of ${cluster} answer, fewer than the ${toString majority} a majority needs. Quorum queues and the metadata store stop accepting writes until enough nodes return. Check the pods of the StatefulSet ${name}-server.";
+          };
+          # Each node reports one erlang_vm_dist_node_state series per peer
+          # it is connected to, 3 while the link is up. CLI tools connect
+          # as temporary nodes not named rabbit@, so the peer filter leaves
+          # them out. A node with no link reports none, and the `or` branch
+          # gives it a count of 0.
+          RabbitMQDistributionLinksMissing = {
+            expr = "(count by (namespace, job, pod) (erlang_vm_dist_node_state{${sel},peer=~\"rabbit@.+\"} == 3) or on (namespace, job, pod) count by (namespace, job, pod) (up{${sel}} == 1) * 0) < ${toString (config.replicas - 1)}";
+            "for" = "10m";
+            severity = "warning";
+            summary = "A RabbitMQ node is not connected to every other node.";
+            description = "Node {{ $labels.pod }} of ${cluster} has {{ $value }} of its ${toString (config.replicas - 1)} links to the other nodes up for 10 minutes. A node cut off from its peers can be partitioned from the cluster; quorum queues on it lose their replicas. Check `rabbitmq-diagnostics cluster_status` on that node and the network between the pods on port ${toString distributionPort}.";
           };
           # Every node of one cluster reads the ID from the replicated
           # metadata store (rabbit_nodes:persistent_cluster_id/0), so two IDs

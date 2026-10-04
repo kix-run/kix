@@ -129,6 +129,75 @@ tests:
       - eval_time: 12m
         alertname: RabbitMQClusterIdentityMismatch
         exp_alerts: []
+  # rabbitmq-ha-server-2 has lost both its links: its peers each see one
+  # link, and it sees none.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692"}'
+        values: '1x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692",peer="rabbit@rabbitmq-ha-server-1.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692"}'
+        values: '1x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692",peer="rabbit@rabbitmq-ha-server-0.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-2",instance="10.0.1.3:15692"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: RabbitMQDistributionLinksMissing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "messaging"
+              job: "messaging/rabbitmq-ha"
+              pod: "rabbitmq-ha-server-0"
+            exp_annotations:
+              summary: "A RabbitMQ node is not connected to every other node."
+              description: "Node rabbitmq-ha-server-0 of RabbitMQ cluster messaging/rabbitmq-ha has 1 of its 2 links to the other nodes up for 10 minutes. A node cut off from its peers can be partitioned from the cluster; quorum queues on it lose their replicas. Check `rabbitmq-diagnostics cluster_status` on that node and the network between the pods on port 25672."
+          - exp_labels:
+              severity: "warning"
+              namespace: "messaging"
+              job: "messaging/rabbitmq-ha"
+              pod: "rabbitmq-ha-server-1"
+            exp_annotations:
+              summary: "A RabbitMQ node is not connected to every other node."
+              description: "Node rabbitmq-ha-server-1 of RabbitMQ cluster messaging/rabbitmq-ha has 1 of its 2 links to the other nodes up for 10 minutes. A node cut off from its peers can be partitioned from the cluster; quorum queues on it lose their replicas. Check `rabbitmq-diagnostics cluster_status` on that node and the network between the pods on port 25672."
+          - exp_labels:
+              severity: "warning"
+              namespace: "messaging"
+              job: "messaging/rabbitmq-ha"
+              pod: "rabbitmq-ha-server-2"
+            exp_annotations:
+              summary: "A RabbitMQ node is not connected to every other node."
+              description: "Node rabbitmq-ha-server-2 of RabbitMQ cluster messaging/rabbitmq-ha has 0 of its 2 links to the other nodes up for 10 minutes. A node cut off from its peers can be partitioned from the cluster; quorum queues on it lose their replicas. Check `rabbitmq-diagnostics cluster_status` on that node and the network between the pods on port 25672."
+  # Every node sees both peers; a CLI tool's temporary node does not count.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692"}'
+        values: '1x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692",peer="rabbit@rabbitmq-ha-server-1.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692",peer="rabbit@rabbitmq-ha-server-2.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692"}'
+        values: '1x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692",peer="rabbit@rabbitmq-ha-server-0.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692",peer="rabbit@rabbitmq-ha-server-2.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-2",instance="10.0.1.3:15692"}'
+        values: '1x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-2",instance="10.0.1.3:15692",peer="rabbit@rabbitmq-ha-server-0.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-2",instance="10.0.1.3:15692",peer="rabbit@rabbitmq-ha-server-1.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692",peer="rabbitmqcli-123-rabbit@rabbitmq-ha-server-0.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: RabbitMQDistributionLinksMissing
+        exp_alerts: []
   # rabbitmq-server-0 holds its memory alarm, with one scrape that has no
   # alarm series, and rabbitmq-ha-server-0 its free disk alarm.
   - interval: 1m

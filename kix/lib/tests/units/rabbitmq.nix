@@ -640,6 +640,7 @@ in
       replicated = [
         "RabbitMQQuorumLost"
         "RabbitMQClusterIdentityMismatch"
+        "RabbitMQDistributionLinksMissing"
       ];
       sel = ''namespace="messaging",job="messaging/rabbitmq"'';
     in
@@ -652,6 +653,7 @@ in
       && lib.all (n: three ? ${n}) replicated
       && lib.hasSuffix "< 2" three.RabbitMQQuorumLost.expr
       && lib.hasSuffix "< 3" five.RabbitMQQuorumLost.expr
+      && lib.hasSuffix "< 4" five.RabbitMQDistributionLinksMissing.expr
       && rulesOf { modules = [ ]; } == null
       && rulesOf { clusterConfig.metrics.enabled = false; } == null
     )

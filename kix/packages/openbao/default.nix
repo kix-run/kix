@@ -22,8 +22,9 @@
 #                              newline (`openssl rand -hex 32 | tr -d '\n'`).
 #   storageClasses (optional)  the class of the volumes when
 #                              `storage.storageClassName` is unset.
-#   prometheus (optional)      a metrics listener, a metrics Service, and a
-#                              ServiceMonitor while `metrics.enabled`.
+#   prometheus (optional)      a metrics listener, a metrics Service, a
+#                              ServiceMonitor, and the alert rules while
+#                              `metrics.enabled`.
 #
 # Minimal instance (`clusters/test-openbao.nix` evaluates this shape with
 # `stringData`):
@@ -128,9 +129,11 @@
 #                                     no request.
 #   OpenBaoNoActiveNode (critical)    pods are unsealed but none is active,
 #                                     so requests fail.
-#   OpenBaoAuditFailing (critical)    an audit device fails to log, and
-#                                     OpenBao refuses the requests it
-#                                     cannot audit.
+#   OpenBaoAuditFailing (critical)    no audit device could log a request,
+#                                     so OpenBao refused it. One failing
+#                                     device among several that log does
+#                                     not count; that shows only in the
+#                                     server log.
 #   OpenBaoSealed (warning, 3 replicas)
 #                                     one pod is sealed while another is
 #                                     not. With the static seal check the
@@ -1227,7 +1230,10 @@ in
         instance = "OpenBao ${ns}/${name}";
         # The gauges of pods that are unsealed, and of the active pod. Other
         # pods keep exporting the values they had before they sealed or
-        # stepped down.
+        # stepped down. Each pod also exports a `vault_core_unsealed` at 0
+        # without the `cluster` label from before its first unseal, for
+        # `prometheus_retention_time`, so a per-pod read must take the
+        # `max` over the pod's series.
         unsealed = "on (${by}, pod) vault_core_unsealed{${sel}} == 1";
         active = "on (${by}, pod) vault_core_active{${sel}} == 1";
         fromLeader = metric: "${metric}{${sel}} and ${active} and ${unsealed}";
@@ -1273,8 +1279,8 @@ in
           OpenBaoAuditFailing = {
             expr = "sum by (${by}) (increase(vault_audit_log_request_failure{${sel}}[10m])) > 0 or sum by (${by}) (increase(vault_audit_log_response_failure{${sel}}[10m])) > 0";
             severity = "critical";
-            summary = "An OpenBao audit device fails to log.";
-            description = "${instance} has failed to write audit entries in the last 10 minutes. OpenBao refuses a request that no audit device can log. Check the audit devices (`bao audit list`) and the space or endpoint they write to.";
+            summary = "OpenBao refuses requests it cannot audit.";
+            description = "No audit device of ${instance} could log some requests in the last 10 minutes, so OpenBao refused them. Check the audit devices (`bao audit list`) and the space or endpoint they write to.";
           };
           OpenBaoMetricsMissing = {
             expr = "count by (${by}) (up{${sel}} == 1) unless on (${by}) count by (${by}) (vault_core_unsealed{${sel}})";

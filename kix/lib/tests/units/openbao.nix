@@ -2,8 +2,8 @@
 # reconcile Job's role and policy, the Raft join addresses, the shamir mode,
 # the package's refusals, `out.externalSecretsProvider` with its
 # refusals, and the metrics listener, ServiceMonitor, and alert rules that a
-# prometheus dependency turns on. OpenBao runs as instance `openbao` in namespace `secrets`, and
-# the store's consumer in `app`.
+# prometheus dependency turns on. OpenBao runs as instance `openbao` in
+# namespace `secrets`, and the store's consumer in `app`.
 
 {
   lib,
