@@ -1,5 +1,6 @@
 # clusters/s3-test-store.nix: an in-cluster S3 store for test clusters,
-# versitygw on emptyDirs, used by test-velero.nix and test-cnpg.nix.
+# versitygw on emptyDirs, used by test-velero.nix, test-cnpg.nix, and
+# test-tempo.nix.
 #
 # Each directory under /data is a bucket; an init container creates one
 # per entry of `buckets`. --sidecar keeps object metadata in files under

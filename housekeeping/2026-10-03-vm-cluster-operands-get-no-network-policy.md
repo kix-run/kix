@@ -1,0 +1,3 @@
+# 2026-10-03 · `kix/packages/victoria-metrics-cluster` · The package writes no network policy for the vmstorage, vmselect, and vminsert pods, so the cluster cannot work under default deny.
+
+The operator creates those pods, so the derived policy never covers them, and the package has no `kix.operandPolicy` for their DNS egress or for vminsert and vmselect reaching vmstorage. `clusters/test-tempo-generator.nix` turns network policy off for this reason, so Tempo's generator egress to vminsert is evaluated but not exercised under Cilium. `clusters/test-victoria-metrics.nix` runs without network policy too.

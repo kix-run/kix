@@ -1,3 +1,0 @@
-# 2026-10-03 · `kix/packages/external-secrets` · The package has only been evaluated, never deployed, so its start-up ordering is unproven.
-
-`nix build .#cluster-external-secrets` builds, but no kind run has shown that the webhook pods start once the cert-controller fills the empty `<instance>-webhook-tls` Secret, that the cert-controller's readiness (which waits for the webhook's endpoints) does not stall `kix deploy`, or that the webhook check Job's `kubectl create --dry-run=server` succeeds within its six restarts. A later `kix deploy` must also leave the Secret's `data`, which the cert-controller writes, in place. Deploy `clusters/test-external-secrets.nix` on kind and read the secret-echo pod's environment.

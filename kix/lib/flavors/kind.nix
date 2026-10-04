@@ -46,7 +46,16 @@
     # kind ships no metrics-server; a metrics-server instance provides
     # metrics.k8s.io.
     metricsApi.binding = lib.mkDefault "absent";
+    # kind ships no registry mirror; a spegel instance provides one.
+    registryMirror.binding = lib.mkDefault "absent";
   };
+
+  # The node image turns discard_unpacked_layers on, in the version 2
+  # config's [plugins."io.containerd.grpc.v1.cri".containerd] table. A
+  # cluster created with a containerdConfigPatches entry that sets it false
+  # in that same table sets this to false; containerd 2 copies that table
+  # over one written in the newer io.containerd.cri.v1.images form.
+  cluster.containerd.discardUnpackedLayers = lib.mkDefault true;
 
   cluster.capabilities = {
     multiNode = lib.mkDefault false;

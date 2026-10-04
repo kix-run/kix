@@ -1,0 +1,6 @@
+# The operator's ClusterRole and leader-election Role from the same release
+# manifest as crds/sources.txt. default.nix binds them to the operator's
+# ServiceAccount. The manifest's rabbitmq-cluster-service-binding-role is
+# left out: it only aggregates read access for a Service Binding
+# controller, which no package runs.
+https://github.com/rabbitmq/cluster-operator/releases/download/v2.23.0/cluster-operator.yml ClusterRole/rabbitmq-cluster-operator-role Role/rabbitmq-cluster-leader-election-role

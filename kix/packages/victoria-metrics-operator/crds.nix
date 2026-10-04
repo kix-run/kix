@@ -105,25 +105,46 @@ let
     VMAlertmanager.factBehavior = operandFactBehavior "vmalertmanager";
   };
 
-  # The operator's uniform health convention, declared once for the whole
-  # group: every VM CR is ready when status.updateStatus == "operational"
-  # (conditions are consumer-prefixed, never Ready/Available, so a generic
-  # condition check waits forever, as it does for VMServiceScrape). Rides
-  # the typed chain into every CR as the `kix.run/readiness` annotation,
-  # which the kix CLI evaluates at deploy time, so no kind list in the CLI
-  # to keep in sync.
+  # The operator's health convention: a VM CR is ready when
+  # status.updateStatus == "operational". Its conditions are
+  # consumer-prefixed, never Ready/Available, so the generic condition check
+  # would wait forever. The rule rides the typed chain into every CR as the
+  # `kix.run/readiness` annotation, which the kix CLI evaluates at deploy
+  # time, so the CLI keeps no kind list.
   #
-  # The claim is verified against a running operator only for the
-  # consumer kinds; the parked kinds (VTCluster, VLAgent, ...) inherit it
-  # on the operator's convention alone. If the operator never writes
-  # updateStatus for some kind, a CR of it waits until timeout. That is the
-  # visible, self-diagnosing failure, preferred over generic
-  # ready-on-empty racing the operator. Re-verify per-kind when adding
-  # out.mk* builders for parked kinds.
+  # The operator reconciles operand kinds (VMCluster, VMAgent, ...) itself
+  # and always writes updateStatus. It writes updateStatus on a
+  # configuration kind only from a consumer that selects it: a VMAgent or
+  # VMSingle for the scrape kinds, a VMAlert for VMRule, a VMAlertmanager
+  # for VMAlertmanagerConfig, a VMAuth for VMUser, a VMAnomaly for
+  # VMAnomalyConfig (factory/reconcile/status.go, writeAggregatedStatus, at
+  # v0.74.1). With no consumer the field never appears, so those kinds are
+  # ready unless a consumer rejected them (`failed`).
+  #
+  # The parked kinds (VTCluster, VLAgent, ...) inherit the operand rule on
+  # the operator's convention alone. If the operator never writes
+  # updateStatus for one, a CR of it waits until timeout. Re-verify per kind
+  # when adding out.mk* builders for parked kinds.
   vmReadiness = {
     path = "/status/updateStatus";
     equals = "operational";
   };
+  vmConfigReadiness = {
+    path = "/status/updateStatus";
+    notEquals = "failed";
+  };
+  configKinds = [
+    "VMServiceScrape"
+    "VMPodScrape"
+    "VMNodeScrape"
+    "VMProbe"
+    "VMStaticScrape"
+    "VMScrapeConfig"
+    "VMRule"
+    "VMAlertmanagerConfig"
+    "VMUser"
+    "VMAnomalyConfig"
+  ];
 
   # ── Vendored upstream spec schemas ──────────────────────────────────
   # `fromKind` mints a stub whose spec is x-kubernetes-preserve-unknown-
@@ -174,7 +195,7 @@ let
     mkVMOperatorCRD (
       schemed
       // {
-        readiness = vmReadiness;
+        readiness = if builtins.elem def.kind configKinds then vmConfigReadiness else vmReadiness;
       }
       // lib.optionalAttrs (extras ? factBehavior) {
         inherit (extras) factBehavior;

@@ -530,6 +530,21 @@ cluster with default-deny network policy: it publishes its pods, so
 `kix.expose` opens each backend to them, while Envoy Gateway's proxy pods
 are placed by its controller and get no derived policy.
 
+The OpenID Connect contract, `kix.contracts.oidcProvider`
+(`kix/lib/vocab/oidc-provider.nix`), lets an application sign users in
+through any provider that publishes an issuer per realm. keycloak passes its
+`out` through `check`; grafana, harbor, and immich take it as an optional
+`oidcProvider` dependency that only `oidc.enabled` reads, beside an
+`oidcClient` secret, so a provider in the cluster turns nothing on by
+itself. keycloak answers no alias, and the cluster names it with
+`deps.oidcProvider = ref.<ns>.<instance>`: an optional dependency that two
+instances answer fails every consumer, even one that never reads it. Where
+the application lets the server call the token endpoint at another address
+(Grafana), the contract's `endpoints` give the provider's Service, so the
+egress is derived. Harbor and Immich check the issuer they discover against
+the public URL, so they dial it and get no derived edge; their headers say
+when the world egress covers that request.
+
 When both implementations are on the shelf, auto-instantiation refuses a
 demanded alias until the cluster selects one with an optional instance
 named after the alias, which is created only when something depends on it.
@@ -567,7 +582,7 @@ gracefully omits resources when they're absent.
 
 Infrastructure-role owners claim their role from the closed registry in
 `kix/lib/eval/roles.nix` (currently: `network-policy-enforcer`, `dns`,
-`storageClasses`, `snapshotController`, `metricsApi`, `cni`, `loadBalancer`):
+`storageClasses`, `snapshotController`, `metricsApi`, `registryMirror`, `cni`, `loadBalancer`):
 
 ```nix
 # kix/packages/storage-classes/default.nix
@@ -994,7 +1009,7 @@ that's the price of the workaround being visible.
 resolve via arg name → instance name → instance aliases (which *replace*
 package `defaultAliases` when non-empty). Roles are only for the registry's
 infrastructure slots (network-policy-enforcer, dns, storageClasses,
-snapshotController, metricsApi, cni, loadBalancer).
+snapshotController, metricsApi, registryMirror, cni, loadBalancer).
 
 ### 12.8 Backwards-compatibility shims
 

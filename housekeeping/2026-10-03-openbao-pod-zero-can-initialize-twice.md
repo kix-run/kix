@@ -1,0 +1,3 @@
+# 2026-10-03 · `kix/packages/openbao` · Pod 0 on an empty volume initializes a second cluster when no peer answers within five seconds.
+
+`start.sh` loads the self-initialization stanza on pod 0 unless a peer reports itself initialized. If pod 0's volume is lost while pods 1 and 2 are down or slow to answer, pod 0 initializes a new, empty cluster, and the Service then routes clients to two clusters with different data. Recovery is by hand: delete pod 0's claim and let it join. A check against the Raft peers recorded on the other pods' volumes, or refusing to self-initialize once the StatefulSet has ever run more than one pod, would close it.

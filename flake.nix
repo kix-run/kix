@@ -40,6 +40,7 @@
           clickhouse-swap-bare = ./clusters/test-clickhouse-swap/bare.nix;
           clickhouse-swap-replicated = ./clusters/test-clickhouse-swap/replicated.nix;
           cnpg = ./clusters/test-cnpg.nix;
+          rabbitmq = ./clusters/test-rabbitmq.nix;
           postgres-swap-stackgres = ./clusters/test-postgres-swap/stackgres.nix;
           postgres-swap-cnpg = ./clusters/test-postgres-swap/cnpg.nix;
           gateway-swap-envoy = ./clusters/test-gateway-swap/envoy.nix;
@@ -47,12 +48,16 @@
           kind = ./clusters/test-kind.nix;
           kind-v2 = ./clusters/test-kind-v2.nix;
           metrics-server = ./clusters/test-metrics-server.nix;
+          spegel = ./clusters/test-spegel.nix;
+          volsync = ./clusters/test-volsync.nix;
           otel-collector = ./clusters/test-otel-collector.nix;
+          falco = ./clusters/test-falco.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
           monitoring-loki = ./clusters/test-monitoring-loki.nix;
           victoria-metrics = ./clusters/test-victoria-metrics.nix;
           victoria-metrics-crd-ref = ./clusters/test-victoria-metrics-crd-ref.nix;
           external-secrets = ./clusters/test-external-secrets.nix;
+          openbao = ./clusters/test-openbao.nix;
           doc-how-tos = ./clusters/test-doc-how-tos.nix;
 
           # Register documented examples so routine builds catch evaluation
