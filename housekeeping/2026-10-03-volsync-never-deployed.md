@@ -1,3 +1,0 @@
-# 2026-10-03 · `kix/packages/volsync` · The package has only been evaluated, never deployed, so no backup has been seen to reach the store.
-
-`nix build .#cluster-volsync` builds. No kind run has shown the operator starting against the snapshot-controller's CRDs, the restic mover with copyMethod Direct reaching the S3 test store in another namespace under Cilium default deny, the ReplicationSource reaching `latestMoverStatus.result: Successful`, or the mover's cache claim binding on kind's `standard` class. Deploy `clusters/test-volsync.nix` on kind and check the repository with `restic snapshots`.

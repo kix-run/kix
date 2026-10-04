@@ -1,3 +1,0 @@
-# 2026-10-03 · `kix/packages/openbao` · The package has only been evaluated, never deployed.
-
-`clusters/test-openbao.nix` builds, but nothing has run `start.sh`, the self-initialization config, or `reconcile.sh` against a real OpenBao 2.7.1. Unverified: that the JSON `initialize` stanza parses as written, that `bao write <path> @file.json` and `jwt=@<file>` behave as in Vault's CLI, that `bao list` on `auth/kubernetes/role` and `bao policy list` are allowed by the `/*` paths of the `kix-reconcile` policy, that the server runs with `readOnlyRootFilesystem`, and that `$(POD_NAME)` expands in `BAO_API_ADDR`. Deploy it on kind with `networkPolicy.enable` and write a value under `secret/app/credentials` to see the ExternalSecret sync.

@@ -1,3 +1,0 @@
-# 2026-10-03 · `kix/packages/spegel` · The package has only been evaluated, never deployed, so no node has been seen to pull a layer from a peer.
-
-`nix build .#cluster-spegel` builds. No kind run has shown the init container writing `hosts.toml` under `/etc/containerd/certs.d`, the registry running as root with every capability dropped (the socket and content store are root-owned, so this should hold, but it is untested), the hostPort reaching the pod under Cilium with `cni.chainingMode = "portmap"`, or two nodes finding each other through `<name>-bootstrap`. Deploy `clusters/test-spegel.nix` on a two-node kind cluster with the containerd patch its header gives, and pull one image on each node.
