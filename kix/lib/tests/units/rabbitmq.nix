@@ -2,7 +2,8 @@
 # rabbitmq-cluster, each beside a positive control, the rendered
 # RabbitmqCluster, its placement and network policy, the broker `out` a
 # consumer reads, the webhook check that every RabbitmqCluster waits for,
-# and the vendored sources' release.
+# the vendored sources' release, and the alert rules of both packages and
+# what each is gated on.
 
 {
   lib,
@@ -16,6 +17,9 @@
   evalFails,
   multiZone,
   singleNode,
+  alertRulesOf,
+  allSelect,
+  prometheusStub,
   ...
 }:
 
@@ -140,6 +144,7 @@ let
   ms = cluster: manifests cluster;
   clusterOf = all: byName "rabbitmq" (ofKind "RabbitmqCluster" all);
   dependsOn = m: (m.metadata.annotations or { }).${kixKeys.dependsOn} or "";
+  withPrometheus.instances.monitoring.prometheus.package = prometheusStub;
 
   # Cilium as the enforcer, as the environment's CNI.
   cilium = {
@@ -537,8 +542,7 @@ in
       && apiEgress "4.0.9-management"
       && apiEgress "management"
       && !apiEgress "4.1.0-management"
-      &&
-      builtins.any (
+      && builtins.any (
         r:
         r ? toPorts
         &&
@@ -614,4 +618,70 @@ in
       && depCheck "2.23.4" == [ ]
     )
     || throw "rabbitmq-cluster operator dependency: the import passed, or the release check is wrong";
+
+  # The rules select the PodMonitor's job, need a prometheus dependency and
+  # metrics.enabled, and add the majority and identity rules from two
+  # replicas, with the majority taken from `replicas`.
+  rabbitmq-cluster-alerts =
+    let
+      rulesOf =
+        {
+          clusterConfig ? { },
+          modules ? [ withPrometheus ],
+        }:
+        alertRulesOf "PrometheusRule" "rabbitmq" (
+          ms (rabbitmq {
+            inherit clusterConfig modules;
+          })
+        );
+      one = rulesOf { clusterConfig.replicas = 1; };
+      three = rulesOf { clusterConfig.replicas = 3; };
+      five = rulesOf { clusterConfig.replicas = 5; };
+      replicated = [
+        "RabbitMQQuorumLost"
+        "RabbitMQClusterIdentityMismatch"
+      ];
+      sel = ''namespace="messaging",job="messaging/rabbitmq"'';
+    in
+    (
+      allSelect sel one
+      && allSelect sel three
+      && one ? RabbitMQDown
+      && one ? RabbitMQMemoryAlarm
+      && !lib.any (n: one ? ${n}) replicated
+      && lib.all (n: three ? ${n}) replicated
+      && lib.hasSuffix "< 2" three.RabbitMQQuorumLost.expr
+      && lib.hasSuffix "< 3" five.RabbitMQQuorumLost.expr
+      && rulesOf { modules = [ ]; } == null
+      && rulesOf { clusterConfig.metrics.enabled = false; } == null
+    )
+    || throw "rabbitmq-cluster alerts: one ${builtins.toJSON (builtins.attrNames one)}, three ${builtins.toJSON (builtins.attrNames three)}";
+
+  # The operator's rules select its metrics Service and need a prometheus
+  # dependency and metrics.enabled.
+  rabbitmq-operator-alerts =
+    let
+      rulesOf =
+        {
+          operatorConfig ? { },
+          modules ? [ withPrometheus ],
+        }:
+        alertRulesOf "PrometheusRule" "rabbitmq-operator" (
+          ms (rabbitmq {
+            inherit operatorConfig modules;
+          })
+        );
+      rules = rulesOf { };
+    in
+    (
+      allSelect ''namespace="rabbitmq-system",service="rabbitmq-operator-metrics"'' rules
+      &&
+        builtins.attrNames rules == [
+          "RabbitMQOperatorDown"
+          "RabbitMQOperatorReconcileErrors"
+        ]
+      && rulesOf { modules = [ ]; } == null
+      && rulesOf { operatorConfig.metrics.enabled = false; } == null
+    )
+    || throw "rabbitmq-operator alerts: ${builtins.toJSON (builtins.attrNames rules)}";
 }

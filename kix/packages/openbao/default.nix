@@ -22,6 +22,8 @@
 #                              newline (`openssl rand -hex 32 | tr -d '\n'`).
 #   storageClasses (optional)  the class of the volumes when
 #                              `storage.storageClassName` is unset.
+#   prometheus (optional)      a metrics listener, a metrics Service, and a
+#                              ServiceMonitor while `metrics.enabled`.
 #
 # Minimal instance (`clusters/test-openbao.nix` evaluates this shape with
 # `stringData`):
@@ -105,9 +107,51 @@
 #     restarts the pods, and they cannot unseal the existing data until the
 #     old value is restored.
 #
+# Metrics: with a prometheus dependency and `metrics.enabled`, each pod
+# opens a second listener on TCP 8202 that serves only `/v1/sys/metrics`,
+# without TLS and without a token (`metrics_only`,
+# `unauthenticated_metrics_access`), so standbys and sealed pods report
+# too. The listener refuses every other path, but its metrics name mounts,
+# auth methods, and policies; under network policy only the scrape reaches
+# it. The ServiceMonitor asks for `format=prometheus`. The package sets
+# `telemetry.disable_hostname`, without which gauge names carry the pod
+# name, and `telemetry.prometheus_retention_time`, and refuses those and
+# `telemetry.metrics_prefix` in `settings`.
+#
+# Alerts: a PrometheusRule `<instance>-alerts` selects the metrics
+# Service's series. Several gauges keep their last value for
+# `prometheus_retention_time` after a pod seals, and the autopilot gauges
+# after a pod stops being the leader, so the rules read them only from
+# unsealed pods and the active pod.
+#   OpenBaoDown (critical)            no pod answers a scrape.
+#   OpenBaoAllSealed (critical)       every pod is sealed, so OpenBao serves
+#                                     no request.
+#   OpenBaoNoActiveNode (critical)    pods are unsealed but none is active,
+#                                     so requests fail.
+#   OpenBaoAuditFailing (critical)    an audit device fails to log, and
+#                                     OpenBao refuses the requests it
+#                                     cannot audit.
+#   OpenBaoSealed (warning, 3 replicas)
+#                                     one pod is sealed while another is
+#                                     not. With the static seal check the
+#                                     `unsealKey` Secret; with shamir, run
+#                                     `bao operator unseal`.
+#   OpenBaoRaftUnhealthy (warning, 3 replicas)
+#                                     autopilot reports an unhealthy Raft
+#                                     peer, or the cluster tolerates no
+#                                     further peer failure.
+#   OpenBaoMetricsMissing (warning)   pods are scraped but report no
+#                                     OpenBao metrics.
+# The package configures no audit device, so OpenBaoAuditFailing fires
+# only for a device added through the API. Left to
+# prometheus-default-rules: full volumes (KubePersistentVolumeFillingUp),
+# crash loops, and a failed reconcile Job (KubeJobFailed); the server
+# certificate to cert-manager's alerts. Lease and token counts depend on
+# the site.
+#
 # Escape hatches: `settings` for server configuration keys the package does
-# not set, `env`, and the instance's `partsOverlays`. Metrics, audit
-# devices, and the web UI are not configured.
+# not set, `env`, and the instance's `partsOverlays`. Audit devices and the
+# web UI are not configured.
 
 {
   scope,
@@ -127,6 +171,17 @@ let
   ports = {
     api = 8200;
     cluster = 8201;
+    metrics = 8202;
+  };
+
+  # The metrics Service, whose name the alerts select on.
+  metricsServiceName = "${name}-metrics";
+
+  replicas = kix.availability.pick availability {
+    none = 1;
+    pod = 3;
+    node = 3;
+    zone = 3;
   };
 
   # The role and policy self-initialization creates for the reconcile Job.
@@ -382,661 +437,516 @@ in
       example = {
         log_level = "debug";
       };
-      description = "Server configuration keys merged over the package's, as JSON. The package sets `listener`, `storage`, `seal`, `api_addr`, `cluster_addr`, and `initialize`, and refuses them here.";
+      description = "Server configuration keys merged over the package's, as JSON. The package sets `listener`, `storage`, `seal`, `api_addr`, `cluster_addr`, and `initialize`, and refuses them here; with metrics, also `telemetry.disable_hostname`, `telemetry.prometheus_retention_time`, and `telemetry.metrics_prefix`.";
     };
 
     env = kix.options.env // {
       description = "Extra environment variables of the server container. The addresses, Raft, and seal variables are set by the package.";
     };
+
+    metrics = kix.options.monitor;
   };
 
-  build =
-    {
-      self,
-      config,
-      clusterConfig,
-      certManager,
-      unsealKey ? null,
-      storageClasses ? null,
-      ...
-    }:
-    let
-      selfInit = config.seal.type == "static";
+  build = [
+    (
+      {
+        self,
+        config,
+        clusterConfig,
+        certManager,
+        unsealKey ? null,
+        storageClasses ? null,
+        prometheus ? null,
+        ...
+      }:
+      let
+        selfInit = config.seal.type == "static";
+        metricsOn = config.metrics.enabled && prometheus != null;
 
-      replicas = kix.availability.pick availability {
-        none = 1;
-        pod = 3;
-        node = 3;
-        zone = 3;
-      };
+        certCrds =
+          certManager.out.crds
+            or (throw "${who}: the certManager dependency has no out.crds, as with an import. Wire a managed cert-manager instance with deps.certManager = ref.<namespace>.<instance>.");
 
-      certCrds =
-        certManager.out.crds
-          or (throw "${who}: the certManager dependency has no out.crds, as with an import. Wire a managed cert-manager instance with deps.certManager = ref.<namespace>.<instance>.");
-
-      unseal =
-        if !selfInit then
-          null
-        else if unsealKey == null then
-          throw "${who}: seal.type is \"static\" and there is no unsealKey dependency. Add a secret aliased unsealKey with key \"key\", a 32-byte key (`openssl rand -hex 32 | tr -d '\\n'`), or set seal.type = \"shamir\" to initialize and unseal OpenBao by hand."
-        else
-          kix.checkSecretKeys {
-            inherit who;
-            arg = "unsealKey";
-            dep = unsealKey;
-            keys = [ "key" ];
-          };
-
-      storageClassName =
-        if config.storage.storageClassName != null then
-          config.storage.storageClassName
-        else if storageClasses != null then
-          storageClasses.out.storageClassName
-        else
-          null;
-
-      headlessName = "${name}-headless";
-      tlsSecretName = "${name}-tls";
-      caSecretName = "${name}-ca";
-      tlsSecret = kix.untrackedRef {
-        kind = "Secret";
-        name = tlsSecretName;
-        by = self.serverCertificate;
-      };
-      # The same Secret for a resource in another namespace. The deploy looks
-      # up an untrackedRef in the referring manifest's namespace, so a
-      # ClusterSecretStore or another namespace's SecretStore would wait for
-      # a Secret that is never there. The Certificate is named like its
-      # Secret, and its out.name makes the reader wait until it is Ready.
-      tlsSecretElsewhere = self.serverCertificate.out.name;
-
-      headlessFqdn = self.headlessService.out.fqdn;
-      podUrl = i: "https://${name}-${toString i}.${headlessFqdn}:${toString ports.api}";
-      serviceUrl = self.service.out.url { scheme = "https"; };
-
-      enginePaths = builtins.attrNames config.secretsEngines;
-
-      # Top-level keys the package writes, with what derives each one.
-      ownedSettings = {
-        listener = "the Service, the probes, and the certificate paths";
-        storage = "the volumes and the Raft join addresses of the StatefulSet";
-        seal = "seal.type and seal.keyId";
-        api_addr = "BAO_API_ADDR, derived from each pod's name";
-        cluster_addr = "BAO_CLUSTER_ADDR, derived from each pod's name";
-        initialize = "the self-initialization the reconcile Job depends on";
-      };
-      settingsOwned = builtins.filter (k: ownedSettings ? ${k}) (builtins.attrNames config.settings);
-      serverConfig =
-        if settingsOwned != [ ] then
-          throw "${who}: settings sets ${lib.concatStringsSep ", " settingsOwned}, which the package sets from ${
-            lib.concatMapStringsSep "; " (k: ownedSettings.${k}) settingsOwned
-          }. Remove ${if builtins.length settingsOwned == 1 then "it" else "them"} from settings."
-        else
-          lib.recursiveUpdate baseConfig config.settings;
-
-      baseConfig = {
-        listener = [
-          {
-            tcp = {
-              address = "[::]:${toString ports.api}";
-              cluster_address = "[::]:${toString ports.cluster}";
-              tls_cert_file = "${dirs.tls}/tls.crt";
-              tls_key_file = "${dirs.tls}/tls.key";
-              # OpenBao 2.7.0 added tls_auto_reload.
-              tls_auto_reload = true;
+        unseal =
+          if !selfInit then
+            null
+          else if unsealKey == null then
+            throw "${who}: seal.type is \"static\" and there is no unsealKey dependency. Add a secret aliased unsealKey with key \"key\", a 32-byte key (`openssl rand -hex 32 | tr -d '\\n'`), or set seal.type = \"shamir\" to initialize and unseal OpenBao by hand."
+          else
+            kix.checkSecretKeys {
+              inherit who;
+              arg = "unsealKey";
+              dep = unsealKey;
+              keys = [ "key" ];
             };
+
+        storageClassName =
+          if config.storage.storageClassName != null then
+            config.storage.storageClassName
+          else if storageClasses != null then
+            storageClasses.out.storageClassName
+          else
+            null;
+
+        headlessName = "${name}-headless";
+        tlsSecretName = "${name}-tls";
+        caSecretName = "${name}-ca";
+        tlsSecret = kix.untrackedRef {
+          kind = "Secret";
+          name = tlsSecretName;
+          by = self.serverCertificate;
+        };
+        # The same Secret for a resource in another namespace. The deploy looks
+        # up an untrackedRef in the referring manifest's namespace, so a
+        # ClusterSecretStore or another namespace's SecretStore would wait for
+        # a Secret that is never there. The Certificate is named like its
+        # Secret, and its out.name makes the reader wait until it is Ready.
+        tlsSecretElsewhere = self.serverCertificate.out.name;
+
+        headlessFqdn = self.headlessService.out.fqdn;
+        podUrl = i: "https://${name}-${toString i}.${headlessFqdn}:${toString ports.api}";
+        serviceUrl = self.service.out.url { scheme = "https"; };
+
+        enginePaths = builtins.attrNames config.secretsEngines;
+
+        # Top-level keys the package writes, with what derives each one.
+        ownedSettings = {
+          listener = "the Services, the probes, the certificate paths, and the metrics listener";
+          storage = "the volumes and the Raft join addresses of the StatefulSet";
+          seal = "seal.type and seal.keyId";
+          api_addr = "BAO_API_ADDR, derived from each pod's name";
+          cluster_addr = "BAO_CLUSTER_ADDR, derived from each pod's name";
+          initialize = "the self-initialization the reconcile Job depends on";
+        };
+        # The telemetry keys the metrics listener and the alerts rely on.
+        ownedTelemetry = {
+          disable_hostname = "gauge names without the pod name, which the alerts read";
+          prometheus_retention_time = "the Prometheus metrics the ServiceMonitor scrapes";
+          metrics_prefix = "the vault_ metric names the alerts read";
+        };
+        telemetryOwned = lib.optionals metricsOn (
+          builtins.filter (k: ownedTelemetry ? ${k}) (builtins.attrNames (config.settings.telemetry or { }))
+        );
+        settingsOwned =
+          builtins.filter (k: ownedSettings ? ${k}) (builtins.attrNames config.settings)
+          ++ map (k: "telemetry.${k}") telemetryOwned;
+        ownedReason =
+          k:
+          if lib.hasPrefix "telemetry." k then
+            ownedTelemetry.${lib.removePrefix "telemetry." k}
+          else
+            ownedSettings.${k};
+        serverConfig =
+          if settingsOwned != [ ] then
+            throw "${who}: settings sets ${lib.concatStringsSep ", " settingsOwned}, which the package sets from ${
+              lib.concatMapStringsSep "; " ownedReason settingsOwned
+            }. Remove ${if builtins.length settingsOwned == 1 then "it" else "them"} from settings."
+          else
+            lib.recursiveUpdate baseConfig config.settings;
+
+        baseConfig = {
+          listener = [
+            {
+              tcp = {
+                address = "[::]:${toString ports.api}";
+                cluster_address = "[::]:${toString ports.cluster}";
+                tls_cert_file = "${dirs.tls}/tls.crt";
+                tls_key_file = "${dirs.tls}/tls.key";
+                # OpenBao 2.7.0 added tls_auto_reload.
+                tls_auto_reload = true;
+              };
+            }
+          ]
+          ++ lib.optional metricsOn {
+            tcp = {
+              address = "[::]:${toString ports.metrics}";
+              tls_disable = true;
+              telemetry = {
+                metrics_only = true;
+                unauthenticated_metrics_access = true;
+              };
+            };
+          };
+          storage.raft = {
+            path = dirs.data;
+            retry_join = map (i: {
+              leader_api_addr = podUrl i;
+              leader_ca_cert_file = "${dirs.tls}/ca.crt";
+            }) (lib.range 0 (replicas - 1));
+          };
+        }
+        // lib.optionalAttrs metricsOn {
+          telemetry = {
+            disable_hostname = true;
+            # OpenBao's default. A series with no update for this long drops
+            # out of the output and a counter starts again from zero, so a
+            # day keeps the audit counters continuous on an instance that
+            # serves few requests. Zero would turn off the Prometheus output.
+            prometheus_retention_time = "24h";
+          };
+        }
+        // lib.optionalAttrs selfInit {
+          seal.static = {
+            current_key_id = config.seal.keyId;
+            current_key = "file://${dirs.unseal}/key";
+          };
+        };
+
+        request = rname: path: data: {
+          ${rname} = {
+            operation = "update";
+            inherit path data;
+          };
+        };
+
+        initConfig.initialize = [
+          {
+            kix-bootstrap.request = [
+              (request "enable-kubernetes-auth" "sys/auth/kubernetes" { type = "kubernetes"; })
+              # In a pod, Kubernetes auth reviews tokens with the pod's own
+              # ServiceAccount token and CA.
+              (request "configure-kubernetes-auth" "auth/kubernetes/config" {
+                kubernetes_host = "https://kubernetes.default.svc";
+              })
+              (request "reconcile-policy" "sys/policies/acl/${reconcileRole}" {
+                policy = reconcilePolicy enginePaths;
+              })
+              (request "reconcile-role" "auth/kubernetes/role/${reconcileRole}" {
+                bound_service_account_names = [ self.reconcileServiceAccount.out.name ];
+                bound_service_account_namespaces = [ ns ];
+                token_policies = [ reconcileRole ];
+                token_ttl = "15m";
+                token_max_ttl = "15m";
+              })
+            ];
           }
         ];
-        storage.raft = {
-          path = dirs.data;
-          retry_join = map (i: {
-            leader_api_addr = podUrl i;
-            leader_ca_cert_file = "${dirs.tls}/ca.crt";
-          }) (lib.range 0 (replicas - 1));
-        };
-      }
-      // lib.optionalAttrs selfInit {
-        seal.static = {
-          current_key_id = config.seal.keyId;
-          current_key = "file://${dirs.unseal}/key";
-        };
-      };
 
-      request = rname: path: data: {
-        ${rname} = {
-          operation = "update";
-          inherit path data;
-        };
-      };
+        podAddr = port: "https://$(POD_NAME).${headlessFqdn}:${toString port}";
 
-      initConfig.initialize = [
-        {
-          kix-bootstrap.request = [
-            (request "enable-kubernetes-auth" "sys/auth/kubernetes" { type = "kubernetes"; })
-            # In a pod, Kubernetes auth reviews tokens with the pod's own
-            # ServiceAccount token and CA.
-            (request "configure-kubernetes-auth" "auth/kubernetes/config" {
-              kubernetes_host = "https://kubernetes.default.svc";
-            })
-            (request "reconcile-policy" "sys/policies/acl/${reconcileRole}" {
-              policy = reconcilePolicy enginePaths;
-            })
-            (request "reconcile-role" "auth/kubernetes/role/${reconcileRole}" {
-              bound_service_account_names = [ self.reconcileServiceAccount.out.name ];
-              bound_service_account_namespaces = [ ns ];
-              token_policies = [ reconcileRole ];
-              token_ttl = "15m";
-              token_max_ttl = "15m";
-            })
-          ];
-        }
-      ];
-
-      podAddr = port: "https://$(POD_NAME).${headlessFqdn}:${toString port}";
-
-      # POD_NAME comes first: Kubernetes expands $(POD_NAME) only in the
-      # variables after it, and mkEnvVars sorts by name.
-      env = [
-        {
-          name = "POD_NAME";
-          valueFrom.fieldRef.fieldPath = "metadata.name";
-        }
-      ]
-      ++ kix.mkEnvVars (
-        kix.mergeEnv {
-          inherit who;
-          owned = [
-            {
-              vars = {
-                BAO_API_ADDR = podAddr ports.api;
-                BAO_CLUSTER_ADDR = podAddr ports.cluster;
-                BAO_RAFT_NODE_ID = "$(POD_NAME)";
-                # For `bao` run in the pod, which dials https://127.0.0.1:8200.
-                BAO_CACERT = "${dirs.tls}/ca.crt";
-                CONFIG_DIR = dirs.config;
-                INIT_DIR = dirs.init;
-                TLS_DIR = dirs.tls;
-                SELF_INIT = lib.boolToString selfInit;
-                PEER_ADDRS = lib.concatMapStringsSep " " podUrl (lib.range 1 (replicas - 1));
-              };
-              names = [
-                "POD_NAME"
-                "BAO_ADVERTISE_ADDR"
-                "BAO_REDIRECT_ADDR"
-                "BAO_RAFT_PATH"
-                "BAO_RAFT_RETRY_JOIN_AS_NON_VOTER"
-                "BAO_SEAL_TYPE"
-                "BAO_STATIC_SEAL_CURRENT_KEY"
-                "BAO_STATIC_SEAL_CURRENT_KEY_ID"
-                "BAO_STATIC_SEAL_PREVIOUS_KEY"
-                "BAO_STATIC_SEAL_PREVIOUS_KEY_ID"
-              ];
-              from = "the package, which derives the addresses, the Raft node, and the seal from the StatefulSet and the seal options";
-              fix = "Remove it from env.";
-            }
-          ];
-        } config.env
-      );
-
-      healthProbe = query: {
-        httpGet = {
-          path = "/v1/sys/health?${query}";
-          port = "api";
-          scheme = "HTTPS";
-        };
-      };
-
-      issuerRef = issuer: {
-        group = "cert-manager.io";
-        kind = "Issuer";
-        name = issuer.out.name;
-      };
-
-      # Data the reconcile Job reads; see reconcile.sh.
-      nameList = names: lib.concatMapStrings (n: "${n}\n") names;
-      indexedEngines = lib.imap0 (i: path: {
-        inherit i path;
-        engine = config.secretsEngines.${path};
-      }) enginePaths;
-      reconcileData = {
-        "reconcile.sh" = builtins.readFile ./reconcile.sh;
-        "reconcile.hcl" = reconcilePolicy enginePaths;
-        "policies.txt" = nameList (builtins.attrNames config.policies);
-        "roles.txt" = nameList (builtins.attrNames config.kubernetesAuth.roles);
-        "mounts.txt" = lib.concatMapStrings (
-          e: "${toString e.i} ${e.path} ${e.engine.type}\n"
-        ) indexedEngines;
-      }
-      // lib.mapAttrs' (n: text: lib.nameValuePair "policy.${n}.hcl" text) config.policies
-      // lib.mapAttrs' (
-        n: role: lib.nameValuePair "role.${n}.json" (builtins.toJSON role)
-      ) config.kubernetesAuth.roles
-      // builtins.listToAttrs (
-        map (e: lib.nameValuePair "mount.${toString e.i}.json" (builtins.toJSON e.engine)) indexedEngines
-      );
-
-      containerSecurity = {
-        runAsNonRoot = true;
-        runAsUser = uid;
-        runAsGroup = gid;
-        allowPrivilegeEscalation = false;
-        capabilities.drop = [ "ALL" ];
-        readOnlyRootFilesystem = true;
-      };
-
-      # A role name carrying the reconcile Job's context, so a store that
-      # names it is applied after the Job wrote the role.
-      afterReconcile = s: if selfInit then lib.addContextFrom self.reconcile.out.name s else s;
-
-      externalSecretsProvider =
-        consumerScope:
-        {
-          serviceAccount,
-          role,
-          mount,
-        }:
-        let
-          consumerNs = consumerScope.namespaceName;
-          saName = serviceAccount.out.name;
-          plainSa = builtins.unsafeDiscardStringContext saName;
-          r = config.kubernetesAuth.roles.${role} or null;
-          engine = config.secretsEngines.${mount} or null;
-          binds = field: value: builtins.elem value r.${field} || builtins.elem "*" r.${field};
-          what = "out.externalSecretsProvider for ServiceAccount ${consumerNs}/${plainSa}";
-        in
-        if r == null then
-          throw "${who}: ${what} names role \"${role}\", which kubernetesAuth.roles does not declare (declared: ${lib.concatStringsSep ", " (builtins.attrNames config.kubernetesAuth.roles)}). Declare it on the openbao instance."
-        else if !(binds "bound_service_account_names" plainSa) then
-          throw "${who}: ${what}: role \"${role}\" binds the ServiceAccounts ${builtins.toJSON r.bound_service_account_names}, not ${plainSa}, so OpenBao would refuse the login. Add ${plainSa} to kubernetesAuth.roles.${role}.bound_service_account_names."
-        else if !(binds "bound_service_account_namespaces" consumerNs) then
-          throw "${who}: ${what}: role \"${role}\" binds the namespaces ${builtins.toJSON r.bound_service_account_namespaces}, not ${consumerNs}, so OpenBao would refuse the login. Add ${consumerNs} to kubernetesAuth.roles.${role}.bound_service_account_namespaces."
-        else if engine == null then
-          throw "${who}: ${what} names mount \"${mount}\", which secretsEngines does not declare. Declare secretsEngines.${mount} = { type = \"kv\"; options.version = \"2\"; } on the openbao instance."
-        else if engine.type != "kv" then
-          throw "${who}: ${what} names mount \"${mount}\", a ${engine.type} engine; external-secrets' vault provider reads kv engines. Name a kv engine from secretsEngines."
-        else
+        # POD_NAME comes first: Kubernetes expands $(POD_NAME) only in the
+        # variables after it, and mkEnvVars sorts by name.
+        env = [
           {
-            vault = {
-              server = serviceUrl;
-              path = mount;
-              version = kvVersion engine;
-              caProvider = {
-                type = "Secret";
-                name = tlsSecretElsewhere;
-                key = "ca.crt";
-                namespace = ns;
-              };
-              auth.kubernetes = {
-                mountPath = "kubernetes";
-                role = afterReconcile role;
-                serviceAccountRef = {
-                  name = saName;
-                  namespace = consumerNs;
-                };
-              };
-            };
-          };
-    in
-    {
-      serviceAccount = scope.mkResource {
-        apiVersion = "v1";
-        kind = "ServiceAccount";
-        inherit name;
-      };
-
-      # Kubernetes auth checks each login token with a TokenReview.
-      authDelegator = scope.mkClusterResource {
-        apiVersion = "rbac.authorization.k8s.io/v1";
-        kind = "ClusterRoleBinding";
-        name = "${name}-${ns}-auth-delegator";
-        labels = scope.selectorLabels;
-        extra = {
-          roleRef = {
-            apiGroup = "rbac.authorization.k8s.io";
-            kind = "ClusterRole";
-            name = "system:auth-delegator";
-          };
-          subjects = [
-            {
-              kind = "ServiceAccount";
-              name = self.serviceAccount.out.name;
-              namespace = ns;
-            }
-          ];
-        };
-      };
-
-      # A CA that outlives the server certificates, so `ca.crt` stays the
-      # same across renewals and clients keep trusting a renewed server.
-      selfSignedIssuer = scope.mkCR certCrds.Issuer {
-        name = "${name}-selfsigned";
-        spec.selfSigned = { };
-      };
-
-      caCertificate = scope.mkCR certCrds.Certificate {
-        name = caSecretName;
-        spec = {
-          secretName = caSecretName;
-          isCA = true;
-          commonName = "${name}.${ns} CA";
-          duration = "87600h";
-          privateKey.algorithm = "ECDSA";
-          issuerRef = issuerRef self.selfSignedIssuer;
-        };
-      };
-
-      caIssuer = scope.mkCR certCrds.Issuer {
-        name = caSecretName;
-        spec.ca.secretName = kix.untrackedRef {
-          kind = "Secret";
-          name = caSecretName;
-          by = self.caCertificate;
-        };
-      };
-
-      # Names spelled from the cluster domain: the StatefulSet mounts this
-      # certificate's Secret and the Services select the StatefulSet's pods,
-      # so reading their `out.fqdn` here would close a cycle.
-      serverCertificate =
-        let
-          svcNames = svc: [
-            svc
-            "${svc}.${ns}"
-            "${svc}.${ns}.svc"
-            "${svc}.${ns}.svc.${clusterConfig.clusterDomain}"
-          ];
-        in
-        scope.mkCR certCrds.Certificate {
-          name = tlsSecretName;
-          spec = {
-            secretName = tlsSecretName;
-            commonName = name;
-            dnsNames =
-              svcNames name
-              ++ svcNames headlessName
-              ++ [ "*.${headlessName}.${ns}.svc.${clusterConfig.clusterDomain}" ];
-            # `bao` run in a pod dials the loopback address by default.
-            ipAddresses = [ "127.0.0.1" ];
-            privateKey.algorithm = "ECDSA";
-            usages = [ "server auth" ];
-            issuerRef = issuerRef self.caIssuer;
-          };
-        };
-
-      configMap = scope.mkResource {
-        apiVersion = "v1";
-        kind = "ConfigMap";
-        name = "${name}-config";
-        data = {
-          "server.json" = builtins.toJSON serverConfig;
-          "start.sh" = builtins.readFile ./start.sh;
-        };
-      };
-
-      # Read only on pod 0's first start, so a change does not restart the
-      # pods.
-      initConfigMap =
-        if selfInit then
-          scope.mkResource {
-            apiVersion = "v1";
-            kind = "ConfigMap";
-            name = "${name}-init";
-            data."init.json" = builtins.toJSON initConfig;
+            name = "POD_NAME";
+            valueFrom.fieldRef.fieldPath = "metadata.name";
           }
-        else
-          null;
-
-      statefulSet =
-        {
-          inherit name;
-          spec = {
-            inherit replicas;
-            headlessService = self.headlessService;
-            # Pod 0 initializes the cluster and each later pod joins the
-            # pods before it, so they start one at a time.
-            podManagementPolicy = "OrderedReady";
-            updateStrategy.type = "RollingUpdate";
-            selector.matchLabels = labelsFor "server";
-            template = {
-              metadata.annotations = {
-                "checksum/config" = self.configMap.out.identityHash;
-              }
-              # A secret-ref has no identityHash. The key is read at start.
-              // lib.optionalAttrs (unseal != null && unseal.out ? identityHash) {
-                "checksum/unsealKey" = unseal.out.identityHash;
-              };
-              spec = {
-                serviceAccount = self.serviceAccount;
-                # Long enough for the active pod to hand over leadership.
-                terminationGracePeriodSeconds = 30;
-                securityContext = {
-                  runAsNonRoot = true;
-                  runAsUser = uid;
-                  runAsGroup = gid;
-                  fsGroup = gid;
-                  fsGroupChangePolicy = "OnRootMismatch";
-                  seccompProfile.type = "RuntimeDefault";
+        ]
+        ++ kix.mkEnvVars (
+          kix.mergeEnv {
+            inherit who;
+            owned = [
+              {
+                vars = {
+                  BAO_API_ADDR = podAddr ports.api;
+                  BAO_CLUSTER_ADDR = podAddr ports.cluster;
+                  BAO_RAFT_NODE_ID = "$(POD_NAME)";
+                  # For `bao` run in the pod, which dials https://127.0.0.1:8200.
+                  BAO_CACERT = "${dirs.tls}/ca.crt";
+                  CONFIG_DIR = dirs.config;
+                  INIT_DIR = dirs.init;
+                  TLS_DIR = dirs.tls;
+                  SELF_INIT = lib.boolToString selfInit;
+                  PEER_ADDRS = lib.concatMapStringsSep " " podUrl (lib.range 1 (replicas - 1));
                 };
-                containers = [
-                  {
-                    name = "openbao";
-                    image = kix.image.ref config.image;
-                    imagePullPolicy = config.image.pullPolicy;
-                    command = [
-                      "/bin/sh"
-                      "${dirs.config}/start.sh"
-                    ];
-                    inherit env;
-                    ports = [
-                      (kix.port "api" ports.api)
-                      (kix.port "cluster" ports.cluster)
-                    ];
-                    # 200 for the active pod and standbys; 429, 473, 501
-                    # (not initialized), and 503 (sealed) fail.
-                    readinessProbe = healthProbe "standbyok=true&perfstandbyok=true" // {
-                      periodSeconds = 5;
-                      timeoutSeconds = 3;
-                      failureThreshold = 2;
-                    };
-                    # Succeeds while the process answers, sealed or not, so
-                    # a sealed pod waiting for its key or for a person is not
-                    # restarted.
-                    livenessProbe = healthProbe "standbyok=true&perfstandbyok=true&sealedcode=204&uninitcode=204" // {
-                      initialDelaySeconds = 10;
-                      periodSeconds = 10;
-                      timeoutSeconds = 5;
-                      failureThreshold = 6;
-                    };
-                    resources = config.resources;
-                    securityContext = containerSecurity;
-                    volumeMounts = [
-                      {
-                        name = "data";
-                        mountPath = dirs.data;
-                      }
-                      {
-                        name = "tls";
-                        mountPath = dirs.tls;
-                        readOnly = true;
-                      }
-                    ];
-                  }
+                names = [
+                  "POD_NAME"
+                  "BAO_ADVERTISE_ADDR"
+                  "BAO_REDIRECT_ADDR"
+                  "BAO_RAFT_PATH"
+                  "BAO_RAFT_RETRY_JOIN_AS_NON_VOTER"
+                  "BAO_SEAL_TYPE"
+                  "BAO_STATIC_SEAL_CURRENT_KEY"
+                  "BAO_STATIC_SEAL_CURRENT_KEY_ID"
+                  "BAO_STATIC_SEAL_PREVIOUS_KEY"
+                  "BAO_STATIC_SEAL_PREVIOUS_KEY_ID"
                 ];
-                volumes = [
-                  # A directory mount, not subPath, so a renewed
-                  # certificate reaches the pod and tls_auto_reload.
-                  {
-                    name = "tls";
-                    secret.secretName = tlsSecret;
-                  }
-                ];
+                from = "the package, which derives the addresses, the Raft node, and the seal from the StatefulSet and the seal options";
+                fix = "Remove it from env.";
+              }
+            ];
+          } config.env
+        );
+
+        healthProbe = query: {
+          httpGet = {
+            path = "/v1/sys/health?${query}";
+            port = "api";
+            scheme = "HTTPS";
+          };
+        };
+
+        issuerRef = issuer: {
+          group = "cert-manager.io";
+          kind = "Issuer";
+          name = issuer.out.name;
+        };
+
+        # Data the reconcile Job reads; see reconcile.sh.
+        nameList = names: lib.concatMapStrings (n: "${n}\n") names;
+        indexedEngines = lib.imap0 (i: path: {
+          inherit i path;
+          engine = config.secretsEngines.${path};
+        }) enginePaths;
+        reconcileData = {
+          "reconcile.sh" = builtins.readFile ./reconcile.sh;
+          "reconcile.hcl" = reconcilePolicy enginePaths;
+          "policies.txt" = nameList (builtins.attrNames config.policies);
+          "roles.txt" = nameList (builtins.attrNames config.kubernetesAuth.roles);
+          "mounts.txt" = lib.concatMapStrings (
+            e: "${toString e.i} ${e.path} ${e.engine.type}\n"
+          ) indexedEngines;
+        }
+        // lib.mapAttrs' (n: text: lib.nameValuePair "policy.${n}.hcl" text) config.policies
+        // lib.mapAttrs' (
+          n: role: lib.nameValuePair "role.${n}.json" (builtins.toJSON role)
+        ) config.kubernetesAuth.roles
+        // builtins.listToAttrs (
+          map (e: lib.nameValuePair "mount.${toString e.i}.json" (builtins.toJSON e.engine)) indexedEngines
+        );
+
+        containerSecurity = {
+          runAsNonRoot = true;
+          runAsUser = uid;
+          runAsGroup = gid;
+          allowPrivilegeEscalation = false;
+          capabilities.drop = [ "ALL" ];
+          readOnlyRootFilesystem = true;
+        };
+
+        # A role name carrying the reconcile Job's context, so a store that
+        # names it is applied after the Job wrote the role.
+        afterReconcile = s: if selfInit then lib.addContextFrom self.reconcile.out.name s else s;
+
+        externalSecretsProvider =
+          consumerScope:
+          {
+            serviceAccount,
+            role,
+            mount,
+          }:
+          let
+            consumerNs = consumerScope.namespaceName;
+            saName = serviceAccount.out.name;
+            plainSa = builtins.unsafeDiscardStringContext saName;
+            r = config.kubernetesAuth.roles.${role} or null;
+            engine = config.secretsEngines.${mount} or null;
+            binds = field: value: builtins.elem value r.${field} || builtins.elem "*" r.${field};
+            what = "out.externalSecretsProvider for ServiceAccount ${consumerNs}/${plainSa}";
+          in
+          if r == null then
+            throw "${who}: ${what} names role \"${role}\", which kubernetesAuth.roles does not declare (declared: ${lib.concatStringsSep ", " (builtins.attrNames config.kubernetesAuth.roles)}). Declare it on the openbao instance."
+          else if !(binds "bound_service_account_names" plainSa) then
+            throw "${who}: ${what}: role \"${role}\" binds the ServiceAccounts ${builtins.toJSON r.bound_service_account_names}, not ${plainSa}, so OpenBao would refuse the login. Add ${plainSa} to kubernetesAuth.roles.${role}.bound_service_account_names."
+          else if !(binds "bound_service_account_namespaces" consumerNs) then
+            throw "${who}: ${what}: role \"${role}\" binds the namespaces ${builtins.toJSON r.bound_service_account_namespaces}, not ${consumerNs}, so OpenBao would refuse the login. Add ${consumerNs} to kubernetesAuth.roles.${role}.bound_service_account_namespaces."
+          else if engine == null then
+            throw "${who}: ${what} names mount \"${mount}\", which secretsEngines does not declare. Declare secretsEngines.${mount} = { type = \"kv\"; options.version = \"2\"; } on the openbao instance."
+          else if engine.type != "kv" then
+            throw "${who}: ${what} names mount \"${mount}\", a ${engine.type} engine; external-secrets' vault provider reads kv engines. Name a kv engine from secretsEngines."
+          else
+            {
+              vault = {
+                server = serviceUrl;
+                path = mount;
+                version = kvVersion engine;
+                caProvider = {
+                  type = "Secret";
+                  name = tlsSecretElsewhere;
+                  key = "ca.crt";
+                  namespace = ns;
+                };
+                auth.kubernetes = {
+                  mountPath = "kubernetes";
+                  role = afterReconcile role;
+                  serviceAccountRef = {
+                    name = saName;
+                    namespace = consumerNs;
+                  };
+                };
               };
             };
-            volumeClaimTemplates = [
+      in
+      {
+        serviceAccount = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ServiceAccount";
+          inherit name;
+        };
+
+        # Kubernetes auth checks each login token with a TokenReview.
+        authDelegator = scope.mkClusterResource {
+          apiVersion = "rbac.authorization.k8s.io/v1";
+          kind = "ClusterRoleBinding";
+          name = "${name}-${ns}-auth-delegator";
+          labels = scope.selectorLabels;
+          extra = {
+            roleRef = {
+              apiGroup = "rbac.authorization.k8s.io";
+              kind = "ClusterRole";
+              name = "system:auth-delegator";
+            };
+            subjects = [
               {
-                metadata.name = "data";
-                spec = {
-                  accessModes = [ "ReadWriteOnce" ];
-                  resources.requests.storage = toString config.storage.size;
-                }
-                // lib.optionalAttrs (storageClassName != null) { inherit storageClassName; };
+                kind = "ServiceAccount";
+                name = self.serviceAccount.out.name;
+                namespace = ns;
               }
             ];
           };
-        }
-        |> kix.withMounts (
-          [
-            (kix.mount.configMap self.configMap {
-              name = "config";
-              mountPath = dirs.config;
-              readOnly = true;
-            })
-            (kix.mount.emptyDir {
-              name = "tmp";
-              mountPath = "/tmp";
-            })
-          ]
-          ++ lib.optionals selfInit [
-            (kix.mount.configMap self.initConfigMap {
-              name = "init";
-              mountPath = dirs.init;
-              readOnly = true;
-            })
-            (kix.mount.secret unseal {
-              name = "unseal";
-              mountPath = dirs.unseal;
-              items = [
-                {
-                  key = "key";
-                  path = "key";
-                }
-              ];
-            })
-          ]
-        )
-        |> scope.mkStatefulSet;
-
-      # The config reads this Service's `out.fqdn`, so it selects through
-      # `rawSelector`; `out.selector` would recurse. Unready addresses are
-      # published so a starting pod resolves the peers it joins.
-      headlessService = scope.mkResource {
-        apiVersion = "v1";
-        kind = "Service";
-        name = headlessName;
-        labels."app.kubernetes.io/component" = "headless";
-        spec = {
-          clusterIP = "None";
-          publishNotReadyAddresses = true;
-          selector = self.statefulSet.rawSelector;
-          ports = [
-            {
-              name = "api";
-              port = ports.api;
-              targetPort = ports.api;
-              protocol = "TCP";
-            }
-            {
-              name = "cluster";
-              port = ports.cluster;
-              targetPort = ports.cluster;
-              protocol = "TCP";
-            }
-          ];
         };
-      };
 
-      service =
-        self.statefulSet
-        |> kix.service.fromWorkload {
-          inherit name;
-          labels."app.kubernetes.io/component" = "server";
-          ports = [
-            {
-              name = "api";
-              port = ports.api;
-              targetPort = "api";
-            }
-          ];
-        }
-        |> scope.mkResource;
+        # A CA that outlives the server certificates, so `ca.crt` stays the
+        # same across renewals and clients keep trusting a renewed server.
+        selfSignedIssuer = scope.mkCR certCrds.Issuer {
+          name = "${name}-selfsigned";
+          spec.selfSigned = { };
+        };
 
-      reconcileServiceAccount =
-        if selfInit then
-          scope.mkResource {
-            apiVersion = "v1";
-            kind = "ServiceAccount";
-            name = "${name}-reconcile";
-          }
-        else
-          null;
+        caCertificate = scope.mkCR certCrds.Certificate {
+          name = caSecretName;
+          spec = {
+            secretName = caSecretName;
+            isCA = true;
+            commonName = "${name}.${ns} CA";
+            duration = "87600h";
+            privateKey.algorithm = "ECDSA";
+            issuerRef = issuerRef self.selfSignedIssuer;
+          };
+        };
 
-      reconcileConfigMap =
-        if selfInit then
-          scope.mkResource {
-            apiVersion = "v1";
-            kind = "ConfigMap";
-            name = "${name}-reconcile";
-            data = reconcileData;
-          }
-        else
-          null;
+        caIssuer = scope.mkCR certCrds.Issuer {
+          name = caSecretName;
+          spec.ca.secretName = kix.untrackedRef {
+            kind = "Secret";
+            name = caSecretName;
+            by = self.caCertificate;
+          };
+        };
 
-      reconcile =
-        if selfInit then
-          {
-            name = "${name}-reconcile";
-            labels = labelsFor "reconcile";
-            annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
-            requires = [ self.statefulSet ];
+        # Names spelled from the cluster domain: the StatefulSet mounts this
+        # certificate's Secret and the Services select the StatefulSet's pods,
+        # so reading their `out.fqdn` here would close a cycle.
+        serverCertificate =
+          let
+            svcNames = svc: [
+              svc
+              "${svc}.${ns}"
+              "${svc}.${ns}.svc"
+              "${svc}.${ns}.svc.${clusterConfig.clusterDomain}"
+            ];
+          in
+          scope.mkCR certCrds.Certificate {
+            name = tlsSecretName;
             spec = {
-              # The container restarts with the kubelet's back-off, so six
-              # restarts cover a few minutes of an OpenBao that is still
-              # electing a leader.
-              backoffLimit = 6;
+              secretName = tlsSecretName;
+              commonName = name;
+              dnsNames =
+                svcNames name
+                ++ svcNames headlessName
+                ++ [ "*.${headlessName}.${ns}.svc.${clusterConfig.clusterDomain}" ];
+              # `bao` run in a pod dials the loopback address by default.
+              ipAddresses = [ "127.0.0.1" ];
+              privateKey.algorithm = "ECDSA";
+              usages = [ "server auth" ];
+              issuerRef = issuerRef self.caIssuer;
+            };
+          };
+
+        configMap = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "${name}-config";
+          data = {
+            "server.json" = builtins.toJSON serverConfig;
+            "start.sh" = builtins.readFile ./start.sh;
+          };
+        };
+
+        # Read only on pod 0's first start, so a change does not restart the
+        # pods.
+        initConfigMap =
+          if selfInit then
+            scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "${name}-init";
+              data."init.json" = builtins.toJSON initConfig;
+            }
+          else
+            null;
+
+        statefulSet =
+          {
+            inherit name;
+            spec = {
+              inherit replicas;
+              headlessService = self.headlessService;
+              # Pod 0 initializes the cluster and each later pod joins the
+              # pods before it, so they start one at a time.
+              podManagementPolicy = "OrderedReady";
+              updateStrategy.type = "RollingUpdate";
+              selector.matchLabels = labelsFor "server";
               template = {
-                metadata = {
-                  labels = labelsFor "reconcile";
-                  annotations."checksum/reconcile" = self.reconcileConfigMap.out.identityHash;
+                metadata.annotations = {
+                  "checksum/config" = self.configMap.out.identityHash;
+                }
+                # A secret-ref has no identityHash. The key is read at start.
+                // lib.optionalAttrs (unseal != null && unseal.out ? identityHash) {
+                  "checksum/unsealKey" = unseal.out.identityHash;
                 };
                 spec = {
-                  restartPolicy = "OnFailure";
-                  serviceAccount = self.reconcileServiceAccount;
+                  serviceAccount = self.serviceAccount;
+                  # Long enough for the active pod to hand over leadership.
+                  terminationGracePeriodSeconds = 30;
                   securityContext = {
                     runAsNonRoot = true;
                     runAsUser = uid;
                     runAsGroup = gid;
+                    fsGroup = gid;
+                    fsGroupChangePolicy = "OnRootMismatch";
                     seccompProfile.type = "RuntimeDefault";
                   };
                   containers = [
                     {
-                      name = "reconcile";
+                      name = "openbao";
                       image = kix.image.ref config.image;
                       imagePullPolicy = config.image.pullPolicy;
                       command = [
                         "/bin/sh"
-                        "/reconcile/reconcile.sh"
+                        "${dirs.config}/start.sh"
                       ];
-                      workingDir = "/reconcile";
-                      env = kix.mkEnvVars {
-                        BAO_ADDR = serviceUrl;
-                        BAO_CACERT = "${dirs.tls}/ca.crt";
-                        RECONCILE_ROLE = reconcileRole;
-                        HOME = "/tmp";
+                      inherit env;
+                      ports = [
+                        (kix.port "api" ports.api)
+                        (kix.port "cluster" ports.cluster)
+                      ]
+                      ++ lib.optional metricsOn (kix.port "metrics" ports.metrics);
+                      # 200 for the active pod and standbys; 429, 473, 501
+                      # (not initialized), and 503 (sealed) fail.
+                      readinessProbe = healthProbe "standbyok=true&perfstandbyok=true" // {
+                        periodSeconds = 5;
+                        timeoutSeconds = 3;
+                        failureThreshold = 2;
                       };
-                      resources = {
-                        requests = {
-                          cpu = "10m";
-                          memory = "32Mi";
-                        };
-                        limits = {
-                          cpu = "200m";
-                          memory = "128Mi";
-                        };
+                      # Succeeds while the process answers, sealed or not, so
+                      # a sealed pod waiting for its key or for a person is not
+                      # restarted.
+                      livenessProbe = healthProbe "standbyok=true&perfstandbyok=true&sealedcode=204&uninitcode=204" // {
+                        initialDelaySeconds = 10;
+                        periodSeconds = 10;
+                        timeoutSeconds = 5;
+                        failureThreshold = 6;
                       };
+                      resources = config.resources;
                       securityContext = containerSecurity;
                       volumeMounts = [
                         {
-                          name = "ca";
+                          name = "data";
+                          mountPath = dirs.data;
+                        }
+                        {
+                          name = "tls";
                           mountPath = dirs.tls;
                           readOnly = true;
                         }
@@ -1044,52 +954,361 @@ in
                     }
                   ];
                   volumes = [
+                    # A directory mount, not subPath, so a renewed
+                    # certificate reaches the pod and tls_auto_reload.
                     {
-                      name = "ca";
-                      secret = {
-                        secretName = tlsSecret;
-                        items = [
-                          {
-                            key = "ca.crt";
-                            path = "ca.crt";
-                          }
-                        ];
-                      };
+                      name = "tls";
+                      secret.secretName = tlsSecret;
                     }
                   ];
                 };
               };
+              volumeClaimTemplates = [
+                {
+                  metadata.name = "data";
+                  spec = {
+                    accessModes = [ "ReadWriteOnce" ];
+                    resources.requests.storage = toString config.storage.size;
+                  }
+                  // lib.optionalAttrs (storageClassName != null) { inherit storageClassName; };
+                }
+              ];
             };
           }
-          |> kix.withMounts [
-            (kix.mount.configMap self.reconcileConfigMap {
-              name = "reconcile";
-              mountPath = "/reconcile";
-              readOnly = true;
-            })
-            (kix.mount.emptyDir {
-              name = "tmp";
-              mountPath = "/tmp";
-            })
-          ]
-          |> scope.mkJob
-        else
-          null;
+          |> kix.withMounts (
+            [
+              (kix.mount.configMap self.configMap {
+                name = "config";
+                mountPath = dirs.config;
+                readOnly = true;
+              })
+              (kix.mount.emptyDir {
+                name = "tmp";
+                mountPath = "/tmp";
+              })
+            ]
+            ++ lib.optionals selfInit [
+              (kix.mount.configMap self.initConfigMap {
+                name = "init";
+                mountPath = dirs.init;
+                readOnly = true;
+              })
+              (kix.mount.secret unseal {
+                name = "unseal";
+                mountPath = dirs.unseal;
+                items = [
+                  {
+                    key = "key";
+                    path = "key";
+                  }
+                ];
+              })
+            ]
+          )
+          |> scope.mkStatefulSet;
 
-      root = {
-        resource = self.service;
-        requires = builtins.filter (r: r != null) [
-          self.headlessService
-          self.authDelegator
-          self.reconcile
-        ];
-        out = {
-          url = serviceUrl;
-          fqdn = self.service.out.fqdn;
-          port = toString ports.api;
-          caSecret = tlsSecretElsewhere;
-          inherit externalSecretsProvider;
+        # The config reads this Service's `out.fqdn`, so it selects through
+        # `rawSelector`; `out.selector` would recurse. Unready addresses are
+        # published so a starting pod resolves the peers it joins.
+        headlessService = scope.mkResource {
+          apiVersion = "v1";
+          kind = "Service";
+          name = headlessName;
+          labels."app.kubernetes.io/component" = "headless";
+          spec = {
+            clusterIP = "None";
+            publishNotReadyAddresses = true;
+            selector = self.statefulSet.rawSelector;
+            ports = [
+              {
+                name = "api";
+                port = ports.api;
+                targetPort = ports.api;
+                protocol = "TCP";
+              }
+              {
+                name = "cluster";
+                port = ports.cluster;
+                targetPort = ports.cluster;
+                protocol = "TCP";
+              }
+            ];
+          };
         };
-      };
-    };
+
+        service =
+          self.statefulSet
+          |> kix.service.fromWorkload {
+            inherit name;
+            labels."app.kubernetes.io/component" = "server";
+            ports = [
+              {
+                name = "api";
+                port = ports.api;
+                targetPort = "api";
+              }
+            ];
+          }
+          |> scope.mkResource;
+
+        # Sealed pods fail the readiness probe, and their metrics are what
+        # OpenBaoSealed reads, so the Service publishes unready addresses.
+        metricsService =
+          if metricsOn then
+            self.statefulSet
+            |> kix.service.fromWorkload {
+              name = metricsServiceName;
+              labels."app.kubernetes.io/component" = "metrics";
+              spec.publishNotReadyAddresses = true;
+              ports = [
+                {
+                  name = "metrics";
+                  port = ports.metrics;
+                  targetPort = "metrics";
+                  protocol = "TCP";
+                }
+              ];
+            }
+            |> scope.mkResource
+          else
+            null;
+
+        reconcileServiceAccount =
+          if selfInit then
+            scope.mkResource {
+              apiVersion = "v1";
+              kind = "ServiceAccount";
+              name = "${name}-reconcile";
+            }
+          else
+            null;
+
+        reconcileConfigMap =
+          if selfInit then
+            scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "${name}-reconcile";
+              data = reconcileData;
+            }
+          else
+            null;
+
+        reconcile =
+          if selfInit then
+            {
+              name = "${name}-reconcile";
+              labels = labelsFor "reconcile";
+              annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
+              requires = [ self.statefulSet ];
+              spec = {
+                # The container restarts with the kubelet's back-off, so six
+                # restarts cover a few minutes of an OpenBao that is still
+                # electing a leader.
+                backoffLimit = 6;
+                template = {
+                  metadata = {
+                    labels = labelsFor "reconcile";
+                    annotations."checksum/reconcile" = self.reconcileConfigMap.out.identityHash;
+                  };
+                  spec = {
+                    restartPolicy = "OnFailure";
+                    serviceAccount = self.reconcileServiceAccount;
+                    securityContext = {
+                      runAsNonRoot = true;
+                      runAsUser = uid;
+                      runAsGroup = gid;
+                      seccompProfile.type = "RuntimeDefault";
+                    };
+                    containers = [
+                      {
+                        name = "reconcile";
+                        image = kix.image.ref config.image;
+                        imagePullPolicy = config.image.pullPolicy;
+                        command = [
+                          "/bin/sh"
+                          "/reconcile/reconcile.sh"
+                        ];
+                        workingDir = "/reconcile";
+                        env = kix.mkEnvVars {
+                          BAO_ADDR = serviceUrl;
+                          BAO_CACERT = "${dirs.tls}/ca.crt";
+                          RECONCILE_ROLE = reconcileRole;
+                          HOME = "/tmp";
+                        };
+                        resources = {
+                          requests = {
+                            cpu = "10m";
+                            memory = "32Mi";
+                          };
+                          limits = {
+                            cpu = "200m";
+                            memory = "128Mi";
+                          };
+                        };
+                        securityContext = containerSecurity;
+                        volumeMounts = [
+                          {
+                            name = "ca";
+                            mountPath = dirs.tls;
+                            readOnly = true;
+                          }
+                        ];
+                      }
+                    ];
+                    volumes = [
+                      {
+                        name = "ca";
+                        secret = {
+                          secretName = tlsSecret;
+                          items = [
+                            {
+                              key = "ca.crt";
+                              path = "ca.crt";
+                            }
+                          ];
+                        };
+                      }
+                    ];
+                  };
+                };
+              };
+            }
+            |> kix.withMounts [
+              (kix.mount.configMap self.reconcileConfigMap {
+                name = "reconcile";
+                mountPath = "/reconcile";
+                readOnly = true;
+              })
+              (kix.mount.emptyDir {
+                name = "tmp";
+                mountPath = "/tmp";
+              })
+            ]
+            |> scope.mkJob
+          else
+            null;
+
+        root = {
+          resource = self.service;
+          requires = builtins.filter (r: r != null) [
+            self.headlessService
+            self.authDelegator
+            self.reconcile
+            self.metricsService
+            self.serviceMonitor
+            self.prometheusRules
+          ];
+          out = {
+            url = serviceUrl;
+            fqdn = self.service.out.fqdn;
+            port = toString ports.api;
+            caSecret = tlsSecretElsewhere;
+            inherit externalSecretsProvider;
+          };
+        };
+      }
+    )
+
+    # DI passes a build function only the arguments its formals name, so
+    # the wrapper names every argument kix.monitor reads.
+    (
+      {
+        self,
+        config,
+        scope,
+        lib,
+        prometheus ? null,
+        ...
+      }@args:
+      let
+        sel = ''namespace="${ns}",service="${metricsServiceName}"'';
+        by = "namespace, service";
+        instance = "OpenBao ${ns}/${name}";
+        # The gauges of pods that are unsealed, and of the active pod. Other
+        # pods keep exporting the values they had before they sealed or
+        # stepped down.
+        unsealed = "on (${by}, pod) vault_core_unsealed{${sel}} == 1";
+        active = "on (${by}, pod) vault_core_active{${sel}} == 1";
+        fromLeader = metric: "${metric}{${sel}} and ${active} and ${unsealed}";
+      in
+      kix.monitor {
+        service = "metricsService";
+        path = "/v1/sys/metrics";
+        # OpenBao answers in its own JSON format unless asked for Prometheus
+        # text, by this parameter or by an OpenMetrics Accept header, which
+        # not every scraper sends.
+        params.format = [ "prometheus" ];
+        alerts = {
+          OpenBaoDown = {
+            expr = "sum by (${by}) (up{${sel}}) == 0 or absent(up{${sel}})";
+            "for" = "10m";
+            severity = "critical";
+            summary = "OpenBao is down.";
+            description = "No pod of ${instance} has answered a scrape for 10 minutes, so clients cannot read secrets. Check the pods of the StatefulSet ${name} in ${ns}.";
+          };
+          OpenBaoAllSealed = {
+            expr = "max by (${by}) (vault_core_unsealed{${sel}}) == 0";
+            "for" = "5m";
+            severity = "critical";
+            summary = "Every OpenBao pod is sealed.";
+            description = "Every pod of ${instance} has been sealed for 5 minutes, so OpenBao serves no request. ${
+              if config.seal.type == "static" then
+                "The pods unseal themselves with the key in the unsealKey Secret; check that Secret and the pod logs."
+              else
+                "Unseal each pod with `bao operator unseal`."
+            }";
+          };
+          OpenBaoNoActiveNode = {
+            expr = "max by (${by}) (vault_core_unsealed{${sel}}) == 1 unless on (${by}) max by (${by}) (vault_core_active{${sel}} and ${unsealed}) == 1";
+            "for" = "5m";
+            severity = "critical";
+            summary = "OpenBao has no active pod.";
+            description = "Pods of ${instance} are unsealed but none has been active for 5 minutes, so requests fail. The pods cannot elect a Raft leader; check their logs and `bao operator raft list-peers`.";
+          };
+          # OpenBao adds to both counters on every audited request, zero when
+          # logging succeeds, so the series exist before the first failure.
+          # The ten-minute window already spans a restart, so the rule has
+          # no `for`.
+          OpenBaoAuditFailing = {
+            expr = "sum by (${by}) (increase(vault_audit_log_request_failure{${sel}}[10m])) > 0 or sum by (${by}) (increase(vault_audit_log_response_failure{${sel}}[10m])) > 0";
+            severity = "critical";
+            summary = "An OpenBao audit device fails to log.";
+            description = "${instance} has failed to write audit entries in the last 10 minutes. OpenBao refuses a request that no audit device can log. Check the audit devices (`bao audit list`) and the space or endpoint they write to.";
+          };
+          OpenBaoMetricsMissing = {
+            expr = "count by (${by}) (up{${sel}} == 1) unless on (${by}) count by (${by}) (vault_core_unsealed{${sel}})";
+            "for" = "15m";
+            severity = "warning";
+            summary = "OpenBao reports no metrics.";
+            description = "The pods of ${instance} are scraped but report no vault_core_unsealed, so the seal and leader alerts cannot fire. Check `settings.telemetry` for a filter that drops the vault.core metrics, and the server log.";
+          };
+        }
+        // lib.optionalAttrs (replicas > 1) {
+          OpenBaoSealed = {
+            expr = "max by (${by}, pod) (vault_core_unsealed{${sel}}) == 0 and on (${by}) max by (${by}) (vault_core_unsealed{${sel}}) == 1";
+            "for" = "10m";
+            severity = "warning";
+            summary = "An OpenBao pod is sealed.";
+            description = "Pod {{ $labels.pod }} of ${instance} has been sealed for 10 minutes, so it serves no request and one more lost pod stops OpenBao. ${
+              if config.seal.type == "static" then
+                "It unseals itself with the key in the unsealKey Secret; check that Secret and the pod log."
+              else
+                "Unseal it with `bao operator unseal`."
+            }";
+          };
+          # Autopilot reports healthy = 0 when a peer lags or does not
+          # answer, and failure_tolerance = 0 when losing one more voter
+          # loses quorum.
+          OpenBaoRaftUnhealthy = {
+            expr = "min by (${by}) (${fromLeader "vault_autopilot_healthy"}) == 0 or min by (${by}) (${fromLeader "vault_autopilot_failure_tolerance"}) < 1";
+            "for" = "10m";
+            severity = "warning";
+            summary = "OpenBao's Raft cluster is degraded.";
+            description = "The active pod of ${instance} reports an unhealthy Raft peer or no failure tolerance, so losing one more pod stops OpenBao. Check `bao operator raft autopilot state` and the pods that it names.";
+          };
+        };
+      } args
+    )
+  ];
 }

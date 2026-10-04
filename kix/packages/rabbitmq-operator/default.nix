@@ -58,8 +58,23 @@
 # listens on that port. The operator's traffic to the RabbitMQ pods comes
 # from rabbitmq-cluster.
 #
-# Limits: the package ships no alerts. The operator's metrics endpoint is
-# served over plain HTTP (`--metrics-secure` is off, as upstream ships it).
+# Alerts: with a prometheus dependency and `metrics.enabled`, a
+# PrometheusRule `<instance>-alerts` selects the metrics Service's series.
+#   RabbitMQOperatorDown (warning)             no operator replica answers
+#                                              a scrape. Running clusters
+#                                              keep serving; RabbitmqCluster
+#                                              changes are not applied, and
+#                                              the webhooks refuse creates
+#                                              and updates.
+#   RabbitMQOperatorReconcileErrors (warning)  reconciles fail, such as
+#                                              `FailedReconcilePVC`.
+# Changes the operator refuses without an error (`UnsupportedOperation` on
+# a lower replica count) set only a condition and an Event, so no metric
+# shows them. Fewer ready replicas than desired is left to
+# prometheus-default-rules (KubeDeploymentReplicasMismatch).
+#
+# Limits: the operator's metrics endpoint is served over plain HTTP
+# (`--metrics-secure` is off, as upstream ships it).
 #
 # root = the operator Deployment; the webhook check runs after it.
 #
@@ -103,6 +118,9 @@ let
   # issued for. Plain names: the Deployment mounts the Certificate's Secret
   # and the Service selects the Deployment's pods, so a reference to the
   # Service would close a cycle.
+  # The metrics Service, whose name the alerts select on.
+  metricsServiceName = "${name}-metrics";
+
   webhookServiceName = "${name}-webhook";
   certificateName = "${name}-webhook";
   certSecretName = "${name}-webhook-tls";
@@ -394,7 +412,7 @@ in
           if config.metrics.enabled && prometheus != null then
             self.deployment
             |> kix.service.fromWorkload {
-              name = "${name}-metrics";
+              name = metricsServiceName;
               labels."app.kubernetes.io/component" = "metrics";
               ports = [
                 {
@@ -655,7 +673,29 @@ in
         prometheus ? null,
         ...
       }@args:
-      kix.monitor { service = "metricsService"; } args
+      let
+        sel = ''namespace="${ns}",service="${metricsServiceName}"'';
+        operator = "RabbitMQ Cluster Operator ${ns}/${name}";
+      in
+      kix.monitor {
+        service = "metricsService";
+        alerts = {
+          RabbitMQOperatorDown = {
+            expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+            "for" = "10m";
+            severity = "warning";
+            summary = "The RabbitMQ Cluster Operator is down.";
+            description = "No replica of the ${operator} has answered a scrape for 10 minutes. Running RabbitMQ clusters keep serving, but changes to RabbitmqClusters are not applied, and its webhooks refuse creating or updating one. Check the operator Deployment in ${ns}.";
+          };
+          RabbitMQOperatorReconcileErrors = {
+            expr = "sum by (namespace, service, controller) (rate(controller_runtime_reconcile_errors_total{${sel}}[5m])) > 0";
+            "for" = "15m";
+            severity = "warning";
+            summary = "The RabbitMQ Cluster Operator fails to reconcile RabbitMQ clusters.";
+            description = "The {{ $labels.controller }} controller of the ${operator} has failed reconciles for 15 minutes, so a RabbitmqCluster's StatefulSet, Services, or claims may not match its spec. The operator log and the ReconcileSuccess condition of the RabbitmqCluster name the error.";
+          };
+        };
+      } args
     )
   ];
 }
