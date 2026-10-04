@@ -51,6 +51,28 @@
 #   prometheus (optional)        metrics Services, ServiceMonitors, and the
 #                                backup alerts.
 #
+# Alerts: with a prometheus dependency and `metrics.enabled`, a
+# PrometheusRule `<instance>-alerts` selects the server Service's series.
+#   VeleroBackupFailed (warning)   a backup failed or partly failed in the
+#                                  last hour.
+#   VeleroBackupMissing (warning)  a schedule has no successful backup
+#                                  within its age (below).
+#   VeleroServerDown (warning)     no running server is scraped.
+# A schedule not in `metrics.maxBackupAge` takes `kix.schedules.staleAfter`
+# of its cron line, two periods plus two hours (50h for a daily schedule),
+# and the build fails for one whose period the package cannot read, such
+# as a line that names days of the month. Up to 6d, VeleroBackupMissing
+# compares the schedule's backup counters across that window, which the
+# 7d Prometheus retention holds. A longer age compares
+# velero_backup_last_successful_timestamp with the current time; Velero
+# reports that gauge only after a backup succeeds, so after a server
+# restart, or before the first success, a weekly schedule's alert is silent
+# until its next success. Schedules built through `out.mkSchedule` share
+# one age, `metrics.otherSchedulesMaxAge` (50h by default), since the
+# package cannot read their cron lines. Left to prometheus-default-rules: crash loops
+# (KubePodCrashLooping) and a node-agent pod that does not start
+# (KubeDaemonSetRolloutStuck).
+#
 # Exposes:
 #   out.crds.<Kind>              the 13 CRDs. Velero reads its CRs only in
 #                                its own namespace, so build one there:
@@ -547,11 +569,19 @@ in
     };
 
     metrics = kix.options.monitor // {
+      otherSchedulesMaxAge = lib.mkOption {
+        type = kix.types.promDuration;
+        default = "50h";
+        example = "338h";
+        description = "How long a Schedule this package does not render, such as one built through `out.mkSchedule`, may go without a successful backup before VeleroBackupMissing fires. The package cannot read those cron lines, so one age covers them all. The default suits daily schedules; a weekly one needs \"338h\".";
+      };
       maxBackupAge = lib.mkOption {
-        type = lib.types.strMatching "([0-9]+(ms|s|m|h|d|w|y))+";
-        default = "26h";
-        example = "8d";
-        description = "How long a schedule may go without a successful backup before the VeleroBackupMissing alert fires, as a Prometheus duration. Set it above the longest interval between a schedule's runs plus its run time.";
+        type = lib.types.attrsOf kix.types.promDuration;
+        default = { };
+        example = {
+          monthly = "64d";
+        };
+        description = "How long each schedule, by its name in `schedules`, may go without a successful backup before VeleroBackupMissing fires, as a Prometheus duration. A schedule not listed takes `kix.schedules.staleAfter` of its cron line: two periods plus two hours, so `@daily` gives 50h and a line that names days of the week gives 338h, and one missed run does not fire it. List a schedule whose period cannot be read, such as one that names days of the month: while the alerts render, the build fails without it. An age over 6d is compared with the last success's timestamp, which Velero reports only after a success since the server started.";
       };
     };
   };
@@ -566,6 +596,9 @@ in
       needsNodeAgent =
         fsBackupPolicies != [ ]
         || builtins.any (t: t.defaultVolumesToFsBackup or false || t.snapshotMoveData or false) templates;
+      unknownAgeKeys = builtins.filter (k: !(config.schedules ? ${k})) (
+        builtins.attrNames config.metrics.maxBackupAge
+      );
       setByPackage =
         location:
         lib.filter (k: location ? ${k}) [
@@ -600,6 +633,17 @@ in
           || p.conditions.csi.driver != null
         ) config.volumePolicies;
         message = "a volume policy sets conditions.csi.volumeAttributes without conditions.csi.driver, and Velero refuses that policy file, so every backup would fail. Set the driver.";
+      }
+      {
+        assertion = unknownAgeKeys == [ ];
+        message = "metrics.maxBackupAge names ${lib.concatStringsSep ", " unknownAgeKeys}, which ${
+          if builtins.length unknownAgeKeys == 1 then "is not a schedule" else "are not schedules"
+        } in schedules. Its keys are schedule names: ${
+          if config.schedules == { } then
+            "there are none"
+          else
+            lib.concatStringsSep ", " (builtins.attrNames config.schedules)
+        }.";
       }
       (dataPathLabelCollisions "nodeAgent.settings" config.nodeAgent.settings)
       (dataPathLabelCollisions "repositoryMaintenance.settings" config.repositoryMaintenance.settings)
@@ -1291,32 +1335,77 @@ in
       }@args:
       let
         server = ''namespace="${ns}",service="${name}"'';
-        scheduled = ''${server},schedule!=""'';
-        age = config.metrics.maxBackupAge;
+        ageOf =
+          scheduleName: schedule:
+          let
+            derived = kix.schedules.staleAfter schedule.schedule;
+          in
+          if config.metrics.maxBackupAge ? ${scheduleName} then
+            config.metrics.maxBackupAge.${scheduleName}
+          else if derived != null then
+            derived
+          else
+            throw "${who}: schedules.${scheduleName}.schedule \"${schedule.schedule}\" does not show how often it runs, so VeleroBackupMissing has no threshold for it. Set metrics.maxBackupAge.${scheduleName} to twice the longest gap between two runs plus the time a backup takes, such as \"64d\" for a monthly schedule.";
+        ages = lib.mapAttrs ageOf config.schedules;
+        # The counter form reads a sample `age` ago, so the age must fit
+        # inside the prometheus package's default retention of 7d.
+        counterFormLimit = kix.durations.toSeconds "6d";
+        # Velero creates a schedule's counters at 0 when it reconciles the
+        # schedule, so they exist before the first run. The counter form
+        # reports a schedule the server knew `age` ago and still knows,
+        # with no success counted in between. The timestamp form returns
+        # nothing while velero_backup_last_successful_timestamp is absent,
+        # and Velero sets that gauge only when a backup succeeds, so after
+        # a server restart the alert for such a schedule is silent until
+        # its next success.
+        missingFor =
+          sel: age:
+          let
+            seconds = kix.durations.toSeconds age;
+          in
+          if seconds <= counterFormLimit then
+            "((sum by (namespace, schedule) (velero_backup_attempt_total{${sel}} offset ${age}) and on (namespace, schedule) sum by (namespace, schedule) (velero_backup_attempt_total{${sel}})) unless on (namespace, schedule) (sum by (namespace, schedule) (increase(velero_backup_success_total{${sel}}[${age}])) > 0))"
+          else
+            "(time() - max by (namespace, schedule) (velero_backup_last_successful_timestamp{${sel}}) > ${toString seconds})";
+        missing = scheduleName: missingFor ''${server},schedule="${scheduleName}"'';
+        # Schedules built through out.mkSchedule, whose cron lines this
+        # package never sees.
+        otherSel =
+          ''${server},schedule!=""''
+          +
+            lib.optionalString (config.schedules != { })
+              '',schedule!~"${
+                lib.concatMapStringsSep "|" lib.escapeRegex (builtins.attrNames config.schedules)
+              }"'';
+        otherAge = config.metrics.otherSchedulesMaxAge;
       in
       kix.monitor {
         service = "service";
         port = "http-monitoring";
         alerts = {
           VeleroBackupFailed = {
-            expr = "sum by (schedule) (increase(velero_backup_failure_total{${server}}[1h]) + increase(velero_backup_partial_failure_total{${server}}[1h])) > 0";
+            expr = "sum by (namespace, schedule) (increase(velero_backup_failure_total{${server}}[1h]) + increase(velero_backup_partial_failure_total{${server}}[1h])) > 0";
             severity = "warning";
             summary = "A Velero backup failed or partly failed in the last hour";
             description = "Velero in ${ns} recorded a failed or partially failed backup for schedule {{ $labels.schedule }}. Run velero backup describe on its latest backup.";
           };
-          # Velero creates a schedule's counters at 0 when it reconciles the
-          # schedule, so they exist before the first run. A schedule is
-          # reported when the server knew it maxBackupAge ago, still knows
-          # it, and counted no success in between. The last-success
-          # timestamp gauge is not used: a restarted server reports it only
-          # after its next success.
+        }
+        // {
           VeleroBackupMissing = {
-            expr = "(sum by (schedule) (velero_backup_attempt_total{${scheduled}} offset ${age}) and on (schedule) sum by (schedule) (velero_backup_attempt_total{${scheduled}})) unless on (schedule) (sum by (schedule) (increase(velero_backup_success_total{${scheduled}}[${age}])) > 0)";
+            expr = lib.concatStringsSep " or " (
+              lib.mapAttrsToList missing ages ++ [ (missingFor otherSel otherAge) ]
+            );
             "for" = "15m";
             severity = "warning";
-            summary = "A Velero schedule has no successful backup within metrics.maxBackupAge";
-            description = "Schedule {{ $labels.schedule }} of Velero in ${ns} has not completed a backup in ${age}. Check the backup location with velero backup-location get and the schedule's latest backups.";
+            summary = "A Velero schedule has no successful backup within its metrics.maxBackupAge";
+            description = "Schedule {{ $labels.schedule }} of Velero in ${ns} has not completed a backup within its threshold (${
+              lib.concatStringsSep ", " (
+                lib.mapAttrsToList (n: a: "${n} ${a}") ages ++ [ "other schedules ${otherAge}" ]
+              )
+            }). Check the backup location with velero backup-location get and the schedule's latest backups.";
           };
+        }
+        // {
           VeleroServerDown = {
             expr = "absent(up{${server}} == 1)";
             "for" = "15m";

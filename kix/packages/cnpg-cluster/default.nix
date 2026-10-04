@@ -126,10 +126,11 @@
 #                                          shorter).
 #   CNPGBackupFailed (warning)             the latest base backup failed.
 #   CNPGBackupMetricsMissing (warning)     the plugin metrics are missing.
-# `metrics.maxBackupAge` defaults to two of the schedule's periods plus two
-# hours (50h for the default daily schedule), and must be
-# set for a schedule whose period the package cannot read: `@every` or a
-# cron expression with a day-of-month, month, or day-of-week field.
+# `metrics.maxBackupAge` defaults to `kix.schedules.staleAfter` of the
+# schedule, two periods plus two hours (50h for the default daily schedule),
+# and must be set for a schedule whose period the package cannot read: an
+# `@every` duration with a fraction, or a cron expression that restricts
+# the day of the month or the month.
 # Left to prometheus-default-rules: full data and WAL volumes
 # (KubePersistentVolumeFillingUp), crash loops (KubePodCrashLooping), pods
 # that do not start (KubePodNotReady), and one instance of several not
@@ -209,55 +210,6 @@ let
   # The PodMonitor's name. Its series carry job="<namespace>/<name>", which
   # the alerts select on.
   podMonitorName = name;
-
-  # A Prometheus duration such as "26h" or "1h30m", in seconds.
-  durationType = lib.types.strMatching "([0-9]+[smhdw])+";
-  durationUnits = {
-    s = 1;
-    m = 60;
-    h = 3600;
-    d = 86400;
-    w = 604800;
-  };
-  durationSeconds =
-    d:
-    lib.foldl' (
-      acc: p: acc + lib.toInt (builtins.elemAt p 0) * durationUnits.${builtins.elemAt p 1}
-    ) 0 (builtins.filter builtins.isList (builtins.split "([0-9]+)([smhdw])" d));
-
-  # Two of the longest gaps between base backups of a schedule, so one
-  # missed run does not fire CNPGBackupMissing (CNPGBackupFailed reports
-  # the failed run), plus two hours for a backup to finish. A
-  # six-field schedule whose day-of-month, month, and day-of-week fields are
-  # all `*` runs at least daily. Null when the period cannot be read.
-  descriptorMaxAge = {
-    "@hourly" = "4h";
-    "@daily" = "50h";
-    "@midnight" = "50h";
-    "@weekly" = "338h";
-    "@monthly" = "1490h";
-    "@yearly" = "17570h";
-    "@annually" = "17570h";
-  };
-  scheduleMaxAge =
-    schedule:
-    let
-      fields = builtins.filter builtins.isString (builtins.split "[[:space:]]+" (lib.trim schedule));
-    in
-    if descriptorMaxAge ? ${schedule} then
-      descriptorMaxAge.${schedule}
-    else if
-      builtins.length fields == 6
-      &&
-        lib.drop 3 fields == [
-          "*"
-          "*"
-          "*"
-        ]
-    then
-      "50h"
-    else
-      null;
 
   # The S3 credential selectors every ObjectStore names. Each reads the
   # Secret key of its own name unless backup.credentialKeys names another;
@@ -394,16 +346,16 @@ in
 
     metrics = kix.options.monitor // {
       maxReplicationLag = lib.mkOption {
-        type = durationType;
+        type = kix.types.promDuration;
         default = "5m";
         example = "30s";
         description = "How far a standby's replay may fall behind the primary before CNPGReplicationLagHigh fires, as a Prometheus duration. A standby that cannot keep up loses that much committed data if it is promoted. The default is the threshold of CloudNativePG's sample rules.";
       };
       maxBackupAge = lib.mkOption {
-        type = lib.types.nullOr durationType;
+        type = lib.types.nullOr kix.types.promDuration;
         default = null;
         example = "15d";
-        description = "How long the cluster may go without a completed base backup before CNPGBackupMissing fires, as a Prometheus duration. Null derives it from `backup.schedule`: two periods plus two hours for a descriptor (`@daily` gives 50h), and 50h for a six-field schedule that runs every day, so one missed run does not fire it. Set it for `@every` and for other cron schedules: while the alerts render, the build fails without it. CNPGBackupMissing compares it with the last backup's timestamp, so it may be longer than the Prometheus retention.";
+        description = "How long the cluster may go without a completed base backup before CNPGBackupMissing fires, as a Prometheus duration. Null derives it from `backup.schedule` with `kix.schedules.staleAfter`: two periods plus two hours, so `@daily` gives 50h and a schedule that names days of the week gives 338h, and one missed run does not fire it. Set it for a schedule whose period cannot be read, such as one that names days of the month: while the alerts render, the build fails without it. CNPGBackupMissing compares it with the last backup's timestamp, so it may be longer than the Prometheus retention.";
       };
     };
 
@@ -922,7 +874,7 @@ in
             config.metrics.maxBackupAge
           else
             let
-              derived = scheduleMaxAge config.backup.schedule;
+              derived = kix.schedules.staleAfter config.backup.schedule;
             in
             if derived != null then
               derived
@@ -932,7 +884,8 @@ in
         # first base backup when it creates the ScheduledBackup rather than
         # at the first scheduled run. A day covers that backup on any
         # schedule; an hourly schedule's shorter threshold applies as is.
-        firstBackupWindow = if durationSeconds backupAge < durationSeconds "24h" then backupAge else "24h";
+        firstBackupWindow =
+          if kix.durations.toSeconds backupAge < kix.durations.toSeconds "24h" then backupAge else "24h";
         backupTs = "barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{${sel}}";
         failedTs = "barman_cloud_cloudnative_pg_io_last_failed_backup_timestamp{${sel}}";
         runbook =
@@ -1029,7 +982,7 @@ in
           # The lag is 0 while a standby has replayed all it received, so an
           # idle primary does not raise it.
           CNPGReplicationLagHigh = {
-            expr = "max by (namespace, job, pod) (cnpg_pg_replication_lag{${sel}}) > ${toString (durationSeconds lag)}";
+            expr = "max by (namespace, job, pod) (cnpg_pg_replication_lag{${sel}}) > ${toString (kix.durations.toSeconds lag)}";
             "for" = "15m";
             severity = "warning";
             summary = "A CloudNativePG standby is far behind the primary.";
@@ -1050,7 +1003,7 @@ in
           # Prometheus retention. The plugin reports 0 until a backup
           # completes; CNPGBackupNeverCompleted covers that case.
           CNPGBackupMissing = {
-            expr = "time() - max by (namespace, job) (${backupTs} > 0) > ${toString (durationSeconds backupAge)}";
+            expr = "time() - max by (namespace, job) (${backupTs} > 0) > ${toString (kix.durations.toSeconds backupAge)}";
             "for" = "5m";
             severity = "warning";
             summary = "A CloudNativePG cluster has no recent base backup.";

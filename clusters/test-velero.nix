@@ -9,7 +9,12 @@
 # runs in the pods node-agent launches and the repository maintenance Job
 # the server launches, which the `velero-data-path` policy lets out.
 #
+# prometheus-operator is the `prometheus` dependency, so Velero's alert
+# rules render; test-velero.rules-test.yaml tests them with promtool. The
+# `weekly` schedule gives VeleroBackupMissing its timestamp form.
+#
 # Build:  nix build .#cluster-velero --extra-experimental-features pipe-operators
+# Rules:  nix build ./clusters#checks.x86_64-linux.rules-cluster-velero --extra-experimental-features pipe-operators
 # Deploy: scripts/kind-velero.sh
 
 { kix, packages }:
@@ -171,10 +176,17 @@ kix.buildCluster {
                 # The store ignores the region, and the AWS plugin needs one.
                 config.region = "us-east-1";
               };
-              schedules.daily = {
-                schedule = "@every 24h";
-                skipImmediately = true;
-                template.includedNamespaces = [ "velero-smoke" ];
+              schedules = {
+                daily = {
+                  schedule = "@every 24h";
+                  skipImmediately = true;
+                  template.includedNamespaces = [ "velero-smoke" ];
+                };
+                weekly = {
+                  schedule = "CRON_TZ=UTC 0 3 * * 0";
+                  skipImmediately = true;
+                  template.includedNamespaces = [ "velero-smoke" ];
+                };
               };
               volumePolicies = [
                 {
@@ -187,6 +199,7 @@ kix.buildCluster {
         };
 
         velero-smoke.smoke.package = smokePackage;
+        monitoring.prometheus-operator.package = packages.prometheus-operator;
       };
     }
   ];
