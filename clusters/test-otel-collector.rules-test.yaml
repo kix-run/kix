@@ -26,6 +26,23 @@ tests:
             exp_annotations:
               summary: An OpenTelemetry Collector is down.
               description: Prometheus has not scraped the collector at 10.0.0.1:8888 for 5 minutes; telemetry sent to it may be lost.
+  # The gateway's alert selects the gateway's Service.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="observability",service="gateway",instance="10.0.0.3:8888"}'
+        values: '1 1 0x10'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: OtelCollectorDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: observability
+              service: gateway
+              instance: 10.0.0.3:8888
+            exp_annotations:
+              summary: An OpenTelemetry Collector is down.
+              description: Prometheus has not scraped the collector at 10.0.0.3:8888 for 5 minutes; telemetry sent to it may be lost.
   # Healthy targets fire nothing.
   - interval: 1m
     input_series:

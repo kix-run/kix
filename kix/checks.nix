@@ -71,14 +71,24 @@ rec {
           cp ${ruleTests} rules/rules-test.yaml
           # promtool reads `rule_files` as globs and loads nothing from one
           # that matches no file, so a test expecting no alerts would pass.
-          for g in $(yq '.rule_files[]' rules/rules-test.yaml); do
+          # stdenv sets nullglob, which would drop such an entry here too.
+          shopt -u nullglob
+          if [ "$(yq '.rule_files | length' rules/rules-test.yaml)" = 0 ]; then
+            echo "${name}: ${baseNameOf (toString ruleTests)} lists no rule_files." >&2
+            exit 1
+          fi
+          yq '.rule_files[]' rules/rules-test.yaml | while IFS= read -r g; do
             set -- rules/$g
             if [ ! -e "$1" ]; then
               echo "${name}: rule_files entry '$g' in ${baseNameOf (toString ruleTests)} matches no rendered PrometheusRule. Rendered: $(cd rules && find . -name '*.yaml' ! -name rules-test.yaml | sed 's|^\./||' | tr '\n' ' ')" >&2
               exit 1
             fi
           done
-          (cd rules && promtool test rules rules-test.yaml)
+          (cd rules && promtool test rules rules-test.yaml) 2>&1 | tee test.log
+          if grep -q 'no file match pattern' test.log; then
+            echo "${name}: promtool loaded no rules for an entry of rule_files." >&2
+            exit 1
+          fi
         ''
         + ''
           touch $out

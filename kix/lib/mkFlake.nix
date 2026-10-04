@@ -117,14 +117,15 @@ let
         );
       }) resolvedClusters;
 
-      # `test-foo.nix` declares its alert rule tests in `test-foo.rules-test.yaml`
-      # beside it. A cluster given as a value, not a path, has none.
+      # A cluster file `foo.nix` declares its alert rule tests in
+      # `foo.rules-test.yaml` beside it. A cluster given as a value, not a
+      # path, has none.
       ruleTestsOf =
         clusterDef:
         let
           sibling =
-            if builtins.isPath clusterDef then
-              dirOf clusterDef + "/${lib.removeSuffix ".nix" (baseNameOf clusterDef)}.rules-test.yaml"
+            if builtins.isPath clusterDef || builtins.isString clusterDef then
+              "${dirOf clusterDef}/${lib.removeSuffix ".nix" (baseNameOf clusterDef)}.rules-test.yaml"
             else
               null;
         in
