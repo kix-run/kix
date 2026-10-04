@@ -443,6 +443,12 @@ in
         name = tlsSecretName;
         by = self.serverCertificate;
       };
+      # The same Secret for a resource in another namespace. The deploy looks
+      # up an untrackedRef in the referring manifest's namespace, so a
+      # ClusterSecretStore or another namespace's SecretStore would wait for
+      # a Secret that is never there. The Certificate is named like its
+      # Secret, and its out.name makes the reader wait until it is Ready.
+      tlsSecretElsewhere = self.serverCertificate.out.name;
 
       headlessFqdn = self.headlessService.out.fqdn;
       podUrl = i: "https://${name}-${toString i}.${headlessFqdn}:${toString ports.api}";
@@ -656,7 +662,7 @@ in
               version = kvVersion engine;
               caProvider = {
                 type = "Secret";
-                name = tlsSecret;
+                name = tlsSecretElsewhere;
                 key = "ca.crt";
                 namespace = ns;
               };
@@ -1081,7 +1087,7 @@ in
           url = serviceUrl;
           fqdn = self.service.out.fqdn;
           port = toString ports.api;
-          caSecret = tlsSecret;
+          caSecret = tlsSecretElsewhere;
           inherit externalSecretsProvider;
         };
       };

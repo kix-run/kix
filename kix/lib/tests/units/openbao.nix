@@ -263,12 +263,15 @@ in
 
   # The store from the provider reads the CA from OpenBao's namespace, logs
   # in as the consumer's ServiceAccount, and is ordered after the reconcile
-  # Job that writes the role.
+  # Job that writes the role and after the Certificate that writes the CA
+  # Secret. It expects no Secret by name: the deploy would look for it in
+  # the store's own namespace, and a ClusterSecretStore has none.
   openbao-external-secrets-provider =
     let
       store = find cluster "ClusterSecretStore" "openbao";
       vault = store.spec.provider.vault;
       job = hashOf "secrets" "openbao" "reconcile";
+      certificate = hashOf "secrets" "openbao" "serverCertificate";
     in
     (
       vault.server == "https://openbao.secrets.svc.cluster.local:8200"
@@ -291,6 +294,8 @@ in
           };
         }
       && lib.any (lib.hasInfix job) (dependsOn store)
+      && lib.any (lib.hasInfix certificate) (dependsOn store)
+      && !((store.metadata.annotations or { }) ? ${kixKeys.expects})
     )
     || throw "openbao provider: ${builtins.toJSON store}";
 
