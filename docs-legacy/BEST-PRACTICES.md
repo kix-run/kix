@@ -770,6 +770,104 @@ Three properties are worth stating because they are easy to lose:
   truth is worth more than a value fetched over the network during a deploy,
   which nobody could review before it was applied.
 
+### 9.6 A package ships the alerts only it can write
+
+A package knows things about its software that a generic rule set cannot:
+which metric means a replica has gone read-only, how often its backups run,
+what memory limit it was given. So a package that exposes metrics ships alerts
+for its own failure modes, the same way it ships its own health probe. The
+mechanics are in HANDBOOK §9.4 ("Writing alerts"). The review items are `Mo`
+in the `package-review` skill, which also gives the research steps for
+writing a package's alerts.
+
+**Every alert must be actionable.** A page should be urgent, important,
+actionable, and real ([Ewaschuk][ewaschuk]). People can respond urgently to
+only a few pages a day, so each rule must earn its place. It must detect a
+condition nothing else catches, someone must be able to act on it, and it
+must not fire on a healthy cluster ([Google SRE, ch. 6][sre6]). An alert that
+fires falsely teaches people to ignore the others.
+
+**A package alerts on the causes it understands, and leaves symptom paging to
+the site.** The best page is a symptom users notice: requests failing, or
+latency high ([Ewaschuk][ewaschuk]). Symptom thresholds depend on traffic and
+on the site's service-level objectives, and a package knows neither. A
+package therefore alerts on these:
+
+- **The component stopped reporting.** No target, or every target down. Every
+  other alert in the package evaluates to nothing when its metrics disappear,
+  so this one has to exist.
+- **Data at risk.** A backup, WAL archive, or replication that has not
+  succeeded recently enough, measured against the schedule the package
+  configured. Alert on "last success too old", not on one failure, and allow
+  at least two missed runs ([Prometheus docs][promalert]).
+- **A stuck state the software reports.** A replica read-only, a vault
+  sealed, no leader, or a certificate not ready.
+- **Exhaustion before it becomes an outage.** Disk, memory against the
+  container limit, connection slots, or quota. These are causes, but by the
+  time the symptom shows it is too late to act ([Ewaschuk][ewaschuk]).
+
+Latency and error-rate alerts in a package are `warning`, with thresholds the
+instance can change. The site writes its own SLO alerts.
+
+**Severity says how soon a person must act.** The three values are the
+monitoring-mixins ones ([mixins][mixins]); the meanings below are how Kix
+packages use them:
+
+| Severity | Meaning | Use in a package |
+|---|---|---|
+| `critical` | Act now. Usually pages. | The service is down, or data is at risk now. |
+| `warning` | Act within a working day, as a ticket. | Degradation, a resource heading for its limit, or a failure a retry may still fix. |
+| `info` | No action on its own. Context for other alerts. | Rarely. Alertmanager should not send an `info` alert on its own. |
+
+Choose the lower severity when in doubt. A site can still page on a
+`warning` it cares about through its Alertmanager routes, while a noisy
+`critical` teaches people to ignore pages.
+
+**Thresholds come from what the package knows.** Derive a threshold from the
+evaluated configuration where one exists: memory alerts from
+`resources.limits.memory`, replica alerts from the replica count, and
+staleness from the backup schedule. Otherwise make the threshold a typed
+option with a default that holds on any healthy cluster, and say in the
+option description where the default comes from.
+
+**Alerts do not duplicate the cluster's generic rules.**
+`prometheus-default-rules` (`monitoring.defaultRules.enabled`) vendors the
+kube-prometheus rules, which cover crash-looping pods, unavailable replicas,
+volumes filling up, failed Jobs, nodes, and the API server. A package alert
+that restates one of those pages twice for one fault. A package adds what
+those rules cannot see, which is the meaning of the software's own metrics.
+
+**Prefer upstream's rules when upstream maintains them.** The authors of a
+program write its basic alerts best, and those alerts should change with its
+versions ([mixins design][mixinsdesign]). Some upstreams ship maintained rules
+as YAML or a compiled mixin, for example CloudNativePG, RabbitMQ,
+VictoriaMetrics, Tempo, and Loki. When those rules match the version the
+package pins, vendor them the way `prometheus-default-rules` does: a pinned
+copy, selectors rewritten to the instance, a typed toggle per rule group, and
+a test that every expression carries the instance's selector.
+Write your own when upstream ships none, when its rules need an exporter the
+package does not run, or when they cannot be scoped to one instance. Vendored
+rules pass the same review as written ones.
+
+**An alert says what it means and what to check first.** `summary` is one
+fixed sentence. `description` names the instance and the value, says what
+the alert means, and gives the first thing to check. A few lines on what the
+alert means are more use on call than a long playbook ([Ewaschuk][ewaschuk]). Kix has no runbook site, so `runbook_url`
+points only at a maintained upstream runbook for the same condition.
+
+**A rule is tested like code.** A rule that cannot match, because a label is
+misspelled or a metric was renamed, looks exactly like a healthy system
+([Cloudflare][pint]). A test shows the rule fires on a fixture that breaks
+the condition, stays quiet on a healthy one, and carries the labels
+Alertmanager routes on.
+
+[ewaschuk]: https://docs.google.com/document/d/199PqyG3UsyXlwieHaqbGiWVa8eMWi8zzAn0YfcApr8Q
+[sre6]: https://sre.google/sre-book/monitoring-distributed-systems/
+[promalert]: https://prometheus.io/docs/practices/alerting/
+[mixins]: https://github.com/monitoring-mixins/docs
+[mixinsdesign]: https://github.com/monitoring-mixins/docs/blob/master/design.pdf
+[pint]: https://blog.cloudflare.com/monitoring-our-monitoring/
+
 ## 10. AI as multiplier on typed surfaces
 
 Agents compound on validated APIs and structured diagnostics; they hallucinate
