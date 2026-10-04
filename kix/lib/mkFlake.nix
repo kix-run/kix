@@ -117,8 +117,24 @@ let
         );
       }) resolvedClusters;
 
+      # `test-foo.nix` declares its alert rule tests in `test-foo.rules-test.yaml`
+      # beside it. A cluster given as a value, not a path, has none.
+      ruleTestsOf =
+        clusterDef:
+        let
+          sibling =
+            if builtins.isPath clusterDef then
+              dirOf clusterDef + "/${lib.removeSuffix ".nix" (baseNameOf clusterDef)}.rules-test.yaml"
+            else
+              null;
+        in
+        if sibling != null && builtins.pathExists sibling then sibling else null;
+
       clusterChecks = lib.concatMapAttrs (cname: cluster: {
         "schema-cluster-${cname}" = kixChecks.schemaCheck "cluster-${cname}" (kix.mkManifests cluster);
+        "rules-cluster-${cname}" = kixChecks.rulesCheck "cluster-${cname}" (kix.mkManifests cluster) (
+          ruleTestsOf clusters.${cname}
+        );
         "pi-wiring-cluster-${cname}" =
           assert piChecks.validatePIWiring "cluster-${cname}" cluster;
           pkgs.runCommand "pi-wiring-cluster-${cname}" { } ''

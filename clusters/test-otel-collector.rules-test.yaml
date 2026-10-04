@@ -1,0 +1,39 @@
+# promtool unit tests for the alert rules test-otel-collector.nix renders.
+# The rules-cluster-otel-collector check runs them from the rendered rules,
+# so each rule_files entry is <namespace>/<file> in the cluster's manifests.
+rule_files:
+  - observability/agent-alerts-prometheusrule.yaml
+  - observability/gateway-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # One agent target stops answering: the alert fires for that target once
+  # `for` (5m) has passed.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="observability",service="agent",instance="10.0.0.1:8888"}'
+        values: '1 1 0x10'
+      - series: 'up{namespace="observability",service="agent",instance="10.0.0.2:8888"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: OtelCollectorDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: observability
+              service: agent
+              instance: 10.0.0.1:8888
+            exp_annotations:
+              summary: An OpenTelemetry Collector is down.
+              description: Prometheus has not scraped the collector at 10.0.0.1:8888 for 5 minutes; telemetry sent to it may be lost.
+  # Healthy targets fire nothing.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="observability",service="agent",instance="10.0.0.1:8888"}'
+        values: '1x12'
+      - series: 'up{namespace="observability",service="gateway",instance="10.0.0.3:8888"}'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: OtelCollectorDown
+        exp_alerts: []

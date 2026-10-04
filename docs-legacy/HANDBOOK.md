@@ -776,17 +776,28 @@ metrics = kix.options.monitor // {
 
 **Routing.** The alertmanager package's default settings send everything to a `null` receiver and define no inhibition rules. A site that wants pages writes `settings` with its receivers, and usually a route on `severity`. Packages make that possible by setting `severity` on every rule and keeping `namespace` on every alert. The site also routes `Watchdog`, the always-firing alert in `prometheus-default-rules`, to an external heartbeat service that pages when it stops arriving. Nothing else notices when Prometheus, Alertmanager, or the route to the receiver fails.
 
-**Tests.** A package that ships alerts has a unit test in `kix/lib/tests/units/<package>.nix`, like `reloader-metrics`. It checks that the PrometheusRule renders under the expected name, that every expression contains the instance's selector, and that nothing renders without a `prometheus` dependency or with `metrics.enabled = false`. A test does not catch a rule that never matches. For that, run `promtool` on the rendered rules. A PrometheusRule's `spec` is a Prometheus rule file:
+**Tests.** A package that ships alerts has a unit test in `kix/lib/tests/units/<package>.nix`, like `reloader-metrics`. It checks that the PrometheusRule renders under the expected name, that every expression contains the instance's selector, and that nothing renders without a `prometheus` dependency or with `metrics.enabled = false`. A unit test does not catch a rule that never matches, so every cluster also gets the flake check `rules-cluster-<name>` (`kix/checks.nix` `rulesCheck`, wired in `kix/lib/mkFlake.nix`). It writes each rendered PrometheusRule's `spec`, which is a Prometheus rule file, to `<namespace>/<file>` and runs `promtool check rules` over them, so a PromQL syntax error, a bad duration, or an unknown template function fails the check. promtool also prints a lint warning, with the word `FAILED`, for a duplicated recording rule; it does not fail the check, and the vendored `kube-apiserver-availability.rules` group has one.
 
-```bash
-nix build ./clusters#cluster-<test-cluster> -o result-rules --extra-experimental-features pipe-operators
-nix shell nixpkgs#yq-go nixpkgs#prometheus.cli -c sh -c '
-  yq ".spec" result-rules/<namespace>/<name>-alerts-prometheusrule.yaml > rules.yaml
-  promtool check rules rules.yaml
-  promtool test rules rules-test.yaml'
+When a cluster file `clusters/test-foo.nix` has a sibling `clusters/test-foo.rules-test.yaml`, the check also runs `promtool test rules` on it, from the directory of rendered rules:
+
+```yaml
+rule_files:
+  - observability/agent-alerts-prometheusrule.yaml   # <namespace>/<file> in the cluster's manifests
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="observability",service="agent",instance="10.0.0.1:8888"}'
+        values: '1 1 0x10'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: OtelCollectorDown
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: observability, service: agent, instance: "10.0.0.1:8888" }
 ```
 
-`rules-test.yaml` lists `rule_files: [rules.yaml]` and gives input series for each alert: one that breaks the condition and one that stays healthy. Wait until `eval_time` is past `for` plus one evaluation. `exp_labels` must list every label, including `severity`. The [Prometheus unit-testing docs](https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/) give the format. Before shipping, check every metric name against the program's source or a scrape at the version the package pins. A misspelled metric name passes both checks.
+`clusters/test-otel-collector.rules-test.yaml` is the full example. Give each alert input series that break the condition and series that stay healthy (`exp_alerts: []`). Set `eval_time` past `for` plus one evaluation. `exp_labels` must list every label, including `severity`, and `exp_annotations` every annotation with its templates rendered. The check refuses a `rule_files` entry that matches no rendered file, because promtool reads the entries as globs and would otherwise load nothing. The [Prometheus unit-testing docs](https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/) give the format.
+
+Run it with `nix build ./clusters#checks.x86_64-linux.rules-cluster-<name> --extra-experimental-features pipe-operators`. Before shipping, check every metric name against the program's source or a scrape at the version the package pins. A misspelled metric name passes both checks.
 
 **`kix.healthCheck`**: a post-deploy probe, a Job in the package's namespace that runs a script against addresses passed in as env vars from `out.*` values. Every callback receives the same `{ self, config, deps }`.
 
