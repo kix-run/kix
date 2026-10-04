@@ -262,13 +262,14 @@ when a check fails or the path is not evaluated by default.
 - Mo11. Is `/metrics` served on the public route by default? Fix: off, `kix.expose { deriveHost = false; }` so only an instance that sets `ingress.host` is routed (Grafana), or state the trade-off.
 - Mo12. Does the program need a flag or setting before it serves the metrics the ServiceMonitor scrapes (ingress-nginx `--enable-metrics`)? Read upstream's flag defaults, not the chart's values.
 - Mo13. When `root` is an attrset with its own `requires`, does it omit the `kix.monitor` parts (`serviceMonitor`, `prometheusRules`, filtered for null), leaving them orphaned? Detection: a package-eval fixture with a real `prometheus` provider and the orphaned-part trace.
-- Mo14. Does an alert's result lose `namespace` (aggregation `without` or `by` a list lacking it, or `absent()` over an expression such as `absent(up{...} == 1)`, which returns no labels)? Routing, grouping, and inhibition then span the cluster, and `$labels` templates render empty. Fix: `sum by (namespace, service) (up{sel}) == 0 or absent(up{sel})` (HANDBOOK §9.4 "Writing alerts").
+- Mo14. Does an alert's result lose `namespace` (a bare `sum(...)`, a `by` list without it, a `without` list that includes it, or `absent()` over an expression such as `absent(up{...} == 1)`, which returns no labels)? Routing, grouping, and inhibition then span the cluster, and `$labels` templates render empty. Fix: `sum by (namespace, service) (up{sel}) == 0 or absent(up{sel})` (HANDBOOK §9.4 "Writing alerts").
 - Mo15. Is a rule's severity unset (the builder's default is `warning`), `critical` for a condition that is not an outage or data at risk now, or outside `critical`, `warning`, and `info`? Fix: set it on every rule, choosing the lower level when in doubt (BEST-PRACTICES §9.6).
 - Mo16. Does a rule lack `summary` or `description`, template the `summary`, put a value or other changing text in a label, or set `runbook_url` to anything but a maintained upstream runbook for the same condition? Fix: a fixed `summary`; a `description` naming the instance, the value, the meaning, and the first thing to check.
 - Mo17. Is `for` missing or under `5m` without a comment saying the expression's window already spans the restart time? Is a range window under four scrape intervals, or is `rate()` applied after `sum`? Fix: HANDBOOK §9.4 "Writing alerts".
 - Mo18. Is a threshold a literal tuned for one site, when the evaluated configuration knows it (memory limit, replica count, schedule) or an instance would need to change it? Fix: derive it, or add a typed option to `metrics` (velero's `maxBackupAge`) whose description says where the default comes from.
 - Mo19. Does an alert restate a kube-prometheus rule from `prometheus-default-rules` (crash looping, replicas mismatch, volume filling up, Job failed, TargetDown)? Detection: `grep -h '"alert"' kix/packages/prometheus-default-rules/rules/*.json`. Fix: delete it; alert on what only the package's own metrics show.
-- Mo20. Does a rule break under vmalert: a template function vmalert or Prometheus lacks, such as `float64` (the operator's converter rejects the whole group), `query_offset`, an exact comparison of `rate()` or `increase()`, or a `for` of hours? Fix: HANDBOOK §9.4 "Writing alerts".
+- Mo20. Does a rule break under Prometheus or vmalert: a template function one of them lacks, such as `float64` (prometheus-operator refuses the whole PrometheusRule, the VM converter the whole group), `query_offset`, or an exact comparison of `rate()` or `increase()`? Fix: HANDBOOK §9.4 "Writing alerts".
+- Mo23. Does a ratio alert (errors over requests) lack a traffic floor, so one failure at low traffic fires it? Does a down alert fire when the component runs zero replicas by design or its metrics Service is off? Does a last-success alert lack a missing-metric partner? Fix: HANDBOOK §9.4 "Writing alerts".
 - Mo21. Does an alert use a metric name not found in the program's source or a scrape at the pinned version? Upstream renames metrics between releases, and a rule over a missing metric never fires. Fix: cite where each metric is defined in the pull request; recheck on version bumps.
 - Mo22. Do the rules lack a unit test (renders under its name, every expression has the selector, nothing without `prometheus` or with `metrics.enabled = false`), or were they never run through `promtool check rules` and `promtool test rules` with a failing and a healthy fixture? Fix: HANDBOOK §9.4 "Writing alerts", "Tests".
 
@@ -355,18 +356,19 @@ a source for each claim; they go in the pull request description.
    selectors are written.
 2. **Read how it fails in practice.** Practitioner write-ups, postmortems,
    and Hacker News threads on running it; upstream issues about outages,
-   data loss, and confusing states; and the upstream runbooks. Personal blogs
-   and issue threads beat vendor marketing.
+   data loss, and confusing states; and the upstream runbooks. Prefer
+   personal blogs and issue threads to vendor marketing.
 3. **List the failure modes.** For each, note the first metric that shows
    it, and whether a symptom would show before it is too late to act.
 4. **Sort each failure mode** into one of: covered by a kube-prometheus rule
    in `prometheus-default-rules` (no package alert); a package alert, in the
    four kinds of BEST-PRACTICES §9.6; or a dashboard concern, not an alert.
 5. **Decide vendor or write** (BEST-PRACTICES §9.6). To vendor, pin the file
-   and its version beside the package and rewrite selectors to the instance
-   structurally, as `prometheus-default-rules` does.
+   and its version beside the package, rewrite its selectors to the instance
+   as `prometheus-default-rules` does (string substitution of the `job`
+   matchers in `rebake`), and test that every expression got the selector.
 6. **Write and test the rules** against HANDBOOK §9.4 "Writing alerts" and
-   items Mo5 to Mo22. Test each rule with a fixture that breaks the condition
+   items Mo5 to Mo23. Test each rule with a fixture that breaks the condition
    and one that stays healthy.
 7. **Say what is covered.** The package header lists the alerts and the
    failure modes left to the generic rules or to the site.
@@ -463,7 +465,7 @@ N5 entities =|k8s:io\.kubernetes\.pod\.namespace|endpointSelector
 Mo2 kind = "(ServiceMonitor|PodMonitor|PrometheusRule)"
 Mo4 prometheus\.io/
 Mo5 job=~
-Mo14 absent\([^)]*==|without \(
+Mo14 absent\([^)]*==|without \(|\b(sum|max|min|avg|count) *\(
 Mo20 float64|query_offset
 E5 config\.(values|extraSpec|settings) //|// config\.(values|extraSpec|settings)
 E7 hasPrefix "-

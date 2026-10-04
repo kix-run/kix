@@ -770,8 +770,7 @@ actionable, and real ([Ewaschuk][ewaschuk]). People can respond urgently to
 only a few pages a day, so each rule must earn its place. It must detect a
 condition nothing else catches, someone must be able to act on it, and it
 must not fire on a healthy cluster ([Google SRE, ch. 6][sre6]). An alert that
-fires falsely teaches people to ignore the others, and one that is wrong half
-the time is broken.
+fires falsely teaches people to ignore the others.
 
 **A package alerts on the causes it understands, and leaves symptom paging to
 the site.** The best page is a symptom users notice: requests failing, or
@@ -795,8 +794,9 @@ package therefore alerts on these:
 Latency and error-rate alerts in a package are `warning`, with thresholds the
 instance can change. The site writes its own SLO alerts.
 
-**Severity says how soon a person must act.** The values follow the
-monitoring-mixins convention ([mixins][mixins]):
+**Severity says how soon a person must act.** The three values are the
+monitoring-mixins ones ([mixins][mixins]); the meanings below are how Kix
+packages use them:
 
 | Severity | Meaning | Use in a package |
 |---|---|---|
@@ -804,8 +804,9 @@ monitoring-mixins convention ([mixins][mixins]):
 | `warning` | Act within a working day, as a ticket. | Degradation, a resource heading for its limit, or a failure a retry may still fix. |
 | `info` | No action on its own. Context for other alerts. | Rarely. Alertmanager should not send an `info` alert on its own. |
 
-Choose the lower severity when in doubt. A site can raise a severity it finds
-too low, but a noisy `critical` costs trust that is hard to win back.
+Choose the lower severity when in doubt. A site can still page on a
+`warning` it cares about through its Alertmanager routes, while a noisy
+`critical` teaches people to ignore pages.
 
 **Thresholds come from what the package knows.** Derive a threshold from the
 evaluated configuration where one exists: memory alerts from
@@ -827,15 +828,16 @@ versions ([mixins design][mixinsdesign]). Some upstreams ship maintained rules
 as YAML or a compiled mixin, for example CloudNativePG, RabbitMQ,
 VictoriaMetrics, Tempo, and Loki. When those rules match the version the
 package pins, vendor them the way `prometheus-default-rules` does: a pinned
-copy, selectors rewritten to the instance, and a typed toggle per rule group.
+copy, selectors rewritten to the instance, a typed toggle per rule group, and
+a test that every expression carries the instance's selector.
 Write your own when upstream ships none, when its rules need an exporter the
 package does not run, or when they cannot be scoped to one instance. Vendored
 rules pass the same review as written ones.
 
 **An alert says what it means and what to check first.** `summary` is one
 fixed sentence. `description` names the instance and the value, says what
-the alert means, and gives the first thing to check. Short notes beat long
-runbooks ([Ewaschuk][ewaschuk]). Kix has no runbook site, so `runbook_url`
+the alert means, and gives the first thing to check. A few lines on what the
+alert means are more use on call than a long playbook ([Ewaschuk][ewaschuk]). Kix has no runbook site, so `runbook_url`
 points only at a maintained upstream runbook for the same condition.
 
 **A rule is tested like code.** A rule that cannot match, because a label is
