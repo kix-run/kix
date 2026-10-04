@@ -10,8 +10,13 @@
 # offers availability `none`, so one OpenBao pod runs.
 #
 # OpenBao starts empty: the ExternalSecret becomes ready only after a value
-# is written to `secret/app/credentials` (key `password`), for example with
-# `bao kv put` under a role and policy that allow it.
+# is written to `secret/app/credentials` (key `password`). The test-only
+# role `seed` lets the server's own ServiceAccount write it, so while the
+# deploy waits on the ExternalSecret:
+#
+#   kubectl -n secrets exec openbao-0 -- sh -c 'export BAO_ADDR=https://127.0.0.1:8200 BAO_SKIP_VERIFY=true;
+#     BAO_TOKEN=$(bao write -field=token auth/kubernetes/login role=seed jwt=@/var/run/secrets/kubernetes.io/serviceaccount/token) &&
+#     export BAO_TOKEN && bao kv put -mount=secret app/credentials password=test-only'
 #
 # The refusals of the package and of `out.externalSecretsProvider` are
 # covered by kix/lib/tests/units/openbao.nix.
@@ -110,6 +115,17 @@ kix.buildCluster {
             policies.app-read = ''
               path "secret/data/app/*" { capabilities = ["read"] }
             '';
+            # Test only: lets the seeding command in the header write the
+            # value the ExternalSecret reads.
+            policies.seed-write = ''
+              path "secret/data/app/*" { capabilities = ["create", "update"] }
+            '';
+            kubernetesAuth.roles.seed = {
+              bound_service_account_names = [ "openbao" ];
+              bound_service_account_namespaces = [ "secrets" ];
+              token_policies = [ "seed-write" ];
+              token_ttl = "5m";
+            };
             kubernetesAuth.roles.app = {
               bound_service_account_names = [ "openbao-store" ];
               bound_service_account_namespaces = [ "app" ];
