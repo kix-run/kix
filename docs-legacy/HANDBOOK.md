@@ -693,6 +693,7 @@ These return functions whose own DI args are auto-discovered.
   path ? "/metrics",
   scheme ? "http",               # primary endpoint only
   tlsConfig ? null,              # primary endpoint only; a ServiceMonitor endpoint tlsConfig
+  params ? null,                 # primary endpoint only; query parameters, { format = [ "prometheus" ]; }
   alerts ? {},                   # { alertName = { expr, "for"?, keep_firing_for?, severity?, description?, summary?, runbook_url?, labels?, annotations? }; }
   extraEndpoints ? [],           # each over { scheme = "http"; path = "/metrics"; } and metrics.interval
   extraLabels ? {},
@@ -702,13 +703,24 @@ These return functions whose own DI args are auto-discovered.
 })
 ```
 
-The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule`, which the prometheus package exposes on its `out`. `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`). `scheme` and `tlsConfig` set the primary endpoint's; each `extraEndpoints` entry defaults to `scheme = "http"`, `path = "/metrics"`, and the instance's `metrics.interval`.
+The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule`, which the prometheus package exposes on its `out`. `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`). `scheme`, `tlsConfig`, and `params` set the primary endpoint's; each `extraEndpoints` entry defaults to `scheme = "http"`, `path = "/metrics"`, and the instance's `metrics.interval`.
+
+**`kix.alerts`**: the PrometheusRule half of `kix.monitor` on its own, for a package whose scrape is not one `kix.monitor` ServiceMonitor: a PodMonitor it builds with `prometheus.out.mkPodMonitor` (cnpg-cluster, stackgres-cluster, clickhouse-cluster), or a scrape the operator configures. It renders under the same conditions, a `prometheus` dependency and `metrics.enabled` not false, and renders nothing when `alerts` is empty.
+
+```nix
+(kix.alerts {
+  alerts,                        # as kix.monitor's
+  name ? null,                   # rule name `<name>-alerts`; default the instance name
+  extraLabels ? {},
+  rulesPart ? "prometheusRules",
+})
+```
 
 #### Writing alerts
 
 The principles are in BEST-PRACTICES §9.6. The `package-review` skill has the review items (`Mo`) and the research steps to follow before writing a package's alerts. This section is the mechanics.
 
-**What `kix.monitor` renders.** Each `alerts` entry becomes one rule in a single group named `<name>-alerts`, inside a PrometheusRule of the same name. Only `severity` has a default, `warning`. The builder adds no `for`, no labels, and no annotations, so the package sets every one. It reads only the keys in the signature above and ignores any other. The prometheus package's Prometheus selects every PrometheusRule in every namespace. Under VictoriaMetrics, the operator converts each PrometheusRule into a VMRule, and `victoria-metrics-alert` evaluates every VMRule.
+**What `kix.monitor` and `kix.alerts` render.** Each `alerts` entry becomes one rule in a single group named `<name>-alerts`, inside a PrometheusRule of the same name. Only `severity` has a default, `warning`. The builder adds no `for`, no labels, and no annotations, so the package sets every one. It reads only the keys in the signature above and ignores any other. The prometheus package's Prometheus selects every PrometheusRule in every namespace. Under VictoriaMetrics, the operator converts each PrometheusRule into a VMRule, and `victoria-metrics-alert` evaluates every VMRule. The VictoriaMetrics packages render their own alerts as VMRules, by handing `kix.alerts` a `prometheus` whose `out.mkPrometheusRule` is the operator's `mkVMRule`, so they do not depend on the converter and a prometheus-operator Prometheus on the same cluster never loads them.
 
 `alerts` is an attrset keyed by alert name, so a package cannot render two rules with one name. kube-prometheus pairs a `warning` and a `critical` rule under one name, so that inhibition on equal `alertname` drops the warning while the critical fires. A package gives the two levels distinct names (`DiskPoolUsageHigh`, `DiskPoolUsageCritical`) instead.
 
@@ -721,6 +733,12 @@ let
   metricsService = "${scope.instanceName}-metrics";
   sel = ''namespace="${scope.namespaceName}",service="${metricsService}"'';
 in
+```
+
+A PodMonitor's series carry no `service` label. Prometheus Operator and the VictoriaMetrics operator both set `job` to `<namespace>/<PodMonitor name>`, so select on that instead, and aggregate `by (namespace, job)` wherever the patterns below say `by (namespace, service)`:
+
+```nix
+sel = ''namespace="${scope.namespaceName}",job="${scope.namespaceName}/${podMonitorName}"'';
 ```
 
 Aggregate with `by (namespace, service, ...)`, and keep `namespace` in every result. A bare `sum(...)` drops every label. The alertmanager package's default route groups by `namespace` and `alertname`, and inhibition rules usually compare `namespace`. An alert without it groups and inhibits across the whole cluster. Labels are the alert's identity. Never put a value in a label, because each new value starts a new alert. Values go in annotations.
@@ -738,14 +756,16 @@ expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
 # A metric the other alerts rely on disappeared while the target is up.
 expr = "count by (namespace, service) (up{${sel}} == 1) unless on (namespace, service) count by (namespace, service) (foo_ready{${sel}})";
 
-# Last success too old. The threshold comes from the package's schedule and
-# allows at least two missed runs. The gauge's own window is the age, so a
-# short `for` only rides out a scrape gap.
-expr = "time() - max by (namespace, service, schedule) (foo_last_success_timestamp_seconds{${sel}}) > ${toString maxAgeSeconds}";
+# Last success too old. `kix.schedules.staleAfter schedule` gives two periods
+# plus two hours as a duration ("50h" for a daily schedule), or null when the
+# period cannot be read; make a threshold option required then. One missed
+# run stays quiet while the failure alert reports it. The gauge's own window
+# is the age, so a short `for` only rides out a scrape gap.
+expr = "time() - max by (namespace, service, schedule) (foo_last_success_timestamp_seconds{${sel}}) > ${toString (kix.durations.toSeconds maxAge)}";
 "for" = "5m";
 ```
 
-A last-success alert evaluates to nothing when its series is missing, and the down alert does not fire while the target is up. Pair it with the missing-metric pattern over the same series. Some programs publish the timestamp only after their first success since start (Velero does), so a missing-metric alert would fire after every restart. Build the alert from the success and attempt counters instead, as `VeleroBackupMissing` does.
+A last-success alert evaluates to nothing when its series is missing, and the down alert does not fire while the target is up. Pair it with the missing-metric pattern over the same series. Some programs publish the timestamp only after their first success since start (Velero does), so a missing-metric alert would fire after every restart. Build the alert from the success and attempt counters instead, but only for an age that fits inside the Prometheus retention (7d by default), since `offset` and `increase` see no older sample. `VeleroBackupMissing` uses the counters up to 6d and the timestamp past that, where it stays silent after a restart until the next success.
 
 The down pattern fires only when every target is down. One replica of several down is left to kube-prometheus's `TargetDown` (`warning`, more than 10% of a job's targets down for 10 minutes). A per-target `up == 0` alert at `critical` on a DaemonSet pages for one node, which the generic node alerts already report. When the component can run with zero replicas by design, or its metrics Service can be switched off, gate the rule on the same configuration, or `absent()` fires.
 
@@ -755,14 +775,14 @@ Apply `rate()` or `increase()` to the raw counter first and aggregate second: `s
 
 **`for`.** Use at least `5m`, so a restart or a rollout does not fire the alert. A down alert uses `10m`, like kube-prometheus's `TargetDown`. A threshold on a gauge that moves around uses `15m`. Leave `for` out only when the expression already spans a long window, such as `increase(foo_failures_total[1h]) > 0`, and say so in a comment. `keep_firing_for` holds an alert after its condition clears, which stops a flapping condition from resolving and refiring. Prometheus 2.42, prometheus-operator 0.66, and vmalert all support it.
 
-**Thresholds.** Derive a threshold from evaluated configuration where the package has one: `resources.limits.memory` through `kix.parseQuantity "memory"`, a replica count, or a schedule. Otherwise extend the monitor options with a typed threshold, as velero does:
+**Thresholds.** Derive a threshold from evaluated configuration where the package has one: `resources.limits.memory` through `kix.parseQuantity "memory"`, a replica count, or a schedule. Otherwise extend the monitor options with a typed threshold, as cnpg-cluster does, and derive its default where the configuration allows:
 
 ```nix
 metrics = kix.options.monitor // {
   maxBackupAge = lib.mkOption {
-    type = lib.types.strMatching "([0-9]+(ms|s|m|h|d|w|y))+";
-    default = "26h";
-    description = "How long a schedule may go without a successful backup before VeleroBackupMissing fires ...";
+    type = lib.types.nullOr kix.types.promDuration;
+    default = null;
+    description = "How long the cluster may go without a completed base backup before CNPGBackupMissing fires ... Null derives it from `backup.schedule` with `kix.schedules.staleAfter` ...";
   };
 };
 ```
@@ -778,17 +798,31 @@ metrics = kix.options.monitor // {
 
 **Routing.** The alertmanager package's default settings send everything to a `null` receiver and define no inhibition rules. A site that wants pages writes `settings` with its receivers, and usually a route on `severity`. Packages make that possible by setting `severity` on every rule and keeping `namespace` on every alert. The site also routes `Watchdog`, the always-firing alert in `prometheus-default-rules`, to an external heartbeat service that pages when it stops arriving. Nothing else notices when Prometheus, Alertmanager, or the route to the receiver fails.
 
-**Tests.** A package that ships alerts has a unit test in `kix/lib/tests/units/<package>.nix`, like `reloader-metrics`. It checks that the PrometheusRule renders under the expected name, that every expression contains the instance's selector, and that nothing renders without a `prometheus` dependency or with `metrics.enabled = false`. A test does not catch a rule that never matches. For that, run `promtool` on the rendered rules. A PrometheusRule's `spec` is a Prometheus rule file:
+**Tests.** A package that ships alerts has a unit test in `kix/lib/tests/units/<package>.nix`, like `reloader-metrics`. It checks that the PrometheusRule renders under the expected name, that every expression contains the instance's selector, and that nothing renders without a `prometheus` dependency or with `metrics.enabled = false`. A unit test does not catch a rule that never matches, so every cluster also gets the flake check `rules-cluster-<name>` (`kix/checks.nix` `rulesCheck`, wired in `kix/lib/mkFlake.nix`). It writes the `spec` of each rendered PrometheusRule and VMRule, which is a Prometheus rule file, to `<namespace>/<file>` and runs `promtool check rules` over them, so a PromQL syntax error, a bad duration, or an unknown template function fails the check. promtool also prints a lint warning, with the word `FAILED`, for a duplicated recording rule; it does not fail the check, and the vendored `kube-apiserver-availability.rules` group has one.
 
-```bash
-nix build ./clusters#cluster-<test-cluster> -o result-rules --extra-experimental-features pipe-operators
-nix shell nixpkgs#yq-go nixpkgs#prometheus.cli -c sh -c '
-  yq ".spec" result-rules/<namespace>/<name>-alerts-prometheusrule.yaml > rules.yaml
-  promtool check rules rules.yaml
-  promtool test rules rules-test.yaml'
+When a cluster file has a sibling with the same base name and the suffix `.rules-test.yaml` (`clusters/test-foo.nix` and `clusters/test-foo.rules-test.yaml`), the check also runs `promtool test rules` on it, from the directory of rendered rules:
+
+```yaml
+rule_files:
+  - observability/agent-alerts-prometheusrule.yaml   # <namespace>/<file> in the cluster's manifests
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="observability",service="agent",instance="10.0.0.1:8888"}'
+        values: '1 1 0x10'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: OtelCollectorDown
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: observability, service: agent, instance: "10.0.0.1:8888" }
+            exp_annotations:
+              summary: An OpenTelemetry Collector is down.
+              description: Prometheus has not scraped the collector at 10.0.0.1:8888 for 5 minutes; telemetry sent to it may be lost.
 ```
 
-`rules-test.yaml` lists `rule_files: [rules.yaml]` and gives input series for each alert: one that breaks the condition and one that stays healthy. Wait until `eval_time` is past `for` plus one evaluation. `exp_labels` must list every label, including `severity`. The [Prometheus unit-testing docs](https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/) give the format. Before shipping, check every metric name against the program's source or a scrape at the version the package pins. A misspelled metric name passes both checks.
+`clusters/test-otel-collector.rules-test.yaml` is the full example. Give each alert input series that break the condition and series that stay healthy (`exp_alerts: []`). Set `eval_time` past `for` plus one evaluation. `exp_labels` must list every label, including `severity`, and `exp_annotations` every annotation with its templates rendered. The check refuses a test file without `rule_files` and an entry that matches no rendered file, because promtool reads the entries as globs and would otherwise load nothing. The [Prometheus unit-testing docs](https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/) give the format.
+
+Run it with `nix build ./clusters#checks.x86_64-linux.rules-cluster-<name> --extra-experimental-features pipe-operators`. Before shipping, check every metric name against the program's source or a scrape at the version the package pins. A misspelled metric name passes both checks.
 
 **`kix.healthCheck`**: a post-deploy probe, a Job in the package's namespace that runs a script against addresses passed in as env vars from `out.*` values. Every callback receives the same `{ self, config, deps }`.
 
@@ -1830,6 +1864,8 @@ store = externalSecrets.out.mkClusterSecretStore scope {
 `out.externalSecretsProvider` returns the `vault` provider: the Service URL, the CA from the `<instance>-tls` Secret in OpenBao's namespace, the mount and its KV version, and Kubernetes auth with a token of the given ServiceAccount. It refuses a role that `kubernetesAuth.roles` does not declare or that does not bind that ServiceAccount and namespace (`*` binds any), and a mount that is not a declared `kv` engine. The role name it writes carries the reconcile Job, so the store is applied after the Job has written the role. A namespaced SecretStore cannot read the CA Secret from OpenBao's namespace, so the provider is for a ClusterSecretStore, limited to its namespaces with `conditions`. `clusters/test-openbao.nix` evaluates this shape.
 
 The store carries the OpenBao Service's address, so the external-secrets store definitions' `factBehavior` (§21.9) gives the controller egress to port 8200 of the OpenBao pods and those pods ingress from the controller.
+
+Metrics. With a `prometheus` dependency and `metrics.enabled` (the default), each pod opens a second listener on TCP 8202 that serves only `/v1/sys/metrics`, over plain HTTP and without a token, so standbys and sealed pods report too. The output names mount paths, auth methods, and policies. Under network policy only the Prometheus scrape and the other OpenBao pods reach the port; on a cluster without an enforcer any pod can read it. Set `metrics.enabled = false` to close the listener, which also drops the ServiceMonitor and the alert rules.
 
 Known limits. If self-initialization fails on pod 0's first start, OpenBao has already initialized the volume and revoked the root token, and it refuses to unseal on every later start; delete the claim `data-<instance>-0` and the pod and let it start again (self-initialization runs only on an empty volume). The static key cannot be rotated: a changed `unsealKey` value restarts the pods, and they cannot unseal the existing data until the old value is restored.
 

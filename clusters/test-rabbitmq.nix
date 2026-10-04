@@ -146,7 +146,7 @@ kix.buildCluster {
           rabbitmq = {
             package = packages.rabbitmq-cluster;
             config = {
-              storage.size = "1Gi";
+              storage.size = "5Gi";
               resources = {
                 requests = {
                   cpu = "250m";
@@ -169,7 +169,7 @@ kix.buildCluster {
             package = packages.rabbitmq-cluster;
             config = {
               replicas = 3;
-              storage.size = "1Gi";
+              storage.size = "5Gi";
               resources = {
                 requests = {
                   cpu = "250m";

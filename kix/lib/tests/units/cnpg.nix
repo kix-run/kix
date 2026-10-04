@@ -2,7 +2,8 @@
 # cnpg-cluster, cnpg-database, cnpg-barman-cloud, and cnpg-pooler, each
 # beside a positive control, the rendered Cluster, Database, DatabaseRole,
 # backups, and Pooler, the webhook check that every postgresql.cnpg.io
-# custom resource waits for, and the vendored sources' release.
+# custom resource waits for, the vendored sources' release, and
+# cnpg-cluster's alert rules and what each is gated on.
 
 {
   lib,
@@ -16,6 +17,9 @@
   evalFails,
   singleNode,
   netpolOn,
+  alertRulesOf,
+  allSelect,
+  prometheusStub,
   ...
 }:
 
@@ -713,10 +717,11 @@ in
         }
       && lib.hasInfix pluginHash (dependsOn postgres)
       && lib.hasInfix checkHash (dependsOn scheduled)
-      && egress.spec.endpointSelector.matchLabels == {
-        "cnpg.io/cluster" = "postgres";
-        "cnpg.io/podRole" = "instance";
-      }
+      &&
+        egress.spec.endpointSelector.matchLabels == {
+          "cnpg.io/cluster" = "postgres";
+          "cnpg.io/podRole" = "instance";
+        }
     )
     || throw "backup resources: ${
       builtins.toJSON {
@@ -739,7 +744,10 @@ in
       });
     in
     (
-      (clusterSpec (backups { backup = null; })) ? plugins == false
+      (clusterSpec (backups {
+        backup = null;
+      }))
+        ? plugins == false
       && ofKind "ObjectStore" all == [ ]
       && ofKind "ScheduledBackup" all == [ ]
       && (byName "postgres" (ofKind "Cluster" all)).spec.plugins == [ { name = "example.com"; } ]
@@ -751,8 +759,12 @@ in
   # all three evaluates.
   cnpg-cluster-backup-needs-deps =
     (
-      evalFails (backups { plugin = false; })
-      && evalFails (backups { credentials = null; })
+      evalFails (backups {
+        plugin = false;
+      })
+      && evalFails (backups {
+        credentials = null;
+      })
       && evalFails (backups {
         credentials.accessKeyId = "id";
       })
@@ -782,16 +794,28 @@ in
         };
     in
     (
-      evalFails (withExtra { configuration.destinationPath = "s3://other"; })
-      && evalFails (withExtra { configuration.s3Credentials.inheritFromIAMRole = true; })
-      && evalFails (withExtra { retentionPolicy = "7d"; })
-      && evalFails (backups { clusterExtraSpec.plugins = [ ]; })
-      && evalFails (backups { clusterExtraSpec.backup.barmanObjectStore.destinationPath = "s3://other"; })
+      evalFails (withExtra {
+        configuration.destinationPath = "s3://other";
+      })
+      && evalFails (withExtra {
+        configuration.s3Credentials.inheritFromIAMRole = true;
+      })
+      && evalFails (withExtra {
+        retentionPolicy = "7d";
+      })
+      && evalFails (backups {
+        clusterExtraSpec.plugins = [ ];
+      })
+      && evalFails (backups {
+        clusterExtraSpec.backup.barmanObjectStore.destinationPath = "s3://other";
+      })
       && !evalFails (backups {
         backup = null;
         clusterExtraSpec.backup.barmanObjectStore.destinationPath = "s3://other";
       })
-      && !evalFails (backups { clusterExtraSpec.backup.target = "primary"; })
+      && !evalFails (backups {
+        clusterExtraSpec.backup.target = "primary";
+      })
       && !evalFails (withExtra {
         configuration.wal.compression = "gzip";
         instanceSidecarConfiguration.logLevel = "debug";
@@ -881,7 +905,9 @@ in
       policies = ofKind "CiliumNetworkPolicy" all;
       toStore = builtins.filter (
         p:
-        (p.spec.endpointSelector.matchLabels or { }) == { "cnpg.io/cluster" = "postgres"; }
+        (p.spec.endpointSelector.matchLabels or { }) == {
+          "cnpg.io/cluster" = "postgres";
+        }
         && lib.hasInfix "7070" (builtins.toJSON p.spec)
       ) policies;
     in
@@ -952,10 +978,18 @@ in
       && daily == [ ]
       && says ''backup.schedule "@reboot" is not a descriptor'' reboot
       && says ''backup.schedule "@every day" is not a descriptor'' everyBad
-      && evalFails (withBackup { destinationPath = "gs://backups/pg"; })
-      && evalFails (withBackup { retention = "30 days"; })
-      && evalFails (withBackup { extraSpec.configuration.endpointURL = "s3.example.com"; })
-      && !evalFails (withBackup { retention = "4w"; })
+      && evalFails (withBackup {
+        destinationPath = "gs://backups/pg";
+      })
+      && evalFails (withBackup {
+        retention = "30 days";
+      })
+      && evalFails (withBackup {
+        extraSpec.configuration.endpointURL = "s3.example.com";
+      })
+      && !evalFails (withBackup {
+        retention = "4w";
+      })
     )
     || throw "backup refusals: ${
       builtins.toJSON {
@@ -978,26 +1012,26 @@ in
     let
       serverNameOf =
         backup:
-        (builtins.head (clusterSpec (backups {
-          backup = {
-            destinationPath = "s3://backups/pg";
-          }
-          // backup;
-        })).plugins).parameters.serverName;
+        (builtins.head
+          (clusterSpec (backups {
+            backup = {
+              destinationPath = "s3://backups/pg";
+            }
+            // backup;
+          })).plugins
+        ).parameters.serverName;
       default = serverNameOf { };
       set = serverNameOf { serverName = "postgres"; };
     in
     (
       default == "data-postgres"
       && set == "postgres"
-      && evalFails (
-        backups {
-          backup = {
-            destinationPath = "s3://backups/pg";
-            serverName = "a/b";
-          };
-        }
-      )
+      && evalFails (backups {
+        backup = {
+          destinationPath = "s3://backups/pg";
+          serverName = "a/b";
+        };
+      })
     )
     || throw "backup serverName: ${builtins.toJSON { inherit default set; }}";
 
@@ -1071,18 +1105,25 @@ in
     in
     (
       evalFails (withCA "store-ca")
-      && !evalFails (withCA (
-        kixlib.untrackedRef {
-          name = "store-ca";
-          kind = "Secret";
-        }
-      ))
+      && !evalFails (
+        withCA (
+          kixlib.untrackedRef {
+            name = "store-ca";
+            kind = "Secret";
+          }
+        )
+      )
     )
     || throw "mkObjectStore: the literal Secret name passed, or the untracked one failed";
 
   # The plugin must run in the operator's namespace.
   cnpg-barman-cloud-operator-namespace =
-    (evalFails (backups { pluginNamespace = "backup-system"; }) && !evalFails (backups { }))
+    (
+      evalFails (backups {
+        pluginNamespace = "backup-system";
+      })
+      && !evalFails (backups { })
+    )
     || throw "cnpg-barman-cloud namespace: another namespace passed, or the control failed";
 
   # The plugin's Service carries the label and annotations the operator
@@ -1131,8 +1172,12 @@ in
       says ''image.tag "v0.14.0" is not a plugin-barman-cloud 0.15 release'' oldImage
       && says ''sidecar.image.tag "v0.14.0" is not a plugin-barman-cloud 0.15 release'' oldSidecar
       && fine == [ ]
-      && evalFails (backups { pluginConfig.extraArgs = [ "--server-address=:9091" ]; })
-      && evalFails (backups { pluginConfig.env.SIDECAR_IMAGE = "example.com/sidecar:1"; })
+      && evalFails (backups {
+        pluginConfig.extraArgs = [ "--server-address=:9091" ];
+      })
+      && evalFails (backups {
+        pluginConfig.env.SIDECAR_IMAGE = "example.com/sidecar:1";
+      })
       && !evalFails (backups {
         pluginConfig = {
           extraArgs = [ "--log-level=debug" ];
@@ -1224,11 +1269,71 @@ in
       says "is not a DNS-1035 label" badName
       && says "extraSpec sets monitoring.enablePodMonitor" podMonitor
       && fine == [ ]
-      && evalFails (pooled { poolerConfig.extraSpec.instances = 3; })
-      && evalFails (pooled { poolerConfig.extraSpec.template.spec.containers = [ ]; })
-      && evalFails (pooled { poolerNamespace = "apps"; })
-      && evalFails (pooled { postgres = stackgresClusterPackage; })
-      && !evalFails (pooled { poolerConfig.extraSpec.pgbouncer.parameters.max_client_conn = "500"; })
+      && evalFails (pooled {
+        poolerConfig.extraSpec.instances = 3;
+      })
+      && evalFails (pooled {
+        poolerConfig.extraSpec.template.spec.containers = [ ];
+      })
+      && evalFails (pooled {
+        poolerNamespace = "apps";
+      })
+      && evalFails (pooled {
+        postgres = stackgresClusterPackage;
+      })
+      && !evalFails (pooled {
+        poolerConfig.extraSpec.pgbouncer.parameters.max_client_conn = "500";
+      })
     )
     || throw "cnpg-pooler refusals: ${builtins.toJSON { inherit badName podMonitor fine; }}";
+
+  # The rules select on the PodMonitor's job and render only with a
+  # prometheus dependency and metrics on. The replication rules need more
+  # than one instance and the backup rules need `backup`.
+  cnpg-cluster-alerts =
+    let
+      withPrometheus.instances.monitoring.prometheus.package = prometheusStub;
+      rulesOf = cluster: alertRulesOf "PrometheusRule" "postgres" (ms cluster);
+      plain =
+        clusterConfig:
+        rulesOf (cnpg {
+          inherit clusterConfig;
+          database = null;
+          extra = withPrometheus;
+        });
+      one = plain { instances = 1; };
+      two = plain { instances = 2; };
+      backedUp = rulesOf (backups {
+        modules = [ withPrometheus ];
+      });
+      replication = [
+        "CNPGClusterMultiplePrimaries"
+        "CNPGStandbysNotStreaming"
+        "CNPGReplicationLagHigh"
+      ];
+      backupRules = [
+        "CNPGWALArchivingFailing"
+        "CNPGBackupMissing"
+        "CNPGBackupNeverCompleted"
+        "CNPGBackupFailed"
+        "CNPGBackupMetricsMissing"
+      ];
+      hasAll = names: rules: lib.all (n: rules ? ${n}) names;
+      hasNone = names: rules: !lib.any (n: rules ? ${n}) names;
+    in
+    (
+      allSelect ''namespace="data",job="data/postgres"'' two
+      && allSelect ''namespace="data",job="data/postgres"'' backedUp
+      && one ? CNPGClusterDown
+      && hasNone replication one
+      && hasAll replication two
+      && hasNone backupRules two
+      && hasAll backupRules backedUp
+      &&
+        rulesOf (cnpg {
+          database = null;
+        }) == null
+      && plain { metrics.enabled = false; } == null
+    )
+    || throw "cnpg-cluster alerts: one ${builtins.toJSON (builtins.attrNames one)}, two ${builtins.toJSON (builtins.attrNames two)}, backup ${builtins.toJSON (builtins.attrNames backedUp)}";
 }

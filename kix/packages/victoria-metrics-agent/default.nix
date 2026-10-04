@@ -21,6 +21,24 @@
 # Service, and the VMAgent CRD's terminate factBehavior points netpol at
 # the vmagent operand pods, so the egress hole lands on the pods that
 # actually dial vminsert.
+#
+# Alerts (a VMRule `<instance>-alerts`, which vmalert evaluates and a
+# prometheus-operator Prometheus does not load). They render only when the
+# `prometheus` dependency is the VictoriaMetrics operator, because the series come from
+# the operator's own scrape of the agent:
+#   VMAgentDown                       down, critical. Every target's `up`
+#                                     reaches the store through the agent,
+#                                     so this also fires when vminsert or
+#                                     vmstorage stop accepting writes.
+#   VMAgentPersistentQueueDropping    data at risk, critical
+#   VMAgentRemoteWriteDropping        data at risk, warning: vminsert
+#                                     rejected blocks
+#   VMAgentRemoteWriteErrors          stuck state, warning
+#   VMAgentConfigReloadFailed         stuck state, warning
+# Not covered here: other packages' targets failing their scrapes
+# (TargetDown in prometheus-default-rules, which does not run on a cluster
+# without prometheus-operator), one replica of the pair down, and scrape
+# volume and saturation, which belong on a dashboard.
 
 {
   scope,
@@ -122,6 +140,14 @@ in
       description = "Extra fields deep-merged into the VMAgent CR spec. The package refuses `remoteWrite` and `scrapeInterval`, which come from the vmCluster dependency, and `image`, `replicaCount`, `selectAllByDefault`, `resources`, and `extraArgs`, which have options of their own.";
     };
 
+    # The operator scrapes the agent whatever this says; `enabled` only
+    # switches the package's alert rules.
+    metrics.enabled = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Render the package's alert rules when the `prometheus` dependency is the VictoriaMetrics operator. The operator's own scrape of the agent does not depend on it.";
+    };
+
     # After the agent is ready, run ./health-check.py as a Job in this
     # namespace: the agent's own samples are fresh, every replica is
     # scraped and up, no remote-write errors. Proves the scrape-and-write
@@ -209,12 +235,89 @@ in
 
         root = {
           resource = self.vmAgent;
+          requires = lib.optional (self.prometheusRules != null) self.prometheusRules;
           out = {
             # Operand pods are operator-created; image not in any kix manifest.
             extraImages = [ (kix.image.ref config.image) ];
           };
         };
       }
+    )
+
+    # DI passes a build function only the arguments its formals name, so
+    # the wrapper names every argument kix.alerts reads.
+    (
+      {
+        self,
+        config,
+        scope,
+        prometheus ? null,
+        ...
+      }@args:
+      let
+        ns = scope.namespaceName;
+        # The operator's VMServiceScrape sets `job` to the agent's Service
+        # name, which the CR states as out.scrapeJob. The `service` label is
+        # the same, but the config-reloader sidecar shares that Service
+        # under job `<scrapeJob>-config-reloader`, so only `job` picks out
+        # vmagent itself.
+        ag = ''namespace="${ns}",job="${self.vmAgent.out.scrapeJob}"'';
+      in
+      kix.alerts
+        {
+          alerts = {
+            VMAgentDown = {
+              expr = "sum by (namespace, job) (up{${ag}}) == 0 or absent(up{${ag}})";
+              "for" = "10m";
+              severity = "critical";
+              summary = "No vmagent replica is scraping.";
+              description = "No replica of vmagent ${ns}/${name} has a fresh `up` sample for 10 minutes, so no target in the cluster is being scraped and stored. If the vmagent pods are running, vminsert or vmstorage is not accepting writes. Check the vmagent-${name} pods, then VMInsertDown and VMStorageDown.";
+            };
+            # The on-disk queue holds samples vminsert has not accepted yet;
+            # a full queue drops the oldest.
+            VMAgentPersistentQueueDropping = {
+              expr = "sum by (namespace, job) (increase(vm_persistentqueue_bytes_dropped_total{${ag}}[5m])) > 0";
+              "for" = "10m";
+              severity = "critical";
+              summary = "vmagent is dropping samples from its full persistent queue.";
+              description = "vmagent ${ns}/${name} dropped {{ $value | humanize1024 }}B of queued samples in 5 minutes because its persistent queue is full. Those samples are lost. Check that vminsert accepts writes.";
+            };
+            VMAgentRemoteWriteDropping = {
+              expr = "sum by (namespace, job) (increase(vmagent_remotewrite_packets_dropped_total{${ag}}[5m])) > 0";
+              "for" = "15m";
+              severity = "warning";
+              summary = "vmagent is dropping data blocks that vminsert rejected.";
+              description = "vmagent ${ns}/${name} dropped {{ $value | humanize }} blocks in 5 minutes after vminsert answered with a 4xx status. Those samples are lost. Check the vminsert logs for the reason.";
+            };
+            VMAgentRemoteWriteErrors = {
+              expr = "sum by (namespace, job) (rate(vmagent_remotewrite_retries_count_total{${ag}}[5m])) > 0";
+              "for" = "15m";
+              severity = "warning";
+              summary = "vmagent keeps retrying writes to vminsert.";
+              description = "vmagent ${ns}/${name} has retried remote writes for 15 minutes. Samples wait in its queue meanwhile and are lost when the queue fills. Check that vminsert is reachable and healthy.";
+            };
+            VMAgentConfigReloadFailed = {
+              expr = "min by (namespace, job) (vm_promscrape_config_last_reload_successful{${ag}}) < 1";
+              "for" = "10m";
+              severity = "warning";
+              summary = "vmagent failed to load its scrape configuration.";
+              description = "A replica of vmagent ${ns}/${name} could not load the scrape configuration the operator generated and still scrapes with the previous one. Check its logs and the VMServiceScrape and VMPodScrape objects changed most recently.";
+            };
+          };
+        }
+        (
+          args
+          // {
+            # A native VMRule does not depend on the operator's
+            # PrometheusRule converter, and a prometheus-operator
+            # Prometheus on the same cluster does not load it.
+            prometheus =
+              if prometheus != null && prometheus.out ? mkVMRule then
+                { out.mkPrometheusRule = prometheus.out.mkVMRule; }
+              else
+                null;
+          }
+        )
     )
 
     # The agent's samples arrive at the cluster and nothing on the

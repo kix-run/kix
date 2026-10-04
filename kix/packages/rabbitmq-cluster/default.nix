@@ -59,13 +59,68 @@
 # RabbitmqCluster spec. The keys and fields the options own are refused,
 # listed on each.
 #
-# Limits: the package ships no alerts. TLS, the Vault and external-Secret
-# backends, and the ports of additional plugins (MQTT, STOMP, streams) are
-# not modelled; network policy opens AMQP only. Queues, users, and vhosts
-# are not modelled, so every consumer shares the default user and the
-# default vhost. The operator copies the RabbitmqCluster's Kix annotations
-# to the objects it creates; it drops the app.kubernetes.io labels, so
-# `kix gc` does not list those objects as its own.
+# Alerts: with a prometheus dependency and `metrics.enabled`, a
+# PrometheusRule `<instance>-alerts` selects the PodMonitor's series by
+# `job="<namespace>/<instance>"`. They read the aggregated `/metrics`
+# endpoint the PodMonitor scrapes, which reports queues summed per node, so
+# no rule names a queue.
+#   RabbitMQDown (critical)                no node answers a scrape.
+#   RabbitMQQuorumLost (critical, replicas > 1)
+#                                          fewer than a majority of
+#                                          `replicas` nodes answer, so
+#                                          quorum queues and the metadata
+#                                          store cannot commit. The
+#                                          majority comes from `replicas`,
+#                                          not from the nodes that run:
+#                                          after a refused lower
+#                                          `replicas` (see below) the rule
+#                                          needs fewer nodes than the
+#                                          running cluster does, and can
+#                                          miss a lost majority.
+#   RabbitMQClusterIdentityMismatch (critical, replicas > 1)
+#                                          the nodes report more than one
+#                                          cluster ID, so a node formed a
+#                                          cluster of its own.
+#   RabbitMQDistributionLinksMissing (warning, replicas > 1)
+#                                          a node is connected to fewer than
+#                                          `replicas - 1` other nodes.
+#   RabbitMQMemoryAlarm (critical)         a node's memory alarm blocks
+#                                          publishers on every node.
+#   RabbitMQDiskAlarm (critical)           a node's free disk alarm does
+#                                          the same.
+#   RabbitMQMemoryNearWatermark (warning)  a node uses over 90% of its
+#                                          memory high watermark.
+#   RabbitMQDiskNearAlarm (warning)        a node's free disk is under twice
+#                                          the free disk limit.
+#   RabbitMQFileDescriptorsNearLimit (warning)
+#                                          a node uses over 80% of its file
+#                                          descriptors, past which it
+#                                          refuses connections.
+#   RabbitMQAlarmMetricsMissing (warning)  a node is scraped but reports no
+#                                          alarm metrics, so the alarm
+#                                          alerts cannot fire for it.
+# The operator sets the free disk limit to 2GB. On a volume under 5GB
+# RabbitMQDiskNearAlarm can fire while the cluster is idle and healthy, and
+# at 2GB or less RabbitMQDiskAlarm fires too and publishers are blocked
+# from the first boot. Evaluation warns about such a `storage.size`.
+# The rules derive from the cluster-operator 2.23.0 rules in
+# observability/prometheus/rules/rabbitmq, rewritten to select the instance.
+# Left out: the file descriptor alarm rule, whose metric RabbitMQ 4.3.6 no
+# longer reports; queues without consumers, growing queues, unroutable
+# messages, and connection churn, which need per-queue metrics or depend on
+# the application; and nodes not ready, full volumes, and crash
+# loops, which prometheus-default-rules reports
+# (KubeStatefulSetReplicasMismatch, KubePersistentVolumeFillingUp,
+# KubePodCrashLooping). A queue that lost its leader shows only in
+# `rabbitmq-queues quorum_status`.
+#
+# Limits: TLS, the Vault and external-Secret backends, and the ports of
+# additional plugins (MQTT, STOMP, streams) are not modelled; network
+# policy opens AMQP only. Queues, users, and vhosts are not modelled, so
+# every consumer shares the default user and the default vhost. The
+# operator copies the RabbitmqCluster's Kix annotations to the objects it
+# creates; it drops the app.kubernetes.io labels, so `kix gc` does not list
+# those objects as its own.
 #
 # Changes the operator refuses: it sets `ReconcileSuccess=False` and does
 # not advance `status.observedGeneration`, so the deploy waits on
@@ -177,6 +232,10 @@ let
     );
 
   renderValue = v: if builtins.isBool v then lib.boolToString v else toString v;
+
+  # The PodMonitor's name. Its series carry job="<namespace>/<name>", which
+  # the alerts select on.
+  podMonitorName = name;
 in
 {
   meta = {
@@ -363,222 +422,350 @@ in
     };
   };
 
-  build =
-    {
-      self,
-      config,
-      clusterConfig,
-      rabbitmqOperator,
-      storageClasses ? null,
-      prometheus ? null,
-      ...
-    }:
-    let
-      operator =
-        if rabbitmqOperator.out ? operandSelectors then
-          rabbitmqOperator.out
-        else
-          throw "${who}: the rabbitmqOperator dependency has no out.operandSelectors, as with an import. This package reads the operator's CRD handle and pod labels from it. Wire a managed rabbitmq-operator instance with deps.rabbitmqOperator = ref.<namespace>.<instance>.";
+  build = [
+    (
+      {
+        self,
+        config,
+        clusterConfig,
+        rabbitmqOperator,
+        storageClasses ? null,
+        prometheus ? null,
+        ...
+      }:
+      let
+        operator =
+          if rabbitmqOperator.out ? operandSelectors then
+            rabbitmqOperator.out
+          else
+            throw "${who}: the rabbitmqOperator dependency has no out.operandSelectors, as with an import. This package reads the operator's CRD handle and pod labels from it. Wire a managed rabbitmq-operator instance with deps.rabbitmqOperator = ref.<namespace>.<instance>.";
 
-      operandSelector = operator.operandSelectors.cluster name;
+        operandSelector = operator.operandSelectors.cluster name;
 
-      storageClass =
-        if config.storage.storageClass != null then
-          config.storage.storageClass
-        else if storageClasses != null then
-          storageClasses.out.storageClassName
-        else
-          null;
+        storageClass =
+          if config.storage.storageClass != null then
+            config.storage.storageClass
+          else if storageClasses != null then
+            storageClasses.out.storageClassName
+          else
+            null;
 
-      spread = lib.optionals (config.replicas > 1) (
-        kix.availability.spreadConstraints {
-          level = availability;
+        spread = lib.optionals (config.replicas > 1) (
+          kix.availability.spreadConstraints {
+            level = availability;
+            selector = operandSelector;
+            topology = clusterConfig.cluster.topology;
+          }
+        );
+
+        # From 4.1 the operator grants the pods no peer-discovery Role, so
+        # they get no API server egress; a tag with no version keeps it.
+        tagVersion = builtins.match "([0-9]+)\\.([0-9]+).*" config.image.tag;
+        peerDiscoveryApi =
+          tagVersion == null
+          || lib.versionOlder "${builtins.elemAt tagVersion 0}.${builtins.elemAt tagVersion 1}" "4.1";
+
+        additionalConfig = lib.concatStrings (
+          lib.mapAttrsToList (k: v: "${k} = ${renderValue v}\n") config.settings
+        );
+
+        baseSpec = {
+          inherit (config) replicas resources;
+          image = kix.image.ref config.image;
+          persistence = {
+            storage = toString config.storage.size;
+          }
+          // lib.optionalAttrs (storageClass != null) { storageClassName = storageClass; };
+        }
+        // lib.optionalAttrs (additionalConfig != "") {
+          rabbitmq.additionalConfig = additionalConfig;
+        }
+        // lib.optionalAttrs (spread != [ ]) {
+          override.statefulSet.spec.template.spec.topologySpreadConstraints = spread;
+        };
+
+        spec = kix.mergeGuarded {
+          inherit who locked;
+        } baseSpec config.extraSpec;
+
+        # The operator writes `disk_free_limit.absolute = 2GB` into every
+        # node's rabbitmq.conf. Below 5GB a fresh volume leaves too little
+        # headroom over twice that limit, where RabbitMQDiskNearAlarm fires.
+        smallVolume = kix.parseQuantity "storage" config.storage.size < 5 * 1000 * 1000 * 1000;
+
+        # Read only when the scope has an enforcer (kix.operandPolicy).
+        netpol = scope.networkPolicyEnforcer.netpol;
+        tcp = port: {
+          inherit port;
+          protocol = "TCP";
+        };
+        peerPorts = map tcp [
+          epmdPort
+          distributionPort
+        ];
+        operatorPorts = [ (tcp managementPort) ];
+        operatorNamespace = (scope.forService rabbitmqOperator).namespaceName;
+      in
+      {
+        cluster =
+          lib.warnIf smallVolume
+            "${who}: storage.size is ${toString config.storage.size}, under 5GB. The operator sets RabbitMQ's disk_free_limit to 2GB, so RabbitMQDiskNearAlarm can fire on this volume while the cluster is idle, and a volume of 2GB or less starts in the free disk alarm, which blocks every publisher. Use at least 5Gi."
+            (
+              scope.mkCR operator.crds.RabbitmqCluster {
+                inherit name spec;
+                annotations."rabbitmq.com/disable-default-topology-spread-constraints" = "true";
+              }
+            );
+
+        client = scope.mkServiceRef {
+          inherit name;
           selector = operandSelector;
-          topology = clusterConfig.cluster.topology;
-        }
-      );
+          ports = [ (tcp amqpPort) ];
+          requires = [ self.cluster ];
+        };
 
-      # From 4.1 the operator grants the pods no peer-discovery Role, so
-      # they get no API server egress; a tag with no version keeps it.
-      tagVersion = builtins.match "([0-9]+)\\.([0-9]+).*" config.image.tag;
-      peerDiscoveryApi =
-        tagVersion == null
-        || lib.versionOlder "${builtins.elemAt tagVersion 0}.${builtins.elemAt tagVersion 1}" "4.1";
+        defaultUser = scope.mkSecretRef {
+          name = "${name}-default-user";
+          keys = [
+            "username"
+            "password"
+          ];
+          requires = [ self.cluster ];
+        };
 
-      additionalConfig = lib.concatStrings (
-        lib.mapAttrsToList (k: v: "${k} = ${renderValue v}\n") config.settings
-      );
+        # The operator renders no PodDisruptionBudget, and the availability
+        # plugin derives one only for workloads Kix renders.
+        podDisruptionBudget =
+          if config.replicas > 1 then
+            scope.mkResource {
+              apiVersion = "policy/v1";
+              kind = "PodDisruptionBudget";
+              inherit name;
+              annotations.${kix.keys.operandOf} = "rabbitmq.com/RabbitmqCluster/${self.cluster.out.name}";
+              spec = {
+                maxUnavailable = 1;
+                selector.matchLabels = operandSelector;
+              };
+            }
+          else
+            null;
 
-      baseSpec = {
-        inherit (config) replicas resources;
-        image = kix.image.ref config.image;
-        persistence = {
-          storage = toString config.storage.size;
-        }
-        // lib.optionalAttrs (storageClass != null) { storageClassName = storageClass; };
-      }
-      // lib.optionalAttrs (additionalConfig != "") {
-        rabbitmq.additionalConfig = additionalConfig;
-      }
-      // lib.optionalAttrs (spread != [ ]) {
-        override.statefulSet.spec.template.spec.topologySpreadConstraints = spread;
-      };
+        podMonitor =
+          if config.metrics.enabled && prometheus != null then
+            prometheus.out.mkPodMonitor scope {
+              name = podMonitorName;
+              spec = {
+                selector.matchLabels = operandSelector;
+                podMetricsEndpoints = [
+                  (
+                    {
+                      # RabbitMQ's Prometheus plugin (port name `prometheus`).
+                      # The scrape egress rule needs the number, because Kix
+                      # does not see the operator's pods.
+                      portNumber = prometheusPort;
+                    }
+                    // lib.optionalAttrs (config.metrics.interval != null) { inherit (config.metrics) interval; }
+                  )
+                ];
+              };
+              requires = [ self.cluster ];
+            }
+          else
+            null;
 
-      spec = kix.mergeGuarded {
-        inherit who locked;
-      } baseSpec config.extraSpec;
+        # The operator creates these pods, so no policy is derived for them.
+        operandEgress = kix.operandPolicy {
+          inherit scope;
+          name = "${name}-operand-egress";
+          spec = {
+            endpointSelector.matchLabels = operandSelector;
+            egress = [
+              netpol.dnsEgressRule
+            ]
+            ++ lib.optional peerDiscoveryApi netpol.apiServerEgressRule
+            ++ [
+              (netpol.mkServiceEgressRule {
+                selector = operandSelector;
+                namespace = ns;
+                sourceNamespace = ns;
+                ports = peerPorts;
+              })
+            ];
+          };
+        };
+        operandIngress = kix.operandPolicy {
+          inherit scope;
+          name = "${name}-operand-ingress";
+          spec = {
+            endpointSelector.matchLabels = operandSelector;
+            ingress = [
+              (netpol.mkCallerIngressRule {
+                callerSelector = operandSelector;
+                callerNamespace = ns;
+                ports = peerPorts;
+              })
+              (netpol.mkCallerIngressRule {
+                callerSelector = operator.podSelector;
+                callerNamespace = operatorNamespace;
+                ports = operatorPorts;
+              })
+            ];
+          };
+        };
+        # The other end of the operator rule, in the operator's namespace.
+        operatorEgress = kix.operandPolicy {
+          scope = scope.forService rabbitmqOperator;
+          name = "${ns}-${name}-operator-egress";
+          spec = {
+            endpointSelector.matchLabels = operator.podSelector;
+            egress = [
+              (netpol.mkServiceEgressRule {
+                selector = operandSelector;
+                namespace = ns;
+                sourceNamespace = operatorNamespace;
+                ports = operatorPorts;
+              })
+            ];
+          };
+        };
 
-      # Read only when the scope has an enforcer (kix.operandPolicy).
-      netpol = scope.networkPolicyEnforcer.netpol;
-      tcp = port: {
-        inherit port;
-        protocol = "TCP";
-      };
-      peerPorts = map tcp [
-        epmdPort
-        distributionPort
-      ];
-      operatorPorts = [ (tcp managementPort) ];
-      operatorNamespace = (scope.forService rabbitmqOperator).namespaceName;
-    in
-    {
-      cluster = scope.mkCR operator.crds.RabbitmqCluster {
-        inherit name spec;
-        annotations."rabbitmq.com/disable-default-topology-spread-constraints" = "true";
-      };
-
-      client = scope.mkServiceRef {
-        inherit name;
-        selector = operandSelector;
-        ports = [ (tcp amqpPort) ];
-        requires = [ self.cluster ];
-      };
-
-      defaultUser = scope.mkSecretRef {
-        name = "${name}-default-user";
-        keys = [
-          "username"
-          "password"
-        ];
-        requires = [ self.cluster ];
-      };
-
-      # The operator renders no PodDisruptionBudget, and the availability
-      # plugin derives one only for workloads Kix renders.
-      podDisruptionBudget =
-        if config.replicas > 1 then
-          scope.mkResource {
-            apiVersion = "policy/v1";
-            kind = "PodDisruptionBudget";
-            inherit name;
-            annotations.${kix.keys.operandOf} = "rabbitmq.com/RabbitmqCluster/${self.cluster.out.name}";
-            spec = {
-              maxUnavailable = 1;
-              selector.matchLabels = operandSelector;
-            };
-          }
-        else
-          null;
-
-      podMonitor =
-        if config.metrics.enabled && prometheus != null then
-          prometheus.out.mkPodMonitor scope {
-            inherit name;
-            spec = {
-              selector.matchLabels = operandSelector;
-              podMetricsEndpoints = [
-                (
-                  {
-                    # RabbitMQ's Prometheus plugin (port name `prometheus`).
-                    # The scrape egress rule needs the number, because Kix
-                    # does not see the operator's pods.
-                    portNumber = prometheusPort;
-                  }
-                  // lib.optionalAttrs (config.metrics.interval != null) { inherit (config.metrics) interval; }
-                )
-              ];
-            };
-            requires = [ self.cluster ];
-          }
-        else
-          null;
-
-      # The operator creates these pods, so no policy is derived for them.
-      operandEgress = kix.operandPolicy {
-        inherit scope;
-        name = "${name}-operand-egress";
-        spec = {
-          endpointSelector.matchLabels = operandSelector;
-          egress = [
-            netpol.dnsEgressRule
+        root = {
+          resource = self.cluster;
+          requires = [
+            self.client
+            self.defaultUser
           ]
-          ++ lib.optional peerDiscoveryApi netpol.apiServerEgressRule
-          ++ [
-            (netpol.mkServiceEgressRule {
-              selector = operandSelector;
-              namespace = ns;
-              sourceNamespace = ns;
-              ports = peerPorts;
-            })
+          ++ builtins.filter (r: r != null) [
+            self.podDisruptionBudget
+            self.podMonitor
+            self.operandEgress
+            self.operandIngress
+            self.operatorEgress
+            self.prometheusRules
           ];
+          out = {
+            host = self.client.out.fqdn;
+            inherit (self.client.out) port;
+            vhost = if config.settings ? default_vhost then renderValue config.settings.default_vhost else "/";
+            credentials = self.defaultUser;
+            extraImages = [ (kix.image.ref config.image) ];
+          };
         };
-      };
-      operandIngress = kix.operandPolicy {
-        inherit scope;
-        name = "${name}-operand-ingress";
-        spec = {
-          endpointSelector.matchLabels = operandSelector;
-          ingress = [
-            (netpol.mkCallerIngressRule {
-              callerSelector = operandSelector;
-              callerNamespace = ns;
-              ports = peerPorts;
-            })
-            (netpol.mkCallerIngressRule {
-              callerSelector = operator.podSelector;
-              callerNamespace = operatorNamespace;
-              ports = operatorPorts;
-            })
-          ];
-        };
-      };
-      # The other end of the operator rule, in the operator's namespace.
-      operatorEgress = kix.operandPolicy {
-        scope = scope.forService rabbitmqOperator;
-        name = "${ns}-${name}-operator-egress";
-        spec = {
-          endpointSelector.matchLabels = operator.podSelector;
-          egress = [
-            (netpol.mkServiceEgressRule {
-              selector = operandSelector;
-              namespace = ns;
-              sourceNamespace = operatorNamespace;
-              ports = operatorPorts;
-            })
-          ];
-        };
-      };
+      }
+    )
 
-      root = {
-        resource = self.cluster;
-        requires = [
-          self.client
-          self.defaultUser
-        ]
-        ++ builtins.filter (r: r != null) [
-          self.podDisruptionBudget
-          self.podMonitor
-          self.operandEgress
-          self.operandIngress
-          self.operatorEgress
-        ];
-        out = {
-          host = self.client.out.fqdn;
-          inherit (self.client.out) port;
-          vhost = if config.settings ? default_vhost then renderValue config.settings.default_vhost else "/";
-          credentials = self.defaultUser;
-          extraImages = [ (kix.image.ref config.image) ];
+    # DI passes a build function only the arguments its formals name, so
+    # this one names those kix.alerts reads.
+    (
+      {
+        config,
+        scope,
+        prometheus ? null,
+        ...
+      }@args:
+      let
+        sel = ''namespace="${ns}",job="${ns}/${podMonitorName}"'';
+        cluster = "RabbitMQ cluster ${ns}/${name}";
+        majority = config.replicas / 2 + 1;
+        # The alarm collector omits both alarm series from a scrape in which
+        # reading the node's alarms times out. The two-minute window bridges
+        # one such scrape, and RabbitMQAlarmMetricsMissing reports a node
+        # where it keeps happening.
+        alarm = metric: "max by (namespace, job, pod) (max_over_time(${metric}{${sel}}[2m])) > 0";
+      in
+      kix.alerts {
+        alerts = {
+          RabbitMQDown = {
+            expr = "sum by (namespace, job) (up{${sel}}) == 0 or absent(up{${sel}})";
+            "for" = "10m";
+            severity = "critical";
+            summary = "A RabbitMQ cluster has no node answering.";
+            description = "No node of ${cluster} has answered a scrape for 10 minutes, so clients cannot connect. Check kubectl get rabbitmqcluster ${name} -n ${ns} and the pods of the StatefulSet ${name}-server.";
+          };
+          # A memory alarm on one node blocks publishing connections on every
+          # node until it clears (https://www.rabbitmq.com/docs/alarms).
+          RabbitMQMemoryAlarm = {
+            expr = alarm "rabbitmq_alarms_memory_used_watermark";
+            "for" = "5m";
+            keep_firing_for = "5m";
+            severity = "critical";
+            summary = "A RabbitMQ memory alarm blocks publishers.";
+            description = "Node {{ $labels.pod }} of ${cluster} is over its memory high watermark, so the cluster blocks every publishing connection. Restarting the node does not fix it. Check `rabbitmq-diagnostics memory_breakdown` on the node, and queues that grow because consumers are slow or missing.";
+          };
+          RabbitMQDiskAlarm = {
+            expr = alarm "rabbitmq_alarms_free_disk_space_watermark";
+            "for" = "5m";
+            keep_firing_for = "5m";
+            severity = "critical";
+            summary = "A RabbitMQ free disk alarm blocks publishers.";
+            description = "Node {{ $labels.pod }} of ${cluster} has less free disk than its free disk limit, so the cluster blocks every publishing connection. Drain the queues that hold the messages, or grow the node's volume.";
+          };
+          # rabbitmq_resident_memory_limit_bytes is the memory high
+          # watermark, which the operator computes from the memory limit.
+          RabbitMQMemoryNearWatermark = {
+            expr = "max by (namespace, job, pod) (rabbitmq_process_resident_memory_bytes{${sel}} / rabbitmq_resident_memory_limit_bytes{${sel}}) > 0.9";
+            "for" = "15m";
+            severity = "warning";
+            summary = "A RabbitMQ node is close to its memory alarm.";
+            description = "Node {{ $labels.pod }} of ${cluster} uses {{ $value | humanizePercentage }} of its memory high watermark. At the watermark the cluster blocks every publisher. Check `rabbitmq-diagnostics memory_breakdown` and the queues that grow.";
+          };
+          RabbitMQDiskNearAlarm = {
+            expr = "min by (namespace, job, pod) (rabbitmq_disk_space_available_bytes{${sel}}) < 2 * max by (namespace, job, pod) (rabbitmq_disk_space_available_limit_bytes{${sel}})";
+            "for" = "15m";
+            severity = "warning";
+            summary = "A RabbitMQ node is close to its free disk alarm.";
+            description = "Node {{ $labels.pod }} of ${cluster} has {{ $value | humanize }}B of disk free, under twice its free disk limit. At the limit the cluster blocks every publisher. Drain the queues that hold the messages, or grow the volumes (storage.size).";
+          };
+          RabbitMQFileDescriptorsNearLimit = {
+            expr = "max by (namespace, job, pod) (rabbitmq_process_open_fds{${sel}} / rabbitmq_process_max_fds{${sel}}) > 0.8";
+            "for" = "15m";
+            severity = "warning";
+            summary = "A RabbitMQ node is close to its file descriptor limit.";
+            description = "Node {{ $labels.pod }} of ${cluster} uses {{ $value | humanizePercentage }} of its file descriptors. When none is left it refuses new connections. Look for clients that open a connection per message or never close them.";
+          };
+          RabbitMQAlarmMetricsMissing = {
+            expr = "count by (namespace, job, pod) (up{${sel}} == 1) unless on (namespace, job, pod) count by (namespace, job, pod) (rabbitmq_alarms_memory_used_watermark{${sel}})";
+            "for" = "15m";
+            severity = "warning";
+            summary = "A RabbitMQ node reports no alarm metrics.";
+            description = "Node {{ $labels.pod }} of ${cluster} is scraped but reports no alarm metrics, so the memory and disk alarm alerts cannot fire for it. Its log shows `alarm_metrics_collector failed to emit metrics` when reading the alarms times out, which happens on an overloaded node.";
+          };
+        }
+        // lib.optionalAttrs (config.replicas > 1) {
+          # A missing pod has no `up` series, so the count compares with the
+          # configured replicas. With every node down, the count is empty
+          # and RabbitMQDown fires instead.
+          RabbitMQQuorumLost = {
+            expr = "count by (namespace, job) (up{${sel}} == 1) < ${toString majority}";
+            "for" = "5m";
+            severity = "critical";
+            summary = "A RabbitMQ cluster has lost its majority.";
+            description = "{{ $value }} of the ${toString config.replicas} nodes of ${cluster} answer, fewer than the ${toString majority} a majority needs. Quorum queues and the metadata store stop accepting writes until enough nodes return. Check the pods of the StatefulSet ${name}-server.";
+          };
+          # Each node reports one erlang_vm_dist_node_state series per peer
+          # it is connected to, 3 while the link is up. CLI tools connect
+          # as temporary nodes not named rabbit@, so the peer filter leaves
+          # them out. A node with no link reports none, and the `or` branch
+          # gives it a count of 0.
+          RabbitMQDistributionLinksMissing = {
+            expr = "(count by (namespace, job, pod) (erlang_vm_dist_node_state{${sel},peer=~\"rabbit@.+\"} == 3) or on (namespace, job, pod) count by (namespace, job, pod) (up{${sel}} == 1) * 0) < ${toString (config.replicas - 1)}";
+            "for" = "10m";
+            severity = "warning";
+            summary = "A RabbitMQ node is not connected to every other node.";
+            description = "Node {{ $labels.pod }} of ${cluster} has {{ $value }} of its ${toString (config.replicas - 1)} links to the other nodes up for 10 minutes. A node cut off from its peers can be partitioned from the cluster; quorum queues on it lose their replicas. Check `rabbitmq-diagnostics cluster_status` on that node and the network between the pods on port ${toString distributionPort}.";
+          };
+          # Every node of one cluster reads the ID from the replicated
+          # metadata store (rabbit_nodes:persistent_cluster_id/0), so two IDs
+          # mean a node formed or joined another cluster.
+          RabbitMQClusterIdentityMismatch = {
+            expr = "count by (namespace, job) (count by (namespace, job, rabbitmq_cluster_permanent_id) (rabbitmq_identity_info{${sel}})) > 1";
+            "for" = "10m";
+            severity = "critical";
+            summary = "The nodes of a RabbitMQ cluster report different cluster IDs.";
+            description = "The nodes of ${cluster} report {{ $value }} cluster IDs, so at least one node runs as a separate cluster and clients that reach it see other queues and messages. Compare `rabbitmq-diagnostics cluster_status` on each node.";
+          };
         };
-      };
-    };
+      } args
+    )
+  ];
 }

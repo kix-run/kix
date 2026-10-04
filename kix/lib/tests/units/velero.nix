@@ -14,6 +14,8 @@
   ofKind,
   byName,
   kixKeys,
+  alertRulesOf,
+  prometheusStub,
   ...
 }:
 
@@ -148,13 +150,15 @@ let
 
   # The velero package with a bucket, `config` merged over it, the cloud
   # credentials, and a repository Secret named `repository` (none when
-  # null). `withStore` wires the base instances' db Service as the store.
+  # null). `withStore` wires the base instances' db Service as the store,
+  # and `withPrometheus` adds a prometheus provider, so the alerts render.
   mkVelero =
     {
       config ? { },
       repository ? "velero-repo-credentials",
       withStore ? false,
       netpol ? false,
+      withPrometheus ? false,
     }:
     mkCluster (
       [
@@ -185,6 +189,7 @@ let
         )
       ]
       ++ lib.optional netpol netpolOn
+      ++ lib.optional withPrometheus { instances.monitoring.prometheus.package = prometheusStub; }
     );
 
   # The package's assertions, evaluated against `config` merged over a
@@ -432,4 +437,98 @@ in
       && builtins.elem "velero-backupstoragelocation-default-egress" inCluster
     )
     || throw "velero external store policy: without a store ${builtins.toJSON external}, with one ${builtins.toJSON inCluster}";
+
+  # Each schedule's VeleroBackupMissing threshold is its metrics.maxBackupAge
+  # entry, else kix.schedules.staleAfter of its cron line. An age up to 6d
+  # reads the counters over that window; a longer one compares the
+  # last-success timestamp. Both rules aggregate by namespace and schedule.
+  velero-backup-alerts =
+    let
+      cluster = mkVelero {
+        withPrometheus = true;
+        config = {
+          schedules = {
+            daily.schedule = "CRON_TZ=UTC 0 2 * * *";
+            frequent.schedule = "@every 6h";
+            weekly.schedule = "0 3 * * 0";
+            monthly.schedule = "0 2 1 * *";
+          };
+          metrics.maxBackupAge.monthly = "5d";
+        };
+      };
+      rules = alertRulesOf "PrometheusRule" "velero" (manifests cluster);
+      missing = rules.VeleroBackupMissing.expr;
+      failed = rules.VeleroBackupFailed.expr;
+      sel = schedule: ''namespace="velero",service="velero",schedule="${schedule}"'';
+      counterForm =
+        schedule: age:
+        lib.hasInfix "velero_backup_attempt_total{${sel schedule}} offset ${age})" missing
+        && lib.hasInfix "increase(velero_backup_success_total{${sel schedule}}[${age}])" missing;
+      checks = {
+        daily-derived = counterForm "daily" "50h";
+        every-derived = counterForm "frequent" "14h";
+        override = counterForm "monthly" "5d";
+        weekly-timestamp = lib.hasInfix "time() - max by (namespace, schedule) (velero_backup_last_successful_timestamp{${sel "weekly"}}) > 1216800" missing;
+        weekly-no-counter = !(lib.hasInfix "velero_backup_attempt_total{${sel "weekly"}}" missing);
+        missing-keeps-namespace = !(lib.hasInfix "by (schedule)" missing);
+        failed-keeps-namespace = lib.hasPrefix "sum by (namespace, schedule) (" failed;
+        # Schedules the package does not render (out.mkSchedule) share
+        # metrics.otherSchedulesMaxAge, so the rule renders with no
+        # `schedules` too.
+        others-exclude-declared = lib.hasInfix ''schedule!="",schedule!~"daily|frequent|monthly|weekly"} offset 50h'' missing;
+        no-schedules-still-covers-others =
+          let
+            r = alertRulesOf "PrometheusRule" "velero" (
+              manifests (mkVelero {
+                withPrometheus = true;
+              })
+            );
+          in
+          r ? VeleroBackupMissing && lib.hasInfix ''schedule!=""} offset 50h'' r.VeleroBackupMissing.expr;
+      };
+      failedChecks = lib.attrNames (lib.filterAttrs (_: ok: !ok) checks);
+    in
+    failedChecks == [ ]
+    || throw "velero backup alerts: ${toString failedChecks}: ${
+      builtins.toJSON { inherit missing failed; }
+    }";
+
+  # metrics.maxBackupAge refuses a key that names no schedule. A schedule
+  # whose period cannot be read and has no entry fails the build while the
+  # alerts render; with an entry, or without a prometheus dependency, it
+  # builds.
+  velero-backup-age-refusals =
+    let
+      unreadable = {
+        schedules.monthly.schedule = "0 2 1 * *";
+      };
+      cases = {
+        unknown-key =
+          refusedWith
+            [
+              "metrics.maxBackupAge names nightly, which is not a schedule in schedules"
+              "Its keys are schedule names: daily."
+            ]
+            {
+              schedules.daily.schedule = "@daily";
+              metrics.maxBackupAge.nightly = "50h";
+            };
+        unreadable-refused =
+          !(builds (mkVelero {
+            withPrometheus = true;
+            config = unreadable;
+          }));
+        unreadable-with-entry = builds (mkVelero {
+          withPrometheus = true;
+          config = unreadable // {
+            metrics.maxBackupAge.monthly = "64d";
+          };
+        });
+        unreadable-without-alerts = builds (mkVelero {
+          config = unreadable;
+        });
+      };
+      failed = lib.attrNames (lib.filterAttrs (_: ok: !ok) cases);
+    in
+    failed == [ ] || throw "velero backup age refusals: these cases did not behave: ${toString failed}";
 }

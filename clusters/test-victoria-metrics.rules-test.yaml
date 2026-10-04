@@ -1,0 +1,484 @@
+# promtool unit tests for the alert rules test-victoria-metrics.nix renders.
+# The rules-cluster-victoria-metrics check runs them from the rendered rules,
+# so each rule_files entry is <namespace>/<file> in the cluster's manifests.
+# Series carry the labels the VictoriaMetrics operator's VMServiceScrapes
+# give them: `job` is the component's Service name.
+rule_files:
+  - monitoring-system/vm-cluster-alerts-vmrule.yaml
+  - monitoring-system/vm-agent-alerts-vmrule.yaml
+  - monitoring-system/vm-alert-alerts-vmrule.yaml
+  - monitoring-system/vm-operator-alerts-vmrule.yaml
+evaluation_interval: 1m
+tests:
+  # Every vmstorage target is down and vminsert reports nothing: both down
+  # alerts fire, one through `up == 0` and one through absent().
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-0"}'
+        values: '0x15'
+      - series: 'up{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-1"}'
+        values: '0x15'
+      - series: 'up{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-2"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: VMStorageDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring-system
+              job: vmstorage-vm-cluster
+            exp_annotations:
+              summary: "Every vmstorage node of a VictoriaMetrics cluster is down."
+              description: "No vmstorage of victoria-metrics-cluster monitoring-system/vm-cluster has answered a scrape for 10 minutes, so the cluster accepts no new samples. When this fires with many absent() alerts at once, the write path is the cause. Check the vmstorage-vm-cluster pods."
+      - eval_time: 11m
+        alertname: VMInsertDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring-system
+              job: vminsert-vm-cluster
+            exp_annotations:
+              summary: "Every vminsert node of a VictoriaMetrics cluster is down."
+              description: "No vminsert of victoria-metrics-cluster monitoring-system/vm-cluster has answered a scrape for 10 minutes, so the cluster accepts no new samples. When this fires with many absent() alerts at once, the write path is the cause. Check the vminsert-vm-cluster pods."
+  # Two of three vmstorage nodes down with replication factor 2.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-0"}'
+        values: '1x15'
+      - series: 'up{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-1"}'
+        values: '0x15'
+      - series: 'up{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-2"}'
+        values: '0x15'
+      - series: 'up{namespace="monitoring-system",job="vminsert-vm-cluster",pod="vminsert-vm-cluster-a"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: VMStorageReplicationLost
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring-system
+              job: vmstorage-vm-cluster
+            exp_annotations:
+              summary: "Enough vmstorage nodes are down that some samples have no live copy."
+              description: "Only 1 of 3 vmstorage nodes of monitoring-system/vm-cluster are up, with replication factor 2. Queries for some series return partial results, and losing the down nodes' disks loses those samples. Bring the vmstorage-vm-cluster pods back."
+      - eval_time: 11m
+        alertname: VMStorageDown
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: VMInsertDown
+        exp_alerts: []
+  # A read-only node, a node short of disk, a node near its memory limit,
+  # and vminsert writing rows with too few copies.
+  - interval: 1m
+    input_series:
+      - series: 'vm_storage_is_read_only{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-0",path="/vm-data"}'
+        values: '1x40'
+      - series: 'vm_free_disk_space_bytes{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-1",path="/vm-data"}'
+        values: '10000000000x40'
+      - series: 'vm_free_disk_space_limit_bytes{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-1",path="/vm-data"}'
+        values: '100000000x40'
+      - series: 'vm_data_size_bytes{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-1",type="storage/big"}'
+        values: '80000000000x40'
+      - series: 'vm_data_size_bytes{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-1",type="indexdb/file"}'
+        values: '10000000000x40'
+      - series: 'process_resident_memory_anon_bytes{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-2"}'
+        values: '3600000000x40'
+      - series: 'vm_available_memory_bytes{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-2"}'
+        values: '4000000000x40'
+      - series: 'vm_rpc_rows_incompletely_replicated_total{namespace="monitoring-system",job="vminsert-vm-cluster",pod="vminsert-vm-cluster-a",name="vminsert"}'
+        values: '0+10x40'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: VMStorageReadOnly
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring-system
+              job: vmstorage-vm-cluster
+              pod: vmstorage-vm-cluster-0
+            exp_annotations:
+              summary: "A vmstorage node is read-only."
+              description: "vmstorage vmstorage-vm-cluster-0 in monitoring-system has less free disk than -storage.minFreeDiskSpaceBytes and accepts no new samples. vminsert sends its share to the other nodes, which then fill faster; with one node, ingestion has stopped. Free or add disk space."
+      - eval_time: 31m
+        alertname: VMStorageDiskNearlyFull
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vmstorage-vm-cluster
+              pod: vmstorage-vm-cluster-1
+            exp_annotations:
+              summary: "A vmstorage node is running out of disk space."
+              description: "vmstorage vmstorage-vm-cluster-1 in monitoring-system has 9.9% of its usable disk left; it turns read-only when that reaches 0. Grow the volume, shorten retentionPeriod, or add vmstorage nodes."
+      - eval_time: 16m
+        alertname: VMStorageMemoryNearLimit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vmstorage-vm-cluster
+              pod: vmstorage-vm-cluster-2
+            exp_annotations:
+              summary: "A vmstorage node is close to its memory limit."
+              description: "vmstorage vmstorage-vm-cluster-2 in monitoring-system has used 90% of its memory limit for 15 minutes. An OOM kill drops samples not yet flushed to disk. Raise vmstorage.resources.limits.memory."
+      - eval_time: 20m
+        alertname: VMInsertIncompleteReplication
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vminsert-vm-cluster
+            exp_annotations:
+              summary: "vminsert is storing samples with fewer copies than the replication factor."
+              description: "vminsert in monitoring-system stored 50 rows in 5 minutes with fewer than 2 copies, so losing one more vmstorage node loses them. Check which vmstorage nodes are down or read-only."
+  # A healthy cluster fires nothing.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-0"}'
+        values: '1x40'
+      - series: 'up{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-1"}'
+        values: '1x40'
+      - series: 'up{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-2"}'
+        values: '1x40'
+      - series: 'up{namespace="monitoring-system",job="vminsert-vm-cluster",pod="vminsert-vm-cluster-a"}'
+        values: '1x40'
+      - series: 'vm_storage_is_read_only{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-0",path="/vm-data"}'
+        values: '0x40'
+      - series: 'vm_storage_is_read_only{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-1",path="/vm-data"}'
+        values: '0x40'
+      - series: 'vm_storage_is_read_only{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-2",path="/vm-data"}'
+        values: '0x40'
+      - series: 'vm_free_disk_space_bytes{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-0",path="/vm-data"}'
+        values: '50000000000x40'
+      - series: 'vm_free_disk_space_limit_bytes{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-0",path="/vm-data"}'
+        values: '100000000x40'
+      - series: 'vm_data_size_bytes{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-0",type="storage/big"}'
+        values: '50000000000x40'
+      - series: 'process_resident_memory_anon_bytes{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-0"}'
+        values: '1000000000x40'
+      - series: 'vm_available_memory_bytes{namespace="monitoring-system",job="vmstorage-vm-cluster",pod="vmstorage-vm-cluster-0"}'
+        values: '4000000000x40'
+      - series: 'vm_rpc_rows_incompletely_replicated_total{namespace="monitoring-system",job="vminsert-vm-cluster",pod="vminsert-vm-cluster-a",name="vminsert"}'
+        values: '5x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VMStorageDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: VMInsertDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: VMStorageReplicationLost
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: VMStorageReadOnly
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: VMInsertIncompleteReplication
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: VMStorageMemoryNearLimit
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: VMStorageDiskNearlyFull
+        exp_alerts: []
+  # vmagent stores no samples at all: absent() fires the down alert.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: VMAgentDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring-system
+              job: vmagent-vm-agent
+            exp_annotations:
+              summary: "No vmagent replica is scraping."
+              description: "No replica of vmagent monitoring-system/vm-agent has a fresh `up` sample for 10 minutes, so no target in the cluster is being scraped and stored. If the vmagent pods are running, vminsert or vmstorage is not accepting writes. Check the vmagent-vm-agent pods, then VMInsertDown and VMStorageDown."
+  # vmagent drops queued and rejected data, retries writes, and one replica
+  # failed to reload its scrape configuration.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring-system",job="vmagent-vm-agent",pod="vmagent-vm-agent-a"}'
+        values: '1x30'
+      - series: 'vm_persistentqueue_bytes_dropped_total{namespace="monitoring-system",job="vmagent-vm-agent",pod="vmagent-vm-agent-a",path="/tmp/vmagent-remotewrite-data"}'
+        values: '0+1024x30'
+      - series: 'vmagent_remotewrite_packets_dropped_total{namespace="monitoring-system",job="vmagent-vm-agent",pod="vmagent-vm-agent-a",url="1:secret-url"}'
+        values: '0+1x30'
+      - series: 'vmagent_remotewrite_retries_count_total{namespace="monitoring-system",job="vmagent-vm-agent",pod="vmagent-vm-agent-a",url="1:secret-url"}'
+        values: '0+1x30'
+      - series: 'vm_promscrape_config_last_reload_successful{namespace="monitoring-system",job="vmagent-vm-agent",pod="vmagent-vm-agent-a"}'
+        values: '0x30'
+      - series: 'vm_promscrape_config_last_reload_successful{namespace="monitoring-system",job="vmagent-vm-agent",pod="vmagent-vm-agent-b"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VMAgentPersistentQueueDropping
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: monitoring-system
+              job: vmagent-vm-agent
+            exp_annotations:
+              summary: "vmagent is dropping samples from its full persistent queue."
+              description: "vmagent monitoring-system/vm-agent dropped 5kiB of queued samples in 5 minutes because its persistent queue is full. Those samples are lost. Check that vminsert accepts writes."
+      - eval_time: 20m
+        alertname: VMAgentRemoteWriteDropping
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vmagent-vm-agent
+            exp_annotations:
+              summary: "vmagent is dropping data blocks that vminsert rejected."
+              description: "vmagent monitoring-system/vm-agent dropped 5 blocks in 5 minutes after vminsert answered with a 4xx status. Those samples are lost. Check the vminsert logs for the reason."
+      - eval_time: 20m
+        alertname: VMAgentRemoteWriteErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vmagent-vm-agent
+            exp_annotations:
+              summary: "vmagent keeps retrying writes to vminsert."
+              description: "vmagent monitoring-system/vm-agent has retried remote writes for 15 minutes. Samples wait in its queue meanwhile and are lost when the queue fills. Check that vminsert is reachable and healthy."
+      - eval_time: 20m
+        alertname: VMAgentConfigReloadFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vmagent-vm-agent
+            exp_annotations:
+              summary: "vmagent failed to load its scrape configuration."
+              description: "A replica of vmagent monitoring-system/vm-agent could not load the scrape configuration the operator generated and still scrapes with the previous one. Check its logs and the VMServiceScrape and VMPodScrape objects changed most recently."
+      - eval_time: 20m
+        alertname: VMAgentDown
+        exp_alerts: []
+  # A healthy agent fires nothing.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring-system",job="vmagent-vm-agent",pod="vmagent-vm-agent-a"}'
+        values: '1x30'
+      - series: 'vm_persistentqueue_bytes_dropped_total{namespace="monitoring-system",job="vmagent-vm-agent",pod="vmagent-vm-agent-a",path="/tmp/vmagent-remotewrite-data"}'
+        values: '0x30'
+      - series: 'vmagent_remotewrite_packets_dropped_total{namespace="monitoring-system",job="vmagent-vm-agent",pod="vmagent-vm-agent-a",url="1:secret-url"}'
+        values: '0x30'
+      - series: 'vmagent_remotewrite_retries_count_total{namespace="monitoring-system",job="vmagent-vm-agent",pod="vmagent-vm-agent-a",url="1:secret-url"}'
+        values: '0x30'
+      - series: 'vm_promscrape_config_last_reload_successful{namespace="monitoring-system",job="vmagent-vm-agent",pod="vmagent-vm-agent-a"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VMAgentDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: VMAgentPersistentQueueDropping
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: VMAgentRemoteWriteDropping
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: VMAgentRemoteWriteErrors
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: VMAgentConfigReloadFailed
+        exp_alerts: []
+  # Watchdog fires with no input at all. It has no healthy fixture: it
+  # always fires.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels:
+              severity: none
+              namespace: monitoring-system
+            exp_annotations:
+              summary: "An alert that always fires, to prove the alerting pipeline works."
+              description: "vmalert monitoring-system/vm-alert evaluates this rule through vmselect and sends it through Alertmanager, so it arrives only while the whole pipeline works. Route it to an external heartbeat service that pages when it stops arriving."
+  # vmalert fails a rule group, fails to notify, drops remote writes, and
+  # one replica failed to reload; Alertmanager fails a receiver, one replica
+  # failed to reload, and one replica sees only itself.
+  - interval: 1m
+    input_series:
+      - series: 'vmalert_alerting_rules_errors_total{namespace="monitoring-system",job="vmalert-vm-alert",pod="vmalert-vm-alert-a",group="g1",file="/etc/vmalert/config/r.yaml",alertname="X",id="1"}'
+        values: '0+1x40'
+      - series: 'vmalert_recording_rules_errors_total{namespace="monitoring-system",job="vmalert-vm-alert",pod="vmalert-vm-alert-a",group="g2",file="/etc/vmalert/config/r.yaml",recording="y",id="2"}'
+        values: '0x40'
+      - series: 'vmalert_alerts_send_errors_total{namespace="monitoring-system",job="vmalert-vm-alert",pod="vmalert-vm-alert-a",addr="http://am:9093/api/v2/alerts"}'
+        values: '0+2x40'
+      - series: 'vmalert_remotewrite_dropped_rows_total{namespace="monitoring-system",job="vmalert-vm-alert",pod="vmalert-vm-alert-a"}'
+        values: '0+3x40'
+      - series: 'vmalert_config_last_reload_successful{namespace="monitoring-system",job="vmalert-vm-alert",pod="vmalert-vm-alert-a"}'
+        values: '0x40'
+      - series: 'vmalert_config_last_reload_successful{namespace="monitoring-system",job="vmalert-vm-alert",pod="vmalert-vm-alert-b"}'
+        values: '1x40'
+      - series: 'alertmanager_config_last_reload_successful{namespace="monitoring-system",job="vmalertmanager-vm-alert",pod="vmalertmanager-vm-alert-0"}'
+        values: '0x40'
+      - series: 'alertmanager_notifications_failed_total{namespace="monitoring-system",job="vmalertmanager-vm-alert",pod="vmalertmanager-vm-alert-0",integration="webhook",reason="other"}'
+        values: '0+1x40'
+      - series: 'alertmanager_cluster_members{namespace="monitoring-system",job="vmalertmanager-vm-alert",pod="vmalertmanager-vm-alert-0"}'
+        values: '1x40'
+      - series: 'alertmanager_cluster_members{namespace="monitoring-system",job="vmalertmanager-vm-alert",pod="vmalertmanager-vm-alert-1"}'
+        values: '2x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VMAlertRuleErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vmalert-vm-alert
+              group: g1
+            exp_annotations:
+              summary: "vmalert fails to evaluate rules."
+              description: "vmalert monitoring-system/vm-alert failed 5 rule evaluations in group g1 in 5 minutes, so those rules cannot fire. A failing datasource (vmselect) fails every group; otherwise check the group's expressions in the vmalert logs."
+      - eval_time: 20m
+        alertname: VMAlertNotificationsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vmalert-vm-alert
+            exp_annotations:
+              summary: "vmalert fails to send alerts to Alertmanager."
+              description: "vmalert monitoring-system/vm-alert failed to send 10 alerts to Alertmanager in 5 minutes. This alert arrives only through an Alertmanager replica that still answers. Check the vmalertmanager-vm-alert pods."
+      - eval_time: 20m
+        alertname: VMAlertRemoteWriteDropping
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vmalert-vm-alert
+            exp_annotations:
+              summary: "vmalert is dropping rule results it could not write to vminsert."
+              description: "vmalert monitoring-system/vm-alert dropped 15 rows in 5 minutes. Recording rule results are lost, and so is the alert state vmalert restores after a restart, so pending alerts start their `for` over. Check that vminsert accepts writes."
+      - eval_time: 20m
+        alertname: VMAlertConfigReloadFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vmalert-vm-alert
+            exp_annotations:
+              summary: "vmalert failed to load its rules."
+              description: "A replica of vmalert monitoring-system/vm-alert could not load the rule files the operator generated and still evaluates the previous ones. Check its logs and the VMRule and PrometheusRule objects changed most recently."
+      - eval_time: 20m
+        alertname: VMAlertmanagerConfigReloadFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vmalertmanager-vm-alert
+            exp_annotations:
+              summary: "Alertmanager failed to load its configuration."
+              description: "A replica of Alertmanager monitoring-system/vm-alert could not load the configuration in alertmanager.settings and still routes with the previous one. Check its logs."
+      - eval_time: 30m
+        alertname: VMAlertmanagerNotificationsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vmalertmanager-vm-alert
+              integration: webhook
+            exp_annotations:
+              summary: "Alertmanager fails to deliver notifications to a receiver."
+              description: "Alertmanager monitoring-system/vm-alert failed 15 notifications to webhook in 15 minutes. This alert arrives only through another receiver that still works. Check the receiver's settings and the Alertmanager logs."
+      - eval_time: 20m
+        alertname: VMAlertmanagerMembersInconsistent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vmalertmanager-vm-alert
+            exp_annotations:
+              summary: "Alertmanager replicas do not see each other."
+              description: "An Alertmanager replica of monitoring-system/vm-alert sees 1 of 2 cluster members, so silences and the notification log are not shared. Check that the vmalertmanager-vm-alert pods can reach each other on the cluster port."
+  # Healthy vmalert and Alertmanager fire nothing.
+  - interval: 1m
+    input_series:
+      - series: 'vmalert_alerting_rules_errors_total{namespace="monitoring-system",job="vmalert-vm-alert",pod="vmalert-vm-alert-a",group="g1",file="/etc/vmalert/config/r.yaml",alertname="X",id="1"}'
+        values: '3x40'
+      - series: 'vmalert_alerts_send_errors_total{namespace="monitoring-system",job="vmalert-vm-alert",pod="vmalert-vm-alert-a",addr="http://am:9093/api/v2/alerts"}'
+        values: '0x40'
+      - series: 'vmalert_remotewrite_dropped_rows_total{namespace="monitoring-system",job="vmalert-vm-alert",pod="vmalert-vm-alert-a"}'
+        values: '0x40'
+      - series: 'vmalert_config_last_reload_successful{namespace="monitoring-system",job="vmalert-vm-alert",pod="vmalert-vm-alert-a"}'
+        values: '1x40'
+      - series: 'alertmanager_config_last_reload_successful{namespace="monitoring-system",job="vmalertmanager-vm-alert",pod="vmalertmanager-vm-alert-0"}'
+        values: '1x40'
+      - series: 'alertmanager_notifications_failed_total{namespace="monitoring-system",job="vmalertmanager-vm-alert",pod="vmalertmanager-vm-alert-0",integration="webhook",reason="other"}'
+        values: '2x40'
+      - series: 'alertmanager_cluster_members{namespace="monitoring-system",job="vmalertmanager-vm-alert",pod="vmalertmanager-vm-alert-0"}'
+        values: '2x40'
+      - series: 'alertmanager_cluster_members{namespace="monitoring-system",job="vmalertmanager-vm-alert",pod="vmalertmanager-vm-alert-1"}'
+        values: '2x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: VMAlertRuleErrors
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: VMAlertNotificationsFailing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: VMAlertRemoteWriteDropping
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: VMAlertConfigReloadFailed
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: VMAlertmanagerConfigReloadFailed
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: VMAlertmanagerNotificationsFailing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: VMAlertmanagerMembersInconsistent
+        exp_alerts: []
+  # The operator stores no samples and its reconciles fail on the
+  # vmcluster controller.
+  - interval: 1m
+    input_series:
+      - series: 'controller_runtime_reconcile_errors_total{namespace="monitoring-system",job="vm-operator",pod="vm-operator-a",controller="vmcluster"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: VMOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vm-operator
+            exp_annotations:
+              summary: "The VictoriaMetrics operator is down."
+              description: "No replica of the VictoriaMetrics operator monitoring-system/vm-operator has answered a scrape for 10 minutes. Running VMCluster, VMAgent, and VMAlert workloads keep working, but no change to a VictoriaMetrics CR, ServiceMonitor, or PrometheusRule is applied. Check the operator Deployment."
+      - eval_time: 20m
+        alertname: VMOperatorReconcileErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: monitoring-system
+              job: vm-operator
+              controller: vmcluster
+            exp_annotations:
+              summary: "The VictoriaMetrics operator fails to reconcile objects."
+              description: "The vmcluster controller of the VictoriaMetrics operator monitoring-system/vm-operator has failed reconciles for 15 minutes, so the objects it manages may not match their CRs. Check the operator logs for the object and the error."
+  # A healthy operator fires nothing.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="monitoring-system",job="vm-operator",pod="vm-operator-a"}'
+        values: '1x30'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="monitoring-system",job="vm-operator",pod="vm-operator-a",controller="vmcluster"}'
+        values: '4x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: VMOperatorDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: VMOperatorReconcileErrors
+        exp_alerts: []

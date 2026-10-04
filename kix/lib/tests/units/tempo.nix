@@ -5,7 +5,9 @@
 # backend with the keys in env and refuses the shapes Tempo or the network
 # policy cannot serve; `metricsGenerator` remote-writes to the
 # prometheusServer dependency. Tempo runs in namespace `tracing` on a
-# persistent-volume-claim.
+# persistent-volume-claim. The alert rules render as the claim, the memory
+# limit, the backend, and the dependencies say, with the prometheus stub in
+# `monitoring`.
 
 {
   lib,
@@ -16,6 +18,10 @@
   byName,
   evalFails,
   storageClassImport,
+  kixlib,
+  alertRulesOf,
+  allSelect,
+  prometheusStub,
   containerBase,
   baseInstances,
   ...
@@ -159,6 +165,9 @@ let
     secretAccessKey = "key";
   };
 
+  withPrometheus.instances.monitoring.prometheus.package = prometheusStub;
+  rulesOf = cluster: alertRulesOf "PrometheusRule" "tempo" (manifests cluster);
+
   tempoConfigOf =
     cluster:
     builtins.fromJSON
@@ -261,6 +270,60 @@ in
     && !evalFails (tempoCluster {
       extraArgs = [ "-log.level=debug" ];
     });
+
+  # The rules select on the Service and render only with a prometheus
+  # dependency and metrics on. TempoBlocksNearClaimSize needs the local
+  # backend and a storage dependency that reports `out.size`, which the
+  # imported claim here does not; TempoMemoryNearLimit needs a memory limit.
+  tempo-alerts =
+    let
+      on = rulesOf (tempoClusterWith {
+        modules = [ withPrometheus ];
+      });
+      importedClaim = rulesOf (tempoClusterWith {
+        modules = [
+          withPrometheus
+          {
+            instances.tracing.storage.package = lib.mkForce (
+              eval.mkImport {
+                out.name = kixlib.untrackedRef {
+                  name = "storage";
+                  kind = "PersistentVolumeClaim";
+                };
+              }
+            );
+          }
+        ];
+      });
+      s3 = rulesOf (tempoClusterWith {
+        config.objectStorage.bucket = "traces";
+        credentials = keys;
+        inClusterStore = true;
+        modules = [ withPrometheus ];
+      });
+      noLimit = rulesOf (tempoClusterWith {
+        config.resources.limits.memory = null;
+        modules = [ withPrometheus ];
+      });
+    in
+    (
+      allSelect ''namespace="tracing",service="tempo"'' on
+      && on ? TempoDown
+      && on ? TempoBlocksNearClaimSize
+      && on ? TempoMemoryNearLimit
+      && importedClaim ? TempoDown
+      && !(importedClaim ? TempoBlocksNearClaimSize)
+      && s3 ? TempoDown
+      && !(s3 ? TempoBlocksNearClaimSize)
+      && !(noLimit ? TempoMemoryNearLimit)
+      && rulesOf (tempoCluster { }) == null
+      &&
+        rulesOf (tempoClusterWith {
+          config.metrics.enabled = false;
+          modules = [ withPrometheus ];
+        }) == null
+    )
+    || throw "tempo alerts: ${builtins.toJSON (builtins.attrNames on)}";
 
   # With an in-cluster store, blocks go to the bucket under the instance's
   # prefix on the store Service's address over http, the keys reach the pod

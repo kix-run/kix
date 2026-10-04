@@ -1,0 +1,405 @@
+# promtool unit tests for the rabbitmq-cluster and rabbitmq-operator alert
+# rules test-rabbitmq.nix renders. The rules-cluster-rabbitmq check runs them
+# from the rendered rules, so each rule_files entry is <namespace>/<file> in
+# the cluster's manifests. `rabbitmq` has one node; `rabbitmq-ha` has three,
+# so it also renders the rules that need more than one node. Every rule file
+# loads in every test, so a test that expects no alert gives each instance
+# healthy series.
+rule_files:
+  - messaging/rabbitmq-alerts-prometheusrule.yaml
+  - messaging/rabbitmq-ha-alerts-prometheusrule.yaml
+  - rabbitmq-system/rabbitmq-operator-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # The one node of rabbitmq stops answering.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '1 1 0x15'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692"}'
+        values: '1x17'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: RabbitMQDown
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "messaging"
+              job: "messaging/rabbitmq"
+            exp_annotations:
+              summary: "A RabbitMQ cluster has no node answering."
+              description: "No node of RabbitMQ cluster messaging/rabbitmq has answered a scrape for 10 minutes, so clients cannot connect. Check kubectl get rabbitmqcluster rabbitmq -n messaging and the pods of the StatefulSet rabbitmq-server."
+  # No node of rabbitmq-ha is scraped at all: absent() keeps namespace and job.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: RabbitMQDown
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "messaging"
+              job: "messaging/rabbitmq-ha"
+            exp_annotations:
+              summary: "A RabbitMQ cluster has no node answering."
+              description: "No node of RabbitMQ cluster messaging/rabbitmq-ha has answered a scrape for 10 minutes, so clients cannot connect. Check kubectl get rabbitmqcluster rabbitmq-ha -n messaging and the pods of the StatefulSet rabbitmq-ha-server."
+  # Every node answers.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '1x15'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692"}'
+        values: '1x15'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692"}'
+        values: '1x15'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-2",instance="10.0.1.3:15692"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: RabbitMQDown
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: RabbitMQQuorumLost
+        exp_alerts: []
+  # One of the three nodes of rabbitmq-ha answers, below the majority of two.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692"}'
+        values: '1x10'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692"}'
+        values: '0x10'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-2",instance="10.0.1.3:15692"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: RabbitMQQuorumLost
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "messaging"
+              job: "messaging/rabbitmq-ha"
+            exp_annotations:
+              summary: "A RabbitMQ cluster has lost its majority."
+              description: "1 of the 3 nodes of RabbitMQ cluster messaging/rabbitmq-ha answer, fewer than the 2 a majority needs. Quorum queues and the metadata store stop accepting writes until enough nodes return. Check the pods of the StatefulSet rabbitmq-ha-server."
+  # Two of three nodes answer, which is still a majority.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692"}'
+        values: '1x10'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692"}'
+        values: '1x10'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-2",instance="10.0.1.3:15692"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: RabbitMQQuorumLost
+        exp_alerts: []
+  # rabbitmq-ha-server-2 reports another cluster ID than its peers.
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_identity_info{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692",rabbitmq_node="rabbit@rabbitmq-ha-server-0",rabbitmq_cluster="rabbitmq-ha",rabbitmq_cluster_permanent_id="rabbitmq-cluster-id-a",rabbitmq_endpoint="aggregated"}'
+        values: '1x15'
+      - series: 'rabbitmq_identity_info{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692",rabbitmq_node="rabbit@rabbitmq-ha-server-1",rabbitmq_cluster="rabbitmq-ha",rabbitmq_cluster_permanent_id="rabbitmq-cluster-id-a",rabbitmq_endpoint="aggregated"}'
+        values: '1x15'
+      - series: 'rabbitmq_identity_info{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-2",instance="10.0.1.3:15692",rabbitmq_node="rabbit@rabbitmq-ha-server-2",rabbitmq_cluster="rabbitmq-ha",rabbitmq_cluster_permanent_id="rabbitmq-cluster-id-b",rabbitmq_endpoint="aggregated"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: RabbitMQClusterIdentityMismatch
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "messaging"
+              job: "messaging/rabbitmq-ha"
+            exp_annotations:
+              summary: "The nodes of a RabbitMQ cluster report different cluster IDs."
+              description: "The nodes of RabbitMQ cluster messaging/rabbitmq-ha report 2 cluster IDs, so at least one node runs as a separate cluster and clients that reach it see other queues and messages. Compare `rabbitmq-diagnostics cluster_status` on each node."
+  # Every node reports the same cluster ID.
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_identity_info{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692",rabbitmq_node="rabbit@rabbitmq-ha-server-0",rabbitmq_cluster="rabbitmq-ha",rabbitmq_cluster_permanent_id="rabbitmq-cluster-id-a",rabbitmq_endpoint="aggregated"}'
+        values: '1x15'
+      - series: 'rabbitmq_identity_info{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692",rabbitmq_node="rabbit@rabbitmq-ha-server-1",rabbitmq_cluster="rabbitmq-ha",rabbitmq_cluster_permanent_id="rabbitmq-cluster-id-a",rabbitmq_endpoint="aggregated"}'
+        values: '1x15'
+      - series: 'rabbitmq_identity_info{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-2",instance="10.0.1.3:15692",rabbitmq_node="rabbit@rabbitmq-ha-server-2",rabbitmq_cluster="rabbitmq-ha",rabbitmq_cluster_permanent_id="rabbitmq-cluster-id-a",rabbitmq_endpoint="aggregated"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: RabbitMQClusterIdentityMismatch
+        exp_alerts: []
+  # rabbitmq-ha-server-2 has lost both its links: its peers each see one
+  # link, and it sees none.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692"}'
+        values: '1x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692",peer="rabbit@rabbitmq-ha-server-1.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692"}'
+        values: '1x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692",peer="rabbit@rabbitmq-ha-server-0.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-2",instance="10.0.1.3:15692"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: RabbitMQDistributionLinksMissing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "messaging"
+              job: "messaging/rabbitmq-ha"
+              pod: "rabbitmq-ha-server-0"
+            exp_annotations:
+              summary: "A RabbitMQ node is not connected to every other node."
+              description: "Node rabbitmq-ha-server-0 of RabbitMQ cluster messaging/rabbitmq-ha has 1 of its 2 links to the other nodes up for 10 minutes. A node cut off from its peers can be partitioned from the cluster; quorum queues on it lose their replicas. Check `rabbitmq-diagnostics cluster_status` on that node and the network between the pods on port 25672."
+          - exp_labels:
+              severity: "warning"
+              namespace: "messaging"
+              job: "messaging/rabbitmq-ha"
+              pod: "rabbitmq-ha-server-1"
+            exp_annotations:
+              summary: "A RabbitMQ node is not connected to every other node."
+              description: "Node rabbitmq-ha-server-1 of RabbitMQ cluster messaging/rabbitmq-ha has 1 of its 2 links to the other nodes up for 10 minutes. A node cut off from its peers can be partitioned from the cluster; quorum queues on it lose their replicas. Check `rabbitmq-diagnostics cluster_status` on that node and the network between the pods on port 25672."
+          - exp_labels:
+              severity: "warning"
+              namespace: "messaging"
+              job: "messaging/rabbitmq-ha"
+              pod: "rabbitmq-ha-server-2"
+            exp_annotations:
+              summary: "A RabbitMQ node is not connected to every other node."
+              description: "Node rabbitmq-ha-server-2 of RabbitMQ cluster messaging/rabbitmq-ha has 0 of its 2 links to the other nodes up for 10 minutes. A node cut off from its peers can be partitioned from the cluster; quorum queues on it lose their replicas. Check `rabbitmq-diagnostics cluster_status` on that node and the network between the pods on port 25672."
+  # Every node sees both peers; a CLI tool's temporary node does not count.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692"}'
+        values: '1x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692",peer="rabbit@rabbitmq-ha-server-1.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692",peer="rabbit@rabbitmq-ha-server-2.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692"}'
+        values: '1x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692",peer="rabbit@rabbitmq-ha-server-0.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-1",instance="10.0.1.2:15692",peer="rabbit@rabbitmq-ha-server-2.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-2",instance="10.0.1.3:15692"}'
+        values: '1x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-2",instance="10.0.1.3:15692",peer="rabbit@rabbitmq-ha-server-0.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-2",instance="10.0.1.3:15692",peer="rabbit@rabbitmq-ha-server-1.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+      - series: 'erlang_vm_dist_node_state{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692",peer="rabbitmqcli-123-rabbit@rabbitmq-ha-server-0.rabbitmq-ha-nodes.messaging"}'
+        values: '3x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: RabbitMQDistributionLinksMissing
+        exp_alerts: []
+  # rabbitmq-server-0 holds its memory alarm, with one scrape that has no
+  # alarm series, and rabbitmq-ha-server-0 its free disk alarm.
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_alarms_memory_used_watermark{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '0 1 1 1 _ 1x10'
+      - series: 'rabbitmq_alarms_free_disk_space_watermark{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692"}'
+        values: '0 1x14'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: RabbitMQMemoryAlarm
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "messaging"
+              job: "messaging/rabbitmq"
+              pod: "rabbitmq-server-0"
+            exp_annotations:
+              summary: "A RabbitMQ memory alarm blocks publishers."
+              description: "Node rabbitmq-server-0 of RabbitMQ cluster messaging/rabbitmq is over its memory high watermark, so the cluster blocks every publishing connection. Restarting the node does not fix it. Check `rabbitmq-diagnostics memory_breakdown` on the node, and queues that grow because consumers are slow or missing."
+      - eval_time: 8m
+        alertname: RabbitMQDiskAlarm
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "messaging"
+              job: "messaging/rabbitmq-ha"
+              pod: "rabbitmq-ha-server-0"
+            exp_annotations:
+              summary: "A RabbitMQ free disk alarm blocks publishers."
+              description: "Node rabbitmq-ha-server-0 of RabbitMQ cluster messaging/rabbitmq-ha has less free disk than its free disk limit, so the cluster blocks every publishing connection. Drain the queues that hold the messages, or grow the node's volume."
+  # Alarms that clear within a minute do not fire.
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_alarms_memory_used_watermark{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '0 0 1 0x12'
+      - series: 'rabbitmq_alarms_free_disk_space_watermark{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692"}'
+        values: '0 0 1 0x12'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: RabbitMQMemoryAlarm
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: RabbitMQDiskAlarm
+        exp_alerts: []
+  # rabbitmq-server-0 uses 95% of its memory watermark, 90% of its file
+  # descriptors, and has 3 GB free against a 2 GB limit.
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_process_resident_memory_bytes{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '950000000x20'
+      - series: 'rabbitmq_resident_memory_limit_bytes{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '1000000000x20'
+      - series: 'rabbitmq_process_open_fds{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '900x20'
+      - series: 'rabbitmq_process_max_fds{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '1000x20'
+      - series: 'rabbitmq_disk_space_available_bytes{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '3000000000x20'
+      - series: 'rabbitmq_disk_space_available_limit_bytes{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '2000000000x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: RabbitMQMemoryNearWatermark
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "messaging"
+              job: "messaging/rabbitmq"
+              pod: "rabbitmq-server-0"
+            exp_annotations:
+              summary: "A RabbitMQ node is close to its memory alarm."
+              description: "Node rabbitmq-server-0 of RabbitMQ cluster messaging/rabbitmq uses 95% of its memory high watermark. At the watermark the cluster blocks every publisher. Check `rabbitmq-diagnostics memory_breakdown` and the queues that grow."
+      - eval_time: 17m
+        alertname: RabbitMQFileDescriptorsNearLimit
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "messaging"
+              job: "messaging/rabbitmq"
+              pod: "rabbitmq-server-0"
+            exp_annotations:
+              summary: "A RabbitMQ node is close to its file descriptor limit."
+              description: "Node rabbitmq-server-0 of RabbitMQ cluster messaging/rabbitmq uses 90% of its file descriptors. When none is left it refuses new connections. Look for clients that open a connection per message or never close them."
+      - eval_time: 17m
+        alertname: RabbitMQDiskNearAlarm
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "messaging"
+              job: "messaging/rabbitmq"
+              pod: "rabbitmq-server-0"
+            exp_annotations:
+              summary: "A RabbitMQ node is close to its free disk alarm."
+              description: "Node rabbitmq-server-0 of RabbitMQ cluster messaging/rabbitmq has 3GB of disk free, under twice its free disk limit. At the limit the cluster blocks every publisher. Drain the queues that hold the messages, or grow the volumes (storage.size)."
+  # The same node with room on every resource.
+  - interval: 1m
+    input_series:
+      - series: 'rabbitmq_process_resident_memory_bytes{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '500000000x20'
+      - series: 'rabbitmq_resident_memory_limit_bytes{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '1000000000x20'
+      - series: 'rabbitmq_process_open_fds{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '100x20'
+      - series: 'rabbitmq_process_max_fds{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '1000x20'
+      - series: 'rabbitmq_disk_space_available_bytes{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '5000000000x20'
+      - series: 'rabbitmq_disk_space_available_limit_bytes{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '2000000000x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: RabbitMQMemoryNearWatermark
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: RabbitMQFileDescriptorsNearLimit
+        exp_alerts: []
+      - eval_time: 17m
+        alertname: RabbitMQDiskNearAlarm
+        exp_alerts: []
+  # rabbitmq-server-0 is scraped but its alarm series are missing;
+  # rabbitmq-ha-server-0 reports them.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '1x20'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692"}'
+        values: '1x20'
+      - series: 'rabbitmq_alarms_memory_used_watermark{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: RabbitMQAlarmMetricsMissing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "messaging"
+              job: "messaging/rabbitmq"
+              pod: "rabbitmq-server-0"
+            exp_annotations:
+              summary: "A RabbitMQ node reports no alarm metrics."
+              description: "Node rabbitmq-server-0 of RabbitMQ cluster messaging/rabbitmq is scraped but reports no alarm metrics, so the memory and disk alarm alerts cannot fire for it. Its log shows `alarm_metrics_collector failed to emit metrics` when reading the alarms times out, which happens on an overloaded node."
+  # Both scraped nodes report their alarm series.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '1x20'
+      - series: 'rabbitmq_alarms_memory_used_watermark{namespace="messaging",job="messaging/rabbitmq",pod="rabbitmq-server-0",instance="10.0.0.1:15692"}'
+        values: '0x20'
+      - series: 'up{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692"}'
+        values: '1x20'
+      - series: 'rabbitmq_alarms_memory_used_watermark{namespace="messaging",job="messaging/rabbitmq-ha",pod="rabbitmq-ha-server-0",instance="10.0.1.1:15692"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: RabbitMQAlarmMetricsMissing
+        exp_alerts: []
+  # The operator's only replica stops answering.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="rabbitmq-system",service="rabbitmq-operator-metrics",pod="rabbitmq-operator-7d9f8b6c5-abcde",instance="10.0.2.1:8080"}'
+        values: '1 1 0x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: RabbitMQOperatorDown
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "rabbitmq-system"
+              service: "rabbitmq-operator-metrics"
+            exp_annotations:
+              summary: "The RabbitMQ Cluster Operator is down."
+              description: "No replica of the RabbitMQ Cluster Operator rabbitmq-system/rabbitmq-operator has answered a scrape for 10 minutes. Running RabbitMQ clusters keep serving, but changes to RabbitmqClusters are not applied, and its webhooks refuse creating or updating one. Check the operator Deployment in rabbitmq-system."
+  # The operator answers, and its rabbitmqcluster controller fails a
+  # reconcile every minute.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="rabbitmq-system",service="rabbitmq-operator-metrics",pod="rabbitmq-operator-7d9f8b6c5-abcde",instance="10.0.2.1:8080"}'
+        values: '1x30'
+      - series: 'controller_runtime_reconcile_errors_total{namespace="rabbitmq-system",service="rabbitmq-operator-metrics",pod="rabbitmq-operator-7d9f8b6c5-abcde",instance="10.0.2.1:8080",controller="rabbitmqcluster"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: RabbitMQOperatorDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: RabbitMQOperatorReconcileErrors
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "rabbitmq-system"
+              service: "rabbitmq-operator-metrics"
+              controller: "rabbitmqcluster"
+            exp_annotations:
+              summary: "The RabbitMQ Cluster Operator fails to reconcile RabbitMQ clusters."
+              description: "The rabbitmqcluster controller of the RabbitMQ Cluster Operator rabbitmq-system/rabbitmq-operator has failed reconciles for 15 minutes, so a RabbitmqCluster's StatefulSet, Services, or claims may not match its spec. The operator log and the ReconcileSuccess condition of the RabbitmqCluster name the error."
+  # The error count stays flat.
+  - interval: 1m
+    input_series:
+      - series: 'controller_runtime_reconcile_errors_total{namespace="rabbitmq-system",service="rabbitmq-operator-metrics",pod="rabbitmq-operator-7d9f8b6c5-abcde",instance="10.0.2.1:8080",controller="rabbitmqcluster"}'
+        values: '4x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: RabbitMQOperatorReconcileErrors
+        exp_alerts: []

@@ -15,6 +15,9 @@
 #    dependency edge rides the URL); victoria-metrics-alert wires
 #    datasource/remoteWrite/remoteRead through vmCluster.out and discovers
 #    its VMAlertmanager by label selector.
+# 5. Each VM package renders its alert rules as a PrometheusRule through the
+#    operator's builder; test-victoria-metrics.rules-test.yaml runs promtool
+#    tests against them (the rules-cluster-victoria-metrics check).
 #
 # Build:  nix build .#cluster-victoria-metrics --extra-experimental-features pipe-operators
 
@@ -116,6 +119,13 @@ kix.buildCluster {
         };
         vm-cluster = {
           package = packages.victoria-metrics-cluster;
+          # The rules test expects VMStorageReplicationLost and
+          # VMInsertIncompleteReplication, which render only with more
+          # nodes than copies and more than one copy.
+          config = {
+            replicationFactor = 2;
+            vmstorage.replicaCount = 3;
+          };
         };
         vm-agent = {
           package = packages.victoria-metrics-agent;
@@ -125,6 +135,8 @@ kix.buildCluster {
         vm-alert = {
           package = packages.victoria-metrics-alert;
           config.healthCheck.enabled = true;
+          # VMAlertmanagerMembersInconsistent renders only with a pair.
+          config.alertmanager.replicaCount = 2;
         };
         grafana = {
           package = packages.grafana;

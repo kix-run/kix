@@ -8,22 +8,25 @@ let
   rulesOf =
     alerts:
     let
-      parts = kixlib.monitor {
-        service = "metricsService";
-        inherit alerts;
-      } {
-        inherit lib;
-        self.metricsService.out.selector.app = "foo";
-        config.metrics.enabled = true;
-        scope = {
-          instanceName = "foo";
-          namespaceName = "foo";
-        };
-        prometheus.out = {
-          mkServiceMonitor = _scope: args: args;
-          mkPrometheusRule = _scope: args: args;
-        };
-      };
+      parts =
+        kixlib.monitor
+          {
+            service = "metricsService";
+            inherit alerts;
+          }
+          {
+            inherit lib;
+            self.metricsService.out.selector.app = "foo";
+            config.metrics.enabled = true;
+            scope = {
+              instanceName = "foo";
+              namespaceName = "foo";
+            };
+            prometheus.out = {
+              mkServiceMonitor = _scope: args: args;
+              mkPrometheusRule = _scope: args: args;
+            };
+          };
     in
     parts.prometheusRules;
 in

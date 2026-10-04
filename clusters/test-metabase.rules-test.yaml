@@ -1,0 +1,330 @@
+# promtool unit tests for the stackgres-cluster alert rules test-metabase.nix
+# renders. The rules-cluster-metabase check runs them from the rendered rules,
+# so each rule_files entry is <namespace>/<file> in the cluster's manifests.
+# `metabase-pg` has one instance and no backups; `pg-replicated` has two
+# instances and backups, so it renders the rules that need a standby or WAL
+# archiving.
+rule_files:
+  - analytics/metabase-pg-alerts-prometheusrule.yaml
+  - data/pg-replicated-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # The exporter of metabase-pg runs and cannot reach PostgreSQL. Both rule
+  # files load in every test, so pg-replicated reports up.
+  - interval: 1m
+    input_series:
+      - series: 'pg_up{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187"}'
+        values: '1 1 0x15'
+      - series: 'pg_up{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: StackGresClusterDown
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "analytics"
+              job: "analytics/metabase-pg"
+            exp_annotations:
+              description: "No exporter of PostgreSQL cluster analytics/metabase-pg has reached PostgreSQL for 10 minutes, so clients cannot connect. Check kubectl describe sgcluster metabase-pg -n analytics and the patroni container's log in the instance pods."
+              summary: "A StackGres cluster has no running PostgreSQL instance."
+  # No exporter of pg-replicated is scraped: absent() keeps namespace and job.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187"}'
+        values: '0x15'
+      - series: 'pg_up{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: StackGresClusterDown
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "data"
+              job: "data/pg-replicated"
+            exp_annotations:
+              description: "No exporter of PostgreSQL cluster data/pg-replicated has reached PostgreSQL for 10 minutes, so clients cannot connect. Check kubectl describe sgcluster pg-replicated -n data and the patroni container's log in the instance pods."
+              summary: "A StackGres cluster has no running PostgreSQL instance."
+  # The only instance is a replica.
+  - interval: 1m
+    input_series:
+      - series: 'pg_replication_is_replica{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: StackGresClusterNoPrimary
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "analytics"
+              job: "analytics/metabase-pg"
+            exp_annotations:
+              description: "Every running instance of PostgreSQL cluster analytics/metabase-pg is a replica, so none accepts writes. Check kubectl exec -n analytics <pod> -c patroni -- patronictl list and the patroni container's log for a failover that did not finish."
+              summary: "A StackGres cluster has no primary."
+  # 95 of 100 connections are client backends; the autovacuum workers do not count.
+  - interval: 1m
+    input_series:
+      - series: 'pg_stat_activity_count{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187",datname="metabase",state="active",usename="metabase",application_name="metabase",backend_type="client backend"}'
+        values: '95x20'
+      - series: 'pg_stat_activity_count{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187",datname="metabase",state="active",usename="postgres",application_name="autovacuum",backend_type="autovacuum worker"}'
+        values: '50x20'
+      - series: 'pg_settings_max_connections{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187"}'
+        values: '100x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: StackGresConnectionsHigh
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "analytics"
+              job: "analytics/metabase-pg"
+              pod: "metabase-pg-0"
+            exp_annotations:
+              description: "Instance metabase-pg-0 of PostgreSQL cluster analytics/metabase-pg uses 95% of max_connections, and new connections fail when none is left. Look for clients that hold idle connections, or set `pooling` to run PgBouncer."
+              summary: "A StackGres instance is close to max_connections."
+  # The XID age crosses the warning threshold.
+  - interval: 1m
+    input_series:
+      - series: 'pg_database_datfrozenxid_age{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187",datname="metabase"}'
+        values: '1200000000x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: StackGresTransactionIDAgeHigh
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "analytics"
+              job: "analytics/metabase-pg"
+              datname: "metabase"
+            exp_annotations:
+              description: "Database metabase of PostgreSQL cluster analytics/metabase-pg has a transaction ID age of 1.2G. Autovacuum is not freezing it; look for long transactions, prepared transactions, or replication slots that hold back the oldest XID."
+              summary: "A StackGres database is not being frozen by autovacuum."
+      - eval_time: 17m
+        alertname: StackGresTransactionIDWraparoundImminent
+        exp_alerts: []
+  # The XID age is past the failsafe age.
+  - interval: 1m
+    input_series:
+      - series: 'pg_database_datfrozenxid_age{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187",datname="metabase"}'
+        values: '1700000000x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: StackGresTransactionIDWraparoundImminent
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "analytics"
+              job: "analytics/metabase-pg"
+              datname: "metabase"
+            exp_annotations:
+              description: "Database metabase of PostgreSQL cluster analytics/metabase-pg has a transaction ID age of 1.7G. PostgreSQL refuses writes at about 2.1 billion. Run VACUUM (FREEZE) on the database's oldest tables now and end the transactions that hold back the oldest XID."
+              summary: "A StackGres database is close to transaction ID wraparound."
+  # An inactive slot on the primary holds 6 GB, over a quarter of the 20Gi volume.
+  - interval: 1m
+    input_series:
+      - series: 'pg_replication_slots_pg_wal_lsn_diff{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187",slot_name="sub",database="metabase"}'
+        values: '6000000000x40'
+      - series: 'pg_replication_slots_active{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187",slot_name="sub",database="metabase"}'
+        values: '0x40'
+      - series: 'pg_replication_is_replica{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 32m
+        alertname: StackGresReplicationSlotInactive
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "analytics"
+              job: "analytics/metabase-pg"
+              pod: "metabase-pg-0"
+              slot_name: "sub"
+            exp_annotations:
+              description: "Replication slot sub on primary metabase-pg-0 of PostgreSQL cluster analytics/metabase-pg is inactive and retains 6GB of WAL, over a quarter of the 20Gi volume. PostgreSQL keeps that WAL until the slot's consumer reconnects or the slot is dropped."
+              summary: "An inactive replication slot holds back WAL on a StackGres primary."
+  # The same slot on a replica does not count.
+  - interval: 1m
+    input_series:
+      - series: 'pg_replication_slots_pg_wal_lsn_diff{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187",slot_name="sub",database="metabase"}'
+        values: '6000000000x40'
+      - series: 'pg_replication_slots_active{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187",slot_name="sub",database="metabase"}'
+        values: '0x40'
+      - series: 'pg_replication_is_replica{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 32m
+        alertname: StackGresReplicationSlotInactive
+        exp_alerts: []
+  # The exporter's last scrape failed.
+  - interval: 1m
+    input_series:
+      - series: 'pg_exporter_last_scrape_error{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: StackGresExporterErrors
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "analytics"
+              job: "analytics/metabase-pg"
+              pod: "metabase-pg-0"
+            exp_annotations:
+              description: "The exporter in metabase-pg-0 of PostgreSQL cluster analytics/metabase-pg fails a query, so the series it produces are missing and the alerts that read them cannot fire. The prometheus-postgres-exporter container's log names the failing query."
+              summary: "A StackGres exporter fails its queries."
+  # Both instances of pg-replicated are primaries.
+  - interval: 1m
+    input_series:
+      - series: 'pg_replication_is_replica{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187"}'
+        values: '0x10'
+      - series: 'pg_replication_is_replica{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.2.2:9187"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: StackGresClusterMultiplePrimaries
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "data"
+              job: "data/pg-replicated"
+            exp_annotations:
+              description: "2 instances of PostgreSQL cluster data/pg-replicated are out of recovery, so more than one may accept writes. Check kubectl exec -n data <pod> -c patroni -- patronictl list."
+              summary: "A StackGres cluster has more than one primary."
+  # The standby runs but the primary has no streaming row for it.
+  - interval: 1m
+    input_series:
+      - series: 'pg_replication_is_replica{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187"}'
+        values: '0x15'
+      - series: 'pg_replication_is_replica{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.2.2:9187"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: StackGresStandbysNotStreaming
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "data"
+              job: "data/pg-replicated"
+            exp_annotations:
+              description: "The primary of PostgreSQL cluster data/pg-replicated streams WAL to 0 of 1 standbys. A standby that does not stream falls behind, and a failover to it loses data. Check kubectl exec -n data <pod> -c patroni -- patronictl list and the standby pods' logs."
+              summary: "A StackGres standby is not streaming from the primary."
+  # The standby replays ten minutes behind.
+  - interval: 1m
+    input_series:
+      - series: 'pg_replication_lag_seconds{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187"}'
+        values: '0x20'
+      - series: 'pg_replication_lag_seconds{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.2.2:9187"}'
+        values: '600x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: StackGresReplicationLagHigh
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "data"
+              job: "data/pg-replicated"
+              pod: "pg-replicated-1"
+            exp_annotations:
+              description: "Standby pg-replicated-1 of PostgreSQL cluster data/pg-replicated replays WAL 10m 0s behind the primary, over metrics.maxReplicationLag (5m). Check the standby's disk and CPU, and the network to the primary."
+              summary: "A StackGres standby is far behind the primary."
+  # The primary fails every archive attempt and archives nothing.
+  - interval: 1m
+    input_series:
+      - series: 'pg_stat_archiver_failed_count{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187"}'
+        values: '0+1x40'
+      - series: 'pg_stat_archiver_archived_count{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187"}'
+        values: '100x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: StackGresWALArchivingFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "data"
+              job: "data/pg-replicated"
+              pod: "pg-replicated-0"
+            exp_annotations:
+              description: "pg-replicated-0 of PostgreSQL cluster data/pg-replicated failed to archive WAL in the last 15 minutes and archived none. Unarchived WAL stays on the volume until it fills, and point-in-time recovery stops at the last archived segment. Check that the SGObjectStorage's bucket exists and its credentials are valid, and look for archive_command errors in PostgreSQL's log."
+              summary: "A StackGres instance fails to archive WAL."
+  # Archiving that fails now and then but keeps succeeding does not fire.
+  - interval: 1m
+    input_series:
+      - series: 'pg_stat_archiver_failed_count{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187"}'
+        values: '0+1x40'
+      - series: 'pg_stat_archiver_archived_count{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187"}'
+        values: '100+1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: StackGresWALArchivingFailing
+        exp_alerts: []
+  # Healthy: one primary per cluster, the standby streams, and WAL is archived.
+  - interval: 1m
+    input_series:
+      - series: 'pg_up{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187"}'
+        values: '1x40'
+      - series: 'pg_replication_is_replica{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187"}'
+        values: '0x40'
+      - series: 'pg_stat_activity_count{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187",datname="metabase",state="active",usename="metabase",application_name="metabase",backend_type="client backend"}'
+        values: '10x40'
+      - series: 'pg_settings_max_connections{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187"}'
+        values: '100x40'
+      - series: 'pg_database_datfrozenxid_age{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187",datname="metabase"}'
+        values: '100000000x40'
+      - series: 'pg_replication_slots_pg_wal_lsn_diff{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187",slot_name="sub",database="metabase"}'
+        values: '1000000x40'
+      - series: 'pg_replication_slots_active{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187",slot_name="sub",database="metabase"}'
+        values: '1x40'
+      - series: 'pg_exporter_last_scrape_error{namespace="analytics",job="analytics/metabase-pg",pod="metabase-pg-0",instance="10.0.1.1:9187"}'
+        values: '0x40'
+      - series: 'pg_up{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187"}'
+        values: '1x40'
+      - series: 'pg_up{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.2.2:9187"}'
+        values: '1x40'
+      - series: 'pg_replication_is_replica{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187"}'
+        values: '0x40'
+      - series: 'pg_replication_is_replica{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.2.2:9187"}'
+        values: '1x40'
+      - series: 'pg_stat_replication_pg_wal_lsn_diff{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187",application_name="pg-replicated-1",client_addr="10.0.2.2",state="streaming",slot_name="pg_replicated_1"}'
+        values: '0x40'
+      - series: 'pg_replication_lag_seconds{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187"}'
+        values: '0x40'
+      - series: 'pg_replication_lag_seconds{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.2.2:9187"}'
+        values: '2x40'
+      - series: 'pg_stat_archiver_failed_count{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187"}'
+        values: '0x40'
+      - series: 'pg_stat_archiver_archived_count{namespace="data",job="data/pg-replicated",pod="pg-replicated-0",instance="10.0.2.1:9187"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: StackGresClusterDown
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: StackGresClusterNoPrimary
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: StackGresConnectionsHigh
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: StackGresTransactionIDAgeHigh
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: StackGresTransactionIDWraparoundImminent
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: StackGresReplicationSlotInactive
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: StackGresExporterErrors
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: StackGresClusterMultiplePrimaries
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: StackGresStandbysNotStreaming
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: StackGresReplicationLagHigh
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: StackGresWALArchivingFailing
+        exp_alerts: []

@@ -1,0 +1,459 @@
+# promtool unit tests for the cnpg-cluster alert rules test-cnpg.nix renders.
+# The rules-cluster-cnpg check runs them from the rendered rules, so each
+# rule_files entry is <namespace>/<file> in the cluster's manifests. `pg`
+# has one instance and backups; `pg-replicated` has two instances and no
+# backups, so it renders the rules that need a standby.
+rule_files:
+  - data/pg-alerts-prometheusrule.yaml
+  - data/pg-replicated-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # Every instance of pg reports PostgreSQL down while the instance manager
+  # still answers. Both rule files load in every test, so pg-replicated reports up.
+  - interval: 1m
+    input_series:
+      - series: 'cnpg_collector_up{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '1 1 0x15'
+      - series: 'cnpg_collector_up{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.0.2:9187"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: CNPGClusterDown
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "data"
+              job: "data/pg"
+            exp_annotations:
+              description: "No instance of PostgreSQL cluster data/pg has reported PostgreSQL up for 10 minutes, so clients cannot connect. Check kubectl cnpg status pg -n data and the instance pods' logs."
+              summary: "A CloudNativePG cluster has no running PostgreSQL instance."
+              runbook_url: "https://github.com/cloudnative-pg/charts/blob/main/charts/cluster/docs/runbooks/CNPGClusterOffline.md"
+  # No instance is scraped at all: absent() keeps namespace and job.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.0.2:9187"}'
+        values: '0x15'
+      - series: 'cnpg_collector_up{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: CNPGClusterDown
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "data"
+              job: "data/pg-replicated"
+            exp_annotations:
+              description: "No instance of PostgreSQL cluster data/pg-replicated has reported PostgreSQL up for 10 minutes, so clients cannot connect. Check kubectl cnpg status pg-replicated -n data and the instance pods' logs."
+              summary: "A CloudNativePG cluster has no running PostgreSQL instance."
+              runbook_url: "https://github.com/cloudnative-pg/charts/blob/main/charts/cluster/docs/runbooks/CNPGClusterOffline.md"
+  # The only instance is in recovery outside replica mode.
+  - interval: 1m
+    input_series:
+      - series: 'cnpg_pg_replication_in_recovery{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '1x10'
+      - series: 'cnpg_collector_replica_mode{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: CNPGClusterNoPrimary
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "data"
+              job: "data/pg"
+            exp_annotations:
+              description: "Every running instance of PostgreSQL cluster data/pg is in recovery, so none accepts writes. Check kubectl cnpg status pg -n data and the operator's log for a failover that did not finish."
+              summary: "A CloudNativePG cluster has no primary."
+  # In replica mode every instance replays WAL from the source cluster, so none is primary.
+  - interval: 1m
+    input_series:
+      - series: 'cnpg_pg_replication_in_recovery{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '1x10'
+      - series: 'cnpg_collector_replica_mode{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: CNPGClusterNoPrimary
+        exp_alerts: []
+  # 46 of 50 connections in use.
+  - interval: 1m
+    input_series:
+      - series: 'cnpg_backends_total{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",datname="app",usename="app",application_name="app",state="active"}'
+        values: '46x20'
+      - series: 'cnpg_backends_total{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",datname="app",usename="app",application_name="app",state="idle"}'
+        values: '0x20'
+      - series: 'cnpg_pg_settings_setting{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",name="max_connections"}'
+        values: '50x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: CNPGConnectionsHigh
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "data"
+              job: "data/pg"
+              pod: "pg-1"
+            exp_annotations:
+              description: "Instance pg-1 of PostgreSQL cluster data/pg uses 92% of max_connections, and new connections fail when none is left. Look for clients that hold idle connections, or put a cnpg-pooler in front of the cluster."
+              summary: "A CloudNativePG instance is close to max_connections."
+              runbook_url: "https://github.com/cloudnative-pg/charts/blob/main/charts/cluster/docs/runbooks/CNPGClusterHighConnectionsWarning.md"
+  # The multixact age crosses the warning threshold; the XID age does not.
+  - interval: 1m
+    input_series:
+      - series: 'cnpg_pg_database_xid_age{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",datname="app"}'
+        values: '100000000x20'
+      - series: 'cnpg_pg_database_mxid_age{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",datname="app"}'
+        values: '1200000000x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: CNPGTransactionIDAgeHigh
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "data"
+              job: "data/pg"
+              datname: "app"
+            exp_annotations:
+              description: "Database app of PostgreSQL cluster data/pg has a transaction ID or multixact age of 1.2G. Autovacuum is not freezing it; look for long transactions, prepared transactions, or replication slots that hold back the oldest XID."
+              summary: "A CloudNativePG database is not being frozen by autovacuum."
+      - eval_time: 17m
+        alertname: CNPGTransactionIDWraparoundImminent
+        exp_alerts: []
+  # The XID age is past the failsafe age.
+  - interval: 1m
+    input_series:
+      - series: 'cnpg_pg_database_xid_age{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",datname="app"}'
+        values: '1700000000x10'
+      - series: 'cnpg_pg_database_mxid_age{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",datname="app"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: CNPGTransactionIDWraparoundImminent
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "data"
+              job: "data/pg"
+              datname: "app"
+            exp_annotations:
+              description: "Database app of PostgreSQL cluster data/pg has a transaction ID or multixact age of 1.7G. PostgreSQL refuses writes at about 2.1 billion. Run VACUUM (FREEZE) on the database's oldest tables now and end the transactions that hold back the oldest XID."
+              summary: "A CloudNativePG database is close to transaction ID wraparound."
+  # An inactive logical slot on the primary holds 500 MB, over a quarter of the 1Gi volume.
+  - interval: 1m
+    input_series:
+      - series: 'cnpg_pg_replication_slots_pg_wal_lsn_diff{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",slot_name="sub",slot_type="logical",database="app"}'
+        values: '500000000x40'
+      - series: 'cnpg_pg_replication_slots_active{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",slot_name="sub",slot_type="logical",database="app"}'
+        values: '0x40'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 32m
+        alertname: CNPGReplicationSlotInactive
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "data"
+              job: "data/pg"
+              pod: "pg-1"
+              slot_name: "sub"
+            exp_annotations:
+              description: "Replication slot sub on primary pg-1 of PostgreSQL cluster data/pg is inactive and retains 500MB of WAL, over a quarter of the 1Gi data volume. PostgreSQL keeps that WAL until the slot's consumer reconnects or the slot is dropped."
+              summary: "An inactive replication slot holds back WAL on a CloudNativePG primary."
+  # The same slot on a standby does not count.
+  - interval: 1m
+    input_series:
+      - series: 'cnpg_pg_replication_slots_pg_wal_lsn_diff{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",slot_name="sub",slot_type="logical",database="app"}'
+        values: '500000000x40'
+      - series: 'cnpg_pg_replication_slots_active{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",slot_name="sub",slot_type="logical",database="app"}'
+        values: '0x40'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 32m
+        alertname: CNPGReplicationSlotInactive
+        exp_alerts: []
+  # A monitoring query fails.
+  - interval: 1m
+    input_series:
+      - series: 'cnpg_collector_last_collection_error{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: CNPGMetricsCollectionFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "data"
+              job: "data/pg"
+              pod: "pg-1"
+            exp_annotations:
+              description: "The instance manager in pg-1 of PostgreSQL cluster data/pg fails a monitoring query, so the series it produces are missing and the alerts that read them cannot fire. Its log names the failing query."
+              summary: "A CloudNativePG instance fails to collect its metrics."
+  # The last archive attempt failed after the last success.
+  - interval: 1m
+    input_series:
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '1000x20'
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '900x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: CNPGWALArchivingFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "data"
+              job: "data/pg"
+              pod: "pg-1"
+            exp_annotations:
+              description: "The last WAL archive attempt of pg-1 in PostgreSQL cluster data/pg failed and none has succeeded since. Unarchived WAL stays on the volume until it fills, and point-in-time recovery stops at the last archived segment. Check the plugin-barman-cloud container's log in that pod and the ObjectStore pg-backup."
+              summary: "A CloudNativePG instance fails to archive WAL."
+  # No backup has completed (the plugin reports 0) for a day after the
+  # metrics appeared. The weekly schedule's 338h is longer, so the day applies.
+  - interval: 5m
+    input_series:
+      - series: 'barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '0x320'
+      - series: 'barman_cloud_cloudnative_pg_io_last_failed_backup_timestamp{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '0x320'
+    alert_rule_test:
+      - eval_time: 23h
+        alertname: CNPGBackupNeverCompleted
+        exp_alerts: []
+      - eval_time: 25h
+        alertname: CNPGBackupNeverCompleted
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "data"
+              job: "data/pg"
+            exp_annotations:
+              description: "PostgreSQL cluster data/pg has reported backup metrics for 24h and has no completed base backup. Check kubectl get backups -n data and the plugin-barman-cloud container's log."
+              summary: "A CloudNativePG cluster has never completed a base backup."
+      - eval_time: 25h
+        alertname: CNPGBackupMissing
+        exp_alerts: []
+  # The last backup completed at 1h and none since: the weekly schedule's
+  # 338h passes at 339h. The rule reads the timestamp, so it fires with an
+  # age longer than the 7d Prometheus retention.
+  - interval: 5m
+    input_series:
+      - series: 'barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '3600x4100'
+    alert_rule_test:
+      - eval_time: 337h
+        alertname: CNPGBackupMissing
+        exp_alerts: []
+      - eval_time: 340h
+        alertname: CNPGBackupMissing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "data"
+              job: "data/pg"
+            exp_annotations:
+              description: "The last completed base backup of PostgreSQL cluster data/pg is 14d 3h 0m 0s old, over 338h (metrics.maxBackupAge). Check kubectl get backups -n data and the plugin-barman-cloud container's log."
+              summary: "A CloudNativePG cluster has no recent base backup."
+      - eval_time: 340h
+        alertname: CNPGBackupNeverCompleted
+        exp_alerts: []
+  # The latest backup failed after the last one that completed.
+  - interval: 1m
+    input_series:
+      - series: 'barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '1000x20'
+      - series: 'barman_cloud_cloudnative_pg_io_last_failed_backup_timestamp{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '2000x20'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: CNPGBackupFailed
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "data"
+              job: "data/pg"
+            exp_annotations:
+              description: "The latest base backup of PostgreSQL cluster data/pg failed, and none has completed since. The alert clears when a backup completes. kubectl get backups -n data shows the failed Backup's error."
+              summary: "The latest base backup of a CloudNativePG cluster failed."
+  # The instance is scraped but reports no plugin metrics.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '1x20'
+      - series: 'cnpg_collector_up{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: CNPGBackupMetricsMissing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "data"
+              job: "data/pg"
+            exp_annotations:
+              description: "The instances of PostgreSQL cluster data/pg are scraped but report no Barman Cloud backup metrics, so the backup alerts cannot fire. Check that each instance pod runs the plugin-barman-cloud container and that its log shows no error reading the ObjectStore pg-backup."
+              summary: "A CloudNativePG cluster reports no backup metrics."
+  # Both instances are out of recovery.
+  - interval: 1m
+    input_series:
+      - series: 'cnpg_pg_replication_in_recovery{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.0.2:9187"}'
+        values: '0x10'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="data",job="data/pg-replicated",pod="pg-replicated-2",instance="10.0.0.3:9187"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: CNPGClusterMultiplePrimaries
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              namespace: "data"
+              job: "data/pg-replicated"
+            exp_annotations:
+              description: "2 instances of PostgreSQL cluster data/pg-replicated are out of recovery, so more than one may accept writes. Check kubectl cnpg status pg-replicated -n data and fence the instance that is not the cluster's current primary."
+              summary: "A CloudNativePG cluster has more than one primary."
+  # The standby runs but its WAL receiver is down.
+  - interval: 1m
+    input_series:
+      - series: 'cnpg_pg_replication_is_wal_receiver_up{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.0.2:9187"}'
+        values: '0x15'
+      - series: 'cnpg_pg_replication_is_wal_receiver_up{namespace="data",job="data/pg-replicated",pod="pg-replicated-2",instance="10.0.0.3:9187"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: CNPGStandbysNotStreaming
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "data"
+              job: "data/pg-replicated"
+            exp_annotations:
+              description: "0 of the 1 standbys of PostgreSQL cluster data/pg-replicated receive WAL. A standby that does not stream falls behind, and a failover to it loses data. Check kubectl cnpg status pg-replicated -n data and the standby pods' logs."
+              summary: "A CloudNativePG standby is not streaming from the primary."
+              runbook_url: "https://github.com/cloudnative-pg/charts/blob/main/charts/cluster/docs/runbooks/CNPGClusterHAWarning.md"
+  # The standby replays ten minutes behind.
+  - interval: 1m
+    input_series:
+      - series: 'cnpg_pg_replication_lag{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.0.2:9187"}'
+        values: '0x20'
+      - series: 'cnpg_pg_replication_lag{namespace="data",job="data/pg-replicated",pod="pg-replicated-2",instance="10.0.0.3:9187"}'
+        values: '600x20'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: CNPGReplicationLagHigh
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              namespace: "data"
+              job: "data/pg-replicated"
+              pod: "pg-replicated-2"
+            exp_annotations:
+              description: "Standby pg-replicated-2 of PostgreSQL cluster data/pg-replicated replays WAL 10m 0s behind the primary, over metrics.maxReplicationLag (5m). Check the standby's disk and CPU, and the network to the primary."
+              summary: "A CloudNativePG standby is far behind the primary."
+              runbook_url: "https://github.com/cloudnative-pg/charts/blob/main/charts/cluster/docs/runbooks/CNPGClusterPhysicalReplicationLag.md"
+  # Healthy: pg has a fresh backup and archives WAL, and pg-replicated's
+  # standby streams. Nothing fires, including CNPGBackupNeverCompleted after
+  # its offset window has passed.
+  - interval: 5m
+    input_series:
+      - series: 'up{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '1x400'
+      - series: 'cnpg_collector_up{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '1x400'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '0x400'
+      - series: 'cnpg_collector_replica_mode{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '0x400'
+      - series: 'cnpg_backends_total{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",datname="app",usename="app",application_name="app",state="active"}'
+        values: '10x400'
+      - series: 'cnpg_pg_settings_setting{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",name="max_connections"}'
+        values: '50x400'
+      - series: 'cnpg_pg_database_xid_age{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",datname="app"}'
+        values: '100000000x400'
+      - series: 'cnpg_pg_database_mxid_age{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",datname="app"}'
+        values: '1000000x400'
+      - series: 'cnpg_pg_replication_slots_pg_wal_lsn_diff{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",slot_name="sub",slot_type="logical",database="app"}'
+        values: '1000000x400'
+      - series: 'cnpg_pg_replication_slots_active{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187",slot_name="sub",slot_type="logical",database="app"}'
+        values: '1x400'
+      - series: 'cnpg_collector_last_collection_error{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '0x400'
+      - series: 'cnpg_pg_stat_archiver_last_failed_time{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '-1x400'
+      - series: 'cnpg_pg_stat_archiver_last_archived_time{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '0+300x400'
+      - series: 'barman_cloud_cloudnative_pg_io_last_available_backup_timestamp{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '0+300x400'
+      - series: 'barman_cloud_cloudnative_pg_io_last_failed_backup_timestamp{namespace="data",job="data/pg",pod="pg-1",instance="10.0.0.1:9187"}'
+        values: '0x400'
+      - series: 'up{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.0.2:9187"}'
+        values: '1x400'
+      - series: 'up{namespace="data",job="data/pg-replicated",pod="pg-replicated-2",instance="10.0.0.3:9187"}'
+        values: '1x400'
+      - series: 'cnpg_collector_up{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.0.2:9187"}'
+        values: '1x400'
+      - series: 'cnpg_collector_up{namespace="data",job="data/pg-replicated",pod="pg-replicated-2",instance="10.0.0.3:9187"}'
+        values: '1x400'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.0.2:9187"}'
+        values: '0x400'
+      - series: 'cnpg_pg_replication_in_recovery{namespace="data",job="data/pg-replicated",pod="pg-replicated-2",instance="10.0.0.3:9187"}'
+        values: '1x400'
+      - series: 'cnpg_collector_replica_mode{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.0.2:9187"}'
+        values: '0x400'
+      - series: 'cnpg_collector_replica_mode{namespace="data",job="data/pg-replicated",pod="pg-replicated-2",instance="10.0.0.3:9187"}'
+        values: '0x400'
+      - series: 'cnpg_pg_replication_is_wal_receiver_up{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.0.2:9187"}'
+        values: '0x400'
+      - series: 'cnpg_pg_replication_is_wal_receiver_up{namespace="data",job="data/pg-replicated",pod="pg-replicated-2",instance="10.0.0.3:9187"}'
+        values: '1x400'
+      - series: 'cnpg_pg_replication_lag{namespace="data",job="data/pg-replicated",pod="pg-replicated-1",instance="10.0.0.2:9187"}'
+        values: '0x400'
+      - series: 'cnpg_pg_replication_lag{namespace="data",job="data/pg-replicated",pod="pg-replicated-2",instance="10.0.0.3:9187"}'
+        values: '2x400'
+    alert_rule_test:
+      - eval_time: 27h
+        alertname: CNPGClusterDown
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CNPGClusterNoPrimary
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CNPGConnectionsHigh
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CNPGTransactionIDAgeHigh
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CNPGTransactionIDWraparoundImminent
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CNPGReplicationSlotInactive
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CNPGMetricsCollectionFailing
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CNPGWALArchivingFailing
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CNPGBackupMissing
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CNPGBackupNeverCompleted
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CNPGBackupFailed
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CNPGBackupMetricsMissing
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CNPGClusterMultiplePrimaries
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CNPGStandbysNotStreaming
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: CNPGReplicationLagHigh
+        exp_alerts: []
