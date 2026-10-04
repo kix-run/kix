@@ -46,6 +46,26 @@
 # `{database:Identifier}`, which the Job binds. Migrations beyond
 # create-if-absent are the application's business.
 #
+# Practice the server does not enforce:
+#   - Insert in batches (a thousand rows or more, about one insert a
+#     second) or with `async_insert`. Each insert writes a part for every
+#     partition it touches, and a partition past parts_to_throw_insert
+#     (3000 active parts) refuses inserts.
+#   - Prefer `CODEC(ZSTD(1))` on large columns over the LZ4 default when
+#     disk matters more than CPU.
+#   - A materialized view runs inside every insert into its source and
+#     counts against that insert's memory. A view that needs more than
+#     planned fails the inserts, and until then takes from the server's
+#     memory cap that every other query shares. Users created here take
+#     the server's `default` settings profile, so `max_memory_usage` set
+#     there caps each of their queries: `usersConfig` on clickhouse,
+#     `extraSpec.configuration.profiles` on clickhouse-cluster.
+#   - Retry a failed insert with the same rows in the same order, so that
+#     replicated insert deduplication drops the copy. Different batches on
+#     retry write the data twice, and every materialized view with it. An
+#     `async_insert` is deduplicated only with `async_insert_deduplicate`
+#     on (off by default).
+#
 # DI deps:
 #   clickhouse (required)  anything honouring the clickhouse contract
 #

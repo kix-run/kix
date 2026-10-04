@@ -27,6 +27,17 @@
 # over the operator's pod labels, the stackgres-cluster precedent. They are
 # what phase 5's default-deny test on kind exercises.
 #
+# Upgrades: stay on an LTS line (the March and August releases), and take a
+# new release only after it has had a few weeks of fixes. The operator
+# restarts one replica at a time on an image change. Run no DDL until every
+# replica reports the new version, and use no new feature until then
+# either. Keep clickhouse-keeper on the same LTS line as the servers.
+#
+# Object storage is not modelled. A serverConfig that adds an S3 disk, and
+# especially one that turns on allow_remote_fs_zero_copy_replication (off
+# by default), is at the cluster's own risk: zero-copy replication has a
+# history of data loss and of orphaned objects left in the bucket.
+#
 # Not carried over from the bare package: the Keeper digest identity. The
 # CR has no way to take it from a Secret, so on this path Keeper's
 # protection is network policy (only these servers may reach it).
@@ -119,7 +130,7 @@ in
         cpu = "2";
         memory = "2Gi";
       };
-      description = "Per replica. ClickHouse sizes itself from these limits; 2Gi of memory is a floor (see the clickhouse package).";
+      description = "Per replica. ClickHouse sizes itself from these limits; the memory limit is required and 2Gi is a floor (see the clickhouse package).";
     };
 
     serverConfig = lib.mkOption {
@@ -143,7 +154,7 @@ in
       enabled = lib.mkOption {
         type = lib.types.bool;
         default = true;
-        description = "Run the post-deploy probe, the same one as the clickhouse package plus a replica count.";
+        description = "Run the post-deploy probe, the same one as the clickhouse package plus a replica count. It asks each replica for read-only tables through the replica's own Service.";
       };
       # A first install pulls images and forms two quorums.
       retryFor = lib.mkOption {
@@ -170,6 +181,23 @@ in
       let
         # What the operator stamps on every pod of this installation.
         podSelector = clickhouseOperator.out.operandSelector.clickHouseInstallations name;
+
+        # The operator's Service for one replica, named
+        # chi-{chi}-{cluster}-{shard}-{replica} with zero-based indexes
+        # (patterns.go in operator 0.27.3). It cuts the installation name to
+        # 60 characters and the cluster name to 15, then trims "-", "_" and
+        # "." from both ends of each. A serviceTemplate could rename it, so
+        # extraSpec may not define one.
+        operatorNamePart =
+          length: s:
+          let
+            m = builtins.match "[-_.]*(.*[^-_.])?[-_.]*" (builtins.substring 0 length s);
+          in
+          if m == null || builtins.head m == null then "" else builtins.head m;
+        replicaServiceName =
+          replica:
+          "chi-${operatorNamePart 60 name}-${operatorNamePart 15 config.clusterName}-0-${toString replica}";
+        replicaIndexes = lib.range 0 (config.replicas - 1);
 
         storageClassName =
           if config.storage.storageClassName != null then
@@ -287,6 +315,9 @@ in
           }
         ];
       in
+      if (config.resources.limits.memory or null) == null then
+        throw "clickhouse-cluster (${name}): resources.limits.memory is unset. ClickHouse sizes its memory cap from the container limit and falls back to the node's RAM without one. Set config.resources.limits.memory."
+      else
       {
         installation = clickhouseOperator.out.mkClickHouseInstallation scope {
           inherit name;
@@ -332,6 +363,10 @@ in
                 "templates"
                 "volumeClaimTemplates"
               ]
+              [
+                "templates"
+                "serviceTemplates"
+              ]
             ];
           } baseSpec config.extraSpec;
         };
@@ -353,6 +388,27 @@ in
           ];
           requires = [ self.installation ];
         };
+
+        # The health check asks every replica whether it has read-only
+        # tables, which a query through the load-balanced Service cannot.
+        replicaServices = map (
+          replica:
+          scope.mkServiceRef {
+            name = replicaServiceName replica;
+            # The replica's name is its index, as a label value too.
+            selector = podSelector // {
+              "clickhouse.altinity.com/replica" = toString replica;
+            };
+            ports = [
+              {
+                name = "http";
+                port = ports.http;
+                protocol = "TCP";
+              }
+            ];
+            requires = [ self.installation ];
+          }
+        ) replicaIndexes;
 
         # Replica to replica: fetches (9009), distributed DDL and queries
         # (9000), and name resolution for them.
@@ -449,6 +505,9 @@ in
           CLICKHOUSE_PASSWORD = self.root.out.authSecret.out.keyRef self.root.out.authPasswordKey;
           CLICKHOUSE_CLUSTER = self.root.out.clusterName;
           CLICKHOUSE_REPLICAS = self.root.out.replicas;
+          CLICKHOUSE_REPLICA_URLS = lib.concatMapStringsSep " " (
+            svc: "http://${svc.out.fqdn}:${svc.out.port}"
+          ) self.replicaServices;
         };
       # One probe for both implementations of the contract.
       script = builtins.readFile ../clickhouse/health-check.py;
