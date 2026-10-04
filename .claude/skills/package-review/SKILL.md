@@ -250,10 +250,10 @@ when a check fails or the path is not evaluated by default.
 ### Monitoring (Mo)
 
 - Mo1. Is `metrics` declared other than `kix.options.monitor` (or that `//` an `enabled` default of false)? Fix: use it.
-- Mo2. Is a ServiceMonitor or PrometheusRule built directly, or emitted without a `prometheus ? null` dep? Fix: `kix.monitor`.
+- Mo2. Is a ServiceMonitor or PrometheusRule built directly, or emitted without a `prometheus ? null` dep? Fix: `kix.monitor`; for a PodMonitor scrape, `prometheus.out.mkPodMonitor` plus `kix.alerts`.
 - Mo3. Is a metrics-only Service rendered when `metrics.enabled` is false or `prometheus` is null? Fix: gate on both. Exception: a Service that is `root` or the target of `kix.healthCheck` renders always.
 - Mo4. Do `prometheus.io` annotations stand in for a monitor? Fix: `kix.monitor` or delete.
-- Mo5. Are alerts not scoped to the instance (`job=~` regex, cluster-wide expr)? Fix: `namespace="<ns>", service="<metrics Service name>"`, aggregated `by (namespace, service)`. `kix.monitor`'s `alerts` is a static set, so one `let` binding feeds both the Service name and the selector.
+- Mo5. Are alerts not scoped to the instance (`job=~` regex, cluster-wide expr)? Fix: `namespace="<ns>", service="<metrics Service name>"`, aggregated `by (namespace, service)`; behind a PodMonitor, `job="<ns>/<PodMonitor name>"` and `by (namespace, job)`. `kix.monitor`'s `alerts` is a static set, so one `let` binding feeds both the Service name and the selector.
 - Mo6. Does the package expose metrics but ship no alerts, or miss the common outage (target absent, no leader, last success stale)? A last-success alert evaluates to nothing when the target is down, so pair it with a down alert. Fix: alerts from "Writing a package's alerts"; a package that still ships none says why in its header.
 - Mo7. Does an alert depend on another component's metrics? Fix: use the package's own.
 - Mo8. Do two monitors select each other's Services (same labels)? Fix: a component label per Service.

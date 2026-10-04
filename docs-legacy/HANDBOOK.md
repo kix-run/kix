@@ -700,13 +700,24 @@ These return functions whose own DI args are auto-discovered.
 })
 ```
 
-The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule`, which the prometheus package exposes on its `out`. `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`). `scheme` and `tlsConfig` set the primary endpoint's; each `extraEndpoints` entry defaults to `scheme = "http"`, `path = "/metrics"`, and the instance's `metrics.interval`.
+The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule`, which the prometheus package exposes on its `out`.
+
+**`kix.alerts`**: the PrometheusRule half of `kix.monitor` on its own, for a package whose scrape is not one `kix.monitor` ServiceMonitor: a PodMonitor it builds with `prometheus.out.mkPodMonitor` (cnpg-cluster, rabbitmq-cluster), or a scrape the operator configures. It renders under the same conditions, a `prometheus` dependency and `metrics.enabled` not false, and renders nothing when `alerts` is empty.
+
+```nix
+(kix.alerts {
+  alerts,                        # as kix.monitor's
+  name ? null,                   # rule name `<name>-alerts`; default the instance name
+  extraLabels ? {},
+  rulesPart ? "prometheusRules",
+})
+``` `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`). `scheme` and `tlsConfig` set the primary endpoint's; each `extraEndpoints` entry defaults to `scheme = "http"`, `path = "/metrics"`, and the instance's `metrics.interval`.
 
 #### Writing alerts
 
 The principles are in BEST-PRACTICES §9.6. The `package-review` skill has the review items (`Mo`) and the research steps to follow before writing a package's alerts. This section is the mechanics.
 
-**What `kix.monitor` renders.** Each `alerts` entry becomes one rule in a single group named `<name>-alerts`, inside a PrometheusRule of the same name. Only `severity` has a default, `warning`. The builder adds no `for`, no labels, and no annotations, so the package sets every one. It reads only the keys in the signature above and ignores any other. The prometheus package's Prometheus selects every PrometheusRule in every namespace. Under VictoriaMetrics, the operator converts each PrometheusRule into a VMRule, and `victoria-metrics-alert` evaluates every VMRule.
+**What `kix.monitor` and `kix.alerts` render.** Each `alerts` entry becomes one rule in a single group named `<name>-alerts`, inside a PrometheusRule of the same name. Only `severity` has a default, `warning`. The builder adds no `for`, no labels, and no annotations, so the package sets every one. It reads only the keys in the signature above and ignores any other. The prometheus package's Prometheus selects every PrometheusRule in every namespace. Under VictoriaMetrics, the operator converts each PrometheusRule into a VMRule, and `victoria-metrics-alert` evaluates every VMRule.
 
 `alerts` is an attrset keyed by alert name, so a package cannot render two rules with one name. kube-prometheus pairs a `warning` and a `critical` rule under one name, so that inhibition on equal `alertname` drops the warning while the critical fires. A package gives the two levels distinct names (`DiskPoolUsageHigh`, `DiskPoolUsageCritical`) instead.
 
@@ -719,6 +730,12 @@ let
   metricsService = "${scope.instanceName}-metrics";
   sel = ''namespace="${scope.namespaceName}",service="${metricsService}"'';
 in
+```
+
+A PodMonitor's series carry no `service` label. Prometheus Operator and the VictoriaMetrics operator both set `job` to `<namespace>/<PodMonitor name>`, so select on that instead, and aggregate `by (namespace, job)` wherever the patterns below say `by (namespace, service)`:
+
+```nix
+sel = ''namespace="${scope.namespaceName}",job="${scope.namespaceName}/${podMonitorName}"'';
 ```
 
 Aggregate with `by (namespace, service, ...)`, and keep `namespace` in every result. A bare `sum(...)` drops every label. The alertmanager package's default route groups by `namespace` and `alertname`, and inhibition rules usually compare `namespace`. An alert without it groups and inhibits across the whole cluster. Labels are the alert's identity. Never put a value in a label, because each new value starts a new alert. Values go in annotations.
