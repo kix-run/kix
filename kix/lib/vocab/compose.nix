@@ -1958,6 +1958,9 @@ rec {
         // lib.optionalAttrs (alertDef ? "for") {
           "for" = alertDef."for";
         }
+        // lib.optionalAttrs (alertDef ? keep_firing_for) {
+          inherit (alertDef) keep_firing_for;
+        }
       ) alerts;
       hasAlerts = alerts != { };
     in
