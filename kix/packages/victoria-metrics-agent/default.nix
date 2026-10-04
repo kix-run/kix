@@ -14,7 +14,7 @@
 #
 # DI deps:
 #   vmOperator (required)   provides the VMAgent CRD + mkVMAgent
-#   vmCluster (required)    out.insertUrl (remote-write target),
+#   vmCluster (required)    out.remoteWriteUrl (remote-write target),
 #                           out.scrapeInterval (dedup coupling)
 #
 # The remoteWrite URL carries the store-path edge to the cluster's insert
@@ -182,7 +182,7 @@ in
         baseSpec = {
           replicaCount = config.replicaCount;
           image = crImage config.image;
-          remoteWrite = [ { url = vmCluster.out.insertUrl; } ];
+          remoteWrite = [ { url = vmCluster.out.remoteWriteUrl; } ];
           # The cluster's dedup is calibrated to ITS scrapeInterval; an
           # agent override that differs double-counts samples (doc 133 §5).
           # Drift is flagged through the package-level `warnings` channel

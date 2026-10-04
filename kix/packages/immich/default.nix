@@ -26,6 +26,8 @@
 #                    Without the dependency the server turns machine
 #                    learning off.
 #   prometheus       scrapes the metrics ports while `metrics.enabled`.
+#   oidcProvider, oidcClient (with `oidc.enabled`)
+#                    single sign-on; see below.
 #
 # A minimal instance, in namespace `photos`:
 #
@@ -45,11 +47,39 @@
 # makes every setting in the admin UI read-only. `partsOverlays` patches
 # the rendered resources.
 #
+# Single sign-on: with `oidc.enabled`, Immich's OAuth login uses the
+# `oidcProvider` dependency (`kix.contracts.oidcProvider`, such as a keycloak
+# instance wired with `deps.oidcProvider = ref.<ns>.<name>`) in the realm
+# `oidc.realm`, with `oidc.scopes` and `oidc.autoLogin` (`oauth.autoLaunch`).
+# `oidcClient` is a secret with keys `clientId` and `clientSecret`. Register a confidential client with the redirect URIs
+# `<public URL>/auth/login`, `<public URL>/user-settings`, and
+# `app.immich:///oauth-callback` for the mobile app. The settings go into
+# the config file, which turns the admin UI read-only. The client id and
+# secret reach the container as environment variables, and the container
+# writes them into a copy of the config file on a memory-backed volume at
+# start, so the ConfigMap holds no credential. Other OAuth keys, such as
+# `oauth.roleClaim` and `oauth.autoRegister`, go in `settings`.
+#
+# Immich links an OAuth sign-in to an existing local account with the same
+# email and does not check `email_verified`. If the realm lets users set
+# their email without verifying it, a user can take over a local account,
+# the administrator's included. Require verified email in the realm, or
+# give local accounts emails that only their owners control.
+#
+# Immich discovers the provider at the issuer URL, the public URL, and
+# checks that the issuer it reports matches, so it cannot use a Keycloak
+# Service address; its token and userinfo requests go to the public URL
+# too. Derived policy has no edge for them. The world:443 intent admits
+# them when the public URL resolves to a load balancer outside the cluster.
+# When it resolves to an address the cluster's own data plane answers, the
+# request reaches the ingress controller from a pod, which its policy does
+# not admit.
+#
 # Known limits: the server runs one pod and rolls out with Recreate, so
 # every rollout stops it briefly. The world:443 intent does not open SMTP
-# (465 or 587) for email notifications. A database or valkey password from
-# a secret-ref has no identity hash, so rotating it restarts the server only
-# with reloader.
+# (465 or 587) for email notifications. A database or valkey password, or
+# an oidcClient secret, from a secret-ref has no identity hash, so rotating
+# it restarts the server only with reloader.
 
 {
   scope,
@@ -130,6 +160,8 @@ in
   };
 
   deps = {
+    oidcProvider.assertions = dep: kix.contracts.oidcProvider.assertions who dep;
+
     database.config.extensions = requiredExtensions;
 
     database.assertions =
@@ -197,10 +229,7 @@ in
       default = { };
       example = {
         storageTemplate.enabled = true;
-        oauth = {
-          enabled = true;
-          issuerUrl = "https://auth.example.com";
-        };
+        passwordLogin.enabled = false;
       };
       description = ''
         Immich's configuration file (`IMMICH_CONFIG_FILE`), in Immich's own
@@ -208,8 +237,20 @@ in
         every setting to the admin UI. A non-empty value makes the admin UI
         read-only for all settings, and a change restarts the server.
         `machineLearning.urls` and `machineLearning.enabled` are refused:
-        they follow the `machineLearning` dependency.
+        they follow the `machineLearning` dependency. `oauth.clientSecret`
+        is refused, because the ConfigMap would hold it; with
+        `oidc.enabled` the package sets `oauth.enabled`, `oauth.issuerUrl`,
+        `oauth.clientId`, `oauth.clientSecret`, `oauth.scope`, and
+        `oauth.autoLaunch`, and refuses them here.
       '';
+    };
+    oidc = kix.options.oidc {
+      scopes = [
+        "openid"
+        "email"
+        "profile"
+      ];
+      autoLogin = "`oauth.autoLaunch`";
     };
     metrics = kix.options.monitor;
     ingress = kix.options.ingress;
@@ -241,10 +282,39 @@ in
         storage,
         machineLearning ? null,
         prometheus ? null,
+        oidcProvider ? null,
+        oidcClient ? null,
         ...
       }:
       let
         hasMetrics = config.metrics.enabled && prometheus != null;
+
+        oidcOn = config.oidc.enabled;
+        oidcProviderInfo = kix.contracts.oidcProvider.requireClient {
+          inherit who;
+          inherit (config) oidc;
+          provider = oidcProvider;
+          client = oidcClient;
+        };
+        # Forcing oidcProviderInfo first reports a missing dependency by
+        # name rather than as a missing attribute of null.
+        oidcCredentials = builtins.seq oidcProviderInfo (
+          kix.checkSecretKeys {
+            inherit who;
+            arg = "oidcClient";
+            dep = oidcClient;
+            keys = kix.contracts.oidcProvider.clientKeys;
+          }
+        );
+        oauthSettings = lib.optionalAttrs oidcOn {
+          oauth = {
+            enabled = true;
+            issuerUrl = oidcProviderInfo.issuerUrl;
+            scope = lib.concatStringsSep " " config.oidc.scopes;
+            autoLaunch = config.oidc.autoLogin;
+          };
+        };
+        effectiveSettings = lib.recursiveUpdate config.settings oauthSettings;
 
         healthCheck = {
           httpGet = {
@@ -285,11 +355,19 @@ in
         # REDIS_PASSWORD at start, which keeps the password in its Secret.
         useSentinel = valkey.out ? sentinelPort;
         sentinelStart = ''
-          set -e
           REDIS_URL="ioredis://$(node -e 'const o = JSON.parse(process.env.REDIS_SENTINEL_OPTIONS); if (process.env.REDIS_PASSWORD) o.password = process.env.REDIS_PASSWORD; process.stdout.write(Buffer.from(JSON.stringify(o)).toString("base64"))')"
           export REDIS_URL
-          exec start.sh
         '';
+
+        # The config file Immich reads while OIDC is on: the ConfigMap's
+        # copy with the client credentials added, written at start by the
+        # image's node to a memory-backed volume.
+        oauthConfigFile = "${self.oauthMount.mountPath}/immich-config.json";
+        oauthStart = ''
+          node -e 'const fs = require("fs"); const c = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); c.oauth.clientId = process.env.OAUTH_CLIENT_ID; c.oauth.clientSecret = process.env.OAUTH_CLIENT_SECRET; fs.writeFileSync(process.argv[2], JSON.stringify(c), { mode: 0o600 })' ${self.configMount.mountPath}/immich-config.json ${oauthConfigFile}
+        '';
+        startSteps = lib.optional useSentinel sentinelStart ++ lib.optional oidcOn oauthStart;
+        startScript = "set -e\n${lib.concatStrings startSteps}exec start.sh\n";
         valkeyPassword = lib.optionalAttrs (valkey.out ? authSecret) {
           REDIS_PASSWORD = valkey.out.authSecret.out.keyRef valkey.out.authPasswordKey;
         };
@@ -304,11 +382,34 @@ in
             "enabled"
           ]
         ];
+        # With oidc.enabled the package owns these oauth keys; clientId and
+        # clientSecret are added at start.
+        oidcOwnedSettings = lib.optionals oidcOn (
+          map
+            (k: [
+              "oauth"
+              k
+            ])
+            [
+              "enabled"
+              "issuerUrl"
+              "clientId"
+              "scope"
+              "autoLaunch"
+            ]
+        );
         settingsCheck =
           let
             hits = builtins.filter (p: lib.hasAttrByPath p config.settings) ownedSettings;
+            oidcHits = builtins.filter (p: lib.hasAttrByPath p config.settings) oidcOwnedSettings;
           in
-          if hits == [ ] then
+          if lib.hasAttrByPath [ "oauth" "clientSecret" ] config.settings then
+            throw "${who}: settings sets oauth.clientSecret, which the config ConfigMap would hold. Set oidc.enabled and wire the client id and secret through deps.oidcClient instead."
+          else if oidcHits != [ ] then
+            throw "${who}: settings sets ${
+              lib.concatMapStringsSep ", " (lib.concatStringsSep ".") oidcHits
+            }, which oidc.enabled sets. Use the oidc option and the oidcProvider and oidcClient dependencies instead."
+          else if hits == [ ] then
             null
           else
             throw (
@@ -399,10 +500,34 @@ in
                 fix = "Set Immich's configuration in settings.";
               }
               // (
-                if self.configMount != null then
+                if oidcOn then
+                  { vars.IMMICH_CONFIG_FILE = oauthConfigFile; }
+                else if self.configMount != null then
                   { vars.IMMICH_CONFIG_FILE = "${self.configMount.mountPath}/immich-config.json"; }
                 else
                   { names = [ "IMMICH_CONFIG_FILE" ]; }
+              )
+            )
+            (
+              {
+                from = "the oidcClient dependency";
+                fix = "Wire another secret through deps.oidcClient.";
+              }
+              // (
+                if oidcOn then
+                  {
+                    vars = {
+                      OAUTH_CLIENT_ID = oidcCredentials.out.keyRef "clientId";
+                      OAUTH_CLIENT_SECRET = oidcCredentials.out.keyRef "clientSecret";
+                    };
+                  }
+                else
+                  {
+                    names = [
+                      "OAUTH_CLIENT_ID"
+                      "OAUTH_CLIENT_SECRET"
+                    ];
+                  }
               )
             )
             {
@@ -419,18 +544,17 @@ in
         } config.env;
       in
       {
-        configMap =
-          if config.settings == { } then
+        configMap = builtins.seq settingsCheck (
+          if effectiveSettings == { } then
             null
           else
-            builtins.seq settingsCheck (
-              scope.mkResource {
-                apiVersion = "v1";
-                kind = "ConfigMap";
-                name = "${name}-config";
-                data."immich-config.json" = builtins.toJSON config.settings;
-              }
-            );
+            scope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "${name}-config";
+              data."immich-config.json" = builtins.toJSON effectiveSettings;
+            }
+        );
 
         libraryMount = kix.mount.pvc storage { mountPath = "/usr/src/app/upload"; };
         configMount = kix.mount.configMap self.configMap { mountPath = "/config"; };
@@ -439,6 +563,16 @@ in
           mountPath = "/tmp";
           sizeLimit = "1Gi";
         };
+        oauthMount =
+          if oidcOn then
+            kix.mount.emptyDir {
+              name = "oauth-config";
+              mountPath = "/run/immich";
+              medium = "Memory";
+              sizeLimit = "1Mi";
+            }
+          else
+            null;
 
         deployment =
           {
@@ -457,6 +591,7 @@ in
                 "checksum/database" = dbCreds.identityHash or null;
                 "checksum/valkey-password" =
                   if valkey.out ? authSecret then valkey.out.authSecret.out.identityHash or null else null;
+                "checksum/oidc-client" = if oidcOn then oidcCredentials.out.identityHash or null else null;
               };
               template.spec = {
                 # Kubernetes default: Immich documents no shutdown drain.
@@ -525,7 +660,7 @@ in
                     imagePullPolicy = config.image.pullPolicy;
                     # The image's entrypoint is `tini -- /bin/bash -c` with
                     # CMD `start.sh`, so args replaces only the command string.
-                    ${if useSentinel then "args" else null} = [ sentinelStart ];
+                    ${if startSteps != [ ] then "args" else null} = [ startScript ];
                     env = kix.mkEnvVars env;
                     ports = [
                       (kix.port "http" 2283)
@@ -554,6 +689,7 @@ in
             self.libraryMount
             self.configMount
             self.tmpMount
+            self.oauthMount
           ]
           |> scope.mkDeployment;
 

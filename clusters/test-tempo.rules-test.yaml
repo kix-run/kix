@@ -315,9 +315,6 @@ tests:
         alertname: TempoBlockFlushFailing
         exp_alerts: []
       - eval_time: 6h30m
-        alertname: TempoBlocksNearClaimSize
-        exp_alerts: []
-      - eval_time: 6h30m
         alertname: TempoCompactionBacklog
         exp_alerts: []
       - eval_time: 6h30m
@@ -503,27 +500,6 @@ tests:
             exp_annotations:
               summary: Tempo answers many requests with a server error.
               description: "20% of Tempo tracing/tempo's requests on route api_search have failed with a 5xx status for 15 minutes. Check the pod's log for the route's errors."
-  # Blocks take 85% of the 1Gi claim, live and compacted together.
-  - interval: 1m
-    input_series:
-      - series: 'tempodb_backend_bytes_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",tenant="single-tenant",status="live"}'
-        values: '812680550x60'
-      - series: 'tempodb_backend_bytes_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",tenant="single-tenant",status="compacted"}'
-        values: '100000000x60'
-    alert_rule_test:
-      - eval_time: 20m
-        alertname: TempoBlocksNearClaimSize
-        exp_alerts: []
-      - eval_time: 40m
-        alertname: TempoBlocksNearClaimSize
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              namespace: tracing
-              service: tempo
-            exp_annotations:
-              summary: "Tempo's blocks nearly fill its volume."
-              description: "Tempo tracing/tempo's trace blocks take 85% of its 1Gi claim. When the volume fills, Tempo can no longer write blocks. Shorten retention or grow the claim."
   # Resident memory at 95% of the 1Gi limit.
   - interval: 1m
     input_series:

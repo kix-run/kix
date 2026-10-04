@@ -91,6 +91,29 @@ let
     else
       { inherit (e) name; } // lib.optionalAttrs (e.version != null) { inherit (e) version; };
 
+  # A consumer's `deps.database.config.extensions` is concatenated with the
+  # instance's own list, so one name can arrive twice (metabase asks for
+  # citext). CloudNativePG's webhook refuses a Database that lists a name
+  # twice, so entries merge by name; two different versions of one name
+  # cannot be merged.
+  uniqueExtensions =
+    exts:
+    let
+      normalized = map normalizeExtension exts;
+      pick =
+        extName:
+        let
+          versions = lib.unique (
+            lib.concatMap (e: lib.optional (e.name == extName && e ? version) e.version) normalized
+          );
+        in
+        if builtins.length versions > 1 then
+          throw "${who}: extension ${extName} is requested at versions ${lib.concatStringsSep " and " versions}, by the instance's `extensions` and a consumer's deps.database.config.extensions. Request one version, or none to take the operand image's default."
+        else
+          { name = extName; } // lib.optionalAttrs (versions != [ ]) { version = builtins.head versions; };
+    in
+    map pick (lib.unique (map (e: e.name) normalized));
+
   # The PostgreSQL identifiers stackgres-database admits, so an instance
   # moves between the two packages unchanged.
   identifier = lib.types.strMatching "[A-Za-z_][A-Za-z0-9_-]{0,62}";
@@ -326,7 +349,7 @@ in
           owner = userName;
         }
         // lib.optionalAttrs (config.extensions != [ ]) {
-          extensions = map (e: normalizeExtension e // { ensure = "present"; }) config.extensions;
+          extensions = map (e: e // { ensure = "present"; }) (uniqueExtensions config.extensions);
         };
       };
     in

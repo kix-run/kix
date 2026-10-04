@@ -37,6 +37,10 @@
     };
   };
 
+  # Amazon Linux 2023 nodes turn discard_unpacked_layers on. A nodeadm
+  # config that turns it off sets this to false.
+  cluster.containerd.discardUnpackedLayers = lib.mkDefault true;
+
   cluster.capabilities = {
     managedControlPlane = lib.mkDefault true;
     nodeAutoscaling = lib.mkDefault false; # Karpenter / cluster-autoscaler must be installed

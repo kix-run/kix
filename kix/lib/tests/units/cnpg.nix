@@ -505,6 +505,63 @@ in
     )
     || throw "cnpg-database resources: ${builtins.toJSON { inherit role database secret; }}";
 
+  # A name listed twice, as when a consumer's deps.database.config.extensions
+  # repeats one of the instance's, renders once, keeping the one version
+  # given; two different versions of one name fail evaluation.
+  cnpg-database-extensions-merge =
+    let
+      databaseWith =
+        extensions:
+        byName "data-app-db" (
+          ofKind "Database" (
+            ms (cnpg {
+              database = {
+                password = "password";
+                inherit extensions;
+              };
+            })
+          )
+        );
+      merged = databaseWith [
+        "citext"
+        "citext"
+        {
+          name = "vector";
+          version = "0.8.0";
+        }
+        "vector"
+      ];
+    in
+    (
+      merged.spec.extensions == [
+        {
+          name = "citext";
+          ensure = "present";
+        }
+        {
+          name = "vector";
+          version = "0.8.0";
+          ensure = "present";
+        }
+      ]
+      && evalFails (cnpg {
+        database = {
+          password = "password";
+          extensions = [
+            {
+              name = "vector";
+              version = "0.8.0";
+            }
+            {
+              name = "vector";
+              version = "0.7.4";
+            }
+          ];
+        };
+      })
+    )
+    || throw "cnpg-database extensions merge: ${builtins.toJSON merged.spec}";
+
   # The password checks of stackgres-database, and the reserved role and
   # database names.
   cnpg-database-refusals =

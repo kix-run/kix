@@ -165,6 +165,7 @@ in
     {
       emit,
       instanceName,
+      namespaceName,
       allPartResources,
       enforced,
       packageMeta,
@@ -326,6 +327,21 @@ in
           operandSelector =
             if builtins.isFunction beh.podSelector then beh.podSelector r.rawManifest else beh.podSelector;
           crNamespace = core.nsOf r;
+          # `podNamespace` names where the operand pods run when that is not
+          # the custom resource's namespace (a controller in its own
+          # namespace serving every namespace, or a cluster-scoped kind).
+          operandNamespace =
+            if !(beh ? podNamespace) then
+              crNamespace
+            else if builtins.isFunction beh.podNamespace then
+              beh.podNamespace r.rawManifest
+            else
+              beh.podNamespace;
+          # A policy placed in another namespace carries this instance's
+          # namespace in its name, so two instances of one name in different
+          # namespaces do not collide there.
+          policyPrefix =
+            if operandNamespace == namespaceName then instanceName else "${namespaceName}-${instanceName}";
 
           crEdges = map (f: {
             inherit (f.payload) name ports;
@@ -339,9 +355,13 @@ in
             else
               [
                 (enforcerApi.mkPolicy {
-                  mkResource = emit.mkResource;
+                  mkResource =
+                    if operandNamespace == namespaceName then
+                      emit.mkResource
+                    else
+                      (emit.inNamespace operandNamespace).mkResource;
                   extraArgs = {
-                    name = "${instanceName}-${lib.toLower r.kind}-${r.name}-egress";
+                    name = "${policyPrefix}-${lib.toLower r.kind}-${r.name}-egress";
                     labels = {
                       ${kixKeys.derived} = "true";
                       ${kixKeys.policyType} = "cr-operand";
@@ -356,7 +376,7 @@ in
                         enforcerApi.mkServiceEgressRule {
                           selector = edge.targetSelector;
                           namespace = edge.targetNamespace;
-                          sourceNamespace = crNamespace;
+                          sourceNamespace = operandNamespace;
                           ports = edge.ports;
                         }
                       ) crEdges;
@@ -375,7 +395,7 @@ in
                 enforcerApi.mkPolicy {
                   mkResource = (emit.inNamespace edge.targetNamespace).mkResource;
                   extraArgs = {
-                    name = "${instanceName}-${lib.toLower r.kind}-${r.name}-to-${edge.name}-ingress";
+                    name = "${policyPrefix}-${lib.toLower r.kind}-${r.name}-to-${edge.name}-ingress";
                     labels = {
                       ${kixKeys.derived} = "true";
                       ${kixKeys.policyType} = "caller-ingress";
@@ -385,7 +405,7 @@ in
                       ingress = [
                         (enforcerApi.mkCallerIngressRule {
                           callerSelector = operandSelector;
-                          callerNamespace = crNamespace;
+                          callerNamespace = operandNamespace;
                           ports = edge.ports;
                         })
                       ];

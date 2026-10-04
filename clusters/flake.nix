@@ -42,6 +42,7 @@
         clickhouse-swap-bare = ./test-clickhouse-swap/bare.nix;
         clickhouse-swap-replicated = ./test-clickhouse-swap/replicated.nix;
         cnpg = ./test-cnpg.nix;
+        rabbitmq = ./test-rabbitmq.nix;
         postgres-swap-stackgres = ./test-postgres-swap/stackgres.nix;
         postgres-swap-cnpg = ./test-postgres-swap/cnpg.nix;
         kind = ./test-kind.nix;
@@ -69,11 +70,17 @@
         virtualization = ./test-virtualization.nix;
         metabase = ./test-metabase.nix;
         metrics-server = ./test-metrics-server.nix;
+        spegel = ./test-spegel.nix;
+        volsync = ./test-volsync.nix;
         keycloak = ./test-keycloak.nix;
+        keycloak-oidc = ./test-keycloak-oidc.nix;
         otel-collector = ./test-otel-collector.nix;
+        falco = ./test-falco.nix;
         traefik = ./test-traefik.nix;
         monitoring-netpol = ./test-monitoring-netpol.nix;
         tempo = ./test-tempo.nix;
+        tempo-generator = ./test-tempo-generator.nix;
+        openbao = ./test-openbao.nix;
       };
     };
 }
