@@ -702,6 +702,85 @@ These return functions whose own DI args are auto-discovered.
 
 The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule`, which the prometheus package exposes on its `out`. `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`). `scheme` and `tlsConfig` set the primary endpoint's; each `extraEndpoints` entry defaults to `scheme = "http"`, `path = "/metrics"`, and the instance's `metrics.interval`.
 
+#### Writing alerts
+
+The principles are in BEST-PRACTICES §9.6. The `package-review` skill has the review items (`Mo`) and the research steps to follow before writing a package's alerts. This section is the mechanics.
+
+**What `kix.monitor` renders.** Each `alerts` entry becomes one rule in a single group named `<name>-alerts`, inside a PrometheusRule of the same name. Only `severity` has a default, `warning`. The builder adds no `for`, no labels, and no annotations, so the package sets every one. The prometheus package's Prometheus selects every PrometheusRule in every namespace. Under VictoriaMetrics, the operator converts each PrometheusRule into a VMRule, and `victoria-metrics-alert` evaluates every VMRule.
+
+`alerts` is an attrset keyed by alert name, so a package cannot render two rules with one name. kube-prometheus pairs a `warning` and a `critical` rule under one name, so that inhibition on equal `alertname` drops the warning while the critical fires. A package gives the two levels distinct names (`DiskPoolUsageHigh`, `DiskPoolUsageCritical`) instead.
+
+**Names.** CamelCase, starting with the component (`ClickHouseReplicaReadOnly`, `VeleroBackupMissing`), so a package's alerts sort together. The name states the condition, not the cause.
+
+**Selectors and labels.** Bind the selector once in a `let` and use it in every expression, as Mo5 describes:
+
+```nix
+let
+  metricsService = "${scope.instanceName}-metrics";
+  sel = ''namespace="${scope.namespaceName}",service="${metricsService}"'';
+in
+```
+
+Aggregate with `by (namespace, service, ...)`, never `without`, and keep `namespace` in every result. The alertmanager package's default route groups by `namespace` and `alertname`, and inhibition rules usually compare `namespace`. An alert without it groups and inhibits across the whole cluster. Labels are the alert's identity. Never put a value in a label, because each new value starts a new alert. Values go in annotations.
+
+`absent()` keeps labels only from a plain selector. `absent(up{${sel}} == 1)` returns a series with no labels at all, so prefer the form below.
+
+**Patterns.**
+
+```nix
+# The component stopped reporting: every target down, or no target at all.
+# Both branches carry namespace and service.
+expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+"for" = "10m";
+
+# A metric the other alerts rely on disappeared while the target is up.
+expr = "count by (namespace, service) (up{${sel}} == 1) unless on (namespace, service) count by (namespace, service) (foo_ready{${sel}})";
+
+# Last success too old. The threshold comes from the package's schedule and
+# allows at least two missed runs. The down alert covers the case where the
+# timestamp series is gone.
+expr = "time() - max by (namespace, service, schedule) (foo_last_success_timestamp_seconds{${sel}}) > ${toString maxAgeSeconds}";
+```
+
+Write every rate as `rate()` or `increase()` first and aggregate second, because `rate(sum(...))` cannot see counter resets. A range window covers at least four scrape intervals, so one failed scrape still leaves two samples. `[5m]` is safe for scrape intervals up to 75 seconds.
+
+**`for`.** Use at least `5m`, so a restart or a rollout does not fire the alert. A down alert uses `10m`, like kube-prometheus's `TargetDown`. A threshold on a gauge that moves around uses `15m`. Leave `for` out only when the expression already spans a long window, such as `increase(foo_failures_total[1h]) > 0`, and say so in a comment. `keep_firing_for` holds an alert after its condition clears, which stops a flapping condition from resolving and refiring. Prometheus 2.42, prometheus-operator 0.66, and vmalert all support it.
+
+**Thresholds.** Derive a threshold from evaluated configuration where the package has one: `resources.limits.memory` through `kix.parseQuantity "memory"`, a replica count, or a schedule. Otherwise extend the monitor options with a typed threshold, as velero does:
+
+```nix
+metrics = kix.options.monitor // {
+  maxBackupAge = lib.mkOption {
+    type = lib.types.strMatching "([0-9]+(ms|s|m|h|d|w|y))+";
+    default = "26h";
+    description = "How long a schedule may go without a successful backup before VeleroBackupMissing fires ...";
+  };
+};
+```
+
+**Annotations.** `summary` is one sentence with no template, the same for every alert in a group. `description` uses `{{ $labels.<name> }}` and `{{ $value | humanize }}` (also `humanizePercentage` and `humanizeDuration`) to name the instance and the value. It says what the condition means and what to check first. Set `runbook_url` only to a maintained upstream runbook for the same condition. Nix interpolates `${...}`, not `{{ ... }}`, so templates need no escaping.
+
+**VictoriaMetrics compatibility.** The same rule must work under vmalert:
+
+- Use only template functions that both Prometheus and vmalert define. `float64` is in neither: Prometheus fails the template only when the alert fires, and the VictoriaMetrics operator's converter rejects the whole rule group. Format numbers with `printf` or the `humanize` functions instead.
+- Do not set `query_offset`. The converter maps it to vmalert's `eval_offset`, which means something else.
+- Do not compare `increase()` or `rate()` with exact equality. Prometheus extrapolates both and VictoriaMetrics does not, so their values differ slightly. Use `> 0`, or a threshold with margin.
+- Without remote read, vmalert forgets how long a pending alert has been pending when it restarts. Put long durations inside the expression's window rather than in a `for` of hours.
+
+**Routing.** The alertmanager package's default settings send everything to a `null` receiver and define no inhibition rules. A site that wants pages writes `settings` with its receivers, and usually a route on `severity`. Packages make that possible by setting `severity` on every rule and keeping `namespace` on every alert.
+
+**Tests.** A package that ships alerts has a unit test in `kix/lib/tests/units/<package>.nix`, like `reloader-metrics`. It checks that the PrometheusRule renders under the expected name, that every expression contains the instance's selector, and that nothing renders without a `prometheus` dependency or with `metrics.enabled = false`. A test does not catch a rule that never matches. For that, run `promtool` on the rendered rules. A PrometheusRule's `spec` is a Prometheus rule file:
+
+```bash
+nix build ./clusters#cluster-<test-cluster> -o result-rules
+nix shell nixpkgs#yq-go nixpkgs#prometheus.cli -c sh -c '
+  yq ".spec" result-rules/<namespace>/<name>-alerts-prometheusrule.yaml > rules.yaml
+  promtool check rules rules.yaml
+  promtool test rules rules-test.yaml'
+```
+
+`rules-test.yaml` lists `rule_files: [rules.yaml]` and gives input series for each alert: one that breaks the condition and one that stays healthy. Wait until `eval_time` is past `for` plus one evaluation. `exp_labels` must list every label, including `severity`. The [Prometheus unit-testing docs](https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/) give the format. Before shipping, check every metric name against the program's source or a scrape at the version the package pins. A misspelled metric name passes both checks.
+
 **`kix.healthCheck`**: a post-deploy probe, a Job in the package's namespace that runs a script against addresses passed in as env vars from `out.*` values. Every callback receives the same `{ self, config, deps }`.
 
 ```nix
