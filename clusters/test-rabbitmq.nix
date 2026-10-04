@@ -54,7 +54,9 @@ let
                 terminationGracePeriodSeconds = 30;
                 securityContext = {
                   runAsNonRoot = true;
-                  runAsUser = 65532;
+                  # The image's own user: /perf_test/perf-test.jar is mode
+                  # 0600 and owned by uid 2000.
+                  runAsUser = 2000;
                   seccompProfile.type = "RuntimeDefault";
                 };
                 containers = [
