@@ -1,0 +1,542 @@
+# promtool unit tests for the Loki and Tempo alert rules test-tempo.nix
+# renders. The rules-cluster-tempo check runs them from the rendered rules,
+# so each rule_files entry is <namespace>/<file> in the cluster's manifests.
+# The expected thresholds follow the packages' defaults: a 1Gi memory limit,
+# a 1Gi Tempo claim, Loki's 90% disk_full_threshold, and maxCompactionAge 3h.
+rule_files:
+  - logs/loki-alerts-prometheusrule.yaml
+  - tracing/tempo-alerts-prometheusrule.yaml
+evaluation_interval: 1m
+tests:
+  # A healthy Loki fires nothing: compaction and retention succeed, no failures,
+  # under 1% of pushes fail, and the volume and memory are half used.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki"}'
+        values: '1x300'
+      - series: 'loki_boltdb_shipper_compact_tables_operation_total{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki",status="success"}'
+        values: '1+0.1x300'
+      - series: 'loki_compactor_apply_retention_operation_total{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki",status="success"}'
+        values: '1+0.1x300'
+      - series: 'loki_ingester_chunks_flush_failures_total{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki"}'
+        values: '0x300'
+      - series: 'loki_ingester_checkpoint_creations_failed_total{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki"}'
+        values: '0x300'
+      - series: 'loki_discarded_samples_total{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki",reason="rate_limited",tenant="fake"}'
+        values: '0x300'
+      - series: 'loki_request_duration_seconds_count{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki",route="loki_api_v1_push",status_code="204",method="POST",ws="false"}'
+        values: '0+120x300'
+      - series: 'loki_request_duration_seconds_count{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki",route="loki_api_v1_push",status_code="500",method="POST",ws="false"}'
+        values: '0+1x300'
+      - series: 'loki_panic_total{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki"}'
+        values: '0x300'
+      - series: 'loki_ingester_wal_disk_usage_percent{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki"}'
+        values: '0.5x300'
+      - series: 'process_resident_memory_bytes{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki"}'
+        values: '500000000x300'
+    alert_rule_test:
+      - eval_time: 4h10m
+        alertname: LokiChunkFlushFailing
+        exp_alerts: []
+      - eval_time: 4h10m
+        alertname: LokiCompactionStale
+        exp_alerts: []
+      - eval_time: 4h10m
+        alertname: LokiDiscardingLogs
+        exp_alerts: []
+      - eval_time: 4h10m
+        alertname: LokiDiskNearlyFull
+        exp_alerts: []
+      - eval_time: 4h10m
+        alertname: LokiDown
+        exp_alerts: []
+      - eval_time: 4h10m
+        alertname: LokiIngestionRefusedDiskFull
+        exp_alerts: []
+      - eval_time: 4h10m
+        alertname: LokiMemoryNearLimit
+        exp_alerts: []
+      - eval_time: 4h10m
+        alertname: LokiPanics
+        exp_alerts: []
+      - eval_time: 4h10m
+        alertname: LokiRequestErrors
+        exp_alerts: []
+      - eval_time: 4h10m
+        alertname: LokiRetentionStale
+        exp_alerts: []
+      - eval_time: 4h10m
+        alertname: LokiWALCheckpointFailing
+        exp_alerts: []
+  # Every Loki target down for 10 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki"}'
+        values: '1 1 0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LokiDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: LokiDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: logs
+              service: loki
+            exp_annotations:
+              summary: Loki is down.
+              description: "Prometheus has scraped no running Loki logs/loki for 10 minutes, so it accepts no logs and answers no queries. Check statefulset/loki and its pod's events."
+  # No Loki target at all: absent() keeps the namespace and service labels.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="logs",service="other",instance="10.0.0.9:80",job="other"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: LokiDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: logs
+              service: loki
+            exp_annotations:
+              summary: Loki is down.
+              description: "Prometheus has scraped no running Loki logs/loki for 10 minutes, so it accepts no logs and answers no queries. Check statefulset/loki and its pod's events."
+  # The compactor and the retention loop report no success for 3 hours while
+  # the target is up.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki"}'
+        values: '1x220'
+      - series: 'loki_boltdb_shipper_compact_tables_operation_total{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki",status="success"}'
+        values: '5x220'
+      - series: 'loki_compactor_apply_retention_operation_total{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki",status="success"}'
+        values: '5x220'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: LokiCompactionStale
+        exp_alerts: []
+      - eval_time: 3h20m
+        alertname: LokiCompactionStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: logs
+              service: loki
+            exp_annotations:
+              summary: Loki has not compacted its index recently.
+              description: "Loki logs/loki has completed no index compaction in 3h. Queries slow down as index files accumulate. Check its log for \"failed to run compaction\"."
+      - eval_time: 3h20m
+        alertname: LokiRetentionStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: logs
+              service: loki
+            exp_annotations:
+              summary: Loki has not applied retention recently.
+              description: "Loki logs/loki has completed no retention run in 3h, so it deletes no expired logs and its volume keeps growing. Check its log for \"failed to apply retention\"."
+  # Chunk flushes and write-ahead log checkpoints keep failing.
+  - interval: 1m
+    input_series:
+      - series: 'loki_ingester_chunks_flush_failures_total{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki"}'
+        values: '0+1x40'
+      - series: 'loki_ingester_checkpoint_creations_failed_total{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LokiChunkFlushFailing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: LokiChunkFlushFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: logs
+              service: loki
+            exp_annotations:
+              summary: Loki fails to flush chunks to storage.
+              description: "Loki logs/loki has failed to write chunks to its volume for 15 minutes. Unflushed chunks stay in memory and in the write-ahead log, so memory use grows. Check its log for \"failed to flush\" and the volume's free space."
+      - eval_time: 30m
+        alertname: LokiWALCheckpointFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: logs
+              service: loki
+            exp_annotations:
+              summary: Loki fails to checkpoint its write-ahead log.
+              description: "Loki logs/loki has failed to write a write-ahead log checkpoint for 15 minutes. The log grows, and the next restart replays more of it. Check the volume's free space and the pod's log."
+  # Lines dropped at the rate limit fire; out-of-order lines are a client
+  # problem and do not.
+  - interval: 1m
+    input_series:
+      - series: 'loki_discarded_samples_total{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki",reason="rate_limited",tenant="fake"}'
+        values: '0+60x40'
+      - series: 'loki_discarded_samples_total{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki",reason="out_of_order",tenant="fake"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LokiDiscardingLogs
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: logs
+              service: loki
+              reason: rate_limited
+            exp_annotations:
+              summary: Loki drops log lines at a configured limit.
+              description: "Loki logs/loki has dropped log lines for 15 minutes with reason rate_limited, 1 lines per second. Raise the matching limit in settings.limits_config, or reduce what the senders ship."
+  # 20% of pushes fail. On the query route every request fails, but at 0.05
+  # requests per second it is under the traffic floor.
+  - interval: 1m
+    input_series:
+      - series: 'loki_request_duration_seconds_count{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki",route="loki_api_v1_push",status_code="204",method="POST",ws="false"}'
+        values: '0+240x40'
+      - series: 'loki_request_duration_seconds_count{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki",route="loki_api_v1_push",status_code="500",method="POST",ws="false"}'
+        values: '0+60x40'
+      - series: 'loki_request_duration_seconds_count{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki",route="loki_api_v1_query_range",status_code="500",method="GET",ws="false"}'
+        values: '0+3x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LokiRequestErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: logs
+              service: loki
+              route: loki_api_v1_push
+            exp_annotations:
+              summary: Loki answers many requests with a server error.
+              description: "20% of Loki logs/loki's requests on route loki_api_v1_push have failed with a 5xx status for 15 minutes. Check the pod's log for the route's errors."
+  # One recovered panic fires at once and clears after the 15-minute window.
+  - interval: 1m
+    input_series:
+      - series: 'loki_panic_total{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki"}'
+        values: '0 0 0 1x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LokiPanics
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: logs
+              service: loki
+            exp_annotations:
+              summary: Loki recovered from a panic.
+              description: "Loki logs/loki panicked while serving a request in the last 15 minutes and failed that request. The pod's log holds the stack trace."
+      - eval_time: 25m
+        alertname: LokiPanics
+        exp_alerts: []
+  # The volume at 85%: nearly full, under the 90% refusal threshold.
+  - interval: 1m
+    input_series:
+      - series: 'loki_ingester_wal_disk_usage_percent{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki"}'
+        values: '0.85x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LokiDiskNearlyFull
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: logs
+              service: loki
+            exp_annotations:
+              summary: "Loki's volume is nearly full."
+              description: "Loki logs/loki's volume is 85% full; at 90% Loki refuses every push. Shorten settings.limits_config.retention_period or grow the claim."
+      - eval_time: 20m
+        alertname: LokiIngestionRefusedDiskFull
+        exp_alerts: []
+  # The volume at 95%: Loki refuses pushes.
+  - interval: 1m
+    input_series:
+      - series: 'loki_ingester_wal_disk_usage_percent{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki"}'
+        values: '0.95x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: LokiIngestionRefusedDiskFull
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: logs
+              service: loki
+            exp_annotations:
+              summary: Loki refuses all pushes because its volume is full.
+              description: "Loki logs/loki's volume is 95% full, at or above settings.ingester.wal.disk_full_threshold (90%), so Loki refuses every push and senders hold or drop the logs. Free space: shorten retention, delete data, or grow the claim."
+  # Resident memory at 95% of the 1Gi limit.
+  - interval: 1m
+    input_series:
+      - series: 'process_resident_memory_bytes{namespace="logs",service="loki",instance="10.0.0.1:3100",job="loki"}'
+        values: '1020054733x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LokiMemoryNearLimit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: logs
+              service: loki
+            exp_annotations:
+              summary: Loki is near its memory limit.
+              description: "Loki logs/loki uses 95% of its 1Gi memory limit. Unflushed chunks are held in memory; an OOM kill replays the write-ahead log on restart. Raise resources.limits.memory."
+  # A healthy Tempo fires nothing.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo"}'
+        values: '1x400'
+      - series: 'tempo_live_store_failed_completions_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo"}'
+        values: '0x400'
+      - series: 'tempo_live_store_local_failed_flushes_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo"}'
+        values: '0x400'
+      - series: 'tempo_discarded_spans_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",reason="rate_limited",tenant="single-tenant"}'
+        values: '0x400'
+      - series: 'tempo_backend_scheduler_jobs_failed_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",tenant="single-tenant",job_type="compaction"}'
+        values: '0x400'
+      - series: 'tempodb_retention_errors_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo"}'
+        values: '0x400'
+      - series: 'tempodb_blocklist_poll_errors_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",tenant=""}'
+        values: '0x400'
+      - series: 'tempodb_compaction_outstanding_blocks{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",tenant="single-tenant"}'
+        values: '20x400'
+      - series: 'tempo_request_duration_seconds_count{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",route="api_search",status_code="200",method="GET",ws="false"}'
+        values: '0+60x400'
+      - series: 'tempodb_backend_bytes_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",tenant="single-tenant",status="live"}'
+        values: '300000000x400'
+      - series: 'tempodb_backend_bytes_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",tenant="single-tenant",status="compacted"}'
+        values: '10000000x400'
+      - series: 'process_resident_memory_bytes{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo"}'
+        values: '500000000x400'
+    alert_rule_test:
+      - eval_time: 6h30m
+        alertname: TempoBackendJobsFailing
+        exp_alerts: []
+      - eval_time: 6h30m
+        alertname: TempoBlockFlushFailing
+        exp_alerts: []
+      - eval_time: 6h30m
+        alertname: TempoBlocksNearClaimSize
+        exp_alerts: []
+      - eval_time: 6h30m
+        alertname: TempoCompactionBacklog
+        exp_alerts: []
+      - eval_time: 6h30m
+        alertname: TempoDiscardingSpans
+        exp_alerts: []
+      - eval_time: 6h30m
+        alertname: TempoDown
+        exp_alerts: []
+      - eval_time: 6h30m
+        alertname: TempoMemoryNearLimit
+        exp_alerts: []
+      - eval_time: 6h30m
+        alertname: TempoPollsFailing
+        exp_alerts: []
+      - eval_time: 6h30m
+        alertname: TempoRequestErrors
+        exp_alerts: []
+      - eval_time: 6h30m
+        alertname: TempoRetentionFailing
+        exp_alerts: []
+  # Every Tempo target down for 10 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo"}'
+        values: '1 1 0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TempoDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TempoDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              namespace: tracing
+              service: tempo
+            exp_annotations:
+              summary: Tempo is down.
+              description: "Prometheus has scraped no running Tempo tracing/tempo for 10 minutes, so it accepts no spans and answers no queries. Check statefulset/tempo and its pod's events."
+  # Block completion keeps failing.
+  - interval: 1m
+    input_series:
+      - series: 'tempo_live_store_failed_completions_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TempoBlockFlushFailing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: TempoBlockFlushFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: tracing
+              service: tempo
+            exp_annotations:
+              summary: Tempo fails to write completed trace blocks.
+              description: "Tempo tracing/tempo has failed for 15 minutes to complete write-ahead log blocks or write them to its block store. The blocks stay in the write-ahead log, which grows on the same volume. Check the volume's free space and the pod's log."
+  # Writing completed blocks to the block store keeps failing.
+  - interval: 1m
+    input_series:
+      - series: 'tempo_live_store_local_failed_flushes_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TempoBlockFlushFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: tracing
+              service: tempo
+            exp_annotations:
+              summary: Tempo fails to write completed trace blocks.
+              description: "Tempo tracing/tempo has failed for 15 minutes to complete write-ahead log blocks or write them to its block store. The blocks stay in the write-ahead log, which grows on the same volume. Check the volume's free space and the pod's log."
+  # Spans dropped at the live-traces limit fire; invalid trace IDs are a
+  # client problem and do not.
+  - interval: 1m
+    input_series:
+      - series: 'tempo_discarded_spans_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",reason="live_traces_exceeded",tenant="single-tenant"}'
+        values: '0+60x40'
+      - series: 'tempo_discarded_spans_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",reason="invalid_trace_id",tenant="single-tenant"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TempoDiscardingSpans
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: tracing
+              service: tempo
+              reason: live_traces_exceeded
+            exp_annotations:
+              summary: Tempo drops spans at a configured limit.
+              description: "Tempo tracing/tempo has dropped spans for 15 minutes with reason live_traces_exceeded, 1 spans per second. Raise the matching limit under settings.overrides.defaults, or reduce what the senders ship."
+  # Compaction jobs, retention, and block-list polls fail every minute.
+  - interval: 1m
+    input_series:
+      - series: 'tempo_backend_scheduler_jobs_failed_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",tenant="single-tenant",job_type="compaction"}'
+        values: '0+1x40'
+      - series: 'tempodb_retention_errors_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo"}'
+        values: '0+1x40'
+      - series: 'tempodb_blocklist_poll_errors_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",tenant=""}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TempoBackendJobsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: tracing
+              service: tempo
+              job_type: compaction
+            exp_annotations:
+              summary: "Tempo's backend jobs keep failing."
+              description: "Tempo tracing/tempo's compaction jobs have failed more than twice in the last hour and are still failing. Failed compaction slows queries; failed retention lets the volume fill. Check the pod's log for the backend worker's errors."
+              runbook_url: "https://github.com/grafana/tempo/blob/v3.1.0/operations/tempo-mixin/runbook.md#tempobackendschedulerjobsfailureratehigh"
+      - eval_time: 30m
+        alertname: TempoRetentionFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: tracing
+              service: tempo
+            exp_annotations:
+              summary: Tempo fails to delete expired blocks.
+              description: "Tempo tracing/tempo has failed to mark or delete blocks older than its retention more than twice in the last hour, so its volume keeps growing. Check the pod's log for retention errors."
+      - eval_time: 30m
+        alertname: TempoPollsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: tracing
+              service: tempo
+            exp_annotations:
+              summary: Tempo fails to list its blocks.
+              description: "Tempo tracing/tempo has failed to poll its block list more than twice in the last hour and is still failing, so new blocks are not queryable and compaction works from a stale list. Check the volume and the pod's log."
+              runbook_url: "https://github.com/grafana/tempo/blob/v3.1.0/operations/tempo-mixin/runbook.md#tempopollsfailing"
+  # Two failures in an hour stay under the threshold of more than two.
+  - interval: 1m
+    input_series:
+      - series: 'tempodb_blocklist_poll_errors_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",tenant=""}'
+        values: '0x10 1x10 2x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TempoPollsFailing
+        exp_alerts: []
+  # 150 blocks wait for compaction for over 6 hours.
+  - interval: 1m
+    input_series:
+      - series: 'tempodb_compaction_outstanding_blocks{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",tenant="single-tenant"}'
+        values: '150x380'
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: TempoCompactionBacklog
+        exp_alerts: []
+      - eval_time: 6h10m
+        alertname: TempoCompactionBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: tracing
+              service: tempo
+            exp_annotations:
+              summary: "Tempo's compaction is falling behind."
+              description: "Tempo tracing/tempo has had 150 blocks waiting for compaction for 6 hours. Queries read more blocks and slow down. Raise resources.limits.cpu, or check TempoBackendJobsFailing."
+              runbook_url: "https://github.com/grafana/tempo/blob/v3.1.0/operations/tempo-mixin/runbook.md#tempocompactiontoomanyoutstandingblocks"
+  # 20% of searches fail.
+  - interval: 1m
+    input_series:
+      - series: 'tempo_request_duration_seconds_count{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",route="api_search",status_code="200",method="GET",ws="false"}'
+        values: '0+240x40'
+      - series: 'tempo_request_duration_seconds_count{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",route="api_search",status_code="500",method="GET",ws="false"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TempoRequestErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: tracing
+              service: tempo
+              route: api_search
+            exp_annotations:
+              summary: Tempo answers many requests with a server error.
+              description: "20% of Tempo tracing/tempo's requests on route api_search have failed with a 5xx status for 15 minutes. Check the pod's log for the route's errors."
+  # Blocks take 85% of the 1Gi claim, live and compacted together.
+  - interval: 1m
+    input_series:
+      - series: 'tempodb_backend_bytes_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",tenant="single-tenant",status="live"}'
+        values: '812680550x60'
+      - series: 'tempodb_backend_bytes_total{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo",tenant="single-tenant",status="compacted"}'
+        values: '100000000x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TempoBlocksNearClaimSize
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: TempoBlocksNearClaimSize
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: tracing
+              service: tempo
+            exp_annotations:
+              summary: "Tempo's blocks nearly fill its volume."
+              description: "Tempo tracing/tempo's trace blocks take 85% of its 1Gi claim. When the volume fills, Tempo can no longer write blocks. Shorten retention or grow the claim."
+  # Resident memory at 95% of the 1Gi limit.
+  - interval: 1m
+    input_series:
+      - series: 'process_resident_memory_bytes{namespace="tracing",service="tempo",instance="10.0.0.2:3200",job="tempo"}'
+        values: '1020054733x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TempoMemoryNearLimit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              namespace: tracing
+              service: tempo
+            exp_annotations:
+              summary: Tempo is near its memory limit.
+              description: "Tempo tracing/tempo uses 95% of its 1Gi memory limit. An OOM kill replays the live store's write-ahead log on restart. Raise resources.limits.memory, or lower live_store.max_live_traces_bytes in settings."

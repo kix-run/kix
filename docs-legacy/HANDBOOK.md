@@ -700,9 +700,9 @@ These return functions whose own DI args are auto-discovered.
 })
 ```
 
-The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule`, which the prometheus package exposes on its `out`.
+The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule`, which the prometheus package exposes on its `out`. `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`). `scheme` and `tlsConfig` set the primary endpoint's; each `extraEndpoints` entry defaults to `scheme = "http"`, `path = "/metrics"`, and the instance's `metrics.interval`.
 
-**`kix.alerts`**: the PrometheusRule half of `kix.monitor` on its own, for a package whose scrape is not one `kix.monitor` ServiceMonitor: a PodMonitor it builds with `prometheus.out.mkPodMonitor` (cnpg-cluster, rabbitmq-cluster), or a scrape the operator configures. It renders under the same conditions, a `prometheus` dependency and `metrics.enabled` not false, and renders nothing when `alerts` is empty.
+**`kix.alerts`**: the PrometheusRule half of `kix.monitor` on its own, for a package whose scrape is not one `kix.monitor` ServiceMonitor: a PodMonitor it builds with `prometheus.out.mkPodMonitor` (cnpg-cluster, stackgres-cluster, clickhouse-cluster), or a scrape the operator configures. It renders under the same conditions, a `prometheus` dependency and `metrics.enabled` not false, and renders nothing when `alerts` is empty.
 
 ```nix
 (kix.alerts {
@@ -711,13 +711,13 @@ The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPro
   extraLabels ? {},
   rulesPart ? "prometheusRules",
 })
-``` `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`). `scheme` and `tlsConfig` set the primary endpoint's; each `extraEndpoints` entry defaults to `scheme = "http"`, `path = "/metrics"`, and the instance's `metrics.interval`.
+```
 
 #### Writing alerts
 
 The principles are in BEST-PRACTICES §9.6. The `package-review` skill has the review items (`Mo`) and the research steps to follow before writing a package's alerts. This section is the mechanics.
 
-**What `kix.monitor` and `kix.alerts` render.** Each `alerts` entry becomes one rule in a single group named `<name>-alerts`, inside a PrometheusRule of the same name. Only `severity` has a default, `warning`. The builder adds no `for`, no labels, and no annotations, so the package sets every one. It reads only the keys in the signature above and ignores any other. The prometheus package's Prometheus selects every PrometheusRule in every namespace. Under VictoriaMetrics, the operator converts each PrometheusRule into a VMRule, and `victoria-metrics-alert` evaluates every VMRule.
+**What `kix.monitor` and `kix.alerts` render.** Each `alerts` entry becomes one rule in a single group named `<name>-alerts`, inside a PrometheusRule of the same name. Only `severity` has a default, `warning`. The builder adds no `for`, no labels, and no annotations, so the package sets every one. It reads only the keys in the signature above and ignores any other. The prometheus package's Prometheus selects every PrometheusRule in every namespace. Under VictoriaMetrics, the operator converts each PrometheusRule into a VMRule, and `victoria-metrics-alert` evaluates every VMRule. The VictoriaMetrics packages render their own alerts as VMRules, by handing `kix.alerts` a `prometheus` whose `out.mkPrometheusRule` is the operator's `mkVMRule`, so they do not depend on the converter and a prometheus-operator Prometheus on the same cluster never loads them.
 
 `alerts` is an attrset keyed by alert name, so a package cannot render two rules with one name. kube-prometheus pairs a `warning` and a `critical` rule under one name, so that inhibition on equal `alertname` drops the warning while the critical fires. A package gives the two levels distinct names (`DiskPoolUsageHigh`, `DiskPoolUsageCritical`) instead.
 
@@ -793,7 +793,7 @@ metrics = kix.options.monitor // {
 
 **Routing.** The alertmanager package's default settings send everything to a `null` receiver and define no inhibition rules. A site that wants pages writes `settings` with its receivers, and usually a route on `severity`. Packages make that possible by setting `severity` on every rule and keeping `namespace` on every alert. The site also routes `Watchdog`, the always-firing alert in `prometheus-default-rules`, to an external heartbeat service that pages when it stops arriving. Nothing else notices when Prometheus, Alertmanager, or the route to the receiver fails.
 
-**Tests.** A package that ships alerts has a unit test in `kix/lib/tests/units/<package>.nix`, like `reloader-metrics`. It checks that the PrometheusRule renders under the expected name, that every expression contains the instance's selector, and that nothing renders without a `prometheus` dependency or with `metrics.enabled = false`. A unit test does not catch a rule that never matches, so every cluster also gets the flake check `rules-cluster-<name>` (`kix/checks.nix` `rulesCheck`, wired in `kix/lib/mkFlake.nix`). It writes each rendered PrometheusRule's `spec`, which is a Prometheus rule file, to `<namespace>/<file>` and runs `promtool check rules` over them, so a PromQL syntax error, a bad duration, or an unknown template function fails the check. promtool also prints a lint warning, with the word `FAILED`, for a duplicated recording rule; it does not fail the check, and the vendored `kube-apiserver-availability.rules` group has one.
+**Tests.** A package that ships alerts has a unit test in `kix/lib/tests/units/<package>.nix`, like `reloader-metrics`. It checks that the PrometheusRule renders under the expected name, that every expression contains the instance's selector, and that nothing renders without a `prometheus` dependency or with `metrics.enabled = false`. A unit test does not catch a rule that never matches, so every cluster also gets the flake check `rules-cluster-<name>` (`kix/checks.nix` `rulesCheck`, wired in `kix/lib/mkFlake.nix`). It writes the `spec` of each rendered PrometheusRule and VMRule, which is a Prometheus rule file, to `<namespace>/<file>` and runs `promtool check rules` over them, so a PromQL syntax error, a bad duration, or an unknown template function fails the check. promtool also prints a lint warning, with the word `FAILED`, for a duplicated recording rule; it does not fail the check, and the vendored `kube-apiserver-availability.rules` group has one.
 
 When a cluster file has a sibling with the same base name and the suffix `.rules-test.yaml` (`clusters/test-foo.nix` and `clusters/test-foo.rules-test.yaml`), the check also runs `promtool test rules` on it, from the directory of rendered rules:
 

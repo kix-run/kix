@@ -4,7 +4,7 @@
 # cnpg-operator and cnpg-barman-cloud run in cnpg-system, and cert-manager
 # issues the plugin's certificates. In `data`, `pg` is a one-instance
 # cnpg-cluster with metrics (a PodMonitor through prometheus-operator), an
-# extraSpec parameter, and backups: WAL archiving and a ScheduledBackup to
+# extraSpec parameter, and backups: WAL archiving and a weekly ScheduledBackup to
 # an in-cluster S3 store (./s3-test-store.nix) wired as its endpointService,
 # with retention and WAL compression. `pg-replicated` runs two instances,
 # which turns on the operator's PodDisruptionBudgets. `pg-pooler` is a
@@ -75,7 +75,7 @@ kix.buildCluster {
               extraSpec.postgresql.parameters.max_connections = "50";
               backup = {
                 destinationPath = "s3://cnpg/data";
-                schedule = "0 0 3 * * *";
+                schedule = "@weekly";
                 retention = "7d";
                 extraSpec.configuration.wal.compression = "gzip";
               };

@@ -7,6 +7,12 @@
 # stackgres-database on a one-instance stackgres-cluster, which receives
 # the citext extension the package requests.
 #
+# `data` holds a second stackgres-cluster, `pg-replicated`, with two
+# instances and backups to an in-cluster S3 store (./s3-test-store.nix)
+# through a stackgres-object-storage wired to it as its endpointService.
+# With metabase-pg it renders every alert of the package, which
+# test-metabase.rules-test.yaml tests.
+#
 # Build:  nix build .#cluster-metabase --extra-experimental-features pipe-operators
 # Deploy: kix deploy metabase --flake ./clusters --context <kind context> --timeout 35m
 #         on a kind cluster created with `disableDefaultCNI: true`. The
@@ -18,45 +24,92 @@ kix.buildCluster {
   name = "test-metabase";
   modules = [
     kix.flavors.kind
-    {
-      availablePackages = packages;
-      networkPolicy.enable = true;
+    (
+      { ref, ... }:
+      {
+        availablePackages = packages;
+        networkPolicy.enable = true;
 
-      # kind runs with the default CNI disabled, so the managed cilium
-      # instance fills the cni role.
-      cluster.roles.cni = {
-        binding = "absent";
-        provider = null;
-      };
-      instances.kube-system.cilium.package = packages.cilium;
+        # kind runs with the default CNI disabled, so the managed cilium
+        # instance fills the cni role.
+        cluster.roles.cni = {
+          binding = "absent";
+          provider = null;
+        };
+        instances.kube-system.cilium.package = packages.cilium;
 
-      instances.ingress-system.ingress-nginx.package = packages.ingress-nginx;
-      instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
-      instances.stackgres-system.stackgres-operator.package = packages.stackgres-operator;
+        instances.ingress-system.ingress-nginx.package = packages.ingress-nginx;
+        instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
+        instances.stackgres-system.stackgres-operator.package = packages.stackgres-operator;
 
-      instances.analytics = {
-        metabase = {
-          package = packages.metabase;
-          config.ingress.host = "metabase.localtest.me";
+        instances.analytics = {
+          metabase = {
+            package = packages.metabase;
+            config.ingress.host = "metabase.localtest.me";
+          };
+          metabase-pg = {
+            package = packages.stackgres-cluster;
+            aliases = [ "postgres" ];
+            # kind has one node and the pods anti-affine, so a second
+            # instance never schedules.
+            config.instances = 1;
+          };
+          metabase-db = {
+            package = packages.stackgres-database;
+            # Dev-only value; it protects nothing.
+            config.password = "dev-metabase-db-password";
+          };
+          metabase-encryption-key = {
+            package = packages.secret;
+            aliases = [ "encryptionKey" ];
+            config.stringData.key = "0123456789abcdef0123456789abcdef";
+          };
         };
-        metabase-pg = {
-          package = packages.stackgres-cluster;
-          aliases = [ "postgres" ];
-          # kind has one node and the pods anti-affine, so a second
-          # instance never schedules.
-          config.instances = 1;
+
+        instances.data = {
+          s3-credentials = {
+            package = packages.secret;
+            aliases = [
+              "storageCredentials"
+              "s3RootCredentials"
+            ];
+            # Test values only.
+            config.stringData = {
+              accessKeyId = "stackgres-test";
+              secretAccessKey = "stackgres-test-secret";
+            };
+          };
+          s3.package = import ./s3-test-store.nix {
+            buckets = [ "stackgres" ];
+            description = "S3 test store for the StackGres backups";
+          };
+          backups = {
+            package = packages.stackgres-object-storage;
+            deps.endpointService = ref.data.s3;
+            config = {
+              type = "s3Compatible";
+              bucket = "stackgres";
+            };
+          };
+          pg-replicated = {
+            package = packages.stackgres-cluster;
+            config = {
+              instances = 2;
+              instanceProfile = {
+                cpu = "500m";
+                memory = "1Gi";
+              };
+              persistentVolume.size = "1Gi";
+              backups = [
+                {
+                  cronSchedule = "0 3 * * *";
+                  retention = 3;
+                }
+              ];
+            };
+          };
         };
-        metabase-db = {
-          package = packages.stackgres-database;
-          # Dev-only value; it protects nothing.
-          config.password = "dev-metabase-db-password";
-        };
-        metabase-encryption-key = {
-          package = packages.secret;
-          aliases = [ "encryptionKey" ];
-          config.stringData.key = "0123456789abcdef0123456789abcdef";
-        };
-      };
-    }
+      }
+    )
   ];
 }

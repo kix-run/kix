@@ -1,8 +1,10 @@
 # clusters/test-tempo.nix: Tempo with Grafana and Loki under Cilium
 # default-deny.
 #
-# Tempo runs in `tracing` on its own claim, with metrics (a ServiceMonitor
-# through prometheus-operator) and a 72-hour retention. Loki runs in `logs`.
+# Tempo runs in `tracing` on its own claim, with metrics and a 72-hour
+# retention. Loki runs in `logs`. prometheus-operator gives both a
+# ServiceMonitor and their PrometheusRules, which
+# test-tempo.rules-test.yaml tests with promtool.
 # Grafana in `grafana` wires both through `ref`, so its datasources
 # ConfigMap carries a Tempo datasource whose spans link to Loki, and the
 # derived policies give Grafana egress to Tempo's query port. The assert
@@ -10,6 +12,7 @@
 # anywhere but Tempo's query port, or has no link to the Loki datasource.
 #
 # Build:  nix build ./clusters#cluster-tempo --extra-experimental-features pipe-operators
+# Rules:  nix build ./clusters#checks.x86_64-linux.rules-cluster-tempo --extra-experimental-features pipe-operators
 # Deploy: kix deploy tempo --flake ./clusters --context <kind context>
 #         on a kind cluster created with `disableDefaultCNI: true`.
 

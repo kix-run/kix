@@ -1221,6 +1221,24 @@ let
 
   evalFails = cluster: !(builtins.tryEval (builtins.deepSeq (manifests cluster) true)).success;
 
+  # The rules of the `<instance>-alerts` resource of `kind` (PrometheusRule
+  # or VMRule) in `ms`, keyed by alert name, or null when none rendered.
+  alertRulesOf =
+    kind: instance: ms:
+    let
+      rule = byName "${instance}-alerts" (ofKind kind ms);
+    in
+    if rule == null then
+      null
+    else
+      lib.listToAttrs (
+        map (r: lib.nameValuePair r.alert r) (lib.concatMap (g: g.rules) rule.spec.groups)
+      );
+
+  # Whether every rule in `rules` (from alertRulesOf) selects on `selector`.
+  allSelect =
+    selector: rules: rules != { } && lib.all (r: lib.hasInfix selector r.expr) (lib.attrValues rules);
+
   scorecardOn = {
     scorecard = {
       enable = true;
@@ -1291,6 +1309,8 @@ let
       hasName
       byName
       evalFails
+      alertRulesOf
+      allSelect
       prometheusStub
       storageClassImport
       requiredScConsumer

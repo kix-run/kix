@@ -6,6 +6,10 @@
 # login, that a passwordless login is refused, and that the {cluster} macro
 # and Keeper answer.
 #
+# prometheus-operator gives both ClickHouse packages their scrape and their
+# alert rules; test-clickhouse.rules-test.yaml beside this file tests the
+# rules.
+#
 # Bring up (three workers, no default CNI; Cilium comes from this cluster):
 #   kind create cluster --name kix-clickhouse --config - <<EOF
 #   kind: Cluster
@@ -38,6 +42,8 @@ kix.buildCluster {
         instances.kube-system.cilium = {
           package = packages.cilium;
         };
+
+        instances.monitoring.prometheus-operator.package = packages.prometheus-operator;
 
         # Every rule set, so the package is held to all of them.
         scorecard = {

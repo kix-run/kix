@@ -21,6 +21,15 @@
 #     used by the victoria-metrics-{cluster,agent,alert} packages
 #   out.mkVMServiceScrape / mkVMPodScrape / mkVMRule / mkVMProbe
 #     native scrape/rule CRs
+#
+# Alerts (a VMRule `<instance>-alerts`, which vmalert evaluates and a
+# prometheus-operator Prometheus does not load). They render with
+# `metrics.enabled` on:
+#   VMOperatorDown             down, warning: running operands keep
+#                              working, but no CR change is applied
+#   VMOperatorReconcileErrors  stuck state, warning
+# The operator's metrics reach the store only through a vmagent that
+# selects its VMServiceScrape.
 
 {
   scope,
@@ -251,7 +260,8 @@ in
               self.operatorServiceAccount
               self.operatorService
             ]
-            ++ lib.optional config.metrics.enabled self.operatorServiceScrape;
+            ++ lib.optional config.metrics.enabled self.operatorServiceScrape
+            ++ lib.optional (self.prometheusRules != null) self.prometheusRules;
 
           # Expose CRD builders; packages depend on these via DI
           # Usage: prometheus.out.mkServiceMonitor scope { ... }
@@ -282,6 +292,49 @@ in
           };
         };
       }
+    )
+
+    # This package is the `prometheus` provider, so it cannot take one as a
+    # dependency. kix.alerts gets this package's VMRule builder in the place
+    # of a PrometheusRule builder; the two kinds take the same `groups`.
+    (
+      {
+        self,
+        config,
+        scope,
+        ...
+      }@args:
+      let
+        ns = scope.namespaceName;
+        # The VMServiceScrape `<instance>-monitor` sets `job` to the
+        # operator's Service name, which is the instance name (operator.nix).
+        op = ''namespace="${ns}",job="${scope.instanceName}"'';
+      in
+      kix.alerts
+        {
+          alerts = {
+            VMOperatorDown = {
+              expr = "sum by (namespace, job) (up{${op}}) == 0 or absent(up{${op}})";
+              "for" = "10m";
+              severity = "warning";
+              summary = "The VictoriaMetrics operator is down.";
+              description = "No replica of the VictoriaMetrics operator ${ns}/${scope.instanceName} has answered a scrape for 10 minutes. Running VMCluster, VMAgent, and VMAlert workloads keep working, but no change to a VictoriaMetrics CR, ServiceMonitor, or PrometheusRule is applied. Check the operator Deployment.";
+            };
+            VMOperatorReconcileErrors = {
+              expr = "sum by (namespace, job, controller) (rate(controller_runtime_reconcile_errors_total{${op}}[5m])) > 0";
+              "for" = "15m";
+              severity = "warning";
+              summary = "The VictoriaMetrics operator fails to reconcile objects.";
+              description = "The {{ $labels.controller }} controller of the VictoriaMetrics operator ${ns}/${scope.instanceName} has failed reconciles for 15 minutes, so the objects it manages may not match their CRs. Check the operator logs for the object and the error.";
+            };
+          };
+        }
+        (
+          args
+          // {
+            prometheus.out.mkPrometheusRule = self.crds.vmRules.out.mkCR;
+          }
+        )
     )
   ];
 }
