@@ -693,6 +693,7 @@ These return functions whose own DI args are auto-discovered.
   path ? "/metrics",
   scheme ? "http",               # primary endpoint only
   tlsConfig ? null,              # primary endpoint only; a ServiceMonitor endpoint tlsConfig
+  params ? null,                 # primary endpoint only; query parameters, { format = [ "prometheus" ]; }
   alerts ? {},                   # { alertName = { expr, "for"?, keep_firing_for?, severity?, description?, summary?, runbook_url?, labels?, annotations? }; }
   extraEndpoints ? [],           # each over { scheme = "http"; path = "/metrics"; } and metrics.interval
   extraLabels ? {},
@@ -702,7 +703,7 @@ These return functions whose own DI args are auto-discovered.
 })
 ```
 
-The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule`, which the prometheus package exposes on its `out`. `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`). `scheme` and `tlsConfig` set the primary endpoint's; each `extraEndpoints` entry defaults to `scheme = "http"`, `path = "/metrics"`, and the instance's `metrics.interval`.
+The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule`, which the prometheus package exposes on its `out`. `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`). `scheme`, `tlsConfig`, and `params` set the primary endpoint's; each `extraEndpoints` entry defaults to `scheme = "http"`, `path = "/metrics"`, and the instance's `metrics.interval`.
 
 **`kix.alerts`**: the PrometheusRule half of `kix.monitor` on its own, for a package whose scrape is not one `kix.monitor` ServiceMonitor: a PodMonitor it builds with `prometheus.out.mkPodMonitor` (cnpg-cluster, stackgres-cluster, clickhouse-cluster), or a scrape the operator configures. It renders under the same conditions, a `prometheus` dependency and `metrics.enabled` not false, and renders nothing when `alerts` is empty.
 
@@ -1863,6 +1864,8 @@ store = externalSecrets.out.mkClusterSecretStore scope {
 `out.externalSecretsProvider` returns the `vault` provider: the Service URL, the CA from the `<instance>-tls` Secret in OpenBao's namespace, the mount and its KV version, and Kubernetes auth with a token of the given ServiceAccount. It refuses a role that `kubernetesAuth.roles` does not declare or that does not bind that ServiceAccount and namespace (`*` binds any), and a mount that is not a declared `kv` engine. The role name it writes carries the reconcile Job, so the store is applied after the Job has written the role. A namespaced SecretStore cannot read the CA Secret from OpenBao's namespace, so the provider is for a ClusterSecretStore, limited to its namespaces with `conditions`. `clusters/test-openbao.nix` evaluates this shape.
 
 The store carries the OpenBao Service's address, so the external-secrets store definitions' `factBehavior` (§21.9) gives the controller egress to port 8200 of the OpenBao pods and those pods ingress from the controller.
+
+Metrics. With a `prometheus` dependency and `metrics.enabled` (the default), each pod opens a second listener on TCP 8202 that serves only `/v1/sys/metrics`, over plain HTTP and without a token, so standbys and sealed pods report too. The output names mount paths, auth methods, and policies. Under network policy only the Prometheus scrape and the other OpenBao pods reach the port; on a cluster without an enforcer any pod can read it. Set `metrics.enabled = false` to close the listener, which also drops the ServiceMonitor and the alert rules.
 
 Known limits. If self-initialization fails on pod 0's first start, OpenBao has already initialized the volume and revoked the root token, and it refuses to unseal on every later start; delete the claim `data-<instance>-0` and the pod and let it start again (self-initialization runs only on an empty volume). The static key cannot be rotated: a changed `unsealKey` value restarts the pods, and they cannot unseal the existing data until the old value is restored.
 

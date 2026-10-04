@@ -1945,10 +1945,12 @@ rec {
   # this once per Service without the parts or the resource names
   # colliding. The defaults are the single-Service case.
   #
-  # `scheme` and `tlsConfig` (a ServiceMonitor endpoint `tlsConfig`) apply
-  # to the primary endpoint only. Each of `extraEndpoints` is a ServiceMonitor
-  # endpoint over the defaults `scheme = "http"`, `path = "/metrics"`, and the
-  # instance's `metrics.interval` when that is set.
+  # `scheme`, `tlsConfig` (a ServiceMonitor endpoint `tlsConfig`), and
+  # `params` (query parameters, as a ServiceMonitor endpoint's `params`:
+  # an attrset of string lists) apply to the primary endpoint only. Each of
+  # `extraEndpoints` is a ServiceMonitor endpoint over the defaults
+  # `scheme = "http"`, `path = "/metrics"`, and the instance's
+  # `metrics.interval` when that is set.
   monitor =
     {
       service,
@@ -1956,6 +1958,7 @@ rec {
       path ? "/metrics",
       scheme ? "http",
       tlsConfig ? null,
+      params ? null,
       alerts ? { },
       extraEndpoints ? [ ],
       extraLabels ? { },
@@ -1985,7 +1988,12 @@ rec {
       primaryEndpoint = {
         port = if builtins.isInt port then null else port;
         targetPort = if builtins.isInt port then port else null;
-        inherit scheme path tlsConfig;
+        inherit
+          scheme
+          path
+          tlsConfig
+          params
+          ;
       }
       // intervalAttrs;
       extraEndpoint =

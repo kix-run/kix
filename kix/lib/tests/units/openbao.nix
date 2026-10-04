@@ -1,8 +1,9 @@
 # Tests for kix/packages/openbao: the self-initialization config and the
 # reconcile Job's role and policy, the Raft join addresses, the shamir mode,
-# the package's refusals, and `out.externalSecretsProvider` with its
-# refusals. OpenBao runs as instance `openbao` in namespace `secrets`, and
-# the store's consumer in `app`.
+# the package's refusals, `out.externalSecretsProvider` with its
+# refusals, and the metrics listener, ServiceMonitor, and alert rules that a
+# prometheus dependency turns on. OpenBao runs as instance `openbao` in
+# namespace `secrets`, and the store's consumer in `app`.
 
 {
   lib,
@@ -15,6 +16,10 @@
   evalFails,
   multiZone,
   netpolOn,
+  alertRulesOf,
+  allSelect,
+  prometheusStub,
+  singleNode,
   ...
 }:
 
@@ -129,6 +134,8 @@ let
     ns: name:
     lib.findFirst (m: m.metadata.name == name && (m.metadata.namespace or null) == ns) null cnps;
   zoneCluster = clusterWith { modules = [ multiZone ]; };
+  withPrometheus.instances.monitoring.prometheus.package = prometheusStub;
+  monitoredCluster = clusterWith { modules = [ withPrometheus ]; };
 
   initOf = c: builtins.fromJSON (find c "ConfigMap" "openbao-init").data."init.json";
   bootstrapRequests =
@@ -450,4 +457,88 @@ in
         env.BAO_LOG_LEVEL = "debug";
       };
     }));
+
+  # With a prometheus dependency, a second listener serves only the metrics
+  # without TLS or a token, the telemetry keys the rules read are set and
+  # refused in settings, and the ServiceMonitor asks for Prometheus text.
+  # Without one, none of that renders and settings may set the keys.
+  openbao-metrics-listener =
+    let
+      listeners = c: (serverConfigOf c).listener;
+      metricsListener = builtins.elemAt (listeners monitoredCluster) 1;
+      monitor = find monitoredCluster "ServiceMonitor" "openbao";
+      service = find monitoredCluster "Service" "openbao-metrics";
+      withPrefix =
+        modules:
+        clusterWith {
+          config = declared // {
+            settings.telemetry.metrics_prefix = "bao";
+          };
+          inherit modules;
+        };
+    in
+    (
+      builtins.length (listeners cluster) == 1
+      && !((serverConfigOf cluster) ? telemetry)
+      && find cluster "Service" "openbao-metrics" == null
+      && builtins.length (listeners monitoredCluster) == 2
+      &&
+        metricsListener.tcp == {
+          address = "[::]:8202";
+          tls_disable = true;
+          telemetry = {
+            metrics_only = true;
+            unauthenticated_metrics_access = true;
+          };
+        }
+      && (serverConfigOf monitoredCluster).telemetry.disable_hostname
+      && service.spec.publishNotReadyAddresses
+      && (builtins.head monitor.spec.endpoints).params == { format = [ "prometheus" ]; }
+      && (builtins.head monitor.spec.endpoints).path == "/v1/sys/metrics"
+      && evalFails (withPrefix [ withPrometheus ])
+      && !(evalFails (withPrefix [ ]))
+    )
+    || throw "openbao metrics listener: ${builtins.toJSON (listeners monitoredCluster)}";
+
+  # The rules select the metrics Service, need a prometheus dependency and
+  # metrics.enabled, and add the per-pod seal and Raft rules with three
+  # replicas.
+  openbao-alerts =
+    let
+      rulesOf = c: alertRulesOf "PrometheusRule" "openbao" (manifests c);
+      one = rulesOf (clusterWith {
+        modules = [
+          singleNode
+          withPrometheus
+        ];
+      });
+      three = rulesOf (clusterWith {
+        modules = [
+          multiZone
+          withPrometheus
+        ];
+      });
+      replicated = [
+        "OpenBaoSealed"
+        "OpenBaoRaftUnhealthy"
+      ];
+      sel = ''namespace="secrets",service="openbao-metrics"'';
+    in
+    (
+      allSelect sel one
+      && allSelect sel three
+      && one ? OpenBaoDown
+      && one ? OpenBaoAllSealed
+      && !lib.any (n: one ? ${n}) replicated
+      && lib.all (n: three ? ${n}) replicated
+      && rulesOf cluster == null
+      &&
+        rulesOf (clusterWith {
+          config = declared // {
+            metrics.enabled = false;
+          };
+          modules = [ withPrometheus ];
+        }) == null
+    )
+    || throw "openbao alerts: one ${builtins.toJSON (builtins.attrNames one)}, three ${builtins.toJSON (builtins.attrNames three)}";
 }
