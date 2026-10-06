@@ -1,0 +1,38 @@
+---
+import Container from './Container.astro';
+
+// A full-width band. Backgrounds alternate paper, paper-2, and night to
+// pace the page; night sections switch text to the on-night colours.
+interface Props {
+  id?: string;
+  tone?: 'paper' | 'paper-2' | 'night';
+  /** Draws the hairline that separates two sections on the same background. */
+  rule?: boolean;
+  class?: string;
+  containerClass?: string;
+  labelledby?: string;
+}
+const { id, tone = 'paper', rule = false, class: className, containerClass, labelledby } = Astro.props;
+---
+
+<section
+  id={id}
+  aria-labelledby={labelledby}
+  class:list={[
+    // Clips decorative overhang (rotated cards, shadows) so it never adds
+    // horizontal page scroll.
+    'overflow-x-clip',
+    {
+      'bg-paper text-ink': tone === 'paper',
+      'bg-paper-2 text-ink': tone === 'paper-2',
+      'bg-night text-on-night': tone === 'night',
+    },
+    className,
+  ]}
+>
+  <Container class={containerClass}>
+    <div class:list={['py-16 md:py-20 lg:py-28', { 'border-t border-line': rule }]}>
+      <slot />
+    </div>
+  </Container>
+</section>

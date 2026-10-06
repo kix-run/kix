@@ -1,0 +1,94 @@
+---
+import Section from '../Section.astro';
+import Heading from '../Heading.astro';
+
+// The YAML layer diagram is drawn on a 560 × 430 canvas. Positions,
+// sizes, and the font size are percentages of that canvas (cqw for text),
+// so the picture scales down on narrow screens without reflowing.
+const slabs = [
+  { num: '05', text: 'policy engines that check YAML afterwards', x: 64, y: 24, rotate: -2.2 },
+  { num: '04', text: 'controllers that sync YAML from git', x: 40, y: 94, rotate: 1.6 },
+  { num: '03', text: 'overlays that patch YAML', x: 78, y: 164, rotate: -1.2 },
+  { num: '02', text: 'templates that generate YAML', x: 30, y: 234, rotate: 0.9 },
+  { num: '01', text: 'YAML', x: 56, y: 304, rotate: 0, base: true },
+];
+const W = 560;
+const H = 430;
+const pct = (n: number, of: number) => `${((n / of) * 100).toFixed(3)}%`;
+
+const beats = [
+  {
+    title: 'What we considered',
+    body: 'We considered describing Kubernetes with a general-purpose language, but couldn’t see a clean way to express the cluster as a whole.',
+  },
+  {
+    title: 'What changed',
+    body: 'As agents began writing more infrastructure code, the need for precise error messages grew. Whether a person or an agent makes a change, they need to know which resource is wrong and why.',
+  },
+  {
+    title: 'What we built',
+    body: 'So we built Kix as a compiler for the whole cluster definition. It can check the resources together, work out their dependencies, and use that information to plan and carry out a deployment.',
+  },
+];
+---
+
+<Section id="why" rule labelledby="why-title">
+  <div class="flex flex-col gap-14 lg:gap-[72px]">
+    <div class="grid grid-cols-1 items-center gap-12 xl:grid-cols-[minmax(0,1fr)_minmax(0,560px)] xl:gap-20">
+      <div class="flex flex-col gap-6">
+        <Heading id="why-title">Why we built Kix</Heading>
+        <p class="text-[17px] leading-[1.55] text-ink-2 md:text-[19px]">
+          Our team managed Kubernetes with YAML. We added templates, overlays, controllers to sync changes from Git, and
+          policies to catch mistakes. Each tool addressed a real need, but together they made the whole system
+          substantially more complex. We wanted to go back to first principles and see what would happen if we described
+          the cluster as a whole.
+        </p>
+      </div>
+      <div class="@container mx-auto w-full max-w-[560px]">
+        <ol
+          aria-label="Layers of tooling on top of Kubernetes, newest first"
+          class="relative w-full"
+          style={`aspect-ratio: ${W} / ${H}`}
+        >
+          {
+            slabs.map((s) => (
+              <li
+                class:list={[
+                  'absolute flex items-center gap-[2.15cqw] rounded-md border-[1.5px] border-ink px-[3.2cqw] font-mono',
+                  s.base ? 'bg-paper-2' : 'bg-paper',
+                ]}
+                style={`left:${pct(s.x, W)};top:${pct(s.y, H)};width:${pct(440, W)};height:${pct(56, H)};transform:rotate(${s.rotate}deg)`}
+              >
+                <span class="text-[2.15cqw] text-ink-2">{s.num}</span>
+                <span class="truncate text-[2.5cqw] text-ink">{s.text}</span>
+              </li>
+            ))
+          }
+          <li
+            class="absolute flex items-center rounded-md bg-ink px-[3.6cqw] font-mono text-[2.7cqw] font-semibold text-paper"
+            style={`left:0;top:${pct(372, H)};width:100%;height:${pct(58, H)}`}
+          >
+            Kubernetes resources
+          </li>
+        </ol>
+      </div>
+    </div>
+    <div class="grid grid-cols-1 border-t border-line md:grid-cols-3">
+      {
+        beats.map((b, i) => (
+          <div
+            class:list={[
+              'flex flex-col gap-3.5 pt-8 md:pr-10',
+              i > 0 && 'max-md:mt-8 max-md:border-t max-md:border-line md:border-l md:border-line md:pl-10',
+            ]}
+          >
+            <Heading as="h3" size="md">
+              {b.title}
+            </Heading>
+            <p class="text-base leading-[1.6] text-ink-2">{b.body}</p>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</Section>

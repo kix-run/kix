@@ -1,0 +1,128 @@
+---
+import Section from '../Section.astro';
+
+const moments = [
+  {
+    when: 'during an incident',
+    question: '“What changed since yesterday?”',
+    answer:
+      'Each receipt records the commit, whether the working tree was clean, the tool versions, and the container images.',
+  },
+  {
+    when: 'during a release',
+    question: '“Did the new build actually go out?”',
+    answer:
+      'Image versions and digests live in a committed file, which lets you trace a release to a commit. kix pin check --source-rev fails when a pinned image was built from a different commit.',
+  },
+  {
+    when: 'during a rollback',
+    question: '“Put back exactly what ran on Tuesday.”',
+    answer: "kix rollback reapplies a previous deploy's build from the Nix store, exactly as it ran.",
+  },
+  {
+    when: 'during an audit',
+    question: '“Show me evidence.”',
+    answer:
+      'kix compliance produces a CycloneDX SBOM, an unsigned SLSA provenance statement, and an audit bundle mapped to SOC 2, ISO 27001, DORA, or NIS2. An auditor can use these artifacts as evidence when assessing compliance.',
+  },
+];
+
+// The receipt card. Fields follow the real receipt (status.receipt on the
+// cluster's Activation resource; schema kix.run/receipt/v1): cluster,
+// deployedAt, source.gitCommit, source.dirty, builder.kixVersion,
+// builder.arch and builder.os, and images. The image is from the capture in
+// docs/src/command-output/how-to/application-receipt/. `emphasis` marks the
+// "working tree: clean" value.
+const receipt = {
+  title: 'KIX DEPLOY RECEIPT',
+  subtitle: 'kix.run/receipt/v1',
+  fields: [
+    { key: 'cluster', value: 'shop' },
+    { key: 'deployed', value: '2026-09-09 10:47' },
+    { key: 'commit', value: 'c1b8d5e' },
+    { key: 'working tree', value: 'clean', emphasis: true },
+    { key: 'kix', value: '0.1.0' },
+    { key: 'arch', value: 'aarch64 / macos' },
+  ],
+  images: ['docker.io/nginxinc/\nnginx-unprivileged:1.28-alpine\n@sha256:7377697a…'],
+  footer: 'Stored on the cluster after each deploy. Manifests stay out of the receipt because they can contain secrets.',
+};
+
+// Decorative barcode: alternating bar and gap widths in px.
+const barcode = [3, 1, 2, 1, 4, 1, 1, 3, 2, 1, 1, 2, 3, 1, 2, 1, 1, 4, 1, 2, 1, 3, 1, 1, 2, 1, 3, 2, 1, 1, 2, 3, 1, 2, 1, 4, 1];
+---
+
+<Section id="receipt" labelledby="receipt-title">
+  <div class="grid grid-cols-1 items-center gap-14 xl:grid-cols-[minmax(0,1fr)_400px] xl:gap-20">
+    <div class="flex min-w-0 flex-col gap-10">
+      <div class="flex flex-col gap-5">
+        <h2
+          id="receipt-title"
+          class="text-[30px] leading-[1.1] font-semibold tracking-[-0.75px] text-balance text-ink md:text-[40px] md:tracking-[-1px]"
+        >
+          <span class="text-accent-brand">C.</span> see what was deployed
+        </h2>
+        <p class="max-w-[620px] text-[17px] leading-[1.6] text-ink-2">
+          Kix records a receipt for each deployment on the cluster, so you can trace what is running back to the inputs
+          and images that produced it.
+        </p>
+      </div>
+
+      <ul class="grid grid-cols-1 border-t border-line sm:grid-cols-2">
+        {
+          moments.map((m, i) => (
+            <li
+              class:list={[
+                'flex flex-col gap-2.5 pt-7 pb-8',
+                {
+                  'border-t border-line': i > 0,
+                  'sm:border-t-0': i === 1,
+                  'sm:pr-8': i % 2 === 0,
+                  'sm:border-l sm:pl-8': i % 2 === 1,
+                },
+              ]}
+            >
+              <span class="font-mono text-[12.5px] text-accent-text">{m.when}</span>
+              <p class="text-[19px] leading-[1.3] font-semibold tracking-[-0.3px] text-ink md:text-[21px]">
+                {m.question}
+              </p>
+              <p class="text-[15px] leading-[1.6] text-ink-2">{m.answer}</p>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+
+    <figure class="mx-auto w-full max-w-[356px] xl:mr-0">
+      <div
+        class="flex -rotate-2 flex-col gap-3.5 bg-white/60 px-[26px] py-7 font-mono text-[13px] text-ink shadow-[0_18px_40px] shadow-ink/15"
+      >
+        <div class="flex flex-col items-center gap-1 text-center">
+          <span class="text-[15px] font-bold tracking-[2px]">{receipt.title}</span>
+          <span class="text-xs text-ink-2">{receipt.subtitle}</span>
+        </div>
+        <hr class="border-0 border-t border-dashed border-line" />
+        <dl class="flex flex-col gap-2.5">
+          {
+            receipt.fields.map((f) => (
+              <div class="flex justify-between gap-4">
+                <dt class="text-ink-2">{f.key}</dt>
+                <dd class:list={['text-right font-medium', { 'font-semibold': f.emphasis }]}>
+                  {f.value}
+                </dd>
+              </div>
+            ))
+          }
+        </dl>
+        <hr class="border-0 border-t border-dashed border-line" />
+        <span class="text-xs tracking-[1.5px] text-ink-2">IMAGES</span>
+        {receipt.images.map((img) => <p class="leading-[1.55] break-all whitespace-pre-line">{img}</p>)}
+        <hr class="border-0 border-t border-dashed border-line" />
+        <figcaption class="text-[11.5px] leading-[1.55] text-ink-2">{receipt.footer}</figcaption>
+        <div aria-hidden="true" class="flex h-9 justify-between pt-2">
+          {barcode.map((w, i) => <span class:list={['h-full', { 'bg-ink': i % 2 === 0 }]} style={`width:${w}px`} />)}
+        </div>
+      </div>
+    </figure>
+  </div>
+</Section>

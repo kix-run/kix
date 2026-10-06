@@ -1,0 +1,171 @@
+---
+import Section from '../Section.astro';
+import Terminal from '../Terminal.astro';
+
+// Terminal tones: "text" on-night, "out" on-night-2, "dim", and the
+// change colours "changed" (yellow), "added" (green), "removed" (red).
+type Tone = 'text' | 'out' | 'dim' | 'changed' | 'added' | 'removed';
+type Run = [string, Tone];
+
+// `kix diff shop`, in the layout of the real captures in
+// docs/src/command-output (tutorials/04-from-scratch/diff-after-edit.json):
+// a package summary, packages grouped by namespace (added before changed),
+// field-level changes, dependents marked "via dependency", and the
+// activation change. Names and values are sample data.
+const diff: Run[][] = [
+  [['$ ', 'dim'], ['kix diff shop', 'text']],
+  [['12 packages: 9 unchanged, 2 changed, 1 added, 0 removed', 'out']],
+  [],
+  [['  monitoring', 'text']],
+  [['    ~ grafana 11.2.0 (1 changed, 1 dep-affected)', 'changed']],
+  [['      ~ Deployment/grafana@monitoring', 'changed']],
+  [['          ~ ', 'changed'], ['$.spec.replicas:', 'dim']],
+  [['              old: ', 'out'], ['1', 'removed']],
+  [['              new: ', 'out'], ['2', 'added']],
+  [['      ~ PackageInstance/grafana@monitoring (via dependency)', 'dim']],
+  [['  shop', 'text']],
+  [['    + valkey 8.0.2 (4 resources)', 'added']],
+  [['    ~ web 1.4.2 -> 1.5.0 (1 changed, 2 dep-affected)', 'changed']],
+  [['      ~ Deployment/web@shop', 'changed']],
+  [['          ~ ', 'changed'], ['$.spec.template.spec.containers[web].image:', 'dim']],
+  [['              old: ', 'out'], ['"ghcr.io/acme/web:1.4.2"', 'removed']],
+  [['              new: ', 'out'], ['"ghcr.io/acme/web:1.5.0"', 'added']],
+  [['      ~ HorizontalPodAutoscaler/web@shop (via dependency)', 'dim']],
+  [['      ~ PackageInstance/web@shop (via dependency)', 'dim']],
+  [],
+  [['  Activation: ', 'text'], ['shop-ll6g0k5f2kqm', 'dim'], [' -> ', 'out'], ['shop-6w9czkc51502', 'added']],
+];
+
+const toneClass: Record<Tone, string> = {
+  text: 'text-on-night',
+  out: 'text-on-night-2',
+  dim: 'text-t-dim',
+  changed: 'text-t-yellow',
+  added: 'text-t-green',
+  removed: 'text-t-red',
+};
+
+// The deploy waves are a diagram of dependency order, not CLI output.
+const waves = [
+  ['Secret/db', 'ConfigMap/web'],
+  ['SGCluster/db'],
+  ['Service/web', 'Deployment/web'],
+  ['HTTPRoute/web'],
+];
+
+const notes = [
+  {
+    cmd: 'kix rollback',
+    desc: 'Reapplies a previous deploy from the local Nix store. kix gc keeps at least the 10 newest records.',
+  },
+  {
+    cmd: 'kix drift',
+    desc: 'Reports Kix-managed resources whose applied fields changed since the last deploy, and which tool changed them.',
+  },
+  {
+    cmd: '--prune',
+    desc: 'Removes resources no longer defined, except Namespaces and CRDs. Without --prune, the plan lists them and leaves them in place.',
+  },
+  {
+    cmd: 'kix snapshot',
+    desc: 'Saves the Kix-managed resources of a live cluster, so kix diff --from can compare against them later.',
+  },
+];
+---
+
+<Section id="plan" tone="paper-2" labelledby="plan-title">
+  <div class="flex flex-col gap-14">
+    <div class="grid grid-cols-1 gap-10 xl:grid-cols-[minmax(0,700px)_minmax(0,1fr)] xl:gap-16">
+      <div class="flex flex-col gap-5 xl:order-2">
+        <h2
+          id="plan-title"
+          class="text-[30px] leading-[1.1] font-semibold tracking-[-0.75px] text-balance text-ink md:text-[40px] md:tracking-[-1px]"
+        >
+          {/* accent-button, not the brand orange: on paper-2 the brand orange is 2.7:1. */}
+          <span class="text-accent-button">B.</span> plan a change
+        </h2>
+        <p class="text-[17px] leading-[1.6] text-ink-2">
+          Before deploying, kix diff compares the compiled definition with the live cluster and groups the changes by
+          package. You can also post the plan to a pull request so the review happens alongside the change.
+        </p>
+        <p class="text-[17px] leading-[1.6] text-ink-2">
+          When you deploy, Kix applies resources in dependency order and waits for each step to become ready before
+          moving on.
+        </p>
+      </div>
+
+      <Terminal class="min-w-0 xl:order-1">
+        <div aria-hidden="true" class="flex gap-[7px] border-b border-night-line px-[18px] py-3">
+          <span class="size-[11px] rounded-full bg-t-dot"></span>
+          <span class="size-[11px] rounded-full bg-t-dot"></span>
+          <span class="size-[11px] rounded-full bg-t-dot"></span>
+        </div>
+        <pre
+          class="overflow-x-auto px-5 pt-5 pb-6 sm:px-6"><code class="block min-w-max">{diff.map((line) => (
+          <span class="block min-h-[25px] whitespace-pre">{line.map(([text, tone]) => <span class={toneClass[tone]}>{text}</span>)}</span>
+        ))}</code></pre>
+      </Terminal>
+    </div>
+
+    <div class="flex flex-col gap-4">
+      <p class="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 font-mono">
+        <span class="text-sm font-semibold text-ink">$ kix deploy shop</span>
+        <span class="text-[13px] text-ink-2">dependency order</span>
+      </p>
+      <ol class="flex flex-col xl:flex-row xl:items-stretch">
+        {
+          waves.map((resources, i) => (
+            <li
+              class:list={[
+                'flex min-w-0 flex-col xl:flex-row xl:items-center',
+                // Later items also hold a 96px connector; giving them that
+                // as flex-basis keeps the four boxes the same width.
+                i > 0 ? 'xl:flex-[1_1_96px]' : 'xl:flex-[1_1_0%]',
+              ]}
+            >
+              {i > 0 && (
+                <span
+                  aria-hidden="true"
+                  class="flex shrink-0 items-center gap-2 py-1.5 pl-6 xl:w-24 xl:flex-col xl:gap-1 xl:py-0 xl:pl-0"
+                >
+                  <span class="h-5 w-[1.5px] bg-ink xl:hidden" />
+                  <span class="font-mono text-[11px] text-ink-2">ready</span>
+                  <span class="hidden h-[1.5px] w-full bg-ink xl:block" />
+                </span>
+              )}
+              <div class="flex min-w-0 flex-1 flex-col gap-2 self-stretch rounded-lg border border-ink bg-paper p-4 xl:min-h-[100px]">
+                <span class="font-mono text-xs text-accent-text">wave {i + 1}</span>
+                {resources.map((r) => (
+                  <span class="font-mono text-[13.5px] break-all text-ink">{r}</span>
+                ))}
+              </div>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+
+    <dl class="grid grid-cols-1 border-t-[1.5px] border-ink sm:grid-cols-2 lg:grid-cols-4">
+      {
+        notes.map((note, i) => (
+          <div
+            class:list={[
+              'flex flex-col gap-2 py-5 lg:pb-0',
+              {
+                'border-t border-line lg:border-t-0': i > 0,
+                'sm:border-t-0': i === 1,
+                'sm:pr-6': i % 2 === 0,
+                'sm:border-l sm:pl-6': i % 2 === 1,
+                'lg:border-l lg:pl-6': i > 0,
+                'lg:pr-6': i < notes.length - 1,
+              },
+            ]}
+          >
+            <dt class="font-mono text-sm font-semibold text-ink">{note.cmd}</dt>
+            <dd class="text-[14.5px] leading-[1.5] text-ink-2">{note.desc}</dd>
+          </div>
+        ))
+      }
+    </dl>
+  </div>
+</Section>

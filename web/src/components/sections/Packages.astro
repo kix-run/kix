@@ -1,0 +1,32 @@
+---
+import Section from '../Section.astro';
+import Heading from '../Heading.astro';
+---
+
+<Section id="packages" tone="paper-2" labelledby="packages-title">
+  <div class="grid grid-cols-1 gap-12 lg:grid-cols-[540px_minmax(0,1fr)] lg:gap-[100px]">
+    <div class="flex flex-col gap-6">
+      <Heading id="packages-title">Packages for the software you run</Heading>
+      <p class="text-[17px] leading-[1.55] text-ink-2 md:text-[19px]">
+        The library covers databases, observability, networking, and applications, with more packages added all the
+        time.
+      </p>
+    </div>
+    <div class="flex flex-col gap-9">
+      <div class="flex flex-col gap-3 border-t border-line pt-6">
+        <h3 class="text-[22px] font-semibold md:text-[26px]">Growing the library</h3>
+        <p class="text-[16px] leading-[1.55] text-ink-2 md:text-[17px]">
+          We use an established agent-assisted process to build new packages quickly and test each one against a range
+          of test clusters we operate.
+        </p>
+      </div>
+      <div class="flex flex-col gap-3 border-t border-line pt-6">
+        <h3 class="text-[22px] font-semibold md:text-[26px]">Helm charts work too</h3>
+        <p class="text-[16px] leading-[1.55] text-ink-2 md:text-[17px]">
+          You can use existing Helm charts with Kix. They let you bring in software you already use, though they do not
+          provide every benefit of a native Kix package.
+        </p>
+      </div>
+    </div>
+  </div>
+</Section>

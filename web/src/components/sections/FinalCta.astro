@@ -1,0 +1,59 @@
+---
+import { ArrowUpRight } from '@lucide/astro';
+import Container from '../Container.astro';
+import Button from '../Button.astro';
+import Logo from '../Logo.astro';
+// import CommandBar from '../CommandBar.astro';
+import { DOCS_URL, INSTALL_URL } from '@/lib/links';
+
+const footerLinks = [
+  { label: 'Docs', href: '/docs/' },
+  { label: 'Packages', href: '#packages' },
+  { label: 'What it catches', href: '#check' },
+  { label: 'FAQ', href: '#faq' },
+];
+---
+
+<div class="bg-night text-on-night">
+  <Container>
+    <section aria-labelledby="final-cta-title" class="flex flex-col items-center gap-7 pt-20 text-center lg:pt-[120px]">
+      <h2
+        id="final-cta-title"
+        class="text-[40px] leading-[1.05] font-semibold tracking-[-1.5px] text-balance md:text-[56px] lg:text-[72px] lg:tracking-[-2.5px]"
+      >
+        Compile your first cluster.
+      </h2>
+      <p class="max-w-[620px] text-[17px] leading-normal text-on-night-2 md:text-[19px]">
+        Install the CLI, compile an example, and review the plan before deploying.
+      </p>
+      {/* Shown once web/install.sh is published at kix.run/install (see web/HANDOVER.md).
+      <CommandBar command={INSTALL_COMMAND} tone="night" />
+      */}
+      <div class="flex flex-wrap justify-center gap-3">
+        <Button href={INSTALL_URL}>Install the Kix CLI</Button>
+        <Button href={DOCS_URL} variant="outline-night">Read the docs <ArrowUpRight size={18} aria-hidden="true" /></Button>
+      </div>
+    </section>
+    <footer
+      class="mt-16 flex flex-col gap-6 border-t border-night-line pt-7 pb-14 md:flex-row md:items-center md:justify-between lg:mt-24"
+    >
+      <div class="flex flex-wrap items-center gap-x-2.5 gap-y-2">
+        <a href="/" class="rounded-md"><Logo tone="night" size="sm" /><span class="sr-only"> home</span></a>
+        <span class="text-sm text-t-dim">The Kubernetes compiler</span>
+      </div>
+      <nav aria-label="Footer">
+        <ul class="flex flex-wrap gap-x-7 gap-y-3">
+          {
+            footerLinks.map((link) => (
+              <li>
+                <a href={link.href} class="text-sm text-on-night-2 transition-colors hover:text-on-night">
+                  {link.label}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </nav>
+    </footer>
+  </Container>
+</div>

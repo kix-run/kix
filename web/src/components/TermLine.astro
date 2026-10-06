@@ -1,0 +1,36 @@
+---
+// One line of terminal output with a leading mark. `$` is a prompt; the
+// other marks colour the line's status.
+interface Props {
+  mark?: '$' | '✓' | '✗' | '!' | '#' | '+' | '~' | '-' | '';
+  tone?: 'command' | 'output' | 'dim';
+  class?: string;
+}
+const { mark = '$', tone, class: className } = Astro.props;
+const markColour: Record<string, string> = {
+  $: 'text-t-dim',
+  '✓': 'text-t-green',
+  '+': 'text-t-green',
+  '✗': 'text-t-red',
+  '-': 'text-t-red',
+  '!': 'text-t-yellow',
+  '~': 'text-t-yellow',
+  '#': 'text-t-dim',
+  '': '',
+};
+const textTone = tone ?? (mark === '$' ? 'command' : 'output');
+---
+
+<div class:list={['flex gap-2.5', className]}>
+  {mark && <span aria-hidden={mark === '$' ? 'true' : undefined} class:list={['shrink-0 select-none', markColour[mark]]}>{mark}</span>}
+  <span
+    class:list={[
+      'min-w-0',
+      {
+        'text-on-night': textTone === 'command',
+        'text-on-night-2': textTone === 'output',
+        'text-t-dim': textTone === 'dim',
+      },
+    ]}><slot /></span
+  >
+</div>

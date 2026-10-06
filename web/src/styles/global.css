@@ -1,0 +1,118 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter-tight";
+@import "@fontsource-variable/jetbrains-mono";
+
+/* This app lives inside the larger kixpkgs git repo, which breaks
+   Tailwind v4's automatic (git-root-based) source detection. Declare
+   the sources explicitly so utilities are generated. */
+@source "../**/*.{astro,ts}";
+
+@theme inline {
+  --font-sans: "Inter Tight Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Design tokens as Tailwind colours: bg-paper, text-ink-2, border-line, bg-night … */
+  --color-paper: var(--paper);
+  --color-paper-2: var(--paper-2);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-accent-brand: var(--accent-brand);
+  --color-accent-text: var(--accent-text);
+  --color-accent-button: var(--accent-button);
+  --color-accent-soft: var(--accent-soft);
+  --color-night: var(--night);
+  --color-night-2: var(--night-2);
+  --color-night-line: var(--night-line);
+  --color-on-night: var(--on-night);
+  --color-on-night-2: var(--on-night-2);
+  --color-t-green: var(--t-green);
+  --color-t-red: var(--t-red);
+  --color-t-yellow: var(--t-yellow);
+  --color-t-blue: var(--t-blue);
+  --color-t-dim: var(--t-dim);
+  --color-t-dot: var(--t-dot);
+  --color-code-line-number: var(--code-line-number);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+}
+
+/* Values come from the design file's variables. The website is light only. */
+:root {
+  --paper: #f2efe7;
+  --paper-2: #e9e5da;
+  --line: #d6d0c2;
+  --ink: #15171c;
+  --ink-2: #565a63;
+  /* The design's "accent". Named --accent-brand so Tailwind's accent
+     utilities stay unambiguous. */
+  --accent-brand: #f2542d;
+  /* Links and orange text on paper; #f2542d fails contrast there. The
+     design's #b5401f is 4.49:1 on paper-2, so this is a shade darker (the
+     docs use the same value). */
+  --accent-text: #ad3d1d;
+  --accent-soft: #f7e1d8;
+  /* Fill of the orange buttons. White on #f2542d is 3.4:1, below AA for
+     16px labels; this is 4.5:1. */
+  --accent-button: #d4441e;
+  --night: #101216;
+  --night-2: #191c22;
+  --night-line: #2a2e36;
+  --on-night: #ece9e1;
+  --on-night-2: #9ca0a8;
+  --t-green: #8bd49a;
+  --t-red: #ff7a6b;
+  --t-yellow: #e9c46a;
+  --t-blue: #8ab4f8;
+  /* The design's #6b707a is 3.8:1 on night; this passes AA (as in the docs). */
+  --t-dim: #80858f;
+  /* Window dots in terminal title bars; decorative. */
+  --t-dot: #3a3f48;
+  /* Line numbers are decorative and keep the design's low contrast. */
+  --code-line-number: #3e434c;
+
+}
+
+@layer base {
+  * {
+    @apply border-line;
+  }
+  html {
+    @apply font-sans;
+    scroll-behavior: smooth;
+    /* Anchor targets clear the sticky nav. */
+    scroll-padding-top: 5rem;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+  body {
+    @apply bg-paper text-ink antialiased;
+  }
+  ::selection {
+    background: var(--accent-soft);
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent-brand);
+    outline-offset: 2px;
+  }
+}
+
+@utility text-balance {
+  text-wrap: balance;
+}
+
+/* Mono caps label used for kickers and metadata. */
+@utility kicker {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}

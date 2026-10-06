@@ -1,0 +1,38 @@
+---
+import { Copy } from '@lucide/astro';
+
+// Copies `text` to the clipboard. The click handler lives in
+// layouts/Base.astro; it swaps the icon for a check and announces the
+// result through the page's live region.
+interface Props {
+  text: string;
+  label?: string;
+  class?: string;
+}
+const { text, label = 'Copy command', class: className } = Astro.props;
+---
+
+<button
+  type="button"
+  data-copy={text}
+  aria-label={label}
+  class:list={[
+    'copy-button inline-flex size-8 shrink-0 items-center justify-center rounded-md text-on-night-2 transition-colors hover:bg-on-night/10 hover:text-on-night',
+    className,
+  ]}
+>
+  <Copy size={16} aria-hidden="true" class="copy-icon" />
+  <svg
+    aria-hidden="true"
+    class="check-icon hidden"
+    xmlns="http://www.w3.org/2000/svg"
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg
+  >
+</button>

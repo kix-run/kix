@@ -1,0 +1,101 @@
+---
+import { Activity, GitCommitHorizontal, KeyRound, Layers, ListOrdered, Route, Shield, Trash, Type } from '@lucide/astro';
+import Section from '../Section.astro';
+import Heading from '../Heading.astro';
+
+const derived = [
+  { icon: ListOrdered, title: 'Deploy order', desc: 'Resources wait for their dependencies to be ready.' },
+  { icon: KeyRound, title: 'RBAC', desc: 'Roles and bindings built from the access each package declares.' },
+  { icon: Activity, title: 'Monitoring config', desc: 'When a Prometheus-compatible stack is in the cluster.' },
+  { icon: Route, title: 'Routes', desc: 'Ingress or Gateway API, from the Service.' },
+  { icon: Layers, title: 'Spread and PDBs', desc: 'Pod spread and PodDisruptionBudgets.' },
+  { icon: Trash, title: 'Clean-up', desc: 'Resources that are no longer defined.' },
+  { icon: Shield, title: 'Network policies', desc: 'Derived from real dependencies when enabled, on Cilium.' },
+];
+---
+
+<Section id="how" tone="night" labelledby="how-title">
+  <div class="flex flex-col gap-14 lg:gap-[72px]">
+    <div class="grid grid-cols-1 gap-12 xl:grid-cols-[minmax(0,1fr)_minmax(0,560px)] xl:gap-20">
+      <div class="flex flex-col gap-6">
+        <Heading id="how-title" class="text-on-night">A definition for the whole cluster</Heading>
+        <p class="text-[17px] leading-[1.55] text-on-night-2 md:text-[19px]">
+          The compiler needs to know how resources connect, so a Kix definition uses references where one resource
+          depends on another. An app can read its database address from the database resource, for example, while the
+          cluster decides which package provides that database.
+        </p>
+      </div>
+      <div class="flex flex-col gap-4">
+        <figure class="flex flex-col gap-3 rounded-[10px] border border-night-line bg-night-2 px-[22px] py-[18px]">
+          <figcaption class="flex items-center gap-2 font-mono text-[13px] text-t-yellow">
+            <Type size={16} aria-hidden="true" /> a string
+          </figcaption>
+          <code class="block overflow-x-auto font-mono text-[14px] whitespace-nowrap text-on-night sm:text-[15px]">
+            DB_HOST = <span class="text-t-green">"db.shop.svc.cluster.local"</span>;
+          </code>
+          <p class="text-sm leading-normal text-on-night-2">
+            This address is a string, so Kix cannot tell which Service it refers to.
+          </p>
+        </figure>
+        <figure class="flex flex-col gap-3 rounded-[10px] border border-t-green/35 bg-night-2 px-[22px] py-[18px]">
+          <figcaption class="flex items-center gap-2 font-mono text-[13px] text-t-green">
+            <GitCommitHorizontal size={16} aria-hidden="true" /> a reference
+          </figcaption>
+          <code class="block overflow-x-auto font-mono text-[14px] whitespace-nowrap text-on-night sm:text-[15px]">
+            DB_HOST = <span class="text-t-blue">db</span>.out.fqdn;
+          </code>
+          <p class="text-sm leading-normal text-on-night-2">
+            With a reference, Kix can follow the connection from web to db. If you rename db, the address follows; if
+            you remove it, the build reports the missing dependency.
+          </p>
+        </figure>
+      </div>
+    </div>
+    <div class="flex flex-col gap-7">
+      <Heading as="h3" size="md" class="text-on-night">Once Kix has those connections, it can derive:</Heading>
+      <ul class="derive-grid grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7">
+        {
+          derived.map(({ icon: Icon, title, desc }) => (
+            <li class="flex flex-col gap-2.5 border-t border-night-line px-[18px] pt-[22px] pb-8 xl:pb-2">
+              <Icon size={20} aria-hidden="true" class="text-on-night" />
+              <span class="text-base font-semibold text-on-night">{title}</span>
+              <span class="text-sm leading-normal text-on-night-2">{desc}</span>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </div>
+</Section>
+
+<style>
+  /* Vertical hairlines between cells; the first cell of each row has none
+     and sits flush with the section edge. */
+  .derive-grid > li {
+    border-left: 1px solid var(--night-line);
+  }
+  .derive-grid > li:nth-child(2n + 1) {
+    border-left-color: transparent;
+    padding-left: 0;
+  }
+  @media (min-width: 48rem) {
+    .derive-grid > li:nth-child(2n + 1) {
+      border-left-color: var(--night-line);
+      padding-left: 18px;
+    }
+    .derive-grid > li:nth-child(4n + 1) {
+      border-left-color: transparent;
+      padding-left: 0;
+    }
+  }
+  @media (min-width: 80rem) {
+    .derive-grid > li:nth-child(4n + 1) {
+      border-left-color: var(--night-line);
+      padding-left: 18px;
+    }
+    .derive-grid > li:first-child {
+      border-left-color: transparent;
+      padding-left: 0;
+    }
+  }
+</style>

@@ -1,0 +1,40 @@
+---
+import Terminal from './Terminal.astro';
+import { tokenClass, type Line } from '@/lib/code';
+
+// A source file on a night panel: title bar, line numbers, and coloured
+// tokens. The optional `footer` slot holds a command and its result.
+interface Props {
+  title: string;
+  lines: Line[];
+  class?: string;
+}
+const { title, lines, class: className } = Astro.props;
+const width = String(lines.length).length;
+---
+
+<Terminal title={title} class={className}>
+  <pre
+    class="overflow-x-auto px-5 pt-5 pb-6 sm:px-6"><code class="block min-w-max">{lines.map((line, i) => (
+    <span class="flex h-[24px] items-center">
+      <span aria-hidden="true" data-line={i + 1} class="line-number mr-4 inline-block text-right text-code-line-number select-none" style={`width:${width}ch`}></span>
+      <span class="whitespace-pre">{line.map((t) => typeof t === 'string' ? t : <span class={tokenClass[t[1]]}>{t[0]}</span>)}</span>
+    </span>
+  ))}</code></pre>
+  {
+    Astro.slots.has('footer') && (
+      <div class="border-t border-night-line bg-night-2 px-5 pt-4 pb-5 sm:px-6">
+        <slot name="footer" />
+      </div>
+    )
+  }
+</Terminal>
+
+<style>
+  /* Line numbers come from CSS so they stay out of the text that copy and
+     contrast checks see; they are decorative and keep the design's low
+     contrast. */
+  .line-number::before {
+    content: attr(data-line);
+  }
+</style>
