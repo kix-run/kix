@@ -1,4 +1,107 @@
 ---
+import { Check, Eye, GitCompare, Pencil, Rocket, Undo2 } from '@lucide/astro';
+import Section from '../Section.astro';
+
+const beats = [
+  {
+    title: 'Agents write infrastructure code now.',
+    body: 'Agents already write Kubernetes configuration for many teams, so they need the same checks that a person would use.',
+  },
+  {
+    title: 'An agent needs fast, exact feedback.',
+    body: 'Kix identifies the affected resource and explains the error, giving the agent something specific to correct.',
+  },
+  {
+    title: 'You need something small enough to review.',
+    body: 'You can review the results of kix check and the package-level plan from kix diff before approving a change.',
+  },
+];
+
+// Each step of the loop. `tone` colours the node ring and icon.
+const steps = [
+  { who: 'agent or person', cmd: 'edit the cluster definition', icon: Pencil, tone: 'text-on-night border-on-night' },
+  {
+    who: 'kix',
+    cmd: '$ kix check',
+    desc: 'Names the resource and explains what to fix.',
+    back: 'back to the definition until it builds',
+    icon: Check,
+    tone: 'text-t-yellow border-t-yellow',
+  },
+  { who: 'kix', cmd: '$ kix diff', desc: 'The plan, grouped by package.', icon: GitCompare, tone: 'text-t-blue border-t-blue' },
+  {
+    who: 'you',
+    cmd: 'review the plan',
+    desc: 'Review the changes by package on the pull request.',
+    icon: Eye,
+    tone: 'text-on-night border-on-night',
+  },
+  {
+    who: 'kix',
+    cmd: '$ kix deploy',
+    desc: 'In dependency order, waiting on readiness.',
+    icon: Rocket,
+    tone: 'text-t-green border-t-green',
+  },
+];
 ---
 
-<!-- Ai: not built yet -->
+<Section labelledby="ai-title">
+  <div class="grid grid-cols-1 items-start gap-12 xl:grid-cols-[minmax(0,1fr)_minmax(0,520px)] xl:gap-20">
+    <div class="flex flex-col gap-6">
+      <h2
+        id="ai-title"
+        class="text-[32px] leading-[1.08] font-semibold tracking-[-1px] text-balance md:text-[44px] md:tracking-[-1.2px]"
+      >
+        Compiler feedback for people and agents
+      </h2>
+      <p class="text-[17px] leading-[1.55] text-ink-2 md:text-[18px]">
+        An agent can edit a Kix definition and use compiler errors to revise it. The resulting plan gives you a
+        manageable view of the proposed change before deployment.
+      </p>
+      <ul class="pt-2">
+        {
+          beats.map((beat) => (
+            <li class="flex flex-col gap-1.5 border-t border-line py-5">
+              <h3 class="text-[18px] font-semibold">{beat.title}</h3>
+              <p class="text-[15.5px] leading-[1.55] text-ink-2">{beat.body}</p>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+    <figure class="rounded-[14px] bg-night p-6 text-on-night sm:p-8">
+      <figcaption class="mb-6 font-mono text-[12.5px] text-on-night-2">the loop, for agents and people alike</figcaption>
+      <ol>
+        {
+          steps.map((step, i) => (
+            <li class="flex gap-[18px]">
+              <div class="flex w-9 shrink-0 flex-col items-center" aria-hidden="true">
+                <span
+                  class:list={[
+                    'inline-flex size-9 shrink-0 items-center justify-center rounded-full border-[1.5px]',
+                    step.tone,
+                  ]}
+                >
+                  <step.icon size={16} />
+                </span>
+                {i < steps.length - 1 && <span class="w-[1.5px] flex-1 bg-night-line" />}
+              </div>
+              <div class:list={['flex min-w-0 flex-col gap-1 pt-1.5', { 'pb-[26px]': i < steps.length - 1 }]}>
+                <span class="font-mono text-[11.5px] text-t-dim">{step.who}</span>
+                <span class="font-mono text-[15px] font-semibold">{step.cmd}</span>
+                {step.desc && <span class="text-[14px] leading-normal text-on-night-2">{step.desc}</span>}
+                {step.back && (
+                  <span class="mt-2 inline-flex items-center gap-2 self-start rounded-md border border-night-line bg-night-2 px-3 py-2 font-mono text-[12.5px] text-t-yellow">
+                    <Undo2 size={14} aria-hidden="true" class="shrink-0" />
+                    {step.back}
+                  </span>
+                )}
+              </div>
+            </li>
+          ))
+        }
+      </ol>
+    </figure>
+  </div>
+</Section>

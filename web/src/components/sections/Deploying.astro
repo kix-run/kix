@@ -1,4 +1,105 @@
 ---
+import { ChevronRight, Check, GitMerge, GitPullRequest, MessageSquare, Receipt, Rocket } from '@lucide/astro';
+import Section from '../Section.astro';
+import Heading from '../Heading.astro';
+
+// The pull request comment is illustrative. Its contents follow the shape
+// of `kix diff -o markdown` output; keep them in step with the renderer.
+const comment = {
+  author: 'ci-bot',
+  action: 'commented on pull request #214',
+  heading: 'kix diff',
+  summary: 'Plan for cluster shop: 2 updated, 1 added, 9 unchanged.',
+  groups: [
+    {
+      title: 'Changed packages',
+      items: [
+        { name: 'shop/web', rest: '1.4.2 -> 1.5.0 (1 changed, 1 dep-affected)', details: 'Modified resources' },
+        { name: 'monitoring/grafana', rest: '(1 changed)' },
+      ],
+    },
+    { title: 'Added packages', items: [{ name: 'shop/valkey', rest: '8.0.2 (4 resources)' }] },
+  ] as { title: string; items: { name: string; rest: string; details?: string }[] }[],
+};
+
+const pipeline = [
+  { title: 'pull request', desc: 'open a change', icon: GitPullRequest, iconClass: 'text-on-night' },
+  { title: 'kix check', desc: 'fails the build on errors', icon: Check, iconClass: 'text-on-night' },
+  { title: 'kix diff -o markdown', desc: 'plan posted on the PR', icon: MessageSquare, iconClass: 'text-on-night' },
+  { title: 'merge', desc: 'a release is a commit', icon: GitMerge, iconClass: 'text-on-night' },
+  { title: 'kix deploy', desc: 'ordered, waits on readiness', icon: Rocket, iconClass: 'text-t-green' },
+  { title: 'receipt', desc: 'written to the cluster', icon: Receipt, iconClass: 'text-on-night' },
+];
 ---
 
-<!-- Deploying: not built yet -->
+<Section tone="night" labelledby="deploying-title">
+  <div class="flex flex-col gap-12 lg:gap-16">
+    <div class="grid grid-cols-1 gap-10 xl:grid-cols-[minmax(0,1fr)_560px] xl:gap-20">
+      <div class="flex flex-col gap-5">
+        <Heading id="deploying-title">Deploy from CI or your laptop.</Heading>
+        <p class="text-[17px] leading-[1.55] text-on-night-2 md:text-[18px]">
+          The cluster definition and image versions live in Git. Kix can deploy a commit from your laptop or any CI
+          system and write a receipt to the cluster afterward.
+        </p>
+        <p class="text-sm text-t-dim">An optional in-cluster operator is in development.</p>
+      </div>
+      <figure class="overflow-hidden rounded-[10px] bg-paper text-ink">
+        <figcaption class="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-line bg-paper-2 px-[18px] py-3">
+          <span
+            aria-hidden="true"
+            class="inline-flex size-[22px] items-center justify-center rounded-full bg-ink font-mono text-[12px] font-bold text-accent-brand"
+            >k</span
+          >
+          <span class="text-sm font-semibold">{comment.author}</span>
+          <span class="text-[13.5px] text-ink-2">{comment.action}</span>
+        </figcaption>
+        <div class="flex flex-col gap-3 px-[22px] pt-[18px] pb-[22px]">
+          <p class="text-[20px] font-bold">{comment.heading}</p>
+          <p class="text-[14.5px]">{comment.summary}</p>
+          {
+            comment.groups.map((group) => (
+              <>
+                <p class="text-[15px] font-bold">{group.title}</p>
+                <ul class="flex flex-col gap-3">
+                  {group.items.map((item) => (
+                    <li class="flex flex-col gap-2">
+                      <span class="flex flex-wrap items-center gap-2 text-[14.5px]">
+                        <span aria-hidden="true">•</span>
+                        <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[13px]">{item.name}</code>
+                        <span class="text-ink-2">{item.rest}</span>
+                      </span>
+                      {item.details && (
+                        <span class="flex items-center gap-1.5 pl-[18px] text-[13.5px] text-ink-2">
+                          <ChevronRight size={14} aria-hidden="true" />
+                          {item.details}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ))
+          }
+        </div>
+      </figure>
+    </div>
+    <ol class="flex flex-col items-stretch gap-2 xl:flex-row">
+      {
+        pipeline.map((step, i) => (
+          <>
+            <li class="flex flex-1 flex-col gap-2 rounded-lg border border-night-line bg-night-2 p-4">
+              <step.icon size={18} aria-hidden="true" class={step.iconClass} />
+              <span class="font-mono text-[13.5px] font-semibold text-on-night">{step.title}</span>
+              <span class="text-[13.5px] leading-[1.4] text-on-night-2">{step.desc}</span>
+            </li>
+            {i < pipeline.length - 1 && (
+              <li aria-hidden="true" class="flex items-center justify-center text-t-dim">
+                <ChevronRight size={18} class="rotate-90 xl:rotate-0" />
+              </li>
+            )}
+          </>
+        ))
+      }
+    </ol>
+  </div>
+</Section>

@@ -1,4 +1,92 @@
 ---
+import Section from '../Section.astro';
+import Heading from '../Heading.astro';
 ---
 
-<!-- Faq: not built yet -->
+<Section id="faq" labelledby="faq-title">
+  <div class="grid grid-cols-1 gap-10 xl:grid-cols-[400px_minmax(0,1fr)] xl:gap-20">
+    <div class="flex flex-col gap-5">
+      <Heading id="faq-title">Questions before you try Kix</Heading>
+      <p class="text-[17px] leading-[1.55] text-ink-2">
+        Kix produces standard Kubernetes resources, and the CLI fits into an existing workflow. These are the details
+        people usually ask about before trying it.
+      </p>
+    </div>
+    <dl class="border-t-[1.5px] border-ink">
+      <div class="faq-row">
+        <dt>Is it still standard Kubernetes underneath?</dt>
+        <dd>
+          Yes. Kix produces ordinary Kubernetes resources that kubectl, dashboards, operators, and security tools can
+          inspect.
+        </dd>
+      </div>
+      <div class="faq-row">
+        <dt>What if you stop using Kix?</dt>
+        <dd>
+          <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[14px] text-ink">kix export</code> writes the cluster
+          as plain Kubernetes YAML. If you stop using Kix, you can keep managing those resources with standard Kubernetes
+          tools.
+        </dd>
+      </div>
+      <div class="faq-row">
+        <dt>Can Kix use existing Helm charts?</dt>
+        <dd>
+          Yes. You can use existing Helm charts with Kix, although they do not provide every benefit of a native Kix
+          package.
+        </dd>
+      </div>
+      <div class="faq-row">
+        <dt>What if Kix doesn't model something I need?</dt>
+        <dd>Define any Kubernetes resource or field directly in the cluster definition.</dd>
+      </div>
+      <div class="faq-row">
+        <dt>Does anything need to run in my cluster?</dt>
+        <dd>The CLI deploys from your laptop or CI. Receipts are stored as resources in the cluster.</dd>
+      </div>
+      <div class="faq-row">
+        <dt>Does Kix block insecure configs?</dt>
+        <dd>
+          Security checks run on every build. Scorecard findings are warnings by default; choose which rules fail the
+          build.
+        </dd>
+      </div>
+      <div class="faq-row">
+        <dt>Which packages exist?</dt>
+        <dd class="flex flex-col gap-2">
+          <span>
+            The library covers databases, observability, networking, and applications, with more added regularly.
+          </span>
+          <a href="#packages" class="self-start font-semibold text-accent-text hover:underline"
+            >See the Packages section →</a
+          >
+        </dd>
+      </div>
+    </dl>
+  </div>
+</Section>
+
+<style>
+  .faq-row {
+    display: grid;
+    gap: 0.5rem;
+    padding-block: 22px;
+    border-bottom: 1px solid var(--line);
+  }
+  @media (min-width: 48rem) {
+    .faq-row {
+      grid-template-columns: 340px minmax(0, 1fr);
+      gap: 40px;
+    }
+  }
+  dt {
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--ink);
+  }
+  dd {
+    font-size: 16px;
+    line-height: 1.6;
+    color: var(--ink-2);
+  }
+</style>

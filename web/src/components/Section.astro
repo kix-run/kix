@@ -19,6 +19,9 @@ const { id, tone = 'paper', rule = false, class: className, containerClass, labe
   id={id}
   aria-labelledby={labelledby}
   class:list={[
+    // Clips decorative overhang (rotated cards, shadows) so it never adds
+    // horizontal page scroll.
+    'overflow-x-clip',
     {
       'bg-paper text-ink': tone === 'paper',
       'bg-paper-2 text-ink': tone === 'paper-2',

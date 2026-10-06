@@ -1,4 +1,101 @@
 ---
+import Section from '../Section.astro';
+
+const targets = [
+  { profile: 'kind · 1 node', availability: 'none', result: '1 replica, no high availability' },
+  { profile: 'eks · 3 zones', availability: 'zone', result: 'replicas spread across zones for high availability', highlight: true },
+];
+
+// Cluster profiles in kix/lib/flavors, as named in the design.
+const profiles = [
+  ['EKS', 'GKE', 'GKE Autopilot', 'AKS', 'OpenShift'],
+  ['k3s', 'RKE2', 'Talos', 'kubeadm', 'kind'],
+];
+
+// The provider swap, as drawn in the design.
+type SwapLine = { kind: 'comment' | 'removed' | 'added'; text: string };
+const swap: SwapLine[] = [
+  { kind: 'comment', text: '// single-node ClickHouse provider' },
+  { kind: 'removed', text: 'instances.data.olap.package = packages.clickhouse;' },
+  { kind: 'comment', text: '// operator-managed ClickHouse provider' },
+  { kind: 'added', text: 'instances.data.olap.package = packages.clickhouse-cluster;' },
+];
 ---
 
-<!-- PayoffD: not built yet -->
+<Section id="clusters" tone="night" labelledby="clusters-title">
+  <div class="flex flex-col gap-14 lg:gap-16">
+    <div class="flex flex-col gap-5">
+      <h2
+        id="clusters-title"
+        class="text-[30px] leading-[1.1] font-semibold tracking-[-0.75px] text-balance text-on-night md:text-[40px] md:tracking-[-1px]"
+      >
+        <span class="text-accent-brand">D.</span> use packages across clusters
+      </h2>
+      <p class="max-w-[780px] text-[17px] leading-[1.6] text-on-night-2">
+        Packages respond to the needs of each cluster. The same package can run one replica on a single-node development
+        cluster, then spread replicas across zones on a production cluster configured for high availability.
+      </p>
+    </div>
+
+    <div class="flex flex-col items-stretch lg:flex-row lg:items-center">
+      <div class="rounded-[10px] border-[1.5px] border-on-night p-[22px] lg:w-[300px] lg:shrink-0">
+        <span class="font-mono text-base font-semibold text-on-night">packages.clickhouse</span>
+      </div>
+      <div aria-hidden="true" class="relative h-8 w-[120px] shrink-0 self-start lg:h-auto lg:self-stretch">
+        <span class="absolute top-0 bottom-0 left-6 w-[1.5px] bg-t-dim lg:hidden"></span>
+        <span class="absolute top-1/2 left-0 hidden h-[1.5px] w-1/2 bg-t-dim lg:block"></span>
+        <span class="absolute top-1/4 right-0 bottom-1/4 left-1/2 hidden border-y-[1.5px] border-l-[1.5px] border-t-dim lg:block"
+        ></span>
+      </div>
+      <ul class="flex min-w-0 flex-1 flex-col gap-5">
+        {
+          targets.map((t) => (
+            <li class="flex flex-col gap-3 rounded-[10px] border border-night-line bg-night-2 px-[22px] py-[18px] md:flex-row md:items-center md:gap-6">
+              <div class="flex flex-col gap-1.5 md:w-[270px] md:shrink-0">
+                <span class="font-mono text-[15px] font-semibold text-on-night">{t.profile}</span>
+                <span class="font-mono text-[12.5px] text-t-yellow">
+                  cluster availability:{' '}
+                  <span class:list={{ 'font-bold underline decoration-[1.5px] underline-offset-4': t.highlight }}>
+                    {t.availability}
+                  </span>
+                </span>
+              </div>
+              <span class="font-mono text-[13.5px] text-on-night-2">{t.result}</span>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+
+    <div class="grid grid-cols-1 gap-12 border-t border-night-line pt-10 lg:grid-cols-2 lg:gap-16">
+      <div class="flex flex-col gap-4">
+        <h3 class="text-lg font-semibold text-on-night">Cluster profiles included</h3>
+        <ul class="flex max-w-[560px] flex-wrap gap-2">
+          {
+            profiles.flat().map((p) => (
+              <li class="rounded-md border border-night-line px-3 py-[7px] font-mono text-[13px] text-on-night">{p}</li>
+            ))
+          }
+        </ul>
+        <p class="text-[14.5px] leading-[1.55] text-on-night-2">
+          Profiles describe cluster capabilities. You can also use any conformant Kubernetes cluster.
+        </p>
+      </div>
+      <div class="flex min-w-0 flex-col gap-4">
+        <h3 class="text-lg font-semibold text-on-night">Apps depend on an interface. Clusters choose the provider.</h3>
+        <p class="text-[14.5px] leading-[1.55] text-on-night-2">
+          Availability is set for the cluster, and packages adapt to it. Separately, the cluster can choose which package
+          provides an interface such as ClickHouse, without changing the apps that use it.
+        </p>
+        <pre
+          class="overflow-x-auto rounded-lg border border-night-line bg-night-2 px-[18px] py-3.5 font-mono text-[13.5px] leading-[1.6]"><code class="block min-w-max">{swap.map((line) => (
+          <span class="block whitespace-pre">{line.kind === 'comment' ? (
+            <span class="text-[12.5px] text-on-night-2">{line.text}</span>
+          ) : (
+            <><span class={line.kind === 'added' ? 'text-t-green' : 'text-t-red'}>{line.kind === 'added' ? '+ ' : '- '}</span><span class={line.kind === 'added' ? 'text-on-night' : 'text-on-night-2'}>{line.text}</span></>
+          )}</span>
+        ))}</code></pre>
+      </div>
+    </div>
+  </div>
+</Section>

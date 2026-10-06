@@ -7,7 +7,8 @@ interface Props {
 }
 const {
   title = 'Kix | The Kubernetes compiler',
-  description = 'Kix is a Kubernetes compiler. Compile your whole cluster from one definition, check it, preview the change, and deploy from your laptop or CI.',
+  // The hero's H1 and subhead.
+  description = 'Kix is a Kubernetes compiler. Compile your whole cluster from one definition. Make deploys boring.',
 } = Astro.props;
 const url = new URL(Astro.url.pathname, Astro.site);
 ---
