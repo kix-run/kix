@@ -264,6 +264,25 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
             "yaml",
         ),
     };
+    // `doc` keeps the last of a repeated key, where sops would refuse it
+    // (YAML) or merge it into the first (JSON).
+    let unique = match input_type {
+        "json" => serde_json::from_str::<UniqueKeys>(&text).is_ok(),
+        _ => serde_yml::from_str::<UniqueKeys>(&text).is_ok(),
+    };
+    if !unique {
+        return Err(refuse("an object in it repeats a key"));
+    }
+    if let Some(key) = doc
+        .as_object()
+        .into_iter()
+        .flat_map(|o| o.keys())
+        .find(|k| *k != "sops" && folds_to_sops(k))
+    {
+        return Err(refuse(&format!(
+            "sops would read its key {key} as metadata"
+        )));
+    }
     let sops = doc
         .get("sops")
         .and_then(Value::as_object)
@@ -291,6 +310,86 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
         .cloned()
         .collect();
     Ok((keys, input_type))
+}
+
+/// Whether Go's encoding/json, which sops reads JSON metadata with, takes
+/// `key` for the `sops` field. It matches field names under Unicode simple
+/// case folding, where `ſ` (U+017F) folds with `s`. The fields inside the
+/// metadata need no such check: the allowlist in [`age_only_keys`] matches
+/// them exactly and refuses any other non-empty field.
+fn folds_to_sops(key: &str) -> bool {
+    let mut chars = key.chars();
+    "sops".chars().all(|want| {
+        chars
+            .next()
+            .is_some_and(|c| c.to_ascii_lowercase() == want || (want == 's' && c == 'ſ'))
+    }) && chars.next().is_none()
+}
+
+/// A JSON or YAML document that deserializes only when no object in it
+/// repeats a key.
+struct UniqueKeys;
+
+impl<'de> serde::Deserialize<'de> for UniqueKeys {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(UniqueKeys)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for UniqueKeys {
+    type Value = UniqueKeys;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a JSON or YAML value")
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<Self, E> {
+        Ok(self)
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<Self, E> {
+        Ok(self)
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<Self, E> {
+        Ok(self)
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<Self, E> {
+        Ok(self)
+    }
+
+    fn visit_str<E>(self, _: &str) -> Result<Self, E> {
+        Ok(self)
+    }
+
+    fn visit_unit<E>(self) -> Result<Self, E> {
+        Ok(self)
+    }
+
+    fn visit_none<E>(self) -> Result<Self, E> {
+        Ok(self)
+    }
+
+    fn visit_some<D: serde::Deserializer<'de>>(self, d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(self)
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self, A::Error> {
+        while seq.next_element::<UniqueKeys>()?.is_some() {}
+        Ok(self)
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self, A::Error> {
+        let mut seen = std::collections::HashSet::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if !seen.insert(key) {
+                return Err(serde::de::Error::custom("repeated key"));
+            }
+            map.next_value::<UniqueKeys>()?;
+        }
+        Ok(self)
+    }
 }
 
 /// Hydrate a single Secret manifest.
@@ -713,6 +812,42 @@ mod tests {
                 "{name}: {args:?}"
             );
         }
+    }
+
+    /// sops reads JSON metadata with Go's encoding/json, which takes a key
+    /// that matches `sops` ignoring case (Unicode simple folding, so `ſ`
+    /// matches `s`) and merges a repeated key into the one before it.
+    /// serde_json keeps the last of a repeated key and reads `SOPS` as data,
+    /// so it could see age alone where sops sees a cloud KMS.
+    #[test]
+    fn a_json_sops_file_that_go_reads_differently_is_refused() {
+        let age = r#"{"age":[{"recipient":"age1abc","enc":"x"}],"mac":"ENC[x]","version":"3.9.0"}"#;
+        let kms = r#"{"kms":[{"arn":"arn:aws:kms:eu-west-1:000000000000:key/x"}]}"#;
+        let refused = [
+            format!(r#"{{"data":"ENC[x]","sops":{age},"SOPS":{kms}}}"#),
+            format!(r#"{{"data":"ENC[x]","ſops":{kms},"sops":{age}}}"#),
+            format!(r#"{{"data":"ENC[x]","sops":{kms},"sops":{age}}}"#),
+            r#"{"data":"ENC[x]","sops":{"kms":[],"age":[],"age":[{"recipient":"age1abc"}]}}"#
+                .to_string(),
+        ];
+        for text in refused {
+            let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+            let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+            assert!(
+                matches!(err, SecretError::NotAgeOnly { .. }),
+                "{text}: {err}"
+            );
+        }
+    }
+
+    /// sops reads YAML with yaml.v3, which refuses a repeated key and matches
+    /// `sops` exactly. serde_yml refuses a repeated key too.
+    #[test]
+    fn a_yaml_sops_file_with_a_repeated_key_is_refused() {
+        let text = format!("sops:\n  kms:\n    - arn: arn:aws:kms:x\n{AGE_ONLY}");
+        let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+        let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+        assert!(matches!(err, SecretError::NotAgeOnly { .. }), "{err}");
     }
 
     #[test]
