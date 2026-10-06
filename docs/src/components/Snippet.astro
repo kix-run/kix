@@ -33,7 +33,7 @@ const {
   url,
   lang = 'nix',
 } = Astro.props;
-const title = `${source} (L${startLine}–L${endLine})`;
+const range = `L${startLine}–L${endLine}`;
 
 const childByName = new Map(childRegions.map((child) => [child.name, child]));
 const replacements = Object.entries(elide)
@@ -49,25 +49,49 @@ for (const { startLine, endLine, replacement } of replacements) {
   codeLines.splice(startLine - 1, endLine - startLine + 1, replacement);
 }
 const renderedCode = codeLines.join('\n');
+// Line numbers match the source file only while no child region has been
+// collapsed into a one-line replacement.
+const meta = replacements.length === 0 ? `startLineNumber=${startLine}` : 'showLineNumbers=false';
 ---
 
-<Code code={renderedCode} {lang} {title} />
-
-{url && (
-  <p class="snippet-source">
-    <a href={url} target="_blank" rel="noopener">
-      View source on GitHub ↗
-    </a>
-  </p>
-)}
+<div class="snippet" style={`--snippet-range: '${range}'; --snippet-range-ch: ${range.length}`}>
+  <Code code={renderedCode} {lang} title={source} {meta} />
+  {url && (
+    <p class="snippet-source">
+      <a href={url} target="_blank" rel="noopener">
+        View source on GitHub ↗
+      </a>
+    </p>
+  )}
+</div>
 
 <style>
+  /* The line range sits after the file name inside the active tab.
+     Expressive Code draws the tab's orange underline with the title's
+     ::after, a box covering the whole tab, so the range text is
+     right-aligned in that box and the tab is widened to make room. */
+  .snippet :global(.frame.has-title .header .title) {
+    padding-inline-end: calc(1rem + 0.625rem + var(--snippet-range-ch) * 1ch);
+  }
+  .snippet :global(.frame.has-title .header .title::after) {
+    content: var(--snippet-range);
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-inline-end: 1rem;
+    color: var(--kix-on-night-dim);
+  }
   .snippet-source {
-    margin-top: 0.5rem;
+    margin-top: 0.625rem;
     text-align: right;
-    font-size: 0.85em;
+    font-family: var(--__sl-font-mono);
+    font-size: 0.75rem;
   }
   .snippet-source a {
-    color: var(--sl-color-text-accent);
+    color: var(--kix-accent-text);
+    text-decoration: none;
+  }
+  .snippet-source a:hover {
+    text-decoration: underline;
   }
 </style>

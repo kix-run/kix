@@ -1,0 +1,39 @@
+---
+// Page footer: pagination, then a hairline and the last-updated date.
+// The design's "Edit this page" and "Report a problem" links are left out
+// until the docs have a public edit and issue target (decision D7).
+import Pagination from 'virtual:starlight/components/Pagination';
+
+const { lang, lastUpdated } = Astro.locals.starlightRoute;
+---
+
+<footer class="kix-footer">
+  <Pagination />
+  {
+    lastUpdated && (
+      <p class="meta">
+        Updated{' '}
+        <time datetime={lastUpdated.toISOString()}>
+          {lastUpdated.toLocaleDateString(lang, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}
+        </time>
+      </p>
+    )
+  }
+</footer>
+
+<style>
+  .kix-footer {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    margin-top: 3.5rem;
+  }
+  .meta {
+    margin: 0;
+    border-top: 1px solid var(--kix-line);
+    padding-top: 1.25rem;
+    color: var(--kix-dim);
+    font-family: var(--__sl-font-mono);
+    font-size: 0.75rem;
+  }
+</style>

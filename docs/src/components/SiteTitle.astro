@@ -1,42 +1,52 @@
 ---
-// Wordmark matching the homepage logo (web/src/components/landing/Nav.tsx):
-// mono lowercase "kix" with a brand dot at the baseline, plus a muted
-// "docs" suffix. Replaces Starlight's default text title.
+// Logo mark (ink square with an orange mono "k"), the "kix" wordmark and a
+// "/docs" suffix. Replaces Starlight's default text title.
 const { siteTitleHref } = Astro.locals.starlightRoute;
 ---
 
-<a href={siteTitleHref} class="site-title">
+<a href={siteTitleHref} class="site-title" aria-label="Kix docs home">
+  <span class="mark" aria-hidden="true">k</span>
   <span class="wordmark" translate="no">kix</span>
-  <span class="dot"></span>
-  <span class="suffix">docs</span>
+  <span class="suffix" translate="no">/docs</span>
 </a>
 
 <style>
   .site-title {
     display: flex;
-    align-items: baseline;
-    gap: 0.25rem;
+    align-items: center;
+    gap: 0.625rem;
     min-width: 0;
     text-decoration: none;
     white-space: nowrap;
   }
-  .wordmark {
+  .mark {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 1.625rem;
+    height: 1.625rem;
+    border-radius: 6px;
+    background-color: var(--kix-ink);
+    color: var(--kix-brand);
     font-family: var(--__sl-font-mono);
-    font-size: var(--sl-text-xl);
+    font-size: 1rem;
     font-weight: 700;
-    letter-spacing: -0.025em;
-    color: var(--sl-color-white);
+    line-height: 1;
   }
-  .dot {
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 9999px;
-    background-color: var(--sl-color-accent);
+  :global(:root:not([data-theme='light'])) .mark {
+    background-color: var(--kix-paper-2);
+    box-shadow: inset 0 0 0 1px var(--kix-line);
+  }
+  .wordmark {
+    color: var(--kix-ink);
+    font-family: var(--__sl-font-mono);
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
   }
   .suffix {
-    margin-inline-start: 0.25rem;
+    color: var(--kix-ink-2);
     font-family: var(--__sl-font-mono);
-    font-size: var(--sl-text-base);
-    color: var(--sl-color-gray-3);
+    font-size: 0.9375rem;
   }
 </style>
