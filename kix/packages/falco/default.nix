@@ -37,7 +37,7 @@
 # `out`: nothing beyond the DaemonSet's own; no package consumes Falco.
 #
 # Prometheus alerts, scoped to this instance's metrics Service: Falco is not
-# scraped for 5 minutes.
+# scraped for 5 minutes, or it drops alerts because its outputs queue is full.
 #
 # Escape hatches: `settings` (falco.yaml; the locked paths are listed in its
 # description), `env`, and the instance's `partsOverlays`.
@@ -210,6 +210,7 @@ in
         falco.yaml settings, deep-merged over the package's; a list
         replaces the package's list. The package sets
         `json_output: true`, `stdout_output.enabled: true`,
+        `outputs_queue.capacity: 10000`,
         `time_format_iso_8601: true`, `log_stderr: true`, `log_syslog: false`,
         `syslog_output.enabled: false` (the image runs no syslog daemon),
         `metrics.interval: 1h`, and `metrics.output_rule: false`; these may
@@ -328,6 +329,12 @@ in
               };
             }
           ];
+          # Falco's default capacity, 0, leaves the queue of alerts waiting
+          # for the outputs unbounded. When alerts arrive faster than the
+          # outputs write them, the queue grows until the kernel kills Falco
+          # at its memory limit. Bounded, Falco drops alerts and counts them
+          # in falcosecurity_falco_outputs_queue_num_drops_total.
+          outputs_queue.capacity = 10000;
           time_format_iso_8601 = true;
           json_output = true;
           stdout_output.enabled = true;
@@ -608,6 +615,12 @@ in
             severity = "critical";
             summary = "A Falco agent is down.";
             description = "Prometheus has not scraped Falco at {{ $labels.instance }} for 5 minutes, so system calls on that node may go unwatched.";
+          };
+          FalcoDroppingAlerts = {
+            expr = "sum by (namespace, service, instance) (increase(falcosecurity_falco_outputs_queue_num_drops_total{${scoped}}[10m])) > 0";
+            severity = "warning";
+            summary = "A Falco agent is dropping alerts.";
+            description = "Falco at {{ $labels.instance }} dropped {{ $value }} alerts in 10 minutes because its outputs queue was full. Find the rule that is flooding and add an exception, or raise settings.outputs_queue.capacity together with the memory limit.";
           };
         };
     })
