@@ -25,7 +25,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::de::{Error as _, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::error::KixEvalError;
@@ -50,6 +51,16 @@ pub const STORE_ENTRY_DIR: &str = "store";
 pub const MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// The most store files a bundle may hold.
 pub const MAX_FILES: usize = 50_000;
+/// The largest header kix reads, in bytes. The header of the stage1 test build
+/// takes 282 bytes per store path, so [`MAX_FILES`] paths at that rate take
+/// 14 MB.
+pub const MAX_HEADER_BYTES: u64 = 24 * 1024 * 1024;
+/// The largest receipt a header may carry, as JSON. `kix bundle` writes
+/// about 150 bytes per flake input.
+pub const MAX_RECEIPT_BYTES: usize = 256 * 1024;
+/// The largest manifest kix reads, in bytes. The API server refuses a
+/// request body over 3 MiB.
+pub const MAX_MANIFEST_BYTES: u64 = 3 * 1024 * 1024;
 
 /// The first four bytes of a zstd frame.
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
@@ -72,11 +83,85 @@ pub struct Header {
     pub index: String,
     /// Every store path in the bundle, with the store paths its file
     /// references, as Nix records them. The bundle holds exactly these files.
+    #[serde(deserialize_with = "store_references")]
     pub references: BTreeMap<String, Vec<String>>,
     /// What `kix deploy` would otherwise read from the flake's checkout for
-    /// the deploy receipt: `source`, `inputs` and `builder`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub receipt: Option<serde_json::Value>,
+    /// the deploy receipt.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "capped_receipt"
+    )]
+    pub receipt: Option<Provenance>,
+}
+
+/// What the machine that wrote a bundle recorded about the build's source,
+/// for the deploy receipt: the receipt's `source`, `inputs` and `builder`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Provenance {
+    #[serde(default)]
+    pub source: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub inputs: Vec<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub builder: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The header's `references`, refused while it is parsed when it lists more
+/// than [`MAX_FILES`] paths or holds a string that is not a store path. A
+/// store path is at least 45 bytes, so the parsed map takes no more than a
+/// few times the header's size in memory.
+fn store_references<'de, D: Deserializer<'de>>(
+    d: D,
+) -> Result<BTreeMap<String, Vec<String>>, D::Error> {
+    struct StorePath(String);
+    impl<'de> Deserialize<'de> for StorePath {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            let path = String::deserialize(d)?;
+            if store_path::name_of(&path).is_none() {
+                return Err(D::Error::custom(format!("'{path}' is not a store path")));
+            }
+            Ok(StorePath(path))
+        }
+    }
+    struct References;
+    impl<'de> Visitor<'de> for References {
+        type Value = BTreeMap<String, Vec<String>>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a map of store paths to the store paths they reference")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut out = BTreeMap::new();
+            while let Some(StorePath(path)) = map.next_key()? {
+                if out.len() == MAX_FILES {
+                    return Err(A::Error::custom(format!(
+                        "the bundle lists more than {MAX_FILES} store paths"
+                    )));
+                }
+                let refs: Vec<StorePath> = map.next_value()?;
+                out.insert(path, refs.into_iter().map(|StorePath(r)| r).collect());
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_map(References)
+}
+
+/// The header's `receipt`, refused when it is over [`MAX_RECEIPT_BYTES`]
+/// before it is parsed.
+fn capped_receipt<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Provenance>, D::Error> {
+    let Some(raw) = Option::<Box<serde_json::value::RawValue>>::deserialize(d)? else {
+        return Ok(None);
+    };
+    if raw.get().len() > MAX_RECEIPT_BYTES {
+        return Err(D::Error::custom(format!(
+            "the receipt is larger than {MAX_RECEIPT_BYTES} bytes"
+        )));
+    }
+    serde_json::from_str(raw.get())
+        .map(Some)
+        .map_err(|e| D::Error::custom(format!("receipt: {e}")))
 }
 
 /// What a bundle holds: the header's fields, and the files by store path.
@@ -88,7 +173,7 @@ pub struct Contents {
     pub cluster: String,
     pub activation: String,
     pub index: String,
-    pub receipt: Option<serde_json::Value>,
+    pub receipt: Option<Provenance>,
     pub files: BTreeMap<String, BundleFile>,
 }
 
@@ -124,8 +209,6 @@ pub enum BundleError {
         "the bundle's format is '{format}' version {version}; this kix reads '{FORMAT}' version {VERSION}"
     )]
     WrongFormat { format: String, version: u32 },
-    #[error("the bundle has {0} files; the most kix reads is {MAX_FILES}")]
-    TooManyFiles(usize),
     #[error("'{0}' is not a store path")]
     NotAStorePath(String),
     #[error("the bundle's entry '{0}' is not a regular file under {STORE_ENTRY_DIR}/")]
@@ -176,6 +259,12 @@ pub enum BundleError {
     RetiredDomain(String),
     #[error("{0} is a source file that no Secret's SOPS source annotation names")]
     UnexpectedSource(String),
+    #[error("the bundle's {HEADER_ENTRY} is larger than {MAX_HEADER_BYTES} bytes")]
+    HeaderTooLarge,
+    #[error(
+        "{0} is larger than {MAX_MANIFEST_BYTES} bytes, the most the API server takes in one request"
+    )]
+    ManifestTooLarge(String),
 }
 
 impl Contents {
@@ -413,9 +502,6 @@ fn read_entries(tar: impl Read) -> Result<(Contents, BTreeSet<String>), BundleEr
     let mut archive = tar::Archive::new(tar);
     let mut entries = archive.entries().map_err(unreadable)?;
     let header = read_header_entry(&mut entries)?;
-    if header.references.len() > MAX_FILES {
-        return Err(BundleError::TooManyFiles(header.references.len()));
-    }
     let closure = check_closure(&header)?;
 
     let mut files: BTreeMap<String, BundleFile> = BTreeMap::new();
@@ -439,6 +525,9 @@ fn read_entries(tar: impl Read) -> Result<(Contents, BTreeSet<String>), BundleEr
         };
         if last.as_ref().is_some_and(|l| *l >= path) {
             return Err(BundleError::OutOfOrder(name));
+        }
+        if is_manifest(&path) && entry.size() > MAX_MANIFEST_BYTES {
+            return Err(BundleError::ManifestTooLarge(path));
         }
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes).map_err(unreadable)?;
@@ -478,15 +567,20 @@ fn read_entries(tar: impl Read) -> Result<(Contents, BTreeSet<String>), BundleEr
 
 /// The first entry, parsed, with its format and version checked.
 fn read_header_entry<R: Read>(entries: &mut tar::Entries<'_, R>) -> Result<Header, BundleError> {
-    let entry = entries
+    let mut entry = entries
         .next()
         .ok_or(BundleError::HeaderNotFirst)?
         .map_err(unreadable)?;
     if !entry.header().entry_type().is_file() || &*entry.path_bytes() != HEADER_ENTRY.as_bytes() {
         return Err(BundleError::HeaderNotFirst);
     }
+    if entry.size() > MAX_HEADER_BYTES {
+        return Err(BundleError::HeaderTooLarge);
+    }
+    let mut bytes = Vec::new();
+    entry.read_to_end(&mut bytes).map_err(unreadable)?;
     // serde_json stops at 128 levels of nesting.
-    let header: Header = serde_json::from_reader(entry)
+    let header: Header = serde_json::from_slice(&bytes)
         .map_err(|e| BundleError::Unreadable(format!("{HEADER_ENTRY}: {e}")))?;
     if header.format != FORMAT || header.version != VERSION {
         return Err(BundleError::WrongFormat {
@@ -749,7 +843,7 @@ impl<R: Read> Read for Hashing<R> {
 pub fn from_result_dir(
     result_dir: &Path,
     kix_rev: &str,
-    receipt: Option<serde_json::Value>,
+    receipt: Option<Provenance>,
 ) -> Result<Contents, KixEvalError> {
     let err = |message: String| KixEvalError::StoreGraphError { message };
     let resolve = |name: &str| {
@@ -1361,6 +1455,109 @@ mod tests {
             Bundle::read(tar.as_slice()),
             Err(BundleError::Unreadable(_))
         ));
+    }
+
+    /// A tar file of `header`, given as JSON, and `contents`' files.
+    fn tar_with_header(header: &serde_json::Value, contents: &Contents) -> Vec<u8> {
+        let header = serde_json::to_vec(header).unwrap();
+        let names: Vec<String> = contents.files.keys().map(|p| entry_name(p)).collect();
+        let mut entries: Vec<(&str, tar::EntryType, &[u8])> =
+            vec![(HEADER_ENTRY, tar::EntryType::Regular, &header)];
+        for (name, file) in names.iter().zip(contents.files.values()) {
+            entries.push((name, tar::EntryType::Regular, &file.bytes));
+        }
+        raw_tar(&entries)
+    }
+
+    /// The header of `contents` with `receipt` in place of its own.
+    fn with_receipt(contents: &Contents, receipt: serde_json::Value) -> serde_json::Value {
+        let mut header = serde_json::to_value(contents.header()).unwrap();
+        header["receipt"] = receipt;
+        header
+    }
+
+    /// A small compressed file can hold a huge header. Parsing it into
+    /// `serde_json::Value`s takes many times its size in memory.
+    #[test]
+    fn a_header_over_its_cap_is_refused_before_it_is_parsed() {
+        let contents = real();
+        let big = "a".repeat(30 << 20);
+        let header = with_receipt(&contents, serde_json::json!({"source": {"x": big}}));
+        let compressed = zstd::encode_all(&tar_with_header(&header, &contents)[..], 19).unwrap();
+        assert!(compressed.len() < 100 << 10, "{}", compressed.len());
+        assert_eq!(
+            Bundle::read(compressed.as_slice()).err(),
+            Some(BundleError::HeaderTooLarge)
+        );
+    }
+
+    #[test]
+    fn a_receipt_over_its_cap_is_refused() {
+        let contents = real();
+        let big = "a".repeat(300 << 10);
+        let header = with_receipt(&contents, serde_json::json!({"source": {"x": big}}));
+        assert!(matches!(
+            Bundle::read(tar_with_header(&header, &contents).as_slice()),
+            Err(BundleError::Unreadable(m)) if m.contains("receipt")
+        ));
+    }
+
+    /// `kix deploy` adds to the receipt's `source`, which must be an object.
+    #[test]
+    fn a_receipt_of_another_shape_is_refused() {
+        let contents = real();
+        for receipt in [
+            serde_json::json!({"source": 1}),
+            serde_json::json!({"inputs": {}}),
+            serde_json::json!({"builder": []}),
+            serde_json::json!({"other": {}}),
+        ] {
+            let header = with_receipt(&contents, receipt.clone());
+            assert!(
+                matches!(
+                    Bundle::read(tar_with_header(&header, &contents).as_slice()),
+                    Err(BundleError::Unreadable(_))
+                ),
+                "{receipt}"
+            );
+        }
+    }
+
+    /// Each reference is checked as a store path while the header is
+    /// parsed, so short strings cannot stand in for paths.
+    #[test]
+    fn a_reference_that_is_not_a_store_path_is_refused_while_parsing() {
+        let contents = real();
+        let mut header = serde_json::to_value(contents.header()).unwrap();
+        header["references"][&contents.activation]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!(""));
+        assert!(matches!(
+            Bundle::read(tar_with_header(&header, &contents).as_slice()),
+            Err(BundleError::Unreadable(m)) if m.contains("store path")
+        ));
+    }
+
+    /// The API server takes no request body over 3 MiB, so no manifest kix
+    /// applies is larger.
+    #[test]
+    fn a_manifest_over_its_cap_is_refused() {
+        let mut contents = real();
+        let big = "a".repeat(3 << 20);
+        let text = format!(
+            r#"{{"apiVersion":"v1","kind":"ConfigMap","metadata":{{"name":"big","namespace":"kix-enterprise-test-web"}},"data":{{"k":"{big}"}}}}"#
+        );
+        let path = add_to_build(
+            &mut contents,
+            "k8s-ConfigMap-kix-enterprise-test-web-big",
+            &text,
+            Some("-k8s-PackageInstance-kix-enterprise-test-web-status-page"),
+        );
+        assert_eq!(
+            reread(&contents).err(),
+            Some(BundleError::ManifestTooLarge(path))
+        );
     }
 
     #[test]

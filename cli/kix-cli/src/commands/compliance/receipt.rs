@@ -94,12 +94,8 @@ pub fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
 /// claims by whoever uploaded the bundle. The bundle's SHA-256 is not: it
 /// names exactly the bytes that were deployed.
 pub fn from_bundle(graph: &StoreGraph, loaded: &LoadedBundle) -> Value {
-    let made = loaded
-        .contents()
-        .receipt
-        .clone()
-        .unwrap_or_else(|| json!({}));
-    let mut source = made.get("source").cloned().unwrap_or_else(|| json!({}));
+    let made = loaded.contents().receipt.clone().unwrap_or_default();
+    let mut source = Value::Object(made.source);
     source["bundle"] = json!({
         "sha256": loaded.sha256(),
         "kixRev": loaded.contents().kix_rev,
@@ -110,13 +106,13 @@ pub fn from_bundle(graph: &StoreGraph, loaded: &LoadedBundle) -> Value {
         "activationHash": shared::activation_identity_hash(graph),
         "deployedAt": shared::now_rfc3339(),
         "source": source,
-        "builder": made.get("builder").cloned().unwrap_or_else(|| json!({})),
+        "builder": made.builder,
         "deployer": {
             "kixVersion": env!("CARGO_PKG_VERSION"),
             "arch": std::env::consts::ARCH,
             "os": std::env::consts::OS,
         },
-        "inputs": made.get("inputs").cloned().unwrap_or_else(|| json!([])),
+        "inputs": made.inputs,
         "images": images(graph),
     })
 }
@@ -522,11 +518,14 @@ mod tests {
         let fixture: &[u8] =
             include_bytes!("../../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle");
         let mut contents = Bundle::read(fixture).unwrap().into_contents();
-        contents.receipt = Some(json!({
-            "source": {"revision": "abc", "dirty": false},
-            "inputs": [{"name": "nixpkgs"}],
-            "builder": {"kixVersion": "0.0.1"},
-        }));
+        contents.receipt = Some(
+            serde_json::from_value(json!({
+                "source": {"revision": "abc", "dirty": false},
+                "inputs": [{"name": "nixpkgs"}],
+                "builder": {"kixVersion": "0.0.1"},
+            }))
+            .unwrap(),
+        );
         let mut bytes = Vec::new();
         contents.write(&mut bytes).unwrap();
         let loaded = LoadedBundle::from(Bundle::read(bytes.as_slice()).unwrap());

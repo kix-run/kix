@@ -145,11 +145,17 @@ pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
     }
     let graph = StoreGraph::from_result_dir(&result_dir).map_err(|e| miette!("{e}"))?;
     let receipt = super::compliance::receipt::build_receipt(&graph, &ctx.global.flake);
-    let provenance = serde_json::json!({
-        "source": receipt["source"],
-        "inputs": receipt["inputs"],
-        "builder": receipt["builder"],
-    });
+    let object = |v: &serde_json::Value| v.as_object().cloned().unwrap_or_default();
+    let provenance = bundle::Provenance {
+        source: object(&receipt["source"]),
+        inputs: receipt["inputs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(object)
+            .collect(),
+        builder: object(&receipt["builder"]),
+    };
     let kix = crate::plan::document::KixBuild::current();
     let kix_rev = match &kix.store_path {
         Some(path) => format!("{} ({path})", kix.version),
