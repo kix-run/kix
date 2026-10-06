@@ -273,8 +273,10 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
     if !unique {
         return Err(refuse("an object in it repeats a key"));
     }
+    // yaml.v3 matches `sops` exactly; Go's encoding/json does not.
     if let Some(key) = doc
         .as_object()
+        .filter(|_| input_type == "json")
         .into_iter()
         .flat_map(|o| o.keys())
         .find(|k| *k != "sops" && folds_to_sops(k))
@@ -838,6 +840,17 @@ mod tests {
                 "{text}: {err}"
             );
         }
+    }
+
+    /// yaml.v3 matches `sops` exactly, so in YAML a key `SOPS` is data.
+    #[test]
+    fn a_yaml_sops_file_may_hold_a_key_named_sops_in_capitals() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.yaml");
+        let text = AGE_ONLY.replace("password: ", "SOPS: ");
+        std::fs::write(&path, text).unwrap();
+        let (keys, input_type) = age_only_keys(&path).unwrap();
+        assert_eq!((keys, input_type), (vec!["SOPS".to_string()], "yaml"));
     }
 
     /// sops reads YAML with yaml.v3, which refuses a repeated key and matches
