@@ -235,6 +235,29 @@ impl StoreGraph {
         status_fn("Loading store graph...");
         let ref_cache = bulk_load_graph(&activation_path);
 
+        Self::assemble(
+            index,
+            activation_path,
+            result_dir.to_path_buf(),
+            ref_cache,
+            &|path| read_store_json(path),
+            status_fn,
+        )
+    }
+
+    /// Steps 4 to 6 of loading a build: read every package's manifests,
+    /// find the cluster-level resources among the references, and work out
+    /// the cross-package dependencies. Shared by a result directory and a
+    /// bundle (`eval::bundle`), which differ only in where a file's bytes
+    /// come from (`read`).
+    pub(crate) fn assemble(
+        index: KixPackageIndex,
+        activation_path: PathBuf,
+        result_dir: PathBuf,
+        ref_cache: HashMap<PathBuf, Vec<PathBuf>>,
+        read: &dyn Fn(&Path) -> Result<serde_json::Value, KixEvalError>,
+        status_fn: &dyn Fn(&str),
+    ) -> Result<Self, KixEvalError> {
         // 4. Read manifests and build ownership
         let pkg_count = index.packages.len();
         status_fn(&format!("Reading {} packages...", pkg_count));
@@ -244,7 +267,7 @@ impl StoreGraph {
         let mut resource_owner = HashMap::new();
 
         for (pi_path, resource_paths) in &index.packages {
-            let pi_manifest = read_store_json(pi_path)?;
+            let pi_manifest = read(pi_path)?;
             let instance_name = pi_manifest
                 .pointer("/spec/instanceName")
                 .and_then(|v| v.as_str())
@@ -273,7 +296,7 @@ impl StoreGraph {
                 if res_path == pi_path {
                     continue;
                 }
-                match read_store_json(res_path) {
+                match read(res_path) {
                     Ok(manifest) => {
                         resource_owner.insert(res_path.clone(), pi_path.clone());
                         resources.insert(
@@ -321,7 +344,7 @@ impl StoreGraph {
             if !is_k8s_path(path) || resources.contains_key(path) {
                 continue;
             }
-            if let Ok(manifest) = read_store_json(path) {
+            if let Ok(manifest) = read(path) {
                 resources.insert(
                     path.clone(),
                     ResourceNode {
@@ -379,7 +402,7 @@ impl StoreGraph {
         Ok(StoreGraph {
             cluster_name: index.cluster,
             activation_path,
-            result_dir: result_dir.to_path_buf(),
+            result_dir,
             packages,
             resources,
             resource_owner,

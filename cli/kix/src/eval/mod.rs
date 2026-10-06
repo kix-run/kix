@@ -21,6 +21,7 @@
 //!   not currently used by the CLI.
 
 pub mod build;
+pub mod bundle;
 pub mod cache;
 pub mod cli_backend;
 pub mod error;
