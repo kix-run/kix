@@ -28,10 +28,10 @@ pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
     let manifests = match &args.bundle {
         Some(path) => {
             let loaded = super::bundle::load(path)?;
-            if loaded.bundle.cluster != args.cluster {
+            if loaded.contents().cluster != args.cluster {
                 return Err(miette::miette!(
                     "the bundle is a build of cluster '{}', not '{}'",
-                    loaded.bundle.cluster,
+                    loaded.contents().cluster,
                     args.cluster
                 ));
             }

@@ -294,10 +294,11 @@ pub enum Command {
 
     /// Build a cluster and write it as one file, a bundle
     ///
-    /// A bundle holds every store file of the build with its references, so
-    /// `kix plan`, `kix deploy` and `kix graph` can read it with `--bundle`
-    /// on a machine with no Nix store. Reading a bundle recomputes every
-    /// store path from its file's bytes and refuses one that differs.
+    /// A bundle (`.kixbundle`) is a zstd-compressed tar file of every store
+    /// file of the build, with its references, so `kix plan`, `kix deploy`
+    /// and `kix graph` can read it with `--bundle` on a machine with no Nix
+    /// store. Reading a bundle recomputes every store path from its file's
+    /// bytes and refuses one that differs.
     Bundle(BundleArgs),
 
     /// Summarise a cluster's rendered resources by namespace and kind
@@ -1055,9 +1056,9 @@ pub struct BundleArgs {
     /// Cluster name
     pub cluster: String,
 
-    /// Where to write the bundle
+    /// Where to write the bundle [default: <CLUSTER>.kixbundle]
     #[arg(value_name = "FILE")]
-    pub file: std::path::PathBuf,
+    pub file: Option<std::path::PathBuf>,
 }
 
 #[derive(clap::Args)]

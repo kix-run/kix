@@ -529,11 +529,11 @@ pub(crate) fn prepare(args: &PlanArgs, ctx: &mut CommandContext) -> Result<Optio
                 crate::say!("Reading bundle {}...", path.display());
             }
             let loaded = super::bundle::load(path)?;
-            if loaded.bundle.cluster != args.cluster {
+            if loaded.contents().cluster != args.cluster {
                 return Err(miette!(
                     "the bundle {} is for cluster '{}', not '{}'",
                     path.display(),
-                    loaded.bundle.cluster,
+                    loaded.contents().cluster,
                     args.cluster
                 ));
             }

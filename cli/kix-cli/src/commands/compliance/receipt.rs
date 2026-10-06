@@ -94,11 +94,15 @@ pub fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
 /// claims by whoever uploaded the bundle. The bundle's SHA-256 is not: it
 /// names exactly the bytes that were deployed.
 pub fn from_bundle(graph: &StoreGraph, loaded: &LoadedBundle) -> Value {
-    let made = loaded.bundle.receipt.clone().unwrap_or_else(|| json!({}));
+    let made = loaded
+        .contents()
+        .receipt
+        .clone()
+        .unwrap_or_else(|| json!({}));
     let mut source = made.get("source").cloned().unwrap_or_else(|| json!({}));
     source["bundle"] = json!({
-        "sha256": loaded.sha256,
-        "kixRev": loaded.bundle.kix_rev,
+        "sha256": loaded.sha256(),
+        "kixRev": loaded.contents().kix_rev,
     });
     json!({
         "schema": keys::RECEIPT_SCHEMA,
@@ -513,22 +517,23 @@ mod tests {
     /// what the bundle's maker recorded about the source.
     #[test]
     fn a_bundle_receipt_names_the_bundle_and_keeps_its_makers_record() {
-        let bytes =
-            include_bytes!("../../../../kix/tests/fixtures/bundles/kix-enterprise-test.json");
-        let mut bundle = kix::eval::bundle::Bundle::parse(bytes).unwrap();
-        bundle.receipt = Some(json!({
+        use kix::eval::bundle::Bundle;
+
+        let fixture: &[u8] =
+            include_bytes!("../../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle");
+        let mut contents = Bundle::read(fixture).unwrap().into_contents();
+        contents.receipt = Some(json!({
             "source": {"revision": "abc", "dirty": false},
             "inputs": [{"name": "nixpkgs"}],
             "builder": {"kixVersion": "0.0.1"},
         }));
-        let loaded = LoadedBundle {
-            bundle,
-            sha256: kix::eval::bundle::sha256_hex(bytes),
-        };
+        let mut bytes = Vec::new();
+        contents.write(&mut bytes).unwrap();
+        let loaded = LoadedBundle::from(Bundle::read(bytes.as_slice()).unwrap());
         let graph = loaded.graph().unwrap();
         let r = from_bundle(&graph, &loaded);
         assert_eq!(r["source"]["revision"], "abc");
-        assert_eq!(r["source"]["bundle"]["sha256"], json!(loaded.sha256));
+        assert_eq!(r["source"]["bundle"]["sha256"], json!(loaded.sha256()));
         assert_eq!(r["inputs"][0]["name"], "nixpkgs");
         assert_eq!(r["builder"]["kixVersion"], "0.0.1");
         assert_eq!(r["deployer"]["kixVersion"], env!("CARGO_PKG_VERSION"));

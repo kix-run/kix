@@ -77,6 +77,10 @@ proptest = "1"
 # DAG
 petgraph = "0.7"
 
+# Bundles
+tar = "0.4"
+zstd = "0.14"
+
 # SQLite
 rusqlite = { version = "0.32", features = ["bundled"] }
 
