@@ -112,6 +112,10 @@ pub enum BundleError {
     IndexInstances,
     #[error("two manifests in the bundle name {0}")]
     DuplicateObject(String),
+    #[error(
+        "kix-packages.json lists {0}, which is not a manifest: its store name does not start with k8s-"
+    )]
+    IndexNotManifest(String),
     #[error("{0} uses a retired kix domain key or group")]
     RetiredDomain(String),
     #[error("{0} is a source file that no Secret's SOPS source annotation names")]
@@ -259,6 +263,13 @@ impl Bundle {
         }
         for (pi, resources) in &index.packages {
             for p in std::iter::once(pi).chain(resources) {
+                // The checks above cover the files named k8s-*, and the
+                // graph reads every file the index lists as a manifest.
+                if !store_name(p).starts_with("k8s-") {
+                    return Err(BundleError::IndexNotManifest(
+                        p.to_string_lossy().into_owned(),
+                    ));
+                }
                 let p = p.to_string_lossy();
                 if !closure.contains(p.as_ref()) {
                     return Err(BundleError::IndexOutsideClosure(p.into_owned()));
@@ -648,6 +659,24 @@ mod tests {
                 "ConfigMap/x@kix-enterprise-test-web".to_string()
             ))
         );
+    }
+
+    #[test]
+    fn an_index_entry_not_named_as_a_manifest_is_refused() {
+        let mut bundle = real();
+        let record = serde_json::json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": lifecycle::RECORD_KIND,
+            "metadata": {"name": "other", "labels": {(keys::CLUSTER_LABEL): "kix-enterprise-test"}},
+        })
+        .to_string();
+        let path = add_to_build(
+            &mut bundle,
+            "extra",
+            &record,
+            Some("-k8s-PackageInstance-kix-enterprise-test-web-status-page"),
+        );
+        assert_eq!(bundle.verify(), Err(BundleError::IndexNotManifest(path)));
     }
 
     #[test]
