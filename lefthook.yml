@@ -2,6 +2,17 @@
 # Install: lefthook install
 #
 # Rust hooks adapted from lithus monorepo pattern (no mise — uses cargo directly)
+#
+# .github/workflows/lint.yml runs the nixfmt, deadnix, and Co-Authored-By
+# checks on every pull request too, for commits made without these hooks.
+
+# The installed git hooks run lefthook through Nix rather than looking for it
+# on PATH. Their own lookup prints "Can't find lefthook in PATH" and lets the
+# commit through unchecked, which is what happens in a shell outside devenv.
+# Nix is needed for the hooks below anyway, and once the registry's nixpkgs is
+# evaluated this costs about 0.1 s. A command rather than a script in the
+# repository keeps the hooks working on branches cut before this line.
+lefthook: "nix run nixpkgs#lefthook --"
 
 commit-msg:
   commands:
@@ -85,7 +96,9 @@ pre-commit:
       glob: "*.nix"
       exclude:
         - "docs/src/snippets/**/*.nix"
-      run: nix shell nixpkgs#nixfmt-rfc-style -c nixfmt --check {staged_files}
+      # `--inputs-from .` takes nixfmt from this flake's locked nixpkgs, as
+      # deadnix below and the lint workflow do.
+      run: nix shell --inputs-from . nixpkgs#nixfmt -c nixfmt --check {staged_files}
 
     # Unused bindings. Attrset pattern names are exempt: kix reads them
     # with builtins.functionArgs to resolve a package's dependencies.

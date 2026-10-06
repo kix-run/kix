@@ -1,0 +1,68 @@
+name: Lint
+
+# The nixfmt, deadnix, and Co-Authored-By checks from lefthook.yml, run on
+# every pull request and every push to main. The git hooks run only in a
+# clone that has them installed, and a commit made without them reaches main
+# unchecked. Each Nix check covers every file, not only the changed ones, so
+# main stays clean and the next edit to a file does not carry a reformat of
+# the whole file.
+#
+# The tools come from this flake's locked nixpkgs (`--inputs-from .`), the
+# same versions the hooks use. Spindle runs the job on a VM whose image ships
+# Nix; see .github/workflows/spindle-smoke.yml.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: [self-hosted, spindle-2c-4g]
+    env:
+      # `extra-` keeps the features the image enabled; same form as
+      # cli-tests.yml.
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        accept-flake-config = true
+        access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # The commit-message check reads every commit of the pull request,
+          # and Nix's git fetcher needs the full history.
+          fetch-depth: 0
+
+      # docs/src/snippets holds region extracts that nixfmt and deadnix
+      # cannot parse; lefthook.yml and treefmt exclude them too.
+      - name: nixfmt
+        run: |
+          git ls-files -z '*.nix' ':!:docs/src/snippets/**' \
+            | xargs -0 nix shell --inputs-from . nixpkgs#nixfmt -c nixfmt --check
+
+      - name: deadnix
+        run: |
+          git ls-files -z '*.nix' ':!:docs/src/snippets/**' \
+            | xargs -0 nix run --inputs-from . nixpkgs#deadnix -- --fail --no-lambda-pattern-names
+
+      - name: No Co-Authored-By trailers
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          found=$(git log --format='%h %s%n%b' "$BASE..$HEAD" | grep -i '^Co-Authored-By:' || true)
+          if [ -n "$found" ]; then
+            echo "Co-Authored-By trailers are not allowed in commit messages:"
+            git log --format='%h %s' "$BASE..$HEAD" --grep='^Co-Authored-By:' -i
+            exit 1
+          fi
