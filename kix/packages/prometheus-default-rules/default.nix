@@ -177,7 +177,7 @@ let
   };
 
   bridgedOptions =
-    key: c:
+    _key: c:
     {
       enabled = lib.mkOption {
         type = lib.types.bool;
@@ -230,14 +230,6 @@ let
       };
     };
   };
-
-  ruleGroupOption =
-    description:
-    lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      inherit description;
-    };
 
   # Every bundled file, with the rule toggle that renders it. The four split
   # container-resource groups record the same series as

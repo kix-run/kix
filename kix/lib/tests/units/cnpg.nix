@@ -746,8 +746,7 @@ in
     (
       (clusterSpec (backups {
         backup = null;
-      }))
-        ? plugins == false
+      })) ? plugins == false
       && ofKind "ObjectStore" all == [ ]
       && ofKind "ScheduledBackup" all == [ ]
       && (byName "postgres" (ofKind "Cluster" all)).spec.plugins == [ { name = "example.com"; } ]

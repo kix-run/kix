@@ -171,13 +171,17 @@ let
       integration =
         integrations.${type}
           or (throw "${who}: ${where}: Alertmanager has no integration `${type}`, so it refuses the configuration. The integrations are ${
-            lib.concatStringsSep ", " (lib.sort builtins.lessThan (builtins.attrNames integrations ++ [ "email_configs" ]))
+            lib.concatStringsSep ", " (
+              lib.sort builtins.lessThan (builtins.attrNames integrations ++ [ "email_configs" ])
+            )
           }.");
       globalKeys = integration.global or [ ];
       fromEntry = firstPort (k: "${where}.${k}") entry integration.keys;
       fromGlobal = firstPort (k: "settings.global.${k}") global globalKeys;
       fallback = integration.default or 443;
-      sources = lib.concatStringsSep " or " (integration.keys ++ map (k: "settings.global.${k}") globalKeys);
+      sources = lib.concatStringsSep " or " (
+        integration.keys ++ map (k: "settings.global.${k}") globalKeys
+      );
     in
     if type == "email_configs" then
       let

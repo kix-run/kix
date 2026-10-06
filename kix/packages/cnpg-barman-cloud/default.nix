@@ -110,10 +110,11 @@ let
         v ? name
         && v ? key
         && builtins.isString v.name
-        && builtins.attrNames v == [
-          "key"
-          "name"
-        ]
+        &&
+          builtins.attrNames v == [
+            "key"
+            "name"
+          ]
       then
         [
           {
@@ -251,11 +252,13 @@ in
       ++ kix.guardArgs {
         inherit who;
         owned = {
-          "--server-cert" = "the server certificate mounted from the Certificate the package issues; remove it.";
+          "--server-cert" =
+            "the server certificate mounted from the Certificate the package issues; remove it.";
           "--server-key" = "the server key mounted from the Certificate the package issues; remove it.";
           "--client-cert" =
             "the client certificate the operator presents, which the package issues and names on the Service; remove it.";
-          "--server-address" = "the Service and the readiness probe use port ${toString grpcPort}; remove it.";
+          "--server-address" =
+            "the Service and the readiness probe use port ${toString grpcPort}; remove it.";
           "--health-probe-bind-address" = "the liveness probe uses port ${toString healthPort}; remove it.";
           "--leader-elect" = "the package always enables leader election; remove it.";
           "--plugin-path" =

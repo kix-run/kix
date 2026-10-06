@@ -324,7 +324,13 @@ in
             (args.apiVersion or "") == "autoscaling/v1"
             || metrics == [ ]
             || metrics == null
-            || builtins.any (m: builtins.elem (m.type or "") [ "Resource" "ContainerResource" ]) metrics;
+            || builtins.any (
+              m:
+              builtins.elem (m.type or "") [
+                "Resource"
+                "ContainerResource"
+              ]
+            ) metrics;
         in
         if (args.kind or "") == "HorizontalPodAutoscaler" && readsResourceMetrics then
           requireMetricsApi "HorizontalPodAutoscaler '${args.name or "unknown"}'"

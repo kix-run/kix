@@ -204,6 +204,8 @@ in
         else if builtins.length names == 1 then
           parts.${builtins.head names}.out.name
         else
-          throw "${who}: out.storageClassName was read, but ${optionPath} has ${toString (builtins.length names)} classes (${namesText}) and none is chosen for consumers that name no class. ${lib.toUpper (builtins.substring 0 1 remedies)}${builtins.substring 1 (-1) remedies}.";
+          throw "${who}: out.storageClassName was read, but ${optionPath} has ${toString (builtins.length names)} classes (${namesText}) and none is chosen for consumers that name no class. ${
+            lib.toUpper (builtins.substring 0 1 remedies)
+          }${builtins.substring 1 (-1) remedies}.";
     };
 }

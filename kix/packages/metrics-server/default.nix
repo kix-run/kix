@@ -177,8 +177,7 @@ in
           "--cert-dir" =
             "the serving certificate is written to the emptyDir at ${certDir}, the only writable path; remove it.";
           "--bind-address" = "the probes and the API server reach the pod address; remove it.";
-          "--kubelet-port" =
-            "the network policy admits kubelets on ${toString kubeletPort} only; remove it.";
+          "--kubelet-port" = "the network policy admits kubelets on ${toString kubeletPort} only; remove it.";
         };
       } config.extraArgs;
     in
