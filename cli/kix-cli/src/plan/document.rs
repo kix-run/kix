@@ -673,7 +673,7 @@ impl ChangedPackage {
                                 .iter()
                                 .enumerate()
                                 .map(|(i, d)| {
-                                    let mut change = FieldChange::of(id, d);
+                                    let mut change = FieldChange::of(c.secrets.contains(id), d);
                                     change.labels = resource_labels.map(|l| {
                                         l.and_then(|l| l.get(i)).cloned().unwrap_or_default()
                                     });
@@ -703,17 +703,17 @@ impl ChangedPackage {
 }
 
 impl FieldChange {
-    /// `d` with every secret value in it hidden. Other values are shown as
+    /// `d` with every secret value in it hidden; `is_secret` says whether
+    /// the resource is a Secret (`types::is_secret`). Other values are shown as
     /// the build and the cluster hold them: a password written as a literal
     /// container `env` value, or into a ConfigMap, is not recognised as
     /// secret.
-    pub fn of(id: &ResourceId, d: &Difference) -> Self {
+    pub fn of(is_secret: bool, d: &Difference) -> Self {
         let change = match d.kind {
             DiffKind::MissingInB => ChangeKind::Removed,
             DiffKind::ExtraInB => ChangeKind::Added,
             DiffKind::ValueMismatch | DiffKind::TypeMismatch => ChangeKind::Changed,
         };
-        let is_secret = id.kind == "Secret";
         let max = super::MAX_SHOWN_VALUE_BYTES;
         let old = d.a_value.as_ref();
         FieldChange {

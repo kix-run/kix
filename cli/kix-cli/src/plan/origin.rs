@@ -14,7 +14,7 @@ use kix::cluster::fieldsv1::KIX_FIELD_MANAGER;
 use kix::manifest::diff::engine::structural_diff;
 use kix::manifest::diff::{DiffConfig, DiffKind, Difference};
 use kix::manifest::keys;
-use kix::manifest::types::ResourceId;
+use kix::manifest::types::{self, ResourceId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -186,7 +186,7 @@ pub fn label_live(
                 new,
                 managed: sides.managed.get(rid),
                 applies,
-                secret: rid.kind == "Secret",
+                secret: types::is_secret(live) || types::is_secret(new),
             };
             let (l, drifted) = three.label(changes);
             labels.insert(rid.clone(), l);

@@ -1054,7 +1054,7 @@ fn redact_secret(
 ) {
     use serde_json::{Map, Value};
 
-    if obj.data.get("kind").and_then(Value::as_str) != Some("Secret") {
+    if !crate::manifest::types::is_secret(&obj.data) {
         return;
     }
     let hidden = || Value::String(HIDDEN_SECRET_VALUE.into());
@@ -1637,6 +1637,26 @@ mod tests {
                 "data": {"user": "YWRtaW4=", "password": password_b64, "other": "eA=="}
             }),
         }
+    }
+
+    /// An object of another API group with kind Secret is not a Kubernetes
+    /// Secret, and its view keeps its values.
+    #[test]
+    fn kix_owned_view_of_a_custom_resource_named_secret_keeps_its_values() {
+        let obj = DynamicObject {
+            metadata: ObjectMeta {
+                name: Some("creds".into()),
+                namespace: Some("app".into()),
+                ..Default::default()
+            },
+            types: None,
+            data: json!({
+                "apiVersion": "x.example/v1",
+                "kind": "Secret",
+                "data": {"password": "plain"}
+            }),
+        };
+        assert_eq!(kix_owned_view(&obj)["data"]["password"], json!("plain"));
     }
 
     #[test]
