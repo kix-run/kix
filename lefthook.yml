@@ -2,6 +2,13 @@
 # Install: lefthook install
 #
 # Rust hooks adapted from lithus monorepo pattern (no mise — uses cargo directly)
+
+# A hook that cannot find lefthook fails the commit or push. Without this,
+# the script `lefthook install` writes prints "Can't find lefthook in PATH"
+# and exits 0, so every check here is skipped. That happens outside the dev
+# shell once `nix store gc` has removed the lefthook store path the script
+# was installed with; `nix develop` reinstalls it (flake.nix shellHook).
+assert_lefthook_installed: true
 #
 # .github/workflows/lint.yml runs the nixfmt, deadnix, and Co-Authored-By
 # checks on every pull request too, for commits made without these hooks.

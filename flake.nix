@@ -164,6 +164,7 @@
               pkgs.rustc
               pkgs.clippy
               pkgs.rustfmt
+              pkgs.lefthook
               pkgs.pkg-config
               pkgs.openssl
               pkgs.nix.libs.nix-expr-c
@@ -184,6 +185,11 @@
             shellHook = ''
               export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/kix-cargo-target/$(basename "$PWD")-$(printf %s "$PWD" | sha256sum | cut -c1-12)"
               mkdir -p "$CARGO_TARGET_DIR"
+
+              # The git hooks name lefthook by store path, which a
+              # `nix store gc` can remove. Reinstalling points them at this
+              # shell's lefthook.
+              lefthook install >/dev/null 2>&1 || echo "lefthook install failed; git hooks may be stale" >&2
             '';
           };
         }
