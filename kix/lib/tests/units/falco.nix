@@ -98,14 +98,15 @@ in
       && !(pod ? hostNetwork)
       && !(pod ? hostPID)
       && pod.automountServiceAccountToken == false
-      && hostPathsOf c == [
-        "/proc"
-        "/etc"
-        "/sys/kernel/tracing"
-        "/run/containerd"
-        "/run/crio"
-        "/run/k3s/containerd"
-      ]
+      &&
+        hostPathsOf c == [
+          "/proc"
+          "/etc"
+          "/sys/kernel/tracing"
+          "/run/containerd"
+          "/run/crio"
+          "/run/k3s/containerd"
+        ]
       && cfg.engine.kind == "modern_ebpf"
       && cfg.json_output
       && cfg.stdout_output.enabled
@@ -116,15 +117,16 @@ in
       # container plugin rejects an engines block missing any engine key.
       && cfg.metrics.interval == "1h"
       && cfg.log_stderr
-      && builtins.attrNames (builtins.head cfg.plugins).init_config.engines == [
-        "bpm"
-        "containerd"
-        "cri"
-        "docker"
-        "libvirt_lxc"
-        "lxc"
-        "podman"
-      ]
+      &&
+        builtins.attrNames (builtins.head cfg.plugins).init_config.engines == [
+          "bpm"
+          "containerd"
+          "cri"
+          "docker"
+          "libvirt_lxc"
+          "lxc"
+          "podman"
+        ]
       && configMapOf "falco-rules" c == null
     )
     || throw "falco defaults: ${builtins.toJSON { inherit sc cfg; }}";
@@ -138,10 +140,11 @@ in
     in
     (
       builtins.fromJSON cm.data."50-custom.yaml" == [ rule ]
-      && (falcoYaml c).rules_files == [
-        "/etc/falco/falco_rules.yaml"
-        "/etc/falco/rules.d"
-      ]
+      &&
+        (falcoYaml c).rules_files == [
+          "/etc/falco/falco_rules.yaml"
+          "/etc/falco/rules.d"
+        ]
       && builtins.any (m: m.mountPath == "/etc/falco/rules.d") (containerOf c).volumeMounts
       && (daemonSetOf c).spec.template.metadata.annotations ? "checksum/rules"
     )
@@ -162,9 +165,15 @@ in
       };
     in
     (
-      evalFails (clusterWith { config.rules.custom = [ { condition = "x"; } ]; })
-      && evalFails (clusterWith { config.rules."../custom" = [ rule ]; })
-      && evalFails (clusterWith { config.rules.custom = [ ]; })
+      evalFails (clusterWith {
+        config.rules.custom = [ { condition = "x"; } ];
+      })
+      && evalFails (clusterWith {
+        config.rules."../custom" = [ rule ];
+      })
+      && evalFails (clusterWith {
+        config.rules.custom = [ ];
+      })
       && builtins.length twoKinds == 1
       && lib.hasInfix "rules.\"custom\"[0]" (builtins.head twoKinds)
       && builtins.length noKind == 1
@@ -208,10 +217,11 @@ in
     (
       accepted == [ ]
       && merged.priority == "notice"
-      && merged.engine == {
-        kind = "modern_ebpf";
-        modern_ebpf.buf_size_preset = 6;
-      }
+      &&
+        merged.engine == {
+          kind = "modern_ebpf";
+          modern_ebpf.buf_size_preset = 6;
+        }
       && merged.json_output == false
     )
     || throw "falco settings accepted locked paths: ${builtins.toJSON accepted}";
@@ -234,13 +244,16 @@ in
         "/run/containerd/containerd.sock"
         "/run/containerd/other.sock"
       ]
-      && hostPathsOf c == [
-        "/proc"
-        "/etc"
-        "/sys/kernel/tracing"
-        "/run/containerd"
-      ]
-      && evalFails (clusterWith { config.containerRuntime.sockets.extra = "run/x.sock"; })
+      &&
+        hostPathsOf c == [
+          "/proc"
+          "/etc"
+          "/sys/kernel/tracing"
+          "/run/containerd"
+        ]
+      && evalFails (clusterWith {
+        config.containerRuntime.sockets.extra = "run/x.sock";
+      })
     )
     || throw "falco runtime sockets: ${builtins.toJSON plugin}";
 
@@ -289,9 +302,15 @@ in
       };
     in
     (
-      evalFails (clusterWith { modules = [ publicKix.flavors.gke-autopilot ]; })
-      && evalFails (clusterWith { modules = [ { cluster.capabilities.daemonSets = false; } ]; })
-      && evalFails (clusterWith { modules = [ { cluster.capabilities.privilegedContainers = false; } ]; })
+      evalFails (clusterWith {
+        modules = [ publicKix.flavors.gke-autopilot ];
+      })
+      && evalFails (clusterWith {
+        modules = [ { cluster.capabilities.daemonSets = false; } ];
+      })
+      && evalFails (clusterWith {
+        modules = [ { cluster.capabilities.privilegedContainers = false; } ];
+      })
       && !(evalFails (clusterWith {
         modules = [
           {
@@ -307,10 +326,11 @@ in
       # The fix names no other platform, so it reads right on OpenShift.
       && !(lib.hasInfix "GKE" both)
       && lib.hasInfix "set the capability to true" both
-      && message {
-        daemonSets = true;
-        privilegedContainers = null;
-      } == null
+      &&
+        message {
+          daemonSets = true;
+          privilegedContainers = null;
+        } == null
     )
     || throw "falco platform refusal: ${toString both}";
 }

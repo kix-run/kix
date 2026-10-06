@@ -179,7 +179,7 @@ let
     builtins.listToAttrs (
       map (e: lib.nameValuePair e.name e.value)
         (builtins.head (byName "infisical-operator" (ofKind "Deployment" (manifests c)))
-          .spec.template.spec.containers).env
+        .spec.template.spec.containers).env
     );
 in
 {

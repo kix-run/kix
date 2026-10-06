@@ -164,7 +164,9 @@ in
 
   # Without a route, KC_HOSTNAME must come from env, and it must be a URL
   # with a scheme.
-  keycloak-hostname-required = evalFails (clusterWith { env = { }; });
+  keycloak-hostname-required = evalFails (clusterWith {
+    env = { };
+  });
   keycloak-hostname-needs-scheme = evalFails (clusterWith {
     env.KC_HOSTNAME = "auth.example.com";
   });
@@ -214,9 +216,10 @@ in
       && evalFails (clusterWith {
         config.env.KC_DB_URL_HOST = null;
       })
-      && (envOf (clusterWith {
-        config.env.KC_LOG_LEVEL = "debug";
-      })).KC_LOG_LEVEL == "debug"
+      &&
+        (envOf (clusterWith {
+          config.env.KC_LOG_LEVEL = "debug";
+        })).KC_LOG_LEVEL == "debug"
     )
     || throw "keycloak env accepted owned names: ${builtins.toJSON accepted}";
 
@@ -243,16 +246,18 @@ in
             "--optimized"
             "--hostname=https://x.example.com"
           ];
-      args = (containerOf (clusterWith {
-        config.extraArgs = [ "--log-level=INFO" ];
-      })).args;
+      args =
+        (containerOf (clusterWith {
+          config.extraArgs = [ "--log-level=INFO" ];
+        })).args;
     in
     (
       accepted == [ ]
-      && args == [
-        "start"
-        "--log-level=INFO"
-      ]
+      &&
+        args == [
+          "start"
+          "--log-level=INFO"
+        ]
     )
     || throw "keycloak extraArgs: accepted ${builtins.toJSON accepted}, args ${builtins.toJSON args}";
 
@@ -261,7 +266,11 @@ in
   # KC_DB_URL_PROPERTIES.
   keycloak-db-sslmode =
     let
-      props = dbTls: (envOf (clusterWith { inherit dbTls; })).KC_DB_URL_PROPERTIES or null;
+      props =
+        dbTls:
+        (envOf (clusterWith {
+          inherit dbTls;
+        })).KC_DB_URL_PROPERTIES or null;
       withEnv =
         dbTls:
         clusterWith {

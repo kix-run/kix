@@ -237,7 +237,9 @@ in
   assertions =
     { config, ... }:
     let
-      badNames = builtins.filter (n: builtins.match ruleFileName n == null) (builtins.attrNames config.rules);
+      badNames = builtins.filter (n: builtins.match ruleFileName n == null) (
+        builtins.attrNames config.rules
+      );
       badEntries = lib.concatLists (
         lib.mapAttrsToList (
           file: entries:
@@ -359,9 +361,17 @@ in
 
         refusals =
           map (l: "settings sets ${l.path}, which the package owns: ${l.reason}.") lockedSet
-          ++ map (o: "settings sets ${o}.enabled, which the package does not support: ${unsupportedOutputs.${o}} Collect the JSON alerts from stdout with the cluster's log pipeline.") (
-            builtins.filter (o: (config.settings.${o}.enabled or false) == true) (builtins.attrNames unsupportedOutputs)
-          );
+          ++
+            map
+              (
+                o:
+                "settings sets ${o}.enabled, which the package does not support: ${unsupportedOutputs.${o}} Collect the JSON alerts from stdout with the cluster's log pipeline."
+              )
+              (
+                builtins.filter (o: (config.settings.${o}.enabled or false) == true) (
+                  builtins.attrNames unsupportedOutputs
+                )
+              );
 
         # A locked path whose ancestor settings replaces is refused by
         # mergeGuarded.
@@ -375,13 +385,16 @@ in
               locked = map (l: lib.splitString "." l.path) lockedPaths;
             } builtinSettings config.settings;
 
-        probe = extra: {
-          httpGet = {
-            path = healthPath;
-            port = "http";
-          };
-          timeoutSeconds = 5;
-        } // extra;
+        probe =
+          extra:
+          {
+            httpGet = {
+              path = healthPath;
+              port = "http";
+            };
+            timeoutSeconds = 5;
+          }
+          // extra;
       in
       {
         configMap = scope.mkResource {
@@ -402,7 +415,9 @@ in
               apiVersion = "v1";
               kind = "ConfigMap";
               name = "${name}-rules";
-              data = lib.mapAttrs' (file: entries: lib.nameValuePair "${file}.yaml" (builtins.toJSON entries)) config.rules;
+              data = lib.mapAttrs' (
+                file: entries: lib.nameValuePair "${file}.yaml" (builtins.toJSON entries)
+              ) config.rules;
             }
           else
             null;

@@ -131,8 +131,7 @@ in
         podSelector = null;
         podNamespace = null;
       }
-    )
-    ? podSelector
+    ) ? podSelector
     && !succeeds (contract.check "provider gwns/gw" importOut)
     && !succeeds (contract.check "provider gwns/gw" (providerOut // { podNamespace = null; }))
     && !succeeds (contract.check "provider gwns/gw" (providerOut // { podSelector = { }; }));

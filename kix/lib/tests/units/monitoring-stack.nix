@@ -111,7 +111,7 @@ in
       args =
         cluster:
         (builtins.head (byName "prometheus-operator" (kindIn "Deployment" cluster))
-          .spec.template.spec.containers).args;
+        .spec.template.spec.containers).args;
       plus = clusterWith { instances.prometheus-operator.config.extraArgs = [ "--log-level=debug" ]; };
     in
     (
@@ -270,7 +270,9 @@ in
           };
         }
       );
-      withoutClass = specWith (server { storage.size = "20Gi"; });
+      withoutClass = specWith (server {
+        storage.size = "20Gi";
+      });
     in
     (
       withClass.storage.volumeClaimTemplate.spec == {
@@ -415,7 +417,9 @@ in
           }
         ];
       }))
-      && evalFails (am { slack_configs = [ { api_url = "https://hooks.slack.com/services/x"; } ]; })
+      && evalFails (am {
+        slack_configs = [ { api_url = "https://hooks.slack.com/services/x"; } ];
+      })
       && evalFails (am {
         email_configs = [
           {
@@ -506,22 +510,26 @@ in
   # datasources ConfigMap is not secret.
   monitoring-stack-grafana-datasource-inline-secret =
     let
-      withSecure = secureJsonData: grafanaWith {
-        datasources = [
-          {
-            name = "Tempo";
-            type = "tempo";
-            inherit secureJsonData;
-          }
-        ];
-      };
+      withSecure =
+        secureJsonData:
+        grafanaWith {
+          datasources = [
+            {
+              name = "Tempo";
+              type = "tempo";
+              inherit secureJsonData;
+            }
+          ];
+        };
     in
     (
       !(evalFails (withSecure {
         httpHeaderValue1 = "Bearer $TEMPO_TOKEN";
         tlsClientKey = "$__file{/etc/secrets/tempo/key}";
       }))
-      && evalFails (withSecure { httpHeaderValue1 = "Bearer abc"; })
+      && evalFails (withSecure {
+        httpHeaderValue1 = "Bearer abc";
+      })
     )
     || throw "the inline datasource secret refusal did not fire";
 
@@ -569,7 +577,9 @@ in
           datasources.enabled = false;
         };
       }))
-      && evalFails (grafanaWith { sidecar.sources = noSources; })
+      && evalFails (grafanaWith {
+        sidecar.sources = noSources;
+      })
     )
     || throw "the sidecar source assertion did not fire";
 
@@ -654,9 +664,7 @@ in
       && lib.hasInfix ''job=\"nx\"'' (text full "node-exporter")
       && !(lib.hasInfix ''job=\"node-exporter\"'' (text full "node-exporter"))
       && lib.hasInfix ''job=\"prometheus-server\",namespace=\"monitoring\"'' (text full "prometheus")
-      && lib.hasInfix ''job=\"alertmanager\",namespace=\"monitoring\"'' (
-        text full "alertmanager.rules"
-      )
+      && lib.hasInfix ''job=\"alertmanager\",namespace=\"monitoring\"'' (text full "alertmanager.rules")
       && lib.hasInfix ''job=\"prometheus-operator\",namespace=\"monitoring\"'' (
         text full "prometheus-operator"
       )
@@ -683,14 +691,20 @@ in
             config.stringData.unused = "test-only";
           };
         };
-      monitor = byName "prometheus-default-rules-coredns" (kindIn "ServiceMonitor" (rules {
-        interval = "1m";
-      }));
+      monitor = byName "prometheus-default-rules-coredns" (
+        kindIn "ServiceMonitor" (rules {
+          interval = "1m";
+        })
+      );
     in
     (
       (builtins.head monitor.spec.endpoints).interval == "1m"
-      && evalFails (rules { port = "metrics"; })
-      && evalFails (rules { path = "/other"; })
+      && evalFails (rules {
+        port = "metrics";
+      })
+      && evalFails (rules {
+        path = "/other";
+      })
     )
     || throw "default-rules endpoint: ${show monitor}";
 

@@ -212,7 +212,9 @@ in
 
   # An HPA on custom metrics only does not read metrics.k8s.io.
   metrics-api-hpa-custom-metrics-unchecked =
-    builds (hpaCluster { hpa.spec.metrics = [ podsMetric ]; })
+    builds (hpaCluster {
+      hpa.spec.metrics = [ podsMetric ];
+    })
     || throw "an HPA on Pods metrics was refused with the metricsApi role absent";
 
   # A binding that says the environment serves the API satisfies the check
@@ -344,7 +346,9 @@ in
   # RoleBinding lands in kube-system.
   metrics-api-apiservice-wiring =
     let
-      ms = manifests (kindCluster { instances = withMetricsServer; });
+      ms = manifests (kindCluster {
+        instances = withMetricsServer;
+      });
       apiService = byName "v1beta1.metrics.k8s.io" (ofKind "APIService" ms);
       authReader = byName "metrics-server-metrics-server-auth-reader" (ofKind "RoleBinding" ms);
     in
@@ -355,5 +359,7 @@ in
       }
       && authReader.metadata.namespace == "kube-system"
     )
-    || throw "metrics-server wiring: APIService service ${builtins.toJSON apiService.spec.service}, auth reader in ${authReader.metadata.namespace or "?"}";
+    || throw "metrics-server wiring: APIService service ${builtins.toJSON apiService.spec.service}, auth reader in ${
+      authReader.metadata.namespace or "?"
+    }";
 }

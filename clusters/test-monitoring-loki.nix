@@ -46,9 +46,11 @@ let
     ]
   ) cluster.rawManifests;
 
-  claimsOf = m: map (v: v.persistentVolumeClaim.claimName) (
-    builtins.filter (v: v ? persistentVolumeClaim) (m.spec.template.spec.volumes or [ ])
-  );
+  claimsOf =
+    m:
+    map (v: v.persistentVolumeClaim.claimName) (
+      builtins.filter (v: v ? persistentVolumeClaim) (m.spec.template.spec.volumes or [ ])
+    );
 
   grafanaClaims = builtins.concatMap claimsOf (
     builtins.filter (m: m.kind == "Deployment" && m.metadata.name == "grafana") workloads

@@ -65,7 +65,10 @@ else if unnamed != [ ] then
   "extraSpec.template.spec.containers has an entry without a name. Entries are matched by name; name each one."
 else if ownedHits != [ ] then
   "extraSpec.template.spec.containers.runner sets ${quoted ownedHits}, which the ${quoted ownedHits} ${
-    if builtins.length ownedHits == 1 then "option sets; use the option" else "options set; use the options"
+    if builtins.length ownedHits == 1 then
+      "option sets; use the option"
+    else
+      "options set; use the options"
   }."
 else
   null
