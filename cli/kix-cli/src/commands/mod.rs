@@ -1,5 +1,6 @@
 pub mod baseline;
 pub mod build;
+pub mod bundle;
 pub mod check;
 pub mod completions;
 pub mod compliance;

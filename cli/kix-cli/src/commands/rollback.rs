@@ -599,6 +599,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
             consumed_failed: failed_baseline.consumed.clone(),
             kept_orphans,
             mark_failed_on_abort: true,
+            sops: Default::default(),
             // Rollback re-applies a known-good prior activation; conflicts
             // fail loudly rather than silently overwriting whatever the
             // cluster has.

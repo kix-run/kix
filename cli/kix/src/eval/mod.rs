@@ -21,6 +21,7 @@
 //!   not currently used by the CLI.
 
 pub mod build;
+pub mod bundle;
 pub mod cache;
 pub mod cli_backend;
 pub mod error;
@@ -28,6 +29,7 @@ pub mod evaluator;
 pub mod mock;
 pub mod store;
 pub mod store_graph;
+pub mod store_path;
 pub mod value;
 
 pub use build::{build_cluster_activation, build_cluster_activation_with_status};

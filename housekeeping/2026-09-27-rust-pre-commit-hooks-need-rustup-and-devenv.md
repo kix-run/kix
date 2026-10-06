@@ -9,3 +9,4 @@ Both abort the commit without running a check. CI
 inside `nix develop`, and notes why it names those binaries. Hit
 2026-09-27 committing a gc change; the same checks passed under
 `nix develop`.
+- Hit again 2026-10-06 committing inside `nix develop`: devenv is not on PATH there, so `clippy-rust` exits 127 and blocks the commit; ran clippy by hand and committed with `LEFTHOOK_EXCLUDE=clippy-rust`.

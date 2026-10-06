@@ -10,14 +10,14 @@ pub mod render;
 pub mod saved;
 pub mod server;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use kix::eval::PackageNode;
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::diff::display::format_diffs;
 use kix::manifest::diff::engine::structural_diff;
 use kix::manifest::diff::{DiffConfig, Difference};
-use kix::manifest::types::ResourceId;
+use kix::manifest::types::{self, ResourceId};
 use serde_json::Value;
 
 use crate::output;
@@ -179,6 +179,9 @@ pub struct PackageChangeDiff {
     /// Resources with actual manifest field changes (propagation-only diffs filtered out).
     /// Only contains the real (non-propagation) differences.
     pub resource_diffs: Vec<(ResourceId, Vec<Difference>)>,
+    /// The resources in `resource_diffs` that are Secrets (see
+    /// `types::is_secret`) on either side. Renderers hide their values.
+    pub secrets: BTreeSet<ResourceId>,
     /// Resources whose identity-hash changed purely because a dependency's hash
     /// propagated up (via `kix.run/identity-hash`/`kix.run/depends-on`/`kix.run/activations`/
     /// `kix.run/built-via`). Manifest content is otherwise identical and redeploys
@@ -395,6 +398,7 @@ fn diff_resource_maps(
     config: &DiffConfig,
 ) -> PackageChangeDiff {
     let mut resource_diffs = Vec::new();
+    let mut secrets = BTreeSet::new();
     let mut dep_affected_resources = Vec::new();
     let mut added_resources = Vec::new();
     let mut removed_resources = Vec::new();
@@ -413,6 +417,9 @@ fn diff_resource_maps(
                 // bumped because a dependency changed, but content is the same.
                 dep_affected_resources.push(id.clone());
             } else {
+                if types::is_secret(old_val) || types::is_secret(new_val) {
+                    secrets.insert(id.clone());
+                }
                 resource_diffs.push((id.clone(), real));
             }
         } else {
@@ -431,6 +438,7 @@ fn diff_resource_maps(
         old_version,
         new_version,
         resource_diffs,
+        secrets,
         dep_affected_resources,
         added_resources,
         removed_resources,
@@ -491,6 +499,7 @@ pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
                     old_version: old_pkg.version.clone(),
                     new_version: new_pkg.version.clone(),
                     resource_diffs: Vec::new(),
+                    secrets: BTreeSet::new(),
                     dep_affected_resources: Vec::new(),
                     added_resources: Vec::new(),
                     removed_resources,
@@ -600,10 +609,12 @@ impl<'a> ManifestIndex<'a> {
         ids.into_iter()
             .map(|id| {
                 let old = self.old.get(id);
-                let is_secret = id.kind == "Secret";
+                let new = self.new.get(id);
+                let is_secret =
+                    old.is_some_and(types::is_secret) || new.is_some_and(types::is_secret);
                 let sides = document::ManifestSides {
                     old: old.map(|o| shown_manifest(is_secret, o, None)),
-                    new: self.new.get(id).map(|n| shown_manifest(is_secret, n, old)),
+                    new: new.map(|n| shown_manifest(is_secret, n, old)),
                 };
                 (id.display_id(), sides)
             })
@@ -660,9 +671,8 @@ pub(crate) fn shown_value(
 /// `d` with the values [`is_secret_path`] covers hidden, for the text plan.
 /// Unlike the JSON it keeps large values, which the text diff prints line
 /// by line.
-fn without_secrets(id: &ResourceId, d: &Difference) -> Difference {
+fn without_secrets(is_secret: bool, d: &Difference) -> Difference {
     let mut d = d.clone();
-    let is_secret = id.kind == "Secret";
     let old = d.a_value.clone();
     if let Some(value) = &mut d.a_value {
         hide_secrets(is_secret, &d.path, value, None);
@@ -1087,7 +1097,7 @@ fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
                             );
                             let labels = diff.labels.get(id);
                             for (i, d) in diffs.iter().enumerate() {
-                                let shown = without_secrets(id, d);
+                                let shown = without_secrets(change.secrets.contains(id), d);
                                 let formatted = format_diffs(
                                     std::slice::from_ref(&shown),
                                     &config,
@@ -2020,6 +2030,35 @@ mod diff_graph_tests {
         );
     }
 
+    /// An object of another API group with kind Secret is not a Kubernetes
+    /// Secret: its values show in the field changes, the manifests, and
+    /// the text plan.
+    #[test]
+    fn a_custom_resource_named_secret_shows_its_values() {
+        let custom = |hash: &str, value: &str| {
+            let mut v = web_resource("Secret", hash, json!({"data": {"password": value}}));
+            v["apiVersion"] = json!("x.example/v1");
+            v
+        };
+        let mut old = baseline();
+        old.push(custom(&h("s1"), "old-value"));
+        let mut new = baseline();
+        new.push(custom(&h("s2"), "new-value"));
+        let (old_graph, new_graph) = graphs_of(&old, &new);
+        let d = diff_graphs(&old_graph, &new_graph);
+        let manifests = ManifestIndex::new(&old_graph, &new_graph);
+        for shown in [
+            render_package_diff_json(&d, document::Detail::Fields).to_string(),
+            render_package_diff_json(&d, document::Detail::Manifests(&manifests)).to_string(),
+            render_package_plan(&d, true),
+        ] {
+            assert!(
+                shown.contains("old-value") && shown.contains("new-value"),
+                "{shown}"
+            );
+        }
+    }
+
     /// No Secret value or hash of one reaches the manifests, and a hidden
     /// value that changed reads differently on the new side, so a line diff
     /// of the two manifests shows it.
@@ -2135,7 +2174,7 @@ mod diff_graph_tests {
         let legacy = kix::legacy_domain::legacy_spellings(keys::CONTENT_HASH)
             .pop()
             .expect("a retired domain");
-        let live = json!({"kind": "Secret", "metadata": {"name": "s", "annotations": {
+        let live = json!({"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "s", "annotations": {
             LAST_APPLIED: "{\"data\":{\"p\":\"cGxhaW4=\"}}",
             legacy.clone(): "sha256-legacy-hash"}},
             "data": {"p": "b2xk"}});

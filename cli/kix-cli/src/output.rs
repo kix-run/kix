@@ -88,6 +88,22 @@ pub fn yellow(s: &str) -> Cow<'_, str> {
     }
 }
 
+/// `s` with control characters and bidirectional formatting characters
+/// escaped (`\u{1b}`), for text kix did not write, so it cannot move the
+/// cursor, clear the screen, or reorder what the terminal shows.
+pub fn printable(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            let bidi = matches!(c, '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
+            if c.is_control() || bidi {
+                c.escape_unicode().to_string()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+
 pub fn dim(s: &str) -> Cow<'_, str> {
     if color_enabled() {
         Cow::Owned(format!("{}", s.dimmed()))

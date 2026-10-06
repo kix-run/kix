@@ -15,7 +15,7 @@ use kix::eval::store_graph::StoreGraph;
 use kix::manifest::diff::engine::structural_diff;
 use kix::manifest::diff::{DiffConfig, Difference};
 use kix::manifest::lifecycle;
-use kix::manifest::types::ResourceId;
+use kix::manifest::types::{self, ResourceId};
 use serde_json::Value;
 
 use super::document::DriftChange;
@@ -59,10 +59,10 @@ pub fn comparable(obj: &Value) -> Value {
 
 /// What applying the build changes on the live object: `live` compared with
 /// the dry-run `result`, with every secret value hidden.
-pub fn field_changes(rid: &ResourceId, live: &Value, result: &Value) -> Vec<Difference> {
+pub fn field_changes(live: &Value, result: &Value) -> Vec<Difference> {
     let config = DiffConfig::new("live", "planned");
     let mut diffs = structural_diff(&comparable(live), &comparable(result), "$", &config);
-    let is_secret = rid.kind == "Secret";
+    let is_secret = types::is_secret(live) || types::is_secret(result);
     let max = super::MAX_SHOWN_VALUE_BYTES;
     for d in &mut diffs {
         let old = d.a_value.clone();
@@ -143,8 +143,7 @@ impl Overlay<'_> {
             match (live, result) {
                 (None, _) => entry.added_resources.push(rid.clone()),
                 (Some(live), Some(result)) => {
-                    let (real, propagation) =
-                        partition_propagation(field_changes(rid, &live, &result));
+                    let (real, propagation) = partition_propagation(field_changes(&live, &result));
                     if !real.is_empty() {
                         if let (Some(deployed), Some(new)) = (&self.deployed, new_by_rid.get(rid)) {
                             let three = ThreeWay {
@@ -153,7 +152,7 @@ impl Overlay<'_> {
                                 new,
                                 managed: Some(&live),
                                 applies: true,
-                                secret: rid.kind == "Secret",
+                                secret: types::is_secret(&live) || types::is_secret(new),
                             };
                             let (labels, drifted) = three.label(&real);
                             labelled.push((rid.clone(), labels));
@@ -267,6 +266,7 @@ fn empty_change(key: &str, version: Option<String>) -> PackageChangeDiff {
         old_version: version.clone(),
         new_version: version,
         resource_diffs: Vec::new(),
+        secrets: Default::default(),
         dep_affected_resources: Vec::new(),
         added_resources: Vec::new(),
         removed_resources: Vec::new(),
@@ -359,7 +359,7 @@ mod tests {
     #[test]
     fn server_metadata_is_not_a_change_and_secrets_stay_hidden() {
         let live = served(
-            &json!({"kind": "Secret", "metadata": {"name": "s", "annotations": {
+            &json!({"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "s", "annotations": {
             "kubectl.kubernetes.io/last-applied-configuration": "{\"data\":{\"p\":\"cGxhaW4=\"}}"}},
             "data": {"p": "b2xk"}}),
         );
@@ -368,18 +368,24 @@ mod tests {
         result["data"]["p"] = json!("bmV3");
         result["metadata"]["annotations"]["kubectl.kubernetes.io/last-applied-configuration"] =
             json!("{}");
-        let secret = ResourceId {
-            kind: "Secret".into(),
-            namespace: "app".into(),
-            name: "s".into(),
-        };
-        let diffs = field_changes(&secret, &live, &result);
+        let diffs = field_changes(&live, &result);
         let text = format!("{diffs:?}");
         for leaked in ["b2xk", "bmV3", "cGxhaW4="] {
             assert!(!text.contains(leaked), "{leaked} in {text}");
         }
         assert_eq!(diffs.len(), 2, "{diffs:?}");
         assert!(diffs.iter().all(|d| !d.path.contains("resourceVersion")));
+    }
+
+    #[test]
+    fn a_custom_resource_named_secret_shows_its_values() {
+        let live = served(&json!({"apiVersion": "x.example/v1", "kind": "Secret",
+            "metadata": {"name": "s"}, "data": {"p": "old-value"}}));
+        let mut result = live.clone();
+        result["data"]["p"] = json!("new-value");
+        let diffs = field_changes(&live, &result);
+        assert_eq!(diffs[0].a_value, Some(json!("old-value")), "{diffs:?}");
+        assert_eq!(diffs[0].b_value, Some(json!("new-value")), "{diffs:?}");
     }
 
     /// The build comparison says a ConfigMap changed; the server says one

@@ -5,6 +5,15 @@ use serde::{Deserialize, Serialize};
 /// Sentinel namespace value for cluster-scoped resources.
 pub const CLUSTER_SCOPED: &str = "_cluster";
 
+/// Whether `manifest` is a Kubernetes Secret: `apiVersion` `v1` and `kind`
+/// `Secret`. Kix hides a Secret's values by this rule, which is also the one
+/// Kix Enterprise's agent and server use. An object of another API group
+/// with kind `Secret` is a custom resource, and its values show.
+pub fn is_secret(manifest: &serde_json::Value) -> bool {
+    manifest.get("apiVersion").and_then(|v| v.as_str()) == Some("v1")
+        && manifest.get("kind").and_then(|v| v.as_str()) == Some("Secret")
+}
+
 /// Unique identifier for a K8s resource.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ResourceId {

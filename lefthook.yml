@@ -2,6 +2,13 @@
 # Install: lefthook install
 #
 # Rust hooks adapted from lithus monorepo pattern (no mise — uses cargo directly)
+
+# A hook that cannot find lefthook fails the commit or push. Without this,
+# the script `lefthook install` writes prints "Can't find lefthook in PATH"
+# and exits 0, so every check here is skipped. That happens outside the dev
+# shell once `nix store gc` has removed the lefthook store path the script
+# was installed with; `nix develop` reinstalls it (flake.nix shellHook).
+assert_lefthook_installed: true
 #
 # .github/workflows/lint.yml runs the nixfmt, deadnix, and Co-Authored-By
 # checks on every pull request too, for commits made without these hooks.
@@ -9,10 +16,12 @@
 # The installed git hooks run lefthook through Nix rather than looking for it
 # on PATH. Their own lookup prints "Can't find lefthook in PATH" and lets the
 # commit through unchecked, which is what happens in a shell outside devenv.
-# Nix is needed for the hooks below anyway, and once the registry's nixpkgs is
-# evaluated this costs about 0.1 s. A command rather than a script in the
-# repository keeps the hooks working on branches cut before this line.
-lefthook: "nix run nixpkgs#lefthook --"
+# Nix is needed for the hooks below anyway, and once nixpkgs is evaluated
+# this costs about 0.1 s. A command rather than a script in the repository
+# keeps the hooks working on branches cut before this line. `--inputs-from .`
+# takes lefthook from this flake's locked nixpkgs, as nixfmt and deadnix do,
+# not from the committer's registry.
+lefthook: "nix run --inputs-from . nixpkgs#lefthook --"
 
 commit-msg:
   commands:

@@ -68,6 +68,11 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let Some(mut p) = prepare(plan_args, ctx)? else {
         return Ok(());
     };
+    // A deploy decrypts a bundle's SOPS files for real, after review.
+    if let Some(b) = &p.bundle {
+        p.sops = b.sops(false)?;
+    }
+    annotate_record(&mut p, &args.record_annotations);
 
     // Detect stateful migration pairs and require --accept-migrations.
     if !p.migration_pairs.is_empty() {
@@ -155,6 +160,8 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let Prepared {
         result_path,
+        bundle,
+        sops,
         new_manifests,
         cluster,
         old_manifests,
@@ -236,26 +243,13 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // Build the deployment receipt before confirmation so dirty source state
     // is visible in the prompt.
-    let receipt =
-        crate::commands::compliance::receipt::build_receipt(&new_graph, &ctx.global.flake);
+    let receipt = match &bundle {
+        Some(b) => crate::commands::compliance::receipt::from_bundle(&new_graph, b),
+        None => crate::commands::compliance::receipt::build_receipt(&new_graph, &ctx.global.flake),
+    };
 
-    if receipt["source"]["dirty"] == Value::Bool(true) && !ctx.global.quiet {
-        // A dirty tree is allowed, but its recorded commit does not fully
-        // describe the deployed source.
-        println!();
-        println!(
-            "{}",
-            output::yellow(
-                "The working tree has uncommitted changes, so the commit recorded for this deploy"
-            )
-        );
-        println!(
-            "{}",
-            output::yellow("does not contain what is about to be applied. The record will say so.")
-        );
-        if let Some(rev) = receipt["source"]["revision"].as_str() {
-            println!("  {}", output::dim(rev));
-        }
+    if !ctx.global.quiet {
+        print_dirty_source_warning(&receipt, bundle.is_some());
     }
 
     // The nodes: do they carry the labels the plan's placement rules name?
@@ -311,6 +305,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         } else {
             None
         },
+        sops,
     ))?;
 
     // Save activation path for next deploy's diff and for soft `kix gc`.
@@ -319,6 +314,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // makes soft gc treat the current closure as garbage, and makes the next
     // `--current-activation` plan skip the nodes this run never applied.
     if end.current
+        && bundle.is_none()
         && let Err(e) = kix::eval::store::save_activation_path(&cluster, &result_path)
     {
         tracing::warn!(
@@ -382,6 +378,9 @@ fn check_saved_plan(saved: &SavedPlan, ctx: &mut CommandContext) -> Result<()> {
     let Some(mut p) = prepare(&saved.args, ctx)? else {
         return Ok(());
     };
+    if let Some(b) = &p.bundle {
+        p.sops = b.sops(false)?;
+    }
     let report = match &p.pre_client {
         Some(client) => Some(super::plan::dry_run(&p, &saved.args, client.clone(), ctx)?),
         None => None,
@@ -422,11 +421,50 @@ fn check_saved_plan(saved: &SavedPlan, ctx: &mut CommandContext) -> Result<()> {
     Ok(())
 }
 
+/// Write `--record-annotation` pairs onto the Activation record, both where
+/// the engine creates it before the first wave and where the plan applies
+/// it last, so the two stay the same manifest.
+fn annotate_record(p: &mut Prepared, annotations: &[(String, String)]) {
+    if annotations.is_empty() {
+        return;
+    }
+    let annotate = |manifest: &mut Value| {
+        if !lifecycle::is_record(manifest) {
+            return;
+        }
+        let meta = manifest
+            .as_object_mut()
+            .and_then(|m| m.get_mut("metadata"))
+            .and_then(Value::as_object_mut);
+        if let Some(meta) = meta {
+            let map = meta
+                .entry("annotations")
+                .or_insert_with(|| Value::Object(Default::default()));
+            if let Some(map) = map.as_object_mut() {
+                for (k, v) in annotations {
+                    map.insert(k.clone(), Value::String(v.clone()));
+                }
+            }
+        }
+    };
+    p.new_manifests.iter_mut().for_each(annotate);
+    for node in p.plan.nodes.iter_mut() {
+        if let ChangeAction::Apply(manifest) = &mut node.action {
+            annotate(manifest);
+        }
+    }
+}
+
 /// Everything a deploy decides before it writes: the two builds compared,
 /// the actions, and the engine plan. `kix plan` and `kix deploy` share it,
 /// so a plan made with the deploy's flags is the deploy's plan.
 pub(crate) struct Prepared {
     pub result_path: PathBuf,
+    /// The bundle the new side came from (`--bundle`), when it did.
+    pub bundle: Option<super::bundle::LoadedBundle>,
+    /// Where SOPS sources come from. A caller sets it for a bundle: `kix
+    /// plan` with placeholders, `kix deploy` with the real files.
+    pub sops: kix::cluster::secrets::SopsSources,
     pub new_graph: StoreGraph,
     pub new_manifests: Vec<Value>,
     /// The name the build gives the cluster, which keys its records and the
@@ -464,23 +502,54 @@ pub(crate) struct Prepared {
 /// `None` when the build has nothing to deploy. Progress lines go through
 /// [`crate::say!`], so `kix plan -o json` keeps them off stdout.
 pub(crate) fn prepare(args: &PlanArgs, ctx: &mut CommandContext) -> Result<Option<Prepared>> {
-    let flake_path = resolve_flake_path(&ctx.global.flake)?;
-
-    // Build the new activation and load its store graph.
-    if !ctx.global.quiet {
-        crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
-    }
     let status = |msg: &str| {
         if !ctx.global.quiet {
             eprint!("\r\x1b[2K  {msg}");
         }
     };
-    let overrides = ctx.global.input_overrides();
-    let result_path =
-        build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &status)
+    // The new side: a bundle, or a build of the flake.
+    let bundle = match &args.bundle {
+        Some(path) => {
+            if !ctx.global.quiet {
+                crate::say!("Reading bundle {}...", path.display());
+            }
+            let loaded = super::bundle::load(path)?;
+            if loaded.contents().cluster != args.cluster {
+                return Err(miette!(
+                    "the bundle {} is for cluster '{}', not '{}'",
+                    path.display(),
+                    loaded.contents().cluster,
+                    args.cluster
+                ));
+            }
+            super::bundle::register_deployed(&args.deployed_bundles)?;
+            Some(loaded)
+        }
+        None => None,
+    };
+    let (result_path, mut new_graph) = match &bundle {
+        Some(loaded) => {
+            let graph = loaded.graph()?;
+            (graph.result_dir.clone(), graph)
+        }
+        None => {
+            let flake_path = resolve_flake_path(&ctx.global.flake)?;
+            if !ctx.global.quiet {
+                crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
+            }
+            let overrides = ctx.global.input_overrides();
+            let result_path = build_cluster_activation_with_status(
+                &flake_path,
+                &args.cluster,
+                &overrides,
+                &status,
+            )
             .map_err(|e| miette!("failed to build cluster: {e}"))?;
-    let mut new_graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
-        .map_err(|e| miette!("{e}"))?;
+            let graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
+                .map_err(|e| miette!("{e}"))?;
+            (result_path, graph)
+        }
+    };
     // A kixpkgs pin from before the domain move renders Kix's own CRDs under
     // the retired group. Deploying it would put those CRDs back and leave two
     // groups live, which the CLI cannot tell apart. Check before
@@ -706,6 +775,8 @@ pub(crate) fn prepare(args: &PlanArgs, ctx: &mut CommandContext) -> Result<Optio
 
     Ok(Some(Prepared {
         result_path,
+        bundle,
+        sops: Default::default(),
         new_graph,
         new_manifests,
         cluster,
@@ -891,56 +962,32 @@ async fn load_old_from_cluster(
                 );
             }
 
-            // Prefer built-via, then fall back to the activation hash.
-            let result_dir = act
-                .built_via
-                .as_ref()
-                .map(std::path::PathBuf::from)
-                .filter(|p| p.join("kix-packages.json").exists())
-                .or_else(|| kix::eval::store::resolve_activation_by_hash(cluster, hash));
-
-            match result_dir {
-                Some(result_dir) => {
-                    let noop = |_: &str| {};
-                    match StoreGraph::from_result_dir_with_status(&result_dir, &noop) {
-                        Ok(mut old_graph) => {
-                            stamp_annotations(&mut old_graph);
-                            let manifests: Vec<Value> = old_graph
-                                .resources
-                                .values()
-                                .map(|r| r.manifest.clone())
-                                .collect();
-                            Ok((Some(old_graph), manifests, Some(client), Some(act)))
-                        }
-                        Err(e) => {
-                            // A store path that exists but will not load is
-                            // not a first deploy. Fall back to the cluster
-                            // rather than planning against nothing.
-                            if !global.quiet {
-                                crate::say!(
-                                    "  {} previous build at {} would not load ({e}). Reconstructing previous state from cluster",
-                                    output::yellow("!"),
-                                    result_dir.display(),
-                                );
-                            }
-                            let old_manifests = reconstruct_old_from_live(
-                                &client,
-                                &discovery,
-                                cluster,
-                                &act,
-                                global.quiet,
-                            )
-                            .await?;
-                            Ok((None, old_manifests, Some(client), Some(act)))
-                        }
-                    }
+            // A `--deployed-bundle`, then built-via, then the local cache.
+            match crate::commands::baseline::record_graph(cluster, hash, act.built_via.as_deref()) {
+                Ok(Some(mut old_graph)) => {
+                    stamp_annotations(&mut old_graph);
+                    let manifests: Vec<Value> = old_graph
+                        .resources
+                        .values()
+                        .map(|r| r.manifest.clone())
+                        .collect();
+                    Ok((Some(old_graph), manifests, Some(client), Some(act)))
                 }
-                None => {
+                found => {
+                    // A build that will not load, or is not the record's,
+                    // is not a first deploy. Fall back to the cluster rather
+                    // than planning against nothing.
                     if !global.quiet {
-                        crate::say!(
-                            "  {} store path for activation not found locally. Reconstructing previous state from cluster",
-                            output::yellow("!"),
-                        );
+                        match &found {
+                            Err(e) => crate::say!(
+                                "  {} {e}. Reconstructing previous state from cluster",
+                                output::yellow("!"),
+                            ),
+                            _ => crate::say!(
+                                "  {} store path for activation not found locally. Reconstructing previous state from cluster",
+                                output::yellow("!"),
+                            ),
+                        }
                     }
                     let old_manifests =
                         reconstruct_old_from_live(&client, &discovery, cluster, &act, global.quiet)
@@ -1403,6 +1450,7 @@ async fn run_deploy_async(
     consumed_failed: &[String],
     kept_orphans: activation::KeptOrphans,
     cached_baseline: Option<&str>,
+    sops: kix::cluster::secrets::SopsSources,
 ) -> Result<RunEnd> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
 
@@ -1445,6 +1493,20 @@ async fn run_deploy_async(
 
     if let Some(hash) = cached_baseline {
         check_cached_baseline(&client, &discovery, cluster_name, hash).await?;
+    }
+
+    if let (Some(name), Some(hash)) = (activation_name, activation_identity_hash)
+        && let Some((ar, _)) =
+            activation::find_activation_ar(&discovery).map_err(|e| miette!("{e}"))?
+        && let Some(found) = activation::identity_hash_of(&client, ar, name)
+            .await
+            .map_err(|e| miette!("{e}"))?
+        && found != hash
+    {
+        return Err(miette!(
+            "the cluster already has an Activation named {name} for another build \
+             (identity hash {found}, this build is {hash}). Nothing was applied."
+        ));
     }
 
     // The engine would refuse each of these on its own, part way through
@@ -1510,6 +1572,7 @@ async fn run_deploy_async(
             consumed_failed: consumed_failed.to_vec(),
             kept_orphans,
             mark_failed_on_abort: true,
+            sops,
         },
     ));
     let ops: Arc<dyn ClusterOps> = kube_ops.clone();
@@ -1862,21 +1925,8 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // is applied.
     let receipt =
         crate::commands::compliance::receipt::build_receipt(&new_graph, &ctx.global.flake);
-    if receipt["source"]["dirty"] == Value::Bool(true) && !ctx.global.quiet {
-        println!();
-        println!(
-            "{}",
-            output::yellow(
-                "The working tree has uncommitted changes, so the commit recorded for this deploy"
-            )
-        );
-        println!(
-            "{}",
-            output::yellow("does not contain what is about to be applied. The record will say so.")
-        );
-        if let Some(rev) = receipt["source"]["revision"].as_str() {
-            println!("  {}", output::dim(rev));
-        }
+    if !ctx.global.quiet {
+        print_dirty_source_warning(&receipt, false);
     }
 
     // Confirm before submitting the Activation.
@@ -1993,9 +2043,74 @@ fn print_migration_pairs(pairs: &[MigrationPair]) {
     println!();
 }
 
+/// Print [`dirty_source_warning`], if any.
+fn print_dirty_source_warning(receipt: &Value, from_bundle: bool) {
+    let Some((warning, revision)) = dirty_source_warning(receipt, from_bundle) else {
+        return;
+    };
+    println!();
+    for line in warning {
+        println!("{}", output::yellow(line));
+    }
+    if let Some(rev) = revision {
+        println!("  {}", output::dim(&rev));
+    }
+}
+
+/// The warning to print before confirming a deploy whose receipt records a
+/// dirty source, and the recorded revision. A dirty tree is allowed, but
+/// its recorded commit does not fully describe the deployed source. A
+/// bundle's receipt says what the machine that made the bundle recorded,
+/// so the revision is shown with its control characters escaped.
+fn dirty_source_warning(
+    receipt: &Value,
+    from_bundle: bool,
+) -> Option<([&'static str; 2], Option<String>)> {
+    if receipt["source"]["dirty"] != Value::Bool(true) {
+        return None;
+    }
+    let warning = if from_bundle {
+        [
+            "The bundle was made from a source tree with uncommitted changes, so the commit it",
+            "records does not contain what is about to be applied. The record will say so.",
+        ]
+    } else {
+        [
+            "The working tree has uncommitted changes, so the commit recorded for this deploy",
+            "does not contain what is about to be applied. The record will say so.",
+        ]
+    };
+    Some((
+        warning,
+        receipt["source"]["revision"]
+            .as_str()
+            .map(output::printable),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bundle's receipt is written by whoever made the bundle: its text
+    /// reaches the terminal without control characters, and the warning
+    /// is about the bundle's source, not the operator's tree.
+    #[test]
+    fn a_dirty_bundle_source_is_named_as_the_bundles_and_escaped() {
+        let receipt = serde_json::json!({"source": {
+            "dirty": true, "revision": "abc\u{1b}[2J\u{202e}-dirty"}});
+        let (warning, revision) = dirty_source_warning(&receipt, true).unwrap();
+        let text = warning.join(" ");
+        assert!(text.contains("bundle"), "{text}");
+        assert!(!text.contains("working tree"), "{text}");
+        let revision = revision.unwrap();
+        assert!(
+            !revision.chars().any(|c| c.is_control() || c == '\u{202e}'),
+            "{revision:?}"
+        );
+        let (warning, _) = dirty_source_warning(&receipt, false).unwrap();
+        assert!(warning.join(" ").contains("working tree"));
+    }
 
     fn orphans() -> Vec<ResourceId> {
         vec![

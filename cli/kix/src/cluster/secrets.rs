@@ -4,9 +4,10 @@
 //! decrypts the SOPS file via the `sops` CLI, optionally verifies the
 //! content hash, and injects the plaintext into `stringData`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -24,7 +25,7 @@ pub enum SecretError {
     SourceNotFound { path: String },
 
     #[error(
-        "content hash mismatch for secret '{name}': expected {expected}, got {actual}. \
+        "content hash mismatch for secret '{name}': expected {expected}. \
          Check that you are using the intended SOPS file. If the change is intentional, update the secret's hash in its Nix definition and rebuild."
     )]
     HashMismatch {
@@ -35,6 +36,64 @@ pub enum SecretError {
 
     #[error("failed to parse SOPS output as YAML/JSON for {path}: {message}")]
     ParseFailed { path: String, message: String },
+
+    /// A bundle's Secret names a SOPS source the bundle does not carry, or
+    /// carries none and no content hash.
+    #[error("secret '{name}': {message}")]
+    NotInBundle { name: String, message: String },
+
+    /// A SOPS file from a bundle is encrypted to something other than age
+    /// recipients alone.
+    #[error("SOPS file {path} must be encrypted to age recipients only: {message}")]
+    NotAgeOnly { path: String, message: String },
+}
+
+/// Where SOPS sources are read from.
+#[derive(Debug, Clone, Default)]
+pub enum SopsSources {
+    /// The path in each Secret's `kix.run/sops-source`, on this machine.
+    #[default]
+    Local,
+    /// Only the files a bundle carries ([`SopsSources::from_bundle`]).
+    Bundle(Arc<BundleSources>),
+}
+
+/// The SOPS files of a bundle, written to a private directory.
+#[derive(Debug)]
+pub struct BundleSources {
+    /// Store path named by `kix.run/sops-source` to the file on disk.
+    files: HashMap<String, PathBuf>,
+    /// Plan without decrypting: each Secret gets placeholder values for
+    /// the keys it declares.
+    placeholders: bool,
+    _dir: tempfile::TempDir,
+}
+
+impl SopsSources {
+    /// Write a bundle's SOPS files to a fresh directory, each under its
+    /// SHA-256 and its store name, and read them only from there.
+    pub fn from_bundle(
+        sources: HashMap<String, Vec<u8>>,
+        placeholders: bool,
+    ) -> std::io::Result<Self> {
+        let dir = tempfile::tempdir()?;
+        let mut files = HashMap::new();
+        for (store_path, bytes) in sources {
+            let digest: String = Sha256::digest(&bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            let name = crate::eval::store_path::name_of(&store_path).unwrap_or("source");
+            let file = dir.path().join(format!("{digest}-{name}"));
+            std::fs::write(&file, &bytes)?;
+            files.insert(store_path, file);
+        }
+        Ok(SopsSources::Bundle(Arc::new(BundleSources {
+            files,
+            placeholders,
+            _dir: dir,
+        })))
+    }
 }
 
 /// Result of hydrating a single secret.
@@ -70,6 +129,21 @@ pub fn needs_hydration(manifest: &Value) -> bool {
 ///
 /// Returns the list of hydrated secrets, or the first error encountered.
 pub fn hydrate_secrets(manifests: &mut [Value]) -> Result<Vec<HydrationResult>, SecretError> {
+    hydrate_secrets_from(manifests, &SopsSources::Local)
+}
+
+/// [`hydrate_secrets`], reading SOPS sources from `sources`.
+///
+/// From a bundle, a source must be one of the bundle's files, the file must
+/// be encrypted to age recipients only (so decrypting never reaches a cloud
+/// KMS or Vault with this machine's credentials), and the Secret must
+/// declare a content hash. With placeholders, nothing is decrypted: each
+/// declared key (`kix.run/secret-keys`) gets a value valid for the Secret's
+/// type.
+pub fn hydrate_secrets_from(
+    manifests: &mut [Value],
+    sources: &SopsSources,
+) -> Result<Vec<HydrationResult>, SecretError> {
     let mut results = Vec::new();
 
     for manifest in manifests.iter_mut() {
@@ -77,11 +151,247 @@ pub fn hydrate_secrets(manifests: &mut [Value]) -> Result<Vec<HydrationResult>, 
             continue;
         }
 
-        let result = hydrate_single(manifest)?;
+        let result = match sources {
+            SopsSources::Local => hydrate_single(manifest)?,
+            SopsSources::Bundle(bundle) => hydrate_from_bundle(manifest, bundle)?,
+        };
         results.push(result);
     }
 
     Ok(results)
+}
+
+fn hydrate_from_bundle(
+    manifest: &mut Value,
+    bundle: &BundleSources,
+) -> Result<HydrationResult, SecretError> {
+    let rid = ResourceId::from_value(manifest);
+    let not_in_bundle = |message: String| SecretError::NotInBundle {
+        name: rid.name.clone(),
+        message,
+    };
+    let source = keys::get(manifest, keys::SOPS_SOURCE)
+        .unwrap_or_default()
+        .to_string();
+    let path = bundle
+        .files
+        .get(&source)
+        .ok_or_else(|| not_in_bundle(format!("its SOPS source {source} is not in the bundle")))?;
+    let expected = keys::get(manifest, keys::CONTENT_HASH)
+        .map(str::to_string)
+        .ok_or_else(|| not_in_bundle(format!("it declares no {}", keys::CONTENT_HASH)))?;
+    let (clear_keys, input_type) = age_only_keys(path)?;
+
+    let data: BTreeMap<String, String> = if bundle.placeholders {
+        placeholders(manifest, &clear_keys)
+    } else {
+        let data = parse_secret_data(path, &decrypt_sops(path, Some(input_type))?)?;
+        if compute_content_hash(&data) != expected {
+            return Err(SecretError::HashMismatch {
+                name: rid.name.clone(),
+                expected,
+                actual: String::new(),
+            });
+        }
+        data
+    };
+    let keys_injected = data.len();
+    let string_data: serde_json::Map<String, Value> = data
+        .into_iter()
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect();
+    if let Some(obj) = manifest.as_object_mut() {
+        obj.insert("stringData".to_string(), Value::Object(string_data));
+    }
+    Ok(HydrationResult { rid, keys_injected })
+}
+
+/// A value for each of `keys`, valid for the Secret's type, so a dry run
+/// passes the API server's own checks without the real values.
+///
+/// The keys come from the SOPS file, where they are stored in clear, and
+/// not from the Secret's own annotation: they are the keys a deploy will
+/// write, so the plan shows exactly those.
+fn placeholders(manifest: &Value, keys: &[String]) -> BTreeMap<String, String> {
+    let secret_type = manifest
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("Opaque");
+    keys.iter()
+        .map(|key| {
+            let value = match (secret_type, key.as_str()) {
+                ("kubernetes.io/dockerconfigjson", ".dockerconfigjson") => r#"{"auths":{}}"#,
+                ("kubernetes.io/dockercfg", ".dockercfg") => "{}",
+                _ => "kix-placeholder",
+            };
+            (key.clone(), value.to_string())
+        })
+        .collect()
+}
+
+/// Refuse a SOPS file whose metadata names any key source but age, and
+/// return the file's keys (stored in clear; only values are encrypted) and
+/// its format, `json` or `yaml`. sops must be told that format: by default
+/// it goes by the file's extension, and a bundle chooses the name.
+///
+/// An allowlist: SOPS adds key sources over time (and `key_groups` can hold
+/// any of them), so a field this code does not know is refused.
+fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError> {
+    /// Metadata that names no key.
+    const NOT_KEYS: &[&str] = &[
+        "lastmodified",
+        "mac",
+        "mac_only_encrypted",
+        "version",
+        "unencrypted_suffix",
+        "encrypted_suffix",
+        "unencrypted_regex",
+        "encrypted_regex",
+        "unencrypted_comment_regex",
+        "encrypted_comment_regex",
+        "shamir_threshold",
+    ];
+    let refuse = |message: &str| SecretError::NotAgeOnly {
+        path: path.display().to_string(),
+        message: message.to_string(),
+    };
+    let text = std::fs::read_to_string(path).map_err(|e| refuse(&e.to_string()))?;
+    let (doc, input_type): (Value, _) = match serde_json::from_str(&text) {
+        Ok(doc) => (doc, "json"),
+        Err(_) => (
+            serde_yml::from_str(&text)
+                .map_err(|_| refuse("only YAML or JSON SOPS files can come from a bundle"))?,
+            "yaml",
+        ),
+    };
+    // `doc` keeps the last of a repeated key, where sops would refuse it
+    // (YAML) or merge it into the first (JSON).
+    let unique = match input_type {
+        "json" => serde_json::from_str::<UniqueKeys>(&text).is_ok(),
+        _ => serde_yml::from_str::<UniqueKeys>(&text).is_ok(),
+    };
+    if !unique {
+        return Err(refuse("an object in it repeats a key"));
+    }
+    // yaml.v3 matches `sops` exactly; Go's encoding/json does not.
+    if let Some(key) = doc
+        .as_object()
+        .filter(|_| input_type == "json")
+        .into_iter()
+        .flat_map(|o| o.keys())
+        .find(|k| *k != "sops" && folds_to_sops(k))
+    {
+        return Err(refuse(&format!(
+            "sops would read its key {key} as metadata"
+        )));
+    }
+    let sops = doc
+        .get("sops")
+        .and_then(Value::as_object)
+        .ok_or_else(|| refuse("it has no sops metadata"))?;
+    for (field, value) in sops {
+        let empty = match value {
+            Value::Null => true,
+            Value::Array(a) => a.is_empty(),
+            Value::String(s) => s.is_empty(),
+            _ => false,
+        };
+        if field != "age" && !NOT_KEYS.contains(&field.as_str()) && !empty {
+            return Err(refuse(&format!("it also names {field}")));
+        }
+    }
+    match sops.get("age") {
+        Some(Value::Array(a)) if !a.is_empty() => {}
+        _ => return Err(refuse("it names no age recipient")),
+    }
+    let keys = doc
+        .as_object()
+        .into_iter()
+        .flat_map(|o| o.keys())
+        .filter(|k| *k != "sops")
+        .cloned()
+        .collect();
+    Ok((keys, input_type))
+}
+
+/// Whether Go's encoding/json, which sops reads JSON metadata with, takes
+/// `key` for the `sops` field. It matches field names under Unicode simple
+/// case folding, where `ſ` (U+017F) folds with `s`. The fields inside the
+/// metadata need no such check: the allowlist in [`age_only_keys`] matches
+/// them exactly and refuses any other non-empty field.
+fn folds_to_sops(key: &str) -> bool {
+    let mut chars = key.chars();
+    "sops".chars().all(|want| {
+        chars
+            .next()
+            .is_some_and(|c| c.to_ascii_lowercase() == want || (want == 's' && c == 'ſ'))
+    }) && chars.next().is_none()
+}
+
+/// A JSON or YAML document that deserializes only when no object in it
+/// repeats a key.
+struct UniqueKeys;
+
+impl<'de> serde::Deserialize<'de> for UniqueKeys {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(UniqueKeys)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for UniqueKeys {
+    type Value = UniqueKeys;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a JSON or YAML value")
+    }
+
+    fn visit_bool<E>(self, _: bool) -> Result<Self, E> {
+        Ok(self)
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<Self, E> {
+        Ok(self)
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<Self, E> {
+        Ok(self)
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<Self, E> {
+        Ok(self)
+    }
+
+    fn visit_str<E>(self, _: &str) -> Result<Self, E> {
+        Ok(self)
+    }
+
+    fn visit_unit<E>(self) -> Result<Self, E> {
+        Ok(self)
+    }
+
+    fn visit_none<E>(self) -> Result<Self, E> {
+        Ok(self)
+    }
+
+    fn visit_some<D: serde::Deserializer<'de>>(self, d: D) -> Result<Self, D::Error> {
+        d.deserialize_any(self)
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self, A::Error> {
+        while seq.next_element::<UniqueKeys>()?.is_some() {}
+        Ok(self)
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self, A::Error> {
+        let mut seen = std::collections::HashSet::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if !seen.insert(key) {
+                return Err(serde::de::Error::custom("repeated key"));
+            }
+            map.next_value::<UniqueKeys>()?;
+        }
+        Ok(self)
+    }
 }
 
 /// Hydrate a single Secret manifest.
@@ -105,7 +415,7 @@ fn hydrate_single(manifest: &mut Value) -> Result<HydrationResult, SecretError> 
     let sops_path = resolve_sops_path(&sops_source)?;
 
     // Decrypt
-    let plaintext = decrypt_sops(&sops_path)?;
+    let plaintext = decrypt_sops(&sops_path, None)?;
 
     // Parse the decrypted YAML/JSON into key-value pairs
     let data = parse_secret_data(&sops_path, &plaintext)?;
@@ -163,15 +473,14 @@ fn resolve_sops_path(source: &str) -> Result<PathBuf, SecretError> {
 }
 
 /// Decrypt a SOPS file using the `sops` CLI.
-fn decrypt_sops(path: &Path) -> Result<String, SecretError> {
-    let output = Command::new("sops")
-        .args(["--decrypt", "--output-type", "json"])
-        .arg(path)
-        .output()
-        .map_err(|e| SecretError::DecryptionFailed {
-            path: path.display().to_string(),
-            message: format!("failed to run sops: {e}"),
-        })?;
+fn decrypt_sops(path: &Path, input_type: Option<&str>) -> Result<String, SecretError> {
+    let output =
+        decrypt_command(path, input_type)
+            .output()
+            .map_err(|e| SecretError::DecryptionFailed {
+                path: path.display().to_string(),
+                message: format!("failed to run sops: {e}"),
+            })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -185,6 +494,18 @@ fn decrypt_sops(path: &Path) -> Result<String, SecretError> {
         path: path.display().to_string(),
         message: format!("invalid UTF-8 in decrypted output: {e}"),
     })
+}
+
+/// The `sops` command that decrypts `path` to JSON, reading it as
+/// `input_type` when given and by its extension otherwise.
+fn decrypt_command(path: &Path, input_type: Option<&str>) -> Command {
+    let mut command = Command::new("sops");
+    command.arg("--decrypt");
+    if let Some(input_type) = input_type {
+        command.args(["--input-type", input_type]);
+    }
+    command.args(["--output-type", "json"]).arg(path);
+    command
 }
 
 /// Parse decrypted SOPS output into a flat key-value map.
@@ -406,5 +727,158 @@ mod tests {
         data2.insert("a".to_string(), "1".to_string());
 
         assert_eq!(compute_content_hash(&data1), compute_content_hash(&data2));
+    }
+
+    const SOURCE: &str = "/nix/store/yxyad967bhmxvm5120mrjnrrr7ak087w-db.sops.yaml";
+    const AGE_ONLY: &str = "password: ENC[AES256_GCM,data:abc]\nsops:\n  kms: []\n  age:\n    - recipient: age1abc\n      enc: x\n  lastmodified: '2026-10-06T00:00:00Z'\n  mac: ENC[x]\n  version: 3.9.0\n";
+
+    fn bundle_secret(source: &str, content_hash: Option<&str>) -> Value {
+        let mut annotations = serde_json::json!({
+            (keys::SOPS_SOURCE): source,
+            (keys::SECRET_KEYS): "password, .dockerconfigjson",
+        });
+        if let Some(h) = content_hash {
+            annotations[keys::CONTENT_HASH] = serde_json::json!(h);
+        }
+        serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "type": "kubernetes.io/dockerconfigjson",
+            "metadata": {"name": "db", "namespace": "app", "annotations": annotations},
+        })
+    }
+
+    fn from_bundle(text: &str, placeholders: bool) -> SopsSources {
+        SopsSources::from_bundle(
+            HashMap::from([(SOURCE.to_string(), text.as_bytes().to_vec())]),
+            placeholders,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_plan_from_a_bundle_gets_placeholders_typed_for_the_secret() {
+        let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+        let text = format!(".dockerconfigjson: ENC[AES256_GCM,data:def]\n{AGE_ONLY}");
+        let results = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap();
+        assert_eq!(results[0].keys_injected, 2);
+        assert_eq!(manifests[0]["stringData"]["password"], "kix-placeholder");
+        assert_eq!(
+            manifests[0]["stringData"][".dockerconfigjson"],
+            r#"{"auths":{}}"#
+        );
+    }
+
+    /// The annotation is the bundle's word; the SOPS file is what a deploy
+    /// writes.
+    #[test]
+    fn placeholder_keys_come_from_the_sops_file_not_the_annotation() {
+        let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+        manifests[0]["metadata"]["annotations"][keys::SECRET_KEYS] = "only-this".into();
+        hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap();
+        assert_eq!(
+            manifests[0]["stringData"],
+            json!({"password": "kix-placeholder"})
+        );
+    }
+
+    #[test]
+    fn a_source_the_bundle_does_not_carry_is_refused() {
+        let other = "/nix/store/0h5dy43cxa771fiz9dsx14c0vf32sn67-db.sops.yaml";
+        let mut manifests = [bundle_secret(other, Some("sha256-x"))];
+        let err = hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap_err();
+        assert!(matches!(err, SecretError::NotInBundle { .. }), "{err}");
+    }
+
+    #[test]
+    fn a_secret_from_a_bundle_must_declare_a_content_hash() {
+        let mut manifests = [bundle_secret(SOURCE, None)];
+        let err = hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap_err();
+        assert!(matches!(err, SecretError::NotInBundle { .. }), "{err}");
+    }
+
+    /// sops reads a file in the format its extension names unless told
+    /// otherwise, and a bundle chooses the name.
+    #[test]
+    fn a_bundle_sops_file_is_decrypted_in_the_format_kix_checked() {
+        let json = r#"{"password":"ENC[x]","sops":{"age":[{"recipient":"age1abc","enc":"x"}],"mac":"ENC[x]","version":"3.9.0"}}"#;
+        let dir = tempfile::tempdir().unwrap();
+        for (text, name, format) in [(AGE_ONLY, "s.ini", "yaml"), (json, "s.yaml", "json")] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            let (_, input_type) = age_only_keys(&path).unwrap();
+            let command = decrypt_command(&path, Some(input_type));
+            let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+            assert!(
+                args.windows(2).any(|w| w == ["--input-type", format]),
+                "{name}: {args:?}"
+            );
+        }
+    }
+
+    /// sops reads JSON metadata with Go's encoding/json, which takes a key
+    /// that matches `sops` ignoring case (Unicode simple folding, so `ſ`
+    /// matches `s`) and merges a repeated key into the one before it.
+    /// serde_json keeps the last of a repeated key and reads `SOPS` as data,
+    /// so it could see age alone where sops sees a cloud KMS.
+    #[test]
+    fn a_json_sops_file_that_go_reads_differently_is_refused() {
+        let age = r#"{"age":[{"recipient":"age1abc","enc":"x"}],"mac":"ENC[x]","version":"3.9.0"}"#;
+        let kms = r#"{"kms":[{"arn":"arn:aws:kms:eu-west-1:000000000000:key/x"}]}"#;
+        let refused = [
+            format!(r#"{{"data":"ENC[x]","sops":{age},"SOPS":{kms}}}"#),
+            format!(r#"{{"data":"ENC[x]","ſops":{kms},"sops":{age}}}"#),
+            format!(r#"{{"data":"ENC[x]","sops":{kms},"sops":{age}}}"#),
+            r#"{"data":"ENC[x]","sops":{"kms":[],"age":[],"age":[{"recipient":"age1abc"}]}}"#
+                .to_string(),
+        ];
+        for text in refused {
+            let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+            let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+            assert!(
+                matches!(err, SecretError::NotAgeOnly { .. }),
+                "{text}: {err}"
+            );
+        }
+    }
+
+    /// yaml.v3 matches `sops` exactly, so in YAML a key `SOPS` is data.
+    #[test]
+    fn a_yaml_sops_file_may_hold_a_key_named_sops_in_capitals() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.yaml");
+        let text = AGE_ONLY.replace("password: ", "SOPS: ");
+        std::fs::write(&path, text).unwrap();
+        let (keys, input_type) = age_only_keys(&path).unwrap();
+        assert_eq!((keys, input_type), (vec!["SOPS".to_string()], "yaml"));
+    }
+
+    /// sops reads YAML with yaml.v3, which refuses a repeated key and matches
+    /// `sops` exactly. serde_yml refuses a repeated key too.
+    #[test]
+    fn a_yaml_sops_file_with_a_repeated_key_is_refused() {
+        let text = format!("sops:\n  kms:\n    - arn: arn:aws:kms:x\n{AGE_ONLY}");
+        let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+        let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+        assert!(matches!(err, SecretError::NotAgeOnly { .. }), "{err}");
+    }
+
+    #[test]
+    fn a_bundle_sops_file_must_name_age_recipients_only() {
+        let refused = [
+            AGE_ONLY.replace("kms: []", "kms:\n    - arn: arn:aws:kms:x"),
+            AGE_ONLY.replace("kms: []", "key_groups:\n    - pgp: [x]"),
+            AGE_ONLY.replace("kms: []", "some_new_kms: x"),
+            "password: x\nsops:\n  age: []\n".to_string(),
+            "password: x\n".to_string(),
+        ];
+        for text in refused {
+            let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+            let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+            assert!(
+                matches!(err, SecretError::NotAgeOnly { .. }),
+                "{text}: {err}"
+            );
+        }
     }
 }

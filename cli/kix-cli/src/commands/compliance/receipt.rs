@@ -39,6 +39,7 @@ use kix::eval::store_graph::StoreGraph;
 use kix::manifest::keys;
 
 use super::shared;
+use crate::commands::bundle::LoadedBundle;
 
 /// Assemble the receipt for a build that is about to be deployed.
 pub fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
@@ -82,6 +83,36 @@ pub fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
             .and_then(|p| shared::read_flake_lock(p))
             .map(|lock| flake_inputs(&lock))
             .unwrap_or_else(|| json!([])),
+        "images": images(graph),
+    })
+}
+
+/// The receipt for a deploy from a bundle.
+///
+/// The source, inputs and builder are what the machine that made the bundle
+/// recorded; this machine has no source tree to read them from. They are
+/// claims by whoever uploaded the bundle. The bundle's SHA-256 is not: it
+/// names exactly the bytes that were deployed.
+pub fn from_bundle(graph: &StoreGraph, loaded: &LoadedBundle) -> Value {
+    let made = loaded.contents().receipt.clone().unwrap_or_default();
+    let mut source = Value::Object(made.source);
+    source["bundle"] = json!({
+        "sha256": loaded.sha256(),
+        "kixRev": loaded.contents().kix_rev,
+    });
+    json!({
+        "schema": keys::RECEIPT_SCHEMA,
+        "cluster": graph.cluster_name,
+        "activationHash": shared::activation_identity_hash(graph),
+        "deployedAt": shared::now_rfc3339(),
+        "source": source,
+        "builder": made.builder,
+        "deployer": {
+            "kixVersion": env!("CARGO_PKG_VERSION"),
+            "arch": std::env::consts::ARCH,
+            "os": std::env::consts::OS,
+        },
+        "inputs": made.inputs,
         "images": images(graph),
     })
 }
@@ -476,5 +507,38 @@ mod tests {
         // A malformed digest is a reference Kix will not vouch for.
         collect_images(&json!({ "image": "reg/app@sha256:short" }), &mut found);
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// A deploy from a bundle records the bytes it deployed, and repeats
+    /// what the bundle's maker recorded about the source.
+    #[test]
+    fn a_bundle_receipt_names_the_bundle_and_keeps_its_makers_record() {
+        use kix::eval::bundle::Bundle;
+
+        let fixture: &[u8] =
+            include_bytes!("../../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle");
+        let mut contents = Bundle::read(fixture).unwrap().into_contents();
+        contents.receipt = Some(
+            serde_json::from_value(json!({
+                "source": {"revision": "abc", "dirty": false},
+                "inputs": [{"name": "nixpkgs"}],
+                "builder": {"kixVersion": "0.0.1"},
+            }))
+            .unwrap(),
+        );
+        let mut bytes = Vec::new();
+        contents.write(&mut bytes).unwrap();
+        let loaded = LoadedBundle::from(Bundle::read(bytes.as_slice()).unwrap());
+        let graph = loaded.graph().unwrap();
+        let r = from_bundle(&graph, &loaded);
+        assert_eq!(r["source"]["revision"], "abc");
+        assert_eq!(r["source"]["bundle"]["sha256"], json!(loaded.sha256()));
+        assert_eq!(r["inputs"][0]["name"], "nixpkgs");
+        assert_eq!(r["builder"]["kixVersion"], "0.0.1");
+        assert_eq!(r["deployer"]["kixVersion"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            r["activationHash"],
+            json!(kix::eval::store_graph::store_hash(&graph.activation_path))
+        );
     }
 }

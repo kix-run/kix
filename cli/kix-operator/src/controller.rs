@@ -545,6 +545,7 @@ async fn run_reconcile(
             // Its model is resume-on-requeue: a reconcile that returns early
             // is retried, so marking the record Failed would fight it.
             mark_failed_on_abort: false,
+            sops: Default::default(),
         },
     ));
 
