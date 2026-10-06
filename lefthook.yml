@@ -16,10 +16,12 @@ assert_lefthook_installed: true
 # The installed git hooks run lefthook through Nix rather than looking for it
 # on PATH. Their own lookup prints "Can't find lefthook in PATH" and lets the
 # commit through unchecked, which is what happens in a shell outside devenv.
-# Nix is needed for the hooks below anyway, and once the registry's nixpkgs is
-# evaluated this costs about 0.1 s. A command rather than a script in the
-# repository keeps the hooks working on branches cut before this line.
-lefthook: "nix run nixpkgs#lefthook --"
+# Nix is needed for the hooks below anyway, and once nixpkgs is evaluated
+# this costs about 0.1 s. A command rather than a script in the repository
+# keeps the hooks working on branches cut before this line. `--inputs-from .`
+# takes lefthook from this flake's locked nixpkgs, as nixfmt and deadnix do,
+# not from the committer's registry.
+lefthook: "nix run --inputs-from . nixpkgs#lefthook --"
 
 commit-msg:
   commands:
