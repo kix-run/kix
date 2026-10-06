@@ -48,7 +48,7 @@ const toneClass: Record<Tone, string> = {
 // The deploy waves are a diagram of dependency order, not CLI output.
 const waves = [
   ['Secret/db', 'ConfigMap/web'],
-  ['SGCluster/db'],
+  ['Cluster/db'],
   ['Service/web', 'Deployment/web'],
   ['HTTPRoute/web'],
 ];
