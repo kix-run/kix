@@ -1,0 +1,105 @@
+---
+// Light / Dark / Auto segmented control. Behaviour mirrors Starlight's
+// ThemeSelect: localStorage key `starlight-theme` stores 'light' | 'dark' |
+// '' (empty = auto); `<html data-theme>` carries the resolved theme.
+---
+
+
+<starlight-theme-toggle role="group" aria-label="Theme">
+  <button type="button" data-theme-value="light" aria-label="Light theme" title="Light">
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="4"></circle>
+      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+    </svg>
+  </button>
+  <button type="button" data-theme-value="dark" aria-label="Dark theme" title="Dark">
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+    </svg>
+  </button>
+  <button type="button" data-theme-value="auto" aria-label="Auto theme (match system)" title="Auto">
+    <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect width="20" height="14" x="2" y="3" rx="2"></rect>
+      <path d="M8 21h8M12 17v4"></path>
+    </svg>
+  </button>
+</starlight-theme-toggle>
+
+<style>
+  starlight-theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    border: 1px solid var(--kix-line);
+    border-radius: 7px;
+    padding: 2px;
+    background-color: var(--kix-paper-2);
+  }
+  starlight-theme-toggle button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.625rem;
+    height: 1.625rem;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--kix-ink-2);
+    cursor: pointer;
+  }
+  starlight-theme-toggle button:hover {
+    color: var(--kix-ink);
+  }
+  starlight-theme-toggle button[aria-pressed='true'] {
+    border-color: var(--kix-line);
+    background-color: var(--kix-paper);
+    color: var(--kix-ink);
+  }
+</style>
+
+<script>
+  type Theme = 'auto' | 'dark' | 'light';
+
+  const storageKey = 'starlight-theme';
+
+  const parseTheme = (theme: unknown): Theme =>
+    theme === 'auto' || theme === 'dark' || theme === 'light' ? theme : 'auto';
+
+  const loadTheme = (): Theme =>
+    parseTheme(typeof localStorage !== 'undefined' && localStorage.getItem(storageKey));
+
+  function storeTheme(theme: Theme): void {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(storageKey, theme === 'light' || theme === 'dark' ? theme : '');
+    }
+  }
+
+  const getPreferredColorScheme = (): 'light' | 'dark' =>
+    matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+
+  function applyTheme(theme: Theme): void {
+    document.documentElement.dataset.theme = theme === 'auto' ? getPreferredColorScheme() : theme;
+    storeTheme(theme);
+    for (const el of document.querySelectorAll<HTMLElement>('starlight-theme-toggle button[data-theme-value]')) {
+      el.setAttribute('aria-pressed', String(el.dataset.themeValue === theme));
+    }
+  }
+
+  matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
+    if (loadTheme() === 'auto') applyTheme('auto');
+  });
+
+  class StarlightThemeToggle extends HTMLElement {
+    constructor() {
+      super();
+      applyTheme(loadTheme());
+      for (const button of this.querySelectorAll<HTMLButtonElement>('button[data-theme-value]')) {
+        button.addEventListener('click', () => {
+          applyTheme(parseTheme(button.dataset.themeValue));
+        });
+      }
+    }
+  }
+  customElements.define('starlight-theme-toggle', StarlightThemeToggle);
+</script>

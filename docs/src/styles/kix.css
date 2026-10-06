@@ -1,0 +1,686 @@
+/* Kix theme for the Starlight docs: paper, ink and orange, Inter Tight and
+ * JetBrains Mono, night panels for every terminal and code block.
+ *
+ * Design source: kix-oss-handoff design/kix-oss.pen.json, frames mJBvI
+ * (light page), o1hudj (dark page) and z240z (theme sheet).
+ *
+ * The design tokens are exposed as --kix-*; the --sl-* blocks map them onto
+ * Starlight's variable contract:
+ * - --sl-color-white … --sl-color-black is a text-to-background ramp:
+ *   white is the strongest text in both modes, black is the page.
+ * - --sl-color-gray-5 is the hairline; gray-6 a raised surface.
+ * - :root is dark (Starlight's default); :root[data-theme='light'] is light.
+ *
+ * Rules outside a cascade layer override Starlight's layered styles, so
+ * nothing here needs !important.
+ */
+
+:root {
+  --sl-font: 'Inter Tight Variable';
+  --sl-font-mono: 'JetBrains Mono Variable';
+  --kix-mono: var(--__sl-font-mono);
+
+  --sl-color-bg-nav: var(--sl-color-bg);
+  --sl-color-bg-sidebar: var(--sl-color-bg);
+  --sl-color-hairline-light: var(--kix-line);
+  --sl-color-hairline-shade: var(--kix-line);
+  --sl-color-bg-inline-code: var(--kix-paper-2);
+
+  /* Terminals and code are night panels in both modes; the panel colours
+     (--kix-code-*) differ per mode and are set below. */
+  --kix-on-night: #ece9e1;
+  --kix-on-night-2: #9ca0a8;
+  --kix-t-green: #8bd49a;
+  --kix-t-red: #ff7a6b;
+  --kix-t-yellow: #e9c46a;
+  --kix-t-blue: #8ab4f8;
+  --kix-t-dim: #6b707a;
+  /* t-dim as text on a night panel: #6B707A is 3.9:1 on #101216, under the
+     4.5:1 AA minimum for small text. */
+  --kix-on-night-dim: #80858f;
+  --kix-line-number: #3e434c;
+  --kix-brand: #f2542d;
+  --kix-mark: #f2542d1a;
+
+  --ansi-black: var(--kix-on-night-dim);
+  --ansi-red: var(--kix-t-red);
+  --ansi-green: var(--kix-t-green);
+  --ansi-yellow: var(--kix-t-yellow);
+  --ansi-blue: var(--kix-t-blue);
+  --ansi-magenta: #d7a8f0;
+  --ansi-cyan: #7fd6cc;
+  --ansi-white: var(--kix-on-night);
+  --ansi-bright-black: var(--kix-on-night-dim);
+  --ansi-bright-red: #ff998d;
+  --ansi-bright-green: #a7e2b2;
+  --ansi-bright-yellow: #f0d58f;
+  --ansi-bright-blue: #a9c8fa;
+  --ansi-bright-magenta: #e3c2f5;
+  --ansi-bright-cyan: #a3e4dc;
+  --ansi-bright-white: #ffffff;
+
+  /* Layout: a two-row header (top bar + topic tabs) on wide screens. */
+  --kix-topbar-height: 4rem;
+  --kix-tabs-height: 2.625rem;
+}
+
+@media (min-width: 50rem) {
+  :root {
+    --sl-nav-height: calc(var(--kix-topbar-height) + var(--kix-tabs-height));
+    --sl-nav-pad-x: 2rem;
+    --sl-content-width: 45rem;
+  }
+}
+
+/* At 1440px the design is: 300px sidebar, 80px gutters around a 720px
+   article, and a 260px right rail (TwoColumnContent.astro lays them out).
+   Between 72rem and 90rem the gutters shrink. */
+@media (min-width: 72rem) {
+  :root {
+    --sl-content-pad-x: 2.5rem;
+    --kix-rail-width: 16.25rem;
+  }
+}
+@media (min-width: 90rem) {
+  :root {
+    --sl-content-pad-x: 5rem;
+  }
+}
+
+/* Dark (Starlight default) */
+:root {
+  --kix-paper: #101216;
+  --kix-paper-2: #191c22;
+  --kix-line: #2a2e36;
+  --kix-ink: #ece9e1;
+  --kix-ink-2: #9ca0a8;
+  /* Mono labels in t-dim: #6B707A is 3.9:1 on the dark page; this is 4.8:1. */
+  --kix-dim: #80858f;
+  --kix-accent-text: #f2542d;
+  --kix-accent-soft: #f2542d33;
+  --kix-caution: #e9c46a;
+  --kix-caution-bg: #e9c46a1f;
+  --kix-danger: #ff7a6b;
+  --kix-danger-bg: #ff7a6b1f;
+  --kix-code-bg: #0b0d10;
+  --kix-code-chrome: #121419;
+  --kix-code-line: #252932;
+  --kix-cta-bg: #f2542d;
+  --kix-cta-fg: #15171c;
+
+  --sl-color-accent-low: #3a1e16;
+  --sl-color-accent: #f2542d;
+  --sl-color-accent-high: #f7a58f;
+  --sl-color-text-accent: var(--kix-accent-text);
+  --sl-color-text-invert: #101216;
+  --sl-color-white: #ece9e1;
+  --sl-color-gray-1: #d5d2ca;
+  --sl-color-gray-2: #b8b6b0;
+  --sl-color-gray-3: #9ca0a8;
+  --sl-color-gray-4: #80858f;
+  --sl-color-gray-5: #2a2e36;
+  --sl-color-gray-6: #191c22;
+  --sl-color-black: #101216;
+  --sl-color-backdrop-overlay: #101216b3;
+}
+
+/* Light */
+:root[data-theme='light'] {
+  --kix-paper: #f2efe7;
+  --kix-paper-2: #e9e5da;
+  --kix-line: #d6d0c2;
+  --kix-ink: #15171c;
+  --kix-ink-2: #565a63;
+  /* Mono labels in t-dim: #6B707A is 4.4:1 on paper; this is 5.2:1. */
+  --kix-dim: #62666f;
+  /* accent-text: the design's #B5401F is 4.49:1 on paper-2, where asides put
+     links and the "Use it in a task" label; this is 4.8:1 there. caution:
+     the design's #A8761C is 3.2:1 on its own fill; this is 4.6:1. */
+  --kix-accent-text: #ad3d1d;
+  --kix-accent-soft: #f7e1d8;
+  --kix-caution: #86600f;
+  --kix-caution-bg: #f3e6c4;
+  --kix-danger: #b3261e;
+  --kix-danger-bg: #f6dcd6;
+  --kix-code-bg: #101216;
+  --kix-code-chrome: #191c22;
+  --kix-code-line: #2a2e36;
+  --kix-cta-bg: #15171c;
+  --kix-cta-fg: #f2efe7;
+
+  --sl-color-accent-low: #f7e1d8;
+  --sl-color-accent: #ad3d1d;
+  --sl-color-accent-high: #8f3015;
+  --sl-color-text-accent: var(--kix-accent-text);
+  --sl-color-text-invert: #f2efe7;
+  --sl-color-white: #15171c;
+  --sl-color-gray-1: #2a2d33;
+  --sl-color-gray-2: #3f434b;
+  --sl-color-gray-3: #565a63;
+  --sl-color-gray-4: #62666f;
+  --sl-color-gray-5: #d6d0c2;
+  --sl-color-gray-6: #e9e5da;
+  --sl-color-gray-7: #eeebe2;
+  --sl-color-black: #f2efe7;
+  --sl-color-backdrop-overlay: #15171c73;
+}
+
+body {
+  font-feature-settings: 'ss01' off;
+}
+
+::selection {
+  background-color: var(--kix-accent-soft);
+}
+
+/* Mono caps label used for kickers and metadata across the docs. */
+.kix-label {
+  font-family: var(--kix-mono);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--kix-ink-2);
+}
+
+/* Page frame
+ * ------------------------------------------------------------------------- */
+
+.header {
+  border-bottom-color: var(--kix-line);
+}
+
+@media (min-width: 50rem) {
+  /* The Header override draws its own two rows. */
+  .page > .header {
+    padding: 0;
+  }
+  .sidebar-pane {
+    border-inline-end-color: var(--kix-line);
+  }
+}
+
+.main-pane {
+  --kix-article-top: 3rem;
+}
+
+.content-panel {
+  border-top: 0;
+}
+.content-panel + .content-panel {
+  border-top: 0;
+  padding-top: 0;
+}
+@media (min-width: 72rem) {
+  .content-panel:first-child {
+    padding-top: var(--kix-article-top);
+  }
+}
+
+
+/* Markdown
+ * ------------------------------------------------------------------------- */
+
+.sl-markdown-content {
+  --sl-line-height: 1.65;
+  font-size: 1rem;
+  color: var(--kix-ink);
+}
+
+.sl-markdown-content :is(h2, h3, h4, h5):not(:where(.not-content, .not-content *)) {
+  color: var(--kix-ink);
+  font-weight: 600;
+}
+.sl-markdown-content h2:not(:where(.not-content, .not-content *)) {
+  margin-top: 3rem;
+  font-size: 1.75rem;
+  letter-spacing: -0.021em;
+  line-height: 1.2;
+}
+.sl-markdown-content h3:not(:where(.not-content, .not-content *)) {
+  margin-top: 2rem;
+  font-size: 1.25rem;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+.sl-markdown-content h4:not(:where(.not-content, .not-content *)) {
+  font-size: 1.0625rem;
+}
+.sl-markdown-content :is(h2, h3, h4, h5, .sl-heading-wrapper) + :not(:where(.not-content, .not-content *)) {
+  margin-top: 0.75rem;
+}
+/* Starlight wraps headings in .sl-heading-wrapper for the anchor link; the
+   spacing belongs on the wrapper. */
+.sl-markdown-content .sl-heading-wrapper > :is(h2, h3, h4, h5) {
+  margin-top: 0;
+}
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+  margin-top: 3rem;
+}
+.sl-markdown-content .sl-heading-wrapper:is(.level-h3, .level-h4, .level-h5) {
+  margin-top: 2rem;
+}
+
+.sl-markdown-content a:not(:where(.not-content, .not-content *)) {
+  color: var(--kix-accent-text);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+.sl-markdown-content a:not(:where(.not-content, .not-content *)):hover {
+  color: var(--sl-color-accent-high);
+}
+.sl-markdown-content :is(h2, h3, h4) a:not(:where(.not-content, .not-content *)) {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Inline code */
+.sl-markdown-content :not(pre) > code:not(:where(.not-content, .not-content *)) {
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--kix-line);
+  border-radius: 4px;
+  background-color: var(--kix-paper-2);
+  color: var(--kix-ink);
+  font-size: 0.875em;
+  overflow-wrap: anywhere;
+}
+.sl-markdown-content a > code:not(:where(.not-content, .not-content *)) {
+  border-color: transparent;
+  border-bottom-color: var(--kix-accent-text);
+  background-color: var(--kix-accent-soft);
+  color: var(--kix-accent-text);
+}
+.sl-markdown-content a:has(> code:only-child) {
+  text-decoration: none;
+}
+.sl-markdown-content :is(h2, h3, h4) code:not(:where(.not-content, .not-content *)) {
+  font-size: 0.85em;
+}
+
+.sl-markdown-content kbd:not(:where(.not-content, .not-content *)) {
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--kix-line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background-color: var(--kix-paper);
+  font-family: var(--kix-mono);
+  font-size: 0.8125em;
+}
+
+/* Lists: orange dash bullets, mono numbers. */
+.sl-markdown-content :is(ul, ol):not(:where(.not-content, .not-content *)) {
+  padding-inline-start: 1.75rem;
+}
+.sl-markdown-content li:not(:where(.not-content, .not-content *)) + li {
+  margin-top: 0.5rem;
+}
+.sl-markdown-content ul:not(:where(.not-content, .not-content *)) > li::marker {
+  content: '—  ';
+  color: var(--kix-brand);
+  font-family: var(--kix-mono);
+  font-size: 0.875em;
+}
+.sl-markdown-content ol:not(:where(.not-content, .not-content *, .sl-steps)) > li::marker {
+  color: var(--kix-accent-text);
+  font-family: var(--kix-mono);
+  font-size: 0.875em;
+}
+
+.sl-markdown-content blockquote:not(:where(.not-content, .not-content *)) {
+  border-inline-start: 3px solid var(--kix-line);
+  padding-inline-start: 1.25rem;
+  color: var(--kix-ink-2);
+  font-size: 1.125rem;
+  font-style: italic;
+}
+
+.sl-markdown-content hr:not(:where(.not-content, .not-content *)) {
+  border-top-color: var(--kix-line);
+}
+
+/* Tables: the rehype-table-wrap plugin puts each table in a div so the
+   table can fill the column and still scroll on its own on narrow screens. */
+.sl-markdown-content .kix-table:not(:where(.not-content, .not-content *)) {
+  overflow-x: auto;
+  border: 1px solid var(--kix-line);
+  border-radius: 8px;
+}
+.sl-markdown-content .kix-table > table {
+  display: table;
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.sl-markdown-content .kix-table :is(th, td) {
+  border: 0;
+  border-top: 1px solid var(--kix-line);
+  padding: 0.75rem 1.25rem;
+  vertical-align: top;
+}
+.sl-markdown-content .kix-table thead th {
+  border-top: 0;
+  padding-block: 0.7rem;
+  background-color: var(--kix-paper-2);
+  color: var(--kix-ink-2);
+  font-family: var(--kix-mono);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.sl-markdown-content .kix-table tbody td:first-child {
+  font-family: var(--kix-mono);
+  font-size: 0.8125rem;
+}
+.sl-markdown-content .kix-table tbody td:first-child code {
+  border: 0;
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+.sl-markdown-content .kix-table tbody tr:nth-child(2n) {
+  background: none;
+}
+
+/* <details> in prose */
+.sl-markdown-content details:not(:where(.not-content, .not-content *)) {
+  border: 1px solid var(--kix-line);
+  border-inline-start-width: 1px;
+  border-radius: 8px;
+  padding: 0.75rem 1.25rem;
+}
+.sl-markdown-content summary:not(:where(.not-content, .not-content *)) {
+  font-family: var(--kix-mono);
+  font-size: 0.875rem;
+  font-weight: 400;
+  color: var(--kix-ink);
+}
+.sl-markdown-content summary:not(:where(.not-content, .not-content *))::before {
+  background-color: var(--kix-ink-2);
+}
+
+/* Asides
+ * The title renders as a mono caps label. The icon is chosen by type, and
+ * for notes by title through aria-label, which Starlight sets to the title.
+ * ------------------------------------------------------------------------- */
+
+.starlight-aside {
+  --kix-aside-edge: var(--kix-ink-2);
+  --kix-aside-label: var(--kix-ink-2);
+  --kix-aside-fill: var(--kix-paper-2);
+  --kix-aside-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 16v-4M12 8h.01'/%3E%3C/svg%3E");
+  border: 0;
+  border-inline-start: 2px solid var(--kix-aside-edge);
+  border-radius: 0 8px 8px 0;
+  padding: 0.875rem 1.25rem 1rem;
+  background-color: var(--kix-aside-fill);
+  color: var(--kix-ink);
+}
+.starlight-aside__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.375rem;
+  color: var(--kix-aside-label);
+  font-family: var(--kix-mono);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  letter-spacing: 0.11em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+.starlight-aside__title > svg {
+  display: none;
+}
+.starlight-aside__title::before {
+  content: '';
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  background-color: currentColor;
+  -webkit-mask: var(--kix-aside-icon) center / contain no-repeat;
+  mask: var(--kix-aside-icon) center / contain no-repeat;
+}
+.starlight-aside__content {
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+.starlight-aside__content a {
+  color: var(--kix-accent-text);
+}
+
+.starlight-aside--note[aria-label='Reference' i],
+.starlight-aside--note[aria-label^='Related' i] {
+  --kix-aside-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 7v14'/%3E%3Cpath d='M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z'/%3E%3C/svg%3E");
+}
+.starlight-aside--note[aria-label='Explanation' i],
+.starlight-aside--note[aria-label='Background' i] {
+  --kix-aside-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5'/%3E%3Cpath d='M9 18h6M10 22h4'/%3E%3C/svg%3E");
+}
+.starlight-aside--tip,
+.starlight-aside--note[aria-label='Use it in a task' i] {
+  --kix-aside-edge: var(--kix-brand);
+  --kix-aside-label: var(--kix-accent-text);
+  --kix-aside-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 7h10v10M7 17 17 7'/%3E%3C/svg%3E");
+}
+.starlight-aside--caution {
+  --kix-aside-edge: var(--kix-caution);
+  --kix-aside-label: var(--kix-caution);
+  --kix-aside-fill: var(--kix-caution-bg);
+  --kix-aside-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/%3E%3Cpath d='M12 9v4M12 17h.01'/%3E%3C/svg%3E");
+}
+.starlight-aside--danger {
+  --kix-aside-edge: var(--kix-danger);
+  --kix-aside-label: var(--kix-danger);
+  --kix-aside-fill: var(--kix-danger-bg);
+  --kix-aside-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/%3E%3Cpath d='M12 9v4M12 17h.01'/%3E%3C/svg%3E");
+}
+
+/* Starlight components
+ * ------------------------------------------------------------------------- */
+
+.card-grid {
+  gap: 1rem;
+}
+.card-grid .card {
+  border: 1px solid var(--kix-line);
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  background: none;
+  gap: 0.5rem;
+}
+.card-grid .card .title {
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--kix-ink);
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.card-grid .card .title::before {
+  content: '';
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 1px;
+  background-color: var(--kix-brand);
+}
+.card-grid .card .icon {
+  display: none;
+}
+.card-grid .card .body {
+  color: var(--kix-ink-2);
+  font-size: 0.9375rem;
+}
+.card-grid .card .body > :first-child {
+  margin-top: 0;
+}
+
+.sl-steps > li::before {
+  background-color: var(--kix-paper);
+  box-shadow: inset 0 0 0 1px var(--kix-ink);
+  color: var(--kix-ink);
+  font-family: var(--kix-mono);
+  font-weight: 400;
+}
+.sl-steps > li::after {
+  background-color: var(--kix-line);
+}
+
+starlight-file-tree {
+  --x-space: 1.25rem;
+  --y-pad: 0.125rem;
+  border: 1px solid var(--kix-line);
+  border-radius: 10px;
+  background-color: var(--kix-paper-2);
+  padding: 1rem 1.25rem;
+  font-family: var(--kix-mono);
+  font-size: 0.84375rem;
+}
+starlight-file-tree .directory > details > summary {
+  font-weight: 600;
+}
+starlight-file-tree .highlight {
+  background-color: var(--kix-accent-soft);
+  color: var(--kix-ink);
+}
+
+/* "## Related" link lists: a list that directly follows a Related heading
+   renders as hairline rows with an arrow. */
+.sl-markdown-content :is(h2, .sl-heading-wrapper):is(#related, :has(> #related)) + ul {
+  padding: 0;
+  list-style: none;
+}
+.sl-markdown-content :is(h2, .sl-heading-wrapper):is(#related, :has(> #related)) + ul > li {
+  margin: 0;
+  border-bottom: 1px solid var(--kix-line);
+}
+.sl-markdown-content :is(h2, .sl-heading-wrapper):is(#related, :has(> #related)) + ul > li:first-child {
+  border-top: 1px solid var(--kix-line);
+}
+.sl-markdown-content :is(h2, .sl-heading-wrapper):is(#related, :has(> #related)) + ul > li::marker {
+  content: none;
+}
+.sl-markdown-content :is(h2, .sl-heading-wrapper):is(#related, :has(> #related)) + ul > li > a:first-child {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 0;
+  color: var(--kix-ink);
+  text-decoration: none;
+}
+.sl-markdown-content :is(h2, .sl-heading-wrapper):is(#related, :has(> #related)) + ul > li > a:first-child::after {
+  content: '→';
+  color: var(--kix-accent-text);
+  font-family: var(--kix-mono);
+}
+.sl-markdown-content :is(h2, .sl-heading-wrapper):is(#related, :has(> #related)) + ul > li > a:first-child:hover {
+  color: var(--kix-accent-text);
+}
+
+/* Expressive Code
+ * Colours, fonts and radii are set in astro.config.mjs; these rules cover
+ * what its style overrides cannot.
+ * ------------------------------------------------------------------------- */
+
+.expressive-code {
+  margin-top: 1.25rem;
+}
+.expressive-code .frame {
+  box-shadow: none;
+}
+.expressive-code .frame.has-title .header .title,
+.expressive-code .frame.is-terminal .header .title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--kix-mono);
+}
+.expressive-code .frame.has-title:not(.is-terminal) .header .title::before {
+  content: '';
+  width: 0.875rem;
+  height: 0.875rem;
+  background-color: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z'/%3E%3Cpath d='M14 2v4a2 2 0 0 0 2 2h4'/%3E%3Cpath d='m10 13-2 2 2 2M14 17l2-2-2-2'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z'/%3E%3Cpath d='M14 2v4a2 2 0 0 0 2 2h4'/%3E%3Cpath d='m10 13-2 2 2 2M14 17l2-2-2-2'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+/* Line numbers only on titled file frames; untitled fences are output or
+   short examples. */
+.expressive-code .frame:not(.has-title) .gutter {
+  display: none;
+}
+
+/* Reading-surface layout
+ * ------------------------------------------------------------------------- */
+
+.sl-markdown-content > :not(:where(.not-content, .not-content *)) + :is(figure.command-block, .expressive-code, .kix-table, .starlight-aside, .card-grid, starlight-file-tree, .kix-recap, .kix-loop) {
+  margin-top: 1.25rem;
+}
+
+/* Starlight's mobile "On this page" bar */
+mobile-starlight-toc nav {
+  border-top-color: var(--kix-line);
+}
+mobile-starlight-toc summary {
+  border-bottom-color: var(--kix-line);
+}
+mobile-starlight-toc .toggle {
+  border-color: var(--kix-line);
+  border-radius: 6px;
+  background-color: var(--kix-paper-2);
+  font-family: var(--kix-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+mobile-starlight-toc details[open] .toggle {
+  border-color: var(--kix-brand);
+}
+
+/* starlight-versions: the "outdated version" notice and banner. */
+.sl-banner {
+  background-color: var(--kix-paper-2);
+  color: var(--kix-ink);
+  border-bottom: 1px solid var(--kix-line);
+}
+.sl-banner a {
+  color: var(--kix-accent-text);
+}
+
+/* Header search trigger. Phase 3 replaces the dialog; this styles only the
+   button that opens it. */
+@media (min-width: 50rem) {
+  .kix-header site-search button[data-open-modal] {
+    width: 22.5rem;
+    max-width: 100%;
+    height: 2.375rem;
+    gap: 0.625rem;
+    border: 1px solid var(--kix-line);
+    border-radius: 8px;
+    padding-inline: 0.75rem;
+    background-color: var(--kix-paper-2);
+    color: var(--kix-ink-2);
+    font-size: 0.875rem;
+  }
+  .kix-header site-search button[data-open-modal]:hover {
+    border-color: var(--kix-ink-2);
+    color: var(--kix-ink);
+  }
+  .kix-header site-search button[data-open-modal] > kbd {
+    border: 1px solid var(--kix-line);
+    border-radius: 4px;
+    padding: 0.125rem 0.375rem;
+    background-color: var(--kix-paper);
+    color: var(--kix-ink-2);
+    font-family: var(--kix-mono);
+    font-size: 0.6875rem;
+  }
+  .kix-header site-search button[data-open-modal] > kbd kbd {
+    font-family: inherit;
+  }
+}

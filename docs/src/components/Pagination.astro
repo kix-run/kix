@@ -1,0 +1,75 @@
+---
+// Previous / next cards. Tutorial labels ("05. Title") show their number in
+// the mono caps label and the bare title below it.
+import { splitLessonNumber } from '../lib/lesson-number';
+import { stripBackticks } from '../lib/title-code';
+
+const { pagination } = Astro.locals.starlightRoute;
+const links = [
+  pagination.prev && { rel: 'prev', word: 'Previous', href: pagination.prev.href, ...splitLessonNumber(stripBackticks(pagination.prev.label)) },
+  pagination.next && { rel: 'next', word: 'Next', href: pagination.next.href, ...splitLessonNumber(stripBackticks(pagination.next.label)) },
+].filter(Boolean) as { rel: 'prev' | 'next'; word: string; href: string; number: string; label: string }[];
+---
+
+{
+  links.length > 0 && (
+    <nav class="kix-pagination print:hidden" aria-label="Pagination">
+      {links.map((link) => (
+        <a href={link.href} rel={link.rel} class={link.rel}>
+          <span class="kicker">
+            {link.rel === 'prev' && <span aria-hidden="true">←</span>}
+            <span>{link.number ? `${link.word} · ${link.number}` : link.word}</span>
+            {link.rel === 'next' && <span aria-hidden="true">→</span>}
+          </span>
+          <span class="title">{link.label}</span>
+        </a>
+      ))}
+    </nav>
+  )
+}
+
+<style>
+  .kix-pagination {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+    gap: 1rem;
+  }
+  a {
+    display: flex;
+    flex-direction: column;
+    gap: 0.625rem;
+    border: 1px solid var(--kix-line);
+    border-radius: 10px;
+    padding: 1.125rem 1.25rem 1.25rem;
+    color: var(--kix-ink);
+    text-decoration: none;
+    overflow-wrap: anywhere;
+  }
+  a:hover {
+    border-color: var(--kix-ink-2);
+  }
+  .next {
+    grid-column: -2;
+    align-items: flex-end;
+    border-color: var(--kix-ink);
+    text-align: end;
+  }
+  .kicker {
+    display: inline-flex;
+    gap: 0.625rem;
+    color: var(--kix-ink-2);
+    font-family: var(--__sl-font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+  }
+  .next .kicker {
+    color: var(--kix-accent-text);
+  }
+  .title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+  }
+</style>

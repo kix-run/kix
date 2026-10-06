@@ -234,6 +234,15 @@ Tutorials should make progress feel steady and unsurprising.
 - When a Nix construct appears for the first time, add a one-sentence note.
 - Keep deeper mechanics out of the main flow; link to explanation/reference.
 - End by naming what the reader has learned and what the next tutorial adds.
+- Wrap the "What you learned" list in `<Recap>` (`src/components/Recap.astro`).
+  Write an ordinary Markdown list inside it. An item that starts with inline
+  code (`` `kix check` catches problems before deploy ``) shows the code in a
+  command column; any other item is a plain statement. The page's Markdown
+  twin keeps the list text between the `<Recap>` tags.
+- `<Loop>` (`src/components/Loop.astro`) renders a short ordered list of
+  commands as a strip of cells, each item written as `` `kix check` what it
+  does ``. Tutorial 05 uses it for the check, build, diff, deploy, and graph
+  loop. Keep it to a handful of steps.
 
 Code in tutorials should carry teaching comments where they reduce context
 switching. Preserve those comments when editing. If a snippet is imported from

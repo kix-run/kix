@@ -1,0 +1,43 @@
+---
+// Article column and right rail. At 72rem and up this is a grid: the
+// article column (720px plus its gutters, shrinking when space is short)
+// next to the left sidebar, then the 260px rail, which sticks under the
+// header. Spare width on wide screens collects to the right of the rail.
+//
+// Below 72rem the rail slot only holds Starlight's fixed-position mobile
+// "On this page" bar (see PageSidebar.astro), so the aside takes no space.
+const { toc } = Astro.locals.starlightRoute;
+---
+
+<div class:list={['kix-columns', { 'has-rail': toc }]}>
+  <div class="main-pane"><slot /></div>
+  {
+    toc && (
+      <aside class="rail print:hidden">
+        <slot name="right-sidebar" />
+      </aside>
+    )
+  }
+</div>
+
+<style>
+  @media (min-width: 72rem) {
+    .kix-columns {
+      --sl-content-margin-inline: 0;
+    }
+    .kix-columns.has-rail {
+      display: grid;
+      grid-template-columns:
+        minmax(0, calc(var(--sl-content-width) + 2 * var(--sl-content-pad-x)))
+        var(--kix-rail-width);
+    }
+    .rail {
+      position: sticky;
+      top: var(--sl-nav-height);
+      align-self: start;
+      max-height: calc(100vh - var(--sl-nav-height));
+      overflow-y: auto;
+      scrollbar-width: none;
+    }
+  }
+</style>

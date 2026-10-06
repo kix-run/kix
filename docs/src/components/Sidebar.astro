@@ -1,0 +1,222 @@
+---
+// Left sidebar for the current Diátaxis topic. Takes precedence over the
+// vendored starlight-sidebar-topics override, whose topic switcher moved to
+// the header tabs (Header.astro); the switcher is kept here for the mobile
+// menu only.
+//
+// Tutorials render as a numbered lesson list: the "05." prefix in each page
+// title becomes the number column, so pages are not renamed. Other topics use
+// Starlight's grouped sidebar, restyled below.
+import MobileMenuFooter from 'virtual:starlight/components/MobileMenuFooter';
+import SidebarPersister from '@astrojs/starlight/components/SidebarPersister.astro';
+import SidebarSublist from '@astrojs/starlight/components/SidebarSublist.astro';
+import { splitLessonNumber } from '../lib/lesson-number';
+import { stripSidebarBackticks } from '../lib/title-code';
+
+const sidebar = stripSidebarBackticks(Astro.locals.starlightRoute.sidebar);
+const topics = Astro.locals.starlightSidebarTopics?.topics ?? [];
+const currentTopic = topics.find((topic) => topic.isCurrent);
+
+type Lesson = { href: string; label: string; number: string; state: 'done' | 'current' | 'next' };
+
+const links = sidebar.filter((entry) => entry.type === 'link');
+const isLessonList =
+  currentTopic?.label === 'Tutorials' &&
+  links.length === sidebar.length &&
+  links.some((entry) => splitLessonNumber(entry.label).number !== '');
+const currentIndex = links.findIndex((entry) => entry.isCurrent);
+const lessons: Lesson[] = links
+  .map((entry, index) => ({
+    href: entry.href,
+    ...splitLessonNumber(entry.label),
+    state: index === currentIndex ? 'current' : index < currentIndex ? 'done' : 'next',
+  }))
+  .filter((lesson) => lesson.number !== '') as Lesson[];
+---
+
+{
+  topics.length > 0 && (
+    <div class="md:sl-hidden">
+      <ul class="kix-mobile-topics">
+        {topics.map((topic) => (
+          <li>
+            <a href={topic.link} aria-current={topic.isCurrent ? 'true' : undefined}>
+              {topic.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+{
+  currentTopic && (
+    <div class="kix-sidebar-heading">
+      <span class="kix-label">{currentTopic.label}</span>
+      {isLessonList && <span class="count">{lessons.length} lessons</span>}
+    </div>
+  )
+}
+
+<SidebarPersister>
+  {
+    isLessonList ? (
+      <ol class="kix-lessons">
+        {lessons.map((lesson) => (
+          <li>
+            <a
+              href={lesson.href}
+              class={lesson.state}
+              aria-current={lesson.state === 'current' ? 'page' : undefined}
+            >
+              <span class="number">{lesson.number}</span>
+              <span>{lesson.label}</span>
+            </a>
+          </li>
+        ))}
+      </ol>
+    ) : (
+      <div class="kix-groups">
+        <SidebarSublist sublist={sidebar} />
+      </div>
+    )
+  }
+</SidebarPersister>
+
+<div class="md:sl-hidden">
+  <MobileMenuFooter />
+</div>
+
+<style>
+  .kix-mobile-topics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1.25rem;
+    margin: 0;
+    border-bottom: 1px solid var(--kix-line);
+    padding: 0 0 0.75rem;
+    list-style: none;
+  }
+  .kix-mobile-topics a {
+    color: var(--kix-ink-2);
+    font-size: 0.9375rem;
+    font-weight: 500;
+    text-decoration: none;
+  }
+  .kix-mobile-topics a[aria-current='true'] {
+    color: var(--kix-ink);
+    font-weight: 600;
+    text-decoration: underline 2px var(--kix-brand);
+    text-underline-offset: 0.4em;
+  }
+
+  .kix-sidebar-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding-inline: 0.75rem;
+  }
+  .count {
+    color: var(--kix-dim);
+    font-family: var(--__sl-font-mono);
+    font-size: 0.6875rem;
+  }
+
+  .kix-lessons {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .kix-lessons a {
+    display: flex;
+    gap: 0.75rem;
+    border-radius: 6px;
+    padding: 0.4375rem 0.75rem;
+    color: var(--kix-ink-2);
+    font-size: 0.875rem;
+    line-height: 1.45;
+    text-decoration: none;
+  }
+  .kix-lessons a:hover {
+    color: var(--kix-ink);
+  }
+  .number {
+    flex: none;
+    color: var(--kix-dim);
+    font-family: var(--__sl-font-mono);
+    font-size: 0.75rem;
+    line-height: 1.7;
+  }
+  .done .number {
+    color: var(--kix-ink-2);
+  }
+  .kix-lessons a.current {
+    box-shadow: inset 2px 0 0 var(--kix-brand);
+    background-color: var(--kix-paper-2);
+    color: var(--kix-ink);
+    font-weight: 600;
+  }
+  .current .number {
+    color: var(--kix-accent-text);
+    font-weight: 400;
+  }
+
+  /* Grouped topics (How-to guides, Reference): chevron before the group
+     label, indented items, the same active row as the lesson list. */
+  .kix-groups :global(ul) {
+    --sl-sidebar-item-padding-inline: 0.75rem;
+  }
+  .kix-groups :global(.top-level > li + li) {
+    margin-top: 0.125rem;
+  }
+  .kix-groups :global(summary) {
+    flex-direction: row-reverse;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding: 0.375rem 0.75rem;
+  }
+  .kix-groups :global(summary .large) {
+    color: var(--kix-ink);
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+  .kix-groups :global(.caret) {
+    color: var(--kix-ink-2);
+    font-size: 1rem;
+  }
+  .kix-groups :global(ul ul li) {
+    margin-inline-start: 0;
+    border-inline-start: 0;
+    padding-inline-start: 0;
+  }
+  .kix-groups :global(a) {
+    border-radius: 6px;
+    padding: 0.4375rem 0.75rem;
+    color: var(--kix-ink-2);
+    font-size: 0.875rem;
+    line-height: 1.45;
+  }
+  .kix-groups :global(ul ul a) {
+    padding-inline-start: 2.125rem;
+  }
+  .kix-groups :global(a:hover) {
+    color: var(--kix-ink);
+  }
+  .kix-groups :global(a[aria-current='page']),
+  .kix-groups :global(a[aria-current='page']:hover),
+  .kix-groups :global(a[aria-current='page']:focus) {
+    box-shadow: inset 2px 0 0 var(--kix-brand);
+    background-color: var(--kix-paper-2);
+    color: var(--kix-ink);
+    font-weight: 600;
+  }
+  .kix-groups :global(a.large) {
+    color: var(--kix-ink-2);
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+</style>

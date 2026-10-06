@@ -11,15 +11,19 @@ import statusOutput from '/src/command-output/tutorials/04-from-scratch/status.j
 import diffCleanOutput from '/src/command-output/tutorials/04-from-scratch/diff-clean.json';
 import diffAfterEditOutput from '/src/command-output/tutorials/04-from-scratch/diff-after-edit.json';
 import deployAfterEditOutput from '/src/command-output/tutorials/04-from-scratch/deploy-after-edit.json';
+import Loop from '/src/components/Loop.astro';
+import Recap from '/src/components/Recap.astro';
 
 The last tutorial created a cluster from scratch. This tutorial uses that same
 cluster to look more closely at the Kix loop:
 
-1. check the cluster before deploying;
-2. inspect what Kix will build;
-3. preview changes against the live cluster;
-4. deploy the checked result;
-5. inspect the package and resource graph.
+<Loop>
+1. `kix check` validates the evaluated cluster
+2. `kix build` shows the rendered resources
+3. `kix diff` previews against live state
+4. `kix deploy` applies the checked result
+5. `kix graph` inspects what Kix knows
+</Loop>
 
 The goal is not to learn every graph detail yet. The goal is to see that Kix
 can evaluate a cluster before it touches Kubernetes.
@@ -154,11 +158,13 @@ when you want the design reasoning behind the graph.
 
 You used the same local cluster definition through the main Kix loop:
 
+<Recap>
 - `kix check` catches problems before deploy;
 - `kix build` shows the rendered Kubernetes resources;
 - `kix diff` previews changes against the live cluster;
 - `kix deploy` applies the evaluated result;
 - `kix status` and `kix graph` inspect what Kix knows afterward.
+</Recap>
 
 The next tutorial adds the first real relationship: one local package depends
 on another service.

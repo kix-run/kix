@@ -13,6 +13,7 @@ import checkBrokenName from '/src/command-output/tutorials/06-service-dep/check-
 import localPackageImport from '/src/snippets/tutorials/06-service-dep/cluster/localPackageImport.json';
 import buildArgs from '/src/snippets/tutorials/06-service-dep/reverse-proxy-package/buildArgs.json';
 import configmap from '/src/snippets/tutorials/06-service-dep/reverse-proxy-package/configmap.json';
+import Recap from '/src/components/Recap.astro';
 
 So far, each tutorial cluster has had one service. This tutorial adds the first
 service-to-service relationship.
@@ -214,12 +215,14 @@ example is back in its working state.
 
 You added the first real edge to the tutorial path:
 
+<Recap>
 - a cluster can import a local package;
 - an instance installs that local package just like a catalog package;
 - a package can ask for another instance by argument name;
 - Kix resolves that argument to a matching same-namespace instance;
 - `out` lets one package use another package's public values without hardcoded
   Service names.
+</Recap>
 
 The next dependency tutorial puts the two services in different namespaces and
 uses `ref` to make the wiring explicit.

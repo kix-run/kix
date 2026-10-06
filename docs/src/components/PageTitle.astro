@@ -1,0 +1,99 @@
+---
+// Eyebrow, title and lead above every page's content.
+//
+// Overriding PageTitle displaces two plugins:
+// - starlight-versions, whose VersionNotice ("this is an outdated version")
+//   is rendered below the lead here;
+// - starlight-page-actions, whose Copy as Markdown button moves to
+//   PageSidebar.astro.
+//
+// The id `_top` is Starlight's PAGE_TITLE_ID; its "Overview" table of
+// contents entry links to it.
+import VersionNotice from 'starlight-versions/components/VersionNotice.astro';
+import { pageSection } from '../lib/page-section';
+import { backticksToHtml, stripBackticks } from '../lib/title-code';
+
+const { entry, sidebar } = Astro.locals.starlightRoute;
+const topics = Astro.locals.starlightSidebarTopics?.topics ?? [];
+const topicLabel = topics.find((topic) => topic.isCurrent)?.label;
+const eyebrow = pageSection(topicLabel, sidebar, entry.data.title);
+const title = backticksToHtml(eyebrow?.title ?? entry.data.title);
+const lead = entry.data.description;
+---
+
+<div class="kix-page-title">
+  {
+    eyebrow && (
+      <p class="eyebrow">
+        <span class="section">{eyebrow.section}</span>
+        {eyebrow.detail && <span class="sep" aria-hidden="true">/</span>}
+        {eyebrow.detail && <span class="detail">{stripBackticks(eyebrow.detail)}</span>}
+      </p>
+    )
+  }
+  <h1 id="_top" set:html={title} />
+  {lead && <p class="lead">{lead}</p>}
+  <VersionNotice />
+</div>
+
+<style>
+  .kix-page-title {
+    border-bottom: 1px solid var(--kix-line);
+    padding-bottom: 1.5rem;
+  }
+  .eyebrow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.625rem;
+    margin: 0 0 1.25rem;
+    font-family: var(--__sl-font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    line-height: 1.4;
+    text-transform: uppercase;
+  }
+  .section {
+    color: var(--kix-accent-text);
+  }
+  .sep {
+    color: var(--kix-dim);
+  }
+  .detail {
+    color: var(--kix-ink-2);
+  }
+  h1 {
+    margin: 0;
+    color: var(--kix-ink);
+    font-size: clamp(2.25rem, 1.6rem + 2.2vw, 3rem);
+    font-weight: 600;
+    letter-spacing: -0.029em;
+    line-height: 1.05;
+    overflow-wrap: anywhere;
+  }
+  h1 :global(code) {
+    font-family: var(--__sl-font-mono);
+    font-size: 0.82em;
+    font-weight: 600;
+    letter-spacing: -0.04em;
+  }
+  .lead {
+    margin: 1.25rem 0 0;
+    color: var(--kix-ink-2);
+    font-size: 1.25rem;
+    line-height: 1.5;
+  }
+  .kix-page-title :global(p:has(> svg)) {
+    margin-top: 1.25rem;
+    border: 1px solid var(--kix-caution);
+    border-radius: 0 8px 8px 0;
+    border-inline-start-width: 2px;
+    background-color: var(--kix-caution-bg);
+    color: var(--kix-ink);
+  }
+  .kix-page-title :global(p:has(> svg) a) {
+    color: var(--kix-accent-text);
+  }
+  .kix-page-title :global(p:has(> svg) svg) {
+    color: var(--kix-caution);
+  }
+</style>

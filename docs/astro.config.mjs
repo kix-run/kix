@@ -8,6 +8,7 @@ import starlightLinksValidator from 'starlight-links-validator';
 import starlightGitHubAlerts from 'starlight-github-alerts';
 import starlightPageActions from 'starlight-page-actions';
 import starlightVersions from 'starlight-versions';
+import rehypeTableWrap from './src/lib/rehype-table-wrap.mjs';
 
 // Plugin ordering matters for the topics×versions coexistence:
 //   - At `config:setup` time, we want topics FIRST so it sets the
@@ -29,27 +30,54 @@ export default defineConfig({
   // GH Pages artifact.
   site: 'https://kix.run',
   base: '/docs',
+  markdown: {
+    rehypePlugins: [rehypeTableWrap],
+  },
   integrations: [
     starlight({
       title: 'Kix',
       description: 'Nix-evaluated Kubernetes packages and clusters',
-      // Lagoon palette and Geist, shared with the homepage
-      // (web/src/index.css).
-      customCss: ['@fontsource-variable/geist', './src/styles/lagoon.css'],
+      // Kix theme: tokens, content and chrome styles. The design source is
+      // the kix-oss-handoff folder (frames mJBvI, o1hudj, z240z).
+      customCss: [
+        '@fontsource-variable/inter-tight',
+        '@fontsource-variable/jetbrains-mono',
+        './src/styles/kix.css',
+      ],
+      lastUpdated: true,
       components: {
         // Adds <link rel="alternate" type="text/markdown"> pointing at
         // the page's `.md` twin, which is how Codex CLI discovers it.
         Head: './src/components/Head.astro',
-        // Replace the default theme dropdown (laptop icon labelled
-        // "Auto") with three explicit Light/Dark/Auto icon buttons.
+        // Two-row header: logo, search, version, GitHub, theme and the
+        // install link, then the Diátaxis topic tabs.
+        Header: './src/components/Header.astro',
+        // Used by Starlight's mobile menu footer. Renders VersionSelect
+        // because overriding ThemeSelect displaces starlight-versions'
+        // own override.
         ThemeSelect: './src/components/ThemeSelect.astro',
-        // Homepage wordmark ("kix" + brand dot) with a "docs" suffix.
+        // Logo mark, "kix" and "/docs".
         SiteTitle: './src/components/SiteTitle.astro',
+        // Eyebrow, title and lead. Displaces both starlight-page-actions
+        // (its copy button moves to PageSidebar) and starlight-versions
+        // (its VersionNotice is rendered here).
+        PageTitle: './src/components/PageTitle.astro',
+        // "On this page" plus the Copy as Markdown action.
+        PageSidebar: './src/components/PageSidebar.astro',
+        // Grid of the article column and the right rail.
+        TwoColumnContent: './src/components/TwoColumnContent.astro',
+        // Topic heading, numbered tutorial lessons, grouped how-to and
+        // reference sections. Takes precedence over the vendored
+        // starlight-sidebar-topics Sidebar override.
+        Sidebar: './src/components/Sidebar.astro',
+        Pagination: './src/components/Pagination.astro',
+        Footer: './src/components/Footer.astro',
       },
       plugins: [
         // Splits the sidebar into Diátaxis "topics" so only the
-        // current topic's children show in the left nav. The topic
-        // switcher renders at the top of the sidebar.
+        // current topic's children show in the left nav. The topics
+        // render as tabs in src/components/Header.astro on wide screens
+        // and at the top of the sidebar in the mobile menu.
         // See https://starlight-sidebar-topics.netlify.app/
         //
         // The second arg maps URL patterns to topic ids so that pages
@@ -59,7 +87,7 @@ export default defineConfig({
           [
             {
               id: 'home',
-              label: 'Home',
+              label: 'Start',
               link: '/',
               icon: 'star',
               items: [
@@ -145,9 +173,10 @@ export default defineConfig({
         // Renders GitHub-style `> [!NOTE]` / `> [!WARNING]` blocks as
         // Starlight asides (handy when copying from issues/READMEs).
         starlightGitHubAlerts(),
-        // "Copy as Markdown" + "Open in ChatGPT/Claude" + share menu in
-        // the page header.
-        starlightPageActions(),
+        // Generates the `.md` twins behind "Copy as Markdown". The button
+        // itself is rendered by src/components/PageSidebar.astro because
+        // our PageTitle override displaces the plugin's.
+        starlightPageActions({ actions: { chatgpt: false, claude: false, markdown: true } }),
       ],
     }),
   ],
