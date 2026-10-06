@@ -124,12 +124,12 @@ pre-commit:
       glob: "scripts/**/*.py"
       run: devenv shell -- treefmt {staged_files}
 
-    # Type-check the landing page. This is the exact check the Pages
-    # deploy runs (`tsc -b`, with noEmit set in tsconfig.app.json).
-    # A tsc failure only surfaces in CI, and because GitHub Pages
-    # artifacts expire after ~1 day, a broken build streak silently
-    # takes kix.run offline once the last good artifact ages out.
-    # Catching it here keeps a red build from ever reaching main.
+    # Type-check the landing page. This is the check the Pages deploy runs
+    # first (`npm run build` starts with `astro check`). A failure only
+    # surfaces in CI, and because GitHub Pages artifacts expire after ~1
+    # day, a broken build streak silently takes kix.run offline once the
+    # last good artifact ages out. Catching it here keeps a red build from
+    # ever reaching main.
     typecheck-web:
-      glob: "web/**/*.{ts,tsx}"
-      run: bash -c 'cd web && ./node_modules/.bin/tsc -b'
+      glob: "web/**/*.{ts,astro,mjs}"
+      run: bash -c 'cd web && ./node_modules/.bin/astro check'
