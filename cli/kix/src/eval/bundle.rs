@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 use super::error::KixEvalError;
 use super::store_graph::{KixPackageIndex, StoreGraph, store_name};
 use super::store_path::{self, Method};
+use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
 
 /// The `format` field of every bundle.
@@ -109,6 +110,8 @@ pub enum BundleError {
         "kix-packages.json and the Activation record's `spec.instances` list different package instances"
     )]
     IndexInstances,
+    #[error("two manifests in the bundle name {0}")]
+    DuplicateObject(String),
     #[error("{0} uses a retired kix domain key or group")]
     RetiredDomain(String),
     #[error("{0} is a source file that no Secret's SOPS source annotation names")]
@@ -179,6 +182,10 @@ impl Bundle {
         let mut records = 0;
         let mut sops_sources: BTreeSet<String> = BTreeSet::new();
         let mut instances: BTreeSet<(String, String)> = BTreeSet::new();
+        // Plan and deploy each keep one manifest per object, and which one
+        // depends on hash map order, so two copies could plan one and apply
+        // the other.
+        let mut objects: BTreeSet<ResourceId> = BTreeSet::new();
         for (path, file) in &self.files {
             let is_manifest = store_name(Path::new(path)).starts_with("k8s-");
             if !is_manifest {
@@ -191,6 +198,10 @@ impl Bundle {
                 })?;
             if has_retired_domain(&manifest) {
                 return Err(BundleError::RetiredDomain(path.clone()));
+            }
+            let id = ResourceId::from_value(&manifest);
+            if !objects.insert(id.clone()) {
+                return Err(BundleError::DuplicateObject(id.display_id()));
             }
             match manifest.pointer("/kind").and_then(|k| k.as_str()) {
                 Some(kind) if kind == lifecycle::RECORD_KIND => {
@@ -562,6 +573,81 @@ mod tests {
             },
         );
         assert_eq!(bundle.verify(), Err(BundleError::Unreachable(path)));
+    }
+
+    /// Add a file named `name` holding `text` to the build: the Activation
+    /// record references it, and when `package` is given (the end of a
+    /// PackageInstance path) kix-packages.json lists it under that package.
+    /// Recomputes the paths that change. Returns the new file's path.
+    fn add_to_build(bundle: &mut Bundle, name: &str, text: &str, package: Option<&str>) -> String {
+        let path = store_path::path_for(Method::Text, text.as_bytes(), &[], name);
+        bundle.files.insert(
+            path.clone(),
+            BundleFile {
+                text: text.to_string(),
+                references: vec![],
+            },
+        );
+        let mut record = bundle.files.remove(&bundle.activation).unwrap();
+        record.references.push(path.clone());
+        let record_name = store_path::name_of(&bundle.activation).unwrap().to_string();
+        bundle.activation = store_path::path_for(
+            Method::Text,
+            record.text.as_bytes(),
+            &record.references,
+            &record_name,
+        );
+        bundle.files.insert(bundle.activation.clone(), record);
+        if let Some(package) = package {
+            let mut index = bundle.package_index().unwrap();
+            let (_, resources) = index
+                .packages
+                .iter_mut()
+                .find(|(pi, _)| pi.to_string_lossy().ends_with(package))
+                .unwrap();
+            resources.push(PathBuf::from(&path));
+            let text = serde_json::to_string(&index).unwrap();
+            bundle.files.remove(&bundle.index);
+            bundle.index =
+                store_path::path_for(Method::Text, text.as_bytes(), &[], "kix-packages.json");
+            bundle.files.insert(
+                bundle.index.clone(),
+                BundleFile {
+                    text,
+                    references: vec![],
+                },
+            );
+        }
+        path
+    }
+
+    #[test]
+    fn two_manifests_of_one_object_are_refused() {
+        let mut bundle = real();
+        let configmap = |value: &str| {
+            format!(
+                r#"{{"apiVersion":"v1","kind":"ConfigMap","metadata":{{"name":"x","namespace":"kix-enterprise-test-web"}},"data":{{"k":"{value}"}}}}"#
+            )
+        };
+        let package = Some("-k8s-PackageInstance-kix-enterprise-test-web-status-page");
+        add_to_build(
+            &mut bundle,
+            "k8s-ConfigMap-kix-enterprise-test-web-x",
+            &configmap("harmless"),
+            package,
+        );
+        add_to_build(
+            &mut bundle,
+            "k8s-ConfigMap-kix-enterprise-test-web-x-copy",
+            &configmap("harmful"),
+            package,
+        );
+        assert_eq!(
+            bundle.verify(),
+            Err(BundleError::DuplicateObject(
+                "ConfigMap/x@kix-enterprise-test-web".to_string()
+            ))
+        );
     }
 
     #[test]
