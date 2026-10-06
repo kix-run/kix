@@ -532,7 +532,11 @@ fn read_entries(tar: impl Read) -> Result<(Contents, BTreeSet<String>), BundleEr
     let mut last: Option<String> = None;
     for entry in entries {
         let mut entry = entry.map_err(unreadable)?;
-        let name = String::from_utf8_lossy(&entry.path_bytes()).into_owned();
+        // The header names store paths as UTF-8; another spelling of the
+        // same name would extract as a different file.
+        let name = String::from_utf8(entry.path_bytes().into_owned()).map_err(|e| {
+            BundleError::BadEntry(String::from_utf8_lossy(e.as_bytes()).into_owned())
+        })?;
         if !entry.header().entry_type().is_file() {
             return Err(BundleError::BadEntry(name));
         }
@@ -1616,6 +1620,31 @@ mod tests {
         let mut plain = tar_of(&contents.header(), &contents.files);
         plain.extend([0; 10240]);
         assert!(Bundle::read(plain.as_slice()).is_ok());
+    }
+
+    /// The header names store paths as UTF-8, so an entry's name must be
+    /// UTF-8 too, or other readers would extract a file of another name.
+    #[test]
+    fn an_entry_name_that_is_not_utf8_is_refused() {
+        let mut contents = real();
+        let path = add_to_build(&mut contents, "a\u{FFFD}", "x", None);
+        let mut tar = tar_of(&contents.header(), &contents.files);
+        // The entry's own tar header, which starts with its name.
+        let name = entry_name(&path).into_bytes();
+        let block = (0..tar.len())
+            .step_by(512)
+            .find(|b| tar[*b..].starts_with(&name))
+            .unwrap();
+        let end = block + name.len();
+        tar[end - 3..end].copy_from_slice(b"\xff\0\0");
+        let mut header = tar::Header::new_old();
+        header
+            .as_mut_bytes()
+            .copy_from_slice(&tar[block..block + 512]);
+        header.set_cksum();
+        tar[block..block + 512].copy_from_slice(header.as_bytes());
+        let err = Bundle::read(tar.as_slice()).err();
+        assert!(matches!(err, Some(BundleError::BadEntry(_))), "{err:?}");
     }
 
     #[test]
