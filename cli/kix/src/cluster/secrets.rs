@@ -181,10 +181,10 @@ fn hydrate_from_bundle(
     let expected = keys::get(manifest, keys::CONTENT_HASH)
         .map(str::to_string)
         .ok_or_else(|| not_in_bundle(format!("it declares no {}", keys::CONTENT_HASH)))?;
-    check_age_only(path)?;
+    let clear_keys = age_only_keys(path)?;
 
     let data: BTreeMap<String, String> = if bundle.placeholders {
-        placeholders(manifest)
+        placeholders(manifest, &clear_keys)
     } else {
         let data = parse_secret_data(path, &decrypt_sops(path)?)?;
         if compute_content_hash(&data) != expected {
@@ -207,34 +207,35 @@ fn hydrate_from_bundle(
     Ok(HydrationResult { rid, keys_injected })
 }
 
-/// A value for each key the Secret declares, valid for its type, so a dry
-/// run passes the API server's own checks without the real values.
-fn placeholders(manifest: &Value) -> BTreeMap<String, String> {
+/// A value for each of `keys`, valid for the Secret's type, so a dry run
+/// passes the API server's own checks without the real values.
+///
+/// The keys come from the SOPS file, where they are stored in clear, and
+/// not from the Secret's own annotation: they are the keys a deploy will
+/// write, so the plan shows exactly those.
+fn placeholders(manifest: &Value, keys: &[String]) -> BTreeMap<String, String> {
     let secret_type = manifest
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or("Opaque");
-    keys::get(manifest, keys::SECRET_KEYS)
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|k| !k.is_empty())
+    keys.iter()
         .map(|key| {
-            let value = match (secret_type, key) {
+            let value = match (secret_type, key.as_str()) {
                 ("kubernetes.io/dockerconfigjson", ".dockerconfigjson") => r#"{"auths":{}}"#,
                 ("kubernetes.io/dockercfg", ".dockercfg") => "{}",
                 _ => "kix-placeholder",
             };
-            (key.to_string(), value.to_string())
+            (key.clone(), value.to_string())
         })
         .collect()
 }
 
-/// Refuse a SOPS file whose metadata names any key source but age.
+/// Refuse a SOPS file whose metadata names any key source but age, and
+/// return the file's keys (stored in clear; only values are encrypted).
 ///
 /// An allowlist: SOPS adds key sources over time (and `key_groups` can hold
 /// any of them), so a field this code does not know is refused.
-fn check_age_only(path: &Path) -> Result<(), SecretError> {
+fn age_only_keys(path: &Path) -> Result<Vec<String>, SecretError> {
     /// Metadata that names no key.
     const NOT_KEYS: &[&str] = &[
         "lastmodified",
@@ -272,9 +273,16 @@ fn check_age_only(path: &Path) -> Result<(), SecretError> {
         }
     }
     match sops.get("age") {
-        Some(Value::Array(a)) if !a.is_empty() => Ok(()),
-        _ => Err(refuse("it names no age recipient")),
+        Some(Value::Array(a)) if !a.is_empty() => {}
+        _ => return Err(refuse("it names no age recipient")),
     }
+    Ok(doc
+        .as_object()
+        .into_iter()
+        .flat_map(|o| o.keys())
+        .filter(|k| *k != "sops")
+        .cloned()
+        .collect())
 }
 
 /// Hydrate a single Secret manifest.
@@ -631,12 +639,26 @@ mod tests {
     #[test]
     fn a_plan_from_a_bundle_gets_placeholders_typed_for_the_secret() {
         let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
-        let results = hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap();
+        let text = format!(".dockerconfigjson: ENC[AES256_GCM,data:def]\n{AGE_ONLY}");
+        let results = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap();
         assert_eq!(results[0].keys_injected, 2);
         assert_eq!(manifests[0]["stringData"]["password"], "kix-placeholder");
         assert_eq!(
             manifests[0]["stringData"][".dockerconfigjson"],
             r#"{"auths":{}}"#
+        );
+    }
+
+    /// The annotation is the bundle's word; the SOPS file is what a deploy
+    /// writes.
+    #[test]
+    fn placeholder_keys_come_from_the_sops_file_not_the_annotation() {
+        let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+        manifests[0]["metadata"]["annotations"][keys::SECRET_KEYS] = "only-this".into();
+        hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap();
+        assert_eq!(
+            manifests[0]["stringData"],
+            json!({"password": "kix-placeholder"})
         );
     }
 
