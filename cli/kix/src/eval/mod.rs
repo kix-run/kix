@@ -28,6 +28,7 @@ pub mod evaluator;
 pub mod mock;
 pub mod store;
 pub mod store_graph;
+pub mod store_path;
 pub mod value;
 
 pub use build::{build_cluster_activation, build_cluster_activation_with_status};
