@@ -116,6 +116,8 @@ pub enum BundleError {
         "kix-packages.json lists {0}, which is not a manifest: its store name does not start with k8s-"
     )]
     IndexNotManifest(String),
+    #[error("{0} has an apiVersion that is not spelled `v1` or `group/version`")]
+    ApiVersion(String),
     #[error("{0} uses a retired kix domain key or group")]
     RetiredDomain(String),
     #[error("{0} is a source file that no Secret's SOPS source annotation names")]
@@ -202,6 +204,9 @@ impl Bundle {
                 })?;
             if has_retired_domain(&manifest) {
                 return Err(BundleError::RetiredDomain(path.clone()));
+            }
+            if !canonical_api_version(&text_at(&manifest, "/apiVersion")) {
+                return Err(BundleError::ApiVersion(path.clone()));
             }
             let id = ResourceId::from_value(&manifest);
             if !objects.insert(id.clone()) {
@@ -485,6 +490,18 @@ fn record_instances(record: &serde_json::Value) -> BTreeSet<(String, String)> {
         .collect()
 }
 
+/// Whether `api_version` is `version` or `group/version`, with no empty
+/// part and no whitespace. The API server reads `/v1` as the core group's
+/// `v1`, but Kix Enterprise's agent compares the string with discovery's
+/// `v1` to decide what the build owns, and would miss it.
+fn canonical_api_version(api_version: &str) -> bool {
+    let part = |s: &str| !s.is_empty() && !s.contains(char::is_whitespace);
+    match api_version.split_once('/') {
+        None => part(api_version),
+        Some((group, version)) => part(group) && part(version) && !version.contains('/'),
+    }
+}
+
 /// Whether a manifest carries a label or annotation key, or an API group,
 /// of a retired kix domain. `stamp_annotations` would upgrade those, so the
 /// bundle's bytes would differ from what is applied.
@@ -677,6 +694,29 @@ mod tests {
             Some("-k8s-PackageInstance-kix-enterprise-test-web-status-page"),
         );
         assert_eq!(bundle.verify(), Err(BundleError::IndexNotManifest(path)));
+    }
+
+    #[test]
+    fn an_api_version_with_an_empty_group_is_refused() {
+        let mut bundle = real();
+        let text = r#"{"apiVersion":"/v1","kind":"ConfigMap","metadata":{"name":"x","namespace":"kix-enterprise-test-web"}}"#;
+        let path = add_to_build(
+            &mut bundle,
+            "k8s-ConfigMap-kix-enterprise-test-web-x",
+            text,
+            Some("-k8s-PackageInstance-kix-enterprise-test-web-status-page"),
+        );
+        assert_eq!(bundle.verify(), Err(BundleError::ApiVersion(path)));
+    }
+
+    #[test]
+    fn api_version_spellings() {
+        for good in ["v1", "apps/v1", "example.com/v1alpha1"] {
+            assert!(canonical_api_version(good), "{good}");
+        }
+        for bad in ["", "/v1", "apps/", "a/b/v1", " v1", "v1 ", "apps /v1"] {
+            assert!(!canonical_api_version(bad), "{bad:?}");
+        }
     }
 
     #[test]
