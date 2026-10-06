@@ -248,23 +248,8 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         None => crate::commands::compliance::receipt::build_receipt(&new_graph, &ctx.global.flake),
     };
 
-    if receipt["source"]["dirty"] == Value::Bool(true) && !ctx.global.quiet {
-        // A dirty tree is allowed, but its recorded commit does not fully
-        // describe the deployed source.
-        println!();
-        println!(
-            "{}",
-            output::yellow(
-                "The working tree has uncommitted changes, so the commit recorded for this deploy"
-            )
-        );
-        println!(
-            "{}",
-            output::yellow("does not contain what is about to be applied. The record will say so.")
-        );
-        if let Some(rev) = receipt["source"]["revision"].as_str() {
-            println!("  {}", output::dim(rev));
-        }
+    if !ctx.global.quiet {
+        print_dirty_source_warning(&receipt, bundle.is_some());
     }
 
     // The nodes: do they carry the labels the plan's placement rules name?
@@ -1940,21 +1925,8 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // is applied.
     let receipt =
         crate::commands::compliance::receipt::build_receipt(&new_graph, &ctx.global.flake);
-    if receipt["source"]["dirty"] == Value::Bool(true) && !ctx.global.quiet {
-        println!();
-        println!(
-            "{}",
-            output::yellow(
-                "The working tree has uncommitted changes, so the commit recorded for this deploy"
-            )
-        );
-        println!(
-            "{}",
-            output::yellow("does not contain what is about to be applied. The record will say so.")
-        );
-        if let Some(rev) = receipt["source"]["revision"].as_str() {
-            println!("  {}", output::dim(rev));
-        }
+    if !ctx.global.quiet {
+        print_dirty_source_warning(&receipt, false);
     }
 
     // Confirm before submitting the Activation.
@@ -2071,9 +2043,74 @@ fn print_migration_pairs(pairs: &[MigrationPair]) {
     println!();
 }
 
+/// Print [`dirty_source_warning`], if any.
+fn print_dirty_source_warning(receipt: &Value, from_bundle: bool) {
+    let Some((warning, revision)) = dirty_source_warning(receipt, from_bundle) else {
+        return;
+    };
+    println!();
+    for line in warning {
+        println!("{}", output::yellow(line));
+    }
+    if let Some(rev) = revision {
+        println!("  {}", output::dim(&rev));
+    }
+}
+
+/// The warning to print before confirming a deploy whose receipt records a
+/// dirty source, and the recorded revision. A dirty tree is allowed, but
+/// its recorded commit does not fully describe the deployed source. A
+/// bundle's receipt says what the machine that made the bundle recorded,
+/// so the revision is shown with its control characters escaped.
+fn dirty_source_warning(
+    receipt: &Value,
+    from_bundle: bool,
+) -> Option<([&'static str; 2], Option<String>)> {
+    if receipt["source"]["dirty"] != Value::Bool(true) {
+        return None;
+    }
+    let warning = if from_bundle {
+        [
+            "The bundle was made from a source tree with uncommitted changes, so the commit it",
+            "records does not contain what is about to be applied. The record will say so.",
+        ]
+    } else {
+        [
+            "The working tree has uncommitted changes, so the commit recorded for this deploy",
+            "does not contain what is about to be applied. The record will say so.",
+        ]
+    };
+    Some((
+        warning,
+        receipt["source"]["revision"]
+            .as_str()
+            .map(output::printable),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bundle's receipt is written by whoever made the bundle: its text
+    /// reaches the terminal without control characters, and the warning
+    /// is about the bundle's source, not the operator's tree.
+    #[test]
+    fn a_dirty_bundle_source_is_named_as_the_bundles_and_escaped() {
+        let receipt = serde_json::json!({"source": {
+            "dirty": true, "revision": "abc\u{1b}[2J\u{202e}-dirty"}});
+        let (warning, revision) = dirty_source_warning(&receipt, true).unwrap();
+        let text = warning.join(" ");
+        assert!(text.contains("bundle"), "{text}");
+        assert!(!text.contains("working tree"), "{text}");
+        let revision = revision.unwrap();
+        assert!(
+            !revision.chars().any(|c| c.is_control() || c == '\u{202e}'),
+            "{revision:?}"
+        );
+        let (warning, _) = dirty_source_warning(&receipt, false).unwrap();
+        assert!(warning.join(" ").contains("working tree"));
+    }
 
     fn orphans() -> Vec<ResourceId> {
         vec![
