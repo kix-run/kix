@@ -265,6 +265,10 @@ pub enum BundleError {
         "{0} is larger than {MAX_MANIFEST_BYTES} bytes, the most the API server takes in one request"
     )]
     ManifestTooLarge(String),
+    #[error(
+        "the bundle has data after its archive: a second zstd frame, or bytes other than zero after the tar file's end"
+    )]
+    TrailingData,
 }
 
 impl Contents {
@@ -355,7 +359,7 @@ impl Bundle {
     /// version. For choosing among bundles; [`Bundle::read`] the one chosen.
     pub fn read_header(input: impl Read) -> Result<Header, BundleError> {
         let exceeded = Cell::new(false);
-        let mut stored = Limited::new(input, MAX_BYTES, &exceeded);
+        let mut stored = BufReader::new(Limited::new(input, MAX_BYTES, &exceeded));
         let result = (|| {
             let tar = open_tar(&mut stored)?;
             let mut archive = tar::Archive::new(Limited::new(tar, MAX_BYTES, &exceeded));
@@ -453,19 +457,22 @@ impl Bundle {
 /// [`Bundle::read`] with `max_bytes` in place of [`MAX_BYTES`].
 fn read_limited(input: impl Read, max_bytes: u64) -> Result<Bundle, BundleError> {
     let exceeded = Cell::new(false);
-    let mut stored = Hashing::new(Limited::new(input, max_bytes, &exceeded));
+    let mut stored = BufReader::new(Hashing::new(Limited::new(input, max_bytes, &exceeded)));
     let result = (|| {
         let (contents, sources) = {
             let tar = open_tar(&mut stored)?;
             let mut tar = Limited::new(tar, max_bytes, &exceeded);
             let read = read_entries(&mut tar)?;
-            // The tar file's end-of-archive blocks, and anything after them.
-            io::copy(&mut tar, &mut io::sink()).map_err(unreadable)?;
+            // tar-rs stops at the first zero block. Every byte is hashed, so
+            // anything after it must be zero, as `Contents::write` writes.
+            all_zero(&mut tar)?;
             read
         };
-        // Bytes past the last zstd frame. The decoder reads every frame, so
-        // this is empty unless the decoder stopped early.
-        io::copy(&mut stored, &mut io::sink()).map_err(unreadable)?;
+        // `open_tar` decodes one zstd frame, and nothing may follow it.
+        let mut rest = [0u8; 1];
+        if stored.read(&mut rest).map_err(unreadable)? != 0 {
+            return Err(BundleError::TrailingData);
+        }
         Ok((contents, sources))
     })();
     let (contents, sources) = result.map_err(|e| {
@@ -478,20 +485,36 @@ fn read_limited(input: impl Read, max_bytes: u64) -> Result<Bundle, BundleError>
     Ok(Bundle {
         contents,
         sources,
-        sha256: hex(&stored.hasher.finalize()),
+        sha256: hex(&stored.into_inner().hasher.finalize()),
     })
 }
 
-/// The tar stream of a bundle: decompressed when it starts with a zstd
-/// frame, as stored otherwise.
-fn open_tar<'a>(input: impl Read + 'a) -> Result<Box<dyn Read + 'a>, BundleError> {
-    let mut buffered = BufReader::new(input);
-    let start = buffered.fill_buf().map_err(unreadable)?;
+/// The tar stream of a bundle: the first zstd frame decompressed, when it
+/// starts with one, and as stored otherwise. The decoder takes no byte of
+/// `input` past that frame.
+fn open_tar<'a>(input: &'a mut impl BufRead) -> Result<Box<dyn Read + 'a>, BundleError> {
+    let start = input.fill_buf().map_err(unreadable)?;
     if start.starts_with(&ZSTD_MAGIC) {
-        let decoder = zstd::Decoder::with_buffer(buffered).map_err(unreadable)?;
+        let decoder = zstd::Decoder::with_buffer(input)
+            .map_err(unreadable)?
+            .single_frame();
         Ok(Box::new(decoder))
     } else {
-        Ok(Box::new(buffered))
+        Ok(Box::new(input))
+    }
+}
+
+/// Read `input` to its end, refusing any byte that is not zero.
+fn all_zero(mut input: impl Read) -> Result<(), BundleError> {
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = input.read(&mut buf).map_err(unreadable)?;
+        if n == 0 {
+            return Ok(());
+        }
+        if buf[..n].iter().any(|b| *b != 0) {
+            return Err(BundleError::TrailingData);
+        }
     }
 }
 
@@ -1558,6 +1581,41 @@ mod tests {
             reread(&contents).err(),
             Some(BundleError::ManifestTooLarge(path))
         );
+    }
+
+    /// Bytes after the archive are in the hash, so each must be checked.
+    /// tar-rs stops at the first zero block and the zstd decoder reads
+    /// every frame, so other readers could see more files than kix did.
+    #[test]
+    fn data_after_the_archive_is_refused() {
+        let contents = real();
+        let path = contents.files.keys().next().unwrap();
+        let second_tar = raw_tar(&[(&entry_name(path), tar::EntryType::Regular, b"evil")]);
+        let mut second_frame = written(&contents);
+        second_frame.extend(zstd::encode_all(&second_tar[..], 3).unwrap());
+        let mut skippable = written(&contents);
+        skippable.extend([0x50, 0x2a, 0x4d, 0x18, 4, 0, 0, 0, b'e', b'v', b'i', b'l']);
+        let mut plain = tar_of(&contents.header(), &contents.files);
+        plain.extend(&second_tar);
+        for (what, bytes) in [
+            ("a second zstd frame", second_frame),
+            ("a skippable frame", skippable),
+            ("a second tar file", plain),
+        ] {
+            assert_eq!(
+                Bundle::read(bytes.as_slice()).err(),
+                Some(BundleError::TrailingData),
+                "{what}"
+            );
+        }
+    }
+
+    #[test]
+    fn zero_padding_after_a_plain_tar_reads() {
+        let contents = real();
+        let mut plain = tar_of(&contents.header(), &contents.files);
+        plain.extend([0; 10240]);
+        assert!(Bundle::read(plain.as_slice()).is_ok());
     }
 
     #[test]
