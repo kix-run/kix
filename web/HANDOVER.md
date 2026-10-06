@@ -65,6 +65,9 @@ file, so wording can change without touching markup.
 - **D4**: no Contact link in the footer.
 - **D5**: "An optional in-cluster operator is in development." as designed.
 - **D6**: the agent toggle is gone; the AI section replaces it.
+- **A1** (addendum): "Why the Nix language?" uses the new copy, with no
+  aside and four points; `kix check`, `kix build` and `flake.lock` are inline
+  code. The claims are verified in the handoff's `shared/CLAIMS.md`.
 - **Meta**: the old site's tags are kept. The description is now the hero's
   H1 and subhead. `og:image` and `twitter:image` point at the 2x card
   (2400×1260) so it stays sharp on high-density screens; `twitter:card` is

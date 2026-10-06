@@ -2,51 +2,47 @@
 import Section from '../Section.astro';
 import Heading from '../Heading.astro';
 
+// Copy from addendum A1 (kix-oss-handoff/addenda/A1-nix-language-copy).
+// `body` is trusted HTML so commands and file names can be inline code.
+const code = (text: string) =>
+  `<code class="rounded bg-paper px-1 py-0.5 font-mono text-[13px] text-ink">${text}</code>`;
+
 const reasons = [
   {
-    title: 'The same inputs produce the same output.',
-    body: 'That makes a diff useful for review and lets Kix reproduce a previous deployment.',
+    title: 'String context',
+    body: 'Nix records which values a string was built from. Kix reads those records to find every dependency, including addresses used inside a connection string or a ConfigMap.',
   },
   {
-    title: 'Values carry their references with them.',
-    body: 'When an app reads a database address, Kix can follow that value back to the database resource and include the dependency in its plan.',
+    title: 'Pure evaluation',
+    body: `A Nix expression cannot change anything outside the evaluation. Evaluating a definition never calls the Kubernetes API, so ${code('kix check')} and ${code('kix build')} run without cluster credentials.`,
   },
   {
-    title: 'The whole definition is evaluated first.',
-    body: 'Kix can run its checks against the complete definition before it applies anything.',
+    title: 'Locked inputs',
+    body: `${code('flake.lock')} pins Kix and every package by hash, and image pins are committed with the definition. The same commit builds the same resources.`,
   },
-  { title: 'Reading a definition changes nothing.', body: 'Reading a definition leaves the cluster unchanged.' },
   {
-    title: 'Built on an established language.',
-    body: 'Nix has described reproducible operating systems for two decades. Kix uses that existing language.',
+    title: 'The module system',
+    body: 'Package options have types and defaults, and settings from flavors and clusters are merged by the same rules everywhere.',
   },
 ];
 ---
 
 <Section tone="paper-2" labelledby="language-title">
   <div class="flex flex-col gap-12 lg:gap-16">
-    <div class="grid grid-cols-1 items-end gap-10 xl:grid-cols-[minmax(0,1fr)_480px] xl:gap-20">
-      <div class="flex flex-col gap-5">
-        <Heading id="language-title">Why the Nix language?</Heading>
-        <p class="text-[17px] leading-[1.55] text-ink-2 md:text-[18px]">
-          Kix definitions use the Nix language. Its evaluation model lets Kix read the complete cluster before
-          deployment and retain the references between values, which are the basis for the checks and plan shown above.
-        </p>
-      </div>
-      <div class="flex flex-col gap-2.5 rounded-[10px] border-[1.5px] border-ink bg-paper p-6">
-        <p class="font-mono text-[13px] text-accent-text">the syntax may be unfamiliar</p>
-        <p class="text-[15.5px] leading-[1.55] text-ink">
-          The syntax may take some getting used to. You can start with an existing definition, make a small change, and
-          use Kix's errors to see how it affects the cluster.
-        </p>
-      </div>
+    <div class="flex max-w-[720px] flex-col gap-5">
+      <Heading id="language-title">Why the Nix language?</Heading>
+      <p class="text-[17px] leading-[1.55] text-ink-2 md:text-[18px]">
+        Kix definitions are written in the Nix language, which has been used for reproducible builds for over 20 years.
+        Kix uses the language rather than NixOS, and it runs on any machine with Nix installed. It relies on four of the
+        language's features directly.
+      </p>
     </div>
-    <ul class="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-5">
+    <ul class="grid grid-cols-1 gap-6 sm:grid-cols-2 xl:grid-cols-4">
       {
         reasons.map((reason) => (
           <li class="flex flex-col gap-3 border-t-[1.5px] border-ink pt-5">
             <h3 class="text-[18px] leading-[1.3] font-semibold">{reason.title}</h3>
-            <p class="text-[14.5px] leading-[1.55] text-ink-2">{reason.body}</p>
+            <p class="text-[14.5px] leading-[1.55] text-ink-2" set:html={reason.body} />
           </li>
         ))
       }
