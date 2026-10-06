@@ -54,6 +54,11 @@ pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Resu
     let Some(mut p) = deploy::prepare(args, ctx)? else {
         return Ok(());
     };
+    // A plan from a bundle decrypts nothing: SOPS Secrets get placeholder
+    // values, so planning before anyone has approved reads no secret.
+    if let Some(b) = &p.bundle {
+        p.sops = b.sops(true)?;
+    }
     let report = match &p.pre_client {
         Some(client) => Some(dry_run(&p, args, client.clone(), ctx)?),
         None => None,
@@ -167,6 +172,7 @@ pub(crate) fn dry_run(
                 activation_identity_hash: p.activation_identity_hash.clone(),
                 force_conflicts: args.force_conflicts,
                 dry_run: true,
+                sops: p.sops.clone(),
                 ..Default::default()
             },
         ));

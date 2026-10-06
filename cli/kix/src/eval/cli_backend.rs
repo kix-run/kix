@@ -406,7 +406,7 @@ fn current_nix_system() -> &'static str {
 }
 
 /// Stable ordering for manifests: apiVersion, kind, namespace, name.
-fn manifest_sort_key(manifest: &serde_json::Value) -> (String, String, String, String) {
+pub fn manifest_sort_key(manifest: &serde_json::Value) -> (String, String, String, String) {
     let field = |pointer: &str| {
         manifest
             .pointer(pointer)

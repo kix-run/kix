@@ -4,9 +4,10 @@
 //! decrypts the SOPS file via the `sops` CLI, optionally verifies the
 //! content hash, and injects the plaintext into `stringData`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -24,7 +25,7 @@ pub enum SecretError {
     SourceNotFound { path: String },
 
     #[error(
-        "content hash mismatch for secret '{name}': expected {expected}, got {actual}. \
+        "content hash mismatch for secret '{name}': expected {expected}. \
          Check that you are using the intended SOPS file. If the change is intentional, update the secret's hash in its Nix definition and rebuild."
     )]
     HashMismatch {
@@ -35,6 +36,65 @@ pub enum SecretError {
 
     #[error("failed to parse SOPS output as YAML/JSON for {path}: {message}")]
     ParseFailed { path: String, message: String },
+
+    /// A bundle's Secret names a SOPS source the bundle does not carry, or
+    /// carries none and no content hash.
+    #[error("secret '{name}': {message}")]
+    NotInBundle { name: String, message: String },
+
+    /// A SOPS file from a bundle is encrypted to something other than age
+    /// recipients alone.
+    #[error("SOPS file {path} must be encrypted to age recipients only: {message}")]
+    NotAgeOnly { path: String, message: String },
+}
+
+/// Where SOPS sources are read from.
+#[derive(Debug, Clone, Default)]
+pub enum SopsSources {
+    /// The path in each Secret's `kix.run/sops-source`, on this machine.
+    #[default]
+    Local,
+    /// Only the files a bundle carries ([`SopsSources::from_bundle`]).
+    Bundle(Arc<BundleSources>),
+}
+
+/// The SOPS files of a bundle, written to a private directory.
+#[derive(Debug)]
+pub struct BundleSources {
+    /// Store path named by `kix.run/sops-source` to the file on disk.
+    files: HashMap<String, PathBuf>,
+    /// Plan without decrypting: each Secret gets placeholder values for
+    /// the keys it declares.
+    placeholders: bool,
+    _dir: tempfile::TempDir,
+}
+
+impl SopsSources {
+    /// Write a bundle's SOPS files to a fresh directory, each under its
+    /// SHA-256 and its store name (sops tells the format by the extension),
+    /// and read them only from there.
+    pub fn from_bundle(
+        sources: HashMap<String, Vec<u8>>,
+        placeholders: bool,
+    ) -> std::io::Result<Self> {
+        let dir = tempfile::tempdir()?;
+        let mut files = HashMap::new();
+        for (store_path, bytes) in sources {
+            let digest: String = Sha256::digest(&bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            let name = crate::eval::store_path::name_of(&store_path).unwrap_or("source");
+            let file = dir.path().join(format!("{digest}-{name}"));
+            std::fs::write(&file, &bytes)?;
+            files.insert(store_path, file);
+        }
+        Ok(SopsSources::Bundle(Arc::new(BundleSources {
+            files,
+            placeholders,
+            _dir: dir,
+        })))
+    }
 }
 
 /// Result of hydrating a single secret.
@@ -70,6 +130,21 @@ pub fn needs_hydration(manifest: &Value) -> bool {
 ///
 /// Returns the list of hydrated secrets, or the first error encountered.
 pub fn hydrate_secrets(manifests: &mut [Value]) -> Result<Vec<HydrationResult>, SecretError> {
+    hydrate_secrets_from(manifests, &SopsSources::Local)
+}
+
+/// [`hydrate_secrets`], reading SOPS sources from `sources`.
+///
+/// From a bundle, a source must be one of the bundle's files, the file must
+/// be encrypted to age recipients only (so decrypting never reaches a cloud
+/// KMS or Vault with this machine's credentials), and the Secret must
+/// declare a content hash. With placeholders, nothing is decrypted: each
+/// declared key (`kix.run/secret-keys`) gets a value valid for the Secret's
+/// type.
+pub fn hydrate_secrets_from(
+    manifests: &mut [Value],
+    sources: &SopsSources,
+) -> Result<Vec<HydrationResult>, SecretError> {
     let mut results = Vec::new();
 
     for manifest in manifests.iter_mut() {
@@ -77,11 +152,129 @@ pub fn hydrate_secrets(manifests: &mut [Value]) -> Result<Vec<HydrationResult>, 
             continue;
         }
 
-        let result = hydrate_single(manifest)?;
+        let result = match sources {
+            SopsSources::Local => hydrate_single(manifest)?,
+            SopsSources::Bundle(bundle) => hydrate_from_bundle(manifest, bundle)?,
+        };
         results.push(result);
     }
 
     Ok(results)
+}
+
+fn hydrate_from_bundle(
+    manifest: &mut Value,
+    bundle: &BundleSources,
+) -> Result<HydrationResult, SecretError> {
+    let rid = ResourceId::from_value(manifest);
+    let not_in_bundle = |message: String| SecretError::NotInBundle {
+        name: rid.name.clone(),
+        message,
+    };
+    let source = keys::get(manifest, keys::SOPS_SOURCE)
+        .unwrap_or_default()
+        .to_string();
+    let path = bundle
+        .files
+        .get(&source)
+        .ok_or_else(|| not_in_bundle(format!("its SOPS source {source} is not in the bundle")))?;
+    let expected = keys::get(manifest, keys::CONTENT_HASH)
+        .map(str::to_string)
+        .ok_or_else(|| not_in_bundle(format!("it declares no {}", keys::CONTENT_HASH)))?;
+    check_age_only(path)?;
+
+    let data: BTreeMap<String, String> = if bundle.placeholders {
+        placeholders(manifest)
+    } else {
+        let data = parse_secret_data(path, &decrypt_sops(path)?)?;
+        if compute_content_hash(&data) != expected {
+            return Err(SecretError::HashMismatch {
+                name: rid.name.clone(),
+                expected,
+                actual: String::new(),
+            });
+        }
+        data
+    };
+    let keys_injected = data.len();
+    let string_data: serde_json::Map<String, Value> = data
+        .into_iter()
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect();
+    if let Some(obj) = manifest.as_object_mut() {
+        obj.insert("stringData".to_string(), Value::Object(string_data));
+    }
+    Ok(HydrationResult { rid, keys_injected })
+}
+
+/// A value for each key the Secret declares, valid for its type, so a dry
+/// run passes the API server's own checks without the real values.
+fn placeholders(manifest: &Value) -> BTreeMap<String, String> {
+    let secret_type = manifest
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("Opaque");
+    keys::get(manifest, keys::SECRET_KEYS)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(|key| {
+            let value = match (secret_type, key) {
+                ("kubernetes.io/dockerconfigjson", ".dockerconfigjson") => r#"{"auths":{}}"#,
+                ("kubernetes.io/dockercfg", ".dockercfg") => "{}",
+                _ => "kix-placeholder",
+            };
+            (key.to_string(), value.to_string())
+        })
+        .collect()
+}
+
+/// Refuse a SOPS file whose metadata names any key source but age.
+///
+/// An allowlist: SOPS adds key sources over time (and `key_groups` can hold
+/// any of them), so a field this code does not know is refused.
+fn check_age_only(path: &Path) -> Result<(), SecretError> {
+    /// Metadata that names no key.
+    const NOT_KEYS: &[&str] = &[
+        "lastmodified",
+        "mac",
+        "mac_only_encrypted",
+        "version",
+        "unencrypted_suffix",
+        "encrypted_suffix",
+        "unencrypted_regex",
+        "encrypted_regex",
+        "unencrypted_comment_regex",
+        "encrypted_comment_regex",
+        "shamir_threshold",
+    ];
+    let refuse = |message: &str| SecretError::NotAgeOnly {
+        path: path.display().to_string(),
+        message: message.to_string(),
+    };
+    let text = std::fs::read_to_string(path).map_err(|e| refuse(&e.to_string()))?;
+    let doc: Value = serde_yml::from_str(&text)
+        .map_err(|_| refuse("only YAML or JSON SOPS files can come from a bundle"))?;
+    let sops = doc
+        .get("sops")
+        .and_then(Value::as_object)
+        .ok_or_else(|| refuse("it has no sops metadata"))?;
+    for (field, value) in sops {
+        let empty = match value {
+            Value::Null => true,
+            Value::Array(a) => a.is_empty(),
+            Value::String(s) => s.is_empty(),
+            _ => false,
+        };
+        if field != "age" && !NOT_KEYS.contains(&field.as_str()) && !empty {
+            return Err(refuse(&format!("it also names {field}")));
+        }
+    }
+    match sops.get("age") {
+        Some(Value::Array(a)) if !a.is_empty() => Ok(()),
+        _ => Err(refuse("it names no age recipient")),
+    }
 }
 
 /// Hydrate a single Secret manifest.
@@ -406,5 +599,78 @@ mod tests {
         data2.insert("a".to_string(), "1".to_string());
 
         assert_eq!(compute_content_hash(&data1), compute_content_hash(&data2));
+    }
+
+    const SOURCE: &str = "/nix/store/yxyad967bhmxvm5120mrjnrrr7ak087w-db.sops.yaml";
+    const AGE_ONLY: &str = "password: ENC[AES256_GCM,data:abc]\nsops:\n  kms: []\n  age:\n    - recipient: age1abc\n      enc: x\n  lastmodified: '2026-10-06T00:00:00Z'\n  mac: ENC[x]\n  version: 3.9.0\n";
+
+    fn bundle_secret(source: &str, content_hash: Option<&str>) -> Value {
+        let mut annotations = serde_json::json!({
+            (keys::SOPS_SOURCE): source,
+            (keys::SECRET_KEYS): "password, .dockerconfigjson",
+        });
+        if let Some(h) = content_hash {
+            annotations[keys::CONTENT_HASH] = serde_json::json!(h);
+        }
+        serde_json::json!({
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "type": "kubernetes.io/dockerconfigjson",
+            "metadata": {"name": "db", "namespace": "app", "annotations": annotations},
+        })
+    }
+
+    fn from_bundle(text: &str, placeholders: bool) -> SopsSources {
+        SopsSources::from_bundle(
+            HashMap::from([(SOURCE.to_string(), text.as_bytes().to_vec())]),
+            placeholders,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_plan_from_a_bundle_gets_placeholders_typed_for_the_secret() {
+        let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+        let results = hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap();
+        assert_eq!(results[0].keys_injected, 2);
+        assert_eq!(manifests[0]["stringData"]["password"], "kix-placeholder");
+        assert_eq!(
+            manifests[0]["stringData"][".dockerconfigjson"],
+            r#"{"auths":{}}"#
+        );
+    }
+
+    #[test]
+    fn a_source_the_bundle_does_not_carry_is_refused() {
+        let other = "/nix/store/0h5dy43cxa771fiz9dsx14c0vf32sn67-db.sops.yaml";
+        let mut manifests = [bundle_secret(other, Some("sha256-x"))];
+        let err = hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap_err();
+        assert!(matches!(err, SecretError::NotInBundle { .. }), "{err}");
+    }
+
+    #[test]
+    fn a_secret_from_a_bundle_must_declare_a_content_hash() {
+        let mut manifests = [bundle_secret(SOURCE, None)];
+        let err = hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap_err();
+        assert!(matches!(err, SecretError::NotInBundle { .. }), "{err}");
+    }
+
+    #[test]
+    fn a_bundle_sops_file_must_name_age_recipients_only() {
+        let refused = [
+            AGE_ONLY.replace("kms: []", "kms:\n    - arn: arn:aws:kms:x"),
+            AGE_ONLY.replace("kms: []", "key_groups:\n    - pgp: [x]"),
+            AGE_ONLY.replace("kms: []", "some_new_kms: x"),
+            "password: x\nsops:\n  age: []\n".to_string(),
+            "password: x\n".to_string(),
+        ];
+        for text in refused {
+            let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+            let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+            assert!(
+                matches!(err, SecretError::NotAgeOnly { .. }),
+                "{text}: {err}"
+            );
+        }
     }
 }

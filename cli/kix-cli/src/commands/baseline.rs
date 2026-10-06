@@ -167,6 +167,39 @@ fn short(hash: &str) -> &str {
     &hash[..8.min(hash.len())]
 }
 
+/// The build an Activation record names, unstamped: from a
+/// `--deployed-bundle` with its identity hash, else from `built_via` or the
+/// local activation cache. `Ok(None)` when this machine has none of them.
+///
+/// A build from the store must be the build the record names. `built_via`
+/// is written by whoever deployed, so a record could point at any store
+/// path on this machine.
+pub fn record_graph(
+    cluster: &str,
+    identity_hash: &str,
+    built_via: Option<&str>,
+) -> Result<Option<StoreGraph>, String> {
+    if let Some(graph) = crate::commands::bundle::deployed_graph(identity_hash) {
+        return Ok(Some(graph));
+    }
+    let Some(dir) = result_dir(cluster, identity_hash, built_via) else {
+        return Ok(None);
+    };
+    let noop = |_: &str| {};
+    let graph = StoreGraph::from_result_dir_with_status(&dir, &noop)
+        .map_err(|e| format!("the build at {} would not load: {e}", dir.display()))?;
+    let found = kix::eval::store_graph::store_hash(&graph.activation_path);
+    if found != identity_hash {
+        return Err(format!(
+            "the build at {} is activation {}, not {}",
+            dir.display(),
+            short(&found),
+            short(identity_hash),
+        ));
+    }
+    Ok(Some(graph))
+}
+
 /// The stamped manifests of a build, from `built_via` when that store path
 /// is on this machine, else through the local activation cache by identity
 /// hash. `None` when neither is available or the build will not load.
@@ -175,9 +208,7 @@ fn resolve_closure(
     identity_hash: &str,
     built_via: Option<&str>,
 ) -> Option<Vec<Value>> {
-    let result_dir = result_dir(cluster, identity_hash, built_via)?;
-    let noop = |_: &str| {};
-    let mut graph = StoreGraph::from_result_dir_with_status(&result_dir, &noop).ok()?;
+    let mut graph = record_graph(cluster, identity_hash, built_via).ok()??;
     stamp_annotations(&mut graph);
     Some(
         graph

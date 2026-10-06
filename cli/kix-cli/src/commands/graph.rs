@@ -25,10 +25,27 @@ impl CommandResponse for GraphResponse {
 }
 
 pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
-    let cluster = ctx.eval_cluster_or_suggest(&args.cluster)?;
+    let manifests = match &args.bundle {
+        Some(path) => {
+            let loaded = super::bundle::load(path)?;
+            if loaded.bundle.cluster != args.cluster {
+                return Err(miette::miette!(
+                    "the bundle is a build of cluster '{}', not '{}'",
+                    loaded.bundle.cluster,
+                    args.cluster
+                ));
+            }
+            let mut graph = loaded.graph()?;
+            kix::manifest::stamp::stamp_annotations(&mut graph);
+            let mut manifests: Vec<serde_json::Value> =
+                graph.resources.into_values().map(|r| r.manifest).collect();
+            manifests.sort_by_cached_key(kix::eval::cli_backend::manifest_sort_key);
+            manifests
+        }
+        None => ctx.eval_cluster_or_suggest(&args.cluster)?.raw_manifests,
+    };
 
-    let graph = kix::cluster::graph::ResourceGraph::from_manifests(&cluster.raw_manifests)
-        .into_diagnostic()?;
+    let graph = kix::cluster::graph::ResourceGraph::from_manifests(&manifests).into_diagnostic()?;
 
     // --format takes priority over global -o
     match args.format {

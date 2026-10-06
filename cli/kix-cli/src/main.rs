@@ -111,6 +111,7 @@ fn main() -> miette::Result<()> {
         Command::Status(args) => commands::status::run(args, &mut ctx),
         Command::List(args) => commands::list::run(args, &mut ctx),
         Command::Graph(args) => commands::graph::run(args, &mut ctx),
+        Command::Bundle(args) => commands::bundle::run(args, &mut ctx),
         Command::Inspect(args) => commands::inspect::run(args, &mut ctx),
         Command::Gc(args) => commands::gc::run(args, &mut ctx),
         Command::Migrate(cli::MigrateCommand::Domain(args)) => {

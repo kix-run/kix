@@ -92,7 +92,9 @@ fn base32(bytes: &[u8]) -> String {
             let b = n * 5;
             let (i, j) = (b / 8, b % 8);
             let low = bytes[i] >> j;
-            let high = bytes.get(i + 1).map_or(0, |next| next.checked_shl(8 - j as u32).unwrap_or(0));
+            let high = bytes
+                .get(i + 1)
+                .map_or(0, |next| next.checked_shl(8 - j as u32).unwrap_or(0));
             BASE32[((low | high) & 0x1f) as usize] as char
         })
         .collect()
@@ -143,7 +145,10 @@ mod tests {
         let hash = "0h5dy43cxa771fiz9dsx14c0vf32sn67";
         assert_eq!(name_of(&format!("/nix/store/{hash}-x")), Some("x"));
         assert_eq!(name_of(&format!("/nix/store/{hash}-x/y")), None);
-        assert_eq!(name_of("/nix/store/0h5dy43cxa771fiz9dsx14c0vf32sn6e-x"), None);
+        assert_eq!(
+            name_of("/nix/store/0h5dy43cxa771fiz9dsx14c0vf32sn6e-x"),
+            None
+        );
         assert_eq!(name_of(&format!("/tmp/{hash}-x")), None);
         assert_eq!(name_of(&format!("/nix/store/{hash}-")), None);
     }
@@ -152,7 +157,10 @@ mod tests {
     fn changing_bytes_references_or_name_changes_the_path() {
         let base = path_for(Method::Text, b"a", &[], "n");
         assert_ne!(base, path_for(Method::Text, b"b", &[], "n"));
-        assert_ne!(base, path_for(Method::Text, b"a", &["/nix/store/x".into()], "n"));
+        assert_ne!(
+            base,
+            path_for(Method::Text, b"a", &["/nix/store/x".into()], "n")
+        );
         assert_ne!(base, path_for(Method::Text, b"a", &[], "m"));
         assert_ne!(base, path_for(Method::Source, b"a", &[], "n"));
     }

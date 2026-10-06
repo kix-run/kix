@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use super::error::KixEvalError;
 use super::store_graph::{KixPackageIndex, StoreGraph, store_name};
 use super::store_path::{self, Method};
-use crate::manifest::keys;
+use crate::manifest::{keys, lifecycle};
 
 /// The `format` field of every bundle.
 pub const FORMAT: &str = "kix-bundle";
@@ -73,7 +73,9 @@ pub enum BundleError {
     TooLarge(usize),
     #[error("the bundle is not valid JSON of the bundle format: {0}")]
     Unreadable(String),
-    #[error("the bundle's format is '{format}' version {version}; this kix reads '{FORMAT}' version {VERSION}")]
+    #[error(
+        "the bundle's format is '{format}' version {version}; this kix reads '{FORMAT}' version {VERSION}"
+    )]
     WrongFormat { format: String, version: u32 },
     #[error("the bundle has {0} files; the most kix reads is {MAX_FILES}")]
     TooManyFiles(usize),
@@ -85,21 +87,31 @@ pub enum BundleError {
     MissingReference { path: String, missing: String },
     #[error("the bundle's {what} {path} is not among its files")]
     MissingEntry { what: &'static str, path: String },
-    #[error("{0} is in the bundle but not part of the build: nothing the Activation record depends on references it")]
+    #[error(
+        "{0} is in the bundle but not part of the build: nothing the Activation record depends on references it"
+    )]
     Unreachable(String),
     #[error("{path} is not a JSON manifest: {message}")]
     NotJson { path: String, message: String },
-    #[error("the bundle must hold exactly one Activation record, and it must be its `activation`; found {0}")]
+    #[error(
+        "the bundle must hold exactly one Activation record, and it must be its `activation`; found {0}"
+    )]
     Records(usize),
     #[error("the bundle is for cluster '{bundle}', but its {what} says '{other}'")]
-    WrongCluster { bundle: String, what: &'static str, other: String },
+    WrongCluster {
+        bundle: String,
+        what: &'static str,
+        other: String,
+    },
     #[error("kix-packages.json lists {0}, which the Activation record's closure does not hold")]
     IndexOutsideClosure(String),
-    #[error("kix-packages.json and the Activation record's `spec.instances` list different package instances")]
+    #[error(
+        "kix-packages.json and the Activation record's `spec.instances` list different package instances"
+    )]
     IndexInstances,
     #[error("{0} uses a retired kix domain key or group")]
     RetiredDomain(String),
-    #[error("{0} is a source file that no Secret's `kix.run/sops-source` names")]
+    #[error("{0} is a source file that no Secret's SOPS source annotation names")]
     UnexpectedSource(String),
 }
 
@@ -148,7 +160,10 @@ impl Bundle {
         }
         for (what, path) in [("activation", &self.activation), ("index", &self.index)] {
             if !self.files.contains_key(path) {
-                return Err(BundleError::MissingEntry { what, path: path.clone() });
+                return Err(BundleError::MissingEntry {
+                    what,
+                    path: path.clone(),
+                });
             }
         }
 
@@ -178,13 +193,13 @@ impl Bundle {
                 return Err(BundleError::RetiredDomain(path.clone()));
             }
             match manifest.pointer("/kind").and_then(|k| k.as_str()) {
-                Some("Activation") => {
+                Some(kind) if kind == lifecycle::RECORD_KIND => {
                     records += 1;
                     if *path != self.activation {
                         return Err(BundleError::Records(records));
                     }
                 }
-                Some("PackageInstance") => {
+                Some(kind) if kind == lifecycle::PACKAGE_INSTANCE_KIND => {
                     instances.insert((
                         text_at(&manifest, "/metadata/namespace"),
                         text_at(&manifest, "/spec/instanceName"),
@@ -252,9 +267,11 @@ impl Bundle {
         self.verify().map_err(|e| KixEvalError::StoreGraphError {
             message: e.to_string(),
         })?;
-        let index = self.package_index().map_err(|e| KixEvalError::StoreGraphError {
-            message: e.to_string(),
-        })?;
+        let index = self
+            .package_index()
+            .map_err(|e| KixEvalError::StoreGraphError {
+                message: e.to_string(),
+            })?;
         let closure = self.closure_of(&self.activation);
         let mut ref_cache: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
         for path in &closure {
@@ -274,12 +291,12 @@ impl Bundle {
         }
         let read = |path: &Path| -> Result<serde_json::Value, KixEvalError> {
             let key = path.to_string_lossy();
-            let file = self
-                .files
-                .get(key.as_ref())
-                .ok_or_else(|| KixEvalError::StoreGraphError {
-                    message: format!("{key} is not in the bundle"),
-                })?;
+            let file =
+                self.files
+                    .get(key.as_ref())
+                    .ok_or_else(|| KixEvalError::StoreGraphError {
+                        message: format!("{key} is not in the bundle"),
+                    })?;
             serde_json::from_str(&file.text).map_err(|e| KixEvalError::StoreGraphError {
                 message: format!("failed to parse JSON from {key}: {e}"),
             })
@@ -346,8 +363,12 @@ pub fn from_result_dir(
 ) -> Result<Bundle, KixEvalError> {
     let err = |message: String| KixEvalError::StoreGraphError { message };
     let resolve = |name: &str| {
-        std::fs::canonicalize(result_dir.join(name))
-            .map_err(|e| err(format!("failed to resolve {name} in {}: {e}", result_dir.display())))
+        std::fs::canonicalize(result_dir.join(name)).map_err(|e| {
+            err(format!(
+                "failed to resolve {name} in {}: {e}",
+                result_dir.display()
+            ))
+        })
     };
     let activation = resolve("activation")?;
     let index = resolve("kix-packages.json")?;
@@ -369,8 +390,11 @@ pub fn from_result_dir(
             String::from_utf8_lossy(&output.stderr)
         )));
     }
-    let info: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| err(format!("nix path-info printed something other than JSON: {e}")))?;
+    let info: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|e| {
+        err(format!(
+            "nix path-info printed something other than JSON: {e}"
+        ))
+    })?;
     let mut files = BTreeMap::new();
     for (path, references) in path_info_references(&info) {
         let text = std::fs::read_to_string(&path)
@@ -495,7 +519,10 @@ mod tests {
     #[test]
     fn a_changed_byte_is_refused() {
         let mut bundle = real();
-        let p = path_ending(&bundle, "-k8s-ConfigMap-kix-enterprise-test-web-status-page");
+        let p = path_ending(
+            &bundle,
+            "-k8s-ConfigMap-kix-enterprise-test-web-status-page",
+        );
         bundle.files.get_mut(&p).unwrap().text = bundle.files[&p].text.replace("status", "statux");
         assert_eq!(bundle.verify(), Err(BundleError::PathMismatch(p)));
     }
@@ -503,7 +530,10 @@ mod tests {
     #[test]
     fn a_dropped_reference_is_refused() {
         let mut bundle = real();
-        let p = path_ending(&bundle, "-k8s-Deployment-kix-enterprise-test-web-status-page");
+        let p = path_ending(
+            &bundle,
+            "-k8s-Deployment-kix-enterprise-test-web-status-page",
+        );
         bundle.files.get_mut(&p).unwrap().references.pop();
         assert_eq!(bundle.verify(), Err(BundleError::PathMismatch(p)));
     }
@@ -538,7 +568,10 @@ mod tests {
     fn a_bundle_for_another_cluster_is_refused() {
         let mut bundle = real();
         bundle.cluster = "stage1".to_string();
-        assert!(matches!(bundle.verify(), Err(BundleError::WrongCluster { .. })));
+        assert!(matches!(
+            bundle.verify(),
+            Err(BundleError::WrongCluster { .. })
+        ));
     }
 
     #[test]
@@ -578,8 +611,12 @@ mod tests {
     #[test]
     fn path_info_in_either_shape() {
         let object = serde_json::json!({"/nix/store/a-x": {"references": ["/nix/store/b-y"]}});
-        let array = serde_json::json!([{"path": "/nix/store/a-x", "references": ["/nix/store/b-y"]}]);
-        let want = vec![("/nix/store/a-x".to_string(), vec!["/nix/store/b-y".to_string()])];
+        let array =
+            serde_json::json!([{"path": "/nix/store/a-x", "references": ["/nix/store/b-y"]}]);
+        let want = vec![(
+            "/nix/store/a-x".to_string(),
+            vec!["/nix/store/b-y".to_string()],
+        )];
         assert_eq!(path_info_references(&object), want);
         assert_eq!(path_info_references(&array), want);
     }

@@ -292,6 +292,14 @@ pub enum Command {
     /// Dependency DAG visualization
     Graph(GraphArgs),
 
+    /// Build a cluster and write it as one file, a bundle
+    ///
+    /// A bundle holds every store file of the build with its references, so
+    /// `kix plan`, `kix deploy` and `kix graph` can read it with `--bundle`
+    /// on a machine with no Nix store. Reading a bundle recomputes every
+    /// store path from its file's bytes and refuses one that differs.
+    Bundle(BundleArgs),
+
     /// Summarise a cluster's rendered resources by namespace and kind
     Inspect(InspectArgs),
 
@@ -349,6 +357,7 @@ impl Command {
             Command::Deploy(a) => Some(&a.plan.cluster),
             Command::Status(a) => Some(&a.cluster),
             Command::Graph(a) => Some(&a.cluster),
+            Command::Bundle(a) => Some(&a.cluster),
             Command::Inspect(a) => Some(&a.cluster),
             Command::Gc(a) => Some(&a.cluster),
             Command::Migrate(MigrateCommand::Domain(a)) => Some(&a.cluster),
@@ -665,6 +674,18 @@ pub struct PlanArgs {
     /// loss, and `kix plan` exits 3. Kix does not copy data between them.
     #[arg(long)]
     pub accept_migrations: bool,
+
+    /// Read the build from this bundle (`kix bundle`) instead of building.
+    /// Every store path in it is checked against its content first
+    #[arg(long, value_name = "FILE", conflicts_with = "current_activation")]
+    pub bundle: Option<std::path::PathBuf>,
+
+    /// A bundle of a build the cluster's records name (the Active one, a
+    /// failed or a kept one), used where kix would otherwise look for that
+    /// build in the local Nix store. Matched by the record's identity hash.
+    /// Repeat for several
+    #[arg(long = "deployed-bundle", value_name = "FILE", requires = "bundle")]
+    pub deployed_bundles: Vec<std::path::PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -706,6 +727,16 @@ pub struct DeployArgs {
     /// Delegate deployment to the kix operator instead of applying directly
     #[arg(long)]
     pub operator: bool,
+
+    /// Write an annotation onto this deploy's Activation record, as
+    /// KEY=VALUE. KEY may not be under `kix.run/`. Repeat for several
+    #[arg(
+        long = "record-annotation",
+        value_name = "KEY=VALUE",
+        value_parser = parse_record_annotation,
+        conflicts_with = "operator"
+    )]
+    pub record_annotations: Vec<(String, String)>,
 
     /// Render a live inline graph-streaming dashboard. Falls back to
     /// line-oriented output on non-interactive terminals.
@@ -1013,6 +1044,20 @@ pub struct GraphArgs {
     /// Graph output format (tree, dot, json)
     #[arg(long)]
     pub format: Option<GraphFormat>,
+
+    /// Read the build from this bundle (`kix bundle`) instead of building
+    #[arg(long, value_name = "FILE")]
+    pub bundle: Option<std::path::PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub struct BundleArgs {
+    /// Cluster name
+    pub cluster: String,
+
+    /// Where to write the bundle
+    #[arg(value_name = "FILE")]
+    pub file: std::path::PathBuf,
 }
 
 #[derive(clap::Args)]
@@ -1052,6 +1097,25 @@ pub struct ImagesArgs {
     /// Show which resources reference each image
     #[arg(long)]
     pub sources: bool,
+}
+
+fn parse_record_annotation(s: &str) -> Result<(String, String), String> {
+    let (key, value) = s
+        .split_once('=')
+        .ok_or_else(|| format!("expected KEY=VALUE, got '{s}'"))?;
+    // Kix reads its own keys, and those of the retired domain, off the
+    // record: the identity hash, built-via, and more.
+    let prefix = key.split_once('/').map_or("", |(p, _)| p);
+    let kix_owned = std::iter::once(kix::manifest::keys::DOMAIN)
+        .chain(kix::legacy_domain::DOMAINS.iter().copied())
+        .any(|d| prefix == d || prefix.ends_with(&format!(".{d}")));
+    if key.is_empty() || kix_owned {
+        return Err(format!(
+            "'{key}' is not allowed: the key must be set and not under {}",
+            kix::manifest::keys::DOMAIN
+        ));
+    }
+    Ok((key.to_string(), value.to_string()))
 }
 
 fn validate_timeout(s: &str) -> Result<String, String> {
@@ -1172,5 +1236,24 @@ mod tests {
             .expect("parses");
         let cli = Cli::from_arg_matches(&matches).expect("converts");
         assert_eq!(cli.global.flake, "x");
+    }
+
+    #[test]
+    fn a_record_annotation_cannot_use_a_kix_key() {
+        assert_eq!(
+            parse_record_annotation("lithus.net/statement=abc=="),
+            Ok(("lithus.net/statement".into(), "abc==".into()))
+        );
+        let domain = kix::manifest::keys::DOMAIN;
+        let retired = kix::legacy_domain::DOMAINS[0];
+        for refused in [
+            format!("{}=x", kix::manifest::keys::IDENTITY_HASH),
+            format!("deploy.{domain}/x=y"),
+            format!("{retired}/built-via=/tmp"),
+            "=x".to_string(),
+            "no-equals".to_string(),
+        ] {
+            assert!(parse_record_annotation(&refused).is_err(), "{refused}");
+        }
     }
 }

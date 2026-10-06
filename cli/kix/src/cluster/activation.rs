@@ -1412,6 +1412,32 @@ async fn read_record_phase(
     Ok(read_phase(&item).to_string())
 }
 
+/// The identity hash of the record named `name`, or `None` when no such
+/// record exists. `Some("")` for a record without the annotation.
+///
+/// A record's name carries only the first 12 characters of the build's
+/// hash, so two builds can share a name. Applying one over the other would
+/// rewrite the history of what was deployed.
+pub async fn identity_hash_of(
+    client: &Client,
+    ar: &ApiResource,
+    name: &str,
+) -> Result<Option<String>, ActivationError> {
+    let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
+    let item = api
+        .get_opt(name)
+        .await
+        .map_err(ActivationError::ListFailed)?;
+    Ok(item.map(|o| {
+        o.metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(keys::IDENTITY_HASH))
+            .cloned()
+            .unwrap_or_default()
+    }))
+}
+
 /// Set the Activation phase to Deploying and initialize wave status.
 ///
 /// Called at the start of the apply loop, after the record itself has been

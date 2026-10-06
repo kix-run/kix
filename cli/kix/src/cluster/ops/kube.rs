@@ -101,6 +101,8 @@ pub struct KubeOpsConfig {
     /// operator, whose model is resume-on-requeue: a reconcile that returns
     /// early will be retried, so failing the record would fight it.
     pub mark_failed_on_abort: bool,
+    /// Where SOPS sources come from: this machine, or a bundle's files.
+    pub sops: secrets::SopsSources,
 }
 
 pub struct KubeOps {
@@ -383,9 +385,10 @@ impl ClusterOps for KubeOps {
         let rid = ResourceId::from_value(&manifest);
         // `sops` is a synchronous subprocess. On a blocking thread it cannot
         // stall the runtime; the engine's own thread never runs it.
+        let sops = self.cfg.sops.clone();
         let hydrated = tokio::task::spawn_blocking(move || {
             let mut single = [manifest];
-            let results = secrets::hydrate_secrets(&mut single)?;
+            let results = secrets::hydrate_secrets_from(&mut single, &sops)?;
             let [manifest] = single;
             Ok((manifest, results))
         })
