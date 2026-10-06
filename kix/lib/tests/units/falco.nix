@@ -116,6 +116,8 @@ in
       # Falco exits at startup without a metrics interval, and the
       # container plugin rejects an engines block missing any engine key.
       && cfg.metrics.interval == "1h"
+      # An unbounded outputs queue grows until the kernel kills Falco.
+      && cfg.outputs_queue.capacity == 10000
       && cfg.log_stderr
       &&
         builtins.attrNames (builtins.head cfg.plugins).init_config.engines == [
@@ -257,12 +259,14 @@ in
     )
     || throw "falco runtime sockets: ${builtins.toJSON plugin}";
 
-  # With a prometheus dependency, the metrics Service and the
-  # ServiceMonitor are built; the dependency does not change falco.yaml or
+  # With a prometheus dependency, the metrics Service, the ServiceMonitor,
+  # and the alerts are built; the dependency does not change falco.yaml or
   # the pod template. metrics.enabled = false turns the endpoint off.
   falco-metrics =
     let
       scraped = clusterWith { prometheus = true; };
+      alertRules =
+        (builtins.head (builtins.head (ofKind "PrometheusRule" (manifests scraped))).spec.groups).rules;
       plain = clusterWith { };
       off = clusterWith {
         prometheus = true;
@@ -280,8 +284,18 @@ in
       && (daemonSetOf scraped).spec.template == (daemonSetOf plain).spec.template
       && !(falcoYaml off).webserver.prometheus_metrics_enabled
       && !(falcoYaml off).metrics.enabled
+      &&
+        map (r: r.alert) alertRules == [
+          "FalcoDown"
+          "FalcoDroppingAlerts"
+        ]
     )
-    || throw "falco metrics: ${builtins.toJSON (services scraped)}";
+    || throw "falco metrics: ${
+      builtins.toJSON {
+        services = services scraped;
+        inherit alertRules;
+      }
+    }";
 
   # A cluster that forbids DaemonSets or privileged pods is refused, the
   # GKE Autopilot flavour among them. The message names each capability.
