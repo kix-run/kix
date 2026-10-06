@@ -65,6 +65,8 @@ file, so wording can change without touching markup.
 - **D4**: no Contact link in the footer.
 - **D5**: "An optional in-cluster operator is in development." as designed.
 - **D6**: the agent toggle is gone; the AI section replaces it.
+- **A2** (addendum): Postgres examples use `cnpg-cluster` (CloudNativePG);
+  no other Postgres operator is named.
 - **A1** (addendum): "Why the Nix language?" uses the new copy, with no
   aside and four points; `kix check`, `kix build` and `flake.lock` are inline
   code. The claims are verified in the handoff's `shared/CLAIMS.md`.
@@ -105,16 +107,16 @@ Checked against kix/lib, the CLI source, the docs captures in
 | Claim | Result |
 |---|---|
 | Hero `clusters/shop.nix` | Evaluates as drawn (`web.nix` must declare a `replicas` option for `config.replicas`). |
-| Hero `kix check shop` | Real TOOL / RESULT / DETAILS table. The real run gave 41 manifests; the warning count (2) matches the OG card and depends on `web.nix` (the test run gave 1). |
+| Hero `kix check shop` | Real TOOL / RESULT / DETAILS table. A real run of the hero cluster with `cnpg-cluster` gave 37 manifests; the warning count (2) matches the OG card and depends on `web.nix` (the test run gave 1). The OG card still reads 41, the count from before A2. |
 | Root idea: RBAC | Was "derived from the bindings you declare". Kix builds Roles and bindings from the access each package declares (`kix/lib/vocab/rbac.nix`); wording changed. |
 | Root idea: network policies | Cilium-only and opt-in (`networkPolicy.enable`); "when enabled" added. |
 | Payoff A messages | Full strings from `eval/validate.nix`, `scope/validators.nix` and `core/resource.nix`, including the `[web]` instance prefix, the Secret's "declared keys" line, Kix's two selector labels, and the fix-it sentences the design cut. |
 | Payoff B terminal | Rebuilt in the real `kix diff` layout: package summary, namespaces sorted, added before changed, `$.path` with old/new, "via dependency", Activation line. `kix diff` has no `-v` and no "Plan:" line (that is `kix deploy`/`kix plan`). |
 | Payoff B notes | rollback reapplies from the local Nix store, and `kix gc` keeps at least the 10 newest records; drift, `--prune` (never deletes Namespaces or CRDs) and `snapshot save` / `diff --from` reworded to match the reference. |
-| Payoff B waves | Illustrative diagram; `StatefulSet/db` became `SGCluster/db` (what `stackgres-cluster` renders). |
+| Payoff B waves | Illustrative diagram; the database step is `Cluster/db`, the CloudNativePG resource `cnpg-cluster` renders (addendum A2). |
 | Payoff C receipt | Real: `status.receipt` on the Activation, schema `kix.run/receipt/v1`; card fields map to `cluster`, `deployedAt`, `source.gitCommit`, `source.dirty`, `builder.kixVersion`, `builder.arch/os`, `images`. Cluster renamed `shop`. Manifests are excluded because they carry secrets (`receipt.rs`). |
 | Payoff C moments | "rebuild a previous deploy" was false; rollback reapplies the stored build. `pin check --source-rev` and `kix compliance` (CycloneDX SBOM, unsigned SLSA provenance, one framework per audit) reworded. |
-| Payoff D | `packages.clickhouse` does not adapt to availability; the diagram now shows `packages.stackgres-cluster` (1 instance at `none`, 3 at `zone`). The ClickHouse provider swap is real (`clusters/test-clickhouse-swap/`) but also needs operator and Keeper instances; the comment says so, and comments use `#`. |
+| Payoff D | `packages.clickhouse` does not adapt to availability; the diagram now shows `packages.cnpg-cluster` (1 instance at `none`, 3 at `zone`; addendum A2). The ClickHouse provider swap is real (`clusters/test-clickhouse-swap/`) but also needs operator and Keeper instances; the comment says so, and comments use `#`. |
 | Deploying PR card | Matches `kix diff -o markdown`: Plan and Resources lines, Added packages, Changed packages as collapsed details, Activation. The design's "Plan for cluster shop:" sentence does not exist. Same sample change as Payoff B. |
 | FAQ "Does anything need to run in my cluster?" | Nothing runs in the cluster, but Kix adds two CRDs and records deploys as Activations; answer updated. |
 | Everything else in CLAIMS.md § Website | Verified as listed there. |

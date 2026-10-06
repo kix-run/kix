@@ -9,7 +9,7 @@ import { DOCS_URL, INSTALL_URL } from '@/lib/links';
 import type { Line } from '@/lib/code';
 
 const check = [
-  { tool: 'eval', result: 'pass', details: '41 manifests evaluated' },
+  { tool: 'eval', result: 'pass', details: '37 manifests evaluated' },
   { tool: 'scorecard', result: 'pass', details: '0 errors, 2 warnings, 0 info' },
 ];
 
@@ -21,7 +21,7 @@ const shop: Line[] = [
   ['    kix.flavors.', ['eks', 'pkg']],
   ['    {'],
   ['      availablePackages = packages;'],
-  ['      instances.shop.db.package = packages.', ['stackgres-cluster', 'pkg'], ';'],
+  ['      instances.shop.db.package = packages.', ['cnpg-cluster', 'pkg'], ';'],
   [],
   [['      # web asks for a Postgres. The cluster provides one.', 'comment']],
   ['      instances.shop.web = {'],
@@ -61,7 +61,7 @@ const shop: Line[] = [
       <CodeCard title="clusters/shop.nix" lines={shop} class="shadow-[0_24px_60px_-28px_rgb(21_23_28/0.45)]">
         <div slot="footer" class="font-mono text-[13.5px] leading-[1.6]">
           <TermLine>kix check shop</TermLine>
-          {/* The real `kix check` table. The hero cluster evaluates to 41 manifests; the warning count depends on web.nix and matches the OG image. */}
+          {/* The real `kix check` table. The hero cluster evaluates to 37 manifests; the warning count depends on web.nix and matches the OG image. */}
           <table class="mt-1.5 border-separate border-spacing-x-0 text-left">
             <thead class="sr-only">
               <tr><th>Tool</th><th>Result</th><th>Details</th></tr>

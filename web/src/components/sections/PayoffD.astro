@@ -1,8 +1,8 @@
 ---
 import Section from '../Section.astro';
 
-// What packages.stackgres-cluster renders at each availability level
-// (kix/packages/stackgres-cluster: none 1, pod 2, node 2, zone 3 instances).
+// What packages.cnpg-cluster renders at each availability level
+// (kix/packages/cnpg-cluster: none 1, pod 2, node 2, zone 3 instances).
 // The EKS cluster reaches "zone" by declaring three availability zones.
 const targets = [
   { profile: 'kind · 1 node', availability: 'none', result: '1 instance, no high availability' },
@@ -44,7 +44,7 @@ const swap: SwapLine[] = [
 
     <div class="flex flex-col items-stretch lg:flex-row lg:items-center">
       <div class="rounded-[10px] border-[1.5px] border-on-night p-[22px] lg:w-[300px] lg:shrink-0">
-        <span class="font-mono text-base font-semibold text-on-night">packages.stackgres-cluster</span>
+        <span class="font-mono text-base font-semibold text-on-night">packages.cnpg-cluster</span>
       </div>
       <div aria-hidden="true" class="relative h-8 w-[120px] shrink-0 self-start lg:h-auto lg:self-stretch">
         <span class="absolute top-0 bottom-0 left-6 w-[1.5px] bg-t-dim lg:hidden"></span>
