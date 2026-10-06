@@ -71,8 +71,7 @@ pub struct BundleSources {
 
 impl SopsSources {
     /// Write a bundle's SOPS files to a fresh directory, each under its
-    /// SHA-256 and its store name (sops tells the format by the extension),
-    /// and read them only from there.
+    /// SHA-256 and its store name, and read them only from there.
     pub fn from_bundle(
         sources: HashMap<String, Vec<u8>>,
         placeholders: bool,
@@ -181,12 +180,12 @@ fn hydrate_from_bundle(
     let expected = keys::get(manifest, keys::CONTENT_HASH)
         .map(str::to_string)
         .ok_or_else(|| not_in_bundle(format!("it declares no {}", keys::CONTENT_HASH)))?;
-    let clear_keys = age_only_keys(path)?;
+    let (clear_keys, input_type) = age_only_keys(path)?;
 
     let data: BTreeMap<String, String> = if bundle.placeholders {
         placeholders(manifest, &clear_keys)
     } else {
-        let data = parse_secret_data(path, &decrypt_sops(path)?)?;
+        let data = parse_secret_data(path, &decrypt_sops(path, Some(input_type))?)?;
         if compute_content_hash(&data) != expected {
             return Err(SecretError::HashMismatch {
                 name: rid.name.clone(),
@@ -231,11 +230,13 @@ fn placeholders(manifest: &Value, keys: &[String]) -> BTreeMap<String, String> {
 }
 
 /// Refuse a SOPS file whose metadata names any key source but age, and
-/// return the file's keys (stored in clear; only values are encrypted).
+/// return the file's keys (stored in clear; only values are encrypted) and
+/// its format, `json` or `yaml`. sops must be told that format: by default
+/// it goes by the file's extension, and a bundle chooses the name.
 ///
 /// An allowlist: SOPS adds key sources over time (and `key_groups` can hold
 /// any of them), so a field this code does not know is refused.
-fn age_only_keys(path: &Path) -> Result<Vec<String>, SecretError> {
+fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError> {
     /// Metadata that names no key.
     const NOT_KEYS: &[&str] = &[
         "lastmodified",
@@ -255,8 +256,14 @@ fn age_only_keys(path: &Path) -> Result<Vec<String>, SecretError> {
         message: message.to_string(),
     };
     let text = std::fs::read_to_string(path).map_err(|e| refuse(&e.to_string()))?;
-    let doc: Value = serde_yml::from_str(&text)
-        .map_err(|_| refuse("only YAML or JSON SOPS files can come from a bundle"))?;
+    let (doc, input_type): (Value, _) = match serde_json::from_str(&text) {
+        Ok(doc) => (doc, "json"),
+        Err(_) => (
+            serde_yml::from_str(&text)
+                .map_err(|_| refuse("only YAML or JSON SOPS files can come from a bundle"))?,
+            "yaml",
+        ),
+    };
     let sops = doc
         .get("sops")
         .and_then(Value::as_object)
@@ -276,13 +283,14 @@ fn age_only_keys(path: &Path) -> Result<Vec<String>, SecretError> {
         Some(Value::Array(a)) if !a.is_empty() => {}
         _ => return Err(refuse("it names no age recipient")),
     }
-    Ok(doc
+    let keys = doc
         .as_object()
         .into_iter()
         .flat_map(|o| o.keys())
         .filter(|k| *k != "sops")
         .cloned()
-        .collect())
+        .collect();
+    Ok((keys, input_type))
 }
 
 /// Hydrate a single Secret manifest.
@@ -306,7 +314,7 @@ fn hydrate_single(manifest: &mut Value) -> Result<HydrationResult, SecretError> 
     let sops_path = resolve_sops_path(&sops_source)?;
 
     // Decrypt
-    let plaintext = decrypt_sops(&sops_path)?;
+    let plaintext = decrypt_sops(&sops_path, None)?;
 
     // Parse the decrypted YAML/JSON into key-value pairs
     let data = parse_secret_data(&sops_path, &plaintext)?;
@@ -364,15 +372,14 @@ fn resolve_sops_path(source: &str) -> Result<PathBuf, SecretError> {
 }
 
 /// Decrypt a SOPS file using the `sops` CLI.
-fn decrypt_sops(path: &Path) -> Result<String, SecretError> {
-    let output = Command::new("sops")
-        .args(["--decrypt", "--output-type", "json"])
-        .arg(path)
-        .output()
-        .map_err(|e| SecretError::DecryptionFailed {
-            path: path.display().to_string(),
-            message: format!("failed to run sops: {e}"),
-        })?;
+fn decrypt_sops(path: &Path, input_type: Option<&str>) -> Result<String, SecretError> {
+    let output =
+        decrypt_command(path, input_type)
+            .output()
+            .map_err(|e| SecretError::DecryptionFailed {
+                path: path.display().to_string(),
+                message: format!("failed to run sops: {e}"),
+            })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -386,6 +393,18 @@ fn decrypt_sops(path: &Path) -> Result<String, SecretError> {
         path: path.display().to_string(),
         message: format!("invalid UTF-8 in decrypted output: {e}"),
     })
+}
+
+/// The `sops` command that decrypts `path` to JSON, reading it as
+/// `input_type` when given and by its extension otherwise.
+fn decrypt_command(path: &Path, input_type: Option<&str>) -> Command {
+    let mut command = Command::new("sops");
+    command.arg("--decrypt");
+    if let Some(input_type) = input_type {
+        command.args(["--input-type", input_type]);
+    }
+    command.args(["--output-type", "json"]).arg(path);
+    command
 }
 
 /// Parse decrypted SOPS output into a flat key-value map.
@@ -675,6 +694,25 @@ mod tests {
         let mut manifests = [bundle_secret(SOURCE, None)];
         let err = hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap_err();
         assert!(matches!(err, SecretError::NotInBundle { .. }), "{err}");
+    }
+
+    /// sops reads a file in the format its extension names unless told
+    /// otherwise, and a bundle chooses the name.
+    #[test]
+    fn a_bundle_sops_file_is_decrypted_in_the_format_kix_checked() {
+        let json = r#"{"password":"ENC[x]","sops":{"age":[{"recipient":"age1abc","enc":"x"}],"mac":"ENC[x]","version":"3.9.0"}}"#;
+        let dir = tempfile::tempdir().unwrap();
+        for (text, name, format) in [(AGE_ONLY, "s.ini", "yaml"), (json, "s.yaml", "json")] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            let (_, input_type) = age_only_keys(&path).unwrap();
+            let command = decrypt_command(&path, Some(input_type));
+            let args: Vec<&std::ffi::OsStr> = command.get_args().collect();
+            assert!(
+                args.windows(2).any(|w| w == ["--input-type", format]),
+                "{name}: {args:?}"
+            );
+        }
     }
 
     #[test]
