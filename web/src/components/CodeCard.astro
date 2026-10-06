@@ -17,7 +17,7 @@ const width = String(lines.length).length;
   <pre
     class="overflow-x-auto px-5 pt-5 pb-6 sm:px-6"><code class="block min-w-max">{lines.map((line, i) => (
     <span class="flex h-[24px] items-center">
-      <span aria-hidden="true" class="mr-4 inline-block text-right text-code-line-number select-none" style={`width:${width}ch`}>{i + 1}</span>
+      <span aria-hidden="true" data-line={i + 1} class="line-number mr-4 inline-block text-right text-code-line-number select-none" style={`width:${width}ch`}></span>
       <span class="whitespace-pre">{line.map((t) => typeof t === 'string' ? t : <span class={tokenClass[t[1]]}>{t[0]}</span>)}</span>
     </span>
   ))}</code></pre>
@@ -29,3 +29,12 @@ const width = String(lines.length).length;
     )
   }
 </Terminal>
+
+<style>
+  /* Line numbers come from CSS so they stay out of the text that copy and
+     contrast checks see; they are decorative and keep the design's low
+     contrast. */
+  .line-number::before {
+    content: attr(data-line);
+  }
+</style>

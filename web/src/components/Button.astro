@@ -18,7 +18,7 @@ const { href, variant = 'primary', size = 'lg', class: className } = Astro.props
     {
       'px-[22px] py-[15px] text-base': size === 'lg',
       'px-4 py-2.5 text-sm': size === 'sm',
-      'bg-accent-brand text-white hover:bg-accent-text': variant === 'primary',
+      'bg-accent-button text-white hover:bg-accent-text': variant === 'primary',
       'bg-ink text-paper hover:bg-ink/85': variant === 'ink',
       'border-[1.5px] border-ink text-ink hover:bg-ink/5': variant === 'outline',
       'border-[1.5px] border-on-night text-on-night hover:bg-on-night/10': variant === 'outline-night',

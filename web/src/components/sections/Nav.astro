@@ -10,7 +10,7 @@ import { INSTALL_URL } from '@/lib/links';
 <header id="site-nav" class="sticky top-0 z-40 border-b border-transparent bg-paper transition-colors">
   <Container>
     <nav aria-label="Main" class="flex items-center justify-between gap-6 py-4 lg:py-6">
-      <a href="/" aria-label="Kix home" class="rounded-md"><Logo /></a>
+      <a href="/" class="rounded-md"><Logo /><span class="sr-only"> home</span></a>
       <ul class="hidden items-center gap-9 lg:flex">
         {
           NAV_LINKS.map((link) => (

@@ -20,6 +20,7 @@
   --color-ink-2: var(--ink-2);
   --color-accent-brand: var(--accent-brand);
   --color-accent-text: var(--accent-text);
+  --color-accent-button: var(--accent-button);
   --color-accent-soft: var(--accent-soft);
   --color-night: var(--night);
   --color-night-2: var(--night-2);
@@ -55,6 +56,9 @@
      docs use the same value). */
   --accent-text: #ad3d1d;
   --accent-soft: #f7e1d8;
+  /* Fill of the orange buttons. White on #f2542d is 3.4:1, below AA for
+     16px labels; this is 4.5:1. */
+  --accent-button: #d4441e;
   --night: #101216;
   --night-2: #191c22;
   --night-line: #2a2e36;

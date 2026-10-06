@@ -38,6 +38,7 @@ const url = new URL(Astro.url.pathname, Astro.site);
     <meta name="twitter:image" content="https://kix.run/og-image@2x.png" />
     <meta name="twitter:image:alt" content="Kix is a Kubernetes compiler." />
     <link rel="alternate" type="text/plain" href="/llms.txt" title="llms.txt" />
+    <slot name="head" />
   </head>
   <body>
     <a
