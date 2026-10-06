@@ -21,32 +21,32 @@ const mistakes = [
   {
     mistake: 'The same environment variable defined twice, usually from a copied block.',
     k8s: 'Accepts it, warns, and the last value wins.',
-    kix: "Container 'web' has duplicate env var name(s): [DATABASE_URL].",
+    kix: "[web] Container 'web' has duplicate env var name(s): [DATABASE_URL].",
   },
   {
     mistake: "The app reads a Secret key that doesn't exist: password, when the key is pass.",
     k8s: 'The pod fails to start.',
-    kix: 'secret "db" does not declare key "password"',
+    kix: 'secret "db" does not declare key "password"\n  declared keys: pass',
   },
   {
     mistake: "A migration Job reuses the app's labels.",
     k8s: "The Service sends real user traffic to the Job's pod for as long as it runs.",
-    kix: 'Job shop/migrate pod labels {"app.kubernetes.io/name":"web"} satisfy Service shop/web selector {"app.kubernetes.io/name":"web"}; the Service would route traffic to the Job pod',
+    kix: 'Job shop/migrate pod labels {"app.kubernetes.io/instance":"web","app.kubernetes.io/name":"web"} satisfy Service shop/web selector {"app.kubernetes.io/instance":"web","app.kubernetes.io/name":"web"}; the Service would route traffic to the Job pod',
   },
   {
     mistake: "A workload names a PriorityClass that doesn't exist.",
     k8s: 'The workload applies, then every pod is rejected at admission.',
-    kix: "Deployment shop/web sets priorityClassName 'critical', which no resource in this cluster creates. Every pod of this workload would be rejected at admission.",
+    kix: "Deployment shop/web sets priorityClassName 'critical', which no resource in this cluster creates. Every pod of this workload would be rejected at admission. Add the PriorityClass, or declare it as externally managed with an import or kix.untrackedRef",
   },
   {
     mistake: 'A PodDisruptionBudget whose selector matches nothing.',
     k8s: 'It protects nothing, and you find out during a node drain.',
-    kix: 'PodDisruptionBudget shop/web selector {"app":"wbe"} matches no workload pod template in namespace shop.',
+    kix: 'PodDisruptionBudget shop/web selector {"app":"wbe"} matches no workload pod template in namespace shop. Check the selector against the intended workload\'s pod labels',
   },
   {
     mistake: 'type: LoadBalancer on a cluster with no load balancer provider.',
     k8s: 'The external IP sits at <pending>.',
-    kix: "[web] Service 'web' uses type=LoadBalancer but no load balancer provider is configured",
+    kix: '[web] Service \'web\' uses type=LoadBalancer but no load balancer provider is configured (cluster.roles.loadBalancer.binding = "absent", no provider instance). Use type=ClusterIP or NodePort, add a provider instance, or configure cluster.roles.loadBalancer.binding to match your environment.',
   },
 ];
 ---
@@ -110,7 +110,7 @@ const mistakes = [
               <td data-label="What Kix says" class="align-top md:py-5">
                 <div class="flex gap-2.5 rounded-md bg-night px-3.5 py-2.5 font-mono text-[13px] leading-[1.55] text-on-night">
                   <span class="shrink-0 text-t-red">✗</span>
-                  <span class="min-w-0 break-words">{row.kix}</span>
+                  <span class="min-w-0 break-words whitespace-pre-wrap">{row.kix}</span>
                 </div>
               </td>
             </tr>

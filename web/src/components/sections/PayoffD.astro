@@ -1,9 +1,12 @@
 ---
 import Section from '../Section.astro';
 
+// What packages.stackgres-cluster renders at each availability level
+// (kix/packages/stackgres-cluster: none 1, pod 2, node 2, zone 3 instances).
+// The EKS cluster reaches "zone" by declaring three availability zones.
 const targets = [
-  { profile: 'kind · 1 node', availability: 'none', result: '1 replica, no high availability' },
-  { profile: 'eks · 3 zones', availability: 'zone', result: 'replicas spread across zones for high availability', highlight: true },
+  { profile: 'kind · 1 node', availability: 'none', result: '1 instance, no high availability' },
+  { profile: 'eks · 3 zones', availability: 'zone', result: '3 instances spread across zones for high availability', highlight: true },
 ];
 
 // Cluster profiles in kix/lib/flavors, as named in the design.
@@ -12,12 +15,14 @@ const profiles = [
   ['k3s', 'RKE2', 'Talos', 'kubeadm', 'kind'],
 ];
 
-// The provider swap, as drawn in the design.
+// The provider swap. clusters/test-clickhouse-swap/ tests it; the
+// operator-managed provider also needs clickhouse-operator and
+// clickhouse-keeper instances in the cluster.
 type SwapLine = { kind: 'comment' | 'removed' | 'added'; text: string };
 const swap: SwapLine[] = [
-  { kind: 'comment', text: '// single-node ClickHouse provider' },
+  { kind: 'comment', text: '# single-node ClickHouse provider' },
   { kind: 'removed', text: 'instances.data.olap.package = packages.clickhouse;' },
-  { kind: 'comment', text: '// operator-managed ClickHouse provider' },
+  { kind: 'comment', text: '# operator-managed ClickHouse provider (with its operator and Keeper)' },
   { kind: 'added', text: 'instances.data.olap.package = packages.clickhouse-cluster;' },
 ];
 ---
@@ -39,7 +44,7 @@ const swap: SwapLine[] = [
 
     <div class="flex flex-col items-stretch lg:flex-row lg:items-center">
       <div class="rounded-[10px] border-[1.5px] border-on-night p-[22px] lg:w-[300px] lg:shrink-0">
-        <span class="font-mono text-base font-semibold text-on-night">packages.clickhouse</span>
+        <span class="font-mono text-base font-semibold text-on-night">packages.stackgres-cluster</span>
       </div>
       <div aria-hidden="true" class="relative h-8 w-[120px] shrink-0 self-start lg:h-auto lg:self-stretch">
         <span class="absolute top-0 bottom-0 left-6 w-[1.5px] bg-t-dim lg:hidden"></span>

@@ -8,6 +8,11 @@ import TermLine from '../TermLine.astro';
 import { DOCS_URL, INSTALL_URL } from '@/lib/links';
 import type { Line } from '@/lib/code';
 
+const check = [
+  { tool: 'eval', result: 'pass', details: '41 manifests evaluated' },
+  { tool: 'scorecard', result: 'pass', details: '0 errors, 2 warnings, 0 info' },
+];
+
 const shop: Line[] = [
   ['{ kix, packages }:'],
   ['kix.', ['buildCluster', 'fn'], ' {'],
@@ -56,9 +61,21 @@ const shop: Line[] = [
       <CodeCard title="clusters/shop.nix" lines={shop} class="shadow-[0_24px_60px_-28px_rgb(21_23_28/0.45)]">
         <div slot="footer" class="font-mono text-[13.5px] leading-[1.6]">
           <TermLine>kix check shop</TermLine>
-          <div class="hero-check mt-1.5 text-on-night-2">
-            <slot name="check" />
-          </div>
+          {/* The real `kix check` table. The hero cluster evaluates to 41 manifests; the warning count depends on web.nix and matches the OG image. */}
+          <table class="mt-1.5 border-separate border-spacing-x-0 text-left">
+            <thead class="sr-only">
+              <tr><th>Tool</th><th>Result</th><th>Details</th></tr>
+            </thead>
+            <tbody>
+              {check.map((row) => (
+                <tr>
+                  <td class="pr-6 pl-[1.4em] text-on-night-2">{row.tool}</td>
+                  <td class="pr-6 text-t-green">{row.result}</td>
+                  <td class="text-on-night-2">{row.details}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </CodeCard>
     </div>

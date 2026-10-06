@@ -5,12 +5,12 @@ import Heading from '../Heading.astro';
 
 const derived = [
   { icon: ListOrdered, title: 'Deploy order', desc: 'Resources wait for their dependencies to be ready.' },
-  { icon: KeyRound, title: 'RBAC', desc: 'Derived from the bindings you declare.' },
+  { icon: KeyRound, title: 'RBAC', desc: 'Roles and bindings built from the access each package declares.' },
   { icon: Activity, title: 'Monitoring config', desc: 'When a Prometheus-compatible stack is in the cluster.' },
   { icon: Route, title: 'Routes', desc: 'Ingress or Gateway API, from the Service.' },
   { icon: Layers, title: 'Spread and PDBs', desc: 'Pod spread and PodDisruptionBudgets.' },
   { icon: Trash, title: 'Clean-up', desc: 'Resources that are no longer defined.' },
-  { icon: Shield, title: 'Network policies', desc: 'Derived from real dependencies, on Cilium.' },
+  { icon: Shield, title: 'Network policies', desc: 'Derived from real dependencies when enabled, on Cilium.' },
 ];
 ---
 

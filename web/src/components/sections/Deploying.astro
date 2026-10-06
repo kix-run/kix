@@ -3,23 +3,25 @@ import { ChevronRight, Check, GitMerge, GitPullRequest, MessageSquare, Receipt, 
 import Section from '../Section.astro';
 import Heading from '../Heading.astro';
 
-// The pull request comment is illustrative. Its contents follow the shape
-// of `kix diff -o markdown` output; keep them in step with the renderer.
+// The pull request comment shows `kix diff -o markdown` as GitHub-style
+// Markdown renders it (shape from plan/mod.rs and the capture
+// docs/src/command-output/how-to/application-diff/diff-markdown.json).
+// It describes the same sample change as the Payoff B terminal; keep the
+// two in step. Changed packages render as collapsed <details> blocks.
 const comment = {
   author: 'ci-bot',
   action: 'commented on pull request #214',
   heading: 'kix diff',
-  summary: 'Plan for cluster shop: 2 updated, 1 added, 9 unchanged.',
-  groups: [
-    {
-      title: 'Changed packages',
-      items: [
-        { name: 'shop/web', rest: '1.4.2 -> 1.5.0 (1 changed, 1 dep-affected)', details: 'Modified resources' },
-        { name: 'monitoring/grafana', rest: '(1 changed)' },
-      ],
-    },
-    { title: 'Added packages', items: [{ name: 'shop/valkey', rest: '8.0.2 (4 resources)' }] },
-  ] as { title: string; items: { name: string; rest: string; details?: string }[] }[],
+  summary: [
+    ['Plan:', '2 updated, 1 added, 0 removed, 9 unchanged'],
+    ['Resources:', '2 with real content changes, 3 dep-affected (hash bump only)'],
+  ],
+  added: [{ name: 'shop/valkey', rest: '8.0.2 (4 resources)' }],
+  changed: [
+    { name: 'monitoring/grafana', rest: '11.2.0 (1 changed, 1 dep-affected)' },
+    { name: 'shop/web', rest: '1.4.2 → 1.5.0 (1 changed, 2 dep-affected)' },
+  ],
+  activation: ['shop-ll6g0k5f2kqm', 'shop-6w9czkc51502'],
 };
 
 const pipeline = [
@@ -55,31 +57,45 @@ const pipeline = [
         </figcaption>
         <div class="flex flex-col gap-3 px-[22px] pt-[18px] pb-[22px]">
           <p class="text-[20px] font-bold">{comment.heading}</p>
-          <p class="text-[14.5px]">{comment.summary}</p>
-          {
-            comment.groups.map((group) => (
-              <>
-                <p class="text-[15px] font-bold">{group.title}</p>
-                <ul class="flex flex-col gap-3">
-                  {group.items.map((item) => (
-                    <li class="flex flex-col gap-2">
-                      <span class="flex flex-wrap items-center gap-2 text-[14.5px]">
-                        <span aria-hidden="true">•</span>
-                        <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[13px]">{item.name}</code>
-                        <span class="text-ink-2">{item.rest}</span>
-                      </span>
-                      {item.details && (
-                        <span class="flex items-center gap-1.5 pl-[18px] text-[13.5px] text-ink-2">
-                          <ChevronRight size={14} aria-hidden="true" />
-                          {item.details}
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </>
-            ))
-          }
+          <p class="flex flex-col text-[14.5px]">
+            {
+              comment.summary.map(([label, text]) => (
+                <span>
+                  <strong>{label}</strong> {text}
+                </span>
+              ))
+            }
+          </p>
+          <p class="text-[15px] font-bold">Added packages</p>
+          <ul class="flex flex-col gap-2">
+            {
+              comment.added.map((item) => (
+                <li class="flex flex-wrap items-center gap-2 text-[14.5px]">
+                  <span aria-hidden="true">•</span>
+                  <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[13px]">{item.name}</code>
+                  <span class="text-ink-2">{item.rest}</span>
+                </li>
+              ))
+            }
+          </ul>
+          <p class="text-[15px] font-bold">Changed packages</p>
+          <ul class="flex flex-col gap-2">
+            {
+              comment.changed.map((item) => (
+                <li class="flex flex-wrap items-center gap-2 text-[14.5px]">
+                  <ChevronRight size={14} aria-hidden="true" class="text-ink-2" />
+                  <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[13px]">{item.name}</code>
+                  <span class="text-ink-2">{item.rest}</span>
+                </li>
+              ))
+            }
+          </ul>
+          <p class="flex flex-wrap items-center gap-2 text-[14.5px]">
+            <strong>Activation:</strong>
+            <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[13px]">{comment.activation[0]}</code>
+            <span aria-hidden="true">→</span><span class="sr-only">to</span>
+            <code class="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-[13px]">{comment.activation[1]}</code>
+          </p>
         </div>
       </figure>
     </div>

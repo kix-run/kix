@@ -7,20 +7,33 @@ import Terminal from '../Terminal.astro';
 type Tone = 'text' | 'out' | 'dim' | 'changed' | 'added' | 'removed';
 type Run = [string, Tone];
 
-// `kix diff shop -v`, as drawn in the design.
+// `kix diff shop`, in the layout of the real captures in
+// docs/src/command-output (tutorials/04-from-scratch/diff-after-edit.json):
+// a package summary, packages grouped by namespace (added before changed),
+// field-level changes, dependents marked "via dependency", and the
+// activation change. Names and values are sample data.
 const diff: Run[][] = [
-  [['$ ', 'dim'], ['kix diff shop -v', 'text']],
+  [['$ ', 'dim'], ['kix diff shop', 'text']],
+  [['12 packages: 9 unchanged, 2 changed, 1 added, 0 removed', 'out']],
   [],
-  [['  shop', 'text']],
-  [['    ~ web 1.4.2 -> 1.5.0 (1 changed, 1 dep-affected)', 'changed']],
-  [['      ~ Deployment/web@shop', 'changed']],
-  [['          image: ghcr.io/acme/web:', 'out'], ['1.4.2', 'removed'], [' -> ', 'out'], ['1.5.0', 'added']],
-  [['      ~ HorizontalPodAutoscaler/web@shop (via dependency)', 'dim']],
-  [['    + valkey 8.0.2 (4 resources)', 'added']],
   [['  monitoring', 'text']],
-  [['    ~ grafana (1 changed)', 'changed']],
+  [['    ~ grafana 11.2.0 (1 changed, 1 dep-affected)', 'changed']],
+  [['      ~ Deployment/grafana@monitoring', 'changed']],
+  [['          ~ ', 'changed'], ['$.spec.replicas:', 'dim']],
+  [['              old: ', 'out'], ['1', 'removed']],
+  [['              new: ', 'out'], ['2', 'added']],
+  [['      ~ PackageInstance/grafana@monitoring (via dependency)', 'dim']],
+  [['  shop', 'text']],
+  [['    + valkey 8.0.2 (4 resources)', 'added']],
+  [['    ~ web 1.4.2 -> 1.5.0 (1 changed, 2 dep-affected)', 'changed']],
+  [['      ~ Deployment/web@shop', 'changed']],
+  [['          ~ ', 'changed'], ['$.spec.template.spec.containers[web].image:', 'dim']],
+  [['              old: ', 'out'], ['"ghcr.io/acme/web:1.4.2"', 'removed']],
+  [['              new: ', 'out'], ['"ghcr.io/acme/web:1.5.0"', 'added']],
+  [['      ~ HorizontalPodAutoscaler/web@shop (via dependency)', 'dim']],
+  [['      ~ PackageInstance/web@shop (via dependency)', 'dim']],
   [],
-  [['  Plan: ', 'text'], ['2 updated', 'changed'], [', ', 'text'], ['1 added', 'added'], [', ', 'text'], ['9 unchanged', 'dim']],
+  [['  Activation: ', 'text'], ['shop-ll6g0k5f2kqm', 'dim'], [' -> ', 'out'], ['shop-6w9czkc51502', 'added']],
 ];
 
 const toneClass: Record<Tone, string> = {
@@ -35,19 +48,28 @@ const toneClass: Record<Tone, string> = {
 // The deploy waves are a diagram of dependency order, not CLI output.
 const waves = [
   ['Secret/db', 'ConfigMap/web'],
-  ['StatefulSet/db'],
-  ['Service/db', 'Deployment/web'],
-  ['Service/web', 'HTTPRoute/web'],
+  ['SGCluster/db'],
+  ['Service/web', 'Deployment/web'],
+  ['HTTPRoute/web'],
 ];
 
 const notes = [
-  { cmd: 'kix rollback', desc: 'Reapply a previous deploy. Kix keeps the 10 newest by default.' },
-  { cmd: 'kix drift', desc: 'Shows which resources changed on the cluster since your last deploy.' },
+  {
+    cmd: 'kix rollback',
+    desc: 'Reapplies a previous deploy from the local Nix store. kix gc keeps at least the 10 newest records.',
+  },
+  {
+    cmd: 'kix drift',
+    desc: 'Reports Kix-managed resources whose applied fields changed since the last deploy, and which tool changed them.',
+  },
   {
     cmd: '--prune',
-    desc: 'Removes resources no longer defined. Without --prune, the plan lists them and leaves them in place.',
+    desc: 'Removes resources no longer defined, except Namespaces and CRDs. Without --prune, the plan lists them and leaves them in place.',
   },
-  { cmd: 'kix snapshot', desc: 'Saves live cluster state for a later comparison.' },
+  {
+    cmd: 'kix snapshot',
+    desc: 'Saves the Kix-managed resources of a live cluster, so kix diff --from can compare against them later.',
+  },
 ];
 ---
 
