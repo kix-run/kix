@@ -20,8 +20,13 @@
 //! - Each delete must be one the diff lists as removed, or, when the plan
 //!   read the cluster, one its `prune` section lists.
 //!
-//! Hashes come from the store paths, which are the files' content hashes,
-//! never from the stamped manifests' annotations.
+//! A write's hash comes from its store path, the file's content hash, never
+//! from its stamped manifest's annotation. The builds the cluster ran are
+//! known by their `kix.run/identity-hash` stamps, which on a plan without a
+//! deployed build are read off the live objects. A forged stamp cannot add
+//! a write: a re-apply is only a write the diff does not list, and the diff
+//! lists every object whose file differs from the old side in content,
+//! list order included.
 //!
 //! The plan document lists these objects as `objects` and their [`digest`]
 //! as `objects_digest`, and `kix deploy --plan` refuses a deploy whose
