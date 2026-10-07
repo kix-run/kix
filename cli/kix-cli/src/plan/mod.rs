@@ -230,17 +230,14 @@ fn is_propagation_path(path: &str) -> bool {
         .collect();
     // Match only top-level metadata.annotations. Pod template annotations
     // (e.g. $.spec.template.metadata.annotations.*) are real content changes.
-    for ann in PROPAGATION_ANNS
+    // The match is exact: the path joins keys with `.`, so a prefix would
+    // also take an annotation such as `kix.run/identity-hash.x`, whose
+    // change the plan would then not show.
+    PROPAGATION_ANNS
         .iter()
         .map(|s| (*s).to_string())
         .chain(legacy)
-    {
-        let needle = format!("$.metadata.annotations.{ann}");
-        if path == needle || path.starts_with(&format!("{needle}.")) {
-            return true;
-        }
-    }
-    false
+        .any(|ann| path == format!("$.metadata.annotations.{ann}"))
 }
 
 /// Partition a set of differences into (real, propagation-only).
@@ -1280,6 +1277,20 @@ mod diff_graph_tests {
     use super::*;
     use kix::manifest::keys;
     use serde_json::json;
+
+    /// An annotation whose key begins with a propagated one is content:
+    /// the plan shows its change.
+    #[test]
+    fn an_annotation_named_after_a_propagated_one_is_a_real_change() {
+        let path = |key: &str| format!("$.metadata.annotations.{key}");
+        assert!(is_propagation_path(&path(keys::IDENTITY_HASH)));
+        for key in [
+            format!("{}.x", keys::IDENTITY_HASH),
+            format!("{}.extra", keys::DEPENDS_ON),
+        ] {
+            assert!(!is_propagation_path(&path(&key)), "{key}");
+        }
+    }
 
     fn stamped(
         kind: &str,
