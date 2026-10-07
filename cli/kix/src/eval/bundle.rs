@@ -1,24 +1,130 @@
 //! Bundles: a cluster build as one file, read without Nix.
 //!
-//! `kix bundle` writes every store file in the build's Activation closure,
-//! with its references, plus `kix-packages.json`. `kix plan`, `kix deploy`
-//! and `kix graph` read it back with `--bundle`, so a machine with no Nix
-//! store, such as an in-cluster agent, can plan and deploy a build made
-//! elsewhere.
+//! `kix bundle` writes every store file in a build's Activation closure,
+//! with its references. `kix graph`, `kix plan`, and `kix deploy` read it
+//! with `--bundle`, so a machine with no Nix store, such as an in-cluster
+//! agent, can plan and deploy a build made elsewhere.
 //!
-//! A bundle (`*.kixbundle`) is a tar file compressed with zstd. Its first
-//! entry is `kix-bundle.json`, the [`Header`], which lists every store path
-//! in the bundle with the store paths it references. Then comes one
-//! `store/<hash>-<name>` entry per store path, holding the file's bytes, in
-//! byte order of the name. [`Bundle::read`] also takes an uncompressed tar.
+//! # Format 3
 //!
-//! Whoever wrote a bundle chose its store paths, and kix decides what to
-//! apply, skip and prune by the hash in those paths. So [`Bundle::read`]
-//! recomputes every path from its file's bytes, references and name
-//! (`eval::store_path`) and refuses a bundle where any differs. With that,
-//! equal paths mean equal content, as they do for a Nix build. Because the
-//! header comes first, each file is checked as it is read, and the reader
-//! never holds the compressed or the uncompressed archive in memory.
+//! A bundle (`*.kixbundle`) is a file in zstd's seekable format. Integers
+//! are little-endian.
+//!
+//! - Frame 0 is the [`Header`] as JSON: `format` (`kix-bundle`), `version`
+//!   (3), `kix_rev`, an optional `receipt` that only the deploy receipt
+//!   shows, and `files`, one `[path, size, references]` per store file,
+//!   each reference an index into `files`. Files are sorted by store name,
+//!   then by path, and no path appears twice.
+//! - Frames 1 to n hold the files' bytes, concatenated in that order. A
+//!   frame holds whole files and at least one byte.
+//! - A skippable frame ends the file: the seek table, each frame's
+//!   compressed and decompressed size, with no checksums.
+//!
+//! `zstd -d` gives the header followed by the files. The same contents give
+//! the same bytes from the same kix and libzstd.
+//!
+//! # What the references say
+//!
+//! The header names no record, index or cluster. They are derived from the
+//! references before any file is read:
+//!
+//! - The record is the one file no other file references. It is named
+//!   `k8s-*` and is a manifest of kind Activation in the `kix.run` group.
+//! - The index is the record's one direct reference named
+//!   `kix-packages.json`.
+//! - Every file is in the record's closure. kix/lib makes the record
+//!   reference the index, and the index reference every file it lists, so
+//!   the record's store path covers the whole build.
+//! - The cluster is the record's `kix.run/cluster` label.
+//!
+//! Each file then has one [`Role`]: `Record`, `Index`, `Manifest` (any other
+//! file named `k8s-*`), or `Other` (a SOPS source, or a marker such as
+//! `kix-untracked-ref`, carried and not parsed).
+//!
+//! # Names equal content
+//!
+//! Every reader recomputes each file's store path from its bytes, its
+//! references, and its name (`eval::store_path`), and refuses a file whose
+//! path differs. Equal paths then mean equal content, as they do for a Nix
+//! build, so the decisions kix makes by name (skip an unchanged object,
+//! prune, gc, and the Activation name) hold for bundles.
+//!
+//! # One parser
+//!
+//! [`parse_manifest`] parses every manifest and every index, from bundles
+//! and from result directories. It refuses a key given twice, a key that
+//! starts `$serde_json::private::` (serde_json's `Value`, with the
+//! `raw_value` feature this workspace turns on, reads an object with that
+//! key as the raw JSON its value holds), and nesting past serde_json's own
+//! limit of 128.
+//!
+//! # Two readers
+//!
+//! [`PathsChecked::read`] is for a server that stores bundles from any
+//! tenant and never plans them. It checks the container, every store path,
+//! the roles, and the closure, and parses only the record. It holds the
+//! header as read and parsed, one frame compressed and decompressed, a few
+//! words per file, and the parsed record: under 200 MiB.
+//!
+//! [`Bundle::read`] is for the agent and the CLI. It does the same, then
+//! parses every manifest and the index and gives the build's [`StoreGraph`],
+//! built by [`StoreGraph::assemble`] and checked by
+//! [`StoreGraph::validate`], as a result directory's is. It keeps every
+//! manifest parsed, so the process's memory limit bounds it.
+//!
+//! [`OpenBundle::open`] reads only the seek table and the header, for a
+//! bundle verified before. Each file read through it is checked against its
+//! store path again.
+//!
+//! # Invariants
+//!
+//! After [`PathsChecked::read`]:
+//!
+//! - every file's store path is made from its bytes, references, and name;
+//! - one record, of kind Activation in `kix.run`, whose closure is every
+//!   file and which references the index directly;
+//! - `cluster()` is the record's cluster label, and `sha256()` covers every
+//!   byte of the file.
+//!
+//! After [`Bundle::read`], also:
+//!
+//! - every manifest and the index parse with [`parse_manifest`], and every
+//!   path the index lists is a manifest in the bundle;
+//! - [`StoreGraph::validate`] holds: one Activation record, at the record's
+//!   path, labelled with the index's cluster; each object (kind, namespace,
+//!   name) once; one package per namespace and instance, each with its
+//!   PackageInstance; only import markers listed by more than one package;
+//!   every kind non-empty, and every name, namespace and `apiVersion` part
+//!   one URL path segment: not empty, `.`, or `..`, and without `/`, `%`,
+//!   `?`, or `#`, since kube-rs puts them in request paths unescaped.
+//!
+//! # Caps and refusals
+//!
+//! | Cap or refusal | Protects |
+//! |---|---|
+//! | [`MAX_STORED_BYTES`], 64 MiB | server: bytes read and hashed per upload |
+//! | [`MAX_HEADER_BYTES`], 32 MiB | server: memory for the header |
+//! | [`MAX_FILES`], 200,000 | server: memory per file and per seek-table entry |
+//! | [`MAX_REFERENCES`], 1,600,000 | server: time to hash the references of every path |
+//! | [`MAX_FRAME_BYTES`], 32 MiB | server: memory for one frame, so also the largest file |
+//! | [`MAX_CONTENT_BYTES`], 1 GiB | server: time to decompress and hash the files |
+//! | [`MAX_RECORD_BYTES`], 256 KiB | server: memory to parse the record |
+//! | `cluster::secrets` 8 MiB of SOPS text, aliases expanded | agent: a plan parses SOPS files before anyone approves it |
+//! | `WrongFormat`, `Format1` | another format is never read as this one; `--deployed-bundle` sets format 1 aside |
+//! | `Malformed` | the reader finds each file where the header says, in one encoding |
+//! | `PathMismatch` | names equal content |
+//! | `Roots`, `NotARecord`, `NoIndex`, `Unreachable` | one record, whose name covers every file |
+//! | `NotJson` | each check reads the value plan and deploy use |
+//! | `Build` | plan shows each object once, under one package, at the URL kix requests |
+//!
+//! # Threat model
+//!
+//! - On the server, [`PathsChecked`] reads uploads from any tenant's
+//!   uploader. Their effect must stay within bounded memory and CPU.
+//! - On the agent, [`Bundle::read`] reads uploads from this cluster's
+//!   uploader. Only name-equals-content and one record matter: plan-bound
+//!   deploy refuses any write or delete the approved plan does not show,
+//!   and the agent runs kix under memory, CPU, and time limits.
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
