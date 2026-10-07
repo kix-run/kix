@@ -191,9 +191,8 @@ fn shown(path: &Path) -> String {
     printable(&path.to_string_lossy())
 }
 
-/// The first field of `manifest` that stops kix requesting the object at
-/// the URL plan shows: a kind that is not a non-empty string, or an
-/// `apiVersion` part, name, or namespace that is not one URL path segment.
+/// The first of `manifest`'s kind, `apiVersion` parts, name, and namespace
+/// (when it has one) that is not one URL path segment.
 fn unrequestable_field(manifest: &serde_json::Value) -> Option<&'static str> {
     let segment = |s: &str| !matches!(s, "" | "." | "..") && !s.contains(['/', '%', '?', '#']);
     let text = |pointer: &str| manifest.pointer(pointer).and_then(|v| v.as_str());
@@ -204,7 +203,7 @@ fn unrequestable_field(manifest: &serde_json::Value) -> Option<&'static str> {
     let namespace = manifest.pointer("/metadata/namespace").is_none()
         || text("/metadata/namespace").is_some_and(segment);
     [
-        ("kind", text("/kind").is_some_and(|k| !k.is_empty())),
+        ("kind", text("/kind").is_some_and(segment)),
         ("apiVersion", api_version),
         ("metadata.name", text("/metadata/name").is_some_and(segment)),
         ("metadata.namespace", namespace),
@@ -438,10 +437,10 @@ impl StoreGraph {
     /// directory; a graph [`StoreGraph::synthesize`] makes describes live
     /// objects, not a build, and is not checked. Refuses:
     ///
-    /// - a manifest kix cannot request at the URL plan shows: with no kind,
-    ///   or with an `apiVersion` part, name, or namespace that is not one
-    ///   URL path segment, since kube-rs puts them in request paths
-    ///   unescaped;
+    /// - a manifest whose kind, `apiVersion` parts, name, or namespace is
+    ///   not one URL path segment, since kube-rs puts them in request paths
+    ///   unescaped, and a request could reach another object than plan
+    ///   shows;
     /// - two manifests of one object (kind, namespace, name), since plan
     ///   and deploy key objects that way, without the API group;
     /// - any Activation record but one, at `activation_path`, labelled with
@@ -462,7 +461,7 @@ impl StoreGraph {
             let manifest = &self.resources[path].manifest;
             if let Some(field) = unrequestable_field(manifest) {
                 return fail(format!(
-                    "{}'s {field} must be one URL path segment: not empty, '.' or '..', and without '/', '%', '?' or '#'",
+                    "{}'s {field} must be one URL path segment: a string, not empty, '.', or '..', and without '/', '%', '?', or '#'",
                     shown(path)
                 ));
             }
@@ -803,6 +802,129 @@ mod tests {
         assert!(!is_k8s_path(Path::new(
             "/nix/store/abc123def456ghi789jkl012mno345pq-python3-3.11"
         )));
+    }
+
+    mod validate {
+        use super::super::*;
+        use crate::manifest::{keys, lifecycle};
+        use serde_json::{Value, json};
+
+        fn path(name: &str) -> PathBuf {
+            PathBuf::from(format!("/nix/store/{:0>32}-k8s-{name}", 0))
+        }
+
+        fn add(g: &mut StoreGraph, name: &str, manifest: Value) -> PathBuf {
+            let p = path(name);
+            let node = ResourceNode {
+                store_path: p.clone(),
+                manifest,
+            };
+            g.resources.insert(p.clone(), node);
+            p
+        }
+
+        fn package_instance(ns: &str, instance: &str, import: bool) -> Value {
+            let mut pi = json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": lifecycle::PACKAGE_INSTANCE_KIND,
+                "metadata": {"name": instance, "namespace": ns},
+                "spec": {"instanceName": instance},
+            });
+            if import {
+                pi["metadata"]["annotations"] = json!({(keys::MODE): "import"});
+            }
+            pi
+        }
+
+        /// A build of cluster `c` with a record and the packages
+        /// `(namespace, instance)`, each listing `shared`: an import marker
+        /// or a ConfigMap.
+        fn build(packages: &[(&str, &str)], shared_marker: bool) -> StoreGraph {
+            let mut g = StoreGraph::empty("c");
+            g.activation_path = add(
+                &mut g,
+                "Activation-c",
+                json!({
+                    "apiVersion": keys::API_VERSION,
+                    "kind": lifecycle::RECORD_KIND,
+                    "metadata": {"name": "c", "labels": {(keys::CLUSTER_LABEL): "c"}},
+                }),
+            );
+            let shared = match shared_marker {
+                true => add(
+                    &mut g,
+                    "PackageInstance-marker",
+                    package_instance("a", "marker", true),
+                ),
+                false => add(
+                    &mut g,
+                    "ConfigMap-shared",
+                    json!({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "shared", "namespace": "a"}}),
+                ),
+            };
+            for (i, (ns, instance)) in packages.iter().enumerate() {
+                let pi = add(
+                    &mut g,
+                    &format!("PackageInstance-{i}"),
+                    package_instance(ns, &format!("{instance}{i}"), false),
+                );
+                g.resource_owner.insert(shared.clone(), pi.clone());
+                let node = PackageNode {
+                    store_path: pi.clone(),
+                    instance_name: instance.to_string(),
+                    namespace: ns.to_string(),
+                    version: None,
+                    lifecycle: None,
+                    resource_paths: vec![shared.clone()],
+                    cross_deps: vec![],
+                };
+                g.packages.insert(pi, node);
+            }
+            g
+        }
+
+        #[test]
+        fn packages_that_share_an_import_marker_are_valid() {
+            build(&[("a", "x"), ("b", "y")], true).validate().unwrap();
+        }
+
+        #[test]
+        fn a_resource_two_packages_list_that_is_not_a_marker_is_refused() {
+            let err = build(&[("a", "x"), ("b", "y")], false)
+                .validate()
+                .unwrap_err();
+            assert!(err.to_string().contains("only an import marker"), "{err}");
+        }
+
+        /// Plan keys packages by namespace and instance.
+        #[test]
+        fn two_packages_of_one_namespace_and_instance_are_refused() {
+            let err = build(&[("a", "x"), ("a", "x")], true)
+                .validate()
+                .unwrap_err();
+            assert!(err.to_string().contains("plan would show as one"), "{err}");
+        }
+
+        #[test]
+        fn a_build_without_one_record_at_its_path_is_refused() {
+            let mut g = build(&[("a", "x")], true);
+            g.activation_path = path("elsewhere");
+            assert!(g.validate().is_err());
+            let mut g = build(&[("a", "x")], true);
+            let record = g.resources[&g.activation_path].manifest.clone();
+            let mut second = record;
+            second["metadata"]["name"] = json!("d");
+            add(&mut g, "Activation-d", second);
+            assert!(g.validate().is_err());
+        }
+
+        #[test]
+        fn a_package_without_its_package_instance_is_refused() {
+            let mut g = build(&[("a", "x")], true);
+            let pi = g.packages.keys().next().unwrap().clone();
+            g.resources.get_mut(&pi).unwrap().manifest["kind"] = json!("ConfigMap");
+            assert!(g.validate().is_err());
+        }
     }
 
     mod synthesize {
