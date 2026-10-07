@@ -37,6 +37,7 @@
 
 let
   kixAnnotations = import ../core/annotations.nix;
+  helpers = import ./helpers.nix { inherit lib; };
   kixKeys = kixAnnotations.keys;
 in
 rec {
@@ -172,29 +173,8 @@ rec {
       # item 5). No check here looks up a custom cluster-scoped kind: an HPA
       # can only target namespaced kinds, and the one legitimate cluster-
       # scoped reference is a RoleBinding to a ClusterRole. A check that
-      # needs another kind extends this list.
-      builtInClusterScopedKinds = [
-        "APIService"
-        "CertificateSigningRequest"
-        "ClusterRole"
-        "ClusterRoleBinding"
-        "CSIDriver"
-        "CSINode"
-        "CustomResourceDefinition"
-        "IngressClass"
-        "MutatingWebhookConfiguration"
-        "Namespace"
-        "Node"
-        "PersistentVolume"
-        "PriorityClass"
-        "RuntimeClass"
-        "StorageClass"
-        "ValidatingAdmissionPolicy"
-        "ValidatingAdmissionPolicyBinding"
-        "ValidatingWebhookConfiguration"
-        "VolumeAttachment"
-      ];
-      isClusterScopedKind = kind: builtins.elem kind builtInClusterScopedKinds;
+      # needs another kind extends `builtInClusterScopedKinds` in helpers.nix.
+      isClusterScopedKind = kind: builtins.elem kind helpers.builtInClusterScopedKinds;
 
       # Does `name` of `kind` exist for a referrer in namespace `ns`? The
       # namespaced bucket first; the cluster-scoped bucket and import

@@ -1,6 +1,31 @@
 { lib }:
 
 rec {
+  # The built-in kinds Kubernetes serves cluster-scoped. helm.nix renders
+  # these without a namespace, and validate.nix resolves references to them
+  # through the cluster-scoped bucket.
+  builtInClusterScopedKinds = [
+    "APIService"
+    "CertificateSigningRequest"
+    "ClusterRole"
+    "ClusterRoleBinding"
+    "CSIDriver"
+    "CSINode"
+    "CustomResourceDefinition"
+    "IngressClass"
+    "MutatingWebhookConfiguration"
+    "Namespace"
+    "Node"
+    "PersistentVolume"
+    "PriorityClass"
+    "RuntimeClass"
+    "StorageClass"
+    "ValidatingAdmissionPolicy"
+    "ValidatingAdmissionPolicyBinding"
+    "ValidatingWebhookConfiguration"
+    "VolumeAttachment"
+  ];
+
   mergeCollide =
     context: a: b:
     let

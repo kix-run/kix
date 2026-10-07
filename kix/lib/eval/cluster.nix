@@ -641,20 +641,29 @@
         instances = lib.mapAttrs (
           _nsName: nsInsts: lib.mapAttrs (_: inst: inst._packageInstance.out.name) nsInsts
         ) activeClusterInstances;
+        index = packageIndex;
         extraDeps = clusterHookResources;
       };
 
-      packageIndex = builtins.toFile "kix-packages.json" (
-        builtins.toJSON {
-          cluster = name;
-          packages = builtins.listToAttrs (
-            map (inst: {
-              name = builtins.unsafeDiscardStringContext (toString inst._packageInstance.outPath);
-              value = map (r: builtins.unsafeDiscardStringContext (toString r.outPath)) (collectResources inst);
-            }) allInstancesList
-          );
-        }
-      );
+      # The index keeps the string context of every path it lists, so it
+      # references them, and the Activation record references the index.
+      # An import marker no object uses is in no other closure: these
+      # references put it under the record's name, keep it from garbage
+      # collection, and put it in a bundle. Each instance's list holds its
+      # own PackageInstance, so the keys need no context.
+      packageIndex = builtins.toFile "kix-packages.json" (builtins.toJSON packageIndexContent);
+
+      # What kix-packages.json holds. An instance may name one resource under
+      # two parts (an alias), and its list gives that resource once.
+      packageIndexContent = {
+        cluster = name;
+        packages = builtins.listToAttrs (
+          map (inst: {
+            name = builtins.unsafeDiscardStringContext (toString inst._packageInstance.outPath);
+            value = map (r: toString r.outPath) (dedupeByOutPath (collectResources inst));
+          }) allInstancesList
+        );
+      };
 
       # Surface namespace and cluster scorecard findings here because no
       # instance owns them. Warnings trace during evaluation; error findings
@@ -941,6 +950,7 @@
                     inherit
                       activation
                       packageIndex
+                      packageIndexContent
                       info
                       extraImages
                       ;
