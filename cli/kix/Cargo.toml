@@ -52,8 +52,7 @@ rusqlite.workspace = true
 reqwest.workspace = true
 base64.workspace = true
 
-# Bundles (`eval::bundle`): a zstd-compressed tar file
-tar.workspace = true
+# Bundles (`eval::bundle`): zstd's seekable format
 zstd.workspace = true
 
 # Hashing
@@ -94,3 +93,5 @@ insta.workspace = true
 proptest.workspace = true
 # Paused-clock tests for the deploy engine (start_paused, time::advance).
 tokio = { workspace = true, features = ["test-util"] }
+# Bundle tests read bundles with zstd's own seekable-format reader too.
+zstd-safe = { version = "8", features = ["seekable"] }

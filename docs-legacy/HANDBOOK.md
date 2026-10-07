@@ -2117,7 +2117,7 @@ checklist is in `v2_discussions/archive/137_kix_run_domain_migration.md`.
 
 ## 25. Activation CR and operator
 
-The cluster's root resource is an `Activation` CR. `mkActivation` references every PackageInstance via Nix string context, so `nix-store -q --tree` on the Activation derivation yields the full deploy DAG. This contract is what the CLI (and operator) rely on for ordering.
+The cluster's root resource is an `Activation` CR. `mkActivation` references every PackageInstance via Nix string context, so `nix-store -q --tree` on the Activation derivation yields the full deploy DAG. This contract is what the CLI (and operator) rely on for ordering. The record's store file also references `kix-packages.json`, which references every resource it lists, so the record's closure holds every file a deploy applies (an import marker that no object uses among them) and the record's name changes when any of them does. That reference adds no `kix.run/depends-on` entry.
 
 **Activation lifecycle:** `Queued → Deploying → Active | Degraded | Failed → Superseded`.
 

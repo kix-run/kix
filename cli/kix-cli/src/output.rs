@@ -7,6 +7,8 @@ use miette::IntoDiagnostic;
 
 use crate::cli::{GlobalArgs, OutputFormat};
 
+pub use kix::text::printable;
+
 static COLOR_ENABLED: OnceLock<bool> = OnceLock::new();
 
 /// Set when stdout carries a machine-readable document (`kix plan -o json`),
@@ -86,22 +88,6 @@ pub fn yellow(s: &str) -> Cow<'_, str> {
     } else {
         Cow::Borrowed(s)
     }
-}
-
-/// `s` with control characters and bidirectional formatting characters
-/// escaped (`\u{1b}`), for text kix did not write, so it cannot move the
-/// cursor, clear the screen, or reorder what the terminal shows.
-pub fn printable(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            let bidi = matches!(c, '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
-            if c.is_control() || bidi {
-                c.escape_unicode().to_string()
-            } else {
-                c.to_string()
-            }
-        })
-        .collect()
 }
 
 pub fn dim(s: &str) -> Cow<'_, str> {

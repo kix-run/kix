@@ -126,52 +126,64 @@
 //!   deploy refuses any write or delete the approved plan does not show,
 //!   and the agent runs kix under memory, CPU, and time limits.
 
-use std::cell::Cell;
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 
-use serde::de::{Error as _, MapAccess, Visitor};
+use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
+use zstd::zstd_safe;
 
 use super::error::KixEvalError;
 use super::store_graph::{KixPackageIndex, StoreGraph, store_name};
-use super::store_path::{self, Method, STORE_DIR};
-use crate::manifest::types::ResourceId;
+use super::store_path;
 use crate::manifest::{keys, lifecycle};
+use crate::text::printable;
 
 /// The `format` field of every bundle header.
 pub const FORMAT: &str = "kix-bundle";
 /// The version this kix writes and reads. A reader refuses any other.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 3;
 /// The file extension `kix bundle` suggests.
 pub const EXTENSION: &str = "kixbundle";
-/// The name of the header entry, which must come first.
-pub const HEADER_ENTRY: &str = "kix-bundle.json";
-/// The directory the store files are under, inside the tar file.
-pub const STORE_ENTRY_DIR: &str = "store";
-/// The most bytes kix reads from a bundle, counted once as stored and once
-/// uncompressed. The second count stops a small file that decompresses to
-/// something huge.
-pub const MAX_BYTES: u64 = 64 * 1024 * 1024;
-/// The most store files a bundle may hold.
-pub const MAX_FILES: usize = 50_000;
-/// The largest header kix reads, in bytes. The header of the stage1 test build
-/// takes 282 bytes per store path, so [`MAX_FILES`] paths at that rate take
-/// 14 MB.
-pub const MAX_HEADER_BYTES: u64 = 24 * 1024 * 1024;
-/// The largest receipt a header may carry, as JSON. `kix bundle` writes
-/// about 150 bytes per flake input.
-pub const MAX_RECEIPT_BYTES: usize = 256 * 1024;
-/// The largest manifest kix reads, in bytes. The API server refuses a
-/// request body over 3 MiB.
-pub const MAX_MANIFEST_BYTES: u64 = 3 * 1024 * 1024;
+/// The store name of the package index.
+pub const INDEX_NAME: &str = "kix-packages.json";
 
-/// The first four bytes of a zstd frame.
+/// The largest bundle file kix reads.
+pub const MAX_STORED_BYTES: u64 = 64 * 1024 * 1024;
+/// The largest header, decompressed. A header takes about 100 bytes a file.
+pub const MAX_HEADER_BYTES: u64 = 32 * 1024 * 1024;
+/// The most files a bundle may hold.
+pub const MAX_FILES: usize = 200_000;
+/// The most references the header may give over all its files. A build
+/// gives about 3.5 a file.
+pub const MAX_REFERENCES: usize = 8 * MAX_FILES;
+/// The largest data frame, decompressed, and so the largest file. The
+/// largest file is `kix-packages.json`, at about 130 bytes for each file it
+/// lists: about 26 MB at [`MAX_FILES`].
+pub const MAX_FRAME_BYTES: u64 = 32 * 1024 * 1024;
+/// The most bytes the files may add up to, as the header lists them.
+pub const MAX_CONTENT_BYTES: u64 = 1024 * 1024 * 1024;
+/// The largest Activation record. A record lists the build's package
+/// instances, about 2 KB for each Lithus cluster, and parses to about a
+/// hundred times its size at worst.
+pub const MAX_RECORD_BYTES: u64 = 256 * 1024;
+
+/// The writer starts a new frame before a file that would take a frame past
+/// this size. Larger frames compress better, since files of one kind repeat
+/// each other.
+const FRAME_FILL_BYTES: usize = 1024 * 1024;
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
+const SEEK_TABLE_MAGIC: u32 = 0x184D_2A5E;
+const SEEKABLE_MAGIC: u32 = 0x8F92_EAB1;
+/// The seek table's footer: the frame count (u32), the descriptor (u8),
+/// and [`SEEKABLE_MAGIC`].
+const FOOTER_BYTES: usize = 9;
 
-/// `kix-bundle.json`, the first entry of a bundle.
+/// Frame 0 of a bundle.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Header {
@@ -179,30 +191,69 @@ pub struct Header {
     pub format: String,
     /// Always [`VERSION`].
     pub version: u32,
-    /// The kix revision that wrote the bundle, for the record. Not checked.
+    /// The kix revision that wrote the bundle, for the record.
     pub kix_rev: String,
-    /// The cluster name the build gives (`kix-packages.json`'s `cluster`).
-    pub cluster: String,
-    /// The store path of the Activation record.
-    pub activation: String,
-    /// The store path of `kix-packages.json`.
-    pub index: String,
-    /// Every store path in the bundle, with the store paths its file
-    /// references, as Nix records them. The bundle holds exactly these files.
-    #[serde(deserialize_with = "store_references")]
-    pub references: BTreeMap<String, Vec<String>>,
-    /// What `kix deploy` would otherwise read from the flake's checkout for
-    /// the deploy receipt.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "capped_receipt"
-    )]
+    /// Every file, in stream order: by store name, then by path.
+    pub files: Vec<FileEntry>,
+    /// The bundle maker's account of the build's source, which only the
+    /// deploy receipt shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receipt: Option<Provenance>,
 }
 
-/// What the machine that wrote a bundle recorded about the build's source,
-/// for the deploy receipt: the receipt's `source`, `inputs` and `builder`.
+/// One file of the [`Header`], written `[path, size, references]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "(String, u64, Vec<u32>)", into = "(String, u64, Vec<u32>)")]
+pub struct FileEntry {
+    pub path: String,
+    pub size: u64,
+    /// The files it references, as Nix records them, each by its index in
+    /// [`Header::files`]. A file may reference itself.
+    pub references: Vec<u32>,
+}
+
+impl From<(String, u64, Vec<u32>)> for FileEntry {
+    fn from((path, size, references): (String, u64, Vec<u32>)) -> Self {
+        Self {
+            path,
+            size,
+            references,
+        }
+    }
+}
+
+impl From<FileEntry> for (String, u64, Vec<u32>) {
+    fn from(f: FileEntry) -> Self {
+        (f.path, f.size, f.references)
+    }
+}
+
+impl Header {
+    /// The index of `path` in [`Header::files`].
+    pub fn position(&self, path: &str) -> Option<usize> {
+        self.files
+            .binary_search_by(|f| stream_order(&f.path, path))
+            .ok()
+    }
+
+    fn references_of(&self, i: usize) -> Vec<&str> {
+        let refs = &self.files[i].references;
+        refs.iter()
+            .map(|r| self.files[*r as usize].path.as_str())
+            .collect()
+    }
+}
+
+/// By store name, then by path, so files of one kind sit together and
+/// compress against each other.
+fn stream_order(a: &str, b: &str) -> Ordering {
+    let name_a = store_path::name_of(a).unwrap_or_default();
+    let name_b = store_path::name_of(b).unwrap_or_default();
+    name_a.cmp(name_b).then_with(|| a.cmp(b))
+}
+
+/// What the machine that wrote a bundle recorded about the build's source:
+/// the deploy receipt's `source`, `inputs` and `builder`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provenance {
@@ -214,71 +265,10 @@ pub struct Provenance {
     pub builder: serde_json::Map<String, serde_json::Value>,
 }
 
-/// The header's `references`, refused while it is parsed when it lists more
-/// than [`MAX_FILES`] paths or holds a string that is not a store path. A
-/// store path is at least 45 bytes, so the parsed map takes no more than a
-/// few times the header's size in memory.
-fn store_references<'de, D: Deserializer<'de>>(
-    d: D,
-) -> Result<BTreeMap<String, Vec<String>>, D::Error> {
-    struct StorePath(String);
-    impl<'de> Deserialize<'de> for StorePath {
-        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-            let path = String::deserialize(d)?;
-            if store_path::name_of(&path).is_none() {
-                return Err(D::Error::custom(format!("'{path}' is not a store path")));
-            }
-            Ok(StorePath(path))
-        }
-    }
-    struct References;
-    impl<'de> Visitor<'de> for References {
-        type Value = BTreeMap<String, Vec<String>>;
-        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            f.write_str("a map of store paths to the store paths they reference")
-        }
-        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-            let mut out = BTreeMap::new();
-            while let Some(StorePath(path)) = map.next_key()? {
-                if out.len() == MAX_FILES {
-                    return Err(A::Error::custom(format!(
-                        "the bundle lists more than {MAX_FILES} store paths"
-                    )));
-                }
-                let refs: Vec<StorePath> = map.next_value()?;
-                out.insert(path, refs.into_iter().map(|StorePath(r)| r).collect());
-            }
-            Ok(out)
-        }
-    }
-    d.deserialize_map(References)
-}
-
-/// The header's `receipt`, refused when it is over [`MAX_RECEIPT_BYTES`]
-/// before it is parsed.
-fn capped_receipt<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Provenance>, D::Error> {
-    let Some(raw) = Option::<Box<serde_json::value::RawValue>>::deserialize(d)? else {
-        return Ok(None);
-    };
-    if raw.get().len() > MAX_RECEIPT_BYTES {
-        return Err(D::Error::custom(format!(
-            "the receipt is larger than {MAX_RECEIPT_BYTES} bytes"
-        )));
-    }
-    serde_json::from_str(raw.get())
-        .map(Some)
-        .map_err(|e| D::Error::custom(format!("receipt: {e}")))
-}
-
-/// What a bundle holds: the header's fields, and the files by store path.
-/// [`Contents::write`] makes a bundle of it; [`Bundle::read`] gives it back
-/// once the bundle is verified.
+/// What a bundle holds. [`Contents::write`] makes a bundle of it.
 #[derive(Debug, Clone)]
 pub struct Contents {
     pub kix_rev: String,
-    pub cluster: String,
-    pub activation: String,
-    pub index: String,
     pub receipt: Option<Provenance>,
     pub files: BTreeMap<String, BundleFile>,
 }
@@ -286,681 +276,916 @@ pub struct Contents {
 /// One store file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleFile {
-    /// The file's bytes.
     pub bytes: Vec<u8>,
     /// The store paths it references, as Nix records them.
     pub references: Vec<String>,
 }
 
-/// A bundle that has been read and verified. Only [`Bundle::read`] makes
-/// one.
-#[derive(Debug, Clone)]
-pub struct Bundle {
-    contents: Contents,
-    /// The store paths made by `builtins.path`: SOPS sources.
-    sources: BTreeSet<String>,
-    sha256: String,
+/// What a file is to its bundle, decided from the header's references.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// The Activation record: the one file no other file references.
+    Record,
+    /// `kix-packages.json`: the record's one direct reference of that name.
+    Index,
+    /// Any other file named `k8s-*`.
+    Manifest,
+    /// Any other file: a SOPS source, or a marker such as
+    /// `kix-untracked-ref`. Carried and not parsed.
+    Other,
 }
 
-/// Why a bundle was refused.
+/// Why a bundle was refused. Its strings may hold the uploader's text, and
+/// each message shows them through [`printable`].
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum BundleError {
-    #[error("the bundle is larger than {MAX_BYTES} bytes, compressed or uncompressed")]
-    TooLarge,
-    #[error("the bundle is not a zstd-compressed tar file of the bundle format: {0}")]
+    #[error("the bundle cannot be read: {}", printable(.0))]
     Unreadable(String),
-    #[error("the bundle's first entry must be {HEADER_ENTRY}")]
-    HeaderNotFirst,
     #[error(
-        "the bundle's format is '{format}' version {version}; this kix reads '{FORMAT}' version {VERSION}"
+        "the bundle is a format 1 bundle, a tar file; this kix reads '{FORMAT}' version {VERSION}"
+    )]
+    Format1,
+    #[error(
+        "the bundle's format is '{}' version {version}; this kix reads '{FORMAT}' version {VERSION}",
+        printable(.format)
     )]
     WrongFormat { format: String, version: u32 },
-    #[error("'{0}' is not a store path")]
-    NotAStorePath(String),
-    #[error("the bundle's entry '{0}' is not a regular file under {STORE_ENTRY_DIR}/")]
-    BadEntry(String),
-    #[error("the bundle's entry '{0}' is not a store path its header lists")]
-    UnlistedEntry(String),
-    #[error("the bundle's entry '{0}' is out of order or repeated; entries must be sorted by name")]
-    OutOfOrder(String),
-    #[error("the bundle's header lists {0}, but the bundle has no entry for it")]
-    MissingFile(String),
-    #[error("{0} was not made from the bytes and references the bundle gives it")]
-    PathMismatch(String),
-    #[error("{path} references {missing}, which is not in the bundle")]
-    MissingReference { path: String, missing: String },
-    #[error("the bundle's {what} {path} is not among its files")]
-    MissingEntry { what: &'static str, path: String },
+    #[error("the bundle is too large: {}", printable(.0))]
+    TooLarge(String),
+    #[error("the bundle is malformed: {}", printable(.0))]
+    Malformed(String),
     #[error(
-        "{0} is in the bundle but not part of the build: nothing the Activation record depends on references it"
+        "{} was not made from the bytes and references the bundle gives it",
+        printable(.0)
+    )]
+    PathMismatch(String),
+    #[error("{} is not in the bundle", printable(.0))]
+    NotInBundle(String),
+    #[error(
+        "the bundle must hold one file that no other file references, its Activation record; it holds {0}"
+    )]
+    Roots(usize),
+    #[error(
+        "{} is the file no other file references, so it must be the Activation record: a manifest named k8s-* of kind Activation in the {} group",
+        printable(.0),
+        keys::GROUP
+    )]
+    NotARecord(String),
+    #[error(
+        "the Activation record {} does not reference one {INDEX_NAME}, so its name does not cover the whole build. A kixpkgs lib older than this kix builds records like that: update the flake's kixpkgs input and build again",
+        printable(.0)
+    )]
+    NoIndex(String),
+    #[error(
+        "{} is not in the Activation record's closure, so it is not part of the build",
+        printable(.0)
     )]
     Unreachable(String),
-    #[error("{path} is not a JSON manifest: {message}")]
+    #[error("{} is not a JSON manifest: {}", printable(.path), printable(.message))]
     NotJson { path: String, message: String },
-    #[error(
-        "the bundle must hold exactly one Activation record, and it must be its `activation`; found {0}"
-    )]
-    Records(usize),
-    #[error("the bundle is for cluster '{bundle}', but its {what} says '{other}'")]
-    WrongCluster {
-        bundle: String,
-        what: &'static str,
-        other: String,
-    },
-    #[error("kix-packages.json lists {0}, which the Activation record's closure does not hold")]
-    IndexOutsideClosure(String),
-    #[error(
-        "kix-packages.json and the Activation record's `spec.instances` list different package instances"
-    )]
-    IndexInstances,
-    #[error("two manifests in the bundle name {0}")]
-    DuplicateObject(String),
-    #[error(
-        "kix-packages.json lists {0}, which is not a manifest: its store name does not start with k8s-"
-    )]
-    IndexNotManifest(String),
-    #[error("{0} has an apiVersion that is not spelled `v1` or `group/version`")]
-    ApiVersion(String),
-    #[error("{0} uses a retired kix domain key or group")]
-    RetiredDomain(String),
-    #[error("{0} is a source file that no Secret's SOPS source annotation names")]
-    UnexpectedSource(String),
-    #[error("the bundle's {HEADER_ENTRY} is larger than {MAX_HEADER_BYTES} bytes")]
-    HeaderTooLarge,
-    #[error(
-        "{0} is larger than {MAX_MANIFEST_BYTES} bytes, the most the API server takes in one request"
-    )]
-    ManifestTooLarge(String),
-    #[error(
-        "the bundle has data after its archive: a second zstd frame, or bytes other than zero after the tar file's end"
-    )]
-    TrailingData,
+    /// [`StoreGraph::assemble`] or [`StoreGraph::validate`] refused the
+    /// build. Their messages are escaped already.
+    #[error("{0}")]
+    Build(String),
 }
 
 impl Contents {
-    /// The header [`Contents::write`] puts first.
-    pub fn header(&self) -> Header {
-        Header {
+    /// The header [`Contents::write`] puts in frame 0. Fails when a path is
+    /// not a store path, or a file references a path that is not among the
+    /// files.
+    pub fn header(&self) -> io::Result<Header> {
+        let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
+        if let Some(path) = self.files.keys().find(|p| store_path::name_of(p).is_none()) {
+            return Err(invalid(format!("'{path}' is not a store path")));
+        }
+        let mut paths: Vec<&str> = self.files.keys().map(String::as_str).collect();
+        paths.sort_by(|a, b| stream_order(a, b));
+        let position: HashMap<&str, u32> = (0..).zip(&paths).map(|(i, p)| (*p, i)).collect();
+        let files = paths
+            .iter()
+            .map(|path| {
+                let file = &self.files[*path];
+                let references = file
+                    .references
+                    .iter()
+                    .map(|r| {
+                        position.get(r.as_str()).copied().ok_or_else(|| {
+                            invalid(format!(
+                                "{path} references {r}, which is not among the files"
+                            ))
+                        })
+                    })
+                    .collect::<io::Result<_>>()?;
+                Ok(FileEntry {
+                    path: path.to_string(),
+                    size: file.bytes.len() as u64,
+                    references,
+                })
+            })
+            .collect::<io::Result<_>>()?;
+        Ok(Header {
             format: FORMAT.to_string(),
             version: VERSION,
             kix_rev: self.kix_rev.clone(),
-            cluster: self.cluster.clone(),
-            activation: self.activation.clone(),
-            index: self.index.clone(),
-            references: self
-                .files
-                .iter()
-                .map(|(path, file)| (path.clone(), file.references.clone()))
-                .collect(),
+            files,
             receipt: self.receipt.clone(),
+        })
+    }
+
+    /// Write the bundle. The same contents give the same bytes from the
+    /// same kix and libzstd: the order is fixed, and zstd runs on one
+    /// thread at its default level. Fails on a file over
+    /// [`MAX_FRAME_BYTES`], naming it.
+    pub fn write(&self, mut out: impl Write) -> io::Result<()> {
+        let header = self.header()?;
+        if let Some(f) = header.files.iter().find(|f| f.size > MAX_FRAME_BYTES) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "{} is {} bytes; a bundle holds files of up to {MAX_FRAME_BYTES} bytes",
+                    f.path, f.size
+                ),
+            ));
+        }
+        let mut compressor = zstd::bulk::Compressor::new(zstd::DEFAULT_COMPRESSION_LEVEL)?;
+        compressor.include_checksum(false)?;
+        compressor.include_contentsize(true)?;
+        compressor.include_dictid(false)?;
+        let mut table: Vec<(u32, u32)> = Vec::new();
+        let mut put = |data: &[u8], out: &mut dyn Write| -> io::Result<()> {
+            let stored = compressor.compress(data)?;
+            let size =
+                |n: usize| u32::try_from(n).map_err(|_| io::Error::other("a frame is over 4 GiB"));
+            table.push((size(stored.len())?, size(data.len())?));
+            out.write_all(&stored)
+        };
+        put(&serde_json::to_vec(&header)?, &mut out)?;
+        let mut frame: Vec<u8> = Vec::new();
+        for entry in &header.files {
+            let bytes = &self.files[&entry.path].bytes;
+            if !frame.is_empty() && frame.len() + bytes.len() > FRAME_FILL_BYTES {
+                put(&frame, &mut out)?;
+                frame.clear();
+            }
+            frame.extend_from_slice(bytes);
+        }
+        if !frame.is_empty() {
+            put(&frame, &mut out)?;
+        }
+        out.write_all(&seek_table(&table))?;
+        out.flush()
+    }
+}
+
+/// The seek table of frames of these `(compressed, decompressed)` sizes, as
+/// a skippable frame, with no checksums.
+fn seek_table(frames: &[(u32, u32)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + 8 * frames.len() + FOOTER_BYTES);
+    out.extend(SEEK_TABLE_MAGIC.to_le_bytes());
+    out.extend(((8 * frames.len() + FOOTER_BYTES) as u32).to_le_bytes());
+    for (stored, size) in frames {
+        out.extend(stored.to_le_bytes());
+        out.extend(size.to_le_bytes());
+    }
+    out.extend((frames.len() as u32).to_le_bytes());
+    out.push(0);
+    out.extend(SEEKABLE_MAGIC.to_le_bytes());
+    out
+}
+
+/// A bundle whose seek table and header have been read and checked, and
+/// whose roles are known. Each file read through it is checked against its
+/// store path.
+#[derive(Debug)]
+pub struct OpenBundle<R> {
+    input: R,
+    header: Header,
+    roles: Roles,
+    /// The data frames: frame 1 of the file first.
+    frames: Vec<Frame>,
+    /// Where each file of [`Header::files`] lies.
+    places: Vec<Place>,
+    /// The data frame decompressed last, by its index in `frames`.
+    cached: (usize, Vec<u8>),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Frame {
+    /// Its first byte's offset in the file.
+    offset: u64,
+    /// Its length in the file.
+    stored: usize,
+    /// Its length decompressed.
+    size: usize,
+}
+
+/// Data frame `frame` holds a file's bytes from byte `offset`.
+#[derive(Debug, Clone, Copy)]
+struct Place {
+    frame: usize,
+    offset: usize,
+}
+
+/// Each file's [`Role`], by index in [`Header::files`], and the indices of
+/// the record and the index.
+#[derive(Debug)]
+struct Roles {
+    of: Vec<Role>,
+    record: usize,
+    index: usize,
+}
+
+impl<R: Read + Seek> OpenBundle<R> {
+    /// Read the seek table and the header, and derive each file's role.
+    /// Reads no file.
+    pub fn open(mut input: R) -> Result<Self, BundleError> {
+        let table = read_table(&mut input)?;
+        input.seek(SeekFrom::Start(0)).map_err(unreadable)?;
+        let (header, places, roles) = read_start(&mut input, &table.frames)?;
+        Ok(Self::new(input, header, roles, table.frames, places))
+    }
+
+    /// The bytes of the file at `path`, checked against its store path.
+    pub fn file(&mut self, path: &str) -> Result<Vec<u8>, BundleError> {
+        let i = self
+            .header
+            .position(path)
+            .ok_or_else(|| BundleError::NotInBundle(path.to_string()))?;
+        self.file_at(i)
+    }
+
+    /// Every file, with the header's fields: the whole build in memory.
+    pub fn contents(&mut self) -> Result<Contents, BundleError> {
+        let mut files = BTreeMap::new();
+        for i in 0..self.header.files.len() {
+            let bytes = self.file_at(i)?;
+            let references = self.header.references_of(i);
+            files.insert(
+                self.header.files[i].path.clone(),
+                BundleFile {
+                    bytes,
+                    references: references.into_iter().map(str::to_string).collect(),
+                },
+            );
+        }
+        Ok(Contents {
+            kix_rev: self.header.kix_rev.clone(),
+            receipt: self.header.receipt.clone(),
+            files,
+        })
+    }
+
+    /// The files of [`Role::Other`], by store path: the SOPS sources a
+    /// Secret may name are among them.
+    pub fn other_files(&mut self) -> Result<HashMap<String, Vec<u8>>, BundleError> {
+        let others: Vec<usize> = (0..self.header.files.len())
+            .filter(|i| self.roles.of[*i] == Role::Other)
+            .collect();
+        others
+            .into_iter()
+            .map(|i| Ok((self.header.files[i].path.clone(), self.file_at(i)?)))
+            .collect()
+    }
+
+    fn file_at(&mut self, i: usize) -> Result<Vec<u8>, BundleError> {
+        let size = self.header.files[i].size as usize;
+        let Place { frame, offset } = self.places[i];
+        if size > 0 && self.cached.0 != frame {
+            let f = self.frames[frame];
+            self.input
+                .seek(SeekFrom::Start(f.offset))
+                .map_err(unreadable)?;
+            self.cached = (frame, read_frame(&mut self.input, frame + 1, &f)?);
+        }
+        let bytes = match size {
+            0 => Vec::new(),
+            _ => self.cached.1[offset..offset + size].to_vec(),
+        };
+        check_path(&self.header, i, &bytes)?;
+        Ok(bytes)
+    }
+}
+
+impl<R> OpenBundle<R> {
+    fn new(input: R, header: Header, roles: Roles, frames: Vec<Frame>, places: Vec<Place>) -> Self {
+        Self {
+            input,
+            header,
+            roles,
+            frames: frames[1..].to_vec(),
+            places,
+            cached: (usize::MAX, Vec::new()),
         }
     }
 
-    /// Write the bundle: a zstd-compressed tar file. The same contents give
-    /// the same bytes from the same kix, since every tar header field is
-    /// fixed and zstd runs on one thread at a fixed level.
-    pub fn write(&self, out: impl Write) -> io::Result<()> {
-        let mut encoder = zstd::Encoder::new(out, zstd::DEFAULT_COMPRESSION_LEVEL)?;
-        write_tar(&self.header(), &self.files, &mut encoder)?;
-        encoder.finish()?.flush()
+    pub fn header(&self) -> &Header {
+        &self.header
     }
 
-    /// Every store path the Activation record depends on, and the record.
-    fn closure(&self) -> BTreeSet<&str> {
-        closure_of(&self.activation, |p| {
-            self.files.get(p).map(|f| f.references.as_slice())
-        })
+    /// The store path of the Activation record.
+    pub fn record(&self) -> &str {
+        &self.header.files[self.roles.record].path
+    }
+
+    /// The store path of `kix-packages.json`.
+    pub fn index(&self) -> &str {
+        &self.header.files[self.roles.index].path
+    }
+
+    /// The role of the file at `path`, or `None` when the bundle does not
+    /// hold `path`.
+    pub fn role(&self, path: &str) -> Option<Role> {
+        Some(self.roles.of[self.header.position(path)?])
     }
 }
 
-/// Write `header` and `files` as a tar file to `out`.
-fn write_tar(
-    header: &Header,
-    files: &BTreeMap<String, BundleFile>,
-    out: impl Write,
-) -> io::Result<()> {
-    let mut tar = tar::Builder::new(out);
-    let header_bytes = serde_json::to_vec(header).map_err(io::Error::other)?;
-    append(&mut tar, HEADER_ENTRY, &header_bytes)?;
-    for (path, file) in files {
-        let base = store_path::name_of(path)
-            .and(path.strip_prefix(STORE_DIR))
-            .and_then(|p| p.strip_prefix('/'))
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("'{path}' is not a store path"),
-                )
-            })?;
-        append(&mut tar, &format!("{STORE_ENTRY_DIR}/{base}"), &file.bytes)?;
-    }
-    tar.into_inner()?;
-    Ok(())
+/// A bundle whose every store path, role, and closure has been checked,
+/// and of whose files only the record has been parsed: what a server that
+/// stores bundles and never plans them needs.
+#[derive(Debug)]
+pub struct PathsChecked<R> {
+    open: OpenBundle<R>,
+    cluster: String,
+    sha256: String,
 }
 
-/// Append a regular file with fixed metadata. A name longer than the 100
-/// bytes a tar header holds gets a GNU long-name entry before it.
-fn append(tar: &mut tar::Builder<impl Write>, name: &str, bytes: &[u8]) -> io::Result<()> {
-    let mut header = tar::Header::new_gnu();
-    header.set_entry_type(tar::EntryType::Regular);
-    header.set_mode(0o444);
-    header.set_mtime(0);
-    header.set_uid(0);
-    header.set_gid(0);
-    header.set_size(bytes.len() as u64);
-    tar.append_data(&mut header, name, bytes)
+impl<R: Read + Seek> PathsChecked<R> {
+    /// Read a bundle once, in order: see the module doc for what it checks
+    /// and holds.
+    pub fn read(input: R) -> Result<Self, BundleError> {
+        read_checked(input, |_, _, _| Ok(()))
+    }
 }
 
-impl Bundle {
-    /// Read a bundle and verify it: every path made from its file, the
-    /// closure complete, one Activation record that everything hangs off,
-    /// and a package index that agrees with it. See the module docs.
-    ///
-    /// Reads `input` to its end, so [`Bundle::sha256`] covers every byte.
-    pub fn read(input: impl Read) -> Result<Self, BundleError> {
-        read_limited(input, MAX_BYTES)
+impl<R> PathsChecked<R> {
+    /// The record's `kix.run/cluster` label.
+    pub fn cluster(&self) -> &str {
+        &self.cluster
     }
 
-    /// Read only the header, without verifying anything but its format and
-    /// version. For choosing among bundles; [`Bundle::read`] the one chosen.
-    pub fn read_header(input: impl Read) -> Result<Header, BundleError> {
-        let exceeded = Cell::new(false);
-        let mut stored = BufReader::new(Limited::new(input, MAX_BYTES, &exceeded));
-        let result = (|| {
-            let tar = open_tar(&mut stored)?;
-            let mut archive = tar::Archive::new(Limited::new(tar, MAX_BYTES, &exceeded));
-            let mut entries = archive.entries().map_err(unreadable)?;
-            read_header_entry(&mut entries)
-        })();
-        result.map_err(|e| {
-            if exceeded.get() {
-                BundleError::TooLarge
-            } else {
-                e
-            }
-        })
-    }
-
-    pub fn contents(&self) -> &Contents {
-        &self.contents
-    }
-
-    pub fn into_contents(self) -> Contents {
-        self.contents
-    }
-
-    /// The SHA-256 of the bundle's bytes as read, lowercase hex: what
-    /// `built-via`, the deploy receipt and a Kix Enterprise statement name
-    /// it by.
+    /// The SHA-256 of the bundle's bytes, lowercase hex: what `built-via`,
+    /// the deploy receipt, and a Kix Enterprise statement name it by.
     pub fn sha256(&self) -> &str {
         &self.sha256
     }
+}
 
-    /// Every manifest in the bundle by store path: the files whose store
-    /// name starts with `k8s-`. These are the objects a deploy of the
-    /// bundle applies, the Activation record among them.
-    pub fn manifests(&self) -> impl Iterator<Item = (&str, &[u8])> {
-        self.contents
-            .files
-            .iter()
-            .filter(|(path, _)| is_manifest(path))
-            .map(|(path, file)| (path.as_str(), file.bytes.as_slice()))
-    }
-
-    /// The build as a [`StoreGraph`]. Its `result_dir` is
-    /// `bundle:sha256:<sha256>`, which kix writes to the record's
-    /// `kix.run/built-via`: a bundle has no directory on disk.
-    pub fn graph(&self) -> Result<StoreGraph, KixEvalError> {
-        let contents = &self.contents;
-        let index = package_index(contents).map_err(|e| KixEvalError::StoreGraphError {
-            message: e.to_string(),
-        })?;
-        let mut ref_cache: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
-        for path in contents.closure() {
-            let mut refs: Vec<PathBuf> = contents.files[path]
-                .references
-                .iter()
-                .filter(|r| r.as_str() != path)
-                .map(PathBuf::from)
-                .collect();
-            // Same order `bulk_load_graph` gives a Nix build's references.
-            refs.sort_by_key(|r| store_name(r).to_lowercase());
-            if !refs.is_empty() {
-                ref_cache.insert(PathBuf::from(path), refs);
-            }
-        }
-        let read =
-            |path: &Path| -> Result<serde_json::Value, KixEvalError> {
-                let key = path.to_string_lossy();
-                let file = contents.files.get(key.as_ref()).ok_or_else(|| {
-                    KixEvalError::StoreGraphError {
-                        message: format!("{key} is not in the bundle"),
-                    }
-                })?;
-                serde_json::from_slice(&file.bytes).map_err(|e| KixEvalError::StoreGraphError {
-                    message: format!("failed to parse JSON from {key}: {e}"),
-                })
-            };
-        StoreGraph::assemble(
-            index,
-            PathBuf::from(&contents.activation),
-            PathBuf::from(format!("bundle:sha256:{}", self.sha256)),
-            ref_cache,
-            &read,
-            &|_| {},
-        )
-    }
-
-    /// The bytes of each SOPS source in the bundle, by store path.
-    pub fn sops_sources(&self) -> HashMap<String, Vec<u8>> {
-        self.sources
-            .iter()
-            .map(|path| (path.clone(), self.contents.files[path].bytes.clone()))
-            .collect()
+impl<R> Deref for PathsChecked<R> {
+    type Target = OpenBundle<R>;
+    fn deref(&self) -> &OpenBundle<R> {
+        &self.open
     }
 }
 
-/// [`Bundle::read`] with `max_bytes` in place of [`MAX_BYTES`].
-fn read_limited(input: impl Read, max_bytes: u64) -> Result<Bundle, BundleError> {
-    let exceeded = Cell::new(false);
-    let mut stored = BufReader::new(Hashing::new(Limited::new(input, max_bytes, &exceeded)));
-    let result = (|| {
-        let (contents, sources) = {
-            let tar = open_tar(&mut stored)?;
-            let mut tar = Limited::new(tar, max_bytes, &exceeded);
-            let read = read_entries(&mut tar)?;
-            // tar-rs stops at the first zero block. Every byte is hashed, so
-            // anything after it must be zero, as `Contents::write` writes.
-            all_zero(&mut tar)?;
-            read
+impl<R> DerefMut for PathsChecked<R> {
+    fn deref_mut(&mut self) -> &mut OpenBundle<R> {
+        &mut self.open
+    }
+}
+
+/// A bundle read in full: its paths checked, and its build valid.
+#[derive(Debug)]
+pub struct Bundle<R>(PathsChecked<R>);
+
+impl<R: Read + Seek> Bundle<R> {
+    /// Read a bundle once, in order, and give it with its build, whose
+    /// `result_dir` is `bundle:sha256:<sha256>`. See the module doc for
+    /// what it checks.
+    pub fn read(input: R) -> Result<(Self, StoreGraph), BundleError> {
+        let mut manifests = HashMap::new();
+        let mut index = None;
+        let checked = read_checked(input, |path, role, bytes| {
+            match role {
+                Role::Record | Role::Manifest => {
+                    manifests.insert(PathBuf::from(path), parse_manifest(path, bytes)?);
+                }
+                Role::Index => index = Some(parse_index(path, bytes)?),
+                Role::Other => {}
+            }
+            Ok(())
+        })?;
+        let Some(index) = index else {
+            unreachable!("read_checked passes every file, and every bundle has an index");
         };
-        // `open_tar` decodes one zstd frame, and nothing may follow it.
-        let mut rest = [0u8; 1];
-        if stored.read(&mut rest).map_err(unreadable)? != 0 {
-            return Err(BundleError::TrailingData);
+        let mut read = |path: &Path| {
+            manifests
+                .remove(path)
+                .ok_or_else(|| KixEvalError::StoreGraphError {
+                    message: format!(
+                        "{} is not a manifest in the bundle",
+                        printable(&path.to_string_lossy())
+                    ),
+                })
+        };
+        let graph = StoreGraph::assemble(
+            index,
+            PathBuf::from(checked.record()),
+            PathBuf::from(format!("bundle:sha256:{}", checked.sha256)),
+            ref_cache_of(&checked.header),
+            &mut read,
+            &|_| {},
+        )
+        .and_then(|graph| graph.validate().map(|()| graph))
+        .map_err(|e| BundleError::Build(e.to_string()))?;
+        Ok((Bundle(checked), graph))
+    }
+}
+
+impl<R> Deref for Bundle<R> {
+    type Target = PathsChecked<R>;
+    fn deref(&self) -> &PathsChecked<R> {
+        &self.0
+    }
+}
+
+impl<R> DerefMut for Bundle<R> {
+    fn deref_mut(&mut self) -> &mut PathsChecked<R> {
+        &mut self.0
+    }
+}
+
+/// Read every byte of `input` once, in order, and hash them. Check each
+/// file's store path as its frame arrives, parse the record, and pass each
+/// file to `each` with its role.
+fn read_checked<R: Read + Seek>(
+    mut input: R,
+    mut each: impl FnMut(&str, Role, &[u8]) -> Result<(), BundleError>,
+) -> Result<PathsChecked<R>, BundleError> {
+    let table = read_table(&mut input)?;
+    input.seek(SeekFrom::Start(0)).map_err(unreadable)?;
+    let mut stream = Hashing {
+        inner: &mut input,
+        hasher: Sha256::new(),
+    };
+    let (header, places, roles) = read_start(&mut stream, &table.frames)?;
+    let mut cluster = String::new();
+    let mut frame: (usize, Vec<u8>) = (usize::MAX, Vec::new());
+    for (i, file) in header.files.iter().enumerate() {
+        let Place { frame: k, offset } = places[i];
+        let size = file.size as usize;
+        // `place_files` puts every frame's bytes in some file, so each
+        // frame is read once and in order.
+        if size > 0 && frame.0 != k {
+            frame = (k, read_frame(&mut stream, k + 1, &table.frames[k + 1])?);
         }
-        Ok((contents, sources))
-    })();
-    let (contents, sources) = result.map_err(|e| {
-        if exceeded.get() {
-            BundleError::TooLarge
-        } else {
-            e
+        let bytes = match size {
+            0 => &[][..],
+            _ => &frame.1[offset..offset + size],
+        };
+        check_path(&header, i, bytes)?;
+        if roles.of[i] == Role::Record {
+            cluster = record_cluster(&file.path, bytes)?;
         }
-    })?;
-    Ok(Bundle {
-        contents,
-        sources,
-        sha256: hex(&stored.into_inner().hasher.finalize()),
+        each(&file.path, roles.of[i], bytes)?;
+    }
+    let mut rest = Vec::new();
+    (&mut stream)
+        .take(table.bytes.len() as u64 + 1)
+        .read_to_end(&mut rest)
+        .map_err(unreadable)?;
+    if rest != table.bytes {
+        return Err(BundleError::Unreadable(
+            "the file changed while it was read".to_string(),
+        ));
+    }
+    let sha256 = hex(&stream.hasher.finalize());
+    Ok(PathsChecked {
+        open: OpenBundle::new(input, header, roles, table.frames, places),
+        cluster,
+        sha256,
     })
 }
 
-/// The tar stream of a bundle: the first zstd frame decompressed, when it
-/// starts with one, and as stored otherwise. The decoder takes no byte of
-/// `input` past that frame.
-fn open_tar<'a>(input: &'a mut impl BufRead) -> Result<Box<dyn Read + 'a>, BundleError> {
-    let start = input.fill_buf().map_err(unreadable)?;
-    if start.starts_with(&ZSTD_MAGIC) {
-        let decoder = zstd::Decoder::with_buffer(input)
-            .map_err(unreadable)?
-            .single_frame();
-        Ok(Box::new(decoder))
-    } else {
-        Ok(Box::new(input))
-    }
+/// The seek table: every frame, frame 0 first, and the table's own bytes.
+struct SeekTable {
+    frames: Vec<Frame>,
+    bytes: Vec<u8>,
 }
 
-/// Read `input` to its end, refusing any byte that is not zero.
-fn all_zero(mut input: impl Read) -> Result<(), BundleError> {
-    let mut buf = [0u8; 8192];
-    loop {
-        let n = input.read(&mut buf).map_err(unreadable)?;
-        if n == 0 {
-            return Ok(());
-        }
-        if buf[..n].iter().any(|b| *b != 0) {
-            return Err(BundleError::TrailingData);
-        }
+/// Read the seek table at the end of `input`, and check that its frames
+/// cover every byte before it and are within the caps.
+fn read_table(input: &mut (impl Read + Seek)) -> Result<SeekTable, BundleError> {
+    let len = input.seek(SeekFrom::End(0)).map_err(unreadable)?;
+    if len > MAX_STORED_BYTES {
+        return Err(too_large(format!(
+            "the file is over {MAX_STORED_BYTES} bytes"
+        )));
     }
-}
-
-/// Read the header and every store file, checking each file's path as it
-/// arrives, then check the build as a whole. Returns the contents and the
-/// paths of the SOPS sources.
-fn read_entries(tar: impl Read) -> Result<(Contents, BTreeSet<String>), BundleError> {
-    let mut archive = tar::Archive::new(tar);
-    let mut entries = archive.entries().map_err(unreadable)?;
-    let header = read_header_entry(&mut entries)?;
-    let closure = check_closure(&header)?;
-
-    let mut files: BTreeMap<String, BundleFile> = BTreeMap::new();
-    let mut methods: BTreeMap<String, Method> = BTreeMap::new();
-    let mut last: Option<String> = None;
-    for entry in entries {
-        let mut entry = entry.map_err(unreadable)?;
-        // The header names store paths as UTF-8; another spelling of the
-        // same name would extract as a different file.
-        let name = String::from_utf8(entry.path_bytes().into_owned()).map_err(|e| {
-            BundleError::BadEntry(String::from_utf8_lossy(e.as_bytes()).into_owned())
-        })?;
-        if !entry.header().entry_type().is_file() {
-            return Err(BundleError::BadEntry(name));
-        }
-        let Some(base) = name
-            .strip_prefix(STORE_ENTRY_DIR)
-            .and_then(|n| n.strip_prefix('/'))
-        else {
-            return Err(BundleError::BadEntry(name));
-        };
-        let path = format!("{STORE_DIR}/{base}");
-        let Some(references) = header.references.get(&path) else {
-            return Err(BundleError::UnlistedEntry(name));
-        };
-        if last.as_ref().is_some_and(|l| *l >= path) {
-            return Err(BundleError::OutOfOrder(name));
-        }
-        if is_manifest(&path) && entry.size() > MAX_MANIFEST_BYTES {
-            return Err(BundleError::ManifestTooLarge(path));
-        }
-        let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes).map_err(unreadable)?;
-        let method = store_path::method_of(&path, &bytes, references)
-            .ok_or_else(|| BundleError::PathMismatch(path.clone()))?;
-        methods.insert(path.clone(), method);
-        files.insert(
-            path.clone(),
-            BundleFile {
-                bytes,
-                references: references.clone(),
-            },
-        );
-        last = Some(path);
+    let mut footer = [0u8; FOOTER_BYTES];
+    if len >= FOOTER_BYTES as u64 {
+        input
+            .seek(SeekFrom::End(-(FOOTER_BYTES as i64)))
+            .map_err(unreadable)?;
+        input.read_exact(&mut footer).map_err(unreadable)?;
     }
-    if let Some(missing) = header.references.keys().find(|p| !files.contains_key(*p)) {
-        return Err(BundleError::MissingFile(missing.clone()));
-    }
-
-    let sources: BTreeSet<String> = methods
-        .iter()
-        .filter(|(_, m)| **m == Method::Source)
-        .map(|(p, _)| p.clone())
-        .collect();
-    let closure: BTreeSet<String> = closure.into_iter().map(str::to_string).collect();
-    let contents = Contents {
-        kix_rev: header.kix_rev,
-        cluster: header.cluster,
-        activation: header.activation,
-        index: header.index,
-        receipt: header.receipt,
-        files,
-    };
-    check_build(&contents, &sources, &closure)?;
-    Ok((contents, sources))
-}
-
-/// The first entry, parsed, with its format and version checked.
-fn read_header_entry<R: Read>(entries: &mut tar::Entries<'_, R>) -> Result<Header, BundleError> {
-    let mut entry = entries
-        .next()
-        .ok_or(BundleError::HeaderNotFirst)?
-        .map_err(unreadable)?;
-    if !entry.header().entry_type().is_file() || &*entry.path_bytes() != HEADER_ENTRY.as_bytes() {
-        return Err(BundleError::HeaderNotFirst);
-    }
-    if entry.size() > MAX_HEADER_BYTES {
-        return Err(BundleError::HeaderTooLarge);
-    }
-    let mut bytes = Vec::new();
-    entry.read_to_end(&mut bytes).map_err(unreadable)?;
-    // serde_json stops at 128 levels of nesting.
-    let header: Header = serde_json::from_slice(&bytes)
-        .map_err(|e| BundleError::Unreadable(format!("{HEADER_ENTRY}: {e}")))?;
-    if header.format != FORMAT || header.version != VERSION {
-        return Err(BundleError::WrongFormat {
-            format: header.format,
-            version: header.version,
+    if u32_at(&footer, 5) != SEEKABLE_MAGIC {
+        return Err(match is_format_1(input) {
+            true => BundleError::Format1,
+            false => malformed("it does not end with a zstd seek table"),
         });
+    }
+    let count = u32_at(&footer, 0) as usize;
+    if footer[4] != 0 || count == 0 || count > MAX_FILES + 1 {
+        return Err(malformed(format!(
+            "its seek table lists {count} frames with descriptor {:#04x}",
+            footer[4]
+        )));
+    }
+    let table_len = 8 + 8 * count + FOOTER_BYTES;
+    let Some(start) = len.checked_sub(table_len as u64) else {
+        return Err(malformed("its seek table is longer than the file"));
+    };
+    input.seek(SeekFrom::Start(start)).map_err(unreadable)?;
+    let mut bytes = vec![0u8; table_len];
+    input.read_exact(&mut bytes).map_err(unreadable)?;
+    if u32_at(&bytes, 0) != SEEK_TABLE_MAGIC || u32_at(&bytes, 4) as usize != table_len - 8 {
+        return Err(malformed("its seek table's frame header is wrong"));
+    }
+    let mut frames = Vec::with_capacity(count);
+    let mut offset = 0u64;
+    for i in 0..count {
+        let stored = u32_at(&bytes, 8 + 8 * i) as usize;
+        let size = u32_at(&bytes, 12 + 8 * i) as usize;
+        let cap = if i == 0 {
+            MAX_HEADER_BYTES
+        } else {
+            MAX_FRAME_BYTES
+        };
+        if size as u64 > cap {
+            return Err(too_large(format!("frame {i} is over {cap} bytes")));
+        }
+        if size == 0 || stored > zstd_safe::compress_bound(size) {
+            return Err(malformed(format!(
+                "its seek table gives frame {i} {stored} bytes for {size}"
+            )));
+        }
+        frames.push(Frame {
+            offset,
+            stored,
+            size,
+        });
+        offset += stored as u64;
+    }
+    if offset != start {
+        return Err(malformed(format!(
+            "its frames take {offset} bytes, but its seek table starts at byte {start}"
+        )));
+    }
+    Ok(SeekTable { frames, bytes })
+}
+
+fn u32_at(bytes: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+}
+
+/// Whether `input` is a format 1 bundle: a tar file, compressed with zstd
+/// or not, whose first entry is `kix-bundle.json`.
+fn is_format_1(input: &mut (impl Read + Seek)) -> bool {
+    const FIRST_NAME: &[u8; 16] = b"kix-bundle.json\0";
+    let start = (|| -> io::Result<[u8; 16]> {
+        input.seek(SeekFrom::Start(0))?;
+        let mut start = [0u8; 16];
+        input.read_exact(&mut start[..4])?;
+        if start[..4] == ZSTD_MAGIC {
+            let stored = io::Cursor::new(ZSTD_MAGIC).chain(&mut *input);
+            let mut decoder = zstd::stream::read::Decoder::new(stored)?;
+            // Format 1 was written at level 3, whose window is at most 2^21
+            // bytes; a larger window would only cost memory.
+            decoder.window_log_max(23)?;
+            decoder.read_exact(&mut start)?;
+        } else {
+            input.read_exact(&mut start[4..])?;
+        }
+        Ok(start)
+    })();
+    start.is_ok_and(|s| &s == FIRST_NAME)
+}
+
+/// Read frame 0 from `input`'s position, parse the header, place each file
+/// in a data frame, and derive the roles.
+fn read_start(
+    input: &mut impl Read,
+    frames: &[Frame],
+) -> Result<(Header, Vec<Place>, Roles), BundleError> {
+    let header = parse_header(&read_frame(input, 0, &frames[0])?)?;
+    let places = place_files(&header, &frames[1..])?;
+    let roles = roles_of(&header.files)?;
+    Ok((header, places, roles))
+}
+
+/// Read frame `number` of the file from `input`'s position and decompress
+/// it to the size the seek table gives.
+fn read_frame(input: &mut impl Read, number: usize, frame: &Frame) -> Result<Vec<u8>, BundleError> {
+    let mut stored = vec![0u8; frame.stored];
+    input.read_exact(&mut stored).map_err(unreadable)?;
+    let bytes = zstd::bulk::Decompressor::new()
+        .and_then(|mut d| d.decompress(&stored, frame.size))
+        .map_err(|e| malformed(format!("frame {number} does not decompress: {e}")))?;
+    if bytes.len() != frame.size {
+        return Err(malformed(format!(
+            "frame {number} decompresses to {} bytes, not {}",
+            bytes.len(),
+            frame.size
+        )));
+    }
+    Ok(bytes)
+}
+
+/// Parse frame 0. The format and version are read first, so a bundle of
+/// another version is refused as such whatever else its header holds.
+fn parse_header(bytes: &[u8]) -> Result<Header, BundleError> {
+    #[derive(Deserialize)]
+    struct Version {
+        format: String,
+        version: u32,
+    }
+    let unreadable = |e: serde_json::Error| BundleError::Unreadable(format!("the header: {e}"));
+    let Version { format, version } = serde_json::from_slice(bytes).map_err(unreadable)?;
+    if format != FORMAT || version != VERSION {
+        return Err(BundleError::WrongFormat { format, version });
+    }
+    let header: Header = serde_json::from_slice(bytes).map_err(unreadable)?;
+    let files = &header.files;
+    if files.len() > MAX_FILES {
+        return Err(too_large(format!(
+            "the header lists more than {MAX_FILES} files"
+        )));
+    }
+    if files.iter().map(|f| f.references.len()).sum::<usize>() > MAX_REFERENCES {
+        return Err(too_large(format!(
+            "the header gives more than {MAX_REFERENCES} references"
+        )));
+    }
+    if files.iter().map(|f| f.size).fold(0, u64::saturating_add) > MAX_CONTENT_BYTES {
+        return Err(too_large(format!(
+            "the files add up to more than {MAX_CONTENT_BYTES} bytes"
+        )));
+    }
+    for (i, file) in files.iter().enumerate() {
+        if store_path::name_of(&file.path).is_none() {
+            return Err(malformed(format!("'{}' is not a store path", file.path)));
+        }
+        if i > 0 && stream_order(&files[i - 1].path, &file.path) != Ordering::Less {
+            return Err(malformed(format!(
+                "the header lists {} out of order or twice",
+                file.path
+            )));
+        }
+        if let Some(r) = file.references.iter().find(|r| **r as usize >= files.len()) {
+            return Err(malformed(format!(
+                "{} references file {r}, which the header does not list",
+                file.path
+            )));
+        }
     }
     Ok(header)
 }
 
-/// Check the header's store paths and references before any file is read:
-/// every path well formed, every reference present, the activation and the
-/// index among the files, and every file part of the build. Returns the
-/// Activation record's closure.
-fn check_closure(header: &Header) -> Result<BTreeSet<&str>, BundleError> {
-    for (path, references) in &header.references {
-        if store_path::name_of(path).is_none() {
-            return Err(BundleError::NotAStorePath(path.clone()));
+/// Place each file in the data frame that holds it. The frames must hold
+/// exactly the bytes the header lists, each file in one frame. An empty
+/// file goes in the frame the file before it ends in.
+fn place_files(header: &Header, frames: &[Frame]) -> Result<Vec<Place>, BundleError> {
+    let in_frames: u64 = frames.iter().map(|f| f.size as u64).sum();
+    let listed: u64 = header.files.iter().map(|f| f.size).sum();
+    if in_frames != listed {
+        return Err(malformed(format!(
+            "its frames hold {in_frames} bytes, but its header lists {listed}"
+        )));
+    }
+    let mut places = Vec::with_capacity(header.files.len());
+    let (mut frame, mut filled) = (0, 0);
+    for file in &header.files {
+        let size = file.size as usize;
+        if size > 0 && filled == frames[frame].size {
+            frame += 1;
+            filled = 0;
         }
-        for r in references {
-            if !header.references.contains_key(r) {
-                return Err(BundleError::MissingReference {
-                    path: path.clone(),
-                    missing: r.clone(),
-                });
-            }
+        if size > 0 && filled + size > frames[frame].size {
+            return Err(malformed(format!(
+                "{} runs past the end of its frame",
+                file.path
+            )));
+        }
+        places.push(Place {
+            frame,
+            offset: filled,
+        });
+        filled += size;
+    }
+    Ok(places)
+}
+
+/// Derive each file's role from the references: see the module doc.
+fn roles_of(files: &[FileEntry]) -> Result<Roles, BundleError> {
+    let mut referenced = vec![false; files.len()];
+    for (i, file) in files.iter().enumerate() {
+        for r in file.references.iter().map(|r| *r as usize) {
+            referenced[r] |= r != i;
         }
     }
-    for (what, path) in [("activation", &header.activation), ("index", &header.index)] {
-        if !header.references.contains_key(path) {
-            return Err(BundleError::MissingEntry {
-                what,
-                path: path.clone(),
-            });
-        }
+    let roots: Vec<usize> = (0..files.len()).filter(|i| !referenced[*i]).collect();
+    let [record] = roots[..] else {
+        return Err(BundleError::Roots(roots.len()));
+    };
+    let path = &files[record].path;
+    if !is_manifest(path) {
+        return Err(BundleError::NotARecord(path.clone()));
     }
-    let closure = closure_of(&header.activation, |p| {
-        header.references.get(p).map(Vec::as_slice)
-    });
-    if let Some(stray) = header
+    if files[record].size > MAX_RECORD_BYTES {
+        return Err(too_large(format!(
+            "the Activation record {path} is over {MAX_RECORD_BYTES} bytes"
+        )));
+    }
+    let indexes: Vec<usize> = files[record]
         .references
-        .keys()
-        .find(|p| !closure.contains(p.as_str()) && **p != header.index)
-    {
-        return Err(BundleError::Unreachable(stray.clone()));
-    }
-    Ok(closure)
-}
-
-/// Check what the files say once every path is known to be made from its
-/// file: one Activation record, for this cluster; manifests kix applies as
-/// written; SOPS sources that a Secret names; and a package index that
-/// agrees with the record.
-fn check_build(
-    contents: &Contents,
-    sources: &BTreeSet<String>,
-    closure: &BTreeSet<String>,
-) -> Result<(), BundleError> {
-    let mut records = 0;
-    let mut sops_sources: BTreeSet<String> = BTreeSet::new();
-    let mut instances: BTreeSet<(String, String)> = BTreeSet::new();
-    // Plan and deploy each keep one manifest per object, and which one
-    // depends on hash map order, so two copies could plan one and apply
-    // the other.
-    let mut objects: BTreeSet<ResourceId> = BTreeSet::new();
-    for (path, file) in &contents.files {
-        if !is_manifest(path) {
-            continue;
-        }
-        let manifest: serde_json::Value =
-            serde_json::from_slice(&file.bytes).map_err(|e| BundleError::NotJson {
-                path: path.clone(),
-                message: e.to_string(),
-            })?;
-        if has_retired_domain(&manifest) {
-            return Err(BundleError::RetiredDomain(path.clone()));
-        }
-        if !canonical_api_version(&text_at(&manifest, "/apiVersion")) {
-            return Err(BundleError::ApiVersion(path.clone()));
-        }
-        let id = ResourceId::from_value(&manifest);
-        if !objects.insert(id.clone()) {
-            return Err(BundleError::DuplicateObject(id.display_id()));
-        }
-        match manifest.pointer("/kind").and_then(|k| k.as_str()) {
-            Some(kind) if kind == lifecycle::RECORD_KIND => {
-                records += 1;
-                if *path != contents.activation {
-                    return Err(BundleError::Records(records));
-                }
-            }
-            Some(kind) if kind == lifecycle::PACKAGE_INSTANCE_KIND => {
-                instances.insert((
-                    text_at(&manifest, "/metadata/namespace"),
-                    text_at(&manifest, "/spec/instanceName"),
-                ));
-            }
-            _ => {}
-        }
-        if let Some(source) = keys::get(&manifest, keys::SOPS_SOURCE) {
-            sops_sources.insert(source.to_string());
+        .iter()
+        .map(|r| *r as usize)
+        .filter(|r| store_path::name_of(&files[*r].path) == Some(INDEX_NAME))
+        .collect();
+    let [index] = indexes[..] else {
+        return Err(BundleError::NoIndex(path.clone()));
+    };
+    let mut reached = vec![false; files.len()];
+    let mut queue = vec![record];
+    while let Some(i) = queue.pop() {
+        if !std::mem::replace(&mut reached[i], true) {
+            queue.extend(files[i].references.iter().map(|r| *r as usize));
         }
     }
-    if records != 1 {
-        return Err(BundleError::Records(records));
+    if let Some(stray) = reached.iter().position(|r| !r) {
+        return Err(BundleError::Unreachable(files[stray].path.clone()));
     }
-    if let Some(stray) = sources.iter().find(|p| !sops_sources.contains(*p)) {
-        return Err(BundleError::UnexpectedSource(stray.clone()));
-    }
-
-    let record: serde_json::Value =
-        serde_json::from_slice(&contents.files[&contents.activation].bytes).map_err(|e| {
-            BundleError::NotJson {
-                path: contents.activation.clone(),
-                message: e.to_string(),
-            }
-        })?;
-    let labelled = record
-        .pointer("/metadata/labels")
-        .and_then(|l| l.get(keys::CLUSTER_LABEL))
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    if labelled != contents.cluster {
-        return Err(BundleError::WrongCluster {
-            bundle: contents.cluster.clone(),
-            what: "Activation record",
-            other: labelled.to_string(),
-        });
-    }
-
-    let index = package_index(contents)?;
-    if index.cluster != contents.cluster {
-        return Err(BundleError::WrongCluster {
-            bundle: contents.cluster.clone(),
-            what: "kix-packages.json",
-            other: index.cluster.clone(),
-        });
-    }
-    for (pi, resources) in &index.packages {
-        for p in std::iter::once(pi).chain(resources) {
-            // The checks above cover the files named k8s-*, and the
-            // graph reads every file the index lists as a manifest.
-            if !store_name(p).starts_with("k8s-") {
-                return Err(BundleError::IndexNotManifest(
-                    p.to_string_lossy().into_owned(),
-                ));
-            }
-            let p = p.to_string_lossy();
-            if !closure.contains(p.as_ref()) {
-                return Err(BundleError::IndexOutsideClosure(p.into_owned()));
-            }
-        }
-    }
-    if instances != record_instances(&record) {
-        return Err(BundleError::IndexInstances);
-    }
-    Ok(())
-}
-
-fn package_index(contents: &Contents) -> Result<KixPackageIndex, BundleError> {
-    serde_json::from_slice(&contents.files[&contents.index].bytes).map_err(|e| {
-        BundleError::NotJson {
-            path: contents.index.clone(),
-            message: e.to_string(),
-        }
-    })
-}
-
-/// `root` and every store path it reaches through `references_of`.
-fn closure_of<'a>(
-    root: &'a str,
-    references_of: impl Fn(&str) -> Option<&'a [String]>,
-) -> BTreeSet<&'a str> {
-    let mut seen: BTreeSet<&str> = BTreeSet::new();
-    let mut queue: VecDeque<&str> = VecDeque::from([root]);
-    while let Some(path) = queue.pop_front() {
-        if !seen.insert(path) {
-            continue;
-        }
-        if let Some(refs) = references_of(path) {
-            queue.extend(refs.iter().map(String::as_str));
-        }
-    }
-    seen
+    let of = (0..files.len())
+        .map(|i| match i {
+            _ if i == record => Role::Record,
+            _ if i == index => Role::Index,
+            _ if is_manifest(&files[i].path) => Role::Manifest,
+            _ => Role::Other,
+        })
+        .collect();
+    Ok(Roles { of, record, index })
 }
 
 fn is_manifest(path: &str) -> bool {
-    store_name(Path::new(path)).starts_with("k8s-")
+    store_path::name_of(path).is_some_and(|name| name.starts_with("k8s-"))
+}
+
+/// Refuse file `i` unless its store path is made from `bytes` and its
+/// references.
+fn check_path(header: &Header, i: usize, bytes: &[u8]) -> Result<(), BundleError> {
+    let path = &header.files[i].path;
+    match store_path::method_of(path, bytes, &header.references_of(i)) {
+        Some(_) => Ok(()),
+        None => Err(BundleError::PathMismatch(path.clone())),
+    }
+}
+
+/// The cluster the record at `path` names in its `kix.run/cluster` label,
+/// or empty when it names none. Refuses a record that is not an Activation
+/// in the `kix.run` group.
+fn record_cluster(path: &str, bytes: &[u8]) -> Result<String, BundleError> {
+    let record = parse_manifest(path, bytes)?;
+    let group = record["apiVersion"]
+        .as_str()
+        .and_then(|v| v.split_once('/'))
+        .map(|(group, _)| group);
+    if record["kind"] != lifecycle::RECORD_KIND || group != Some(keys::GROUP) {
+        return Err(BundleError::NotARecord(path.to_string()));
+    }
+    Ok(keys::label(&record, keys::CLUSTER_LABEL)
+        .unwrap_or_default()
+        .to_string())
+}
+
+/// The references of each file, by path, as [`StoreGraph`] holds a
+/// result directory's: no file's own path among them, sorted by store name
+/// in lower case, and no entry for a file with none.
+fn ref_cache_of(header: &Header) -> HashMap<PathBuf, Vec<PathBuf>> {
+    let mut ref_cache = HashMap::new();
+    for (i, file) in header.files.iter().enumerate() {
+        let mut refs: Vec<PathBuf> = header
+            .references_of(i)
+            .into_iter()
+            .filter(|r| *r != file.path)
+            .map(PathBuf::from)
+            .collect();
+        if !refs.is_empty() {
+            refs.sort_by_cached_key(|r| store_name(r).to_lowercase());
+            ref_cache.insert(PathBuf::from(&file.path), refs);
+        }
+    }
+    ref_cache
+}
+
+/// `bytes`, the manifest at `path`, parsed as JSON: the one parser for
+/// manifests and indexes. Refuses a key given twice and a key with
+/// serde_json's reserved prefix; serde_json refuses nesting past 128. An
+/// integer outside `i64` and `u64` reads as the nearest `f64`.
+pub fn parse_manifest(path: &str, bytes: &[u8]) -> Result<serde_json::Value, BundleError> {
+    let mut de = serde_json::Deserializer::from_slice(bytes);
+    Strict
+        .deserialize(&mut de)
+        .and_then(|v| de.end().map(|()| v))
+        .map_err(|e| BundleError::NotJson {
+            path: path.to_string(),
+            message: e.to_string(),
+        })
+}
+
+/// `kix-packages.json` at `path`, parsed with [`parse_manifest`].
+pub fn parse_index(path: &str, bytes: &[u8]) -> Result<KixPackageIndex, BundleError> {
+    serde_json::from_value(parse_manifest(path, bytes)?).map_err(|e| BundleError::NotJson {
+        path: path.to_string(),
+        message: e.to_string(),
+    })
+}
+
+/// The prefix of the keys serde_json reserves for its own types. With the
+/// `raw_value` feature, `serde_json::Value` reads an object whose one key is
+/// `$serde_json::private::RawValue` as the JSON text its value holds.
+const SERDE_JSON_PRIVATE: &str = "$serde_json::private::";
+
+/// A JSON value parsed by [`parse_manifest`]'s rules.
+struct Strict;
+
+impl<'de> DeserializeSeed<'de> for Strict {
+    type Value = serde_json::Value;
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Strict {
+    type Value = serde_json::Value;
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a JSON value")
+    }
+    fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E> {
+        Ok(v.into())
+    }
+    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
+        Ok(v.into())
+    }
+    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> {
+        Ok(v.into())
+    }
+    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E> {
+        Ok(v.into())
+    }
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> {
+        Ok(v.into())
+    }
+    fn visit_string<E>(self, v: String) -> Result<Self::Value, E> {
+        Ok(v.into())
+    }
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(serde_json::Value::Null)
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut out = Vec::new();
+        while let Some(v) = seq.next_element_seed(Strict)? {
+            out.push(v);
+        }
+        Ok(out.into())
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut out = serde_json::Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if key.starts_with(SERDE_JSON_PRIVATE) {
+                return Err(A::Error::custom(format!(
+                    "the key '{key}' is reserved by serde_json"
+                )));
+            }
+            if out.contains_key(&key) {
+                return Err(A::Error::custom(format!("the key '{key}' is given twice")));
+            }
+            let value = map.next_value_seed(Strict)?;
+            out.insert(key, value);
+        }
+        Ok(out.into())
+    }
 }
 
 fn unreadable(e: impl std::fmt::Display) -> BundleError {
     BundleError::Unreadable(e.to_string())
 }
 
+fn malformed(message: impl Into<String>) -> BundleError {
+    BundleError::Malformed(message.into())
+}
+
+fn too_large(message: String) -> BundleError {
+    BundleError::TooLarge(message)
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// A reader that fails once more than `limit` bytes have come through it,
-/// and records that in `exceeded`, since a tar or zstd error wrapping the
-/// failure would not say why.
-struct Limited<'a, R> {
-    inner: R,
-    left: u64,
-    exceeded: &'a Cell<bool>,
-}
-
-impl<'a, R> Limited<'a, R> {
-    fn new(inner: R, limit: u64, exceeded: &'a Cell<bool>) -> Self {
-        Self {
-            inner,
-            left: limit,
-            exceeded,
-        }
-    }
-}
-
-impl<R: Read> Read for Limited<'_, R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        // Ask for one byte more than is left, to tell "at the limit" from
-        // "over it".
-        let want = buf
-            .len()
-            .min(usize::try_from(self.left + 1).unwrap_or(usize::MAX));
-        let n = self.inner.read(&mut buf[..want])?;
-        if n as u64 > self.left {
-            self.exceeded.set(true);
-            return Err(io::Error::other("bundle too large"));
-        }
-        self.left -= n as u64;
-        Ok(n)
-    }
 }
 
 /// A reader that hashes every byte read through it.
 struct Hashing<R> {
     inner: R,
     hasher: Sha256,
-}
-
-impl<R> Hashing<R> {
-    fn new(inner: R) -> Self {
-        Self {
-            inner,
-            hasher: Sha256::new(),
-        }
-    }
 }
 
 impl<R: Read> Read for Hashing<R> {
@@ -979,16 +1204,12 @@ pub fn from_result_dir(
     receipt: Option<Provenance>,
 ) -> Result<Contents, KixEvalError> {
     let err = |message: String| KixEvalError::StoreGraphError { message };
-    let resolve = |name: &str| {
-        std::fs::canonicalize(result_dir.join(name)).map_err(|e| {
-            err(format!(
-                "failed to resolve {name} in {}: {e}",
-                result_dir.display()
-            ))
-        })
-    };
-    let activation = resolve("activation")?;
-    let index = resolve("kix-packages.json")?;
+    let activation = std::fs::canonicalize(result_dir.join("activation")).map_err(|e| {
+        err(format!(
+            "failed to resolve activation in {}: {e}",
+            result_dir.display()
+        ))
+    })?;
     let output = std::process::Command::new("nix")
         .args([
             "path-info",
@@ -998,7 +1219,6 @@ pub fn from_result_dir(
             "nix-command",
         ])
         .arg(&activation)
-        .arg(&index)
         .output()
         .map_err(|e| err(format!("failed to run nix path-info: {e}")))?;
     if !output.status.success() {
@@ -1017,14 +1237,8 @@ pub fn from_result_dir(
         let bytes = std::fs::read(&path).map_err(|e| err(format!("failed to read {path}: {e}")))?;
         files.insert(path, BundleFile { bytes, references });
     }
-    let index_json: KixPackageIndex =
-        serde_json::from_slice(&files[&index.to_string_lossy().into_owned()].bytes)
-            .map_err(|e| err(format!("failed to parse kix-packages.json: {e}")))?;
     Ok(Contents {
         kix_rev: kix_rev.to_string(),
-        cluster: index_json.cluster,
-        activation: activation.to_string_lossy().into_owned(),
-        index: index.to_string_lossy().into_owned(),
         receipt,
         files,
     })
@@ -1050,719 +1264,5 @@ fn path_info_references(info: &serde_json::Value) -> Vec<(String, Vec<String>)> 
             .filter_map(|v| Some((v.get("path")?.as_str()?.to_string(), refs(v))))
             .collect(),
         _ => Vec::new(),
-    }
-}
-
-fn text_at(v: &serde_json::Value, pointer: &str) -> String {
-    v.pointer(pointer)
-        .and_then(|x| x.as_str())
-        .unwrap_or_default()
-        .to_string()
-}
-
-/// `spec.instances` as `(namespace, instance)` pairs.
-fn record_instances(record: &serde_json::Value) -> BTreeSet<(String, String)> {
-    record
-        .pointer("/spec/instances")
-        .and_then(|v| v.as_object())
-        .into_iter()
-        .flat_map(|by_ns| {
-            by_ns.iter().flat_map(|(ns, names)| {
-                names
-                    .as_object()
-                    .into_iter()
-                    .flat_map(move |m| m.keys().map(move |k| (ns.clone(), k.clone())))
-            })
-        })
-        .collect()
-}
-
-/// Whether `api_version` is `version` or `group/version`, with no empty
-/// part and no whitespace. The API server reads `/v1` as the core group's
-/// `v1`, but Kix Enterprise's agent compares the string with discovery's
-/// `v1` to decide what the build owns, and would miss it.
-fn canonical_api_version(api_version: &str) -> bool {
-    let part = |s: &str| !s.is_empty() && !s.contains(char::is_whitespace);
-    match api_version.split_once('/') {
-        None => part(api_version),
-        Some((group, version)) => part(group) && part(version) && !version.contains('/'),
-    }
-}
-
-/// Whether a manifest carries a label or annotation key, or an API group,
-/// of a retired kix domain. `stamp_annotations` would upgrade those, so the
-/// bundle's bytes would differ from what is applied.
-fn has_retired_domain(manifest: &serde_json::Value) -> bool {
-    let retired_key = |field: &str| {
-        manifest
-            .pointer(&format!("/metadata/{field}"))
-            .and_then(|v| v.as_object())
-            .is_some_and(|m| m.keys().any(|k| crate::legacy_domain::is_legacy_key(k)))
-    };
-    let retired_group = manifest
-        .pointer("/apiVersion")
-        .and_then(|v| v.as_str())
-        .and_then(|v| v.split_once('/'))
-        .is_some_and(|(group, _)| crate::legacy_domain::is_legacy_key(&format!("{group}/x")));
-    retired_key("labels") || retired_key("annotations") || retired_group
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const FIXTURE: &[u8] =
-        include_bytes!("../../tests/fixtures/bundles/kix-enterprise-test.kixbundle");
-
-    /// The contents of a real `kix-enterprise-test` build on stage1: 26
-    /// manifests and `kix-packages.json`.
-    fn real() -> Contents {
-        Bundle::read(FIXTURE).unwrap().into_contents()
-    }
-
-    fn written(contents: &Contents) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        contents.write(&mut bytes).unwrap();
-        bytes
-    }
-
-    /// Write `contents` as a bundle and read it back.
-    fn reread(contents: &Contents) -> Result<Bundle, BundleError> {
-        Bundle::read(written(contents).as_slice())
-    }
-
-    /// A tar file of `header` and `files`, uncompressed.
-    fn tar_of(header: &Header, files: &BTreeMap<String, BundleFile>) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        write_tar(header, files, &mut bytes).unwrap();
-        bytes
-    }
-
-    /// A tar file with exactly these entries, in this order.
-    fn raw_tar(entries: &[(&str, tar::EntryType, &[u8])]) -> Vec<u8> {
-        let mut tar = tar::Builder::new(Vec::new());
-        for (name, kind, bytes) in entries {
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(*kind);
-            header.set_mode(0o444);
-            header.set_size(bytes.len() as u64);
-            tar.append_data(&mut header, name, *bytes).unwrap();
-        }
-        tar.into_inner().unwrap()
-    }
-
-    fn header_json(contents: &Contents) -> Vec<u8> {
-        serde_json::to_vec(&contents.header()).unwrap()
-    }
-
-    fn entry_name(path: &str) -> String {
-        format!("{STORE_ENTRY_DIR}/{}", &path[STORE_DIR.len() + 1..])
-    }
-
-    fn path_ending(contents: &Contents, suffix: &str) -> String {
-        contents
-            .files
-            .keys()
-            .find(|p| p.ends_with(suffix))
-            .unwrap()
-            .clone()
-    }
-
-    #[test]
-    fn a_real_build_verifies_and_loads() {
-        let bundle = Bundle::read(FIXTURE).unwrap();
-        assert_eq!(bundle.sha256(), hex(&Sha256::digest(FIXTURE)));
-        let graph = bundle.graph().unwrap();
-        assert_eq!(graph.cluster_name, "kix-enterprise-test");
-        assert_eq!(
-            graph.result_dir,
-            PathBuf::from(format!("bundle:sha256:{}", bundle.sha256()))
-        );
-        assert_eq!(graph.packages.len(), 6);
-        assert_eq!(graph.resources.len(), 26);
-        let cross: usize = graph.packages.values().map(|p| p.cross_deps.len()).sum();
-        assert!(cross > 0, "the shop reads the valkey in another package");
-        assert_eq!(bundle.manifests().count(), 26);
-    }
-
-    #[test]
-    fn writing_is_reproducible_and_round_trips() {
-        let contents = real();
-        let bytes = written(&contents);
-        assert_eq!(bytes, written(&contents));
-        assert_eq!(bytes, FIXTURE, "the fixture is what this kix writes");
-        let back = Bundle::read(bytes.as_slice()).unwrap().into_contents();
-        assert_eq!(back.files, contents.files);
-        assert_eq!(back.header(), contents.header());
-    }
-
-    #[test]
-    fn an_uncompressed_tar_reads_the_same() {
-        let contents = real();
-        let tar = tar_of(&contents.header(), &contents.files);
-        let bundle = Bundle::read(tar.as_slice()).unwrap();
-        assert_eq!(bundle.contents().files, contents.files);
-        assert_eq!(bundle.sha256(), hex(&Sha256::digest(&tar)));
-    }
-
-    #[test]
-    fn the_header_reads_alone() {
-        let header = Bundle::read_header(FIXTURE).unwrap();
-        assert_eq!(header, real().header());
-    }
-
-    #[test]
-    fn a_json_bundle_is_refused() {
-        assert!(matches!(
-            Bundle::read(&br#"{"format":"kix-bundle","version":1}"#[..]),
-            Err(BundleError::Unreadable(_))
-        ));
-    }
-
-    #[test]
-    fn a_long_store_name_round_trips() {
-        let mut contents = real();
-        let name = format!("k8s-ConfigMap-kix-enterprise-test-web-{}", "x".repeat(150));
-        let text = r#"{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"long","namespace":"kix-enterprise-test-web"}}"#;
-        let path = add_to_build(&mut contents, &name, text, None);
-        assert!(entry_name(&path).len() > 100);
-        let bundle = reread(&contents).unwrap();
-        assert_eq!(bundle.contents().files[&path].bytes, text.as_bytes());
-    }
-
-    #[test]
-    fn a_bundle_over_the_limit_is_refused() {
-        let bytes = written(&real());
-        assert_eq!(
-            read_limited(bytes.as_slice(), bytes.len() as u64 - 1).err(),
-            Some(BundleError::TooLarge)
-        );
-        // Small when stored, over the limit once decompressed.
-        let limit = bytes.len() as u64 + 1;
-        assert!(limit < tar_of(&real().header(), &real().files).len() as u64);
-        assert_eq!(
-            read_limited(bytes.as_slice(), limit).err(),
-            Some(BundleError::TooLarge)
-        );
-    }
-
-    #[test]
-    fn a_store_file_before_the_header_is_refused() {
-        let contents = real();
-        let (path, file) = contents.files.iter().next().unwrap();
-        let tar = raw_tar(&[
-            (&entry_name(path), tar::EntryType::Regular, &file.bytes),
-            (
-                HEADER_ENTRY,
-                tar::EntryType::Regular,
-                &header_json(&contents),
-            ),
-        ]);
-        assert_eq!(
-            Bundle::read(tar.as_slice()).err(),
-            Some(BundleError::HeaderNotFirst)
-        );
-    }
-
-    #[test]
-    fn a_symlink_entry_is_refused() {
-        let contents = real();
-        let path = contents.files.keys().next().unwrap();
-        let tar = raw_tar(&[
-            (
-                HEADER_ENTRY,
-                tar::EntryType::Regular,
-                &header_json(&contents),
-            ),
-            (&entry_name(path), tar::EntryType::Symlink, b""),
-        ]);
-        assert_eq!(
-            Bundle::read(tar.as_slice()).err(),
-            Some(BundleError::BadEntry(entry_name(path)))
-        );
-    }
-
-    #[test]
-    fn an_entry_outside_the_store_directory_is_refused() {
-        let contents = real();
-        let tar = raw_tar(&[
-            (
-                HEADER_ENTRY,
-                tar::EntryType::Regular,
-                &header_json(&contents),
-            ),
-            ("etc/passwd", tar::EntryType::Regular, b"x"),
-        ]);
-        assert_eq!(
-            Bundle::read(tar.as_slice()).err(),
-            Some(BundleError::BadEntry("etc/passwd".to_string()))
-        );
-    }
-
-    #[test]
-    fn an_entry_the_header_does_not_list_is_refused() {
-        let contents = real();
-        let unlisted = store_path::path_for(Method::Text, b"x", &[], "k8s-ConfigMap-unlisted");
-        let tar = raw_tar(&[
-            (
-                HEADER_ENTRY,
-                tar::EntryType::Regular,
-                &header_json(&contents),
-            ),
-            (&entry_name(&unlisted), tar::EntryType::Regular, b"x"),
-        ]);
-        assert_eq!(
-            Bundle::read(tar.as_slice()).err(),
-            Some(BundleError::UnlistedEntry(entry_name(&unlisted)))
-        );
-    }
-
-    #[test]
-    fn a_repeated_entry_is_refused() {
-        let contents = real();
-        let (path, file) = contents.files.iter().next().unwrap();
-        let tar = raw_tar(&[
-            (
-                HEADER_ENTRY,
-                tar::EntryType::Regular,
-                &header_json(&contents),
-            ),
-            (&entry_name(path), tar::EntryType::Regular, &file.bytes),
-            (&entry_name(path), tar::EntryType::Regular, &file.bytes),
-        ]);
-        assert_eq!(
-            Bundle::read(tar.as_slice()).err(),
-            Some(BundleError::OutOfOrder(entry_name(path)))
-        );
-    }
-
-    #[test]
-    fn a_file_the_header_lists_but_the_bundle_lacks_is_refused() {
-        let contents = real();
-        let mut files = contents.files.clone();
-        let path = contents.files.keys().last().unwrap().clone();
-        files.remove(&path);
-        let tar = tar_of(&contents.header(), &files);
-        assert_eq!(
-            Bundle::read(tar.as_slice()).err(),
-            Some(BundleError::MissingFile(path))
-        );
-    }
-
-    #[test]
-    fn a_changed_byte_is_refused() {
-        let mut contents = real();
-        let p = path_ending(
-            &contents,
-            "-k8s-ConfigMap-kix-enterprise-test-web-status-page",
-        );
-        let file = contents.files.get_mut(&p).unwrap();
-        file.bytes = String::from_utf8(file.bytes.clone())
-            .unwrap()
-            .replace("status", "statux")
-            .into_bytes();
-        assert_eq!(reread(&contents).err(), Some(BundleError::PathMismatch(p)));
-    }
-
-    #[test]
-    fn a_dropped_reference_is_refused() {
-        let mut contents = real();
-        let p = path_ending(
-            &contents,
-            "-k8s-Deployment-kix-enterprise-test-web-status-page",
-        );
-        // The Namespace stays reachable through other manifests, so the
-        // closure check passes and the path check refuses the Deployment.
-        contents
-            .files
-            .get_mut(&p)
-            .unwrap()
-            .references
-            .retain(|r| !r.contains("-k8s-Namespace-"));
-        assert_eq!(reread(&contents).err(), Some(BundleError::PathMismatch(p)));
-    }
-
-    #[test]
-    fn a_missing_reference_is_refused() {
-        let mut contents = real();
-        let p = path_ending(
-            &contents,
-            "-k8s-Namespace-_cluster_-kix-enterprise-test-web",
-        );
-        contents.files.remove(&p);
-        assert!(matches!(
-            reread(&contents),
-            Err(BundleError::MissingReference { missing, .. }) if missing == p
-        ));
-    }
-
-    #[test]
-    fn a_file_outside_the_build_is_refused() {
-        let mut contents = real();
-        let text = r#"{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"extra","namespace":"kix-enterprise-test-web"}}"#;
-        let path = store_path::path_for(Method::Text, text.as_bytes(), &[], "k8s-ConfigMap-extra");
-        contents.files.insert(
-            path.clone(),
-            BundleFile {
-                bytes: text.as_bytes().to_vec(),
-                references: vec![],
-            },
-        );
-        assert_eq!(
-            reread(&contents).err(),
-            Some(BundleError::Unreachable(path))
-        );
-    }
-
-    /// Add a file named `name` holding `text` to the build: the Activation
-    /// record references it, and when `package` is given (the end of a
-    /// PackageInstance path) kix-packages.json lists it under that package.
-    /// Recomputes the paths that change. Returns the new file's path.
-    fn add_to_build(
-        contents: &mut Contents,
-        name: &str,
-        text: &str,
-        package: Option<&str>,
-    ) -> String {
-        let path = store_path::path_for(Method::Text, text.as_bytes(), &[], name);
-        contents.files.insert(
-            path.clone(),
-            BundleFile {
-                bytes: text.as_bytes().to_vec(),
-                references: vec![],
-            },
-        );
-        let mut record = contents.files.remove(&contents.activation).unwrap();
-        record.references.push(path.clone());
-        let record_name = store_path::name_of(&contents.activation)
-            .unwrap()
-            .to_string();
-        contents.activation = store_path::path_for(
-            Method::Text,
-            &record.bytes,
-            &record.references,
-            &record_name,
-        );
-        contents.files.insert(contents.activation.clone(), record);
-        if let Some(package) = package {
-            let mut index = package_index(contents).unwrap();
-            let (_, resources) = index
-                .packages
-                .iter_mut()
-                .find(|(pi, _)| pi.to_string_lossy().ends_with(package))
-                .unwrap();
-            resources.push(PathBuf::from(&path));
-            let bytes = serde_json::to_vec(&index).unwrap();
-            contents.files.remove(&contents.index);
-            contents.index = store_path::path_for(Method::Text, &bytes, &[], "kix-packages.json");
-            contents.files.insert(
-                contents.index.clone(),
-                BundleFile {
-                    bytes,
-                    references: vec![],
-                },
-            );
-        }
-        path
-    }
-
-    #[test]
-    fn two_manifests_of_one_object_are_refused() {
-        let mut contents = real();
-        let configmap = |value: &str| {
-            format!(
-                r#"{{"apiVersion":"v1","kind":"ConfigMap","metadata":{{"name":"x","namespace":"kix-enterprise-test-web"}},"data":{{"k":"{value}"}}}}"#
-            )
-        };
-        let package = Some("-k8s-PackageInstance-kix-enterprise-test-web-status-page");
-        add_to_build(
-            &mut contents,
-            "k8s-ConfigMap-kix-enterprise-test-web-x",
-            &configmap("harmless"),
-            package,
-        );
-        add_to_build(
-            &mut contents,
-            "k8s-ConfigMap-kix-enterprise-test-web-x-copy",
-            &configmap("harmful"),
-            package,
-        );
-        assert_eq!(
-            reread(&contents).err(),
-            Some(BundleError::DuplicateObject(
-                "ConfigMap/x@kix-enterprise-test-web".to_string()
-            ))
-        );
-    }
-
-    #[test]
-    fn an_index_entry_not_named_as_a_manifest_is_refused() {
-        let mut contents = real();
-        let record = serde_json::json!({
-            "apiVersion": keys::API_VERSION,
-            "kind": lifecycle::RECORD_KIND,
-            "metadata": {"name": "other", "labels": {(keys::CLUSTER_LABEL): "kix-enterprise-test"}},
-        })
-        .to_string();
-        let path = add_to_build(
-            &mut contents,
-            "extra",
-            &record,
-            Some("-k8s-PackageInstance-kix-enterprise-test-web-status-page"),
-        );
-        assert_eq!(
-            reread(&contents).err(),
-            Some(BundleError::IndexNotManifest(path))
-        );
-    }
-
-    #[test]
-    fn an_api_version_with_an_empty_group_is_refused() {
-        let mut contents = real();
-        let text = r#"{"apiVersion":"/v1","kind":"ConfigMap","metadata":{"name":"x","namespace":"kix-enterprise-test-web"}}"#;
-        let path = add_to_build(
-            &mut contents,
-            "k8s-ConfigMap-kix-enterprise-test-web-x",
-            text,
-            Some("-k8s-PackageInstance-kix-enterprise-test-web-status-page"),
-        );
-        assert_eq!(reread(&contents).err(), Some(BundleError::ApiVersion(path)));
-    }
-
-    #[test]
-    fn api_version_spellings() {
-        for good in ["v1", "apps/v1", "example.com/v1alpha1"] {
-            assert!(canonical_api_version(good), "{good}");
-        }
-        for bad in ["", "/v1", "apps/", "a/b/v1", " v1", "v1 ", "apps /v1"] {
-            assert!(!canonical_api_version(bad), "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn a_bundle_for_another_cluster_is_refused() {
-        let mut contents = real();
-        contents.cluster = "stage1".to_string();
-        assert!(matches!(
-            reread(&contents),
-            Err(BundleError::WrongCluster { .. })
-        ));
-    }
-
-    #[test]
-    fn a_misnamed_path_is_refused() {
-        let mut contents = real();
-        let p = path_ending(
-            &contents,
-            "-k8s-Namespace-_cluster_-kix-enterprise-test-web",
-        );
-        let file = contents.files.remove(&p).unwrap();
-        let renamed = p.replace("-k8s-Namespace", "-k8s-Namespacx");
-        contents.files.insert(renamed, file);
-        assert!(reread(&contents).is_err());
-    }
-
-    #[test]
-    fn another_format_version_is_refused() {
-        let contents = real();
-        let mut header = contents.header();
-        header.version = 2;
-        let tar = tar_of(&header, &contents.files);
-        assert!(matches!(
-            Bundle::read(tar.as_slice()),
-            Err(BundleError::WrongFormat { version: 2, .. })
-        ));
-    }
-
-    #[test]
-    fn an_unknown_header_field_is_refused() {
-        let contents = real();
-        let mut header: serde_json::Value = serde_json::to_value(contents.header()).unwrap();
-        header["extra"] = serde_json::json!(1);
-        let tar = raw_tar(&[(
-            HEADER_ENTRY,
-            tar::EntryType::Regular,
-            &serde_json::to_vec(&header).unwrap(),
-        )]);
-        assert!(matches!(
-            Bundle::read(tar.as_slice()),
-            Err(BundleError::Unreadable(_))
-        ));
-    }
-
-    /// A tar file of `header`, given as JSON, and `contents`' files.
-    fn tar_with_header(header: &serde_json::Value, contents: &Contents) -> Vec<u8> {
-        let header = serde_json::to_vec(header).unwrap();
-        let names: Vec<String> = contents.files.keys().map(|p| entry_name(p)).collect();
-        let mut entries: Vec<(&str, tar::EntryType, &[u8])> =
-            vec![(HEADER_ENTRY, tar::EntryType::Regular, &header)];
-        for (name, file) in names.iter().zip(contents.files.values()) {
-            entries.push((name, tar::EntryType::Regular, &file.bytes));
-        }
-        raw_tar(&entries)
-    }
-
-    /// The header of `contents` with `receipt` in place of its own.
-    fn with_receipt(contents: &Contents, receipt: serde_json::Value) -> serde_json::Value {
-        let mut header = serde_json::to_value(contents.header()).unwrap();
-        header["receipt"] = receipt;
-        header
-    }
-
-    /// A small compressed file can hold a huge header. Parsing it into
-    /// `serde_json::Value`s takes many times its size in memory.
-    #[test]
-    fn a_header_over_its_cap_is_refused_before_it_is_parsed() {
-        let contents = real();
-        let big = "a".repeat(30 << 20);
-        let header = with_receipt(&contents, serde_json::json!({"source": {"x": big}}));
-        let compressed = zstd::encode_all(&tar_with_header(&header, &contents)[..], 19).unwrap();
-        assert!(compressed.len() < 100 << 10, "{}", compressed.len());
-        assert_eq!(
-            Bundle::read(compressed.as_slice()).err(),
-            Some(BundleError::HeaderTooLarge)
-        );
-    }
-
-    #[test]
-    fn a_receipt_over_its_cap_is_refused() {
-        let contents = real();
-        let big = "a".repeat(300 << 10);
-        let header = with_receipt(&contents, serde_json::json!({"source": {"x": big}}));
-        assert!(matches!(
-            Bundle::read(tar_with_header(&header, &contents).as_slice()),
-            Err(BundleError::Unreadable(m)) if m.contains("receipt")
-        ));
-    }
-
-    /// `kix deploy` adds to the receipt's `source`, which must be an object.
-    #[test]
-    fn a_receipt_of_another_shape_is_refused() {
-        let contents = real();
-        for receipt in [
-            serde_json::json!({"source": 1}),
-            serde_json::json!({"inputs": {}}),
-            serde_json::json!({"builder": []}),
-            serde_json::json!({"other": {}}),
-        ] {
-            let header = with_receipt(&contents, receipt.clone());
-            assert!(
-                matches!(
-                    Bundle::read(tar_with_header(&header, &contents).as_slice()),
-                    Err(BundleError::Unreadable(_))
-                ),
-                "{receipt}"
-            );
-        }
-    }
-
-    /// Each reference is checked as a store path while the header is
-    /// parsed, so short strings cannot stand in for paths.
-    #[test]
-    fn a_reference_that_is_not_a_store_path_is_refused_while_parsing() {
-        let contents = real();
-        let mut header = serde_json::to_value(contents.header()).unwrap();
-        header["references"][&contents.activation]
-            .as_array_mut()
-            .unwrap()
-            .push(serde_json::json!(""));
-        assert!(matches!(
-            Bundle::read(tar_with_header(&header, &contents).as_slice()),
-            Err(BundleError::Unreadable(m)) if m.contains("store path")
-        ));
-    }
-
-    /// The API server takes no request body over 3 MiB, so no manifest kix
-    /// applies is larger.
-    #[test]
-    fn a_manifest_over_its_cap_is_refused() {
-        let mut contents = real();
-        let big = "a".repeat(3 << 20);
-        let text = format!(
-            r#"{{"apiVersion":"v1","kind":"ConfigMap","metadata":{{"name":"big","namespace":"kix-enterprise-test-web"}},"data":{{"k":"{big}"}}}}"#
-        );
-        let path = add_to_build(
-            &mut contents,
-            "k8s-ConfigMap-kix-enterprise-test-web-big",
-            &text,
-            Some("-k8s-PackageInstance-kix-enterprise-test-web-status-page"),
-        );
-        assert_eq!(
-            reread(&contents).err(),
-            Some(BundleError::ManifestTooLarge(path))
-        );
-    }
-
-    /// Bytes after the archive are in the hash, so each must be checked.
-    /// tar-rs stops at the first zero block and the zstd decoder reads
-    /// every frame, so other readers could see more files than kix did.
-    #[test]
-    fn data_after_the_archive_is_refused() {
-        let contents = real();
-        let path = contents.files.keys().next().unwrap();
-        let second_tar = raw_tar(&[(&entry_name(path), tar::EntryType::Regular, b"evil")]);
-        let mut second_frame = written(&contents);
-        second_frame.extend(zstd::encode_all(&second_tar[..], 3).unwrap());
-        let mut skippable = written(&contents);
-        skippable.extend([0x50, 0x2a, 0x4d, 0x18, 4, 0, 0, 0, b'e', b'v', b'i', b'l']);
-        let mut plain = tar_of(&contents.header(), &contents.files);
-        plain.extend(&second_tar);
-        for (what, bytes) in [
-            ("a second zstd frame", second_frame),
-            ("a skippable frame", skippable),
-            ("a second tar file", plain),
-        ] {
-            assert_eq!(
-                Bundle::read(bytes.as_slice()).err(),
-                Some(BundleError::TrailingData),
-                "{what}"
-            );
-        }
-    }
-
-    #[test]
-    fn zero_padding_after_a_plain_tar_reads() {
-        let contents = real();
-        let mut plain = tar_of(&contents.header(), &contents.files);
-        plain.extend([0; 10240]);
-        assert!(Bundle::read(plain.as_slice()).is_ok());
-    }
-
-    /// The header names store paths as UTF-8, so an entry's name must be
-    /// UTF-8 too, or other readers would extract a file of another name.
-    #[test]
-    fn an_entry_name_that_is_not_utf8_is_refused() {
-        let mut contents = real();
-        let path = add_to_build(&mut contents, "a\u{FFFD}", "x", None);
-        let mut tar = tar_of(&contents.header(), &contents.files);
-        // The entry's own tar header, which starts with its name.
-        let name = entry_name(&path).into_bytes();
-        let block = (0..tar.len())
-            .step_by(512)
-            .find(|b| tar[*b..].starts_with(&name))
-            .unwrap();
-        let end = block + name.len();
-        tar[end - 3..end].copy_from_slice(b"\xff\0\0");
-        let mut header = tar::Header::new_old();
-        header
-            .as_mut_bytes()
-            .copy_from_slice(&tar[block..block + 512]);
-        header.set_cksum();
-        tar[block..block + 512].copy_from_slice(header.as_bytes());
-        let err = Bundle::read(tar.as_slice()).err();
-        assert!(matches!(err, Some(BundleError::BadEntry(_))), "{err:?}");
-    }
-
-    #[test]
-    fn path_info_in_either_shape() {
-        let object = serde_json::json!({"/nix/store/a-x": {"references": ["/nix/store/b-y"]}});
-        let array =
-            serde_json::json!([{"path": "/nix/store/a-x", "references": ["/nix/store/b-y"]}]);
-        let want = vec![(
-            "/nix/store/a-x".to_string(),
-            vec!["/nix/store/b-y".to_string()],
-        )];
-        assert_eq!(path_info_references(&object), want);
-        assert_eq!(path_info_references(&array), want);
     }
 }

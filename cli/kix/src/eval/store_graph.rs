@@ -17,6 +17,9 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use super::error::KixEvalError;
+use crate::manifest::types::ResourceId;
+use crate::manifest::{keys, lifecycle};
+use crate::text::printable;
 
 /// Loaded from kix-packages.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,7 +30,7 @@ pub struct KixPackageIndex {
 }
 
 /// Full in-memory graph built from the result folder.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StoreGraph {
     pub cluster_name: String,
     pub activation_path: PathBuf,
@@ -42,7 +45,7 @@ pub struct StoreGraph {
     pub ref_cache: HashMap<PathBuf, Vec<PathBuf>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PackageNode {
     pub store_path: PathBuf,
     /// From the PI manifest: spec.instanceName
@@ -61,14 +64,14 @@ pub struct PackageNode {
     pub cross_deps: Vec<CrossDep>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResourceNode {
     pub store_path: PathBuf,
     /// Raw K8s manifest parsed from the store path file.
     pub manifest: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CrossDep {
     /// "Kind/name" of the resource in this package that has the dep.
     pub from_resource: String,
@@ -171,14 +174,44 @@ fn is_k8s_path(path: &Path) -> bool {
     store_name(path).starts_with("k8s-")
 }
 
-/// Read and parse a JSON file from a store path.
+/// Read a manifest from a store path, parsed as a bundle's are.
 fn read_store_json(path: &Path) -> Result<serde_json::Value, KixEvalError> {
-    let contents = std::fs::read_to_string(path).map_err(|e| KixEvalError::StoreGraphError {
+    let bytes = std::fs::read(path).map_err(|e| KixEvalError::StoreGraphError {
         message: format!("failed to read store path {}: {e}", path.display()),
     })?;
-    serde_json::from_str(&contents).map_err(|e| KixEvalError::StoreGraphError {
-        message: format!("failed to parse JSON from {}: {e}", path.display()),
+    super::bundle::parse_manifest(&path.to_string_lossy(), &bytes).map_err(|e| {
+        KixEvalError::StoreGraphError {
+            message: e.to_string(),
+        }
     })
+}
+
+/// A path for a message, its hidden characters shown.
+fn shown(path: &Path) -> String {
+    printable(&path.to_string_lossy())
+}
+
+/// The first field of `manifest` that stops kix requesting the object at
+/// the URL plan shows: a kind that is not a non-empty string, or an
+/// `apiVersion` part, name, or namespace that is not one URL path segment.
+fn unrequestable_field(manifest: &serde_json::Value) -> Option<&'static str> {
+    let segment = |s: &str| !matches!(s, "" | "." | "..") && !s.contains(['/', '%', '?', '#']);
+    let text = |pointer: &str| manifest.pointer(pointer).and_then(|v| v.as_str());
+    let api_version = text("/apiVersion").is_some_and(|v| match v.split_once('/') {
+        Some((group, version)) => segment(group) && segment(version),
+        None => segment(v),
+    });
+    let namespace = manifest.pointer("/metadata/namespace").is_none()
+        || text("/metadata/namespace").is_some_and(segment);
+    [
+        ("kind", text("/kind").is_some_and(|k| !k.is_empty())),
+        ("apiVersion", api_version),
+        ("metadata.name", text("/metadata/name").is_some_and(segment)),
+        ("metadata.namespace", namespace),
+    ]
+    .into_iter()
+    .find(|(_, ok)| !ok)
+    .map(|(field, _)| field)
 }
 
 /// Resource label: "Kind/name".
@@ -218,19 +251,18 @@ impl StoreGraph {
         // 1. Read kix-packages.json
         status_fn("Reading package index...");
         let index_path = result_dir.join("kix-packages.json");
-        let index: KixPackageIndex = {
-            let contents = std::fs::read_to_string(&index_path).map_err(|e| {
+        let bytes = std::fs::read(&index_path).map_err(|e| KixEvalError::StoreGraphError {
+            message: format!(
+                "failed to read kix-packages.json at {}: {e}",
+                index_path.display()
+            ),
+        })?;
+        let index =
+            super::bundle::parse_index(&index_path.to_string_lossy(), &bytes).map_err(|e| {
                 KixEvalError::StoreGraphError {
-                    message: format!(
-                        "failed to read kix-packages.json at {}: {e}",
-                        index_path.display()
-                    ),
+                    message: e.to_string(),
                 }
             })?;
-            serde_json::from_str(&contents).map_err(|e| KixEvalError::StoreGraphError {
-                message: format!("failed to parse kix-packages.json: {e}"),
-            })?
-        };
 
         // 2. Resolve activation symlink
         let activation_link = result_dir.join("activation");
@@ -246,46 +278,73 @@ impl StoreGraph {
         status_fn("Loading store graph...");
         let ref_cache = bulk_load_graph(&activation_path)?;
 
-        Self::assemble(
+        let graph = Self::assemble(
             index,
             activation_path,
             result_dir.to_path_buf(),
             ref_cache,
-            &|path| read_store_json(path),
+            &mut read_store_json,
             status_fn,
-        )
+        )?;
+        graph.validate()?;
+        Ok(graph)
     }
 
-    /// Steps 4 to 6 of loading a build: read every package's manifests,
-    /// find the cluster-level resources among the references, and work out
-    /// the cross-package dependencies. Shared by a result directory and a
-    /// bundle (`eval::bundle`), which differ only in where a file's bytes
-    /// come from (`read`).
+    /// Steps 4 to 6 of loading a build: read every manifest, group them by
+    /// package, and work out the cross-package dependencies. Shared by a
+    /// result directory and a bundle (`eval::bundle`), which differ only in
+    /// where a file's bytes come from (`read`). Calls `read` once for each
+    /// path the index lists and each `k8s-` path among the references, and
+    /// fails when it fails: a build is not deployed without a file it names.
+    /// A package that lists a path twice holds it once.
     pub(crate) fn assemble(
         index: KixPackageIndex,
         activation_path: PathBuf,
         result_dir: PathBuf,
         ref_cache: HashMap<PathBuf, Vec<PathBuf>>,
-        read: &dyn Fn(&Path) -> Result<serde_json::Value, KixEvalError>,
+        read: &mut dyn FnMut(&Path) -> Result<serde_json::Value, KixEvalError>,
         status_fn: &dyn Fn(&str),
     ) -> Result<Self, KixEvalError> {
-        // 4. Read manifests and build ownership
-        let pkg_count = index.packages.len();
-        status_fn(&format!("Reading {} packages...", pkg_count));
+        // 4. Read every manifest once. A k8s path among the references that
+        //    no package lists is cluster-level: a Namespace, a CRD, the
+        //    Activation record.
+        status_fn(&format!("Reading {} packages...", index.packages.len()));
+        let mut resources: HashMap<PathBuf, ResourceNode> = HashMap::new();
+        let listed = index
+            .packages
+            .iter()
+            .flat_map(|(pi, paths)| std::iter::once(pi).chain(paths));
+        let referenced = ref_cache
+            .iter()
+            .flat_map(|(k, vs)| std::iter::once(k).chain(vs))
+            .filter(|p| is_k8s_path(p));
+        for path in listed.chain(referenced) {
+            if !resources.contains_key(path) {
+                let node = ResourceNode {
+                    store_path: path.clone(),
+                    manifest: read(path)?,
+                };
+                resources.insert(path.clone(), node);
+            }
+        }
 
+        // 5. Group the resources by package. Plan keys packages by
+        //    namespace and instance name, so a package with no instance
+        //    name is refused rather than shown under a stand-in.
         let mut packages = IndexMap::new();
-        let mut resources = HashMap::new();
         let mut resource_owner = HashMap::new();
-
         for (pi_path, resource_paths) in &index.packages {
-            let pi_manifest = read(pi_path)?;
+            let pi_manifest = &resources[pi_path].manifest;
             let instance_name = pi_manifest
                 .pointer("/spec/instanceName")
                 .and_then(|v| v.as_str())
-                .unwrap_or_else(|| {
-                    tracing::warn!(pi = %pi_path.display(), "PackageInstance is missing spec.instanceName; displaying its name as unknown");
-                    "unknown"
-                })
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| KixEvalError::StoreGraphError {
+                    message: format!(
+                        "the PackageInstance {} has no spec.instanceName",
+                        shown(pi_path)
+                    ),
+                })?
                 .to_string();
             let namespace = pi_manifest
                 .pointer("/metadata/namespace")
@@ -302,27 +361,13 @@ impl StoreGraph {
                 .and_then(|v| v.as_str())
                 .map(|v| v.to_string());
 
-            let mut valid_resource_paths = Vec::new();
+            let mut owned: Vec<PathBuf> = Vec::new();
             for res_path in resource_paths {
-                if res_path == pi_path {
+                if res_path == pi_path || owned.contains(res_path) {
                     continue;
                 }
-                match read(res_path) {
-                    Ok(manifest) => {
-                        resource_owner.insert(res_path.clone(), pi_path.clone());
-                        resources.insert(
-                            res_path.clone(),
-                            ResourceNode {
-                                store_path: res_path.clone(),
-                                manifest,
-                            },
-                        );
-                        valid_resource_paths.push(res_path.clone());
-                    }
-                    Err(e) => {
-                        tracing::warn!(path = %res_path.display(), error = %e, "skipping unreadable resource");
-                    }
-                }
+                resource_owner.insert(res_path.clone(), pi_path.clone());
+                owned.push(res_path.clone());
             }
 
             packages.insert(
@@ -333,37 +378,10 @@ impl StoreGraph {
                     namespace,
                     version,
                     lifecycle,
-                    resource_paths: valid_resource_paths,
+                    resource_paths: owned,
                     cross_deps: vec![],
                 },
             );
-        }
-
-        // 5. Discover cluster-level resources (Namespaces, CRDs, Activation)
-        //    These are k8s store paths in the DAG but not owned by any PI.
-        //    Collect all unique paths from both keys and values of ref_cache.
-        status_fn("Discovering cluster-level resources...");
-        let mut all_dag_paths: std::collections::HashSet<PathBuf> =
-            std::collections::HashSet::new();
-        for (k, vs) in &ref_cache {
-            all_dag_paths.insert(k.clone());
-            for v in vs {
-                all_dag_paths.insert(v.clone());
-            }
-        }
-        for path in &all_dag_paths {
-            if !is_k8s_path(path) || resources.contains_key(path) {
-                continue;
-            }
-            if let Ok(manifest) = read(path) {
-                resources.insert(
-                    path.clone(),
-                    ResourceNode {
-                        store_path: path.clone(),
-                        manifest,
-                    },
-                );
-            }
         }
 
         // 6. Compute cross-package dependencies using bulk-loaded graph
@@ -371,12 +389,7 @@ impl StoreGraph {
         for (pi_path, pkg) in packages.iter_mut() {
             let mut deps = Vec::new();
             for res_path in &pkg.resource_paths {
-                let res = match resources.get(res_path) {
-                    Some(r) => r,
-                    None => continue,
-                };
-                let from_label = resource_label(&res.manifest);
-
+                let from_label = resource_label(&resources[res_path].manifest);
                 let empty = vec![];
                 let refs = ref_cache.get(res_path).unwrap_or(&empty);
                 for dep_ref in refs {
@@ -390,21 +403,20 @@ impl StoreGraph {
                     if dep_owner == pi_path {
                         continue;
                     }
-                    if let Some(dep_res) = resources.get(dep_ref) {
-                        let dep_kind = dep_res
-                            .manifest
-                            .pointer("/kind")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if dep_kind == "Namespace" {
-                            continue;
-                        }
-                        deps.push(CrossDep {
-                            from_resource: from_label.clone(),
-                            to_resource: resource_label(&dep_res.manifest),
-                            target_package: dep_owner.clone(),
-                        });
+                    let dep_res = &resources[dep_ref];
+                    let dep_kind = dep_res
+                        .manifest
+                        .pointer("/kind")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if dep_kind == "Namespace" {
+                        continue;
                     }
+                    deps.push(CrossDep {
+                        from_resource: from_label.clone(),
+                        to_resource: resource_label(&dep_res.manifest),
+                        target_package: dep_owner.clone(),
+                    });
                 }
             }
             pkg.cross_deps = deps;
@@ -419,6 +431,103 @@ impl StoreGraph {
             resource_owner,
             ref_cache,
         })
+    }
+
+    /// Check that the graph is one build as plan shows it and deploy
+    /// requests it. Run on every build, from a bundle or a result
+    /// directory; a graph [`StoreGraph::synthesize`] makes describes live
+    /// objects, not a build, and is not checked. Refuses:
+    ///
+    /// - a manifest kix cannot request at the URL plan shows: with no kind,
+    ///   or with an `apiVersion` part, name, or namespace that is not one
+    ///   URL path segment, since kube-rs puts them in request paths
+    ///   unescaped;
+    /// - two manifests of one object (kind, namespace, name), since plan
+    ///   and deploy key objects that way, without the API group;
+    /// - any Activation record but one, at `activation_path`, labelled with
+    ///   the index's cluster;
+    /// - two packages of one namespace and instance, which plan would show
+    ///   as one, and a package whose PackageInstance is not among the
+    ///   resources;
+    /// - a resource two packages list that is not an import marker. Plan
+    ///   shows each other resource under the one package that lists it, or
+    ///   as cluster-level.
+    pub fn validate(&self) -> Result<(), KixEvalError> {
+        let fail = |message: String| Err(KixEvalError::StoreGraphError { message });
+        let mut paths: Vec<&PathBuf> = self.resources.keys().collect();
+        paths.sort();
+        let mut objects: HashMap<ResourceId, &PathBuf> = HashMap::new();
+        let mut records = Vec::new();
+        for path in paths {
+            let manifest = &self.resources[path].manifest;
+            if let Some(field) = unrequestable_field(manifest) {
+                return fail(format!(
+                    "{}'s {field} must be one URL path segment: not empty, '.' or '..', and without '/', '%', '?' or '#'",
+                    shown(path)
+                ));
+            }
+            let id = ResourceId::from_value(manifest);
+            if let Some(other) = objects.insert(id.clone(), path) {
+                return fail(format!(
+                    "{} and {} are both {id}",
+                    shown(other),
+                    shown(path)
+                ));
+            }
+            if lifecycle::is_record(manifest) {
+                records.push(path);
+            }
+        }
+        if records != [&self.activation_path] {
+            return fail(format!(
+                "the build must hold one Activation record, at {}; it holds {}",
+                shown(&self.activation_path),
+                records.len()
+            ));
+        }
+        let record = &self.resources[&self.activation_path].manifest;
+        let label = keys::label(record, keys::CLUSTER_LABEL).unwrap_or_default();
+        if label != self.cluster_name {
+            return fail(format!(
+                "the Activation record is for cluster '{}', but kix-packages.json says '{}'",
+                printable(label),
+                printable(&self.cluster_name)
+            ));
+        }
+        let mut keys: HashMap<(&str, &str), &PathBuf> = HashMap::new();
+        let mut listings: HashMap<&PathBuf, usize> = HashMap::new();
+        for (pi_path, package) in &self.packages {
+            let kind = self.resources[pi_path].manifest.get("kind");
+            if kind.and_then(|k| k.as_str()) != Some(lifecycle::PACKAGE_INSTANCE_KIND) {
+                return fail(format!("{} is not a PackageInstance", shown(pi_path)));
+            }
+            let key = (package.namespace.as_str(), package.instance_name.as_str());
+            if let Some(other) = keys.insert(key, pi_path) {
+                return fail(format!(
+                    "{} and {} are both package {}/{}, which plan would show as one",
+                    shown(other),
+                    shown(pi_path),
+                    printable(key.0),
+                    printable(key.1)
+                ));
+            }
+            for path in &package.resource_paths {
+                *listings.entry(path).or_default() += 1;
+            }
+        }
+        let mut shared: Vec<&PathBuf> = listings
+            .into_iter()
+            .filter(|(path, n)| *n > 1 && !lifecycle::is_marker(&self.resources[*path].manifest))
+            .map(|(path, _)| path)
+            .collect();
+        shared.sort();
+        if let Some(path) = shared.first() {
+            return fail(format!(
+                "{} is listed by more than one package, which only an import marker may be",
+                shown(path)
+            ));
+        }
+        Ok(())
     }
 
     /// Build a graph from a flat set of stamped manifests, such as live

@@ -56,7 +56,7 @@ pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Resu
     };
     // A plan from a bundle decrypts nothing: SOPS Secrets get placeholder
     // values, so planning before anyone has approved reads no secret.
-    if let Some(b) = &p.bundle {
+    if let Some(b) = &mut p.bundle {
         p.sops = b.sops(true)?;
     }
     let report = match &p.pre_client {

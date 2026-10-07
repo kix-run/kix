@@ -784,8 +784,9 @@ fn render_change_markdown(out: &mut String, c: &PackageChangeDiff) {
     let _ = writeln!(out, "<details>");
     let _ = writeln!(
         out,
-        "<summary><code>{}</code> {ver_str}{detail}</summary>",
-        c.key
+        "<summary><code>{}</code> {}{detail}</summary>",
+        output::printable(&c.key),
+        output::printable(&ver_str)
     );
     let _ = writeln!(out);
 
@@ -884,9 +885,14 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
             let ver = p
                 .version
                 .as_deref()
-                .map(|v| format!(" `{v}`"))
+                .map(|v| format!(" `{}`", output::printable(v)))
                 .unwrap_or_default();
-            let _ = writeln!(out, "- `{}`{ver} ({})", p.key, p.counts());
+            let _ = writeln!(
+                out,
+                "- `{}`{ver} ({})",
+                output::printable(&p.key),
+                p.counts()
+            );
         }
         let _ = writeln!(out);
     }
@@ -898,9 +904,14 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
             let ver = p
                 .version
                 .as_deref()
-                .map(|v| format!(" `{v}`"))
+                .map(|v| format!(" `{}`", output::printable(v)))
                 .unwrap_or_default();
-            let _ = writeln!(out, "- `{}`{ver} ({})", p.key, p.counts());
+            let _ = writeln!(
+                out,
+                "- `{}`{ver} ({})",
+                output::printable(&p.key),
+                p.counts()
+            );
             for id in &p.kept {
                 let _ = writeln!(out, "  - kept, never deleted automatically: `{id}`");
             }
@@ -981,11 +992,12 @@ fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
 
     let _ = writeln!(out);
     for (ns, entries) in &by_ns {
-        let _ = writeln!(out, "  {}", output::bold(ns));
+        let _ = writeln!(out, "  {}", output::bold(&output::printable(ns)));
         for entry in entries {
             match entry {
                 PlanEntry::Added(name, info) => {
-                    let ver = info.version.as_deref().unwrap_or("");
+                    let name = &output::printable(name);
+                    let ver = &output::printable(info.version.as_deref().unwrap_or(""));
                     let ver_str = if ver.is_empty() {
                         String::new()
                     } else {
@@ -1001,7 +1013,8 @@ fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
                     );
                 }
                 PlanEntry::Removed(name, info) => {
-                    let ver = info.version.as_deref().unwrap_or("");
+                    let name = &output::printable(name);
+                    let ver = &output::printable(info.version.as_deref().unwrap_or(""));
                     let ver_str = if ver.is_empty() {
                         String::new()
                     } else {
@@ -1022,8 +1035,9 @@ fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
                     }
                 }
                 PlanEntry::Changed(name, change) => {
-                    let old_ver = change.old_version.as_deref().unwrap_or("");
-                    let new_ver = change.new_version.as_deref().unwrap_or("");
+                    let name = &output::printable(name);
+                    let old_ver = &output::printable(change.old_version.as_deref().unwrap_or(""));
+                    let new_ver = &output::printable(change.new_version.as_deref().unwrap_or(""));
                     let ver_str =
                         if !old_ver.is_empty() && !new_ver.is_empty() && old_ver != new_ver {
                             format!(" {} -> {}", old_ver, new_ver)

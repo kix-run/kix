@@ -274,10 +274,19 @@ pub fn is_kix_key(key: &str) -> bool {
 /// `key` is a constant from this module. Pass the manifest, not its
 /// annotations map.
 pub fn get<'a>(manifest: &'a Value, key: &str) -> Option<&'a str> {
-    let annotations = manifest.pointer("/metadata/annotations")?.as_object()?;
-    annotations.get(key).and_then(Value::as_str).or_else(|| {
-        crate::legacy_domain::fallback(key, |k| annotations.get(k).and_then(Value::as_str))
-    })
+    get_in(manifest, "/metadata/annotations", key)
+}
+
+/// Read a Kix label off a manifest, as [`get`] reads an annotation.
+pub fn label<'a>(manifest: &'a Value, key: &str) -> Option<&'a str> {
+    get_in(manifest, "/metadata/labels", key)
+}
+
+fn get_in<'a>(manifest: &'a Value, map: &str, key: &str) -> Option<&'a str> {
+    let map = manifest.pointer(map)?.as_object()?;
+    map.get(key)
+        .and_then(Value::as_str)
+        .or_else(|| crate::legacy_domain::fallback(key, |k| map.get(k).and_then(Value::as_str)))
 }
 
 /// Read a Kix annotation or label off a `kube` metadata map.

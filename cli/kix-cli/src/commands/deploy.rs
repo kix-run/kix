@@ -69,7 +69,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     };
     // A deploy decrypts a bundle's SOPS files for real, after review.
-    if let Some(b) = &p.bundle {
+    if let Some(b) = &mut p.bundle {
         p.sops = b.sops(false)?;
     }
     annotate_record(&mut p, &args.record_annotations);
@@ -378,7 +378,7 @@ fn check_saved_plan(saved: &SavedPlan, ctx: &mut CommandContext) -> Result<()> {
     let Some(mut p) = prepare(&saved.args, ctx)? else {
         return Ok(());
     };
-    if let Some(b) = &p.bundle {
+    if let Some(b) = &mut p.bundle {
         p.sops = b.sops(false)?;
     }
     let report = match &p.pre_client {
@@ -508,28 +508,23 @@ pub(crate) fn prepare(args: &PlanArgs, ctx: &mut CommandContext) -> Result<Optio
         }
     };
     // The new side: a bundle, or a build of the flake.
-    let bundle = match &args.bundle {
+    let mut bundle = None;
+    let (result_path, mut new_graph) = match &args.bundle {
         Some(path) => {
             if !ctx.global.quiet {
                 crate::say!("Reading bundle {}...", path.display());
             }
-            let loaded = super::bundle::load(path)?;
-            if loaded.contents().cluster != args.cluster {
+            let (loaded, graph) = super::bundle::load(path)?;
+            if loaded.cluster() != args.cluster {
                 return Err(miette!(
                     "the bundle {} is for cluster '{}', not '{}'",
                     path.display(),
-                    loaded.contents().cluster,
+                    output::printable(loaded.cluster()),
                     args.cluster
                 ));
             }
             super::bundle::register_deployed(&args.deployed_bundles)?;
-            Some(loaded)
-        }
-        None => None,
-    };
-    let (result_path, mut new_graph) = match &bundle {
-        Some(loaded) => {
-            let graph = loaded.graph()?;
+            bundle = Some(loaded);
             (graph.result_dir.clone(), graph)
         }
         None => {

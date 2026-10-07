@@ -294,8 +294,8 @@ pub enum Command {
 
     /// Build a cluster and write it as one file, a bundle
     ///
-    /// A bundle (`.kixbundle`) is a zstd-compressed tar file of every store
-    /// file of the build, with its references, so `kix plan`, `kix deploy`
+    /// A bundle (`.kixbundle`) is a zstd file in the seekable format that
+    /// holds every store file of the build, with its references, so `kix plan`, `kix deploy`
     /// and `kix graph` can read it with `--bundle` on a machine with no Nix
     /// store. Reading a bundle recomputes every store path from its file's
     /// bytes and refuses one that differs.

@@ -94,11 +94,11 @@ pub fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
 /// claims by whoever uploaded the bundle. The bundle's SHA-256 is not: it
 /// names exactly the bytes that were deployed.
 pub fn from_bundle(graph: &StoreGraph, loaded: &LoadedBundle) -> Value {
-    let made = loaded.contents().receipt.clone().unwrap_or_default();
+    let made = loaded.header().receipt.clone().unwrap_or_default();
     let mut source = Value::Object(made.source);
     source["bundle"] = json!({
         "sha256": loaded.sha256(),
-        "kixRev": loaded.contents().kix_rev,
+        "kixRev": loaded.header().kix_rev,
     });
     json!({
         "schema": keys::RECEIPT_SCHEMA,
@@ -517,7 +517,11 @@ mod tests {
 
         let fixture: &[u8] =
             include_bytes!("../../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle");
-        let mut contents = Bundle::read(fixture).unwrap().into_contents();
+        let mut contents = Bundle::read(std::io::Cursor::new(fixture))
+            .unwrap()
+            .0
+            .contents()
+            .unwrap();
         contents.receipt = Some(
             serde_json::from_value(json!({
                 "source": {"revision": "abc", "dirty": false},
@@ -526,10 +530,9 @@ mod tests {
             }))
             .unwrap(),
         );
-        let mut bytes = Vec::new();
-        contents.write(&mut bytes).unwrap();
-        let loaded = LoadedBundle::from(Bundle::read(bytes.as_slice()).unwrap());
-        let graph = loaded.graph().unwrap();
+        let file = tempfile::NamedTempFile::new().unwrap();
+        contents.write(file.as_file()).unwrap();
+        let (loaded, graph) = crate::commands::bundle::load(file.path()).unwrap();
         let r = from_bundle(&graph, &loaded);
         assert_eq!(r["source"]["revision"], "abc");
         assert_eq!(r["source"]["bundle"]["sha256"], json!(loaded.sha256()));

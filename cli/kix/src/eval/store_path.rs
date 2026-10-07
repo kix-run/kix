@@ -25,9 +25,13 @@ pub enum Method {
     /// `builtins.toFile`: the hash covers the file's bytes.
     Text,
     /// `builtins.path` of a single regular file: the hash covers the file's
-    /// NAR serialisation.
+    /// NAR serialisation, which records whether the file is executable.
+    /// [`path_for`] gives the path of a file that is not.
     Source,
 }
+
+/// The longest store name Nix accepts (`StorePath::MaxPathLen`).
+pub const MAX_NAME_BYTES: usize = 211;
 
 /// The store path a file gets under `method`, given its bytes, the store
 /// paths it references, and its name (the part after `<hash>-`).
@@ -38,31 +42,53 @@ pub enum Method {
 /// assert!(p.starts_with("/nix/store/") && p.ends_with("-greeting"));
 /// ```
 pub fn path_for(method: Method, bytes: &[u8], references: &[String], name: &str) -> String {
-    let (kind, digest) = match method {
-        Method::Text => ("text", Sha256::digest(bytes)),
-        Method::Source => ("source", Sha256::digest(nar_of_file(bytes, false))),
-    };
-    let mut refs: Vec<&str> = references.iter().map(String::as_str).collect();
-    refs.sort_unstable();
-    refs.dedup();
-    let mut ty = kind.to_string();
-    for r in refs {
-        ty.push(':');
-        ty.push_str(r);
-    }
-    make_store_path(&ty, &digest, name)
+    path_with(method, false, bytes, references, name)
 }
 
 /// The method that makes `path` from `bytes`, `references` and the path's
-/// own name, or `None` if neither does.
-pub fn method_of(path: &str, bytes: &[u8], references: &[String]) -> Option<Method> {
+/// own name, or `None` if neither does. A source path may be of an
+/// executable file or not.
+pub fn method_of<S: AsRef<str>>(path: &str, bytes: &[u8], references: &[S]) -> Option<Method> {
     let name = name_of(path)?;
-    [Method::Text, Method::Source]
-        .into_iter()
-        .find(|m| path_for(*m, bytes, references, name) == path)
+    [
+        (Method::Text, false),
+        (Method::Source, false),
+        (Method::Source, true),
+    ]
+    .into_iter()
+    .find(|(m, executable)| path_with(*m, *executable, bytes, references, name) == path)
+    .map(|(m, _)| m)
 }
 
-/// The name part of a store path: what follows `/nix/store/<hash>-`.
+/// Nix's type string, `<kind>:<reference>:<reference>...`, can be as long
+/// as the references put together, so it goes into the hash piece by piece.
+/// `executable` applies to [`Method::Source`] only.
+fn path_with<S: AsRef<str>>(
+    method: Method,
+    executable: bool,
+    bytes: &[u8],
+    references: &[S],
+    name: &str,
+) -> String {
+    let (kind, digest) = match method {
+        Method::Text => ("text", Sha256::digest(bytes)),
+        Method::Source => ("source", Sha256::digest(nar_of_file(bytes, executable))),
+    };
+    let mut refs: Vec<&str> = references.iter().map(AsRef::as_ref).collect();
+    refs.sort_unstable();
+    refs.dedup();
+    let mut fingerprint = Sha256::new();
+    fingerprint.update(kind);
+    for r in refs {
+        fingerprint.update(":");
+        fingerprint.update(r);
+    }
+    fingerprint.update(format!(":sha256:{}:{STORE_DIR}:{name}", hex(&digest)));
+    make_store_path(&fingerprint.finalize(), name)
+}
+
+/// The name part of a store path: what follows `/nix/store/<hash>-`. `None`
+/// unless the hash is Nix base32 and the name is one Nix accepts.
 pub fn name_of(path: &str) -> Option<&str> {
     let rest = path.strip_prefix(STORE_DIR)?.strip_prefix('/')?;
     let (hash, name) = rest.split_at_checked(32)?;
@@ -70,12 +96,24 @@ pub fn name_of(path: &str) -> Option<&str> {
         return None;
     }
     let name = name.strip_prefix('-')?;
-    (!name.is_empty() && !name.contains('/')).then_some(name)
+    valid_name(name).then_some(name)
 }
 
-fn make_store_path(ty: &str, digest: &[u8], name: &str) -> String {
-    let fingerprint = format!("{ty}:sha256:{}:{STORE_DIR}:{name}", hex(digest));
-    let full = Sha256::digest(fingerprint.as_bytes());
+/// Nix's `checkName`: 1 to [`MAX_NAME_BYTES`] characters from
+/// `[A-Za-z0-9+-._?=]`, and not `.` or `..`, alone or before a `-`.
+fn valid_name(name: &str) -> bool {
+    let allowed = |b: u8| b.is_ascii_alphanumeric() || b"+-._?=".contains(&b);
+    !name.is_empty()
+        && name.len() <= MAX_NAME_BYTES
+        && name.bytes().all(allowed)
+        && !matches!(name, "." | "..")
+        && !name.starts_with(".-")
+        && !name.starts_with("..-")
+}
+
+/// The store path whose fingerprint (`<type>:sha256:<hex>:<store>:<name>`)
+/// hashes to `full`.
+fn make_store_path(full: &[u8], name: &str) -> String {
     let mut short = [0u8; 20];
     for (i, b) in full.iter().enumerate() {
         short[i % 20] ^= b;
@@ -153,6 +191,38 @@ mod tests {
         assert_eq!(name_of(&format!("/nix/store/{hash}-")), None);
     }
 
+    /// Nix's `checkName`: at most 211 characters from `[A-Za-z0-9+-._?=]`,
+    /// and not `.` or `..`, alone or before a `-`.
+    #[test]
+    fn a_name_follows_nix_rules() {
+        let path = |name: &str| format!("/nix/store/0h5dy43cxa771fiz9dsx14c0vf32sn67-{name}");
+        let longest = "a".repeat(211);
+        for good in [
+            "k8s-ConfigMap-x",
+            "db.sops.yaml",
+            "a+b=c?d_e",
+            ".a",
+            "..a",
+            &longest,
+        ] {
+            assert_eq!(name_of(&path(good)), Some(good), "{good}");
+        }
+        let too_long = "a".repeat(212);
+        for bad in [
+            "a b",
+            "k8s-\u{1b}[2J",
+            "caf\u{e9}",
+            "a:b",
+            ".",
+            "..",
+            ".-a",
+            "..-a",
+            &too_long,
+        ] {
+            assert_eq!(name_of(&path(bad)), None, "{bad:?}");
+        }
+    }
+
     #[test]
     fn changing_bytes_references_or_name_changes_the_path() {
         let base = path_for(Method::Text, b"a", &[], "n");
@@ -195,7 +265,16 @@ mod tests {
     fn a_builtins_path_file_recomputes_as_a_source_path() {
         let bytes = b"password: ENC[AES256_GCM,data:abc]\nsops:\n  age: []\n";
         let path = "/nix/store/yxyad967bhmxvm5120mrjnrrr7ak087w-db.sops.yaml";
-        assert_eq!(method_of(path, bytes, &[]), Some(Method::Source));
+        assert_eq!(method_of::<String>(path, bytes, &[]), Some(Method::Source));
+    }
+
+    /// The same file with mode 0755, as a checkout from a filesystem with
+    /// no mode bits gives it. Nix keeps the bit in the NAR it hashes.
+    #[test]
+    fn an_executable_builtins_path_file_recomputes_as_a_source_path() {
+        let bytes = b"password: ENC[AES256_GCM,data:abc]\nsops:\n  age: []\n";
+        let path = "/nix/store/mksphybbsiaag8ayhgj6bqq79f7p5cws-db.sops.yaml";
+        assert_eq!(method_of::<String>(path, bytes, &[]), Some(Method::Source));
     }
 
     #[test]

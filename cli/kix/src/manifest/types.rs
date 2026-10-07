@@ -75,7 +75,8 @@ impl ResourceId {
         })
     }
 
-    /// Display as "Kind/name@namespace".
+    /// "Kind/name@namespace", as given: for keys, and for messages that
+    /// escape their text as a whole. Showing an id goes through `Display`.
     pub fn display_id(&self) -> String {
         if self.namespace == CLUSTER_SCOPED {
             format!("{}/{}", self.kind, self.name)
@@ -85,9 +86,18 @@ impl ResourceId {
     }
 }
 
+/// "Kind/name@namespace" for people to read: each part through
+/// [`crate::text::printable`], since a build's kinds, names and namespaces
+/// are its author's text, and plans, logs and graphs show them. This is
+/// where kix shows an object's id.
 impl std::fmt::Display for ResourceId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.display_id())
+        use crate::text::printable;
+        write!(f, "{}/{}", printable(&self.kind), printable(&self.name))?;
+        if self.namespace != CLUSTER_SCOPED {
+            write!(f, "@{}", printable(&self.namespace))?;
+        }
+        Ok(())
     }
 }
 
@@ -128,6 +138,18 @@ mod tests {
             name: "coredns".into(),
         };
         assert_eq!(rid.to_string(), "deployment/coredns@kube-system");
+    }
+
+    /// Two names that look alike show differently.
+    #[test]
+    fn display_flags_hidden_characters() {
+        let rid = ResourceId {
+            kind: "ClusterRoleBinding".into(),
+            namespace: CLUSTER_SCOPED.into(),
+            name: "cluster-admin\u{200b}".into(),
+        };
+        assert_eq!(rid.to_string(), "ClusterRoleBinding/cluster-admin⟨U+200B⟩");
+        assert_eq!(rid.display_id(), "ClusterRoleBinding/cluster-admin\u{200b}");
     }
 
     #[test]
