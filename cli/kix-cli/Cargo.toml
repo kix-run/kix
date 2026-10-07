@@ -43,5 +43,6 @@ kix-lib = { workspace = true, features = ["test-util"] }
 assert_cmd.workspace = true
 insta.workspace = true
 predicates.workspace = true
+proptest.workspace = true
 # Tests write a bundle's header frame.
 zstd.workspace = true

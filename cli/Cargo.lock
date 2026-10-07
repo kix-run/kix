@@ -1611,6 +1611,7 @@ dependencies = [
  "owo-colors",
  "petgraph",
  "predicates",
+ "proptest",
  "ratatui",
  "schemars",
  "serde",

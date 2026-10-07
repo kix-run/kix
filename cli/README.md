@@ -21,6 +21,11 @@ Both binaries depend on `kix`. No other cross-deps.
   every cluster `kix list clusters` names; it is ignored by default (about
   10 minutes):
   `cargo test -p kix-cli --test commands_test -- --ignored every_test_cluster_bundles`.
+- `commands/deploy/plan_bound_properties.rs` changes honest bundles
+  (`kix/tests/fixtures/bundles/`) at random and checks that each is refused
+  or deploys exactly the objects its plan document shows. 256 cases by
+  default; `PROPTEST_CASES=20000 cargo test -p kix-cli --release --bin kix plan_bound_properties`
+  for a long run.
 - `fuzz/` holds libFuzzer targets for `PathsChecked::read` (held to a bound
   on the bytes it allocates, `kix_fuzz::check_paths`) and `Bundle::read`,
   each on bundle files as uploaded and on frames the fuzzer changes

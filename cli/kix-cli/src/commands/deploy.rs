@@ -2596,6 +2596,9 @@ mod run_end_tests {
 /// `StoreGraph::validate`, so the objects check alone stands between it
 /// and the cluster. The steps are the ones `prepare` takes.
 #[cfg(test)]
+mod plan_bound_properties;
+
+#[cfg(test)]
 mod plan_bound_tests {
     use super::*;
     use crate::cli::{Cli, Command};
