@@ -390,6 +390,8 @@ pub(crate) fn document(
         store_path: a.built_via.clone(),
     });
     doc.flags = Some(flags_of(args));
+    doc.objects_digest = Some(plan::objects::digest(&p.objects));
+    doc.objects = Some(p.objects.clone());
     if !connected {
         return doc;
     }

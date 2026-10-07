@@ -30,7 +30,7 @@ use super::{ManifestIndex, PackageChangeDiff, PackageDiff, PackageInfo, Side};
 /// Version of the document's shape: the date, `YYYY-MM-DD`, of its last
 /// change that was not backward compatible. Readers should refuse a version
 /// they do not know.
-pub const SCHEMA_VERSION: &str = "2026-10-03";
+pub const SCHEMA_VERSION: &str = "2026-10-07";
 
 /// What a deploy of a build would change, or how two things differ.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -55,6 +55,13 @@ pub struct Plan {
     /// `null` from `kix diff`, which plans no deploy.
     pub flags: Option<PlanFlags>,
     pub packages: Packages,
+    /// [`super::objects::digest`] of `objects`. `kix deploy --plan` refuses
+    /// a deploy whose objects have another digest. `null` from `kix diff`.
+    pub objects_digest: Option<String>,
+    /// Every object the planned deploy writes or deletes. `packages` shows
+    /// each of them but the re-applied ones; see [`super::objects`]. `null`
+    /// from `kix diff`, which plans no deploy.
+    pub objects: Option<Objects>,
     /// Stateful resources the change removes and adds in the same slot. A
     /// deploy stops on them unless run with `--accept-migrations`.
     pub migrations: Checked<Migration>,
@@ -360,6 +367,58 @@ pub struct Summary {
     pub unchanged: usize,
 }
 
+/// The objects a deploy writes and deletes, each list sorted.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Objects {
+    pub writes: Vec<ObjectWrite>,
+    pub deletes: Vec<ObjectDelete>,
+}
+
+/// An object the deploy applies, or may create again (a probe Job under the
+/// rerun rule).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+pub struct ObjectWrite {
+    pub kind: String,
+    /// `_cluster` for a manifest that gives no namespace.
+    pub namespace: String,
+    pub name: String,
+    /// The hash part of the store path of the build file the object is made
+    /// from, which is also its identity hash annotation.
+    pub store_hash: String,
+    /// The `namespace/instance` of the package `packages` lists the object
+    /// under, or `_cluster` for an object no package owns and for the
+    /// Activation record.
+    pub package: String,
+    pub change: WriteChange,
+}
+
+/// How `packages` shows a write.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteChange {
+    /// In an added package, or added to a changed one.
+    Added,
+    /// Modified.
+    Modified,
+    /// Changed only in a dependency's propagated hash.
+    DepAffected,
+    /// Not shown in `packages`: the deployed build, or a deploy of this
+    /// cluster that stopped part way, already holds this file for the
+    /// object. `--reconcile` writes such objects again, as does a deploy that
+    /// repairs what a stopped deploy changed.
+    Reapplied,
+}
+
+/// An object the deploy's prune deletes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+pub struct ObjectDelete {
+    pub kind: String,
+    pub namespace: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Migration {
     /// `namespace/instance`.
@@ -521,6 +580,8 @@ impl Plan {
             deployed: None,
             flags: None,
             packages: Packages::of(packages, detail),
+            objects_digest: None,
+            objects: None,
             migrations: Checked::found(migrations.iter().map(Migration::from).collect()),
             conflicts: Checked::not_checked(reason),
             admission: Checked::not_checked(reason),

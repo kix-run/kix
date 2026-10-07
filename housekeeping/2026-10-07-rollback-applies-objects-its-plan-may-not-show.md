@@ -1,0 +1,3 @@
+# 2026-10-07 · `cli/kix-cli/src/commands/rollback.rs` · `kix rollback` applies a build without checking that its plan shows each object.
+
+`kix deploy` and `kix plan` refuse a build whose engine plan writes or deletes an object the package-grouped plan leaves out (`plan::objects::of`, called from `deploy::prepare`). `kix rollback` builds its own `DeployPlan` (rollback.rs:453) and runs `scheduler::run_deploy` (rollback.rs:612) without that check. A rolled-back build whose package index hides an object applies it unseen. `kix deploy --operator` hands the build to the operator through an Activation CR and does not run the check either.
