@@ -62,9 +62,11 @@
 //!
 //! [`PathsChecked::read`] is for a server that stores bundles from any
 //! tenant and never plans them. It checks the container, every store path,
-//! the roles, and the closure, and parses only the record. It holds the
-//! header as read and parsed, one frame compressed and decompressed, a few
-//! words per file, and the parsed record: under 200 MiB.
+//! the roles, and the closure, and parses only the record. It counts the
+//! header's files, references and receipt bytes before it keeps the
+//! header, so the parsed header stays within a few times the caps. It holds
+//! the header as read and parsed, one frame compressed and decompressed, a
+//! few words per file, and the parsed record: under 200 MiB.
 //!
 //! [`Bundle::read`] is for the agent and the CLI. It does the same, then
 //! parses every manifest and the index and gives the build's [`StoreGraph`],
@@ -104,8 +106,9 @@
 //! |---|---|
 //! | [`MAX_STORED_BYTES`], 64 MiB | server: bytes read and hashed per upload |
 //! | [`MAX_HEADER_BYTES`], 32 MiB | server: memory for the header |
-//! | [`MAX_FILES`], 200,000 | server: memory per file and per seek-table entry |
-//! | [`MAX_REFERENCES`], 1,600,000 | server: time to hash the references of every path |
+//! | [`MAX_FILES`], 200,000 | server: memory per file and per seek-table entry, counted before the header is kept |
+//! | [`MAX_REFERENCES`], 1,600,000 | server: time to hash the references of every path, and memory for them |
+//! | [`MAX_RECEIPT_BYTES`], 256 KiB | server: memory to parse the receipt |
 //! | [`MAX_FRAME_BYTES`], 32 MiB | server: memory for one frame, so also the largest file |
 //! | [`MAX_CONTENT_BYTES`], 1 GiB | server: time to decompress and hash the files |
 //! | [`MAX_RECORD_BYTES`], 256 KiB | server: memory to parse the record |
@@ -132,7 +135,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 
-use serde::de::{DeserializeSeed, Error as _, MapAccess, SeqAccess, Visitor};
+use serde::de::{DeserializeSeed, Error as _, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use zstd::zstd_safe;
@@ -171,6 +174,10 @@ pub const MAX_CONTENT_BYTES: u64 = 1024 * 1024 * 1024;
 /// instances, about 2 KB for each Lithus cluster, and parses to about a
 /// hundred times its size at worst.
 pub const MAX_RECORD_BYTES: u64 = 256 * 1024;
+/// The largest receipt in the header, as JSON. A receipt names the build's
+/// source and inputs, a few KB, and parses to about sixteen times its size
+/// at worst.
+pub const MAX_RECEIPT_BYTES: usize = 256 * 1024;
 
 /// The writer starts a new frame before a file that would take a frame past
 /// this size. Larger frames compress better, since files of one kind repeat
@@ -907,18 +914,29 @@ fn parse_header(bytes: &[u8]) -> Result<Header, BundleError> {
     if format != FORMAT || version != VERSION {
         return Err(BundleError::WrongFormat { format, version });
     }
-    let header: Header = serde_json::from_slice(bytes).map_err(unreadable)?;
-    let files = &header.files;
-    if files.len() > MAX_FILES {
+    // Counted before the header is kept: a header that is mostly empty
+    // files, references, or receipt parses to many times its size.
+    let counts: Counts = serde_json::from_slice(bytes).map_err(unreadable)?;
+    if counts.files.0 > MAX_FILES {
         return Err(too_large(format!(
             "the header lists more than {MAX_FILES} files"
         )));
     }
-    if files.iter().map(|f| f.references.len()).sum::<usize>() > MAX_REFERENCES {
+    if counts.files.1 > MAX_REFERENCES {
         return Err(too_large(format!(
             "the header gives more than {MAX_REFERENCES} references"
         )));
     }
+    if counts
+        .receipt
+        .is_some_and(|r| r.get().len() > MAX_RECEIPT_BYTES)
+    {
+        return Err(too_large(format!(
+            "the receipt is over {MAX_RECEIPT_BYTES} bytes"
+        )));
+    }
+    let header: Header = serde_json::from_slice(bytes).map_err(unreadable)?;
+    let files = &header.files;
     if files.iter().map(|f| f.size).fold(0, u64::saturating_add) > MAX_CONTENT_BYTES {
         return Err(too_large(format!(
             "the files add up to more than {MAX_CONTENT_BYTES} bytes"
@@ -942,6 +960,66 @@ fn parse_header(bytes: &[u8]) -> Result<Header, BundleError> {
         }
     }
     Ok(header)
+}
+
+/// What [`parse_header`] counts in the header before it keeps it.
+#[derive(Deserialize)]
+struct Counts<'a> {
+    #[serde(default)]
+    files: FileCounts,
+    #[serde(default, borrow)]
+    receipt: Option<&'a serde_json::value::RawValue>,
+}
+
+/// The files a header lists and the references they give, counted
+/// without keeping them.
+#[derive(Default)]
+struct FileCounts(usize, usize);
+
+impl<'de> Deserialize<'de> for FileCounts {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Files;
+        impl<'de> Visitor<'de> for Files {
+            type Value = FileCounts;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a list of [path, size, references]")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<FileCounts, A::Error> {
+                let mut counts = FileCounts::default();
+                while let Some((_, _, Count(references))) =
+                    seq.next_element::<(IgnoredAny, IgnoredAny, Count)>()?
+                {
+                    counts.0 += 1;
+                    counts.1 += references;
+                }
+                Ok(counts)
+            }
+        }
+        d.deserialize_seq(Files)
+    }
+}
+
+/// The items a JSON list holds, counted without keeping them.
+struct Count(usize);
+
+impl<'de> Deserialize<'de> for Count {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Items;
+        impl<'de> Visitor<'de> for Items {
+            type Value = Count;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a list")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Count, A::Error> {
+                let mut n = 0;
+                while seq.next_element::<IgnoredAny>()?.is_some() {
+                    n += 1;
+                }
+                Ok(Count(n))
+            }
+        }
+        d.deserialize_seq(Items)
+    }
 }
 
 /// Place each file in the data frame that holds it. The frames must hold
@@ -2272,6 +2350,41 @@ mod tests {
         let (result, peak) = crate::allocated::peak_during(|| checked(&bytes).map(drop));
         result.unwrap();
         assert!(peak < 200 << 20, "checking paths held {} MiB", peak >> 20);
+    }
+
+    /// A header of up to [`MAX_HEADER_BYTES`] that would parse to many
+    /// times its size, as a long receipt, many empty files, or one file's
+    /// long list of references, is refused under the stated bound.
+    #[test]
+    fn a_header_that_parses_large_is_refused_under_the_bound() {
+        let header = |opening: &str, item: &str, closing: &str| {
+            let room = MAX_HEADER_BYTES as usize - 200;
+            let items = vec![item; room / (item.len() + 1)].join(",");
+            format!(
+                r#"{{"format":"kix-bundle","version":3,"kix_rev":"x",{opening}{items}{closing}}}"#
+            )
+        };
+        let cases = [
+            header(r#""files":[],"receipt":{"source":{"a":["#, "0", "]}}"),
+            header(r#""files":["#, r#"["",0,[]]"#, "]"),
+            header(r#""files":[["",0,["#, "0", "]]]"),
+        ];
+        let mut frames = frames_of(FIXTURE);
+        for text in cases {
+            frames[0] = text.into_bytes();
+            let bytes = join(&frames);
+            let (result, peak) = crate::allocated::peak_during(|| checked(&bytes).map(drop));
+            assert!(
+                peak < 200 << 20,
+                "reading the header held {} MiB",
+                peak >> 20
+            );
+            assert!(
+                matches!(result, Err(BundleError::TooLarge(_))),
+                "{:?}",
+                result.err()
+            );
+        }
     }
 
     #[test]
