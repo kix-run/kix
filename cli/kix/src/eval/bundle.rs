@@ -557,9 +557,10 @@ impl<R: Read + Seek> OpenBundle<R> {
                 .map_err(unreadable)?;
             self.cached = (frame, read_frame(&mut self.input, frame + 1, &f)?);
         }
-        let bytes = match size {
-            0 => Vec::new(),
-            _ => self.cached.1[offset..offset + size].to_vec(),
+        let bytes = if size == 0 {
+            Vec::new()
+        } else {
+            self.cached.1[offset..offset + size].to_vec()
         };
         check_path(&self.header, i, &bytes)?;
         Ok(bytes)
@@ -728,9 +729,10 @@ fn read_checked<R: Read + Seek>(
         if size > 0 && frame.0 != k {
             frame = (k, read_frame(&mut stream, k + 1, &table.frames[k + 1])?);
         }
-        let bytes = match size {
-            0 => &[][..],
-            _ => &frame.1[offset..offset + size],
+        let bytes = if size == 0 {
+            &[][..]
+        } else {
+            &frame.1[offset..offset + size]
         };
         check_path(&header, i, bytes)?;
         if roles.of[i] == Role::Record {
@@ -779,9 +781,10 @@ fn read_table(input: &mut (impl Read + Seek)) -> Result<SeekTable, BundleError> 
         input.read_exact(&mut footer).map_err(unreadable)?;
     }
     if u32_at(&footer, 5) != SEEKABLE_MAGIC {
-        return Err(match is_format_1(input) {
-            true => BundleError::Format1,
-            false => malformed("it does not end with a zstd seek table"),
+        return Err(if is_format_1(input) {
+            BundleError::Format1
+        } else {
+            malformed("it does not end with a zstd seek table")
         });
     }
     let count = u32_at(&footer, 0) as usize;
@@ -1016,11 +1019,16 @@ fn roles_of(files: &[FileEntry]) -> Result<Roles, BundleError> {
         return Err(BundleError::Unreachable(files[stray].path.clone()));
     }
     let of = (0..files.len())
-        .map(|i| match i {
-            _ if i == record => Role::Record,
-            _ if i == index => Role::Index,
-            _ if is_manifest(&files[i].path) => Role::Manifest,
-            _ => Role::Other,
+        .map(|i| {
+            if i == record {
+                Role::Record
+            } else if i == index {
+                Role::Index
+            } else if is_manifest(&files[i].path) {
+                Role::Manifest
+            } else {
+                Role::Other
+            }
         })
         .collect();
     Ok(Roles { of, record, index })
@@ -1174,8 +1182,8 @@ fn malformed(message: impl Into<String>) -> BundleError {
     BundleError::Malformed(message.into())
 }
 
-fn too_large(message: String) -> BundleError {
-    BundleError::TooLarge(message)
+fn too_large(message: impl Into<String>) -> BundleError {
+    BundleError::TooLarge(message.into())
 }
 
 fn hex(bytes: &[u8]) -> String {

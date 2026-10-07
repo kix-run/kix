@@ -446,8 +446,8 @@ impl StoreGraph {
     /// - any Activation record but one, at `activation_path`, labelled with
     ///   the index's cluster;
     /// - two packages of one namespace and instance, which plan would show
-    ///   as one, and a package whose PackageInstance is not among the
-    ///   resources;
+    ///   as one, and a package whose PackageInstance or listed resource is
+    ///   not among the resources;
     /// - a resource two packages list that is not an import marker. Plan
     ///   shows each other resource under the one package that lists it, or
     ///   as cluster-level.
@@ -496,7 +496,10 @@ impl StoreGraph {
         let mut keys: HashMap<(&str, &str), &PathBuf> = HashMap::new();
         let mut listings: HashMap<&PathBuf, usize> = HashMap::new();
         for (pi_path, package) in &self.packages {
-            let kind = self.resources[pi_path].manifest.get("kind");
+            let Some(pi) = self.resources.get(pi_path) else {
+                return fail(format!("{} is not among the resources", shown(pi_path)));
+            };
+            let kind = pi.manifest.get("kind");
             if kind.and_then(|k| k.as_str()) != Some(lifecycle::PACKAGE_INSTANCE_KIND) {
                 return fail(format!("{} is not a PackageInstance", shown(pi_path)));
             }
@@ -511,6 +514,13 @@ impl StoreGraph {
                 ));
             }
             for path in &package.resource_paths {
+                if !self.resources.contains_key(path) {
+                    return fail(format!(
+                        "{} lists {}, which is not among the resources",
+                        shown(pi_path),
+                        shown(path)
+                    ));
+                }
                 *listings.entry(path).or_default() += 1;
             }
         }
@@ -924,6 +934,31 @@ mod tests {
             let pi = g.packages.keys().next().unwrap().clone();
             g.resources.get_mut(&pi).unwrap().manifest["kind"] = json!("ConfigMap");
             assert!(g.validate().is_err());
+        }
+
+        #[test]
+        fn a_package_whose_package_instance_is_absent_is_refused() {
+            let mut g = build(&[("a", "x")], true);
+            let node = g.packages.values().next().unwrap().clone();
+            let absent = path("PackageInstance-absent");
+            g.packages.insert(
+                absent.clone(),
+                PackageNode {
+                    store_path: absent,
+                    ..node
+                },
+            );
+            let err = g.validate().unwrap_err();
+            assert!(err.to_string().contains("not among the resources"), "{err}");
+        }
+
+        #[test]
+        fn a_package_that_lists_an_absent_resource_is_refused() {
+            let mut g = build(&[("a", "x")], true);
+            let pkg = g.packages.values_mut().next().unwrap();
+            pkg.resource_paths.push(path("ConfigMap-absent"));
+            let err = g.validate().unwrap_err();
+            assert!(err.to_string().contains("not among the resources"), "{err}");
         }
     }
 

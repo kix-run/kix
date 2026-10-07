@@ -130,6 +130,7 @@ pub fn of<'a>(
         });
     }
 
+    let listed_deletes: HashSet<&ResourceId> = listed_deletes.iter().collect();
     let mut removed = Vec::new();
     for id in deletes {
         if shown.deletes.contains_key(id) || listed_deletes.contains(id) {
