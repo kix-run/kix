@@ -606,7 +606,7 @@ impl StoreGraph {
             // kix, and that change has to stay visible.
             let hash = ann(m, keys::IDENTITY_HASH).unwrap_or_default();
             let matched = reference_path_by_hash.get(&hash).filter(|&&p| {
-                let diff_config = crate::manifest::diff::DiffConfig::default();
+                let diff_config = crate::manifest::diff::DiffConfig::default().in_order();
                 crate::manifest::diff::engine::structural_diff(
                     m,
                     &reference.resources[p].manifest,

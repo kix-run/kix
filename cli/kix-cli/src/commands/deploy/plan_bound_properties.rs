@@ -541,6 +541,12 @@ enum Change {
         package: usize,
         name: usize,
     },
+    /// A manifest's list of two or more items, such as `args` or `env`,
+    /// reversed.
+    ReverseList {
+        file: usize,
+        list: usize,
+    },
 }
 
 fn change() -> impl Strategy<Value = Change> {
@@ -603,6 +609,7 @@ fn change() -> impl Strategy<Value = Change> {
             package,
             name
         }),
+        (n(), n()).prop_map(|(file, list)| Change::ReverseList { file, list }),
     ]
 }
 
@@ -998,6 +1005,44 @@ fn apply(draft: &mut Draft, change: &Change) {
             }
             draft.set_manifest(record, &manifest);
         }
+        Change::ReverseList { file, list } => {
+            let Some(i) = pick(&manifests, *file) else {
+                return;
+            };
+            let Some(mut manifest) = draft.manifest(i) else {
+                return;
+            };
+            let mut found = Vec::new();
+            lists(&manifest, "", &mut found);
+            let Some(pointer) = pick(&found, *list) else {
+                return;
+            };
+            if let Some(Value::Array(items)) = manifest.pointer_mut(&pointer) {
+                items.reverse();
+            }
+            draft.set_manifest(i, &manifest);
+        }
+    }
+}
+
+/// JSON pointers to the lists in `v`, at `at`, that hold two or more items.
+fn lists(v: &Value, at: &str, found: &mut Vec<String>) {
+    match v {
+        Value::Object(o) => {
+            for (k, child) in o {
+                let k = k.replace('~', "~0").replace('/', "~1");
+                lists(child, &format!("{at}/{k}"), found);
+            }
+        }
+        Value::Array(a) => {
+            if a.len() >= 2 {
+                found.push(at.to_string());
+            }
+            for (j, child) in a.iter().enumerate() {
+                lists(child, &format!("{at}/{j}"), found);
+            }
+        }
+        _ => {}
     }
 }
 

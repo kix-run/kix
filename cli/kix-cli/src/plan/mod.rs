@@ -321,7 +321,7 @@ pub(crate) fn partition_propagation(diffs: Vec<Difference>) -> (Vec<Difference>,
 }
 
 pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
-    let config = DiffConfig::new("old", "new");
+    let config = DiffConfig::new("old", "new").in_order();
 
     let old_pkgs: BTreeMap<String, &PackageNode> = old
         .packages
@@ -1741,6 +1741,47 @@ mod diff_graph_tests {
                 new: Some("c-new".into())
             })
         );
+    }
+
+    #[test]
+    fn a_reordered_list_is_modified_and_shows_the_new_order() {
+        // The last `--auth` flag wins, so the order is the setting.
+        let deployment = |hash: &str, args: Value, app_first: bool| {
+            let app = json!({"name": "app", "args": args});
+            let proxy = json!({"name": "proxy"});
+            let containers = if app_first {
+                json!([app, proxy])
+            } else {
+                json!([proxy, app])
+            };
+            let spec = json!({"template": {"spec": {"containers": containers}}});
+            stamped("Deployment", "app", "web", ("app", "web"), hash, spec)
+        };
+        let mut old = baseline();
+        old[4] = deployment(&h("dep"), json!(["--auth=off", "--auth=on"]), true);
+        let cases = [
+            (
+                json!(["--auth=on", "--auth=off"]),
+                true,
+                "$.spec.template.spec.containers[app].args",
+            ),
+            (
+                json!(["--auth=off", "--auth=on"]),
+                false,
+                "$.spec.template.spec.containers",
+            ),
+        ];
+        for (args, app_first, path) in cases {
+            let mut new = baseline();
+            new[4] = deployment(&h("dep2"), args, app_first);
+            let d = diff_of(&old, &new);
+            let c = &d.changed[0];
+            assert!(c.dep_affected_resources.is_empty(), "{path}");
+            let (id, diffs) = &c.resource_diffs[0];
+            assert_eq!(id.to_string(), "Deployment/web@app");
+            let paths: Vec<&str> = diffs.iter().map(|d| d.path.as_str()).collect();
+            assert_eq!(paths, [path]);
+        }
     }
 
     #[test]
