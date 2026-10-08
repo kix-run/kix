@@ -23,7 +23,7 @@
 //! B"). Listing the records is a read of our own bookkeeping, not of the
 //! objects being reasoned about.
 
-use kix::build_source::BuildSource;
+use kix::build_source::Build;
 use kix::cluster::activation::{
     self, ActiveActivation, DeployingActivation, FailedActivation, KeptOrphanSource,
 };
@@ -65,7 +65,7 @@ impl FailedBaseline {
 pub async fn load_failed(
     client: &Client,
     ar: &ApiResource,
-    source: &dyn BuildSource,
+    build: Option<&Build>,
     cluster: &str,
     quiet: bool,
 ) -> FailedBaseline {
@@ -83,7 +83,7 @@ pub async fn load_failed(
             out.unresolved.push(record);
             continue;
         };
-        let closure = match resolve_closure(source, cluster, &hash, record.built_via.as_deref()) {
+        let closure = match resolve_closure(build, cluster, &hash, record.built_via.as_deref()) {
             Ok(Some(closure)) => closure,
             Ok(None) => {
                 out.unresolved.push(record);
@@ -181,22 +181,21 @@ fn short(hash: &str) -> &str {
     &hash[..8.min(hash.len())]
 }
 
-/// The build an Activation record names, unstamped: from `source`
-/// ([`BuildSource::deployed_build`]) by its identity hash, else from
-/// `built_via` or the local activation cache. `Ok(None)` when this machine
-/// has none of them.
+/// The build an Activation record names, unstamped: from the new `build`
+/// ([`Build::deployed_build`]) by its identity hash, else from `built_via`
+/// or the local activation cache. `Ok(None)` when this machine has none of
+/// them.
 ///
-/// A build from either must be the build the record names. `built_via`
-/// is written by whoever deployed, so a record could point at any store
-/// path on this machine, and `source` is not trusted to check its own.
+/// A build from `built_via` must be the build the record names: it is
+/// written by whoever deployed, so a record could point at any store path
+/// on this machine.
 pub fn record_graph(
-    source: &dyn BuildSource,
+    build: Option<&Build>,
     cluster: &str,
     identity_hash: &str,
     built_via: Option<&str>,
 ) -> Result<Option<StoreGraph>, String> {
-    if let Some(graph) = source.deployed_build(identity_hash)? {
-        kix::build_source::check_deployed_build(&graph, identity_hash)?;
+    if let Some(graph) = build.map_or(Ok(None), |b| b.deployed_build(identity_hash))? {
         return Ok(Some(graph));
     }
     let Some(dir) = result_dir(cluster, identity_hash, built_via) else {
@@ -217,17 +216,17 @@ pub fn record_graph(
     Ok(Some(graph))
 }
 
-/// The stamped manifests of a build, from `source`, from `built_via` when
+/// The stamped manifests of a build, from `build`, from `built_via` when
 /// that store path is on this machine, else through the local activation
 /// cache by identity hash. `Ok(None)` when none is available, and an error
 /// when one is but will not load.
 fn resolve_closure(
-    source: &dyn BuildSource,
+    build: Option<&Build>,
     cluster: &str,
     identity_hash: &str,
     built_via: Option<&str>,
 ) -> Result<Option<Vec<Value>>, String> {
-    let Some(mut graph) = record_graph(source, cluster, identity_hash, built_via)? else {
+    let Some(mut graph) = record_graph(build, cluster, identity_hash, built_via)? else {
         return Ok(None);
     };
     stamp_annotations(&mut graph);
@@ -268,14 +267,14 @@ pub struct KeptBaseline {
 /// how many there are so the plan's extra orphans have an explanation.
 pub fn load_kept(
     active: &ActiveActivation,
-    build_source: &dyn BuildSource,
+    build: Option<&Build>,
     cluster: &str,
     quiet: bool,
 ) -> KeptBaseline {
     let mut out = KeptBaseline::default();
     for source in &active.orphans_kept_from {
         match resolve_closure(
-            build_source,
+            build,
             cluster,
             &source.identity_hash,
             source.built_via.as_deref(),
@@ -489,57 +488,18 @@ mod tests {
             include_bytes!("../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle")
                 .to_vec();
         std::fs::write(&path, &bytes).unwrap();
-        let (source, graph, _) = crate::commands::deploy::read_bundle(
+        let build = crate::commands::bundle::read(
             &path,
             std::slice::from_ref(&path),
             "kix-enterprise-test",
             true,
         )
         .unwrap();
-        let hash = kix::eval::store_graph::store_hash(&graph.activation_path);
+        let hash = kix::eval::store_graph::store_hash(&build.graph().activation_path);
         let last = bytes.len() - 1;
         bytes[last] ^= 1;
         std::fs::write(&path, &bytes).unwrap();
-        assert!(resolve_closure(&source, "kix-enterprise-test", &hash, None).is_err());
-    }
-
-    /// A build source that gives `graph` for any identity hash.
-    struct Gives(StoreGraph);
-
-    impl BuildSource for Gives {
-        fn carried_sops_files(
-            &mut self,
-        ) -> Result<std::collections::HashMap<String, Vec<u8>>, String> {
-            Ok(Default::default())
-        }
-        fn provenance(&self) -> kix::build_source::Provenance {
-            Default::default()
-        }
-        fn deployed_build(&self, _identity_hash: &str) -> Result<Option<StoreGraph>, String> {
-            Ok(Some(self.0.clone()))
-        }
-    }
-
-    fn fixture_graph() -> StoreGraph {
-        let bytes: &[u8] =
-            include_bytes!("../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle");
-        kix::eval::bundle::Bundle::read(std::io::Cursor::new(bytes))
-            .unwrap()
-            .1
-    }
-
-    /// A source's deployed build is checked here: it must be the build the
-    /// record names, and valid.
-    #[test]
-    fn a_deployed_build_from_a_source_is_checked() {
-        let graph = fixture_graph();
-        let hash = kix::eval::store_graph::store_hash(&graph.activation_path);
-        let source = Gives(graph.clone());
-        assert!(record_graph(&source, "c", &hash, None).unwrap().is_some());
-        assert!(record_graph(&source, "c", &"0".repeat(32), None).is_err());
-        let mut invalid = graph;
-        invalid.cluster_name = "other".to_string();
-        assert!(record_graph(&Gives(invalid), "c", &hash, None).is_err());
+        assert!(resolve_closure(Some(&build), "kix-enterprise-test", &hash, None).is_err());
     }
 
     fn m(kind: &str, name: &str, hash: &str) -> Value {

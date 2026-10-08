@@ -1,28 +1,32 @@
-//! Where the build a command plans and deploys comes from.
+//! The build a command plans and deploys, and where it came from.
 //!
-//! A [`BuildSource`] is made together with the build it holds, as a
-//! [`StoreGraph`]: whoever makes a source reads and verifies the build first,
-//! and gives the graph only once it has passed. Plan and deploy then work
-//! from that one graph and ask the source only for what goes with it: the
-//! SOPS files the build carries, what the machine that made the build
-//! recorded about its source, and the earlier builds the cluster's
-//! Activation records name.
+//! A [`Build`] is a checked build. It is made in one of two ways, and each
+//! does every check once, so a caller cannot hold a build it has not
+//! checked:
 //!
-//! The caller trusts nothing a source gives it. It checks a build a source
-//! read with [`check_read_build`], a deployed build with
-//! [`check_deployed_build`], and the carried SOPS files with
-//! [`carried_sops_sources`]. It alone decides whether the build is in this
-//! machine's Nix store, and the digest the deploy receipt names.
+//! - [`Build::local`] loads and validates a result directory in this
+//!   machine's Nix store.
+//! - [`Build::carried`] reads a build made elsewhere, through a
+//!   [`CarriedBuild`] such as a bundle. It hashes the bytes it hands the
+//!   reader itself, and refuses a build that is not valid or not of the
+//!   named cluster.
 //!
-//! [`NixStore`] is a build in this machine's Nix store, built from the flake
-//! the command names. Another source can be implemented outside this crate:
-//! it reads its files and assembles them with [`StoreGraph::assemble`], as a
-//! result directory is read.
+//! What a carried build gives later is checked as it is asked for: its
+//! SOPS files against their store paths ([`Build::sops_sources`]), and an
+//! earlier build against the record that names it ([`Build::deployed_build`]).
+//! Which kind of build it is, never the source, decides whether it is in
+//! the local store and the digest the deploy receipt names.
+//!
+//! A [`CarriedBuild`] can be implemented outside this crate: it reads its
+//! files and assembles them with [`StoreGraph::assemble`], as a result
+//! directory is read.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::cluster::secrets::SopsSources;
 use crate::eval::store_graph::{StoreGraph, store_hash};
@@ -30,46 +34,21 @@ use crate::eval::store_path;
 use crate::manifest::keys;
 use crate::text::printable;
 
-/// The source of a build, beyond the build's graph.
-pub trait BuildSource {
-    /// The SOPS files the build carries, by store path, as read. For a build
-    /// this machine did not make, these are the only SOPS files its Secrets
-    /// may read: see [`carried_sops_sources`].
-    fn carried_sops_files(&mut self) -> Result<HashMap<String, Vec<u8>>, String>;
+/// A build made elsewhere and carried here, beyond its graph.
+pub trait CarriedBuild {
+    /// The SOPS files the build carries, by store path, as read. These are
+    /// the only SOPS files its Secrets may read.
+    fn sops_files(&mut self) -> Result<HashMap<String, Vec<u8>>, String>;
 
     /// What the machine that made the build recorded about its source, for
-    /// the deploy receipt. These are claims by whoever made the build. Not
-    /// asked of a build this machine made from the flake the command names,
-    /// whose source tree it reads itself.
+    /// the deploy receipt. These are claims by whoever made the build.
     fn provenance(&self) -> Provenance;
 
-    /// The build of the Activation record with `identity_hash`, read and
-    /// verified as the new build was. `Ok(None)` when this source holds no
-    /// such build, and the caller looks in the local Nix store. An error
-    /// when it holds the build and the build no longer verifies, which is
-    /// not the same as a missing build. The caller checks what it gets with
-    /// [`check_deployed_build`].
+    /// The build of the Activation record with `identity_hash`. `Ok(None)`
+    /// when this source holds no such build, and the caller looks in the
+    /// local Nix store. An error when it holds the build and the build no
+    /// longer reads, which is not the same as a missing build.
     fn deployed_build(&self, identity_hash: &str) -> Result<Option<StoreGraph>, String>;
-}
-
-/// A build in this machine's Nix store. Its SOPS sources are the files its
-/// Secrets name on this machine, and it holds no earlier build beyond what
-/// the store holds.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NixStore;
-
-impl BuildSource for NixStore {
-    fn carried_sops_files(&mut self) -> Result<HashMap<String, Vec<u8>>, String> {
-        Ok(HashMap::new())
-    }
-
-    fn provenance(&self) -> Provenance {
-        Provenance::default()
-    }
-
-    fn deployed_build(&self, _identity_hash: &str) -> Result<Option<StoreGraph>, String> {
-        Ok(None)
-    }
 }
 
 /// What the machine that made a build recorded about its source: the deploy
@@ -86,50 +65,131 @@ pub struct Provenance {
     pub builder: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Refuse a build a source read unless it is valid
-/// ([`StoreGraph::validate`]) and a build of `cluster`.
-pub fn check_read_build(graph: &StoreGraph, cluster: &str) -> Result<(), String> {
-    graph.validate().map_err(|e| e.to_string())?;
-    if graph.cluster_name != cluster {
-        return Err(format!(
-            "the build is for cluster '{}', not '{cluster}'",
-            printable(&graph.cluster_name)
-        ));
-    }
-    Ok(())
+/// A checked build. See the module doc.
+pub struct Build {
+    graph: StoreGraph,
+    origin: Origin,
 }
 
-/// Refuse a build a source gave for the Activation record with
-/// `identity_hash` ([`BuildSource::deployed_build`]) unless its record has
-/// that identity hash and the build is valid.
-pub fn check_deployed_build(graph: &StoreGraph, identity_hash: &str) -> Result<(), String> {
-    let found = store_hash(&graph.activation_path);
-    if found != identity_hash {
-        return Err(format!(
-            "the build source gave activation {} for activation {}",
-            printable(&found),
-            printable(identity_hash)
-        ));
-    }
-    graph
-        .validate()
-        .map_err(|e| format!("the build source's activation {identity_hash}: {e}"))
+enum Origin {
+    Local,
+    /// `sha256` is of the bytes [`Build::carried`] handed `source`.
+    Carried {
+        source: Box<dyn CarriedBuild>,
+        sha256: String,
+    },
 }
 
-/// The SOPS sources of a build this machine did not make: only the files
-/// the build carries (`files`, from [`BuildSource::carried_sops_files`]).
-/// Keeps the files a Secret in `manifests` names, and refuses one whose
-/// store path is not made from its bytes. A SOPS source comes from
-/// `builtins.path` of one file, so its path has no references. With
-/// `placeholders`, nothing is decrypted: each Secret gets placeholder
-/// values, so a plan made before anyone approved it reads no secret.
-pub fn carried_sops_sources(
+impl Build {
+    /// The build in the result directory `result_dir`, in this machine's
+    /// Nix store, validated as it is loaded. Its Secrets read SOPS files
+    /// from this machine.
+    pub fn local(result_dir: &Path, status: &dyn Fn(&str)) -> Result<Build, String> {
+        let graph = StoreGraph::from_result_dir_with_status(result_dir, status)
+            .map_err(|e| e.to_string())?;
+        Ok(Build {
+            graph,
+            origin: Origin::Local,
+        })
+    }
+
+    /// The build `read` makes of `bytes`, which must be valid and a build
+    /// of `cluster`. The receipt names the SHA-256 of `bytes`, whatever the
+    /// source claims.
+    pub fn carried<S: CarriedBuild + 'static>(
+        bytes: Vec<u8>,
+        cluster: &str,
+        read: impl FnOnce(Vec<u8>) -> Result<(S, StoreGraph), String>,
+    ) -> Result<Build, String> {
+        let sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let (source, graph) = read(bytes)?;
+        graph.validate().map_err(|e| e.to_string())?;
+        if graph.cluster_name != cluster {
+            return Err(format!(
+                "the build is for cluster '{}', not '{cluster}'",
+                printable(&graph.cluster_name)
+            ));
+        }
+        Ok(Build {
+            graph,
+            origin: Origin::Carried {
+                source: Box::new(source),
+                sha256,
+            },
+        })
+    }
+
+    pub fn graph(&self) -> &StoreGraph {
+        &self.graph
+    }
+
+    /// Stamp the build's manifests ([`crate::manifest::stamp::stamp_annotations`]).
+    pub fn stamp(&mut self) {
+        crate::manifest::stamp::stamp_annotations(&mut self.graph);
+    }
+
+    /// Whether the build is in this machine's Nix store, so later commands
+    /// can find it there.
+    pub fn is_local(&self) -> bool {
+        matches!(self.origin, Origin::Local)
+    }
+
+    /// For a carried build, what its maker recorded and the SHA-256 of the
+    /// bytes read. `None` for a local build, whose source tree is read here.
+    pub fn carried_provenance(&self) -> Option<(Provenance, &str)> {
+        match &self.origin {
+            Origin::Local => None,
+            Origin::Carried { source, sha256 } => Some((source.provenance(), sha256)),
+        }
+    }
+
+    /// The SOPS sources of the build's Secrets. A local build reads the
+    /// files they name on this machine. A carried build reads only the files
+    /// it carries ([`carried_sops`]). With `placeholders`, nothing is
+    /// decrypted: each Secret gets placeholder values, so a plan made before
+    /// anyone approved it reads no secret.
+    pub fn sops_sources(&mut self, placeholders: bool) -> Result<SopsSources, String> {
+        let Origin::Carried { source, .. } = &mut self.origin else {
+            return Ok(SopsSources::Local);
+        };
+        let manifests = self.graph.resources.values().map(|r| &r.manifest);
+        carried_sops(source.sops_files()?, manifests, placeholders)
+    }
+
+    /// The build of the Activation record with `identity_hash` that this
+    /// build carries, refused unless its record has that identity hash and
+    /// it is valid. `Ok(None)` for a local build.
+    pub fn deployed_build(&self, identity_hash: &str) -> Result<Option<StoreGraph>, String> {
+        let Origin::Carried { source, .. } = &self.origin else {
+            return Ok(None);
+        };
+        let Some(graph) = source.deployed_build(identity_hash)? else {
+            return Ok(None);
+        };
+        let found = store_hash(&graph.activation_path);
+        if found != identity_hash {
+            return Err(format!(
+                "the build source gave activation {} for activation {}",
+                printable(&found),
+                printable(identity_hash)
+            ));
+        }
+        graph
+            .validate()
+            .map_err(|e| format!("the build source's activation {identity_hash}: {e}"))?;
+        Ok(Some(graph))
+    }
+}
+
+/// Keeps the carried `files` a Secret in `manifests` names, and refuses one
+/// whose store path is not made from its bytes. A SOPS source comes from
+/// `builtins.path` of one file, so its path has no references.
+fn carried_sops<'a>(
     mut files: HashMap<String, Vec<u8>>,
-    manifests: &[Value],
+    manifests: impl Iterator<Item = &'a Value>,
     placeholders: bool,
 ) -> Result<SopsSources, String> {
     let named: HashSet<&str> = manifests
-        .iter()
         .filter_map(|m| keys::get(m, keys::SOPS_SOURCE))
         .collect();
     files.retain(|path, _| named.contains(path.as_str()));
@@ -157,16 +217,50 @@ mod tests {
         Bundle::read(std::io::Cursor::new(bytes)).unwrap().1
     }
 
+    /// A source that gives `.0` as its build of any record.
+    struct Gives(StoreGraph);
+
+    impl CarriedBuild for Gives {
+        fn sops_files(&mut self) -> Result<HashMap<String, Vec<u8>>, String> {
+            Ok(HashMap::new())
+        }
+        fn provenance(&self) -> Provenance {
+            Provenance::default()
+        }
+        fn deployed_build(&self, _identity_hash: &str) -> Result<Option<StoreGraph>, String> {
+            Ok(Some(self.0.clone()))
+        }
+    }
+
+    /// A carried build of `graph`, giving `deployed` for any record.
+    fn carried(graph: &StoreGraph, deployed: &StoreGraph) -> Result<Build, String> {
+        let (graph, deployed) = (graph.clone(), deployed.clone());
+        Build::carried(b"bytes".to_vec(), "kix-enterprise-test", |_| {
+            Ok((Gives(deployed), graph))
+        })
+    }
+
     /// A source that gives an invalid build, or a build of another cluster,
     /// is refused.
     #[test]
-    fn a_read_build_must_be_valid_and_of_the_cluster() {
+    fn a_carried_build_must_be_valid_and_of_the_cluster() {
         let graph = fixture();
-        assert!(check_read_build(&graph, "kix-enterprise-test").is_ok());
-        assert!(check_read_build(&graph, "other").is_err());
-        let mut invalid = graph;
-        invalid.cluster_name = "other".to_string();
-        assert!(check_read_build(&invalid, "other").is_err());
+        assert!(carried(&graph, &graph).is_ok());
+        let mut other = graph.clone();
+        other.cluster_name = "other".to_string();
+        assert!(carried(&other, &graph).is_err());
+        let mut invalid = graph.clone();
+        invalid.resources.remove(&invalid.activation_path.clone());
+        assert!(carried(&invalid, &graph).is_err());
+    }
+
+    /// The digest is of the bytes the core read, whatever the source says.
+    #[test]
+    fn a_carried_build_names_the_digest_of_the_bytes_read() {
+        let graph = fixture();
+        let build = carried(&graph, &graph).unwrap();
+        let (_, sha256) = build.carried_provenance().unwrap();
+        assert_eq!(sha256, format!("{:x}", Sha256::digest(b"bytes")));
     }
 
     /// A deployed build must be the build the record names, and valid.
@@ -174,11 +268,13 @@ mod tests {
     fn a_deployed_build_must_have_the_identity_hash_and_be_valid() {
         let graph = fixture();
         let hash = store_hash(&graph.activation_path);
-        assert!(check_deployed_build(&graph, &hash).is_ok());
-        assert!(check_deployed_build(&graph, &"0".repeat(32)).is_err());
-        let mut invalid = graph;
+        let build = carried(&graph, &graph).unwrap();
+        assert!(build.deployed_build(&hash).unwrap().is_some());
+        assert!(build.deployed_build(&"0".repeat(32)).is_err());
+        let mut invalid = graph.clone();
         invalid.resources.remove(&invalid.activation_path.clone());
-        assert!(check_deployed_build(&invalid, &hash).is_err());
+        let build = carried(&graph, &invalid).unwrap();
+        assert!(build.deployed_build(&hash).is_err());
     }
 
     fn secret(source: &str) -> Value {
@@ -197,9 +293,9 @@ mod tests {
         let path = path_for(Method::Source, &bytes, &[], "db.sops.yaml");
         let manifests = [secret(&path)];
         let good = HashMap::from([(path.clone(), bytes)]);
-        assert!(carried_sops_sources(good, &manifests, true).is_ok());
+        assert!(carried_sops(good, manifests.iter(), true).is_ok());
         let swapped = HashMap::from([(path, b"x: 2\n".to_vec())]);
-        assert!(carried_sops_sources(swapped, &manifests, true).is_err());
+        assert!(carried_sops(swapped, manifests.iter(), true).is_err());
     }
 
     /// A carried file no Secret names, such as a marker with references,
@@ -208,6 +304,6 @@ mod tests {
     fn a_carried_file_no_secret_names_is_left_out() {
         let marker = path_for(Method::Text, b"x", &[], "kix-untracked-ref");
         let files = HashMap::from([(marker, b"other bytes".to_vec())]);
-        assert!(carried_sops_sources(files, &[], true).is_ok());
+        assert!(carried_sops(files, std::iter::empty(), true).is_ok());
     }
 }

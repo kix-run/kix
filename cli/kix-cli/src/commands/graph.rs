@@ -27,10 +27,14 @@ impl CommandResponse for GraphResponse {
 pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
     let manifests = match &args.bundle {
         Some(path) => {
-            let (_, mut graph, _) = super::deploy::read_bundle(path, &[], &args.cluster, true)?;
-            kix::manifest::stamp::stamp_annotations(&mut graph);
-            let mut manifests: Vec<serde_json::Value> =
-                graph.resources.into_values().map(|r| r.manifest).collect();
+            let mut build = super::bundle::read(path, &[], &args.cluster, true)?;
+            build.stamp();
+            let mut manifests: Vec<serde_json::Value> = build
+                .graph()
+                .resources
+                .values()
+                .map(|r| r.manifest.clone())
+                .collect();
             manifests.sort_by_cached_key(kix::eval::cli_backend::manifest_sort_key);
             manifests
         }

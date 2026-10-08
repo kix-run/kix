@@ -12,7 +12,6 @@ use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
 use crate::commands::baseline;
-use kix::build_source::NixStore;
 use kix::cluster::activation;
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch::{self, SharedOrphan};
@@ -882,7 +881,7 @@ async fn plan_rollback(
             baseline::report_in_flight(&record, quiet);
             baseline::FailedBaseline::default()
         }
-        None => baseline::load_failed(client, activation_ar, &NixStore, cluster, quiet).await,
+        None => baseline::load_failed(client, activation_ar, None, cluster, quiet).await,
     };
 
     // The merged set is for the plan display and for prune ordering only.
@@ -892,7 +891,7 @@ async fn plan_rollback(
     // target declares it at the same hash the plan would skip it and the
     // rollback would finalize claiming an object that is not there.
     // Builds whose orphans an earlier warn-only deploy kept, as in deploy.
-    let kept_baseline = baseline::load_kept(current, &NixStore, cluster, quiet);
+    let kept_baseline = baseline::load_kept(current, None, cluster, quiet);
     let baseline_manifests = kix::cluster::apply::baseline_manifests(
         &current_manifests,
         &[

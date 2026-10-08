@@ -42,7 +42,6 @@ use std::path::PathBuf;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
-use kix::build_source::NixStore;
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::prune_guard::{PruneGuard, Pruned};
@@ -176,7 +175,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     // Orphans a warn-only deploy kept. The cached build is usually the one
     // that deploy made, so the diff above cannot see them.
     let kept_baseline = match &records.active {
-        Some(active) => baseline::load_kept(active, &NixStore, &cluster, ctx.global.quiet),
+        Some(active) => baseline::load_kept(active, None, &cluster, ctx.global.quiet),
         None => baseline::KeptBaseline::default(),
     };
     let kept_garbage = kept_garbage(

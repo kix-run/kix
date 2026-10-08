@@ -35,26 +35,19 @@ use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
-use kix::build_source::{BuildSource, Provenance};
+use kix::build_source::{Build, Provenance};
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::keys;
 
 use super::shared;
-use crate::commands::deploy::BuildOrigin;
 
 /// The receipt for a build about to be deployed: for a build made here,
 /// from the flake at `flake_ref` ([`build_receipt`]), and otherwise from
-/// what the machine that made it recorded, as `source` gives it
-/// ([`from_provenance`]).
-pub fn of_build(
-    graph: &StoreGraph,
-    origin: &BuildOrigin,
-    source: &dyn BuildSource,
-    flake_ref: &str,
-) -> Value {
-    match origin {
-        BuildOrigin::LocalStore => build_receipt(graph, flake_ref),
-        BuildOrigin::Bundle { sha256 } => from_provenance(graph, source.provenance(), sha256),
+/// what the machine that made it recorded ([`from_provenance`]).
+pub fn of_build(build: &Build, flake_ref: &str) -> Value {
+    match build.carried_provenance() {
+        None => build_receipt(build.graph(), flake_ref),
+        Some((made, sha256)) => from_provenance(build.graph(), made, sha256),
     }
 }
 
@@ -551,11 +544,9 @@ mod tests {
         );
         let file = tempfile::NamedTempFile::new().unwrap();
         contents.write(file.as_file()).unwrap();
-        let (source, graph, sha256) =
-            crate::commands::deploy::read_bundle(file.path(), &[], "kix-enterprise-test", true)
-                .unwrap();
-        let origin = BuildOrigin::Bundle { sha256 };
-        let r = of_build(&graph, &origin, &source, "unused");
+        let build =
+            crate::commands::bundle::read(file.path(), &[], "kix-enterprise-test", true).unwrap();
+        let r = of_build(&build, "unused");
         let bytes = std::fs::read(file.path()).unwrap();
         let digest = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));
         assert_eq!(r["source"]["revision"], "abc");
@@ -566,7 +557,9 @@ mod tests {
         assert_eq!(r["deployer"]["kixVersion"], env!("CARGO_PKG_VERSION"));
         assert_eq!(
             r["activationHash"],
-            json!(kix::eval::store_graph::store_hash(&graph.activation_path))
+            json!(kix::eval::store_graph::store_hash(
+                &build.graph().activation_path
+            ))
         );
     }
 

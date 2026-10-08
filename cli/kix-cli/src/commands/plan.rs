@@ -57,7 +57,7 @@ pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Resu
     // A plan decrypts no SOPS file the build carries: those Secrets get
     // placeholder values, so planning before anyone has approved reads no
     // secret.
-    p.sops = p.sops_sources(true)?;
+    p.sops = p.build.sops_sources(true).map_err(|e| miette!("{e}"))?;
     let report = match &p.pre_client {
         Some(client) => Some(dry_run(&p, args, client.clone(), ctx)?),
         None => None,
@@ -348,7 +348,7 @@ pub(crate) fn document(
     let has_deployed = deployed.is_some();
     let answers: &[DryRunAnswer] = report.map(|r| r.answers.as_slice()).unwrap_or(&[]);
     let drift = Overlay {
-        new_graph: &p.new_graph,
+        new_graph: p.build.graph(),
         deployed,
     }
     .apply(&mut p.pkg_diff, answers);
@@ -360,11 +360,11 @@ pub(crate) fn document(
         let old = match &p.old_graph {
             Some(old) => old,
             None => {
-                rebuilt = StoreGraph::synthesize(&p.old_manifests, &p.new_graph);
+                rebuilt = StoreGraph::synthesize(&p.old_manifests, p.build.graph());
                 &rebuilt
             }
         };
-        Some(manifest_index(old, &p.new_graph, answers))
+        Some(manifest_index(old, p.build.graph(), answers))
     } else {
         None
     };
@@ -377,7 +377,7 @@ pub(crate) fn document(
     let mut doc = Plan::new(
         made_by,
         &p.cluster,
-        Build::of(&p.new_graph),
+        Build::of(p.build.graph()),
         &p.pkg_diff,
         detail,
         &p.migration_pairs,

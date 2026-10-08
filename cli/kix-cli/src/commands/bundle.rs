@@ -3,19 +3,19 @@
 //!
 //! A bundle (`kix::eval::bundle`) is a build as one file that loads without
 //! Nix. `--bundle` makes it the new side of `kix plan`, `kix deploy` and
-//! `kix graph`, through [`BundleSource`]. `--deployed-bundle` supplies
+//! `kix graph`, through [`read`]. `--deployed-bundle` supplies
 //! builds the cluster's records name, which kix otherwise looks for in the
 //! local Nix store.
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Cursor};
+use std::io::{BufReader, Cursor, Read};
 use std::path::{Path, PathBuf};
 
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::json;
 
-use kix::build_source::{BuildSource, Provenance};
+use kix::build_source::{Build, CarriedBuild, Provenance};
 use kix::eval::build::build_cluster_activation_with_status;
 use kix::eval::bundle::{self, Bundle, BundleError, OpenBundle};
 use kix::eval::store_graph::{StoreGraph, store_hash};
@@ -25,39 +25,51 @@ use crate::cli::BundleArgs;
 
 use super::CommandContext;
 
-/// A bundle as the source of the build `--bundle` names, with the
-/// `--deployed-bundle` files, by the identity hash of their Activation
-/// record. Made only by [`BundleSource::read`], which verifies the bundle
-/// first.
-#[derive(Debug)]
-pub struct BundleSource {
+/// The build in the bundle at `path`, with the `deployed` bundles, which
+/// must be a build of `cluster`. Its result directory is
+/// `bundle:sha256:<sha256>`.
+pub(crate) fn read(path: &Path, deployed: &[PathBuf], cluster: &str, quiet: bool) -> Result<Build> {
+    if !quiet {
+        crate::say!("Reading bundle {}...", path.display());
+    }
+    let bytes = read_file(path)?;
+    let deployed = deployed_by_hash(deployed)?;
+    Build::carried(bytes, cluster, |bytes| {
+        let (bundle, graph) = Bundle::read(Cursor::new(bytes)).map_err(|e| e.to_string())?;
+        Ok((BundleSource { bundle, deployed }, graph))
+    })
+    .map_err(|e| miette!("cannot use the bundle {}: {e}", path.display()))
+}
+
+/// The bytes of the bundle file at `path`. Reads no more than a bundle may
+/// hold, so a larger file is refused before it fills memory.
+fn read_file(path: &Path) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    open_file(path)?
+        .take(bundle::MAX_STORED_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| miette!("cannot read the bundle {}: {e}", path.display()))?;
+    if bytes.len() as u64 > bundle::MAX_STORED_BYTES {
+        return Err(miette!(
+            "the bundle {} is larger than the {} bytes a bundle may hold",
+            path.display(),
+            bundle::MAX_STORED_BYTES
+        ));
+    }
+    Ok(bytes)
+}
+
+/// A bundle as a build made elsewhere, with the `--deployed-bundle` files,
+/// by the identity hash of their Activation record.
+struct BundleSource {
     bundle: Bundle<Cursor<Vec<u8>>>,
     deployed: HashMap<String, PathBuf>,
 }
 
-impl BundleSource {
-    /// The source and verified build of `bytes`, the bundle at `path`, with
-    /// the `deployed` files opened. The build's result directory is
-    /// `bundle:sha256:<sha256>`.
-    pub fn read(
-        path: &Path,
-        bytes: Vec<u8>,
-        deployed: &[PathBuf],
-    ) -> Result<(BundleSource, StoreGraph)> {
-        let (bundle, graph) = Bundle::read(Cursor::new(bytes))
-            .map_err(|e| miette!("cannot use the bundle {}: {e}", path.display()))?;
-        let source = BundleSource {
-            bundle,
-            deployed: deployed_by_hash(deployed)?,
-        };
-        Ok((source, graph))
-    }
-}
-
-impl BuildSource for BundleSource {
+impl CarriedBuild for BundleSource {
     /// The bundle's files that are neither manifests nor its index. Each is
     /// checked against its store path again as it is read.
-    fn carried_sops_files(&mut self) -> Result<HashMap<String, Vec<u8>>, String> {
+    fn sops_files(&mut self) -> Result<HashMap<String, Vec<u8>>, String> {
         self.bundle
             .other_files()
             .map_err(|e| format!("cannot read the bundle's SOPS files: {e}"))
@@ -91,7 +103,7 @@ fn open_file(path: &Path) -> Result<BufReader<File>> {
 
 /// Read and verify the bundle at `path`, and give it with its build.
 fn load(path: &Path) -> Result<(Bundle<Cursor<Vec<u8>>>, StoreGraph)> {
-    let bytes = super::deploy::read_bundle_file(path)?;
+    let bytes = read_file(path)?;
     Bundle::read(Cursor::new(bytes))
         .map_err(|e| miette!("cannot use the bundle {}: {e}", path.display()))
 }
