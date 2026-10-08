@@ -54,7 +54,7 @@ impl LoadedBundle {
             .0
             .other_files()
             .map_err(|e| miette!("cannot read the bundle's SOPS files: {e}"))?;
-        SopsSources::from_bundle(sources, placeholders)
+        SopsSources::carried(sources, placeholders)
             .map_err(|e| miette!("cannot write the bundle's SOPS files: {e}"))
     }
 }

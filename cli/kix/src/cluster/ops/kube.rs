@@ -101,7 +101,8 @@ pub struct KubeOpsConfig {
     /// operator, whose model is resume-on-requeue: a reconcile that returns
     /// early will be retried, so failing the record would fight it.
     pub mark_failed_on_abort: bool,
-    /// Where SOPS sources come from: this machine, or a bundle's files.
+    /// Where SOPS sources come from: this machine, or the files a build
+    /// carries.
     pub sops: secrets::SopsSources,
 }
 
