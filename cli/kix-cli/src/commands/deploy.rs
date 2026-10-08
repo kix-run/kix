@@ -1835,11 +1835,21 @@ pub(crate) fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
     }
 }
 
+/// The planning flags of an operator deploy. The operator always prunes, so
+/// the objects check treats every orphan as deleted, as the operator will.
+fn operator_plan_args(args: &PlanArgs) -> PlanArgs {
+    PlanArgs {
+        prune: true,
+        prune_mode: None,
+        ..args.clone()
+    }
+}
+
 fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // The plan and the objects check of the direct path. The operator plans
     // again against the live objects, but a build whose plan hides an
     // object is refused here, before it reaches the cluster.
-    let Some(p) = prepare(&args.plan, ctx)? else {
+    let Some(p) = prepare(&operator_plan_args(&args.plan), ctx)? else {
         return Ok(());
     };
     let activation_name = p
@@ -1849,6 +1859,14 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     if !ctx.global.quiet {
         plan::print_package_plan(&p.pkg_diff, ctx.global.verbose > 0);
         plan::print_plan_summary(&p.pkg_diff);
+        print!(
+            "{}",
+            render_plan_orphans(
+                &p.orphan_rids,
+                "will be deleted; the operator always prunes"
+            )
+        );
+        super::shared_orphans::print(&p.shared_orphans);
     }
     // Operator-mode is non-interactive on the operator side, so the CLI
     // must enforce the migration gate before handing off the Activation CR.
@@ -2666,6 +2684,16 @@ pub(crate) mod plan_bound_tests {
         match result {
             Ok(objects) => panic!("the deploy was not refused: {objects:?}"),
             Err(unshown) => unshown.writes,
+        }
+    }
+
+    /// The operator always prunes, so an operator deploy's check holds every
+    /// delete to the plan, whatever the prune flags say.
+    #[test]
+    fn an_operator_deploy_is_checked_as_one_that_prunes() {
+        for extra in [&[][..], &["--prune-mode", "no"][..]] {
+            let args = operator_plan_args(&deploy_args(&[&["--operator"][..], extra].concat()));
+            assert_eq!(prune_policy_for(&args), PrunePolicy::Delete, "{extra:?}");
         }
     }
 
