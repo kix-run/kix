@@ -81,9 +81,21 @@ pub async fn load_failed(
             out.unresolved.push(record);
             continue;
         };
-        let Some(closure) = resolve_closure(cluster, &hash, record.built_via.as_deref()) else {
-            out.unresolved.push(record);
-            continue;
+        let closure = match resolve_closure(cluster, &hash, record.built_via.as_deref()) {
+            Ok(Some(closure)) => closure,
+            Ok(None) => {
+                out.unresolved.push(record);
+                continue;
+            }
+            Err(e) => {
+                warn_unusable_build(
+                    &record.name,
+                    &e,
+                    "This plan leaves out what that failed deployment applied.",
+                );
+                out.unresolved.push(record);
+                continue;
+            }
         };
         if !quiet {
             crate::say!(
@@ -179,7 +191,7 @@ pub fn record_graph(
     identity_hash: &str,
     built_via: Option<&str>,
 ) -> Result<Option<StoreGraph>, String> {
-    if let Some(graph) = crate::commands::bundle::deployed_graph(identity_hash) {
+    if let Some(graph) = crate::commands::bundle::deployed_graph(identity_hash)? {
         return Ok(Some(graph));
     }
     let Some(dir) = result_dir(cluster, identity_hash, built_via) else {
@@ -200,23 +212,37 @@ pub fn record_graph(
     Ok(Some(graph))
 }
 
-/// The stamped manifests of a build, from `built_via` when that store path
-/// is on this machine, else through the local activation cache by identity
-/// hash. `None` when neither is available or the build will not load.
+/// The stamped manifests of a build, from a `--deployed-bundle`, from
+/// `built_via` when that store path is on this machine, else through the
+/// local activation cache by identity hash. `Ok(None)` when none is
+/// available, and an error when one is but will not load.
 fn resolve_closure(
     cluster: &str,
     identity_hash: &str,
     built_via: Option<&str>,
-) -> Option<Vec<Value>> {
-    let mut graph = record_graph(cluster, identity_hash, built_via).ok()??;
+) -> Result<Option<Vec<Value>>, String> {
+    let Some(mut graph) = record_graph(cluster, identity_hash, built_via)? else {
+        return Ok(None);
+    };
     stamp_annotations(&mut graph);
-    Some(
+    Ok(Some(
         graph
             .resources
             .values()
             .map(|r| r.manifest.clone())
             .collect(),
-    )
+    ))
+}
+
+/// Say, even under `--quiet`, that the build of `activation` was found but
+/// will not load, and what the plan does without it. A plan made without
+/// it must show why.
+pub fn warn_unusable_build(activation: &str, error: &str, without_it: &str) {
+    eprintln!(
+        "{} cannot use the build of activation {}: {error}. {without_it}",
+        output::yellow("warning:"),
+        output::bold(activation),
+    );
 }
 
 /// The builds an earlier deploy kept orphans from, resolved to closures.
@@ -238,11 +264,19 @@ pub fn load_kept(active: &ActiveActivation, cluster: &str, quiet: bool) -> KeptB
     let mut out = KeptBaseline::default();
     for source in &active.orphans_kept_from {
         match resolve_closure(cluster, &source.identity_hash, source.built_via.as_deref()) {
-            Some(closure) => {
+            Ok(Some(closure)) => {
                 out.closures.push(closure);
                 out.sources.push(source.clone());
             }
-            None => out.unresolved.push(source.clone()),
+            Ok(None) => out.unresolved.push(source.clone()),
+            Err(e) => {
+                warn_unusable_build(
+                    &source.activation,
+                    &e,
+                    "This plan cannot list or delete the orphans an earlier deploy kept from it.",
+                );
+                out.unresolved.push(source.clone());
+            }
         }
     }
     if quiet {
@@ -428,6 +462,30 @@ mod tests {
     use super::*;
     use kix::manifest::keys;
     use serde_json::json;
+
+    /// A `--deployed-bundle` that no longer verifies is an error for the
+    /// build it holds, not a build this machine lacks: the caller says so.
+    /// The only test in this binary that registers deployed bundles.
+    #[test]
+    fn a_deployed_bundle_that_does_not_verify_is_not_taken_as_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("deployed.kixbundle");
+        let mut bytes =
+            include_bytes!("../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle")
+                .to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        crate::commands::bundle::register_deployed(std::slice::from_ref(&path)).unwrap();
+        let activation = crate::commands::bundle::load(&path)
+            .unwrap()
+            .0
+            .record()
+            .to_string();
+        let hash = kix::eval::store_graph::store_hash(std::path::Path::new(&activation));
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(resolve_closure("kix-enterprise-test", &hash, None).is_err());
+    }
 
     fn m(kind: &str, name: &str, hash: &str) -> Value {
         json!({

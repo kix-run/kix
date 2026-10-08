@@ -23,6 +23,7 @@ pub const EXIT_STALE: i32 = 4;
 pub enum Rule {
     Cluster,
     NewBuild,
+    Objects,
     DeployedBuild,
     Flags,
     NewRefusal,
@@ -36,6 +37,7 @@ impl Rule {
         match self {
             Rule::Cluster => "cluster",
             Rule::NewBuild => "new build",
+            Rule::Objects => "objects",
             Rule::DeployedBuild => "deployed build",
             Rule::Flags => "flags",
             Rule::NewRefusal => "new refusal",
@@ -64,8 +66,9 @@ pub struct Comparison {
     /// make that check (a `kix diff` plan checks no refusals or prune).
     pub skipped: Vec<Rule>,
     /// The two Kix binaries, reviewed then fresh, when they differ. Reported
-    /// and never refused: Kix has no versioning process that says whether
-    /// two binaries plan the same way.
+    /// and not refused: the objects digest already holds the deploy to the
+    /// objects and build files that were reviewed, and the binary is chosen
+    /// by whoever runs the deploy.
     pub kix_differs: Option<(String, String)>,
 }
 
@@ -113,6 +116,25 @@ pub fn unusable(reviewed: &Plan) -> Option<String> {
              deployed build available, or a `kix plan`"
                 .into(),
         );
+    }
+    // The digest is what holds a deploy to the reviewed objects, so a plan
+    // without one, or whose list does not give it, cannot be used.
+    match (&reviewed.objects_digest, &reviewed.objects) {
+        (Some(digest), Some(objects)) if *digest == super::objects::digest(objects) => {}
+        (Some(_), Some(_)) => {
+            return Some(
+                "the objects it lists do not give its objects_digest, so it was edited after \
+                 `kix plan` wrote it"
+                    .into(),
+            );
+        }
+        _ => {
+            return Some(
+                "the plan does not list the objects a deploy writes and deletes, which only \
+                 `kix plan` does; save a plan from `kix plan`"
+                    .into(),
+            );
+        }
     }
     if reviewed.made_by == MadeBy::Builds {
         return Some(
@@ -211,6 +233,10 @@ pub fn compare(reviewed: &Plan, fresh: &Plan) -> Comparison {
                 fresh.build.store_path
             )],
         );
+    }
+
+    if reviewed.objects_digest.is_none() || reviewed.objects_digest != fresh.objects_digest {
+        mismatch(Rule::Objects, objects_differ(reviewed, fresh));
     }
 
     // A record without an identity hash (written by an older Kix) is
@@ -366,6 +392,67 @@ pub fn compare(reviewed: &Plan, fresh: &Plan) -> Comparison {
     }
 }
 
+/// How many differing objects a mismatch names.
+const NAMED_OBJECTS: usize = 20;
+
+/// The objects the fresh plan writes or deletes that the reviewed one does
+/// not, and the other way round, one line each.
+fn objects_differ(reviewed: &Plan, fresh: &Plan) -> Vec<String> {
+    let (Some(r), Some(f)) = (&reviewed.objects, &fresh.objects) else {
+        return vec!["one of the plans lists no objects, so they cannot be compared".into()];
+    };
+    let write = |w: &super::document::ObjectWrite| {
+        format!(
+            "{} (store hash {}, package {})",
+            object_id(&w.kind, &w.namespace, &w.name),
+            w.store_hash,
+            w.package
+        )
+    };
+    let delete = |d: &super::document::ObjectDelete| object_id(&d.kind, &d.namespace, &d.name);
+    let sets = |p: &super::document::Objects| -> (BTreeSet<String>, BTreeSet<String>) {
+        (
+            p.writes.iter().map(write).collect(),
+            p.deletes.iter().map(delete).collect(),
+        )
+    };
+    let ((rw, rd), (fw, fd)) = (sets(r), sets(f));
+    let mut items: Vec<String> = Vec::new();
+    items.extend(fw.difference(&rw).map(|w| format!("{w} would be written")));
+    items.extend(
+        rw.difference(&fw)
+            .map(|w| format!("{w} is no longer written")),
+    );
+    items.extend(fd.difference(&rd).map(|d| format!("{d} would be deleted")));
+    items.extend(
+        rd.difference(&fd)
+            .map(|d| format!("{d} is no longer deleted")),
+    );
+    if items.is_empty() {
+        items.push(format!(
+            "the plan's objects digest is {}, this deploy's is {}",
+            reviewed.objects_digest.as_deref().unwrap_or("none"),
+            fresh.objects_digest.as_deref().unwrap_or("none")
+        ));
+    }
+    if items.len() > NAMED_OBJECTS {
+        let more = items.len() - NAMED_OBJECTS;
+        items.truncate(NAMED_OBJECTS);
+        items.push(format!("and {more} more"));
+    }
+    items
+}
+
+/// An object's id as the plan shows it, its build-supplied text escaped.
+fn object_id(kind: &str, namespace: &str, name: &str) -> String {
+    let id = kix::manifest::types::ResourceId {
+        kind: kind.to_string(),
+        namespace: namespace.to_string(),
+        name: name.to_string(),
+    };
+    kix::text::printable_up_to(&id.display_id(), 300)
+}
+
 fn or_unknown(hash: &Option<String>) -> &str {
     hash.as_deref().unwrap_or("with no identity hash")
 }
@@ -466,8 +553,8 @@ pub fn render_text(c: &Comparison, reviewed: &Plan, path: &str) -> String {
             out,
             "{}",
             output::yellow(&format!(
-                "note: the plan was made by {r}, and this deploy runs {f}. Kix has no versioning \
-                 process yet, so this is not refused."
+                "note: the plan was made by {r}, and this deploy runs {f}. The deploy writes \
+                 and deletes the objects the plan lists, so this is not refused."
             ))
         );
     }
@@ -481,7 +568,8 @@ pub fn render_text(c: &Comparison, reviewed: &Plan, path: &str) -> String {
 mod tests {
     use super::super::document::{
         AdmissionRefusal, Build, Conflict, ConflictOwner, DeployedBuild, DriftChange, KixBuild,
-        NotCheckedReason, PruneEntry, RefusalReason, UncheckedObject, UncheckedReason,
+        NotCheckedReason, ObjectDelete, ObjectWrite, Objects, PruneEntry, RefusalReason,
+        UncheckedObject, UncheckedReason, WriteChange,
     };
     use super::*;
 
@@ -522,6 +610,30 @@ mod tests {
         p.admission = Checked::found(Vec::new());
         p.drift = Checked::found(Vec::new());
         p.prune = Checked::found(Vec::new());
+        with_objects(p, objects())
+    }
+
+    fn objects() -> Objects {
+        Objects {
+            writes: vec![ObjectWrite {
+                kind: "ConfigMap".into(),
+                namespace: "app".into(),
+                name: "x".into(),
+                store_hash: "a".repeat(32),
+                package: "app/web".into(),
+                change: WriteChange::Added,
+            }],
+            deletes: vec![ObjectDelete {
+                kind: "ConfigMap".into(),
+                namespace: "app".into(),
+                name: "old".into(),
+            }],
+        }
+    }
+
+    fn with_objects(mut p: Plan, objects: Objects) -> Plan {
+        p.objects_digest = Some(super::super::objects::digest(&objects));
+        p.objects = Some(objects);
         p
     }
 
@@ -761,5 +873,69 @@ mod tests {
         let mut future = plan();
         future.schema_version = "2099-01-01".into();
         assert!(unusable(&future).is_some());
+    }
+
+    /// A deploy writes and deletes the objects the reviewed plan lists, by
+    /// their digest; the lines name what differs.
+    #[test]
+    fn other_objects_refuse() {
+        let mut more = objects();
+        more.writes.push(ObjectWrite {
+            kind: "ClusterRoleBinding".into(),
+            namespace: "_cluster".into(),
+            name: "admin".into(),
+            store_hash: "b".repeat(32),
+            package: "app/web".into(),
+            change: WriteChange::Added,
+        });
+        let c = compare(&plan(), &with_objects(plan(), more));
+        assert_eq!(rules(&c), vec![Rule::Objects]);
+        assert_eq!(
+            c.mismatches[0].items,
+            vec![format!(
+                "ClusterRoleBinding/admin (store hash {}, package app/web) would be written",
+                "b".repeat(32)
+            )]
+        );
+
+        // Another owner is another object.
+        let mut moved = objects();
+        moved.writes[0].package = "app/other".into();
+        let c = compare(&plan(), &with_objects(plan(), moved));
+        assert_eq!(rules(&c), vec![Rule::Objects]);
+        assert_eq!(c.mismatches[0].items.len(), 2);
+
+        let mut kept = objects();
+        kept.deletes.clear();
+        let c = compare(&plan(), &with_objects(plan(), kept));
+        assert_eq!(
+            c.mismatches[0].items,
+            vec!["ConfigMap/old@app is no longer deleted".to_string()]
+        );
+
+        // How the plan shows a write is not part of it.
+        let mut reapplied = objects();
+        reapplied.writes[0].change = WriteChange::Reapplied;
+        assert!(compare(&plan(), &with_objects(plan(), reapplied)).matches);
+    }
+
+    /// A plan without the objects, or whose list does not give its digest,
+    /// cannot hold a deploy to them.
+    #[test]
+    fn a_plan_without_its_objects_is_unusable() {
+        let mut unlisted = plan();
+        unlisted.objects = None;
+        unlisted.objects_digest = None;
+        assert!(unusable(&unlisted).is_some());
+        let mut undigested = plan();
+        undigested.objects_digest = None;
+        assert!(unusable(&undigested).is_some());
+        let mut edited = plan();
+        edited.objects.as_mut().unwrap().deletes.clear();
+        assert!(unusable(&edited).is_some());
+        // And a fresh plan without them does not match.
+        let mut fresh = plan();
+        fresh.objects_digest = None;
+        assert_eq!(rules(&compare(&plan(), &fresh)), vec![Rule::Objects]);
     }
 }

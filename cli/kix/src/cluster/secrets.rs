@@ -4,11 +4,13 @@
 //! decrypts the SOPS file via the `sops` CLI, optionally verifies the
 //! content hash, and injects the plaintext into `stringData`.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
+use serde::de::{DeserializeSeed, IgnoredAny};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -71,7 +73,7 @@ pub struct BundleSources {
 
 impl SopsSources {
     /// Write a bundle's SOPS files to a fresh directory, each under its
-    /// SHA-256 and its store name, and read them only from there.
+    /// SHA-256 and the end of its store name, and read them only from there.
     pub fn from_bundle(
         sources: HashMap<String, Vec<u8>>,
         placeholders: bool,
@@ -84,6 +86,9 @@ impl SopsSources {
                 .map(|b| format!("{b:02x}"))
                 .collect();
             let name = crate::eval::store_path::name_of(&store_path).unwrap_or("source");
+            // A file name holds at most 255 bytes. The end of the store name
+            // keeps its extension, which sops reads for the file's format.
+            let name = name.get(name.len().saturating_sub(190)..).unwrap_or(name);
             let file = dir.path().join(format!("{digest}-{name}"));
             std::fs::write(&file, &bytes)?;
             files.insert(store_path, file);
@@ -145,6 +150,9 @@ pub fn hydrate_secrets_from(
     sources: &SopsSources,
 ) -> Result<Vec<HydrationResult>, SecretError> {
     let mut results = Vec::new();
+    // Many Secrets may name one source, which is checked, and decrypted,
+    // once.
+    let mut read = HashMap::new();
 
     for manifest in manifests.iter_mut() {
         if !needs_hydration(manifest) {
@@ -153,7 +161,7 @@ pub fn hydrate_secrets_from(
 
         let result = match sources {
             SopsSources::Local => hydrate_single(manifest)?,
-            SopsSources::Bundle(bundle) => hydrate_from_bundle(manifest, bundle)?,
+            SopsSources::Bundle(bundle) => hydrate_from_bundle(manifest, bundle, &mut read)?,
         };
         results.push(result);
     }
@@ -161,9 +169,18 @@ pub fn hydrate_secrets_from(
     Ok(results)
 }
 
+/// What one SOPS source from a bundle gave: its keys, stored in clear, its
+/// format, and, once decrypted, its values.
+struct ReadSource {
+    keys: Vec<String>,
+    input_type: &'static str,
+    data: Option<BTreeMap<String, String>>,
+}
+
 fn hydrate_from_bundle(
     manifest: &mut Value,
     bundle: &BundleSources,
+    read: &mut HashMap<PathBuf, ReadSource>,
 ) -> Result<HydrationResult, SecretError> {
     let rid = ResourceId::from_value(manifest);
     let not_in_bundle = |message: String| SecretError::NotInBundle {
@@ -180,12 +197,28 @@ fn hydrate_from_bundle(
     let expected = keys::get(manifest, keys::CONTENT_HASH)
         .map(str::to_string)
         .ok_or_else(|| not_in_bundle(format!("it declares no {}", keys::CONTENT_HASH)))?;
-    let (clear_keys, input_type) = age_only_keys(path)?;
+    let source = match read.entry(path.clone()) {
+        std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+        std::collections::hash_map::Entry::Vacant(e) => {
+            let (keys, input_type) = age_only_keys(path)?;
+            e.insert(ReadSource {
+                keys,
+                input_type,
+                data: None,
+            })
+        }
+    };
 
     let data: BTreeMap<String, String> = if bundle.placeholders {
-        placeholders(manifest, &clear_keys)
+        placeholders(manifest, &source.keys)
     } else {
-        let data = parse_secret_data(path, &decrypt_sops(path, Some(input_type))?)?;
+        let data = match &source.data {
+            Some(data) => data.clone(),
+            None => {
+                let data = parse_secret_data(path, &decrypt_sops(path, Some(source.input_type))?)?;
+                source.data.insert(data).clone()
+            }
+        };
         if compute_content_hash(&data) != expected {
             return Err(SecretError::HashMismatch {
                 name: rid.name.clone(),
@@ -255,24 +288,43 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
         path: path.display().to_string(),
         message: message.to_string(),
     };
+    #[cfg(test)]
+    AGE_CHECKS.with(|n| n.set(n.get() + 1));
     let text = std::fs::read_to_string(path).map_err(|e| refuse(&e.to_string()))?;
-    let (doc, input_type): (Value, _) = match serde_json::from_str(&text) {
-        Ok(doc) => (doc, "json"),
-        Err(_) => (
-            serde_yml::from_str(&text)
-                .map_err(|_| refuse("only YAML or JSON SOPS files can come from a bundle"))?,
-            "yaml",
-        ),
+    let input_type = match serde_json::from_str::<IgnoredAny>(&text) {
+        Ok(_) => "json",
+        Err(_) => "yaml",
     };
-    // `doc` keeps the last of a repeated key, where sops would refuse it
-    // (YAML) or merge it into the first (JSON).
-    let unique = match input_type {
-        "json" => serde_json::from_str::<UniqueKeys>(&text).is_ok(),
-        _ => serde_yml::from_str::<UniqueKeys>(&text).is_ok(),
+    // Checked before the file is parsed into values. A parsed value keeps
+    // the last of a repeated key, where sops would refuse it (YAML) or
+    // merge it into the first (JSON).
+    let left = Cell::new(MAX_SOPS_TEXT_BYTES);
+    let problem = Cell::new(None);
+    let seed = UniqueKeys {
+        left: &left,
+        problem: &problem,
     };
-    if !unique {
-        return Err(refuse("an object in it repeats a key"));
+    let checked = match input_type {
+        "json" => {
+            let mut de = serde_json::Deserializer::from_str(&text);
+            seed.deserialize(&mut de).and_then(|()| de.end()).is_ok()
+        }
+        _ => seed
+            .deserialize(serde_yml::Deserializer::from_str(&text))
+            .is_ok(),
+    };
+    if !checked {
+        return Err(refuse(
+            problem
+                .get()
+                .unwrap_or("only YAML or JSON SOPS files can come from a bundle"),
+        ));
     }
+    let doc: Value = match input_type {
+        "json" => serde_json::from_str(&text).map_err(|e| e.to_string()),
+        _ => serde_yml::from_str(&text).map_err(|e| e.to_string()),
+    }
+    .map_err(|_| refuse("only YAML or JSON SOPS files can come from a bundle"))?;
     // yaml.v3 matches `sops` exactly; Go's encoding/json does not.
     if let Some(key) = doc
         .as_object()
@@ -328,69 +380,107 @@ fn folds_to_sops(key: &str) -> bool {
     }) && chars.next().is_none()
 }
 
-/// A JSON or YAML document that deserializes only when no object in it
-/// repeats a key.
-struct UniqueKeys;
+/// The most a SOPS file from a bundle may hold, counting one byte for each
+/// value plus the bytes of each key and string, and a YAML alias as all its
+/// anchor holds: parsing copies an anchor's values each time an alias names
+/// it, so a small file can stand for a large document. A file without
+/// aliases takes about its own size. sops writes a few hundred bytes for
+/// each secret.
+const MAX_SOPS_TEXT_BYTES: usize = 8 * 1024 * 1024;
 
-impl<'de> serde::Deserialize<'de> for UniqueKeys {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        d.deserialize_any(UniqueKeys)
+/// A JSON or YAML value that deserializes only when no object in it repeats
+/// a key and the document stays within [`MAX_SOPS_TEXT_BYTES`], counted
+/// down in `left`. Keeps nothing. When it refuses, `problem` says why.
+#[derive(Clone, Copy)]
+struct UniqueKeys<'a> {
+    left: &'a Cell<usize>,
+    problem: &'a Cell<Option<&'static str>>,
+}
+
+impl UniqueKeys<'_> {
+    /// Count a value, or a key, of `text` bytes.
+    fn count<E: serde::de::Error>(self, text: usize) -> Result<(), E> {
+        match self.left.get().checked_sub(1 + text) {
+            Some(left) => {
+                self.left.set(left);
+                Ok(())
+            }
+            None => self.refuse(
+                "its keys and values, each YAML alias counted as its anchor's, take more than 8 MiB",
+            ),
+        }
+    }
+
+    fn refuse<E: serde::de::Error>(self, why: &'static str) -> Result<(), E> {
+        self.problem.set(Some(why));
+        Err(E::custom(why))
     }
 }
 
-impl<'de> serde::de::Visitor<'de> for UniqueKeys {
-    type Value = UniqueKeys;
+impl<'de> serde::de::DeserializeSeed<'de> for UniqueKeys<'_> {
+    type Value = ();
+
+    fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for UniqueKeys<'_> {
+    type Value = ();
 
     fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("a JSON or YAML value")
     }
 
-    fn visit_bool<E>(self, _: bool) -> Result<Self, E> {
-        Ok(self)
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<(), E> {
+        self.count(0)
     }
 
-    fn visit_i64<E>(self, _: i64) -> Result<Self, E> {
-        Ok(self)
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<(), E> {
+        self.count(0)
     }
 
-    fn visit_u64<E>(self, _: u64) -> Result<Self, E> {
-        Ok(self)
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<(), E> {
+        self.count(0)
     }
 
-    fn visit_f64<E>(self, _: f64) -> Result<Self, E> {
-        Ok(self)
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<(), E> {
+        self.count(0)
     }
 
-    fn visit_str<E>(self, _: &str) -> Result<Self, E> {
-        Ok(self)
+    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<(), E> {
+        self.count(v.len())
     }
 
-    fn visit_unit<E>(self) -> Result<Self, E> {
-        Ok(self)
+    fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
+        self.count(0)
     }
 
-    fn visit_none<E>(self) -> Result<Self, E> {
-        Ok(self)
+    fn visit_none<E: serde::de::Error>(self) -> Result<(), E> {
+        self.count(0)
     }
 
-    fn visit_some<D: serde::Deserializer<'de>>(self, d: D) -> Result<Self, D::Error> {
+    fn visit_some<D: serde::Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
         d.deserialize_any(self)
     }
 
-    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self, A::Error> {
-        while seq.next_element::<UniqueKeys>()?.is_some() {}
-        Ok(self)
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        self.count(0)?;
+        while seq.next_element_seed(self)?.is_some() {}
+        Ok(())
     }
 
-    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self, A::Error> {
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+        self.count(0)?;
         let mut seen = std::collections::HashSet::new();
         while let Some(key) = map.next_key::<String>()? {
+            self.count(key.len())?;
             if !seen.insert(key) {
-                return Err(serde::de::Error::custom("repeated key"));
+                return self.refuse("an object in it repeats a key");
             }
-            map.next_value::<UniqueKeys>()?;
+            map.next_value_seed(self)?;
         }
-        Ok(self)
+        Ok(())
     }
 }
 
@@ -649,6 +739,15 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// A store name may be 211 characters, and a file name only 255 bytes.
+    #[test]
+    fn a_bundle_source_with_the_longest_store_name_is_written() {
+        let name = format!("{}.sops.yaml", "a".repeat(201));
+        let path = format!("/nix/store/0h5dy43cxa771fiz9dsx14c0vf32sn67-{name}");
+        let sources = HashMap::from([(path, b"x: 1\n".to_vec())]);
+        assert!(SopsSources::from_bundle(sources, true).is_ok());
+    }
+
     #[test]
     fn test_needs_hydration_with_sops_source() {
         let manifest = json!({
@@ -881,4 +980,76 @@ mod tests {
             );
         }
     }
+
+    /// A plan parses a bundle's SOPS file before anyone approves it. The
+    /// JSON and YAML parsers' own nesting limits refuse deep nesting before
+    /// the check recurses far.
+    #[test]
+    fn a_deeply_nested_bundle_sops_file_is_refused() {
+        let deep = format!("{}0{}", "[".repeat(1000), "]".repeat(1000));
+        let json = format!(
+            r#"{{"x":{deep},"password":"ENC[x]","sops":{{"age":[{{"recipient":"age1abc","enc":"x"}}],"mac":"ENC[x]","version":"3.9.0"}}}}"#
+        );
+        let yaml = format!("x: {deep}\n{AGE_ONLY}");
+        for text in [json, yaml] {
+            let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+            let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+            assert!(matches!(&err, SecretError::NotAgeOnly { .. }), "{err}");
+        }
+    }
+
+    /// Each YAML alias stands for every value of its anchor, so a small
+    /// file can stand for many values. Each counts, before the file is
+    /// parsed into values.
+    #[test]
+    fn a_yaml_sops_file_whose_aliases_stand_for_too_many_values_is_refused() {
+        let anchor = format!("a: &a [{}]\n", vec!["0"; 5000].join(","));
+        let aliases = format!("b: [{}]\n", vec!["*a"; 2000].join(","));
+        let text = format!("{anchor}{aliases}{AGE_ONLY}");
+        let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+        let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+        assert!(
+            matches!(&err, SecretError::NotAgeOnly { message, .. } if message.contains("8 MiB")),
+            "{err}"
+        );
+    }
+
+    /// A YAML alias of a long string copies the string each time it is
+    /// used, so the bytes of keys and strings are counted, aliases
+    /// expanded, before the file is parsed into values.
+    #[test]
+    fn a_yaml_sops_file_whose_aliases_stand_for_too_many_bytes_is_refused() {
+        let anchor = format!("a: &a {}\n", "x".repeat(1 << 20));
+        let aliases = format!("b: [{}]\n", ["*a"; 10].join(","));
+        let text = format!("{anchor}{aliases}{AGE_ONLY}");
+        let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+        let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+        assert!(
+            matches!(&err, SecretError::NotAgeOnly { message, .. } if message.contains("8 MiB")),
+            "{err}"
+        );
+    }
+
+    /// Any number of Secrets may name one source, and a plan checks it
+    /// once.
+    #[test]
+    fn a_source_many_secrets_name_is_checked_once() {
+        let mut manifests: Vec<Value> = (0..1000)
+            .map(|i| {
+                let mut secret = bundle_secret(SOURCE, Some("sha256-x"));
+                secret["metadata"]["name"] = json!(format!("db{i}"));
+                secret
+            })
+            .collect();
+        AGE_CHECKS.with(|n| n.set(0));
+        let results = hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap();
+        assert_eq!(results.len(), 1000);
+        assert_eq!(AGE_CHECKS.with(|n| n.get()), 1);
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many SOPS files [`age_only_keys`] has checked on this thread.
+    static AGE_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

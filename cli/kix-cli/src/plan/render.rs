@@ -2,8 +2,9 @@
 //!
 //! The package list is rendered by `render_package_plan` and
 //! `render_package_diff_markdown`; these add what the write path found
-//! (conflicts, refusals, prune fates, objects not checked) and what the
-//! three-way comparison found (drift), each saying when it did not look.
+//! (conflicts, refusals, prune fates, objects not checked, the objects
+//! written and deleted) and what the three-way comparison found (drift),
+//! each saying when it did not look.
 
 use std::fmt::Write;
 
@@ -11,7 +12,7 @@ use crate::output;
 
 use super::document::{
     AdmissionRefusal, Checked, MadeBy, NotCheckedReason, Plan, PruneFate, RefusalReason,
-    UncheckedReason,
+    UncheckedReason, WriteChange,
 };
 use super::origin::ChangeLabel;
 
@@ -34,7 +35,37 @@ pub fn render_text(plan: &Plan) -> String {
     write_drift(&mut out, plan);
     write_prune(&mut out, plan);
     write_not_checked(&mut out, plan);
+    write_objects(&mut out, plan);
     out
+}
+
+/// How many objects the deploy writes and deletes, the digest a saved plan
+/// holds a deploy to, and the writes the package list leaves out.
+fn write_objects(out: &mut String, plan: &Plan) {
+    let (Some(objects), Some(digest)) = (&plan.objects, &plan.objects_digest) else {
+        return;
+    };
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "{} {} written, {} deleted {}",
+        output::bold("Objects:"),
+        objects.writes.len(),
+        objects.deletes.len(),
+        output::dim(&format!("({digest})")),
+    );
+    let reapplied = objects
+        .writes
+        .iter()
+        .filter(|w| w.change == WriteChange::Reapplied)
+        .count();
+    if reapplied > 0 {
+        let _ = writeln!(
+            out,
+            "  {} {reapplied} written again unchanged: a build this cluster ran holds the same file",
+            output::yellow("↻"),
+        );
+    }
 }
 
 fn write_stops(out: &mut String, plan: &Plan) {

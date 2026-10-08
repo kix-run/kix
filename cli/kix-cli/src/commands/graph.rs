@@ -27,15 +27,14 @@ impl CommandResponse for GraphResponse {
 pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
     let manifests = match &args.bundle {
         Some(path) => {
-            let loaded = super::bundle::load(path)?;
-            if loaded.contents().cluster != args.cluster {
+            let (loaded, mut graph) = super::bundle::load(path)?;
+            if loaded.cluster() != args.cluster {
                 return Err(miette::miette!(
                     "the bundle is a build of cluster '{}', not '{}'",
-                    loaded.contents().cluster,
+                    kix::text::printable(loaded.cluster()),
                     args.cluster
                 ));
             }
-            let mut graph = loaded.graph()?;
             kix::manifest::stamp::stamp_annotations(&mut graph);
             let mut manifests: Vec<serde_json::Value> =
                 graph.resources.into_values().map(|r| r.manifest).collect();

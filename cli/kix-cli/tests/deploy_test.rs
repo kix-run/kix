@@ -88,6 +88,10 @@ fn plan_json_is_the_document_alone() {
     );
     assert_eq!(doc["flags"]["prune"], false);
     assert!(doc["kix"]["version"].is_string());
+    // A first deploy writes every object of the build, each as added.
+    let writes = doc["objects"]["writes"].as_array().expect("objects.writes");
+    assert!(!writes.is_empty());
+    assert!(writes.iter().all(|w| w["change"] == "added"), "{writes:?}");
 }
 
 /// Flake attribute `minimal` builds the cluster named `test-minimal`. The

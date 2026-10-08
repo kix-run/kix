@@ -71,9 +71,10 @@ impl ThreeWay<'_> {
     /// fields those changes touch.
     pub fn label(&self, changes: &[Difference]) -> (Vec<Vec<ChangeLabel>>, Vec<Drifted>) {
         let config = DiffConfig::new("deployed", "other");
+        // Both builds: a list in another order is a change the build makes.
         let intended: Option<Vec<Difference>> = self
             .deployed
-            .map(|d| structural_diff(d, self.new, "$", &config));
+            .map(|d| structural_diff(d, self.new, "$", &config.clone().in_order()));
         // A field only the live object has is a server default or another
         // manager's field; applying the build does not touch it.
         let drift: Vec<Difference> = self

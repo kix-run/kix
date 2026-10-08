@@ -3,6 +3,7 @@
 use similar::TextDiff;
 
 use super::{DiffConfig, DiffKind, Difference};
+use crate::text::printable;
 
 /// Format a list of differences for terminal output.
 ///
@@ -39,10 +40,18 @@ fn format_one(d: &Difference, config: &DiffConfig, color: bool, full_diff: bool)
 fn format_plain(d: &Difference, config: &DiffConfig, full_diff: bool) -> String {
     match d.kind {
         DiffKind::MissingInB => {
-            format!("  - {}: {}", d.path, compact(d.a_value.as_ref()))
+            format!(
+                "  - {}: {}",
+                printable(&d.path),
+                compact(d.a_value.as_ref())
+            )
         }
         DiffKind::ExtraInB => {
-            format!("  + {}: {}", d.path, compact(d.b_value.as_ref()))
+            format!(
+                "  + {}: {}",
+                printable(&d.path),
+                compact(d.b_value.as_ref())
+            )
         }
         DiffKind::ValueMismatch => {
             if full_diff
@@ -52,11 +61,11 @@ fn format_plain(d: &Difference, config: &DiffConfig, full_diff: bool) -> String 
             {
                 let diff_text =
                     multiline_diff(a_str, b_str, &config.a_label, &config.b_label, false);
-                return format!("  ~ {}:\n{}", d.path, diff_text);
+                return format!("  ~ {}:\n{}", printable(&d.path), diff_text);
             }
             format!(
                 "  ~ {}:\n      {}: {}\n      {}: {}",
-                d.path,
+                printable(&d.path),
                 config.a_label,
                 compact(d.a_value.as_ref()),
                 config.b_label,
@@ -66,7 +75,7 @@ fn format_plain(d: &Difference, config: &DiffConfig, full_diff: bool) -> String 
         DiffKind::TypeMismatch => {
             format!(
                 "  ! {}: type mismatch\n      {}: {} = {}\n      {}: {} = {}",
-                d.path,
+                printable(&d.path),
                 config.a_label,
                 json_type_name(d.a_value.as_ref()),
                 compact(d.a_value.as_ref()),
@@ -83,14 +92,14 @@ fn format_colored(d: &Difference, config: &DiffConfig, full_diff: bool) -> Strin
         DiffKind::MissingInB => {
             format!(
                 "  {RED}{BOLD}-{RESET} {DIM}{path}:{RESET} {RED}{val}{RESET}",
-                path = d.path,
+                path = printable(&d.path),
                 val = compact(d.a_value.as_ref()),
             )
         }
         DiffKind::ExtraInB => {
             format!(
                 "  {GREEN}{BOLD}+{RESET} {DIM}{path}:{RESET} {GREEN}{val}{RESET}",
-                path = d.path,
+                path = printable(&d.path),
                 val = compact(d.b_value.as_ref()),
             )
         }
@@ -104,12 +113,12 @@ fn format_colored(d: &Difference, config: &DiffConfig, full_diff: bool) -> Strin
                     multiline_diff(a_str, b_str, &config.a_label, &config.b_label, true);
                 return format!(
                     "  {YELLOW}{BOLD}~{RESET} {DIM}{path}:{RESET}\n{diff_text}",
-                    path = d.path,
+                    path = printable(&d.path),
                 );
             }
             format!(
                 "  {YELLOW}{BOLD}~{RESET} {DIM}{path}:{RESET}\n      {RED}{a_label}: {a_val}{RESET}\n      {GREEN}{b_label}: {b_val}{RESET}",
-                path = d.path,
+                path = printable(&d.path),
                 a_label = config.a_label,
                 a_val = compact(d.a_value.as_ref()),
                 b_label = config.b_label,
@@ -119,7 +128,7 @@ fn format_colored(d: &Difference, config: &DiffConfig, full_diff: bool) -> Strin
         DiffKind::TypeMismatch => {
             format!(
                 "  {CYAN}{BOLD}!{RESET} {DIM}{path}:{RESET} type mismatch\n      {RED}{a_label}: {a_type} = {a_val}{RESET}\n      {GREEN}{b_label}: {b_type} = {b_val}{RESET}",
-                path = d.path,
+                path = printable(&d.path),
                 a_label = config.a_label,
                 a_type = json_type_name(d.a_value.as_ref()),
                 a_val = compact(d.a_value.as_ref()),
@@ -190,6 +199,8 @@ fn multiline_diff(a: &str, b: &str, a_label: &str, b_label: &str, color: bool) -
     let header = unified.header(a_label, b_label).to_string();
 
     for line in header.lines() {
+        // The lines are a manifest's text, its author's to choose.
+        let line = &crate::text::printable_up_to(line, usize::MAX);
         if color {
             if line.starts_with("---") || line.starts_with("+++") {
                 result.push(format!("{indent}{BOLD}{line}{RESET}"));
@@ -239,6 +250,22 @@ mod tests {
         assert!(out.contains("~ $.image:"));
         assert!(out.contains("kix: \"v1\""));
         assert!(out.contains("cluster: \"v2\""));
+    }
+
+    /// A diff shows a manifest's paths and text with hidden characters
+    /// flagged, so a line it shows cannot be rewritten by them.
+    #[test]
+    fn a_diff_flags_hidden_characters() {
+        let d = Difference::value_mismatch(
+            "$.data.a\u{202e}b".into(),
+            json!("x\n\u{1b}[2Jy"),
+            json!("x\nz"),
+        );
+        for color in [false, true] {
+            let out = format_diffs(std::slice::from_ref(&d), &cfg(), color, true);
+            assert!(out.contains("a⟨U+202E⟩b"), "{out}");
+            assert!(!out.contains("\u{1b}[2J"), "{out}");
+        }
     }
 
     #[test]

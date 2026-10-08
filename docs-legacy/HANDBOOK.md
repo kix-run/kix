@@ -2117,7 +2117,7 @@ checklist is in `v2_discussions/archive/137_kix_run_domain_migration.md`.
 
 ## 25. Activation CR and operator
 
-The cluster's root resource is an `Activation` CR. `mkActivation` references every PackageInstance via Nix string context, so `nix-store -q --tree` on the Activation derivation yields the full deploy DAG. This contract is what the CLI (and operator) rely on for ordering.
+The cluster's root resource is an `Activation` CR. `mkActivation` references every PackageInstance via Nix string context, so `nix-store -q --tree` on the Activation derivation yields the full deploy DAG. This contract is what the CLI (and operator) rely on for ordering. The record's store file also references `kix-packages.json`, which references every resource it lists, so the record's closure holds every file a deploy applies (an import marker that no object uses among them) and the record's name changes when any of them does. That reference adds no `kix.run/depends-on` entry.
 
 **Activation lifecycle:** `Queued → Deploying → Active | Degraded | Failed → Superseded`.
 
@@ -2203,12 +2203,23 @@ it would change or delete something, and 3 when it would stop. `kix deploy` make
 before it asks for confirmation, and under `--on-error stop` it stops before
 applying anything when the plan shows a refused write.
 
+`kix plan` and `kix deploy` refuse a build when the deploy would write or
+delete an object the package list does not show, and name the objects.
+`--reconcile`, a repair after a deploy that stopped part way, and a rerun
+probe Job write some objects again unchanged: the cluster already ran the
+same file for each, so the package list leaves them out. The document lists
+every object the deploy writes and deletes under `objects`, re-applied ones
+included, and its digest as `objects_digest`.
+
 `kix deploy --plan plan.json` deploys a reviewed plan. It plans again with
 the saved plan's flags and exits 4, applying nothing, when the cluster, the
-new or deployed build's identity hash, or the flags differ, or when the new
-plan has a refusal, reverted drift, or prune delete the reviewed one did not.
-A saved `kix diff` plan skips the refusal and prune comparisons, and a plan
-made from two builds alone is refused.
+new or deployed build's identity hash, the objects digest, or the flags
+differ, or when the new plan has a refusal, reverted drift, or prune delete
+the reviewed one did not. So the deploy writes and deletes the objects the
+reviewed plan lists, made from the same build files, or nothing. A plan
+without `objects`, such as a saved `kix diff`, is refused, as is a plan made
+from two builds alone. A plan made by another Kix binary is reported, not
+refused.
 
 Diff features:
 - Structural (path-based) differences with **keyed-list awareness** — containers→name, ports→name, env→name, volumeMounts→mountPath, subjects→kind:name. So reordering doesn't show as a diff.

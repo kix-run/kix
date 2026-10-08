@@ -5,12 +5,14 @@
 //! [`document::Plan`] is the typed document `kix plan` and `kix diff` emit.
 
 pub mod document;
+pub mod objects;
 pub mod origin;
 pub mod render;
 pub mod saved;
 pub mod server;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 
 use kix::eval::PackageNode;
 use kix::eval::store_graph::StoreGraph;
@@ -41,6 +43,61 @@ pub struct PackageDiff {
     /// For each modified resource, one label list per entry of its
     /// `resource_diffs`, in order.
     pub labels: HashMap<ResourceId, Vec<Vec<origin::ChangeLabel>>>,
+    /// The objects the lists above show a deploy writing and deleting, as
+    /// [`diff_graphs`] made them. [`objects::of`] holds a deploy to them.
+    pub shown: Shown,
+}
+
+/// The objects a [`PackageDiff`] shows a deploy writing and deleting, each
+/// with the package key it is listed under.
+#[derive(Clone, Debug, Default)]
+pub struct Shown {
+    /// Each new-side object listed as added, modified, or dep-affected, and
+    /// the new Activation record, by its id and the store hash of its file.
+    pub writes: BTreeMap<(ResourceId, String), (String, document::WriteChange)>,
+    /// Each old-side object listed as removed, kept ones aside.
+    pub deletes: BTreeMap<ResourceId, String>,
+}
+
+impl Shown {
+    /// Record the new side of `c`'s added, modified, and dep-affected
+    /// resources, found in `objects`, and its removed ones.
+    fn change(
+        &mut self,
+        c: &PackageChangeDiff,
+        objects: &BTreeMap<ResourceId, (&PathBuf, &Value)>,
+    ) {
+        use document::WriteChange;
+        let ids = c
+            .added_resources
+            .iter()
+            .map(|id| (id, WriteChange::Added))
+            .chain(
+                c.resource_diffs
+                    .iter()
+                    .map(|(id, _)| (id, WriteChange::Modified)),
+            )
+            .chain(
+                c.dep_affected_resources
+                    .iter()
+                    .map(|id| (id, WriteChange::DepAffected)),
+            );
+        for (id, change) in ids {
+            if let Some((path, _)) = objects.get(id) {
+                self.write(id, path, &c.key, change);
+            }
+        }
+        for id in c.removed_and_kept().0 {
+            self.deletes.insert(id.clone(), c.key.clone());
+        }
+    }
+
+    fn write(&mut self, id: &ResourceId, path: &Path, key: &str, change: document::WriteChange) {
+        self.writes.insert(
+            (id.clone(), kix::eval::store_graph::store_hash(path)),
+            (key.to_string(), change),
+        );
+    }
 }
 
 /// Old and new deploy record names; either side may be absent (first
@@ -81,6 +138,7 @@ impl PackageDiff {
             c.removed_resources = removed;
             c.shared_kept.extend(kept);
         }
+        self.shown.deletes.retain(|id, _| !ids.contains(id));
     }
 
     /// Changed packages plus the cluster-level pseudo-package, for renderers
@@ -196,6 +254,14 @@ pub struct PackageChangeDiff {
 }
 
 impl PackageChangeDiff {
+    /// Any resource added, removed, modified, or dep-affected.
+    fn any(&self) -> bool {
+        !self.resource_diffs.is_empty()
+            || !self.dep_affected_resources.is_empty()
+            || !self.added_resources.is_empty()
+            || !self.removed_resources.is_empty()
+    }
+
     /// `removed_resources` split into `(removed, kept)`. `kept` holds the
     /// kinds `lifecycle::never_pruned` protects, then `shared_kept`: they
     /// left the build, but deploy and `kix gc` do not delete them, so
@@ -230,17 +296,14 @@ fn is_propagation_path(path: &str) -> bool {
         .collect();
     // Match only top-level metadata.annotations. Pod template annotations
     // (e.g. $.spec.template.metadata.annotations.*) are real content changes.
-    for ann in PROPAGATION_ANNS
+    // The match is exact: the path joins keys with `.`, so a prefix would
+    // also take an annotation such as `kix.run/identity-hash.x`, whose
+    // change the plan would then not show.
+    PROPAGATION_ANNS
         .iter()
         .map(|s| (*s).to_string())
         .chain(legacy)
-    {
-        let needle = format!("$.metadata.annotations.{ann}");
-        if path == needle || path.starts_with(&format!("{needle}.")) {
-            return true;
-        }
-    }
-    false
+        .any(|ann| path == format!("$.metadata.annotations.{ann}"))
 }
 
 /// Partition a set of differences into (real, propagation-only).
@@ -258,7 +321,7 @@ pub(crate) fn partition_propagation(diffs: Vec<Difference>) -> (Vec<Difference>,
 }
 
 pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
-    let config = DiffConfig::new("old", "new");
+    let config = DiffConfig::new("old", "new").in_order();
 
     let old_pkgs: BTreeMap<String, &PackageNode> = old
         .packages
@@ -275,16 +338,29 @@ pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
     let mut removed = Vec::new();
     let mut changed = Vec::new();
     let mut unchanged = 0usize;
+    let mut shown = Shown::default();
 
     for (key, new_pkg) in &new_pkgs {
+        let new_objects = objects_of_package(new_pkg, new);
         if let Some(old_pkg) = old_pkgs.get(key) {
-            if old_pkg.resource_paths == new_pkg.resource_paths {
+            let same_resources = old_pkg.resource_paths == new_pkg.resource_paths;
+            if same_resources && old_pkg.store_path == new_pkg.store_path {
                 unchanged += 1;
                 continue;
             }
+            // A PackageInstance that changed alone is a change: the deploy
+            // applies it.
             let change = diff_package_resources(key, old_pkg, new_pkg, old, new, &config);
+            if same_resources && !change.any() {
+                unchanged += 1;
+                continue;
+            }
+            shown.change(&change, &new_objects);
             changed.push(change);
         } else {
+            for (id, (path, _)) in &new_objects {
+                shown.write(id, path, key, document::WriteChange::Added);
+            }
             added.push(PackageInfo {
                 key: key.clone(),
                 version: new_pkg.version.clone(),
@@ -297,7 +373,13 @@ pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
 
     for (key, old_pkg) in &old_pkgs {
         if !new_pkgs.contains_key(key) {
-            removed.push(PackageInfo::removed(key, old_pkg, old));
+            let info = PackageInfo::removed(key, old_pkg, old);
+            for id in resource_map_for_package(old_pkg, old).into_keys() {
+                if !info.kept.contains(&id) {
+                    shown.deletes.insert(id, key.clone());
+                }
+            }
+            removed.push(info);
         }
     }
 
@@ -308,16 +390,37 @@ pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
     let cluster_level = {
         let old_res = unowned_resources(old);
         let new_res = unowned_resources(new);
-        let d = diff_resource_maps(CLUSTER_LEVEL_KEY, None, None, &old_res, &new_res, &config);
-        (!d.resource_diffs.is_empty()
-            || !d.dep_affected_resources.is_empty()
-            || !d.added_resources.is_empty()
-            || !d.removed_resources.is_empty())
-        .then_some(d)
+        let d = diff_resource_maps(
+            CLUSTER_LEVEL_KEY,
+            None,
+            None,
+            &values_of(&old_res),
+            &values_of(&new_res),
+            &config,
+        );
+        d.any().then(|| {
+            shown.change(&d, &new_res);
+            d
+        })
     };
 
     let old_record = record_name(old);
     let new_record = record_name(new);
+    if old_record != new_record
+        && let Some(name) = &new_record
+    {
+        for (path, node) in &new.resources {
+            let m = &node.manifest;
+            if m.get("kind")
+                .and_then(Value::as_str)
+                .is_some_and(lifecycle::is_record_kind)
+                && m.pointer("/metadata/name").and_then(Value::as_str) == Some(name)
+            {
+                let id = ResourceId::from_value(m);
+                shown.write(&id, path, CLUSTER_LEVEL_KEY, document::WriteChange::Added);
+            }
+        }
+    }
     let activation = (old_record != new_record).then_some(RecordChange {
         old: old_record,
         new: new_record,
@@ -332,6 +435,7 @@ pub fn diff_graphs(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
         activation,
         labelled: false,
         labels: HashMap::new(),
+        shown,
     }
 }
 
@@ -341,15 +445,30 @@ pub const CLUSTER_LEVEL_KEY: &str = "_cluster";
 /// Resources in `graph.resources` that no package owns, minus the
 /// PackageInstances (each belongs with its package, see
 /// `resource_map_for_package`) and the deploy record.
-fn unowned_resources(graph: &StoreGraph) -> BTreeMap<ResourceId, &Value> {
+fn unowned_resources(graph: &StoreGraph) -> BTreeMap<ResourceId, (&PathBuf, &Value)> {
     graph
         .resources
         .iter()
         .filter(|(path, _)| {
             !graph.resource_owner.contains_key(*path) && !graph.packages.contains_key(*path)
         })
-        .map(|(_, node)| (ResourceId::from_value(&node.manifest), &node.manifest))
+        .map(|(path, node)| {
+            (
+                ResourceId::from_value(&node.manifest),
+                (path, &node.manifest),
+            )
+        })
         .filter(|(id, _)| !kix::manifest::lifecycle::is_record_kind(&id.kind))
+        .collect()
+}
+
+/// The manifests of `objects`.
+fn values_of<'a>(
+    objects: &BTreeMap<ResourceId, (&'a PathBuf, &'a Value)>,
+) -> BTreeMap<ResourceId, &'a Value> {
+    objects
+        .iter()
+        .map(|(id, (_, m))| (id.clone(), *m))
         .collect()
 }
 
@@ -449,14 +568,27 @@ fn diff_resource_maps(
 /// A package's resources plus its own PackageInstance (the graph keeps the
 /// PI at the package's store path, outside `resource_paths`).
 fn resource_map_for_package<'a>(
-    pkg: &PackageNode,
+    pkg: &'a PackageNode,
     graph: &'a StoreGraph,
 ) -> BTreeMap<ResourceId, &'a Value> {
+    values_of(&objects_of_package(pkg, graph))
+}
+
+/// [`resource_map_for_package`] with the store path of each manifest.
+fn objects_of_package<'a>(
+    pkg: &'a PackageNode,
+    graph: &'a StoreGraph,
+) -> BTreeMap<ResourceId, (&'a PathBuf, &'a Value)> {
     pkg.resource_paths
         .iter()
         .chain(std::iter::once(&pkg.store_path))
-        .filter_map(|p| graph.resources.get(p))
-        .map(|node| (ResourceId::from_value(&node.manifest), &node.manifest))
+        .filter_map(|p| graph.resources.get_key_value(p))
+        .map(|(path, node)| {
+            (
+                ResourceId::from_value(&node.manifest),
+                (path, &node.manifest),
+            )
+        })
         .collect()
 }
 
@@ -520,6 +652,7 @@ pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
         activation: None,
         labelled: false,
         labels: HashMap::new(),
+        shown: Shown::default(),
     }
 }
 
@@ -784,8 +917,9 @@ fn render_change_markdown(out: &mut String, c: &PackageChangeDiff) {
     let _ = writeln!(out, "<details>");
     let _ = writeln!(
         out,
-        "<summary><code>{}</code> {ver_str}{detail}</summary>",
-        c.key
+        "<summary><code>{}</code> {}{detail}</summary>",
+        output::printable(&c.key),
+        output::printable(&ver_str)
     );
     let _ = writeln!(out);
 
@@ -884,9 +1018,14 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
             let ver = p
                 .version
                 .as_deref()
-                .map(|v| format!(" `{v}`"))
+                .map(|v| format!(" `{}`", output::printable(v)))
                 .unwrap_or_default();
-            let _ = writeln!(out, "- `{}`{ver} ({})", p.key, p.counts());
+            let _ = writeln!(
+                out,
+                "- `{}`{ver} ({})",
+                output::printable(&p.key),
+                p.counts()
+            );
         }
         let _ = writeln!(out);
     }
@@ -898,9 +1037,14 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
             let ver = p
                 .version
                 .as_deref()
-                .map(|v| format!(" `{v}`"))
+                .map(|v| format!(" `{}`", output::printable(v)))
                 .unwrap_or_default();
-            let _ = writeln!(out, "- `{}`{ver} ({})", p.key, p.counts());
+            let _ = writeln!(
+                out,
+                "- `{}`{ver} ({})",
+                output::printable(&p.key),
+                p.counts()
+            );
             for id in &p.kept {
                 let _ = writeln!(out, "  - kept, never deleted automatically: `{id}`");
             }
@@ -981,11 +1125,12 @@ fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
 
     let _ = writeln!(out);
     for (ns, entries) in &by_ns {
-        let _ = writeln!(out, "  {}", output::bold(ns));
+        let _ = writeln!(out, "  {}", output::bold(&output::printable(ns)));
         for entry in entries {
             match entry {
                 PlanEntry::Added(name, info) => {
-                    let ver = info.version.as_deref().unwrap_or("");
+                    let name = &output::printable(name);
+                    let ver = &output::printable(info.version.as_deref().unwrap_or(""));
                     let ver_str = if ver.is_empty() {
                         String::new()
                     } else {
@@ -1001,7 +1146,8 @@ fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
                     );
                 }
                 PlanEntry::Removed(name, info) => {
-                    let ver = info.version.as_deref().unwrap_or("");
+                    let name = &output::printable(name);
+                    let ver = &output::printable(info.version.as_deref().unwrap_or(""));
                     let ver_str = if ver.is_empty() {
                         String::new()
                     } else {
@@ -1022,8 +1168,9 @@ fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
                     }
                 }
                 PlanEntry::Changed(name, change) => {
-                    let old_ver = change.old_version.as_deref().unwrap_or("");
-                    let new_ver = change.new_version.as_deref().unwrap_or("");
+                    let name = &output::printable(name);
+                    let old_ver = &output::printable(change.old_version.as_deref().unwrap_or(""));
+                    let new_ver = &output::printable(change.new_version.as_deref().unwrap_or(""));
                     let ver_str =
                         if !old_ver.is_empty() && !new_ver.is_empty() && old_ver != new_ver {
                             format!(" {} -> {}", old_ver, new_ver)
@@ -1266,6 +1413,20 @@ mod diff_graph_tests {
     use super::*;
     use kix::manifest::keys;
     use serde_json::json;
+
+    /// An annotation whose key begins with a propagated one is content:
+    /// the plan shows its change.
+    #[test]
+    fn an_annotation_named_after_a_propagated_one_is_a_real_change() {
+        let path = |key: &str| format!("$.metadata.annotations.{key}");
+        assert!(is_propagation_path(&path(keys::IDENTITY_HASH)));
+        for key in [
+            format!("{}.x", keys::IDENTITY_HASH),
+            format!("{}.extra", keys::DEPENDS_ON),
+        ] {
+            assert!(!is_propagation_path(&path(&key)), "{key}");
+        }
+    }
 
     fn stamped(
         kind: &str,
@@ -1580,6 +1741,47 @@ mod diff_graph_tests {
                 new: Some("c-new".into())
             })
         );
+    }
+
+    #[test]
+    fn a_reordered_list_is_modified_and_shows_the_new_order() {
+        // The last `--auth` flag wins, so the order is the setting.
+        let deployment = |hash: &str, args: Value, app_first: bool| {
+            let app = json!({"name": "app", "args": args});
+            let proxy = json!({"name": "proxy"});
+            let containers = if app_first {
+                json!([app, proxy])
+            } else {
+                json!([proxy, app])
+            };
+            let spec = json!({"template": {"spec": {"containers": containers}}});
+            stamped("Deployment", "app", "web", ("app", "web"), hash, spec)
+        };
+        let mut old = baseline();
+        old[4] = deployment(&h("dep"), json!(["--auth=off", "--auth=on"]), true);
+        let cases = [
+            (
+                json!(["--auth=on", "--auth=off"]),
+                true,
+                "$.spec.template.spec.containers[app].args",
+            ),
+            (
+                json!(["--auth=off", "--auth=on"]),
+                false,
+                "$.spec.template.spec.containers",
+            ),
+        ];
+        for (args, app_first, path) in cases {
+            let mut new = baseline();
+            new[4] = deployment(&h("dep2"), args, app_first);
+            let d = diff_of(&old, &new);
+            let c = &d.changed[0];
+            assert!(c.dep_affected_resources.is_empty(), "{path}");
+            let (id, diffs) = &c.resource_diffs[0];
+            assert_eq!(id.to_string(), "Deployment/web@app");
+            let paths: Vec<&str> = diffs.iter().map(|d| d.path.as_str()).collect();
+            assert_eq!(paths, [path]);
+        }
     }
 
     #[test]

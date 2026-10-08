@@ -159,6 +159,11 @@ rec {
       outputs ? { },
       requires ? [ ],
       extraDeps ? [ ],
+      # Store files the manifest's store path references without a deploy
+      # order (no `kix.run/depends-on` entry), as a store path interpolated
+      # into a field would. The Activation record references
+      # kix-packages.json this way.
+      storeReferences ? [ ],
       extra ? { },
       clusterDomain ? "cluster.local",
       # per-kind terminate/conduct override from the factBehavior index
@@ -394,7 +399,13 @@ rec {
         acc: dep: if builtins.isAttrs dep && dep ? outPath then acc // builtins.getContext "${dep}" else acc
       ) { } allDeps;
 
-      manifestJsonWithDeps = builtins.appendContext manifestJsonStamped depContexts;
+      storeReferenceContexts = builtins.foldl' (
+        acc: file: acc // builtins.getContext "${file}"
+      ) { } storeReferences;
+
+      manifestJsonWithDeps = builtins.appendContext manifestJsonStamped (
+        depContexts // storeReferenceContexts
+      );
 
       # Forward facts from manifest values through out.* for conducting
       # resources. manifestJsonSealed removes fact tokens from store references

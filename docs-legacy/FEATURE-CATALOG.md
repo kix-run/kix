@@ -113,7 +113,7 @@ Complete inventory of kix/lib (Nix library) and CLI features. Breadth-first — 
 - **`wrapHelmResource`** — Wrap single parsed JSON resource into kix resource via scope. Strips Helm annotations/labels, handles foreign namespaces, injects Secret type "Opaque" default, cleans default strategy/updateStrategy.
 - **`helmChart`**: Main entry: import Helm chart as kix package: `{ repo, name, version, hash, releaseName?, root?, includeCrds?, strip?, patchResources?, metaExtra? }`. Returns `{ meta, options, build }`. Config-level `values` deep-merged with package-level `values`. Root: `root = { kind; name; }` when given, else the only Service, else the only Deployment/StatefulSet/DaemonSet; anything else fails evaluation with the candidates (`helm-dag.nix` `pickRoot`). Supports `patchResources` (pre-wrap transform), filters test hooks, expands List resources.
 - **Chart CRDs**: `helm-dag` adds an `instance-of` edge from a chart custom resource to the chart's own CRD of its group and kind.
-- **`isClusterScopedKind`** — Check against known cluster-scoped kinds list (14 kinds).
+- **`isClusterScopedKind`** — Check against the built-in cluster-scoped kinds (`builtInClusterScopedKinds` in `eval/helpers.nix`, 19 kinds).
 
 ### CRD Builders (`crd.nix`)
 

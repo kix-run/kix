@@ -12937,9 +12937,9 @@ expression: stable
     "kind": "Activation",
     "metadata": {
       "annotations": {
-        "kix.run/built-via": "/nix/store/6bsp81mcwasaw7bfh6v7xzqlmq3n2jwz-k8s-activation-example",
+        "kix.run/built-via": "/nix/store/diykls1s4q5d2z5axjh2lqxm2q8kgsf2-k8s-activation-example",
         "kix.run/depends-on": "2hnqf813zj2q2vlpk9j6s8gh4q4kw1ij,35i8mjh56ys8dz6yd89269yy5k86abin,590al7hbiz804ha7f7q5ivm49ds9fxcg,597bi0wj1dzqy570jjarc2vlvgzgji1c,5mv940cjcfv2zf1cm9zjfi61b117n128,5n47j74lzrsijy4r2z12cj7w81mgsnsh,612a8ppkv1f4rn0w58x8iycqxi69byb3,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,k2i0mwwl9mnx88z9i8xmf0468n4svii9,kk77rzkfz89hrapfkz9s3bzwz3giwbm1,ria5rm7jiqz7q00b8zbqvz4n9xlnx7b6,vrvzyifl375j5169qbhbi9g4929rn82y,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj",
-        "kix.run/identity-hash": "z1v9qyrvf51m1rsjs29qsl7wk6p0d0r4",
+        "kix.run/identity-hash": "zrpa5mqdkj4fcqwcs2468r424mna41wy",
         "kix.run/package": "_cluster",
         "kix.run/package-namespace": "_cluster"
       },
@@ -12947,7 +12947,7 @@ expression: stable
         "app.kubernetes.io/managed-by": "kix",
         "kix.run/cluster": "example"
       },
-      "name": "example-z1v9qyrvf51m"
+      "name": "example-zrpa5mqdkj4f"
     },
     "spec": {
       "instances": {

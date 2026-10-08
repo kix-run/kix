@@ -78,7 +78,6 @@ proptest = "1"
 petgraph = "0.7"
 
 # Bundles
-tar = "0.4"
 zstd = "0.14"
 
 # SQLite

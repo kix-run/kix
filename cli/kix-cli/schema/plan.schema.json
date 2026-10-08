@@ -671,6 +671,83 @@
         }
       ]
     },
+    "ObjectDelete": {
+      "description": "An object the deploy's prune deletes.",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "namespace",
+        "name"
+      ],
+      "type": "object"
+    },
+    "ObjectWrite": {
+      "description": "An object the deploy applies, or may create again (a probe Job under the\nrerun rule).",
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/WriteChange"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "description": "`_cluster` for a manifest that gives no namespace.",
+          "type": "string"
+        },
+        "package": {
+          "description": "The `namespace/instance` of the package `packages` lists the object\nunder, or `_cluster` for an object no package owns and for the\nActivation record.",
+          "type": "string"
+        },
+        "store_hash": {
+          "description": "The hash part of the store path of the build file the object is made\nfrom, which is also its identity hash annotation.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "namespace",
+        "name",
+        "store_hash",
+        "package",
+        "change"
+      ],
+      "type": "object"
+    },
+    "Objects": {
+      "description": "The objects a deploy writes and deletes, each list sorted.",
+      "properties": {
+        "deletes": {
+          "items": {
+            "$ref": "#/$defs/ObjectDelete"
+          },
+          "type": "array"
+        },
+        "writes": {
+          "items": {
+            "$ref": "#/$defs/ObjectWrite"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "writes",
+        "deletes"
+      ],
+      "type": "object"
+    },
     "PackageEntry": {
       "properties": {
         "kept_resources": {
@@ -1004,6 +1081,31 @@
           "type": "string"
         }
       ]
+    },
+    "WriteChange": {
+      "description": "How `packages` shows a write.",
+      "oneOf": [
+        {
+          "const": "added",
+          "description": "In an added package, or added to a changed one.",
+          "type": "string"
+        },
+        {
+          "const": "modified",
+          "description": "Modified.",
+          "type": "string"
+        },
+        {
+          "const": "dep_affected",
+          "description": "Changed only in a dependency's propagated hash.",
+          "type": "string"
+        },
+        {
+          "const": "reapplied",
+          "description": "Not shown in `packages`: the deployed build, or a deploy of this\ncluster that stopped part way, already holds this file for the\nobject. `--reconcile` writes such objects again, as does a deploy that\nrepairs what a stopped deploy changed.",
+          "type": "string"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1068,6 +1170,24 @@
         "$ref": "#/$defs/UncheckedObject"
       },
       "type": "array"
+    },
+    "objects": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Objects"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Every object the planned deploy writes or deletes. `packages` shows\neach of them but the re-applied ones; see [`super::objects`]. `null`\nfrom `kix diff`, which plans no deploy."
+    },
+    "objects_digest": {
+      "description": "[`super::objects::digest`] of `objects`. `kix deploy --plan` refuses\na deploy whose objects have another digest. `null` from `kix diff`.",
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "packages": {
       "$ref": "#/$defs/Packages"
