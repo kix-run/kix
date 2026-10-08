@@ -657,7 +657,7 @@ impl<R: Read + Seek> Bundle<R> {
         let checked = read_checked(input, |path, role, bytes| {
             match role {
                 Role::Record | Role::Manifest => {
-                    manifests.insert(PathBuf::from(path), parse_manifest(path, bytes)?);
+                    manifests.insert(PathBuf::from(path), bytes.to_vec());
                 }
                 Role::Index => index = Some(parse_index(path, bytes)?),
                 Role::Other => {}
@@ -686,7 +686,10 @@ impl<R: Read + Seek> Bundle<R> {
             &|_| {},
         )
         .and_then(|graph| graph.validate().map(|()| graph))
-        .map_err(|e| BundleError::Build(e.to_string()))?;
+        .map_err(|e| match e {
+            KixEvalError::NotJson(e) => BundleError::from(e),
+            e => BundleError::Build(e.to_string()),
+        })?;
         Ok((Bundle(checked), graph))
     }
 }

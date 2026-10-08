@@ -174,16 +174,10 @@ fn is_k8s_path(path: &Path) -> bool {
     store_name(path).starts_with("k8s-")
 }
 
-/// Read a manifest from a store path with the one parser
-/// ([`super::manifest_json`]).
-fn read_store_json(path: &Path) -> Result<serde_json::Value, KixEvalError> {
-    let bytes = std::fs::read(path).map_err(|e| KixEvalError::StoreGraphError {
+/// Read a file from a store path.
+fn read_store_file(path: &Path) -> Result<Vec<u8>, KixEvalError> {
+    std::fs::read(path).map_err(|e| KixEvalError::StoreGraphError {
         message: format!("failed to read store path {}: {e}", path.display()),
-    })?;
-    super::manifest_json::parse_manifest(&path.to_string_lossy(), &bytes).map_err(|e| {
-        KixEvalError::StoreGraphError {
-            message: e.to_string(),
-        }
     })
 }
 
@@ -281,7 +275,7 @@ impl StoreGraph {
             activation_path,
             result_dir.to_path_buf(),
             ref_cache,
-            &mut read_store_json,
+            &mut read_store_file,
             status_fn,
         )?;
         graph.validate()?;
@@ -291,18 +285,19 @@ impl StoreGraph {
     /// Steps 4 to 6 of loading a build: read every manifest, group them by
     /// package, and work out the cross-package dependencies. Shared by
     /// every reader of a build, which differ only in where a file's bytes
-    /// come from (`read`). A reader parses with
-    /// [`super::manifest_json::parse_manifest`] and runs
-    /// [`StoreGraph::validate`] on the result. Calls `read` once for each
-    /// path the index lists and each `k8s-` path among the references, and
-    /// fails when it fails: a build is not deployed without a file it names.
+    /// come from (`read`). Each file is parsed here, with
+    /// [`super::manifest_json::parse_manifest`], so every reader parses
+    /// alike. A reader runs [`StoreGraph::validate`] on the result. Calls
+    /// `read` once for each path the index lists and each `k8s-` path among
+    /// the references, and fails when it fails: a build is not deployed
+    /// without a file it names.
     /// A package that lists a path twice holds it once.
     pub fn assemble(
         index: KixPackageIndex,
         activation_path: PathBuf,
         result_dir: PathBuf,
         ref_cache: HashMap<PathBuf, Vec<PathBuf>>,
-        read: &mut dyn FnMut(&Path) -> Result<serde_json::Value, KixEvalError>,
+        read: &mut dyn FnMut(&Path) -> Result<Vec<u8>, KixEvalError>,
         status_fn: &dyn Fn(&str),
     ) -> Result<Self, KixEvalError> {
         // 4. Read every manifest once. A k8s path among the references that
@@ -320,9 +315,13 @@ impl StoreGraph {
             .filter(|p| is_k8s_path(p));
         for path in listed.chain(referenced) {
             if !resources.contains_key(path) {
+                let bytes = read(path)?;
                 let node = ResourceNode {
                     store_path: path.clone(),
-                    manifest: read(path)?,
+                    manifest: super::manifest_json::parse_manifest(
+                        &path.to_string_lossy(),
+                        &bytes,
+                    )?,
                 };
                 resources.insert(path.clone(), node);
             }
@@ -434,8 +433,9 @@ impl StoreGraph {
     }
 
     /// Check that the graph is one build as plan shows it and deploy
-    /// requests it. Run on every build, whichever reader read it; a graph [`StoreGraph::synthesize`] makes describes live
-    /// objects, not a build, and is not checked. Refuses:
+    /// requests it. Run on every build, whichever reader read it; a graph
+    /// [`StoreGraph::synthesize`] makes describes live objects, not a
+    /// build, and is not checked. Refuses:
     ///
     /// - a manifest whose kind, `apiVersion` parts, name, or namespace is
     ///   not one URL path segment, since kube-rs puts them in request paths
