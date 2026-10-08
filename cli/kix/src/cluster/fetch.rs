@@ -246,10 +246,29 @@ const DISCOVERY_BACKOFF_MAX: Duration = Duration::from_secs(2);
 /// stops being listed, and one that is arriving starts being served. Any
 /// other failure is returned at once: the transport has already retried it.
 pub async fn discover_resources(client: &Client) -> Result<Vec<(ApiResource, Scope)>, FetchError> {
+    settled_discovery(client, None).await
+}
+
+/// [`discover_resources`] of the named API groups alone. A group the
+/// cluster does not list is left out, and nothing else is asked for, so a
+/// group version of some other API that is down cannot fail it.
+pub async fn discover_groups(
+    client: &Client,
+    groups: &[&str],
+) -> Result<Vec<(ApiResource, Scope)>, FetchError> {
+    settled_discovery(client, Some(groups)).await
+}
+
+/// Walk `groups` (every group, the core one first, when `None`) until no
+/// listed group version answers 404, as [`discover_resources`] describes.
+async fn settled_discovery(
+    client: &Client,
+    groups: Option<&[&str]>,
+) -> Result<Vec<(ApiResource, Scope)>, FetchError> {
     let start = tokio::time::Instant::now();
     let mut delay = DISCOVERY_BACKOFF_START;
     loop {
-        let pass = discovery_pass(client).await?;
+        let pass = discovery_pass(client, groups).await?;
         if pass.missing.is_empty() {
             tracing::debug!(count = pass.resources.len(), "API resources discovered");
             return Ok(pass.resources);
@@ -274,7 +293,7 @@ pub async fn discover_resources(client: &Client) -> Result<Vec<(ApiResource, Sco
 /// version that answers 404 is left out, named in `missing` and logged at
 /// debug, with no wait. Any other failure is returned.
 pub async fn discover_resources_once(client: &Client) -> Result<DiscoveryPass, FetchError> {
-    let pass = discovery_pass(client).await?;
+    let pass = discovery_pass(client, None).await?;
     if !pass.missing.is_empty() {
         tracing::debug!(missing = ?pass.missing, "group versions answered 404");
     }
@@ -290,15 +309,23 @@ pub struct DiscoveryPass {
     pub missing: Vec<String>,
 }
 
-async fn discovery_pass(client: &Client) -> Result<DiscoveryPass, FetchError> {
+/// One walk of `only` (every group, the core one first, when `None`).
+async fn discovery_pass(
+    client: &Client,
+    only: Option<&[&str]>,
+) -> Result<DiscoveryPass, FetchError> {
     let mut pass = DiscoveryPass::default();
-    walk_core(client, &mut pass).await?;
+    if only.is_none() {
+        walk_core(client, &mut pass).await?;
+    }
     let groups = client
         .list_api_groups()
         .await
         .map_err(FetchError::DiscoveryError)?;
     for g in groups.groups {
-        walk_api_group(client, g, &mut pass).await?;
+        if only.is_none_or(|only| only.contains(&g.name.as_str())) {
+            walk_api_group(client, g, &mut pass).await?;
+        }
     }
     Ok(pass)
 }

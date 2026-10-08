@@ -82,6 +82,37 @@ fn generation_filter(
     })
 }
 
+/// Refuse to start on a cluster whose records sit under a retired API group.
+///
+/// Discovery that fails is a refusal too. It used to be logged and passed
+/// over, which started the operator unchecked on exactly the kind of cluster
+/// the gate is for. Kubernetes restarts the pod, and the next start checks
+/// again. Only Kix's own groups, current and retired, are discovered: the
+/// gate needs nothing else, and an unrelated API that is down must not keep
+/// the operator from starting.
+async fn check_domain(client: &kube::Client) -> anyhow::Result<()> {
+    let groups: Vec<&str> = std::iter::once(keys::GROUP)
+        .chain(kix::legacy_domain::DOMAINS.iter().copied())
+        .collect();
+    let discovery = match kix::cluster::fetch::discover_groups(client, &groups).await {
+        Ok(discovery) => discovery,
+        Err(e) => {
+            tracing::error!("could not check the cluster's API groups: {e}");
+            return Err(e.into());
+        }
+    };
+    let groups: Vec<&str> = discovery
+        .iter()
+        .filter(|(ar, _)| kix::manifest::lifecycle::is_record_kind(&ar.kind))
+        .map(|(ar, _)| ar.group.as_str())
+        .collect();
+    if let Err(e) = kix::legacy_domain::check_cluster(&groups) {
+        tracing::error!("{e}");
+        return Err(e.into());
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize tracing with env filter (e.g. RUST_LOG=info,kix_operator=debug)
@@ -122,22 +153,7 @@ async fn main() -> anyhow::Result<()> {
     // copies the migration has created but not yet given a status to, and an
     // Activation with no phase reads as Queued: it would supersede the real
     // Active activation and deploy whatever build that record names.
-    match kix::cluster::fetch::discover_resources(&client).await {
-        Ok(discovery) => {
-            let groups: Vec<&str> = discovery
-                .iter()
-                .filter(|(ar, _)| kix::manifest::lifecycle::is_record_kind(&ar.kind))
-                .map(|(ar, _)| ar.group.as_str())
-                .collect();
-            if let Err(e) = kix::legacy_domain::check_cluster(&groups) {
-                tracing::error!("{e}");
-                return Err(e.into());
-            }
-        }
-        // Discovery is not the operator's job to fix. Log and fall through
-        // to the list below, which gives its own diagnosis.
-        Err(e) => tracing::warn!("could not check the cluster's API groups: {e}"),
-    }
+    check_domain(&client).await?;
 
     // Verify CRD is registered by attempting a list
     match activations
@@ -187,4 +203,33 @@ async fn main() -> anyhow::Result<()> {
         .await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kix::cluster::fake_api::FakeApi;
+
+    /// Discovery that fails stops the start, since the domain gate could not
+    /// run; discovery that answers lets it through.
+    #[tokio::test]
+    async fn the_operator_does_not_start_unchecked_when_discovery_fails() {
+        let api = FakeApi::new([]);
+        api.fail_next("/apis", 1, 500);
+        assert!(check_domain(&api.client()).await.is_err());
+        assert!(check_domain(&api.client()).await.is_ok());
+    }
+
+    /// The gate reads only Kix's own groups, so an unrelated API that is
+    /// down does not stop the start; Kix's own group that is down does.
+    #[tokio::test]
+    async fn an_unrelated_api_that_is_down_does_not_stop_the_start() {
+        let api = FakeApi::new([]);
+        api.fail_next("/apis/rbac.authorization.k8s.io/v1", u32::MAX, 503);
+        assert!(check_domain(&api.client()).await.is_ok());
+
+        let api = FakeApi::new([]);
+        api.fail_next(&format!("/apis/{}/v1alpha1", keys::GROUP), 1, 503);
+        assert!(check_domain(&api.client()).await.is_err());
+    }
 }
