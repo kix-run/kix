@@ -218,7 +218,9 @@ deploy` both refuse, naming the objects, a build whose plan leaves one out:
 - Outside the check, because Kix writes them and no build file describes
   them: the Activation record's lifecycle writes and the records it
   supersedes, the `kix.run/activations` stamp on unchanged objects,
-  `--record-annotation`, the `kix.run/*` stamps, SOPS values decrypted into
+  `--record-annotation` (never a key under Kix's domain, a subdomain of
+  it, or a retired one: `Planned::annotate_record` refuses those, since
+  Kix reads them off the record), the `kix.run/*` stamps, SOPS values decrypted into
   a Secret from the source file its store path names, and the delete before
   an immutable-field recreate of a write.
 

@@ -306,9 +306,22 @@ impl Planned {
     /// where the engine creates it before the first wave and where the plan
     /// applies it last, so the two stay the same manifest. The record's
     /// lifecycle writes are outside the objects check.
-    pub fn annotate_record(&mut self, annotations: &[(String, String)]) {
+    ///
+    /// Refuses a key under Kix's own domain ([`keys::is_kix_domain_key`]):
+    /// Kix reads those off the record, the identity hash among them, and the
+    /// check was made with the record's own values.
+    pub fn annotate_record(&mut self, annotations: &[(String, String)]) -> Result<(), String> {
+        if let Some((key, _)) = annotations
+            .iter()
+            .find(|(key, _)| keys::is_kix_domain_key(key))
+        {
+            return Err(format!(
+                "the record annotation '{key}' is not allowed: Kix writes the keys under {} on the record",
+                keys::DOMAIN
+            ));
+        }
         if annotations.is_empty() {
-            return;
+            return Ok(());
         }
         let annotate = |manifest: &mut Value| {
             if !lifecycle::is_record(manifest) {
@@ -335,6 +348,7 @@ impl Planned {
                 annotate(manifest);
             }
         }
+        Ok(())
     }
 
     /// Replace the package diff's entries with what the apiserver answered
@@ -645,5 +659,106 @@ mod tests {
         assert_eq!(prune, vec![rid("ConfigMap", "app", "mine")]);
         let kept: Vec<&str> = kept.iter().map(|s| s.rid.name.as_str()).collect();
         assert_eq!(kept, vec!["shared", "shared-cm"]);
+    }
+
+    /// The `kix-enterprise-test` bundle, planned as a first deploy without
+    /// connecting.
+    fn planned() -> Planned {
+        struct Carried;
+        impl crate::build_source::CarriedBuild for Carried {
+            fn sops_files(&mut self) -> Result<std::collections::HashMap<String, Vec<u8>>, String> {
+                Ok(Default::default())
+            }
+            fn provenance(&self) -> crate::build_source::Provenance {
+                Default::default()
+            }
+            fn deployed_build(&self, _identity_hash: &str) -> Result<Option<StoreGraph>, String> {
+                Ok(None)
+            }
+        }
+        let bytes: &[u8] =
+            include_bytes!("../../tests/fixtures/bundles/kix-enterprise-test.kixbundle");
+        let graph = crate::eval::bundle::Bundle::read(std::io::Cursor::new(bytes))
+            .unwrap()
+            .1;
+        let build =
+            crate::build_source::Build::carried(bytes.to_vec(), "kix-enterprise-test", |_| {
+                Ok((Carried, graph))
+            })
+            .unwrap()
+            .installable()
+            .unwrap();
+        let baseline = Baseline::empty();
+        let flags = super::super::document::PlanFlags {
+            prune: false,
+            prune_mode: None,
+            reconcile: false,
+            force_conflicts: false,
+            accept_migrations: false,
+        };
+        let new_manifests = manifests_of(build.graph());
+        let checked = futures::executor::block_on(Planner::new(flags, &|_| {}).check(
+            build.graph(),
+            &new_manifests,
+            "kix-enterprise-test",
+            &baseline,
+            None,
+        ))
+        .unwrap();
+        Planned {
+            build,
+            new_manifests,
+            client: None,
+            baseline,
+            migration_pairs: Vec::new(),
+            checked,
+        }
+    }
+
+    /// The record annotations a node of the plan and the build's manifests
+    /// carry for `key`.
+    fn record_annotation(p: &Planned, key: &str) -> Vec<Option<String>> {
+        let applied = p.checked.plan.nodes.iter().filter_map(|n| match &n.action {
+            ChangeAction::Apply(m) if lifecycle::is_record(m) => Some(m),
+            _ => None,
+        });
+        lifecycle::record_of(&p.new_manifests)
+            .into_iter()
+            .chain(applied)
+            .map(|m| {
+                m.pointer("/metadata/annotations")
+                    .and_then(|a| a.get(key))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    /// `--record-annotation` cannot set a key Kix reads off the record,
+    /// under its domain, a subdomain of it, or a retired domain; the plan
+    /// keeps the record it was checked with. Another key lands on both
+    /// copies of the record.
+    #[test]
+    fn a_record_annotation_under_kix_domain_is_refused() {
+        let mut p = planned();
+        let hash = keys::IDENTITY_HASH.to_string();
+        let before = record_annotation(&p, &hash);
+        for key in [
+            hash.clone(),
+            format!("operator.{}/x", keys::DOMAIN),
+            format!("{}/x", crate::legacy_domain::DOMAINS[0]),
+        ] {
+            let err = p
+                .annotate_record(&[("team".into(), "a".into()), (key.clone(), "forged".into())])
+                .unwrap_err();
+            assert!(err.contains(&format!("'{key}'")), "{err}");
+        }
+        assert_eq!(record_annotation(&p, &hash), before);
+        assert!(record_annotation(&p, "team").iter().all(Option::is_none));
+
+        p.annotate_record(&[("example.com/ticket".into(), "T-1".into())])
+            .unwrap();
+        let ticket = record_annotation(&p, "example.com/ticket");
+        assert_eq!(ticket, vec![Some("T-1".to_string()); 2]);
     }
 }

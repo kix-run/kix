@@ -269,6 +269,16 @@ pub fn is_kix_key(key: &str) -> bool {
     key.starts_with(PREFIX) || crate::legacy_domain::is_legacy_key(key)
 }
 
+/// Is `key` under Kix's domain, a subdomain of it (`operator.kix.run/`),
+/// or a retired domain? Kix reads such keys off the records it writes, so
+/// no one else may set them there.
+pub fn is_kix_domain_key(key: &str) -> bool {
+    let prefix = key.split_once('/').map_or("", |(p, _)| p);
+    std::iter::once(DOMAIN)
+        .chain(crate::legacy_domain::DOMAINS.iter().copied())
+        .any(|d| prefix == d || prefix.ends_with(&format!(".{d}")))
+}
+
 /// Read a Kix annotation off a manifest.
 ///
 /// `key` is a constant from this module. Pass the manifest, not its

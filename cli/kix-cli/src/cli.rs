@@ -731,7 +731,8 @@ pub struct DeployArgs {
     pub operator: bool,
 
     /// Write an annotation onto this deploy's Activation record, as
-    /// KEY=VALUE. KEY may not be under `kix.run/`. Repeat for several
+    /// KEY=VALUE. KEY may not be under `kix.run/`, a subdomain of it, or a
+    /// retired Kix domain: Kix reads those off the record. Repeat for several
     #[arg(
         long = "record-annotation",
         value_name = "KEY=VALUE",
@@ -1107,11 +1108,7 @@ fn parse_record_annotation(s: &str) -> Result<(String, String), String> {
         .ok_or_else(|| format!("expected KEY=VALUE, got '{s}'"))?;
     // Kix reads its own keys, and those of the retired domain, off the
     // record: the identity hash, built-via, and more.
-    let prefix = key.split_once('/').map_or("", |(p, _)| p);
-    let kix_owned = std::iter::once(kix::manifest::keys::DOMAIN)
-        .chain(kix::legacy_domain::DOMAINS.iter().copied())
-        .any(|d| prefix == d || prefix.ends_with(&format!(".{d}")));
-    if key.is_empty() || kix_owned {
+    if key.is_empty() || kix::manifest::keys::is_kix_domain_key(key) {
         return Err(format!(
             "'{key}' is not allowed: the key must be set and not under {}",
             kix::manifest::keys::DOMAIN

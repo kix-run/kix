@@ -63,7 +63,8 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     };
     // A deploy decrypts the SOPS files for real, after review.
     let sops = p.sops_sources(false).map_err(|e| miette!("{e}"))?;
-    p.annotate_record(&args.record_annotations);
+    p.annotate_record(&args.record_annotations)
+        .map_err(|e| miette!("{e}"))?;
 
     // Detect stateful migration pairs and require --accept-migrations.
     if !p.migration_pairs().is_empty() {
