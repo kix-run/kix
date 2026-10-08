@@ -1,0 +1,3 @@
+# 2026-10-08 · `cli/kix-operator/src/controller.rs` · The operator applies a build without the plan-bound objects check.
+
+`kix deploy --operator` and `kix rollback --operator` now run `plan::objects::of` on the build before they write the Activation CR. The operator then plans again against the live objects and always prunes, and it runs no such check itself. Its writes and deletes can differ from the plan the CLI showed, and an Activation CR written another way (kubectl, a GitOps tool) reaches the operator unchecked. The check lives in `kix-cli` and needs the package diff, which the operator does not build.

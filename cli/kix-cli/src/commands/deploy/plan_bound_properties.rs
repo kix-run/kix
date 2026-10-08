@@ -1248,7 +1248,7 @@ fn plan_and_check(
         return Ok(Outcome::PlanningRefused);
     };
     let pkg_diff = plan::diff_graphs(&old_graph, &new_graph);
-    let deletes = deletes_of(&args, &orphans);
+    let deletes = deletes_of(prune_policy_for(&args), &orphans);
     let Ok(objects) = plan::objects::of(
         &pkg_diff.shown,
         &new_graph,

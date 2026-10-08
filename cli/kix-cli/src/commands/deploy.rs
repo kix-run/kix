@@ -747,7 +747,7 @@ pub(crate) fn prepare(args: &PlanArgs, ctx: &mut CommandContext) -> Result<Optio
         &pkg_diff.shown,
         &new_graph,
         &plan,
-        &deletes_of(args, &orphan_rids),
+        &deletes_of(prune_policy_for(args), &orphan_rids),
         listed_deletes,
         active_manifests
             .iter()
@@ -822,10 +822,10 @@ fn actions(
         .collect()
 }
 
-/// The orphans the deploy's prune deletes: under `--prune`, all but the
-/// kinds `lifecycle::never_pruned` protects.
-fn deletes_of(args: &PlanArgs, orphan_rids: &[ResourceId]) -> Vec<ResourceId> {
-    if prune_policy_for(args) != PrunePolicy::Delete {
+/// The orphans a run's prune deletes: under `PrunePolicy::Delete`, all but
+/// the kinds `lifecycle::never_pruned` protects.
+pub(crate) fn deletes_of(prune: PrunePolicy, orphan_rids: &[ResourceId]) -> Vec<ResourceId> {
+    if prune != PrunePolicy::Delete {
         return Vec::new();
     }
     orphan_rids
@@ -1836,126 +1836,41 @@ pub(crate) fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
 }
 
 fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
-    let flake_path = resolve_flake_path(&ctx.global.flake)?;
-
-    // Build the new activation and load its store graph.
-    if !ctx.global.quiet {
-        println!(
-            "Building cluster '{}' (operator mode)...",
-            output::bold(&args.plan.cluster)
-        );
-    }
-    let status = |msg: &str| {
-        if !ctx.global.quiet {
-            eprint!("\r\x1b[2K  {msg}");
-        }
-    };
-    let overrides = ctx.global.input_overrides();
-    let result_path =
-        build_cluster_activation_with_status(&flake_path, &args.plan.cluster, &overrides, &status)
-            .map_err(|e| miette!("failed to build cluster: {e}"))?;
-    let mut new_graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
-        .map_err(|e| miette!("{e}"))?;
-    // The same stale-pin check the direct path makes, and for the same
-    // reason: a pin from before the domain move renders Kix's own CRDs under
-    // the retired group. Before `stamp_annotations`, which would upgrade
-    // them and make a stale pin indistinguishable from a current one. Two
-    // deploy paths that answer differently about one build is worse than
-    // either answer.
-    kix::legacy_domain::check_build(
-        &new_graph
-            .resources
-            .values()
-            .map(|r| r.manifest.clone())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|e| miette!("{e}"))?;
-    stamp_annotations(&mut new_graph);
-    if !ctx.global.quiet {
-        eprint!("\r\x1b[2K");
-    }
-    // Keyed by the build's cluster name, as in the direct path.
-    let cluster = new_graph.cluster_name.clone();
-
-    let new_manifests: Vec<Value> = new_graph
-        .resources
-        .values()
-        .map(|r| r.manifest.clone())
-        .collect();
-
-    let manifest_count = new_manifests.len();
-    if !ctx.global.quiet {
-        println!(
-            "Cluster {}: {} manifests",
-            output::bold(&new_graph.cluster_name),
-            manifest_count,
-        );
-    }
-
-    if manifest_count == 0 {
-        if !ctx.global.quiet {
-            println!("Nothing to deploy.");
-        }
+    // The plan and the objects check of the direct path. The operator plans
+    // again against the live objects, but a build whose plan hides an
+    // object is refused here, before it reaches the cluster.
+    let Some(p) = prepare(&args.plan, ctx)? else {
         return Ok(());
-    }
-
-    // Read the Activation name and identity hash.
-    let activation_manifest = lifecycle::record_of(&new_manifests);
-    let activation_name = activation_manifest
-        .and_then(|m| {
-            m.pointer("/metadata/name")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        })
+    };
+    let activation_name = p
+        .activation_name
+        .clone()
         .ok_or_else(|| miette!("no Activation resource found in cluster manifests"))?;
-    let activation_identity_hash = activation_manifest.and_then(|m| {
-        m.pointer("/metadata/annotations")
-            .and_then(|a| a.get(keys::IDENTITY_HASH))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    });
-
-    // Show the plan when requested.
     if !ctx.global.quiet {
-        let old_graph = if args.plan.current_activation {
-            let (og, _) = load_old_from_cache(&cluster, &ctx.global);
-            og
-        } else {
-            ctx.runtime
-                .block_on(load_old_from_cluster(&cluster, &ctx.global))
-                .ok()
-                .and_then(|(og, _, _, _)| og)
-        };
-
-        let pkg_diff = match &old_graph {
-            Some(old) => plan::diff_graphs(old, &new_graph),
-            None => plan::diff_graphs(&StoreGraph::empty(&new_graph.cluster_name), &new_graph),
-        };
-
-        plan::print_package_plan(&pkg_diff, ctx.global.verbose > 0);
-        plan::print_plan_summary(&pkg_diff);
-
-        // Apply the same migration acknowledgement gate as direct mode.
-        // Operator-mode is non-interactive on the operator side, so the
-        // CLI must enforce the gate before handing off the Activation CR.
-        let old_manifests_for_pairs: Vec<Value> = old_graph
-            .as_ref()
-            .map(|g| g.resources.values().map(|r| r.manifest.clone()).collect())
-            .unwrap_or_default();
-        let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests_for_pairs);
-        if !migration_pairs.is_empty() {
-            print_migration_pairs(&migration_pairs);
-            if !args.plan.accept_migrations {
-                eprintln!(
-                    "{}",
-                    output::red(
-                        "Refusing to delegate to operator: stateful migration pairs detected but --accept-migrations was not passed."
-                    )
-                );
-                std::process::exit(1);
-            }
+        plan::print_package_plan(&p.pkg_diff, ctx.global.verbose > 0);
+        plan::print_plan_summary(&p.pkg_diff);
+    }
+    // Operator-mode is non-interactive on the operator side, so the CLI
+    // must enforce the migration gate before handing off the Activation CR.
+    if !p.migration_pairs.is_empty() {
+        print_migration_pairs(&p.migration_pairs);
+        if !args.plan.accept_migrations {
+            eprintln!(
+                "{}",
+                output::red(
+                    "Refusing to delegate to operator: stateful migration pairs detected but --accept-migrations was not passed."
+                )
+            );
+            std::process::exit(1);
         }
     }
+    let Prepared {
+        result_path,
+        new_graph,
+        cluster,
+        activation_identity_hash,
+        ..
+    } = p;
 
     // The receipt, same as the direct path. The operator has no source tree,
     // so provenance is computed here and written onto the Activation when it
@@ -2599,7 +2514,7 @@ mod run_end_tests {
 mod plan_bound_properties;
 
 #[cfg(test)]
-mod plan_bound_tests {
+pub(crate) mod plan_bound_tests {
     use super::*;
     use crate::cli::{Cli, Command};
     use crate::plan::document::{Objects, WriteChange};
@@ -2617,7 +2532,7 @@ mod plan_bound_tests {
 
     const NS: &str = "kix-enterprise-test-data";
 
-    fn build() -> StoreGraph {
+    pub(crate) fn build() -> StoreGraph {
         Bundle::read(std::io::Cursor::new(FIXTURE)).unwrap().1
     }
 
@@ -2630,7 +2545,7 @@ mod plan_bound_tests {
         }
     }
 
-    fn stamped(graph: &StoreGraph) -> (StoreGraph, Vec<Value>) {
+    pub(crate) fn stamped(graph: &StoreGraph) -> (StoreGraph, Vec<Value>) {
         let mut graph = graph.clone();
         stamp_annotations(&mut graph);
         let manifests = graph
@@ -2670,7 +2585,7 @@ mod plan_bound_tests {
             &pkg_diff.shown,
             &new_graph,
             &plan,
-            &deletes_of(&args, &orphan_rids),
+            &deletes_of(prune_policy_for(&args), &orphan_rids),
             &[],
             active_manifests.iter(),
         )
@@ -2691,7 +2606,7 @@ mod plan_bound_tests {
         );
     }
 
-    fn package_instance(name: &str, instance: Option<&str>) -> Value {
+    pub(crate) fn package_instance(name: &str, instance: Option<&str>) -> Value {
         let mut spec = json!({"namespaceName": NS});
         if let Some(instance) = instance {
             spec["instanceName"] = json!(instance);
@@ -2716,7 +2631,12 @@ mod plan_bound_tests {
 
     /// Add a package that the graph names `instance` in [`NS`], made from
     /// `pi` and holding one ClusterRoleBinding, before every other package.
-    fn add_package(graph: &mut StoreGraph, seed: &str, pi: Value, instance: &str) -> ResourceId {
+    pub(crate) fn add_package(
+        graph: &mut StoreGraph,
+        seed: &str,
+        pi: Value,
+        instance: &str,
+    ) -> ResourceId {
         let pi_path = path(&format!("{seed}p"), "PackageInstance-pi");
         let crb = cluster_role_binding(&format!("{seed}-admin"));
         let crb_path = path(&format!("{seed}c"), "ClusterRoleBinding-admin");
@@ -2747,6 +2667,21 @@ mod plan_bound_tests {
             Ok(objects) => panic!("the deploy was not refused: {objects:?}"),
             Err(unshown) => unshown.writes,
         }
+    }
+
+    /// The operator reads the build from the Nix store, and a bundle's build
+    /// is not there: with `--bundle` it would be handed a path it cannot read.
+    #[test]
+    fn an_operator_deploy_does_not_take_a_bundle() {
+        let parsed = Cli::try_parse_from([
+            "kix",
+            "deploy",
+            "x",
+            "--operator",
+            "--bundle",
+            "x.kixbundle",
+        ]);
+        assert!(parsed.is_err());
     }
 
     /// Two PackageInstances of one instance: the plan keys packages by

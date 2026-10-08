@@ -725,8 +725,9 @@ pub struct DeployArgs {
     #[arg(long, value_parser = validate_timeout)]
     pub timeout: Option<String>,
 
-    /// Delegate deployment to the kix operator instead of applying directly
-    #[arg(long)]
+    /// Delegate deployment to the kix operator instead of applying directly.
+    /// The operator reads the build from the Nix store, so not with --bundle
+    #[arg(long, conflicts_with = "bundle")]
     pub operator: bool,
 
     /// Write an annotation onto this deploy's Activation record, as
