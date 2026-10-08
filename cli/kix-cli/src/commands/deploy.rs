@@ -70,7 +70,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     };
     // A deploy decrypts the SOPS files for real, after review.
-    p.sops = p.build.sops_sources(false).map_err(|e| miette!("{e}"))?;
+    let sops = p.build.sops_sources(false).map_err(|e| miette!("{e}"))?;
     annotate_record(&mut p, &args.record_annotations);
 
     // Detect stateful migration pairs and require --accept-migrations.
@@ -114,7 +114,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let report = match &p.pre_client {
         Some(client) if total_apply > 0 || !p.orphan_rids.is_empty() => {
             let client = client.clone();
-            Some(super::plan::dry_run(&p, plan_args, client, ctx)?)
+            Some(super::plan::dry_run(&mut p, false, plan_args, client, ctx)?)
         }
         _ => None,
     };
@@ -159,7 +159,6 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let Prepared {
         build,
-        sops,
         new_manifests,
         cluster,
         old_manifests,
@@ -372,9 +371,14 @@ fn check_saved_plan(saved: &SavedPlan, ctx: &mut CommandContext) -> Result<()> {
     let Some(mut p) = prepare(&saved.args, ctx)? else {
         return Ok(());
     };
-    p.sops = p.build.sops_sources(false).map_err(|e| miette!("{e}"))?;
-    let report = match &p.pre_client {
-        Some(client) => Some(super::plan::dry_run(&p, &saved.args, client.clone(), ctx)?),
+    let report = match p.pre_client.clone() {
+        Some(client) => Some(super::plan::dry_run(
+            &mut p,
+            false,
+            &saved.args,
+            client,
+            ctx,
+        )?),
         None => None,
     };
     let doc = super::plan::document(&mut p, report.as_ref(), &saved.args, Detail::Plain);
@@ -453,9 +457,6 @@ fn annotate_record(p: &mut Prepared, annotations: &[(String, String)]) {
 pub(crate) struct Prepared {
     /// The new build, stamped.
     pub build: Build,
-    /// Where SOPS sources come from ([`Build::sops_sources`]): `kix plan`
-    /// sets it with placeholders, `kix deploy` with the real files.
-    pub sops: kix::cluster::secrets::SopsSources,
     pub new_manifests: Vec<Value>,
     /// The name the build gives the cluster, which keys its records and the
     /// local cache.
@@ -526,7 +527,8 @@ pub(crate) fn prepare(args: &PlanArgs, ctx: &mut CommandContext) -> Result<Optio
     // A kixpkgs pin from before the domain move renders Kix's own CRDs under
     // the retired group. Deploying it would put those CRDs back and leave two
     // groups live, which the CLI cannot tell apart. Check before
-    // stamping, which upgrades a loaded build to the current domain: after that a stale pin is indistinguishable from a current one.
+    // stamping, which upgrades a loaded build to the current domain:
+    // after that a stale pin is indistinguishable from a current one.
     kix::legacy_domain::check_build(
         &build
             .graph()
@@ -734,7 +736,6 @@ pub(crate) fn prepare(args: &PlanArgs, ctx: &mut CommandContext) -> Result<Optio
 
     Ok(Some(Prepared {
         build,
-        sops: Default::default(),
         new_manifests,
         cluster,
         old_graph,

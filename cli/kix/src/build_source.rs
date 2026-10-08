@@ -11,6 +11,12 @@
 //!   reader itself, and refuses a build that is not valid or not of the
 //!   named cluster.
 //!
+//! The bytes are untrusted: a bundle comes from CI. The reader is not
+//! checked against them: it is code the operator chose to run. The digest
+//! names the bytes handed to the reader, and the reader must build the
+//! graph from exactly those bytes. The core's checks guard against a wrong
+//! or careless reader, not a hostile one.
+//!
 //! What a carried build gives later is checked as it is asked for: its
 //! SOPS files against their store paths ([`Build::sops_sources`]), and an
 //! earlier build against the record that names it ([`Build::deployed_build`]).
@@ -35,6 +41,12 @@ use crate::manifest::keys;
 use crate::text::printable;
 
 /// A build made elsewhere and carried here, beyond its graph.
+///
+/// An implementation is trusted code: [`Build::carried`] names the digest
+/// of the bytes it hands the reader, and cannot tell whether the graph came
+/// from them. The reader must build the graph from exactly those bytes.
+/// What each method gives is checked, against a wrong or careless
+/// implementation, not a hostile one.
 pub trait CarriedBuild {
     /// The SOPS files the build carries, by store path, as read. These are
     /// the only SOPS files its Secrets may read.
@@ -96,6 +108,11 @@ impl Build {
     /// The build `read` makes of `bytes`, which must be valid and a build
     /// of `cluster`. The receipt names the SHA-256 of `bytes`, whatever the
     /// source claims.
+    ///
+    /// The digest names the bytes handed to `read`, and `read` must build
+    /// the graph from exactly those bytes: nothing here checks that it did.
+    /// The checks guard against a wrong or careless reader, not a hostile
+    /// one.
     pub fn carried<S: CarriedBuild + 'static>(
         bytes: Vec<u8>,
         cluster: &str,
@@ -232,12 +249,21 @@ mod tests {
         }
     }
 
-    /// A carried build of `graph`, giving `deployed` for any record.
-    fn carried(graph: &StoreGraph, deployed: &StoreGraph) -> Result<Build, String> {
+    /// A carried build of `graph` for `cluster`, giving `deployed` for any
+    /// record.
+    fn carried_for(
+        cluster: &str,
+        graph: &StoreGraph,
+        deployed: &StoreGraph,
+    ) -> Result<Build, String> {
         let (graph, deployed) = (graph.clone(), deployed.clone());
-        Build::carried(b"bytes".to_vec(), "kix-enterprise-test", |_| {
-            Ok((Gives(deployed), graph))
-        })
+        // Ignores the bytes so a test can hand the core a graph a bundle
+        // would not hold.
+        Build::carried(b"bytes".to_vec(), cluster, |_| Ok((Gives(deployed), graph)))
+    }
+
+    fn carried(graph: &StoreGraph, deployed: &StoreGraph) -> Result<Build, String> {
+        carried_for("kix-enterprise-test", graph, deployed)
     }
 
     /// A source that gives an invalid build, or a build of another cluster,
@@ -252,6 +278,16 @@ mod tests {
         let mut invalid = graph.clone();
         invalid.resources.remove(&invalid.activation_path.clone());
         assert!(carried(&invalid, &graph).is_err());
+    }
+
+    /// A build whose cluster name is changed to the one asked for still
+    /// names its real cluster in its manifests, so validation refuses it.
+    #[test]
+    fn a_carried_build_renamed_to_the_cluster_is_refused() {
+        let mut renamed = fixture();
+        renamed.cluster_name = "other".to_string();
+        let deployed = fixture();
+        assert!(carried_for("other", &renamed, &deployed).is_err());
     }
 
     /// The digest is of the bytes the core read, whatever the source says.

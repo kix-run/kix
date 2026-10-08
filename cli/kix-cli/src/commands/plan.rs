@@ -57,9 +57,8 @@ pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Resu
     // A plan decrypts no SOPS file the build carries: those Secrets get
     // placeholder values, so planning before anyone has approved reads no
     // secret.
-    p.sops = p.build.sops_sources(true).map_err(|e| miette!("{e}"))?;
-    let report = match &p.pre_client {
-        Some(client) => Some(dry_run(&p, args, client.clone(), ctx)?),
+    let report = match p.pre_client.clone() {
+        Some(client) => Some(dry_run(&mut p, true, args, client, ctx)?),
         None => None,
     };
     let doc = document(&mut p, report.as_ref(), args, detail);
@@ -140,13 +139,22 @@ pub(crate) struct DryRunReport {
 /// tries the dependents of a refused node, so one refused write does not hide
 /// the answers for the rest. Nothing is persisted: `KubeOps` sends every write with
 /// `dryRun=All` and skips the Activation record's lifecycle writes.
+///
+/// `placeholders` goes to [`kix::build_source::Build::sops_sources`]: true
+/// for `kix plan`, which decrypts nothing.
 pub(crate) fn dry_run(
-    p: &Prepared,
+    p: &mut Prepared,
+    placeholders: bool,
     args: &PlanArgs,
     client: kube::Client,
     ctx: &CommandContext,
 ) -> Result<DryRunReport> {
     let quiet = ctx.global.quiet;
+    let sops = p
+        .build
+        .sops_sources(placeholders)
+        .map_err(|e| miette!("{e}"))?;
+    let p = &*p;
     ctx.runtime.block_on(async {
         let discovery = fetch::discover_resources(&client)
             .await
@@ -171,7 +179,7 @@ pub(crate) fn dry_run(
                 activation_identity_hash: p.activation_identity_hash.clone(),
                 force_conflicts: args.force_conflicts,
                 dry_run: true,
-                sops: p.sops.clone(),
+                sops,
                 ..Default::default()
             },
         ));
