@@ -8,6 +8,10 @@
 //! - [`manifest`]: Kubernetes types, diffs, annotation stamping, and validation
 //! - [`cluster`]: apply, fetch, DAG, readiness, activation lifecycle, and reconcile
 //!
+//! [`plan`] sits on top of them: what a deploy of a build would change, the
+//! plan document `kix plan` and `kix diff` print, and the check that holds a
+//! deploy to the objects its plan shows.
+//!
 //! Four smaller modules sit beside them: [`build_source`], the checked build
 //! a command plans and deploys and where it came from, [`pins`], the committed record of
 //! what each image reference resolved to, [`registry`], the one place Kix asks
@@ -20,6 +24,7 @@ pub mod eval;
 pub mod legacy_domain;
 pub mod manifest;
 pub mod pins;
+pub mod plan;
 pub mod registry;
 pub mod text;
 

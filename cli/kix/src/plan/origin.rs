@@ -9,12 +9,12 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use kix::cluster::drift;
-use kix::cluster::fieldsv1::KIX_FIELD_MANAGER;
-use kix::manifest::diff::engine::structural_diff;
-use kix::manifest::diff::{DiffConfig, DiffKind, Difference};
-use kix::manifest::keys;
-use kix::manifest::types::{self, ResourceId};
+use crate::cluster::drift;
+use crate::cluster::fieldsv1::KIX_FIELD_MANAGER;
+use crate::manifest::diff::engine::structural_diff;
+use crate::manifest::diff::{DiffConfig, DiffKind, Difference};
+use crate::manifest::keys;
+use crate::manifest::types::{self, ResourceId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -265,7 +265,7 @@ pub fn value_at<'v>(obj: &'v Value, path: &str) -> Option<&'v Value> {
             node = items
                 .iter()
                 .find(|item| {
-                    kix::manifest::diff::keyed_lists::extract_key(field, item).as_deref()
+                    crate::manifest::diff::keyed_lists::extract_key(field, item).as_deref()
                         == Some(wanted)
                         || item.get("name").and_then(Value::as_str) == Some(wanted)
                 })

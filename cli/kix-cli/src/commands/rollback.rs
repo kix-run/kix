@@ -761,7 +761,7 @@ struct Planned {
     target_graph: StoreGraph,
     target_manifests: Vec<Value>,
     plan: DeployPlan,
-    pkg_diff: plan::PackageDiff,
+    pkg_diff: kix::plan::PackageDiff,
     orphan_rids: Vec<ResourceId>,
     shared_orphans: Vec<SharedOrphan>,
     /// The current closure with the failed and kept ones, so `prune_order`
@@ -956,7 +956,7 @@ async fn plan_rollback(
 
 /// The rollback's engine plan and the package diff it shows. Refuses a
 /// target whose plan writes or deletes an object the diff leaves out, as
-/// `kix deploy` does (see [`plan::objects`]). `ran` are the manifests of the
+/// `kix deploy` does (see [`kix::plan::objects`]). `ran` are the manifests of the
 /// builds the cluster ran: the current one and the failed and kept ones.
 #[allow(clippy::too_many_arguments)]
 fn checked_plan<'a>(
@@ -968,17 +968,19 @@ fn checked_plan<'a>(
     shared_orphans: &[SharedOrphan],
     prune: PrunePolicy,
     ran: impl IntoIterator<Item = &'a Value>,
-) -> Result<(DeployPlan, plan::PackageDiff)> {
+) -> Result<(DeployPlan, kix::plan::PackageDiff)> {
     let resource_graph = ResourceGraph::from_manifests(target_manifests).into_diagnostic()?;
     let plan =
         DeployPlan::from_graph_and_changes(&resource_graph, all_actions).into_diagnostic()?;
     let mut pkg_diff = match current_graph {
-        Some(old) => plan::diff_graphs(old, target_graph),
-        None => plan::diff_graphs(&StoreGraph::empty(&target_graph.cluster_name), target_graph),
+        Some(old) => kix::plan::diff_graphs(old, target_graph),
+        None => {
+            kix::plan::diff_graphs(&StoreGraph::empty(&target_graph.cluster_name), target_graph)
+        }
     };
     pkg_diff.keep_shared(shared_orphans);
     // The rollback read the cluster, and its plan lists every orphan.
-    plan::objects::of(
+    kix::plan::objects::of(
         &pkg_diff.shown,
         target_graph,
         &plan,
@@ -1068,7 +1070,7 @@ mod tests {
 
     /// What `plan_rollback` checks for a rollback from `current` to
     /// `target`, with no failed or kept deploys.
-    fn checked(current: &StoreGraph, target: &StoreGraph) -> Result<plan::PackageDiff> {
+    fn checked(current: &StoreGraph, target: &StoreGraph) -> Result<kix::plan::PackageDiff> {
         let (current_graph, current_manifests) = stamped(current);
         let (target_graph, target_manifests) = stamped(target);
         let all_actions =

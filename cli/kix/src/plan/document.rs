@@ -8,18 +8,18 @@
 //! read differently.
 //!
 //! The JSON Schema of this type is committed at
-//! `kix-cli/schema/plan.schema.json`; a test fails when the type and the file
-//! disagree. Set [`SCHEMA_VERSION`] to the day's date when a change is not
+//! `kix-cli/schema/plan.schema.json`, beside the CLI that prints the
+//! document; a test there fails when the type and the file disagree. Set [`SCHEMA_VERSION`] to the day's date when a change is not
 //! backward compatible: a field removed or renamed, or a value's meaning
 //! changed.
 
 use std::collections::{BTreeMap, HashMap};
 
-use kix::cluster::migrate::MigrationPair;
-use kix::eval::store_graph::StoreGraph;
-use kix::manifest::diff::{DiffKind, Difference};
-use kix::manifest::types::ResourceId;
-use kix::manifest::{keys, lifecycle};
+use crate::cluster::migrate::MigrationPair;
+use crate::eval::store_graph::StoreGraph;
+use crate::manifest::diff::{DiffKind, Difference};
+use crate::manifest::types::ResourceId;
+use crate::manifest::{keys, lifecycle};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -631,12 +631,6 @@ impl Plan {
     }
 }
 
-/// The JSON Schema of [`Plan`], as committed.
-#[cfg(test)]
-pub fn schema() -> Value {
-    serde_json::to_value(schemars::schema_for!(Plan)).expect("a schema serializes")
-}
-
 impl From<&MigrationPair> for Migration {
     fn from(p: &MigrationPair) -> Self {
         Migration {
@@ -794,29 +788,6 @@ impl FieldChange {
 mod tests {
     use super::*;
 
-    /// Where the committed schema lives, relative to this crate.
-    const SCHEMA_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/schema/plan.schema.json");
-
-    /// The committed schema is the type's schema. Regenerate it with
-    /// `KIX_WRITE_PLAN_SCHEMA=1 cargo test -p kix-cli plan::document`, and
-    /// set `SCHEMA_VERSION` to the day's date when the change is not backward
-    /// compatible.
-    #[test]
-    fn the_committed_schema_matches_the_type() {
-        let generated = serde_json::to_string_pretty(&schema()).unwrap() + "\n";
-        if std::env::var_os("KIX_WRITE_PLAN_SCHEMA").is_some() {
-            std::fs::create_dir_all(std::path::Path::new(SCHEMA_PATH).parent().unwrap()).unwrap();
-            std::fs::write(SCHEMA_PATH, &generated).unwrap();
-        }
-        let committed = std::fs::read_to_string(SCHEMA_PATH).unwrap_or_default();
-        assert!(
-            committed == generated,
-            "kix-cli/schema/plan.schema.json does not match the Plan type. \
-             Regenerate it with KIX_WRITE_PLAN_SCHEMA=1 cargo test -p kix-cli plan::document \
-             and set SCHEMA_VERSION to the day's date if the change is not backward compatible."
-        );
-    }
-
     #[test]
     fn a_store_path_is_the_store_entry_of_a_path_inside_it() {
         assert_eq!(
@@ -853,13 +824,13 @@ mod tests {
     #[test]
     fn a_prune_delete_alone_is_a_change() {
         let empty = super::super::diff_graphs(
-            &kix::eval::store_graph::StoreGraph::empty("c"),
-            &kix::eval::store_graph::StoreGraph::empty("c"),
+            &crate::eval::store_graph::StoreGraph::empty("c"),
+            &crate::eval::store_graph::StoreGraph::empty("c"),
         );
         let mut plan = Plan::new(
             MadeBy::DryRun,
             "c",
-            Build::of(&kix::eval::store_graph::StoreGraph::empty("c")),
+            Build::of(&crate::eval::store_graph::StoreGraph::empty("c")),
             &empty,
             Detail::Plain,
             &[],

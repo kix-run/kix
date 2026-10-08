@@ -10,12 +10,12 @@
 
 use std::collections::HashMap;
 
-use kix::cluster::preview::{DryRunAnswer, DryRunOutcome, Refusal};
-use kix::eval::store_graph::StoreGraph;
-use kix::manifest::diff::engine::structural_diff;
-use kix::manifest::diff::{DiffConfig, Difference};
-use kix::manifest::lifecycle;
-use kix::manifest::types::{self, ResourceId};
+use crate::cluster::preview::{DryRunAnswer, DryRunOutcome, Refusal};
+use crate::eval::store_graph::StoreGraph;
+use crate::manifest::diff::engine::structural_diff;
+use crate::manifest::diff::{DiffConfig, Difference};
+use crate::manifest::lifecycle;
+use crate::manifest::types::{self, ResourceId};
 use serde_json::Value;
 
 use super::document::DriftChange;
@@ -317,8 +317,8 @@ fn prune_empty(diff: &mut PackageDiff) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kix::cluster::apply::ApplyPreview;
-    use kix::manifest::keys;
+    use crate::cluster::apply::ApplyPreview;
+    use crate::manifest::keys;
     use serde_json::json;
 
     fn configmap(ns: &str, name: &str, hash: &str, data: Value) -> Value {

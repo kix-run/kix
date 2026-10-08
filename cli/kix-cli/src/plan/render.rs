@@ -1,4 +1,5 @@
-//! Text and Markdown for the sections of a [`Plan`] beyond its packages.
+//! Text and Markdown for the sections of a [`Plan`] beyond its packages,
+//! and the text of a saved plan's comparison.
 //!
 //! The package list is rendered by `render_package_plan` and
 //! `render_package_diff_markdown`; these add what the write path found
@@ -10,11 +11,12 @@ use std::fmt::Write;
 
 use crate::output;
 
-use super::document::{
+use kix::plan::document::{
     AdmissionRefusal, Checked, MadeBy, NotCheckedReason, Plan, PruneFate, RefusalReason,
     UncheckedReason, WriteChange,
 };
-use super::origin::ChangeLabel;
+use kix::plan::origin::ChangeLabel;
+use kix::plan::saved::{Comparison, Rule};
 
 /// The tag after a field change in the text plan. Intent is the expected
 /// case and carries no tag.
@@ -447,5 +449,73 @@ pub fn render_markdown(plan: &Plan) -> String {
     };
     let _ = writeln!(out, "> {note}");
     let _ = writeln!(out);
+    out
+}
+
+/// The comparison as the deploy prints it. `path` names the saved plan.
+pub fn render_comparison(c: &Comparison, reviewed: &Plan, path: &str) -> String {
+    let mut out = String::new();
+    let path = match &c.plan_sha256 {
+        Some(sha) => format!("{path}, {sha}"),
+        None => path.to_string(),
+    };
+    if c.matches {
+        let _ = writeln!(
+            out,
+            "{}",
+            output::green(&format!("The reviewed plan matches ({path})."))
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "{}",
+            output::red(&format!("The reviewed plan no longer matches ({path}):"))
+        );
+        for m in &c.mismatches {
+            for (i, item) in m.items.iter().enumerate() {
+                let label = if i == 0 {
+                    format!("[{}]", m.rule.label())
+                } else {
+                    String::new()
+                };
+                let _ = writeln!(out, "  {label:<20} {item}");
+            }
+        }
+    }
+    if !c.skipped.is_empty() {
+        let what: Vec<&str> = c
+            .skipped
+            .iter()
+            .map(|r| match r {
+                Rule::NewRefusal => "conflicts and admission",
+                Rule::NewRevertedDrift => "drift",
+                Rule::NewPruneDelete => "prune",
+                _ => r.label(),
+            })
+            .collect();
+        let kind = if reviewed.made_by == MadeBy::LiveRead {
+            "the reviewed plan is a kix diff"
+        } else {
+            "the reviewed plan did not check them"
+        };
+        let _ = writeln!(
+            out,
+            "{}",
+            output::dim(&format!("Not compared, {kind}: {}.", what.join(", ")))
+        );
+    }
+    if let Some((r, f)) = &c.kix_differs {
+        let _ = writeln!(
+            out,
+            "{}",
+            output::yellow(&format!(
+                "note: the plan was made by {r}, and this deploy runs {f}. The deploy writes \
+                 and deletes the objects the plan lists, so this is not refused."
+            ))
+        );
+    }
+    if !c.matches {
+        let _ = writeln!(out, "Review a new plan, or deploy without --plan.");
+    }
     out
 }

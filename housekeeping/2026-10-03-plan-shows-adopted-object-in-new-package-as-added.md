@@ -1,4 +1,4 @@
-# 2026-10-03 · `cli/kix-cli/src/plan/server.rs` · `kix plan` lists an existing object as added when its package is new in the build.
+# 2026-10-03 · `cli/kix/src/plan/server.rs` · `kix plan` lists an existing object as added when its package is new in the build.
 
 `entry()` returns no entry for a package in `packages.added`, so `Overlay::apply`
 ignores the dry-run answer for each of its objects, live object included. When

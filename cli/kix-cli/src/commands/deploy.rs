@@ -123,15 +123,15 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // A reviewed plan that no longer matches applies nothing.
     if let Some(s) = &saved {
-        let mut comparison = plan::saved::compare(&s.reviewed, &doc);
+        let mut comparison = kix::plan::saved::compare(&s.reviewed, &doc);
         comparison.plan_sha256 = Some(s.sha256.clone());
         eprintln!();
         eprint!(
             "{}",
-            plan::saved::render_text(&comparison, &s.reviewed, &s.path)
+            plan::render::render_comparison(&comparison, &s.reviewed, &s.path)
         );
         if !comparison.matches {
-            std::process::exit(plan::saved::EXIT_STALE);
+            std::process::exit(EXIT_STALE);
         }
     }
 
@@ -318,13 +318,17 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     Ok(())
 }
 
+/// Exit status of `kix deploy --plan` when the reviewed plan no longer
+/// matches.
+const EXIT_STALE: i32 = 4;
+
 /// A reviewed plan read for `kix deploy --plan`, with the planning flags the
 /// deploy uses.
 pub(crate) struct SavedPlan {
     pub path: String,
-    /// [`plan::saved::digest`] of the file as read.
+    /// [`kix::plan::saved::digest`] of the file as read.
     pub sha256: String,
-    pub reviewed: plan::document::Plan,
+    pub reviewed: kix::plan::document::Plan,
     pub args: PlanArgs,
 }
 
@@ -333,32 +337,32 @@ pub(crate) struct SavedPlan {
 fn load_saved_plan(path: &std::path::Path, given: &PlanArgs) -> Result<SavedPlan> {
     let bytes =
         std::fs::read(path).map_err(|e| miette!("cannot read the plan {}: {e}", path.display()))?;
-    let reviewed: plan::document::Plan = serde_json::from_slice(&bytes)
+    let reviewed: kix::plan::document::Plan = serde_json::from_slice(&bytes)
         .map_err(|e| miette!("{} is not a Kix plan document: {e}", path.display()))?;
-    if let Some(why) = plan::saved::unusable(&reviewed) {
+    if let Some(why) = kix::plan::saved::unusable(&reviewed) {
         return Err(miette!("cannot deploy from {}: {why}", path.display()));
     }
-    let flags = plan::saved::flags_for(&reviewed, &super::plan::flags_of(given))
+    let flags = kix::plan::saved::flags_for(&reviewed, &super::plan::flags_of(given))
         .map_err(|e| miette!("cannot deploy from {}: {e}", path.display()))?;
     let mut args = given.clone();
     args.prune = flags.prune;
     args.prune_mode = flags.prune_mode.map(|m| match m {
-        plan::document::PruneModeFlag::Default => PruneMode::Default,
-        plan::document::PruneModeFlag::No => PruneMode::No,
+        kix::plan::document::PruneModeFlag::Default => PruneMode::Default,
+        kix::plan::document::PruneModeFlag::No => PruneMode::No,
     });
     args.reconcile = flags.reconcile;
     args.force_conflicts = flags.force_conflicts;
     args.accept_migrations = flags.accept_migrations;
     Ok(SavedPlan {
         path: path.display().to_string(),
-        sha256: plan::saved::digest(&bytes),
+        sha256: kix::plan::saved::digest(&bytes),
         reviewed,
         args,
     })
 }
 
 /// `kix deploy --plan <file> --dry-run`: plan again, compare, and exit 0
-/// when the reviewed plan matches or [`plan::saved::EXIT_STALE`] when not.
+/// when the reviewed plan matches or [`EXIT_STALE`] when not.
 /// The dry run always runs when connected, as `kix plan` does.
 fn check_saved_plan(saved: &SavedPlan, ctx: &mut CommandContext) -> Result<()> {
     let format = ctx.output_format(crate::cli::OutputFormat::Text);
@@ -379,7 +383,7 @@ fn check_saved_plan(saved: &SavedPlan, ctx: &mut CommandContext) -> Result<()> {
         None => None,
     };
     let doc = super::plan::document(&mut p, report.as_ref(), &saved.args, Detail::Plain);
-    let mut comparison = plan::saved::compare(&saved.reviewed, &doc);
+    let mut comparison = kix::plan::saved::compare(&saved.reviewed, &doc);
     comparison.plan_sha256 = Some(saved.sha256.clone());
     match format {
         crate::cli::OutputFormat::Json => println!(
@@ -391,11 +395,11 @@ fn check_saved_plan(saved: &SavedPlan, ctx: &mut CommandContext) -> Result<()> {
         }
         _ => print!(
             "{}",
-            plan::saved::render_text(&comparison, &saved.reviewed, &saved.path)
+            plan::render::render_comparison(&comparison, &saved.reviewed, &saved.path)
         ),
     }
     if !comparison.matches {
-        std::process::exit(plan::saved::EXIT_STALE);
+        std::process::exit(EXIT_STALE);
     }
     // A matching plan can still be one the deploy stops on, as `kix plan`
     // exits 3 for: a refused write, or migrations not accepted.
@@ -484,10 +488,10 @@ pub(crate) struct Prepared {
     pub activation_name: Option<String>,
     pub activation_identity_hash: Option<String>,
     /// The package-grouped comparison of the old side with the new build.
-    pub pkg_diff: plan::PackageDiff,
+    pub pkg_diff: kix::plan::PackageDiff,
     /// Every object `plan` writes and the prune deletes, each shown in
-    /// `pkg_diff` or re-applied; see [`plan::objects`].
-    pub objects: plan::document::Objects,
+    /// `pkg_diff` or re-applied; see [`kix::plan::objects`].
+    pub objects: kix::plan::document::Objects,
 }
 
 /// The new build: the bundle `--bundle` names, or a build of the flake
@@ -689,16 +693,16 @@ pub(crate) fn prepare(args: &PlanArgs, ctx: &mut CommandContext) -> Result<Optio
         activation_manifest.and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(|s| s.to_string()));
 
     let mut pkg_diff = if let Some(old) = &old_graph {
-        plan::diff_graphs(old, new_graph)
+        kix::plan::diff_graphs(old, new_graph)
     } else if !old_manifests.is_empty() {
         // Synthesize a package view from the old manifests when the old
         // store graph is unavailable, so untouched packages show as
         // unchanged instead of everything "added".
         let synthetic = StoreGraph::synthesize(&old_manifests, new_graph);
-        plan::diff_graphs(&synthetic, new_graph)
+        kix::plan::diff_graphs(&synthetic, new_graph)
     } else {
         // A first deploy adds every package.
-        plan::diff_graphs(&StoreGraph::empty(&new_graph.cluster_name), new_graph)
+        kix::plan::diff_graphs(&StoreGraph::empty(&new_graph.cluster_name), new_graph)
     };
     pkg_diff.keep_shared(&shared_orphans);
 
@@ -708,7 +712,7 @@ pub(crate) fn prepare(args: &PlanArgs, ctx: &mut CommandContext) -> Result<Optio
         Some(_) => &orphan_rids,
         None => &[],
     };
-    let objects = plan::objects::of(
+    let objects = kix::plan::objects::of(
         &pkg_diff.shown,
         new_graph,
         &plan,
@@ -1670,7 +1674,7 @@ async fn run_deploy_async(
 pub(crate) fn render_plan_orphans(orphan_rids: &[ResourceId], fate: &str) -> String {
     use std::fmt::Write;
     let mut out = String::new();
-    let (prunable, kept) = plan::split_never_pruned(orphan_rids.to_vec());
+    let (prunable, kept) = kix::plan::split_never_pruned(orphan_rids.to_vec());
     if !prunable.is_empty() {
         let orphan_str = prunable.len().to_string();
         let _ = writeln!(out, "  {} orphaned ({fate})", output::red(&orphan_str));
@@ -2486,14 +2490,14 @@ mod plan_bound_properties;
 pub(crate) mod plan_bound_tests {
     use super::*;
     use crate::cli::{Cli, Command};
-    use crate::plan::document::{Objects, WriteChange};
-    use crate::plan::objects::Unshown;
     use clap::Parser;
     use kix::eval::bundle::Bundle;
     use kix::eval::stamp::stamp_annotations;
     use kix::eval::store_graph::store_hash;
     use kix::eval::{PackageNode, ResourceNode};
     use kix::manifest::types;
+    use kix::plan::document::{Objects, WriteChange};
+    use kix::plan::objects::Unshown;
     use serde_json::json;
     use std::path::Path;
     use std::path::PathBuf;
@@ -2551,8 +2555,8 @@ pub(crate) mod plan_bound_tests {
             .collect();
         let resource_graph = ResourceGraph::from_manifests(&new_manifests).unwrap();
         let plan = DeployPlan::from_graph_and_changes(&resource_graph, &all_actions).unwrap();
-        let pkg_diff = plan::diff_graphs(&old_graph, &new_graph);
-        plan::objects::of(
+        let pkg_diff = kix::plan::diff_graphs(&old_graph, &new_graph);
+        kix::plan::objects::of(
             &pkg_diff.shown,
             &new_graph,
             &plan,
@@ -2747,13 +2751,13 @@ pub(crate) mod plan_bound_tests {
         let all_actions = actions(&new_manifests, &new_manifests, &[], &[], false);
         let resource_graph = ResourceGraph::from_manifests(&new_manifests).unwrap();
         let plan = DeployPlan::from_graph_and_changes(&resource_graph, &all_actions).unwrap();
-        let pkg_diff = plan::diff_graphs(&new_graph, &new_graph);
+        let pkg_diff = kix::plan::diff_graphs(&new_graph, &new_graph);
         let stray = ResourceId {
             kind: "ConfigMap".into(),
             namespace: NS.into(),
             name: "not-in-any-build".into(),
         };
-        let refused = plan::objects::of(
+        let refused = kix::plan::objects::of(
             &pkg_diff.shown,
             &new_graph,
             &plan,
@@ -2765,7 +2769,7 @@ pub(crate) mod plan_bound_tests {
         assert_eq!(refused.deletes, vec![stray.display_id()]);
         // The plan's prune section, when it read the cluster, lists it.
         assert!(
-            plan::objects::of(
+            kix::plan::objects::of(
                 &pkg_diff.shown,
                 &new_graph,
                 &plan,
@@ -2962,7 +2966,11 @@ pub(crate) mod plan_bound_tests {
                     "kix-enterprise-test-data/foreign",
                     listed_hash.as_str()
                 ),
-                ("unlisted", plan::CLUSTER_LEVEL_KEY, unlisted_hash.as_str()),
+                (
+                    "unlisted",
+                    kix::plan::CLUSTER_LEVEL_KEY,
+                    unlisted_hash.as_str()
+                ),
             ]
         );
     }
@@ -2975,27 +2983,27 @@ pub(crate) mod plan_bound_tests {
         reviewed: &StoreGraph,
         deployed: &StoreGraph,
         extra: &[&str],
-    ) -> Vec<plan::saved::Rule> {
+    ) -> Vec<kix::plan::saved::Rule> {
         let doc = |graph: &StoreGraph| {
             let (stamped_graph, _) = stamped(graph);
-            let empty = plan::diff_graphs(&stamped_graph, &stamped_graph);
-            let mut doc = plan::document::Plan::new(
-                plan::document::MadeBy::DryRun,
+            let empty = kix::plan::diff_graphs(&stamped_graph, &stamped_graph);
+            let mut doc = kix::plan::document::Plan::new(
+                kix::plan::document::MadeBy::DryRun,
                 &graph.cluster_name,
-                plan::document::Build::of(&stamped_graph),
+                kix::plan::document::Build::of(&stamped_graph),
                 &empty,
-                plan::document::Detail::Plain,
+                kix::plan::document::Detail::Plain,
                 &[],
-                plan::document::NotCheckedReason::BuildsOnly,
+                kix::plan::document::NotCheckedReason::BuildsOnly,
             );
             let objects = objects(old, graph, extra).unwrap();
-            doc.objects_digest = Some(plan::objects::digest(&objects));
+            doc.objects_digest = Some(kix::plan::objects::digest(&objects));
             doc.objects = Some(objects);
             doc
         };
         let (reviewed, fresh) = (doc(reviewed), doc(deployed));
         assert_eq!(reviewed.build, fresh.build, "one Activation record");
-        plan::saved::compare(&reviewed, &fresh)
+        kix::plan::saved::compare(&reviewed, &fresh)
             .mismatches
             .iter()
             .map(|m| m.rule)
@@ -3026,7 +3034,7 @@ pub(crate) mod plan_bound_tests {
         deployed.packages[&shop].resource_paths.push(crb_path);
         assert_eq!(
             saved_rules(None, &reviewed, &deployed, &[]),
-            vec![plan::saved::Rule::Objects]
+            vec![kix::plan::saved::Rule::Objects]
         );
     }
 
@@ -3045,7 +3053,7 @@ pub(crate) mod plan_bound_tests {
         deployed.resource_owner.insert(moved, cache);
         assert_eq!(
             saved_rules(None, &reviewed, &deployed, &[]),
-            vec![plan::saved::Rule::Objects]
+            vec![kix::plan::saved::Rule::Objects]
         );
     }
 
@@ -3061,7 +3069,7 @@ pub(crate) mod plan_bound_tests {
         deployed.resource_owner.remove(&lost);
         assert_eq!(
             saved_rules(Some(&reviewed), &reviewed, &deployed, &["--prune"]),
-            vec![plan::saved::Rule::Objects]
+            vec![kix::plan::saved::Rule::Objects]
         );
     }
 }

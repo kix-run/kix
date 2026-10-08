@@ -54,7 +54,8 @@ use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use crate::cli::GcArgs;
 use crate::commands::baseline;
 use crate::output;
-use crate::plan::{self, print_never_pruned, split_never_pruned};
+use crate::plan::{self, print_never_pruned};
+use kix::plan::split_never_pruned;
 
 use super::CommandContext;
 
@@ -240,7 +241,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     //    Always render per-resource detail because the user
     //    must see what exactly will be deleted before confirming.
     if !garbage_manifests.is_empty() {
-        let mut pkg_diff = plan::diff_garbage(&old_graph, &new_graph);
+        let mut pkg_diff = kix::plan::diff_garbage(&old_graph, &new_graph);
         pkg_diff.keep_shared(&shared);
         if !ctx.global.quiet {
             println!();

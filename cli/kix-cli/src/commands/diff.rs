@@ -18,11 +18,10 @@ use kix::manifest::types::ResourceId;
 
 use crate::cli::{Detail as DetailArg, DiffArgs, OutputFormat};
 use crate::output;
-use crate::plan::document::{
-    Build, Checked, DeployedBuild, Detail, MadeBy, NotCheckedReason, Plan,
-};
-use crate::plan::origin::{self, Sides};
-use crate::plan::{self, ManifestIndex, PackageDiff, render};
+use crate::plan::{self, render};
+use kix::plan::document::{Build, Checked, DeployedBuild, Detail, MadeBy, NotCheckedReason, Plan};
+use kix::plan::origin::{self, Sides};
+use kix::plan::{ManifestIndex, PackageDiff};
 
 use super::CommandContext;
 
@@ -150,7 +149,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
     // Fail-closed: live objects that predate the lifecycle stamp carry no
     // `kix.run/lifecycle`, and then no pairs fire.
     let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests);
-    let mut packages = plan::diff_graphs(old, new);
+    let mut packages = kix::plan::diff_graphs(old, new);
     let cluster = &new.cluster_name;
 
     let doc = match side {

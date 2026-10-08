@@ -1,6 +1,6 @@
 # 158: Saved plans, `kix deploy --plan`
 
-**Status:** Implemented (`cli/kix-cli/src/plan/saved.rs`, `kix deploy --plan`). The `resourceVersion` precondition and deploying from a binary cache are open in `ROADMAP.md`.
+**Status:** Implemented (`cli/kix/src/plan/saved.rs`, `kix deploy --plan`). The `resourceVersion` precondition and deploying from a binary cache are open in `ROADMAP.md`.
 **Related:** `archive/157_kix_plan_primary_preview.md` (§5, the goal), kixpkgs#185 (the rules), kixpkgs#186 (the document fields this relies on)
 
 ## Context
@@ -131,7 +131,7 @@ Review a new plan, or deploy without --plan.
 
 ### Code
 
-- `cli/kix-cli/src/plan/saved.rs`: `Mismatch`, `Rule`, and `compare(R, F)
+- `cli/kix/src/plan/saved.rs`: `Mismatch`, `Rule`, and `compare(R, F)
   -> Comparison { mismatches, skipped }`. Pure, so every rule is a unit test
   over two `Plan` values.
 - `cli/kix-cli/src/cli.rs`: `--plan <FILE>` on `DeployArgs`, the flag

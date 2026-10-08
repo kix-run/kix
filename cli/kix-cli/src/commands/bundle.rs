@@ -179,7 +179,7 @@ pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
             .collect(),
         builder: object(&receipt["builder"]),
     };
-    let kix = crate::plan::document::KixBuild::current();
+    let kix = kix::plan::document::KixBuild::current();
     let kix_rev = match &kix.store_path {
         Some(path) => format!("{} ({path})", kix.version),
         None => kix.version,

@@ -10,7 +10,7 @@
 //! honest build's objects with no build to compare) with one set of flags.
 //!
 //! What is checked when kix accepts the bundle, computed apart from
-//! `plan::objects::of`:
+//! `kix::plan::objects::of`:
 //! - The writes of the engine plan, each matched to the one build file
 //!   whose manifest it applies, equal the plan document's `objects.writes`,
 //!   and the deletes equal its `objects.deletes`.
@@ -42,8 +42,8 @@ use serde_json::json;
 
 use super::*;
 use crate::cli::{Cli, Command};
-use crate::plan::document::{Packages, WriteChange};
-use crate::plan::{CLUSTER_LEVEL_KEY, ManifestIndex};
+use kix::plan::document::{Packages, WriteChange};
+use kix::plan::{CLUSTER_LEVEL_KEY, ManifestIndex};
 
 /// Honest bundles: the kix-enterprise-test build on stage1, and kixpkgs'
 /// `bundle-alias` and `immich` test clusters, the second with import
@@ -1248,9 +1248,9 @@ fn plan_and_check(
     let Ok(plan) = DeployPlan::from_graph_and_changes(&resource_graph, &all_actions) else {
         return Ok(Outcome::PlanningRefused);
     };
-    let pkg_diff = plan::diff_graphs(&old_graph, &new_graph);
+    let pkg_diff = kix::plan::diff_graphs(&old_graph, &new_graph);
     let deletes = deletes_of(prune_policy_for(&args), &orphans);
-    let Ok(objects) = plan::objects::of(
+    let Ok(objects) = kix::plan::objects::of(
         &pkg_diff.shown,
         &new_graph,
         &plan,
@@ -1338,7 +1338,7 @@ fn plan_and_check(
 
     // Each listed write and delete, as the plan document shows it.
     let index = ManifestIndex::new(&old_graph, &new_graph);
-    let doc = Packages::of(&pkg_diff, plan::document::Detail::Manifests(&index));
+    let doc = Packages::of(&pkg_diff, kix::plan::document::Detail::Manifests(&index));
     let old_of = |id: &ResourceId| {
         old_graph
             .resources
@@ -1357,14 +1357,14 @@ fn plan_and_check(
             listed[&(kind.clone(), namespace.clone(), name.clone(), hash.clone())];
         let old = old_of(&id);
         let is_secret = types::is_secret(manifest) || old.is_some_and(types::is_secret);
-        let expected = plan::shown_value(
+        let expected = kix::plan::shown_value(
             is_secret,
             "$",
             manifest,
             old,
-            plan::MAX_SHOWN_MANIFEST_BYTES,
+            kix::plan::MAX_SHOWN_MANIFEST_BYTES,
         );
-        let shows = |sides: Option<&BTreeMap<String, plan::document::ManifestSides>>| {
+        let shows = |sides: Option<&BTreeMap<String, kix::plan::document::ManifestSides>>| {
             sides
                 .and_then(|s| s.get(&shown_id))
                 .and_then(|s| s.new.as_ref())

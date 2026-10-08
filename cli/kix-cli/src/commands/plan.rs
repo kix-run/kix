@@ -29,13 +29,14 @@ use kix::manifest::types::ResourceId;
 
 use crate::cli::{Detail as DetailArg, OutputFormat, PlanArgs, PruneMode};
 use crate::output;
-use crate::plan::document::{
+use crate::plan::{self, render};
+use kix::plan::ManifestIndex;
+use kix::plan::document::{
     AdmissionRefusal, Build, Checked, Conflict, ConflictOwner, DeployedBuild, Detail, MadeBy,
     NotCheckedReason, Plan, PlanFlags, PruneEntry, PruneFate, PruneModeFlag, RefusalReason,
     UncheckedObject, UncheckedReason,
 };
-use crate::plan::server::{Overlay, comparable};
-use crate::plan::{self, ManifestIndex, render};
+use kix::plan::server::{Overlay, comparable};
 
 use super::CommandContext;
 use super::deploy::{self, Prepared};
@@ -397,7 +398,7 @@ pub(crate) fn document(
         store_path: a.built_via.clone(),
     });
     doc.flags = Some(flags_of(args));
-    doc.objects_digest = Some(plan::objects::digest(&p.objects));
+    doc.objects_digest = Some(kix::plan::objects::digest(&p.objects));
     doc.objects = Some(p.objects.clone());
     if !connected {
         return doc;
