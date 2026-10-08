@@ -20,7 +20,7 @@
 //!   direct FFI evaluation via `nix-bindings-*` crates. It is experimental and
 //!   not currently used by the CLI.
 
-pub mod build;
+pub(crate) mod build;
 pub mod bundle;
 pub mod cache;
 pub mod cli_backend;
@@ -28,12 +28,12 @@ pub mod error;
 pub mod evaluator;
 pub mod manifest_json;
 pub mod mock;
+pub mod stamp;
 pub mod store;
 pub mod store_graph;
 pub mod store_path;
 pub mod value;
 
-pub use build::{build_cluster_activation, build_cluster_activation_with_status};
 pub use cli_backend::{CliNixBackend, cluster_name_command, eval_cluster_name};
 pub use error::KixEvalError;
 pub use evaluator::{

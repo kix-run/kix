@@ -30,6 +30,7 @@ pub mod workload;
 
 use std::path::PathBuf;
 
+use kix::build_source::{Build, FlakeBuildError};
 use miette::IntoDiagnostic;
 
 use crate::cli::{GlobalArgs, OutputFormat};
@@ -163,11 +164,33 @@ fn resolve_identity(
     }
 }
 
+/// A build of `cluster` from the flake `global.flake`, made now into this
+/// machine's Nix store. `status` gets progress lines. A failed `nix build`
+/// reads `{build_failed}: {error}`; a failure to load what it built reads
+/// as the error alone. Each command keeps the wording it had.
+pub(crate) fn build_flake(
+    global: &GlobalArgs,
+    cluster: &str,
+    status: &dyn Fn(&str),
+    build_failed: &str,
+) -> miette::Result<Build> {
+    let flake_path = resolve_flake_path(&global.flake)?;
+    Build::of_flake(&flake_path, cluster, &global.input_overrides(), status).map_err(|e| match e {
+        FlakeBuildError::Build(e) => miette::miette!("{build_failed}: {e}"),
+        FlakeBuildError::Load(e) => miette::miette!("{e}"),
+    })
+}
+
+/// What a command whose `nix build` failed says, before the error.
+pub(crate) const BUILD_FAILED: &str = "failed to build cluster";
+/// The same, in the commands that have always said "activation".
+pub(crate) const ACTIVATION_BUILD_FAILED: &str = "failed to build cluster activation";
+
 /// Resolve a flake reference to a path for evaluation.
 ///
 /// For local paths (relative or absolute), resolves to an absolute path.
 /// For remote references (e.g. "github:org/repo"), passes through as-is.
-fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
+pub(crate) fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
     if flake.contains(':') {
         Ok(PathBuf::from(flake))
     } else {

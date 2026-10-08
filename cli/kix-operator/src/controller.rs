@@ -40,6 +40,7 @@ use kube::{
 use serde_json::Value;
 use thiserror::Error;
 
+use kix::build_source::Build;
 use kix::cluster::activation::{
     self, PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_SUPERSEDED,
 };
@@ -51,8 +52,6 @@ use kix::cluster::prune_guard::{PruneGuard, Pruned};
 use kix::cluster::scheduler::{self, DeployPlan, OnErrorPolicy, PrunePolicy, SchedulerConfig};
 use kix::cluster::stream::DeployObserver;
 use kix::cluster::watchdog::StallPolicy;
-use kix::eval::store_graph::StoreGraph;
-use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
 
 use crate::k8s_events::{CompositeObserver, K8sEventObserver};
@@ -155,22 +154,23 @@ fn identity_hash(activation: &DynamicObject) -> Option<String> {
 // Store graph loading
 // ---------------------------------------------------------------------------
 
-/// Load a StoreGraph from a result directory, stamp annotations, and collect manifests.
-fn load_and_stamp(path: &Path) -> Result<(StoreGraph, Vec<Value>), OperatorError> {
-    let noop = |_: &str| {};
-    let mut graph = StoreGraph::from_result_dir_with_status(path, &noop).map_err(|e| {
-        OperatorError::StoreGraphError {
-            path: path.display().to_string(),
-            reason: e.to_string(),
-        }
+/// The stamped manifests of the build in the result directory `path`.
+///
+/// Not refused for a retired domain ([`Build::installable`]): the record
+/// may name a build from before the domain move, as `kix rollback
+/// --operator` does, and `kix deploy` has already checked a new build
+/// before it writes the record.
+fn load_manifests(path: &Path) -> Result<Vec<Value>, OperatorError> {
+    let build = Build::local(path, &|_| {}).map_err(|e| OperatorError::StoreGraphError {
+        path: path.display().to_string(),
+        reason: e.to_string(),
     })?;
-    stamp_annotations(&mut graph);
-    let manifests = graph
+    Ok(build
+        .graph()
         .resources
         .values()
         .map(|r| r.manifest.clone())
-        .collect();
-    Ok((graph, manifests))
+        .collect())
 }
 
 /// Compare desired manifests with this cluster's live objects by identity
@@ -405,7 +405,7 @@ async fn run_reconcile(
     let path = source_path(activation).ok_or(OperatorError::MissingSourcePath)?;
 
     // 2. Load desired manifests
-    let (_new_graph, new_manifests) = load_and_stamp(&path)?;
+    let new_manifests = load_manifests(&path)?;
 
     if new_manifests.is_empty() {
         tracing::warn!(name, "No manifests found in store graph");
@@ -610,7 +610,7 @@ async fn handle_delete(
         );
 
         if let Some(path) = source_path(activation)
-            && let Ok((_graph, manifests)) = load_and_stamp(&path)
+            && let Ok(manifests) = load_manifests(&path)
         {
             let all_rids: Vec<ResourceId> = manifests
                 .iter()

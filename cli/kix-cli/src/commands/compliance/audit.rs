@@ -45,7 +45,7 @@ pub fn run(args: &ComplianceAuditArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     // Build once, reuse StoreGraph + the cluster output for scorecard data.
-    let (_result_path, graph) = shared::build_and_load(ctx, &args.cluster)?;
+    let graph = shared::build_and_load(ctx, &args.cluster)?;
 
     // The scorecard findings come from the KixEvaluator (ClusterOutput),
     // not the StoreGraph, so we run a cached eval in addition to the build.

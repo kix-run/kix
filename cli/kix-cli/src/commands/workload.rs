@@ -5,14 +5,11 @@
 //! Both commands invoke `kubectl logs` or `kubectl port-forward` rather than
 //! implementing log streaming or port proxying.
 
-use std::path::{Path, PathBuf};
-
-use miette::{IntoDiagnostic, Result, miette};
+use miette::{Result, miette};
 use serde_json::Value;
 
-use kix::eval::build_cluster_activation_with_status;
+use crate::cli::GlobalArgs;
 use kix::eval::store_graph::{PackageNode, StoreGraph};
-use kix::manifest::stamp::stamp_annotations;
 
 /// A workload resolved from a package instance. Contains everything the
 /// downstream `kubectl` shell-out needs.
@@ -42,12 +39,11 @@ const WORKLOAD_KINDS: &[&str] = &["Deployment", "StatefulSet", "DaemonSet"];
 /// single workload target. Errors are shaped so a caller can print them
 /// directly to the user without extra context.
 pub fn resolve_package_workload(
-    flake_path: &Path,
+    global: &GlobalArgs,
     cluster: &str,
     package: &str,
-    input_overrides: &[(String, String)],
-    quiet: bool,
 ) -> Result<WorkloadTarget> {
+    let quiet = global.quiet;
     let status = |msg: &str| {
         if !quiet {
             eprintln!("  {msg}");
@@ -56,17 +52,9 @@ pub fn resolve_package_workload(
     if !quiet {
         eprintln!("Building cluster '{cluster}'...");
     }
-    let result_path =
-        build_cluster_activation_with_status(flake_path, cluster, input_overrides, &status)
-            .map_err(|e| miette!("failed to build cluster activation: {e}"))?;
-
-    let mut graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
-        .map_err(|e| miette!("{e}"))?;
-    // Stamp so downstream labels are in the same shape as deploy.
-    stamp_annotations(&mut graph);
-
-    let pkg = find_package(&graph, package)?;
-    resolve_workload_in_package(&graph, pkg)
+    let build = super::build_flake(global, cluster, &status, super::ACTIVATION_BUILD_FAILED)?;
+    let pkg = find_package(build.graph(), package)?;
+    resolve_workload_in_package(build.graph(), pkg)
 }
 
 /// Match a package by instance name. Matches are case-sensitive and prefer
@@ -181,20 +169,4 @@ fn selector_from_match_labels(labels: &serde_json::Map<String, Value>) -> String
         .map(|(k, v)| format!("{k}={v}"))
         .collect::<Vec<_>>()
         .join(",")
-}
-
-/// Resolve a flake ref / path to a usable `PathBuf` for evaluation. Matches
-/// the helper used by other commands.
-pub fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
-    if flake.contains(':') {
-        Ok(PathBuf::from(flake))
-    } else {
-        let path = PathBuf::from(flake);
-        if path.is_absolute() {
-            Ok(path)
-        } else {
-            let cwd = std::env::current_dir().into_diagnostic()?;
-            Ok(cwd.join(path))
-        }
-    }
 }

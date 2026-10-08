@@ -27,8 +27,7 @@ impl CommandResponse for GraphResponse {
 pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
     let manifests = match &args.bundle {
         Some(path) => {
-            let mut build = super::bundle::read(path, &[], &args.cluster, true)?;
-            build.stamp();
+            let build = super::bundle::read(path, &[], &args.cluster, true)?;
             let mut manifests: Vec<serde_json::Value> = build
                 .graph()
                 .resources

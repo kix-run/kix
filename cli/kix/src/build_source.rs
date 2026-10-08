@@ -1,15 +1,21 @@
 //! The build a command plans and deploys, and where it came from.
 //!
-//! A [`Build`] is a checked build. It is made in one of two ways, and each
-//! does every check once, so a caller cannot hold a build it has not
-//! checked:
+//! A [`Build`] is a checked build, and the only way a command or the
+//! operator loads one. It is made in one of two ways, and each does every
+//! check once, so a caller cannot hold a build it has not checked:
 //!
 //! - [`Build::local`] loads and validates a result directory in this
-//!   machine's Nix store.
+//!   machine's Nix store; [`Build::of_flake`] builds one first.
 //! - [`Build::carried`] reads a build made elsewhere, through a
 //!   [`CarriedBuild`] such as a bundle. It hashes the bytes it hands the
 //!   reader itself, and refuses a build that is not valid or not of the
 //!   named cluster.
+//!
+//! Either way the build is then checked for a retired domain and stamped,
+//! in that order, so its graph is stamped once and the check sees it as
+//! loaded. A command that installs the build's CRDs takes an
+//! [`InstallableBuild`], which only [`Build::installable`] makes, and only
+//! from a build that passed that check.
 //!
 //! The bytes are untrusted: a bundle comes from CI. The reader is not
 //! checked against them: it is code the operator chose to run. The digest
@@ -28,6 +34,7 @@
 //! directory is read.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::{Deref, DerefMut};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -35,8 +42,12 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::cluster::secrets::SopsSources;
+use crate::eval::KixEvalError;
+use crate::eval::build::build_cluster_activation;
+use crate::eval::stamp::stamp_annotations;
 use crate::eval::store_graph::{StoreGraph, store_hash};
 use crate::eval::store_path;
+use crate::legacy_domain::{self, LegacyDomainError};
 use crate::manifest::keys;
 use crate::text::printable;
 
@@ -81,6 +92,38 @@ pub struct Provenance {
 pub struct Build {
     graph: StoreGraph,
     origin: Origin,
+    /// Why the build, as loaded, may not install its CRDs.
+    legacy_domain: Option<LegacyDomainError>,
+}
+
+/// A build whose CRDs may be installed: as loaded, it renders Kix's own
+/// CRDs under the current group, not a retired one. Only
+/// [`Build::installable`] makes one, and the commands that install a
+/// build's CRDs take only this.
+pub struct InstallableBuild(Build);
+
+impl Deref for InstallableBuild {
+    type Target = Build;
+
+    fn deref(&self) -> &Build {
+        &self.0
+    }
+}
+
+impl DerefMut for InstallableBuild {
+    fn deref_mut(&mut self) -> &mut Build {
+        &mut self.0
+    }
+}
+
+/// Why [`Build::of_flake`] failed: at the `nix build`, or loading what it
+/// built. Commands word the two differently.
+#[derive(Debug, thiserror::Error)]
+pub enum FlakeBuildError {
+    #[error("{0}")]
+    Build(KixEvalError),
+    #[error("{0}")]
+    Load(KixEvalError),
 }
 
 enum Origin {
@@ -93,16 +136,26 @@ enum Origin {
 }
 
 impl Build {
+    /// A build of `cluster` from the flake at `flake_path`, made now into
+    /// this machine's Nix store and loaded as [`Build::local`] loads it.
+    /// `status` gets progress lines from both steps.
+    pub fn of_flake(
+        flake_path: &Path,
+        cluster: &str,
+        input_overrides: &[(String, String)],
+        status: &dyn Fn(&str),
+    ) -> Result<Build, FlakeBuildError> {
+        let result_dir = build_cluster_activation(flake_path, cluster, input_overrides, status)
+            .map_err(FlakeBuildError::Build)?;
+        Build::local(&result_dir, status).map_err(FlakeBuildError::Load)
+    }
+
     /// The build in the result directory `result_dir`, in this machine's
     /// Nix store, validated as it is loaded. Its Secrets read SOPS files
     /// from this machine.
-    pub fn local(result_dir: &Path, status: &dyn Fn(&str)) -> Result<Build, String> {
-        let graph = StoreGraph::from_result_dir_with_status(result_dir, status)
-            .map_err(|e| e.to_string())?;
-        Ok(Build {
-            graph,
-            origin: Origin::Local,
-        })
+    pub fn local(result_dir: &Path, status: &dyn Fn(&str)) -> Result<Build, KixEvalError> {
+        let graph = StoreGraph::from_result_dir(result_dir, status)?;
+        Ok(Build::stamped(graph, Origin::Local))
     }
 
     /// The build `read` makes of `bytes`, which must be valid and a build
@@ -127,22 +180,47 @@ impl Build {
                 printable(&graph.cluster_name)
             ));
         }
-        Ok(Build {
-            graph,
-            origin: Origin::Carried {
-                source: Box::new(source),
-                sha256,
-            },
-        })
+        let origin = Origin::Carried {
+            source: Box::new(source),
+            sha256,
+        };
+        Ok(Build::stamped(graph, origin))
     }
 
+    /// Checks the loaded `graph` for a retired domain, then stamps it.
+    fn stamped(mut graph: StoreGraph, origin: Origin) -> Build {
+        let legacy_domain =
+            legacy_domain::check_build(graph.resources.values().map(|r| &r.manifest)).err();
+        stamp_annotations(&mut graph);
+        Build {
+            graph,
+            origin,
+            legacy_domain,
+        }
+    }
+
+    /// The build's graph, stamped.
     pub fn graph(&self) -> &StoreGraph {
         &self.graph
     }
 
-    /// Stamp the build's manifests ([`crate::manifest::stamp::stamp_annotations`]).
-    pub fn stamp(&mut self) {
-        crate::manifest::stamp::stamp_annotations(&mut self.graph);
+    /// The build's graph, stamped, for a caller that needs nothing else
+    /// of the build: not where it came from, its SOPS sources or the
+    /// builds it carries.
+    pub fn into_graph(self) -> StoreGraph {
+        self.graph
+    }
+
+    /// The build, for a command that installs its CRDs. Refused when the
+    /// build, as loaded, renders Kix's own CRDs under a retired group: a
+    /// kixpkgs pin from before the domain move
+    /// ([`legacy_domain::check_build`]). A build an Activation record names
+    /// may predate the move, so a command that only reads one does not ask.
+    pub fn installable(self) -> Result<InstallableBuild, LegacyDomainError> {
+        match self.legacy_domain {
+            Some(e) => Err(e),
+            None => Ok(InstallableBuild(self)),
+        }
     }
 
     /// Whether the build is in this machine's Nix store, so later commands
@@ -174,13 +252,13 @@ impl Build {
     }
 
     /// The build of the Activation record with `identity_hash` that this
-    /// build carries, refused unless its record has that identity hash and
-    /// it is valid. `Ok(None)` for a local build.
+    /// build carries, stamped, and refused unless its record has that
+    /// identity hash and it is valid. `Ok(None)` for a local build.
     pub fn deployed_build(&self, identity_hash: &str) -> Result<Option<StoreGraph>, String> {
         let Origin::Carried { source, .. } = &self.origin else {
             return Ok(None);
         };
-        let Some(graph) = source.deployed_build(identity_hash)? else {
+        let Some(mut graph) = source.deployed_build(identity_hash)? else {
             return Ok(None);
         };
         let found = store_hash(&graph.activation_path);
@@ -194,6 +272,7 @@ impl Build {
         graph
             .validate()
             .map_err(|e| format!("the build source's activation {identity_hash}: {e}"))?;
+        stamp_annotations(&mut graph);
         Ok(Some(graph))
     }
 }
@@ -311,6 +390,35 @@ mod tests {
         invalid.resources.remove(&invalid.activation_path.clone());
         let build = carried(&graph, &invalid).unwrap();
         assert!(build.deployed_build(&hash).is_err());
+    }
+
+    /// The retired-domain check sees the build as loaded, and the graph a
+    /// caller gets is stamped, which upgrades it to the current domain.
+    #[test]
+    fn the_domain_is_checked_before_stamping() {
+        let mut graph = fixture();
+        let record = graph
+            .resources
+            .values_mut()
+            .find(|r| crate::manifest::lifecycle::is_record(&r.manifest))
+            .unwrap();
+        let version = record.manifest["apiVersion"].as_str().unwrap();
+        let legacy = version.replace(keys::GROUP, legacy_domain::DOMAINS[0]);
+        record.manifest["apiVersion"] = Value::String(legacy);
+        let build = carried(&graph, &fixture()).unwrap();
+        let stamped = build.graph().resources.values();
+        assert!(
+            stamped
+                .filter_map(|r| r.manifest["apiVersion"].as_str())
+                .all(|v| !v.starts_with(legacy_domain::DOMAINS[0]))
+        );
+        assert!(build.installable().is_err());
+        assert!(
+            carried(&fixture(), &fixture())
+                .unwrap()
+                .installable()
+                .is_ok()
+        );
     }
 
     fn secret(source: &str) -> Value {

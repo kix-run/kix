@@ -10,7 +10,6 @@
 //! authorized orphans in reverse dependency order.
 
 use std::io::Write;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,7 +17,7 @@ use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
 use crate::commands::baseline;
-use kix::build_source::Build;
+use kix::build_source::{Build, InstallableBuild};
 use kix::cluster::activation;
 use kix::cluster::apply::{ApplyAction, ChangeAction};
 use kix::cluster::fetch;
@@ -32,10 +31,8 @@ use kix::cluster::stream::{
     Verdict,
 };
 use kix::cluster::watchdog::StallPolicy;
-use kix::eval::build::build_cluster_activation_with_status;
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::lifecycle;
-use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
 
 use crate::cli::{DeployArgs, Detail, OnError, PlanArgs, PruneMode};
@@ -455,8 +452,9 @@ fn annotate_record(p: &mut Prepared, annotations: &[(String, String)]) {
 /// the actions, and the engine plan. `kix plan` and `kix deploy` share it,
 /// so a plan made with the deploy's flags is the deploy's plan.
 pub(crate) struct Prepared {
-    /// The new build, stamped.
-    pub build: Build,
+    /// The new build, stamped, and refused if it would install Kix's own
+    /// CRDs under a retired group.
+    pub build: InstallableBuild,
     pub new_manifests: Vec<Value>,
     /// The name the build gives the cluster, which keys its records and the
     /// local cache.
@@ -494,7 +492,16 @@ pub(crate) struct Prepared {
 
 /// The new build: the bundle `--bundle` names, or a build of the flake
 /// into the local Nix store.
-fn new_build(args: &PlanArgs, ctx: &CommandContext) -> Result<Build> {
+///
+/// A kixpkgs pin from before the domain move renders Kix's own CRDs under
+/// the retired group. Deploying it would put those CRDs back and leave two
+/// groups live, which the CLI cannot tell apart, so it is refused.
+fn new_build(args: &PlanArgs, ctx: &CommandContext) -> Result<InstallableBuild> {
+    let build = new_unchecked_build(args, ctx)?;
+    build.installable().map_err(|e| miette!("{e}"))
+}
+
+fn new_unchecked_build(args: &PlanArgs, ctx: &CommandContext) -> Result<Build> {
     if let Some(path) = &args.bundle {
         return super::bundle::read(
             path,
@@ -508,37 +515,17 @@ fn new_build(args: &PlanArgs, ctx: &CommandContext) -> Result<Build> {
             eprint!("\r\x1b[2K  {msg}");
         }
     };
-    let flake_path = resolve_flake_path(&ctx.global.flake)?;
     if !ctx.global.quiet {
         crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
     }
-    let overrides = ctx.global.input_overrides();
-    let result_path =
-        build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &status)
-            .map_err(|e| miette!("failed to build cluster: {e}"))?;
-    Build::local(&result_path, &status).map_err(|e| miette!("{e}"))
+    super::build_flake(&ctx.global, &args.cluster, &status, super::BUILD_FAILED)
 }
 
 /// Build, load the old side, and compute the actions and the engine plan.
 /// `None` when the build has nothing to deploy. Progress lines go through
 /// [`crate::say!`], so `kix plan -o json` keeps them off stdout.
 pub(crate) fn prepare(args: &PlanArgs, ctx: &mut CommandContext) -> Result<Option<Prepared>> {
-    let mut build = new_build(args, ctx)?;
-    // A kixpkgs pin from before the domain move renders Kix's own CRDs under
-    // the retired group. Deploying it would put those CRDs back and leave two
-    // groups live, which the CLI cannot tell apart. Check before
-    // stamping, which upgrades a loaded build to the current domain:
-    // after that a stale pin is indistinguishable from a current one.
-    kix::legacy_domain::check_build(
-        &build
-            .graph()
-            .resources
-            .values()
-            .map(|r| r.manifest.clone())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|e| miette!("{e}"))?;
-    build.stamp();
+    let build = new_build(args, ctx)?;
     let new_graph = build.graph();
     if !ctx.global.quiet {
         eprint!("\r\x1b[2K");
@@ -849,10 +836,9 @@ fn load_old_from_cache(
             if !global.quiet {
                 crate::say!("Loading previous activation from cache...");
             }
-            let noop = |_: &str| {};
-            match StoreGraph::from_result_dir_with_status(&old_result_dir, &noop) {
-                Ok(mut old_graph) => {
-                    stamp_annotations(&mut old_graph);
+            match Build::local(&old_result_dir, &|_| {}) {
+                Ok(old) => {
+                    let old_graph = old.into_graph();
                     let manifests: Vec<Value> = old_graph
                         .resources
                         .values()
@@ -982,8 +968,7 @@ async fn load_old_from_cluster(
                 hash,
                 act.built_via.as_deref(),
             ) {
-                Ok(Some(mut old_graph)) => {
-                    stamp_annotations(&mut old_graph);
+                Ok(Some(old_graph)) => {
                     let manifests: Vec<Value> = old_graph
                         .resources
                         .values()
@@ -1802,20 +1787,6 @@ fn parse_timeout(s: Option<&str>) -> Result<Duration> {
     ))
 }
 
-pub(crate) fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
-    if flake.contains(':') {
-        Ok(PathBuf::from(flake))
-    } else {
-        let path = PathBuf::from(flake);
-        if path.is_absolute() {
-            Ok(path)
-        } else {
-            let cwd = std::env::current_dir().into_diagnostic()?;
-            Ok(cwd.join(path))
-        }
-    }
-}
-
 /// The planning flags of an operator deploy. The operator always prunes, so
 /// the objects check treats every orphan as deleted, as the operator will.
 fn operator_plan_args(args: &PlanArgs) -> PlanArgs {
@@ -2519,11 +2490,13 @@ pub(crate) mod plan_bound_tests {
     use crate::plan::objects::Unshown;
     use clap::Parser;
     use kix::eval::bundle::Bundle;
+    use kix::eval::stamp::stamp_annotations;
     use kix::eval::store_graph::store_hash;
     use kix::eval::{PackageNode, ResourceNode};
     use kix::manifest::types;
     use serde_json::json;
     use std::path::Path;
+    use std::path::PathBuf;
 
     const FIXTURE: &[u8] =
         include_bytes!("../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle");

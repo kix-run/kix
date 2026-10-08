@@ -53,7 +53,7 @@ pub fn of_build(build: &Build, flake_ref: &str) -> Value {
 
 /// Assemble the receipt for a build that is about to be deployed.
 pub fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
-    let flake_path = shared::resolve_flake_path(flake_ref).ok();
+    let flake_path = crate::commands::resolve_flake_path(flake_ref).ok();
 
     let git = flake_path.as_ref().and_then(|p| shared::git_state(p));
     let flake_lock_digest = flake_path

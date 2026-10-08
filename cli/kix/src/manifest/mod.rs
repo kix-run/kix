@@ -4,7 +4,6 @@ pub mod diff;
 pub mod keys;
 pub mod lifecycle;
 pub mod serialize;
-pub mod stamp;
 pub mod types;
 pub mod workload;
 

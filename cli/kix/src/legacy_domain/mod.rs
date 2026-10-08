@@ -13,7 +13,7 @@
 //!
 //! 1. [`fallback`], from `keys::get` and `keys::get_meta`. A live object
 //!    stamped by an older Kix still parses.
-//! 2. [`upgrade_manifest`], from the store-graph loader and from the live
+//! 2. [`upgrade_manifest`], from stamping a loaded build and from the live
 //!    reconstruction in `kix deploy`. A build loaded from an old activation,
 //!    or a set of live objects projected back to manifests, is brought to
 //!    the current domain before the planner ever sees it.
@@ -23,7 +23,9 @@
 //!    by patch and would otherwise stay on the object forever.
 //! 4. [`check_cluster`] and [`check_build`], the gate. Every command that
 //!    reads Kix records refuses a cluster that has not been migrated, and
-//!    names the command to run.
+//!    names the command to run. `Build` checks each build it loads, and
+//!    the commands that install a build's CRDs refuse a stale one
+//!    ([`crate::build_source::Build::installable`]).
 //!
 //! Plus the migration itself, [`migrate::run`], behind `kix migrate domain`.
 //!
@@ -328,7 +330,14 @@ pub fn check_cluster(groups_in_discovery: &[&str]) -> Result<(), LegacyDomainErr
 /// Catches a kixpkgs pin from before the move. Without it, deploying such a
 /// build would re-create the retired CRDs on a migrated cluster and leave
 /// two groups live, which the CLI cannot tell apart.
-pub fn check_build(manifests: &[Value]) -> Result<(), LegacyDomainError> {
+///
+/// It must see the build as loaded: stamping upgrades a build to the current
+/// domain, after which a stale pin looks exactly like a current one. So
+/// [`crate::build_source::Build`] runs it as it loads a build, before
+/// stamping, and keeps the verdict.
+pub(crate) fn check_build<'a>(
+    manifests: impl IntoIterator<Item = &'a Value>,
+) -> Result<(), LegacyDomainError> {
     for m in manifests {
         // A CustomResourceDefinition for Kix's own kinds under a retired
         // group. This is the one that survives `upgrade_manifest`, because

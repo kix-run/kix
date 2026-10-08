@@ -41,7 +41,7 @@ pub struct StoreGraph {
     /// Resource store path to owning PI store path.
     pub resource_owner: HashMap<PathBuf, PathBuf>,
     /// Cached direct store references by path.
-    /// Populated by bulk_load_graph, reusable by stamp_annotations.
+    /// Populated by bulk_load_graph.
     pub ref_cache: HashMap<PathBuf, Vec<PathBuf>>,
 }
 
@@ -235,10 +235,11 @@ impl StoreGraph {
         }
     }
 
-    /// Build a StoreGraph from a result directory.
+    /// Build a StoreGraph from a result directory. Commands load one through
+    /// [`crate::build_source::Build::local`], which stamps it.
     ///
     /// `status_fn` is called with progress messages during loading.
-    pub fn from_result_dir_with_status(
+    pub(crate) fn from_result_dir(
         result_dir: &Path,
         status_fn: &dyn Fn(&str),
     ) -> Result<Self, KixEvalError> {
@@ -758,11 +759,6 @@ impl StoreGraph {
         graph
     }
 
-    /// Build a StoreGraph from a result directory (no progress callback).
-    pub fn from_result_dir(result_dir: &Path) -> Result<Self, KixEvalError> {
-        Self::from_result_dir_with_status(result_dir, &|_| {})
-    }
-
     /// Look up which package owns a resource.
     pub fn package_for_resource(&self, res_path: &Path) -> Option<&PackageNode> {
         self.resource_owner
@@ -1127,7 +1123,7 @@ mod tests {
         /// `(store hash seed, PackageInstance, [(seed, resource)])`.
         type BuiltPackage<'a> = (&'a str, Value, Vec<(&'a str, Value)>);
 
-        /// A build graph shaped like `from_result_dir` makes one: each
+        /// A build graph shaped like `Build::local` makes one: each
         /// package lists `(seed, manifest)` resources by store path, a seed
         /// listed under two packages is one store path, every PackageInstance
         /// is in `resources`, and `stamp_annotations` has run.
@@ -1169,7 +1165,7 @@ mod tests {
                     },
                 );
             }
-            crate::manifest::stamp::stamp_annotations(&mut g);
+            crate::eval::stamp::stamp_annotations(&mut g);
             g
         }
 

@@ -42,14 +42,13 @@ use std::path::PathBuf;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
+use kix::build_source::{Build, FlakeBuildError};
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::prune_guard::{PruneGuard, Pruned};
-use kix::eval::build::build_cluster_activation_with_status;
 use kix::eval::store;
-use kix::eval::store_graph::{StoreGraph, store_hash};
+use kix::eval::store_graph::store_hash;
 use kix::manifest::lifecycle;
-use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use crate::cli::GcArgs;
@@ -76,7 +75,6 @@ pub fn run(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
-    let flake_path = resolve_flake_path(&ctx.global.flake)?;
     // The cache and the records are read before the build, so the name comes
     // from the flake rather than from `new_graph`.
     let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::Mutating)?;
@@ -121,12 +119,11 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     if !ctx.global.quiet {
         println!("Loading old activation...");
     }
-    let noop = |_: &str| {};
-    let mut old_graph =
-        StoreGraph::from_result_dir_with_status(&old_result_dir, &noop).map_err(|e| {
+    let old_graph = Build::local(&old_result_dir, &|_| {})
+        .map_err(|e| {
             miette!("could not read the previous build's resources and dependencies: {e}")
-        })?;
-    stamp_annotations(&mut old_graph);
+        })?
+        .into_graph();
 
     // 3. Build new activation
     if !ctx.global.quiet {
@@ -137,13 +134,16 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
             eprint!("\r\x1b[2K  {msg}");
         }
     };
+    let flake_path = super::resolve_flake_path(&ctx.global.flake)?;
     let overrides = ctx.global.input_overrides();
-    let new_result_dir =
-        build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &status)
-            .map_err(|e| miette!("failed to build cluster: {e}"))?;
-    let mut new_graph = StoreGraph::from_result_dir_with_status(&new_result_dir, &status)
-        .map_err(|e| miette!("could not read the new build's resources and dependencies: {e}"))?;
-    stamp_annotations(&mut new_graph);
+    let new_graph = Build::of_flake(&flake_path, &args.cluster, &overrides, &status)
+        .map_err(|e| match e {
+            FlakeBuildError::Build(e) => miette!("{}: {e}", super::BUILD_FAILED),
+            FlakeBuildError::Load(e) => {
+                miette!("could not read the new build's resources and dependencies: {e}")
+            }
+        })?
+        .into_graph();
     if !ctx.global.quiet {
         eprint!("\r\x1b[2K");
     }
@@ -391,20 +391,12 @@ fn may_clear_kept(
 // ---------------------------------------------------------------------------
 
 fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
-    let flake_path = resolve_flake_path(&ctx.global.flake)?;
-
     // 1. Build new activation
     if !ctx.global.quiet {
         println!("Building cluster '{}'...", output::bold(&args.cluster));
     }
-    let noop = |_: &str| {};
-    let overrides = ctx.global.input_overrides();
-    let result_path =
-        build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &noop)
-            .map_err(|e| miette!("failed to build cluster: {e}"))?;
-    let mut graph =
-        StoreGraph::from_result_dir_with_status(&result_path, &noop).map_err(|e| miette!("{e}"))?;
-    stamp_annotations(&mut graph);
+    let graph =
+        super::build_flake(&ctx.global, &args.cluster, &|_| {}, super::BUILD_FAILED)?.into_graph();
 
     // 2. Collect expected identity hashes, and the Kubernetes identities
     //    behind them, for objects whose hash cannot be compared.
@@ -1412,20 +1404,6 @@ async fn delete_resources(
     }
 
     Ok(done)
-}
-
-fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
-    if flake.contains(':') {
-        Ok(PathBuf::from(flake))
-    } else {
-        let path = PathBuf::from(flake);
-        if path.is_absolute() {
-            Ok(path)
-        } else {
-            let cwd = std::env::current_dir().into_diagnostic()?;
-            Ok(cwd.join(path))
-        }
-    }
 }
 
 /// `kind/namespace/name` for a live object, in the shape [`k8s_identity`]

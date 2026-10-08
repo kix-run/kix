@@ -1,60 +1,36 @@
 //! Shared helpers for compliance exports.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use miette::{IntoDiagnostic, Result, miette};
+use miette::Result;
 
-use kix::eval::build_cluster_activation_with_status;
 use kix::eval::store_graph::{StoreGraph, store_hash};
-use kix::manifest::stamp::stamp_annotations;
 
 use crate::commands::CommandContext;
 
-/// Build the cluster and load its StoreGraph. Stamps annotations so downstream
-/// consumers see the same identity-hashes / provenance that deploy uses.
-pub fn build_and_load(ctx: &CommandContext, cluster: &str) -> Result<(PathBuf, StoreGraph)> {
-    let flake_path = resolve_flake_path(&ctx.global.flake)?;
-
+/// Build the cluster and load its stamped graph, so downstream consumers
+/// see the same identity hashes that deploy uses.
+pub fn build_and_load(ctx: &CommandContext, cluster: &str) -> Result<StoreGraph> {
     if !ctx.global.quiet {
         eprintln!("Building cluster '{cluster}'...");
     }
-    let overrides = ctx.global.input_overrides();
-    let result_path =
-        build_cluster_activation_with_status(&flake_path, cluster, &overrides, &|msg| {
-            if !ctx.global.quiet {
-                eprintln!("  {msg}");
-            }
-        })
-        .map_err(|e| miette!("failed to build cluster activation: {e}"))?;
-
-    let mut graph = StoreGraph::from_result_dir_with_status(&result_path, &|msg| {
+    let status = |msg: &str| {
         if !ctx.global.quiet {
             eprintln!("  {msg}");
         }
-    })
-    .map_err(|e| miette!("{e}"))?;
-
-    stamp_annotations(&mut graph);
-    Ok((result_path, graph))
+    };
+    let build = crate::commands::build_flake(
+        &ctx.global,
+        cluster,
+        &status,
+        crate::commands::ACTIVATION_BUILD_FAILED,
+    )?;
+    Ok(build.into_graph())
 }
 
 /// 32-char identity hash of the activation store path (the kix "root" hash).
 pub fn activation_identity_hash(graph: &StoreGraph) -> String {
     store_hash(&graph.activation_path)
-}
-
-pub fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
-    if flake.contains(':') {
-        Ok(PathBuf::from(flake))
-    } else {
-        let path = PathBuf::from(flake);
-        if path.is_absolute() {
-            Ok(path)
-        } else {
-            let cwd = std::env::current_dir().into_diagnostic()?;
-            Ok(cwd.join(path))
-        }
-    }
 }
 
 /// Parse `flake.lock` at the given flake path, returning `None` if it does not exist.

@@ -12,6 +12,7 @@ use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
 use crate::commands::baseline;
+use kix::build_source::Build;
 use kix::cluster::activation;
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch::{self, SharedOrphan};
@@ -22,7 +23,6 @@ use kix::cluster::scheduler::{self, DeployPlan, OnErrorPolicy, PrunePolicy, Sche
 use kix::cluster::stream::{DeployObserver, DeployResult};
 use kix::cluster::watchdog::StallPolicy;
 use kix::eval::store_graph::StoreGraph;
-use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
 
 use crate::cli::{OutputFormat, RollbackArgs};
@@ -832,15 +832,14 @@ async fn plan_rollback(
             )
         })?;
 
-    let noop = |_: &str| {};
-    let mut target_graph = StoreGraph::from_result_dir_with_status(&target_result_dir, &noop)
-        .map_err(|e| miette!("failed to load target activation: {e}"))?;
-    // No `check_build` here. A rollback target is a build from before the
-    // domain move by definition, and refusing it would make every record the
-    // migration carefully preserved unusable. `stamp_annotations` upgrades
-    // its keys, its record's API group and Kix's own CRDs, so what gets
-    // applied names the current domain throughout.
-    stamp_annotations(&mut target_graph);
+    // Not refused for a retired domain (`Build::installable`). A rollback
+    // target can be a build from before the domain move, and refusing it
+    // would make every record the migration carefully preserved unusable.
+    // Stamping upgrades its keys, its record's API group and Kix's own CRDs,
+    // so what gets applied names the current domain throughout.
+    let target_graph = Build::local(&target_result_dir, &|_| {})
+        .map_err(|e| miette!("failed to load target activation: {e}"))?
+        .into_graph();
 
     let target_manifests: Vec<Value> = target_graph
         .resources
@@ -850,7 +849,6 @@ async fn plan_rollback(
 
     // 5. Resolve current activation to local store graph (for diff).
     //    Prefer built-via, fall back to hash-based lookup.
-    let noop2 = |_: &str| {};
     let current_result_dir = current
         .built_via
         .as_ref()
@@ -861,9 +859,9 @@ async fn plan_rollback(
             kix::eval::store::resolve_activation_by_hash(cluster, hash)
         });
     let (current_graph, current_manifests) = match current_result_dir {
-        Some(dir) => match StoreGraph::from_result_dir_with_status(&dir, &noop2) {
-            Ok(mut g) => {
-                stamp_annotations(&mut g);
+        Some(dir) => match Build::local(&dir, &|_| {}) {
+            Ok(build) => {
+                let g = build.into_graph();
                 let m = g.resources.values().map(|r| r.manifest.clone()).collect();
                 (Some(g), m)
             }

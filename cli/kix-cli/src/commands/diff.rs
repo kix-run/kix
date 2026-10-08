@@ -5,16 +5,15 @@ use std::path::{Path, PathBuf};
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
+use kix::build_source;
 use kix::cluster::activation;
 use kix::cluster::apply::ApplyError;
 use kix::cluster::fetch;
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
-use kix::eval::build_cluster_activation_with_status;
 use kix::eval::store_graph::{KixPackageIndex, StoreGraph, store_hash};
 use kix::manifest::keys;
 use kix::manifest::lifecycle::{self, Lifecycle};
 use kix::manifest::serialize::load_manifests_from_dir;
-use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
 
 use crate::cli::{Detail as DetailArg, DiffArgs, OutputFormat};
@@ -59,11 +58,15 @@ enum OldSide {
 /// kix-owned view. Same renderers as the deploy plan, so what `kix diff`
 /// shows is what `kix deploy` will show.
 pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
-    let flake_path = resolve_flake_path(&ctx.global.flake)?;
-
     let spinner = make_spinner(ctx, &format!("Building cluster '{}'...", args.cluster));
-    let overrides = ctx.global.input_overrides();
-    let new_graph = build_store_graph(&flake_path, &args.cluster, &overrides, &spinner)?;
+    let status = |msg: &str| set_spinner(&spinner, msg);
+    let new_graph = super::build_flake(
+        &ctx.global,
+        &args.cluster,
+        &status,
+        super::ACTIVATION_BUILD_FAILED,
+    )?
+    .into_graph();
     clear_spinner(&spinner);
 
     let (old_graph, side) = if let Some(from) = &args.from {
@@ -73,7 +76,9 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
         }
         let spinner = make_spinner(ctx, "Loading old side...");
         let loaded = if path.join("kix-packages.json").is_file() {
-            (load_old_graph(&path, &spinner)?, OldSide::Build)
+            let status = |msg: &str| set_spinner(&spinner, msg);
+            let old = build_source::Build::local(&path, &status).into_diagnostic()?;
+            (old.into_graph(), OldSide::Build)
         } else {
             let manifests: Vec<Value> = load_manifests_from_dir(&path)
                 .map_err(|e| miette!("failed to load manifest directory {from}: {e}"))?
@@ -131,34 +136,6 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn build_store_graph(
-    flake_path: &Path,
-    cluster_name: &str,
-    input_overrides: &[(String, String)],
-    spinner: &Option<indicatif::ProgressBar>,
-) -> Result<StoreGraph> {
-    let status = |msg: &str| set_spinner(spinner, msg);
-
-    let result_path =
-        build_cluster_activation_with_status(flake_path, cluster_name, input_overrides, &status)
-            .map_err(|e| miette!("failed to build cluster activation: {e}"))?;
-
-    let mut graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
-        .map_err(|e| miette!("{e}"))?;
-
-    set_spinner(spinner, "Stamping annotations...");
-    stamp_annotations(&mut graph);
-    Ok(graph)
-}
-
-fn load_old_graph(path: &Path, spinner: &Option<indicatif::ProgressBar>) -> Result<StoreGraph> {
-    let status = |msg: &str| set_spinner(spinner, msg);
-    let mut graph = StoreGraph::from_result_dir_with_status(path, &status).into_diagnostic()?;
-    set_spinner(spinner, "Stamping annotations...");
-    stamp_annotations(&mut graph);
-    Ok(graph)
 }
 
 fn set_spinner(spinner: &Option<indicatif::ProgressBar>, msg: &str) {
@@ -292,8 +269,7 @@ fn deployed_build(
     if !dir.join("kix-packages.json").is_file() {
         return None;
     }
-    let mut graph = StoreGraph::from_result_dir_with_status(dir, &|_: &str| {}).ok()?;
-    stamp_annotations(&mut graph);
+    let graph = build_source::Build::local(dir, &|_| {}).ok()?.into_graph();
     Some(Deployed::Loaded(Box::new(graph)))
 }
 
@@ -531,20 +507,6 @@ fn make_spinner(ctx: &CommandContext, msg: &str) -> Option<indicatif::ProgressBa
 fn clear_spinner(spinner: &Option<indicatif::ProgressBar>) {
     if let Some(sp) = spinner {
         sp.finish_and_clear();
-    }
-}
-
-fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
-    if flake.contains(':') {
-        Ok(PathBuf::from(flake))
-    } else {
-        let path = PathBuf::from(flake);
-        if path.is_absolute() {
-            Ok(path)
-        } else {
-            let cwd = std::env::current_dir().into_diagnostic()?;
-            Ok(cwd.join(path))
-        }
     }
 }
 

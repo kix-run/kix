@@ -22,10 +22,7 @@ use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
 use kix::cluster::normalize::strip_kix_annotations;
-use kix::eval::build_cluster_activation_with_status;
-use kix::eval::store_graph::StoreGraph;
 use kix::manifest::serialize::strip_nulls;
-use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use crate::cli::{ExportArgs, ExportMode};
@@ -34,31 +31,23 @@ use crate::output;
 use super::CommandContext;
 
 pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
-    let flake_path = resolve_flake_path(&ctx.global.flake)?;
-
     if !ctx.global.quiet {
         eprintln!("Building cluster '{}'...", args.cluster);
     }
-    let overrides = ctx.global.input_overrides();
-    let result_path =
-        build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &|msg| {
-            if !ctx.global.quiet {
-                eprintln!("  {msg}");
-            }
-        })
-        .map_err(|e| miette!("failed to build cluster activation: {e}"))?;
-
-    let mut graph = StoreGraph::from_result_dir_with_status(&result_path, &|msg| {
+    // Stamped, as the deploy and diff pipelines see it. `--for=audit` keeps
+    // the annotations; `--for=exit` strips them again below.
+    let status = |msg: &str| {
         if !ctx.global.quiet {
             eprintln!("  {msg}");
         }
-    })
-    .map_err(|e| miette!("{e}"))?;
-
-    // Stamp so the graph is in the same shape the deploy/diff pipelines see.
-    // For `--for=audit` we want those annotations preserved; for `--for=exit`
-    // we strip them again below.
-    stamp_annotations(&mut graph);
+    };
+    let build = super::build_flake(
+        &ctx.global,
+        &args.cluster,
+        &status,
+        super::ACTIVATION_BUILD_FAILED,
+    )?;
+    let graph = build.graph();
 
     let out_dir = PathBuf::from(&args.out);
     if out_dir.exists() {
@@ -177,20 +166,6 @@ fn output_path_for(out_dir: &Path, rid: &ResourceId) -> PathBuf {
     };
     let filename = format!("{}-{}.yaml", rid.kind, rid.name);
     out_dir.join(ns).join(filename)
-}
-
-fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
-    if flake.contains(':') {
-        Ok(PathBuf::from(flake))
-    } else {
-        let path = PathBuf::from(flake);
-        if path.is_absolute() {
-            Ok(path)
-        } else {
-            let cwd = std::env::current_dir().into_diagnostic()?;
-            Ok(cwd.join(path))
-        }
-    }
 }
 
 /// Return the first entry under `dir` that Kix export would not have written.

@@ -5,11 +5,11 @@ use miette::{IntoDiagnostic, Result, miette};
 
 use crate::cli::{OutputFormat, StatusArgs};
 use crate::output::{self, CommandResponse};
+use kix::build_source::Build;
 use kix::cluster::activation;
 use kix::cluster::fetch;
 use kix::cluster::readiness;
 use kix::eval::store_graph::StoreGraph;
-use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use super::CommandContext;
@@ -281,15 +281,8 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
         .as_ref()
         .map(std::path::PathBuf::from)
         .filter(|p| p.join("kix-packages.json").exists())
-        .and_then(|result_dir| {
-            let noop = |_: &str| {};
-            StoreGraph::from_result_dir_with_status(&result_dir, &noop)
-                .ok()
-                .map(|mut g| {
-                    stamp_annotations(&mut g);
-                    g
-                })
-        });
+        .and_then(|result_dir| Build::local(&result_dir, &|_| {}).ok())
+        .map(Build::into_graph);
 
     // 4. Fetch this cluster's live resources
     let sweep = fetch::sweep_managed(

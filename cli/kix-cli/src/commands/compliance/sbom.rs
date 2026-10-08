@@ -26,7 +26,7 @@ use crate::commands::CommandContext;
 use kix::manifest::keys;
 
 pub fn run(args: &ComplianceSbomArgs, ctx: &mut CommandContext) -> Result<()> {
-    let (_result_path, graph) = shared::build_and_load(ctx, &args.cluster)?;
+    let graph = shared::build_and_load(ctx, &args.cluster)?;
     let sbom = build_sbom(&graph, &ctx.global.flake);
 
     let text = match ctx.output_format(OutputFormat::Json) {
@@ -123,7 +123,7 @@ pub fn build_sbom(graph: &StoreGraph, flake_ref: &str) -> Value {
     }
 
     // 3. Nix flake inputs → library components
-    let flake_path = shared::resolve_flake_path(flake_ref).ok();
+    let flake_path = crate::commands::resolve_flake_path(flake_ref).ok();
     let mut flake_input_bomrefs: Vec<String> = Vec::new();
     if let Some(path) = &flake_path
         && let Some(lock) = shared::read_flake_lock(path)

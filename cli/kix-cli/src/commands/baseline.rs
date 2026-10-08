@@ -28,7 +28,6 @@ use kix::cluster::activation::{
     self, ActiveActivation, DeployingActivation, FailedActivation, KeptOrphanSource,
 };
 use kix::eval::store_graph::StoreGraph;
-use kix::manifest::stamp::stamp_annotations;
 use kube::{client::Client, discovery::ApiResource};
 use serde_json::Value;
 
@@ -181,7 +180,7 @@ fn short(hash: &str) -> &str {
     &hash[..8.min(hash.len())]
 }
 
-/// The build an Activation record names, unstamped: from the new `build`
+/// The build an Activation record names, stamped: from the new `build`
 /// ([`Build::deployed_build`]) by its identity hash, else from `built_via`
 /// or the local activation cache. `Ok(None)` when this machine has none of
 /// them.
@@ -201,9 +200,11 @@ pub fn record_graph(
     let Some(dir) = result_dir(cluster, identity_hash, built_via) else {
         return Ok(None);
     };
-    let noop = |_: &str| {};
-    let graph = StoreGraph::from_result_dir_with_status(&dir, &noop)
-        .map_err(|e| format!("the build at {} would not load: {e}", dir.display()))?;
+    // A record's build can predate the domain move, so it is not refused
+    // for one ([`Build::installable`]).
+    let graph = Build::local(&dir, &|_| {})
+        .map_err(|e| format!("the build at {} would not load: {e}", dir.display()))?
+        .into_graph();
     let found = kix::eval::store_graph::store_hash(&graph.activation_path);
     if found != identity_hash {
         return Err(format!(
@@ -226,10 +227,9 @@ fn resolve_closure(
     identity_hash: &str,
     built_via: Option<&str>,
 ) -> Result<Option<Vec<Value>>, String> {
-    let Some(mut graph) = record_graph(build, cluster, identity_hash, built_via)? else {
+    let Some(graph) = record_graph(build, cluster, identity_hash, built_via)? else {
         return Ok(None);
     };
-    stamp_annotations(&mut graph);
     Ok(Some(
         graph
             .resources

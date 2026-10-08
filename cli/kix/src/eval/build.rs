@@ -4,7 +4,7 @@
 //! - `activation`: symlink to the Activation resource store path
 //! - `kix-packages.json`: package-to-resource store path index
 //!
-//! The Rust CLI then uses `StoreGraph::from_result_dir` to load the graph.
+//! [`crate::build_source::Build::of_flake`] then loads and stamps the graph.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -16,16 +16,7 @@ use super::error::KixEvalError;
 ///
 /// `status_fn` is called with nix build progress lines as they arrive,
 /// allowing the caller to update a spinner or progress bar.
-pub fn build_cluster_activation(
-    flake_path: &Path,
-    cluster_name: &str,
-    input_overrides: &[(String, String)],
-) -> Result<PathBuf, KixEvalError> {
-    build_cluster_activation_with_status(flake_path, cluster_name, input_overrides, &|_| {})
-}
-
-/// Build with a status callback for progress updates.
-pub fn build_cluster_activation_with_status(
+pub(crate) fn build_cluster_activation(
     flake_path: &Path,
     cluster_name: &str,
     input_overrides: &[(String, String)],

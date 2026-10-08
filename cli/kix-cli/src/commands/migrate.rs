@@ -5,17 +5,14 @@
 //! `cli/kix/src/legacy_domain/`. It goes when that goes.
 
 use std::io::Write;
-use std::path::PathBuf;
 
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
+use kix::build_source::InstallableBuild;
 use kix::cluster::fetch;
-use kix::eval::build::build_cluster_activation_with_status;
-use kix::eval::store_graph::StoreGraph;
 use kix::legacy_domain::{KubeMigrationOps, migrate};
 use kix::manifest::keys;
-use kix::manifest::stamp::stamp_annotations;
 
 use crate::cli::MigrateArgs;
 use crate::output;
@@ -70,40 +67,28 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
 /// Taken from the build rather than written here, so the migration installs
 /// exactly the CRDs the next deploy expects.
 fn kix_crds_from_build(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<Vec<Value>> {
-    let flake_path = resolve_flake_path(&ctx.global.flake)?;
     if !ctx.global.quiet {
         println!("Building cluster '{}'...", output::bold(&args.cluster));
     }
-    let noop = |_: &str| {};
-    let overrides = ctx.global.input_overrides();
-    let result_dir =
-        build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &noop)
-            .map_err(|e| miette!("failed to build cluster: {e}"))?;
-    let mut graph =
-        StoreGraph::from_result_dir_with_status(&result_dir, &noop).map_err(|e| miette!("{e}"))?;
+    // The build is stamped, so the CRDs this installs carry an identity hash
+    // like every other object Kix applies. An unstamped object carrying the
+    // managed-by label is what `kix gc --hard --include-unstamped` deletes,
+    // and deleting `activations.<current>` cascades to every Activation
+    // record on the cluster.
     // A pin from before the domain move renders Kix's own CRDs under the
     // retired group, and this command would then install CRDs synthesised
-    // from it. Checked BEFORE stamping, for the same reason `kix deploy`
-    // checks before stamping: stamping upgrades a loaded build to the
-    // current domain, and after that a stale pin looks exactly like a
-    // current one. The `crds.len() != wanted.len()` check below cannot
-    // stand in for this, because upgrading is what makes the names match.
-    kix::legacy_domain::check_build(
-        &graph
-            .resources
-            .values()
-            .map(|r| r.manifest.clone())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|e| miette!("{e}"))?;
+    // from it, so it is refused. The `crds.len() != wanted.len()` check in
+    // `kix_crds` cannot stand in for this, because stamping upgrades the
+    // names until they match.
+    let build = super::build_flake(&ctx.global, &args.cluster, &|_| {}, super::BUILD_FAILED)?
+        .installable()
+        .map_err(|e| miette!("{e}"))?;
+    kix_crds(&build)
+}
 
-    // Stamp, so the CRDs this installs carry an identity hash like every
-    // other object Kix applies. An unstamped object carrying the managed-by
-    // label is what `kix gc --hard --include-unstamped` deletes, and
-    // deleting `activations.<current>` cascades to every Activation record
-    // on the cluster.
-    stamp_annotations(&mut graph);
-
+/// The two CustomResourceDefinition manifests of Kix's own kinds in `build`.
+fn kix_crds(build: &InstallableBuild) -> Result<Vec<Value>> {
+    let graph = build.graph();
     let wanted = [
         migrate::crd_name(migrate::ACTIVATION, keys::GROUP),
         migrate::crd_name(migrate::PACKAGE_INSTANCE, keys::GROUP),
@@ -234,18 +219,4 @@ fn confirm(args: &MigrateArgs) -> Result<bool> {
         return Ok(false);
     }
     Ok(true)
-}
-
-fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
-    if flake.contains(':') {
-        Ok(PathBuf::from(flake))
-    } else {
-        let path = PathBuf::from(flake);
-        if path.is_absolute() {
-            Ok(path)
-        } else {
-            let cwd = std::env::current_dir().into_diagnostic()?;
-            Ok(cwd.join(path))
-        }
-    }
 }

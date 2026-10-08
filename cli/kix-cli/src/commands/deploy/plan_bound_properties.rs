@@ -26,11 +26,12 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::Parser;
 use kix::eval::bundle::{Bundle, BundleError, BundleFile, Contents, INDEX_NAME, Provenance};
+use kix::eval::stamp::stamp_annotations;
 use kix::eval::store_graph::{KixPackageIndex, store_hash};
 use kix::eval::store_path::{self, Method};
 use kix::manifest::diff::equivalence::equivalent_to_unset;

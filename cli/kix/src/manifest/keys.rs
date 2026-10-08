@@ -87,7 +87,7 @@ pub const ACTIVATIONS_CRD: &str = concat!("activations.", domain!());
 /// `packageinstances.<domain>`, the CRD name.
 pub const PACKAGE_INSTANCES_CRD: &str = concat!("packageinstances.", domain!());
 
-// --- Stamped by the CLI at load time (manifest/stamp.rs) ---
+// --- Stamped by the CLI at load time (eval/stamp.rs) ---
 
 /// The 32-char Nix store hash of the resource's sealed manifest. The identity
 /// the whole deploy engine compares on.

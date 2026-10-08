@@ -16,8 +16,8 @@ use miette::{IntoDiagnostic, Result, miette};
 use serde_json::json;
 
 use kix::build_source::{Build, CarriedBuild, Provenance};
-use kix::eval::build::build_cluster_activation_with_status;
 use kix::eval::bundle::{self, Bundle, BundleError, OpenBundle};
+use kix::eval::stamp::stamp_annotations;
 use kix::eval::store_graph::{StoreGraph, store_hash};
 use kix::text::printable;
 
@@ -156,22 +156,18 @@ fn graph_of(path: &Path, identity_hash: &str) -> Result<StoreGraph, String> {
 
 /// `kix bundle <cluster> [FILE]`.
 pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
-    let flake_path = super::deploy::resolve_flake_path(&ctx.global.flake)?;
     let quiet = ctx.global.quiet;
     let status = |msg: &str| {
         if !quiet {
             eprint!("\r\x1b[2K  {msg}");
         }
     };
-    let overrides = ctx.global.input_overrides();
-    let result_dir =
-        build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &status)
-            .map_err(|e| miette!("failed to build cluster: {e}"))?;
+    let build = super::build_flake(&ctx.global, &args.cluster, &status, super::BUILD_FAILED)?;
     if !quiet {
         eprint!("\r\x1b[2K");
     }
-    let graph = StoreGraph::from_result_dir(&result_dir).map_err(|e| miette!("{e}"))?;
-    let receipt = super::compliance::receipt::build_receipt(&graph, &ctx.global.flake);
+    let graph = build.graph();
+    let receipt = super::compliance::receipt::build_receipt(graph, &ctx.global.flake);
     let object = |v: &serde_json::Value| v.as_object().cloned().unwrap_or_default();
     let provenance = bundle::Provenance {
         source: object(&receipt["source"]),
@@ -188,7 +184,7 @@ pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
         Some(path) => format!("{} ({path})", kix.version),
         None => kix.version,
     };
-    let contents = bundle::from_result_dir(&result_dir, &kix_rev, Some(provenance))
+    let contents = bundle::from_result_dir(&graph.result_dir, &kix_rev, Some(provenance))
         .map_err(|e| miette!("{e}"))?;
     let file = args
         .file
@@ -205,13 +201,17 @@ pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
         .map_err(|e| miette!("cannot write {}: {e}", file.display()))?;
     // Read back what was written, so a bundle that would be refused, or
     // that a deploy would read as another build, is never left at `file`.
+    // A deploy reads it stamped, so it is compared stamped, as `build` is.
+    // Stamped here, not through `Build`, because stamping records the result
+    // directory, which must first be the build's.
     let (written, mut read_back) =
         load(temp.path()).map_err(|e| miette!("the build did not make a valid bundle: {e}"))?;
     read_back.result_dir = graph.result_dir.clone();
-    if read_back != graph || !read_back.packages.keys().eq(graph.packages.keys()) {
+    stamp_annotations(&mut read_back);
+    if read_back != *graph || !read_back.packages.keys().eq(graph.packages.keys()) {
         return Err(miette!(
             "the bundle reads back as another build than {}",
-            result_dir.display()
+            graph.result_dir.display()
         ));
     }
     temp.persist(&file).into_diagnostic()?;

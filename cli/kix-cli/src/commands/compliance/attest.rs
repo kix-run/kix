@@ -37,7 +37,7 @@ pub fn run(args: &ComplianceAttestArgs, ctx: &mut CommandContext) -> Result<()> 
             args.invocation_id.as_deref(),
         )
     } else {
-        let (_result_path, graph) = super::shared::build_and_load(ctx, &args.cluster)?;
+        let graph = super::shared::build_and_load(ctx, &args.cluster)?;
         build_attestation(
             &graph,
             &ctx.global.flake,
