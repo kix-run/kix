@@ -179,7 +179,7 @@ fn load_manifests(path: &Path) -> Result<Vec<Value>, OperatorError> {
 fn live_changes(
     desired: &[Value],
     live: &[DynamicObject],
-    tenancy: &activation::Tenancy,
+    tenancy: &kix::cluster::tenancy::Tenancy,
 ) -> (Vec<ChangeAction>, Vec<fetch::SharedOrphan>) {
     let actions = kix::cluster::apply::detect_changes_live(desired, live);
     let orphans: Vec<ResourceId> = actions
@@ -752,7 +752,7 @@ pub fn error_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kix::cluster::activation::Tenancy;
+    use kix::cluster::tenancy::Tenancy;
     use serde_json::json;
 
     fn annotated(kind: &str, name: &str, hash: &str, activations: &str) -> Value {

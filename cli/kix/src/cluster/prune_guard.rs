@@ -19,8 +19,9 @@ use kube::{
 use thiserror::Error;
 use tokio::sync::Mutex;
 
-use super::activation::{self, ActivationError, Tenancy};
+use super::activation::{self, ActivationError};
 use super::fetch::{self, SharedOrphan};
+use super::tenancy::{self, Tenancy};
 use crate::manifest::types::ResourceId;
 
 /// What [`PruneGuard::delete`] did.
@@ -125,12 +126,12 @@ impl PruneGuard {
     async fn tenancy_naming(&self, obj: &DynamicObject) -> Result<Tenancy, PruneError> {
         let mut slot = self.tenancy.lock().await;
         let fresh = match &*slot {
-            Some(t) => activation::named_hashes(obj).all(|h| t.knows(h)),
+            Some(t) => tenancy::named_hashes(obj).all(|h| t.knows(h)),
             None => false,
         };
         if !fresh {
-            let read = activation::tenancy_from(&self.client, self.records.as_ref(), &self.cluster)
-                .await?;
+            let read =
+                tenancy::read_from(&self.client, self.records.as_ref(), &self.cluster).await?;
             *slot = Some(read);
         }
         Ok(slot.clone().unwrap_or_default())

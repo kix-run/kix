@@ -20,6 +20,7 @@ pub mod readiness;
 pub mod scheduler;
 pub mod secrets;
 pub mod stream;
+pub mod tenancy;
 pub mod topology;
 pub mod watchdog;
 

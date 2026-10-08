@@ -16,9 +16,9 @@ use kube::{
 };
 use serde_json::Value;
 
-use super::activation::Tenancy;
 use super::fetch::{self, FetchError};
 use super::fieldsv1::{self, KIX_FIELD_MANAGER};
+use super::tenancy::Tenancy;
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 

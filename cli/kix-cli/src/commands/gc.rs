@@ -645,7 +645,7 @@ fn judge_hard(
     live: &[kube::api::DynamicObject],
     expected_hashes: &HashSet<String>,
     expected_ids: &HashSet<String>,
-    tenancy: &kix::cluster::activation::Tenancy,
+    tenancy: &kix::cluster::tenancy::Tenancy,
 ) -> (Vec<GarbageEntry>, Vec<fetch::SharedOrphan>) {
     let mut garbage: Vec<GarbageEntry> = Vec::new();
     let mut shared: Vec<fetch::SharedOrphan> = Vec::new();
@@ -1757,7 +1757,8 @@ mod delete_tests {
 #[cfg(test)]
 mod hard_scope_tests {
     use super::*;
-    use kix::cluster::activation::{PHASE_ACTIVE, Tenancy};
+    use kix::cluster::activation::PHASE_ACTIVE;
+    use kix::cluster::tenancy::Tenancy;
     use kube::api::DynamicObject;
     use serde_json::json;
 

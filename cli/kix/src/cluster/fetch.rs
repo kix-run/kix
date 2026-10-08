@@ -6,9 +6,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
-use super::activation::{self, Tenancy};
+use super::activation;
 use super::client::{ResiliencePolicy, build_client, mark_first_contact, preflight_enabled};
 use super::errors::{FailureClass, classify};
+use super::tenancy::{self, Tenancy};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::never_pruned;
 use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
@@ -549,11 +550,11 @@ pub enum Attribution {
 }
 
 /// Attribute a swept object to Kix clusters through the record hashes it
-/// names (see [`activation::named_hashes`]).
+/// names (see [`tenancy::named_hashes`]).
 pub fn attribute(obj: &DynamicObject, tenancy: &Tenancy) -> Attribution {
     let mut ours = false;
     let mut others: Vec<String> = Vec::new();
-    for hash in activation::named_hashes(obj) {
+    for hash in tenancy::named_hashes(obj) {
         if tenancy.own.contains(hash) {
             ours = true;
         } else if let Some(owner) = tenancy.others.get(hash) {
@@ -637,7 +638,7 @@ pub fn split_by_records(
 ) -> (Vec<DynamicObject>, Vec<DynamicObject>) {
     objects
         .into_iter()
-        .partition(|o| activation::named_hashes(o).any(|h| hashes.contains(h)))
+        .partition(|o| tenancy::named_hashes(o).any(|h| hashes.contains(h)))
 }
 
 /// Fetch every resource kix applied, in parallel: one LIST per discovered
@@ -662,7 +663,7 @@ pub async fn fetch_managed_resources(
 /// per-cluster label on ordinary objects.
 ///
 /// The Activation records are listed after the objects, for the reason
-/// [`activation::tenancy`] gives.
+/// [`tenancy::read`] gives.
 pub async fn sweep_managed(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
@@ -676,7 +677,7 @@ pub async fn sweep_managed(
         SweepScope::Cluster(cluster) | SweepScope::Records { cluster, .. } => cluster,
         SweepScope::All => "",
     };
-    let tenancy = activation::tenancy(client, discovery, cluster)
+    let tenancy = tenancy::read(client, discovery, cluster)
         .await
         .map_err(FetchError::RecordsError)?;
     Ok(scope_sweep(sweep, scope, tenancy))
@@ -881,7 +882,7 @@ fn split_by_lookup<'a>(
 
 /// [`split_shared_orphans`] for a plan made from builds: GET each orphan
 /// candidate to read its `kix.run/activations`, then read the Tenancy of
-/// `cluster` (after the objects, for the reason [`activation::tenancy`]
+/// `cluster` (after the objects, for the reason [`tenancy::read`]
 /// gives).
 ///
 /// This decides what a plan shows. The delete itself goes through
@@ -928,7 +929,7 @@ pub async fn split_shared_orphans_live(
             .into_iter()
             .flatten()
             .collect();
-    let tenancy = activation::tenancy(client, discovery, cluster)
+    let tenancy = tenancy::read(client, discovery, cluster)
         .await
         .map_err(FetchError::RecordsError)?;
     Ok(split_by_lookup(orphans, |rid| live.get(rid), &tenancy))
