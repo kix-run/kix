@@ -141,6 +141,7 @@ use super::error::KixEvalError;
 use super::manifest_json::{NotJson, parse_index, parse_manifest};
 use super::store_graph::{StoreGraph, store_name};
 use super::store_path;
+pub use crate::build_source::Provenance;
 use crate::manifest::{keys, lifecycle};
 use crate::text::printable;
 
@@ -255,19 +256,6 @@ fn stream_order(a: &str, b: &str) -> Ordering {
     let name_a = store_path::name_of(a).unwrap_or_default();
     let name_b = store_path::name_of(b).unwrap_or_default();
     name_a.cmp(name_b).then_with(|| a.cmp(b))
-}
-
-/// What the machine that wrote a bundle recorded about the build's source:
-/// the deploy receipt's `source`, `inputs` and `builder`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Provenance {
-    #[serde(default)]
-    pub source: serde_json::Map<String, serde_json::Value>,
-    #[serde(default)]
-    pub inputs: Vec<serde_json::Map<String, serde_json::Value>>,
-    #[serde(default)]
-    pub builder: serde_json::Map<String, serde_json::Value>,
 }
 
 /// What a bundle holds. [`Contents::write`] makes a bundle of it.

@@ -8,11 +8,13 @@
 //! - [`manifest`]: Kubernetes types, diffs, annotation stamping, and validation
 //! - [`cluster`]: apply, fetch, DAG, readiness, activation lifecycle, and reconcile
 //!
-//! Three smaller modules sit beside them: [`pins`], the committed record of
+//! Four smaller modules sit beside them: [`build_source`], where the build a
+//! command plans and deploys comes from, [`pins`], the committed record of
 //! what each image reference resolved to, [`registry`], the one place Kix asks
 //! a container registry a question, and [`text`], for printing text kix did
 //! not write.
 
+pub mod build_source;
 pub mod cluster;
 pub mod eval;
 pub mod legacy_domain;

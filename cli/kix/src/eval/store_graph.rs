@@ -297,7 +297,7 @@ impl StoreGraph {
     /// path the index lists and each `k8s-` path among the references, and
     /// fails when it fails: a build is not deployed without a file it names.
     /// A package that lists a path twice holds it once.
-    pub(crate) fn assemble(
+    pub fn assemble(
         index: KixPackageIndex,
         activation_path: PathBuf,
         result_dir: PathBuf,
