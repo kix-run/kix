@@ -34,6 +34,8 @@ Both binaries depend on `kix`. No other cross-deps.
   with `./seed.py <bundle>... seeds` (`kix bundle` of the test clusters), and
   run with `cargo fuzz run -s none -O <target> seeds/raw` (or `seeds/frames`)
   `-- -fork=4 -max_total_time=300 -max_len=2500000 -rss_limit_mb=4096`.
+- `.github/workflows/bundle-checks.yml` runs each fuzz target for two
+  minutes and `every_test_cluster_bundles`, on changes to `cli/` and weekly.
 
 ## Deploy pipeline
 
