@@ -174,12 +174,13 @@ fn is_k8s_path(path: &Path) -> bool {
     store_name(path).starts_with("k8s-")
 }
 
-/// Read a manifest from a store path, parsed as a bundle's are.
+/// Read a manifest from a store path with the one parser
+/// ([`super::manifest_json`]).
 fn read_store_json(path: &Path) -> Result<serde_json::Value, KixEvalError> {
     let bytes = std::fs::read(path).map_err(|e| KixEvalError::StoreGraphError {
         message: format!("failed to read store path {}: {e}", path.display()),
     })?;
-    super::bundle::parse_manifest(&path.to_string_lossy(), &bytes).map_err(|e| {
+    super::manifest_json::parse_manifest(&path.to_string_lossy(), &bytes).map_err(|e| {
         KixEvalError::StoreGraphError {
             message: e.to_string(),
         }
@@ -256,11 +257,9 @@ impl StoreGraph {
                 index_path.display()
             ),
         })?;
-        let index =
-            super::bundle::parse_index(&index_path.to_string_lossy(), &bytes).map_err(|e| {
-                KixEvalError::StoreGraphError {
-                    message: e.to_string(),
-                }
+        let index = super::manifest_json::parse_index(&index_path.to_string_lossy(), &bytes)
+            .map_err(|e| KixEvalError::StoreGraphError {
+                message: e.to_string(),
             })?;
 
         // 2. Resolve activation symlink
@@ -290,9 +289,11 @@ impl StoreGraph {
     }
 
     /// Steps 4 to 6 of loading a build: read every manifest, group them by
-    /// package, and work out the cross-package dependencies. Shared by a
-    /// result directory and a bundle (`eval::bundle`), which differ only in
-    /// where a file's bytes come from (`read`). Calls `read` once for each
+    /// package, and work out the cross-package dependencies. Shared by
+    /// every reader of a build, which differ only in where a file's bytes
+    /// come from (`read`). A reader parses with
+    /// [`super::manifest_json::parse_manifest`] and runs
+    /// [`StoreGraph::validate`] on the result. Calls `read` once for each
     /// path the index lists and each `k8s-` path among the references, and
     /// fails when it fails: a build is not deployed without a file it names.
     /// A package that lists a path twice holds it once.
@@ -433,8 +434,7 @@ impl StoreGraph {
     }
 
     /// Check that the graph is one build as plan shows it and deploy
-    /// requests it. Run on every build, from a bundle or a result
-    /// directory; a graph [`StoreGraph::synthesize`] makes describes live
+    /// requests it. Run on every build, whichever reader read it; a graph [`StoreGraph::synthesize`] makes describes live
     /// objects, not a build, and is not checked. Refuses:
     ///
     /// - a manifest whose kind, `apiVersion` parts, name, or namespace is

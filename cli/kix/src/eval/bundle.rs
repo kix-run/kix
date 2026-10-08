@@ -51,12 +51,9 @@
 //!
 //! # One parser
 //!
-//! [`parse_manifest`] parses every manifest and every index, from bundles
-//! and from result directories. It refuses a key given twice, a key that
-//! starts `$serde_json::private::` (serde_json's `Value`, with the
-//! `raw_value` feature this workspace turns on, reads an object with that
-//! key as the raw JSON its value holds), and nesting past serde_json's own
-//! limit of 128.
+//! Every manifest and the index are parsed with
+//! [`manifest_json::parse_manifest`](super::manifest_json::parse_manifest),
+//! the parser a result directory's are read with.
 //!
 //! # Two readers
 //!
@@ -135,13 +132,14 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 
-use serde::de::{DeserializeSeed, Error as _, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::de::{IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use zstd::zstd_safe;
 
 use super::error::KixEvalError;
-use super::store_graph::{KixPackageIndex, StoreGraph, store_name};
+use super::manifest_json::{NotJson, parse_index, parse_manifest};
+use super::store_graph::{StoreGraph, store_name};
 use super::store_path;
 use crate::manifest::{keys, lifecycle};
 use crate::text::printable;
@@ -354,6 +352,12 @@ pub enum BundleError {
     /// build. Their messages are escaped already.
     #[error("{0}")]
     Build(String),
+}
+
+impl From<NotJson> for BundleError {
+    fn from(NotJson { path, message }: NotJson) -> Self {
+        BundleError::NotJson { path, message }
+    }
 }
 
 impl Contents {
@@ -1161,95 +1165,6 @@ fn ref_cache_of(header: &Header) -> HashMap<PathBuf, Vec<PathBuf>> {
         }
     }
     ref_cache
-}
-
-/// `bytes`, the manifest at `path`, parsed as JSON: the one parser for
-/// manifests and indexes. Refuses a key given twice and a key with
-/// serde_json's reserved prefix; serde_json refuses nesting past 128. An
-/// integer outside `i64` and `u64` reads as the nearest `f64`.
-pub fn parse_manifest(path: &str, bytes: &[u8]) -> Result<serde_json::Value, BundleError> {
-    let mut de = serde_json::Deserializer::from_slice(bytes);
-    Strict
-        .deserialize(&mut de)
-        .and_then(|v| de.end().map(|()| v))
-        .map_err(|e| BundleError::NotJson {
-            path: path.to_string(),
-            message: e.to_string(),
-        })
-}
-
-/// `kix-packages.json` at `path`, parsed with [`parse_manifest`].
-pub fn parse_index(path: &str, bytes: &[u8]) -> Result<KixPackageIndex, BundleError> {
-    serde_json::from_value(parse_manifest(path, bytes)?).map_err(|e| BundleError::NotJson {
-        path: path.to_string(),
-        message: e.to_string(),
-    })
-}
-
-/// The prefix of the keys serde_json reserves for its own types. With the
-/// `raw_value` feature, `serde_json::Value` reads an object whose one key is
-/// `$serde_json::private::RawValue` as the JSON text its value holds.
-const SERDE_JSON_PRIVATE: &str = "$serde_json::private::";
-
-/// A JSON value parsed by [`parse_manifest`]'s rules.
-struct Strict;
-
-impl<'de> DeserializeSeed<'de> for Strict {
-    type Value = serde_json::Value;
-    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
-        d.deserialize_any(self)
-    }
-}
-
-impl<'de> Visitor<'de> for Strict {
-    type Value = serde_json::Value;
-    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("a JSON value")
-    }
-    fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E> {
-        Ok(v.into())
-    }
-    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
-        Ok(v.into())
-    }
-    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> {
-        Ok(v.into())
-    }
-    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E> {
-        Ok(v.into())
-    }
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> {
-        Ok(v.into())
-    }
-    fn visit_string<E>(self, v: String) -> Result<Self::Value, E> {
-        Ok(v.into())
-    }
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(serde_json::Value::Null)
-    }
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-        let mut out = Vec::new();
-        while let Some(v) = seq.next_element_seed(Strict)? {
-            out.push(v);
-        }
-        Ok(out.into())
-    }
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-        let mut out = serde_json::Map::new();
-        while let Some(key) = map.next_key::<String>()? {
-            if key.starts_with(SERDE_JSON_PRIVATE) {
-                return Err(A::Error::custom(format!(
-                    "the key '{key}' is reserved by serde_json"
-                )));
-            }
-            if out.contains_key(&key) {
-                return Err(A::Error::custom(format!("the key '{key}' is given twice")));
-            }
-            let value = map.next_value_seed(Strict)?;
-            out.insert(key, value);
-        }
-        Ok(out.into())
-    }
 }
 
 fn unreadable(e: impl std::fmt::Display) -> BundleError {

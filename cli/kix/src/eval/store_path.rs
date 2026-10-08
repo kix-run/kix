@@ -5,8 +5,8 @@
 //! sources from `builtins.path` (a source path, hashed over its NAR
 //! serialisation). Their store path is a function of their bytes, their
 //! references and their name, so a path can be checked against a file
-//! without a Nix store. A bundle (`eval::bundle`) relies on this to refuse a
-//! file whose path was not made from it.
+//! without a Nix store. A reader of a build that holds no Nix store relies
+//! on this to refuse a file whose path was not made from it.
 //!
 //! The rules follow Nix's `makeStorePath`, `makeTextPath` and
 //! `makeFixedOutputPath` for recursive SHA-256.

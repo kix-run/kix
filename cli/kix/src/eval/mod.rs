@@ -26,6 +26,7 @@ pub mod cache;
 pub mod cli_backend;
 pub mod error;
 pub mod evaluator;
+pub mod manifest_json;
 pub mod mock;
 pub mod store;
 pub mod store_graph;
