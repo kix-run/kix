@@ -35,19 +35,26 @@ use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
-use kix::build_source::Provenance;
+use kix::build_source::{BuildSource, Provenance};
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::keys;
 
 use super::shared;
+use crate::commands::deploy::BuildOrigin;
 
-/// The receipt for a build about to be deployed: from what the machine that
-/// made it recorded ([`from_provenance`]), or, for a build made here, from
-/// the flake at `flake_ref` ([`build_receipt`]).
-pub fn of_build(graph: &StoreGraph, provenance: Option<Provenance>, flake_ref: &str) -> Value {
-    match provenance {
-        Some(made) => from_provenance(graph, made),
-        None => build_receipt(graph, flake_ref),
+/// The receipt for a build about to be deployed: for a build made here,
+/// from the flake at `flake_ref` ([`build_receipt`]), and otherwise from
+/// what the machine that made it recorded, as `source` gives it
+/// ([`from_provenance`]).
+pub fn of_build(
+    graph: &StoreGraph,
+    origin: &BuildOrigin,
+    source: &dyn BuildSource,
+    flake_ref: &str,
+) -> Value {
+    match origin {
+        BuildOrigin::LocalStore => build_receipt(graph, flake_ref),
+        BuildOrigin::Bundle { sha256 } => from_provenance(graph, source.provenance(), sha256),
     }
 }
 
@@ -100,10 +107,18 @@ pub fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
 /// The receipt for a deploy of a build made on another machine.
 ///
 /// The source, inputs and builder are what that machine recorded; this
-/// machine has no source tree to read them from. The build source may add
-/// to `source` what it knows itself, such as a digest of the bytes it read.
-pub fn from_provenance(graph: &StoreGraph, made: Provenance) -> Value {
-    let source = Value::Object(made.source);
+/// machine has no source tree to read them from. They are claims by whoever
+/// made the build. `source.bundle.sha256` is not: it is `sha256`, of the
+/// bytes this machine read, so it names exactly what was deployed.
+pub fn from_provenance(graph: &StoreGraph, made: Provenance, sha256: &str) -> Value {
+    let mut source = made.source;
+    let mut bundle = serde_json::Map::from_iter([("sha256".to_string(), json!(sha256))]);
+    if let Some(Value::Object(claimed)) = source.remove("bundle") {
+        for (key, value) in claimed {
+            bundle.entry(key).or_insert(value);
+        }
+    }
+    source.insert("bundle".to_string(), Value::Object(bundle));
     json!({
         "schema": keys::RECEIPT_SCHEMA,
         "cluster": graph.cluster_name,
@@ -517,7 +532,6 @@ mod tests {
     /// what the bundle's maker recorded about the source.
     #[test]
     fn a_bundle_receipt_names_the_bundle_and_keeps_its_makers_record() {
-        use kix::build_source::BuildSource;
         use kix::eval::bundle::Bundle;
 
         let fixture: &[u8] =
@@ -537,24 +551,38 @@ mod tests {
         );
         let file = tempfile::NamedTempFile::new().unwrap();
         contents.write(file.as_file()).unwrap();
-        let (loaded, _) = crate::commands::bundle::load(file.path()).unwrap();
-        let (source, graph) = crate::commands::bundle::from_flags(
-            Some(file.path()),
-            &[],
-            "kix-enterprise-test",
-            true,
-        )
-        .unwrap()
-        .unwrap();
-        let r = of_build(&graph, source.provenance(), "unused");
+        let (source, graph, sha256) =
+            crate::commands::deploy::read_bundle(file.path(), &[], "kix-enterprise-test", true)
+                .unwrap();
+        let origin = BuildOrigin::Bundle { sha256 };
+        let r = of_build(&graph, &origin, &source, "unused");
+        let bytes = std::fs::read(file.path()).unwrap();
+        let digest = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));
         assert_eq!(r["source"]["revision"], "abc");
-        assert_eq!(r["source"]["bundle"]["sha256"], json!(loaded.sha256()));
+        assert_eq!(r["source"]["bundle"]["sha256"], json!(digest));
+        assert_eq!(r["source"]["bundle"]["kixRev"], json!(contents.kix_rev));
         assert_eq!(r["inputs"][0]["name"], "nixpkgs");
         assert_eq!(r["builder"]["kixVersion"], "0.0.1");
         assert_eq!(r["deployer"]["kixVersion"], env!("CARGO_PKG_VERSION"));
         assert_eq!(
             r["activationHash"],
             json!(kix::eval::store_graph::store_hash(&graph.activation_path))
+        );
+    }
+
+    /// The digest in the receipt is the one this machine computed. A
+    /// source that claims another is not believed.
+    #[test]
+    fn a_source_cannot_supply_the_receipts_digest() {
+        let made = Provenance {
+            source: serde_json::from_value(json!({"bundle": {"sha256": "forged", "kixRev": "r"}}))
+                .unwrap(),
+            ..Default::default()
+        };
+        let r = from_provenance(&StoreGraph::empty("c"), made, "read");
+        assert_eq!(
+            r["source"]["bundle"],
+            json!({"sha256": "read", "kixRev": "r"})
         );
     }
 }

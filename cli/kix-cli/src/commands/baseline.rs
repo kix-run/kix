@@ -186,9 +186,9 @@ fn short(hash: &str) -> &str {
 /// `built_via` or the local activation cache. `Ok(None)` when this machine
 /// has none of them.
 ///
-/// A build from the store must be the build the record names. `built_via`
+/// A build from either must be the build the record names. `built_via`
 /// is written by whoever deployed, so a record could point at any store
-/// path on this machine.
+/// path on this machine, and `source` is not trusted to check its own.
 pub fn record_graph(
     source: &dyn BuildSource,
     cluster: &str,
@@ -196,6 +196,7 @@ pub fn record_graph(
     built_via: Option<&str>,
 ) -> Result<Option<StoreGraph>, String> {
     if let Some(graph) = source.deployed_build(identity_hash)? {
+        kix::build_source::check_deployed_build(&graph, identity_hash)?;
         return Ok(Some(graph));
     }
     let Some(dir) = result_dir(cluster, identity_hash, built_via) else {
@@ -488,24 +489,57 @@ mod tests {
             include_bytes!("../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle")
                 .to_vec();
         std::fs::write(&path, &bytes).unwrap();
-        let (source, _) = crate::commands::bundle::from_flags(
-            Some(&path),
+        let (source, graph, _) = crate::commands::deploy::read_bundle(
+            &path,
             std::slice::from_ref(&path),
             "kix-enterprise-test",
             true,
         )
-        .unwrap()
         .unwrap();
-        let activation = crate::commands::bundle::load(&path)
-            .unwrap()
-            .0
-            .record()
-            .to_string();
-        let hash = kix::eval::store_graph::store_hash(std::path::Path::new(&activation));
+        let hash = kix::eval::store_graph::store_hash(&graph.activation_path);
         let last = bytes.len() - 1;
         bytes[last] ^= 1;
         std::fs::write(&path, &bytes).unwrap();
         assert!(resolve_closure(&source, "kix-enterprise-test", &hash, None).is_err());
+    }
+
+    /// A build source that gives `graph` for any identity hash.
+    struct Gives(StoreGraph);
+
+    impl BuildSource for Gives {
+        fn carried_sops_files(
+            &mut self,
+        ) -> Result<std::collections::HashMap<String, Vec<u8>>, String> {
+            Ok(Default::default())
+        }
+        fn provenance(&self) -> kix::build_source::Provenance {
+            Default::default()
+        }
+        fn deployed_build(&self, _identity_hash: &str) -> Result<Option<StoreGraph>, String> {
+            Ok(Some(self.0.clone()))
+        }
+    }
+
+    fn fixture_graph() -> StoreGraph {
+        let bytes: &[u8] =
+            include_bytes!("../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle");
+        kix::eval::bundle::Bundle::read(std::io::Cursor::new(bytes))
+            .unwrap()
+            .1
+    }
+
+    /// A source's deployed build is checked here: it must be the build the
+    /// record names, and valid.
+    #[test]
+    fn a_deployed_build_from_a_source_is_checked() {
+        let graph = fixture_graph();
+        let hash = kix::eval::store_graph::store_hash(&graph.activation_path);
+        let source = Gives(graph.clone());
+        assert!(record_graph(&source, "c", &hash, None).unwrap().is_some());
+        assert!(record_graph(&source, "c", &"0".repeat(32), None).is_err());
+        let mut invalid = graph;
+        invalid.cluster_name = "other".to_string();
+        assert!(record_graph(&Gives(invalid), "c", &hash, None).is_err());
     }
 
     fn m(kind: &str, name: &str, hash: &str) -> Value {

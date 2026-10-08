@@ -9,8 +9,8 @@
 //! displays the package-grouped diff, applies the dependency graph, and prunes
 //! authorized orphans in reverse dependency order.
 
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -70,7 +70,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         return Ok(());
     };
     // A deploy decrypts the SOPS files for real, after review.
-    p.sops = p.source.sops_sources(false).map_err(|e| miette!("{e}"))?;
+    p.sops = p.sops_sources(false)?;
     annotate_record(&mut p, &args.record_annotations);
 
     // Detect stateful migration pairs and require --accept-migrations.
@@ -159,6 +159,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let Prepared {
         source,
+        origin,
         sops,
         new_manifests,
         cluster,
@@ -241,13 +242,15 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // Build the deployment receipt before confirmation so dirty source state
     // is visible in the prompt.
-    let provenance = source.provenance();
-    let made_elsewhere = provenance.is_some();
-    let receipt =
-        crate::commands::compliance::receipt::of_build(&new_graph, provenance, &ctx.global.flake);
+    let receipt = crate::commands::compliance::receipt::of_build(
+        &new_graph,
+        &origin,
+        &*source,
+        &ctx.global.flake,
+    );
 
     if !ctx.global.quiet {
-        print_dirty_source_warning(&receipt, made_elsewhere);
+        print_dirty_source_warning(&receipt, origin.made_elsewhere());
     }
 
     // The nodes: do they carry the labels the plan's placement rules name?
@@ -312,7 +315,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // makes soft gc treat the current closure as garbage, and makes the next
     // `--current-activation` plan skip the nodes this run never applied.
     if end.current
-        && source.in_local_store()
+        && !origin.made_elsewhere()
         && let Err(e) = kix::eval::store::save_activation_path(&cluster, &new_graph.result_dir)
     {
         tracing::warn!(
@@ -376,7 +379,7 @@ fn check_saved_plan(saved: &SavedPlan, ctx: &mut CommandContext) -> Result<()> {
     let Some(mut p) = prepare(&saved.args, ctx)? else {
         return Ok(());
     };
-    p.sops = p.source.sops_sources(false).map_err(|e| miette!("{e}"))?;
+    p.sops = p.sops_sources(false)?;
     let report = match &p.pre_client {
         Some(client) => Some(super::plan::dry_run(&p, &saved.args, client.clone(), ctx)?),
         None => None,
@@ -457,8 +460,10 @@ fn annotate_record(p: &mut Prepared, annotations: &[(String, String)]) {
 pub(crate) struct Prepared {
     /// Where the new build came from. Its graph is `new_graph`.
     pub source: Box<dyn BuildSource>,
-    /// Where SOPS sources come from, from `source`: `kix plan` sets it with
-    /// placeholders, `kix deploy` with the real files.
+    /// How this machine got the new build, which it decides, not `source`.
+    pub origin: BuildOrigin,
+    /// Where SOPS sources come from ([`Prepared::sops_sources`]): `kix
+    /// plan` sets it with placeholders, `kix deploy` with the real files.
     pub sops: kix::cluster::secrets::SopsSources,
     /// The new build. Its `result_dir` is where `source` holds it.
     pub new_graph: StoreGraph,
@@ -497,16 +502,105 @@ pub(crate) struct Prepared {
     pub objects: plan::document::Objects,
 }
 
-/// The new build and where it came from: the bundle `--bundle` names, or a
-/// build of the flake into the local Nix store.
-fn new_build(args: &PlanArgs, ctx: &CommandContext) -> Result<(Box<dyn BuildSource>, StoreGraph)> {
-    if let Some((source, graph)) = super::bundle::from_flags(
-        args.bundle.as_deref(),
-        &args.deployed_bundles,
-        &args.cluster,
-        ctx.global.quiet,
-    )? {
-        return Ok((Box::new(source), graph));
+/// How this machine got the new build. Decided here, never by the build's
+/// source, so a source cannot claim a place in the local store or the
+/// digest the deploy receipt names.
+pub(crate) enum BuildOrigin {
+    /// Built from the flake into this machine's Nix store, at the graph's
+    /// `result_dir`. Its SOPS files are read from this machine, and later
+    /// commands find it through the local activation cache.
+    LocalStore,
+    /// Read from the file `--bundle` names. `sha256` is the SHA-256 of the
+    /// bytes this machine read and handed to the source.
+    Bundle { sha256: String },
+}
+
+impl BuildOrigin {
+    /// Whether another machine made the build, so the receipt's source is
+    /// that machine's record.
+    pub fn made_elsewhere(&self) -> bool {
+        matches!(self, BuildOrigin::Bundle { .. })
+    }
+}
+
+impl Prepared {
+    /// The SOPS sources of the new build. A build made here reads the files
+    /// its Secrets name on this machine. Any other build reads only the
+    /// files it carries, each checked against its store path. With
+    /// `placeholders`, those are not decrypted.
+    pub fn sops_sources(
+        &mut self,
+        placeholders: bool,
+    ) -> Result<kix::cluster::secrets::SopsSources> {
+        match self.origin {
+            BuildOrigin::LocalStore => Ok(kix::cluster::secrets::SopsSources::Local),
+            BuildOrigin::Bundle { .. } => {
+                let files = self
+                    .source
+                    .carried_sops_files()
+                    .map_err(|e| miette!("{e}"))?;
+                kix::build_source::carried_sops_sources(files, &self.new_manifests, placeholders)
+                    .map_err(|e| miette!("{e}"))
+            }
+        }
+    }
+}
+
+/// The bytes of the bundle file at `path`. Reads no more than a bundle may
+/// hold, so a larger file is refused before it fills memory.
+pub(crate) fn read_bundle_file(path: &Path) -> Result<Vec<u8>> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| miette!("cannot read the bundle {}: {e}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.take(kix::eval::bundle::MAX_STORED_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| miette!("cannot read the bundle {}: {e}", path.display()))?;
+    if bytes.len() as u64 > kix::eval::bundle::MAX_STORED_BYTES {
+        return Err(miette!(
+            "the bundle {} is larger than the {} bytes a bundle may hold",
+            path.display(),
+            kix::eval::bundle::MAX_STORED_BYTES
+        ));
+    }
+    Ok(bytes)
+}
+
+/// The build in the bundle at `path`, its source with the `deployed`
+/// bundles, and the SHA-256 of the bytes read. Refuses a build that is not
+/// valid or not of `cluster`, whatever the source checked.
+pub(crate) fn read_bundle(
+    path: &Path,
+    deployed: &[PathBuf],
+    cluster: &str,
+    quiet: bool,
+) -> Result<(super::bundle::BundleSource, StoreGraph, String)> {
+    use sha2::{Digest, Sha256};
+
+    if !quiet {
+        crate::say!("Reading bundle {}...", path.display());
+    }
+    let bytes = read_bundle_file(path)?;
+    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+    let (source, graph) = super::bundle::BundleSource::read(path, bytes, deployed)?;
+    kix::build_source::check_read_build(&graph, cluster)
+        .map_err(|e| miette!("cannot use the bundle {}: {e}", path.display()))?;
+    Ok((source, graph, sha256))
+}
+
+/// The new build, its source, and how this machine got it: the bundle
+/// `--bundle` names, or a build of the flake into the local Nix store.
+fn new_build(
+    args: &PlanArgs,
+    ctx: &CommandContext,
+) -> Result<(Box<dyn BuildSource>, StoreGraph, BuildOrigin)> {
+    if let Some(path) = &args.bundle {
+        let (source, graph, sha256) = read_bundle(
+            path,
+            &args.deployed_bundles,
+            &args.cluster,
+            ctx.global.quiet,
+        )?;
+        return Ok((Box::new(source), graph, BuildOrigin::Bundle { sha256 }));
     }
     let status = |msg: &str| {
         if !ctx.global.quiet {
@@ -523,14 +617,17 @@ fn new_build(args: &PlanArgs, ctx: &CommandContext) -> Result<(Box<dyn BuildSour
             .map_err(|e| miette!("failed to build cluster: {e}"))?;
     let graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
         .map_err(|e| miette!("{e}"))?;
-    Ok((Box::new(NixStore), graph))
+    Ok((Box::new(NixStore), graph, BuildOrigin::LocalStore))
 }
 
 /// Build, load the old side, and compute the actions and the engine plan.
 /// `None` when the build has nothing to deploy. Progress lines go through
 /// [`crate::say!`], so `kix plan -o json` keeps them off stdout.
 pub(crate) fn prepare(args: &PlanArgs, ctx: &mut CommandContext) -> Result<Option<Prepared>> {
-    let (source, mut new_graph) = new_build(args, ctx)?;
+    let (source, mut new_graph, origin) = new_build(args, ctx)?;
+    // Whichever reader read the build checked it, and it is checked again
+    // here: the plan and deploy below rely on it.
+    new_graph.validate().map_err(|e| miette!("{e}"))?;
     // A kixpkgs pin from before the domain move renders Kix's own CRDs under
     // the retired group. Deploying it would put those CRDs back and leave two
     // groups live, which the CLI cannot tell apart. Check before
@@ -741,6 +838,7 @@ pub(crate) fn prepare(args: &PlanArgs, ctx: &mut CommandContext) -> Result<Optio
 
     Ok(Some(Prepared {
         source,
+        origin,
         sops: Default::default(),
         new_graph,
         new_manifests,
@@ -1872,6 +1970,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     }
     let Prepared {
         source,
+        origin,
         new_graph,
         cluster,
         activation_identity_hash,
@@ -1882,12 +1981,14 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // The receipt, same as the direct path. The operator has no source tree,
     // so provenance is computed here and written onto the Activation when it
     // is applied.
-    let provenance = source.provenance();
-    let made_elsewhere = provenance.is_some();
-    let receipt =
-        crate::commands::compliance::receipt::of_build(&new_graph, provenance, &ctx.global.flake);
+    let receipt = crate::commands::compliance::receipt::of_build(
+        &new_graph,
+        &origin,
+        &*source,
+        &ctx.global.flake,
+    );
     if !ctx.global.quiet {
-        print_dirty_source_warning(&receipt, made_elsewhere);
+        print_dirty_source_warning(&receipt, origin.made_elsewhere());
     }
 
     // Confirm before submitting the Activation.

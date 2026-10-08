@@ -9,16 +9,15 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Cursor};
 use std::path::{Path, PathBuf};
 
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::json;
 
 use kix::build_source::{BuildSource, Provenance};
-use kix::cluster::secrets::SopsSources;
 use kix::eval::build::build_cluster_activation_with_status;
-use kix::eval::bundle::{self, Bundle, BundleError, Header, OpenBundle};
+use kix::eval::bundle::{self, Bundle, BundleError, OpenBundle};
 use kix::eval::store_graph::{StoreGraph, store_hash};
 use kix::text::printable;
 
@@ -26,78 +25,52 @@ use crate::cli::BundleArgs;
 
 use super::CommandContext;
 
-/// A bundle file, verified. Files are read from it as they are needed.
-#[derive(Debug)]
-pub struct LoadedBundle(Bundle<BufReader<File>>);
-
-impl LoadedBundle {
-    pub fn header(&self) -> &Header {
-        self.0.header()
-    }
-
-    /// The store path of the Activation record.
-    pub fn record(&self) -> &str {
-        self.0.record()
-    }
-
-    /// The cluster the Activation record is labelled with.
-    pub fn cluster(&self) -> &str {
-        self.0.cluster()
-    }
-
-    /// The SHA-256 of the file's bytes.
-    pub fn sha256(&self) -> &str {
-        self.0.sha256()
-    }
-
-    /// The bundle's SOPS files. With `placeholders`, nothing is decrypted:
-    /// what `kix plan` uses, so a plan made before approval reads no secret.
-    /// Each file is checked against its store path again as it is read.
-    pub fn sops(&mut self, placeholders: bool) -> Result<SopsSources, String> {
-        let sources = self
-            .0
-            .other_files()
-            .map_err(|e| format!("cannot read the bundle's SOPS files: {e}"))?;
-        SopsSources::carried(sources, placeholders)
-            .map_err(|e| format!("cannot write the bundle's SOPS files: {e}"))
-    }
-}
-
 /// A bundle as the source of the build `--bundle` names, with the
 /// `--deployed-bundle` files, by the identity hash of their Activation
-/// record. Made only by [`from_flags`], which verifies the bundle first.
+/// record. Made only by [`BundleSource::read`], which verifies the bundle
+/// first.
 #[derive(Debug)]
 pub struct BundleSource {
-    bundle: LoadedBundle,
+    bundle: Bundle<Cursor<Vec<u8>>>,
     deployed: HashMap<String, PathBuf>,
 }
 
+impl BundleSource {
+    /// The source and verified build of `bytes`, the bundle at `path`, with
+    /// the `deployed` files opened. The build's result directory is
+    /// `bundle:sha256:<sha256>`.
+    pub fn read(
+        path: &Path,
+        bytes: Vec<u8>,
+        deployed: &[PathBuf],
+    ) -> Result<(BundleSource, StoreGraph)> {
+        let (bundle, graph) = Bundle::read(Cursor::new(bytes))
+            .map_err(|e| miette!("cannot use the bundle {}: {e}", path.display()))?;
+        let source = BundleSource {
+            bundle,
+            deployed: deployed_by_hash(deployed)?,
+        };
+        Ok((source, graph))
+    }
+}
+
 impl BuildSource for BundleSource {
-    /// A bundle's build is not in the local store, and its result directory
-    /// is `bundle:sha256:<sha256>`, so it is not cached.
-    fn in_local_store(&self) -> bool {
-        false
+    /// The bundle's files that are neither manifests nor its index. Each is
+    /// checked against its store path again as it is read.
+    fn carried_sops_files(&mut self) -> Result<HashMap<String, Vec<u8>>, String> {
+        self.bundle
+            .other_files()
+            .map_err(|e| format!("cannot read the bundle's SOPS files: {e}"))
     }
 
-    fn sops_sources(&mut self, placeholders: bool) -> Result<SopsSources, String> {
-        self.bundle.sops(placeholders)
-    }
-
-    /// What the machine that made the bundle recorded, with the bundle's
-    /// SHA-256 and kix revision under `source.bundle`. The recorded fields
-    /// are claims by whoever uploaded the bundle. The SHA-256 is not: it
-    /// names exactly the bytes that were deployed.
-    fn provenance(&self) -> Option<Provenance> {
+    /// What the machine that made the bundle recorded, with the kix
+    /// revision the bundle names under `source.bundle`.
+    fn provenance(&self) -> Provenance {
         let header = self.bundle.header();
         let mut made = header.receipt.clone().unwrap_or_default();
-        made.source.insert(
-            "bundle".to_string(),
-            json!({
-                "sha256": self.bundle.sha256(),
-                "kixRev": header.kix_rev,
-            }),
-        );
-        Some(made)
+        made.source
+            .insert("bundle".to_string(), json!({ "kixRev": header.kix_rev }));
+        made
     }
 
     /// Reads and verifies the `--deployed-bundle` file on each call, so the
@@ -110,49 +83,17 @@ impl BuildSource for BundleSource {
     }
 }
 
-/// The source and verified build of the bundle `--bundle` names, with the
-/// `--deployed-bundle` files opened, or `None` without `--bundle`. Refuses a
-/// bundle of a cluster other than `cluster`.
-pub fn from_flags(
-    bundle: Option<&Path>,
-    deployed: &[PathBuf],
-    cluster: &str,
-    quiet: bool,
-) -> Result<Option<(BundleSource, StoreGraph)>> {
-    let Some(path) = bundle else {
-        return Ok(None);
-    };
-    if !quiet {
-        crate::say!("Reading bundle {}...", path.display());
-    }
-    let (loaded, graph) = load(path)?;
-    if loaded.cluster() != cluster {
-        return Err(miette!(
-            "the bundle {} is for cluster '{}', not '{}'",
-            path.display(),
-            printable(loaded.cluster()),
-            cluster
-        ));
-    }
-    let source = BundleSource {
-        bundle: loaded,
-        deployed: deployed_by_hash(deployed)?,
-    };
-    Ok(Some((source, graph)))
-}
-
 fn open_file(path: &Path) -> Result<BufReader<File>> {
     File::open(path)
         .map(BufReader::new)
         .map_err(|e| miette!("cannot read the bundle {}: {e}", path.display()))
 }
 
-/// Read and verify a bundle, and give it with its build, whose result
-/// directory is `bundle:sha256:<sha256>`.
-pub fn load(path: &Path) -> Result<(LoadedBundle, StoreGraph)> {
-    let (bundle, graph) = Bundle::read(open_file(path)?)
-        .map_err(|e| miette!("cannot use the bundle {}: {e}", path.display()))?;
-    Ok((LoadedBundle(bundle), graph))
+/// Read and verify the bundle at `path`, and give it with its build.
+fn load(path: &Path) -> Result<(Bundle<Cursor<Vec<u8>>>, StoreGraph)> {
+    let bytes = super::deploy::read_bundle_file(path)?;
+    Bundle::read(Cursor::new(bytes))
+        .map_err(|e| miette!("cannot use the bundle {}: {e}", path.display()))
 }
 
 /// Open each `--deployed-bundle` file, reading its seek table and header

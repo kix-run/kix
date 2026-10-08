@@ -57,7 +57,7 @@ pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Resu
     // A plan decrypts no SOPS file the build carries: those Secrets get
     // placeholder values, so planning before anyone has approved reads no
     // secret.
-    p.sops = p.source.sops_sources(true).map_err(|e| miette!("{e}"))?;
+    p.sops = p.sops_sources(true)?;
     let report = match &p.pre_client {
         Some(client) => Some(dry_run(&p, args, client.clone(), ctx)?),
         None => None,

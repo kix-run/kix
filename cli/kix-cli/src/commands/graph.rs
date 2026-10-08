@@ -25,9 +25,9 @@ impl CommandResponse for GraphResponse {
 }
 
 pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
-    let bundle = super::bundle::from_flags(args.bundle.as_deref(), &[], &args.cluster, true)?;
-    let manifests = match bundle {
-        Some((_, mut graph)) => {
+    let manifests = match &args.bundle {
+        Some(path) => {
+            let (_, mut graph, _) = super::deploy::read_bundle(path, &[], &args.cluster, true)?;
             kix::manifest::stamp::stamp_annotations(&mut graph);
             let mut manifests: Vec<serde_json::Value> =
                 graph.resources.into_values().map(|r| r.manifest).collect();

@@ -76,8 +76,12 @@ impl SopsSources {
     /// Write the SOPS files a build carries, by store path, to a fresh
     /// directory, each under its SHA-256 and the end of its store name, and
     /// read them only from there. The caller has checked each file's store
-    /// path against its bytes.
-    pub fn carried(sources: HashMap<String, Vec<u8>>, placeholders: bool) -> std::io::Result<Self> {
+    /// path against its bytes: see
+    /// [`crate::build_source::carried_sops_sources`].
+    pub(crate) fn carried(
+        sources: HashMap<String, Vec<u8>>,
+        placeholders: bool,
+    ) -> std::io::Result<Self> {
         let dir = tempfile::tempdir()?;
         let mut files = HashMap::new();
         for (store_path, bytes) in sources {
