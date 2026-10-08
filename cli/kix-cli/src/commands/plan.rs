@@ -54,11 +54,10 @@ pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Resu
     let Some(mut p) = deploy::prepare(args, ctx)? else {
         return Ok(());
     };
-    // A plan from a bundle decrypts nothing: SOPS Secrets get placeholder
-    // values, so planning before anyone has approved reads no secret.
-    if let Some(b) = &mut p.bundle {
-        p.sops = b.sops(true)?;
-    }
+    // A plan decrypts no SOPS file the build carries: those Secrets get
+    // placeholder values, so planning before anyone has approved reads no
+    // secret.
+    p.sops = p.source.sops_sources(true).map_err(|e| miette!("{e}"))?;
     let report = match &p.pre_client {
         Some(client) => Some(dry_run(&p, args, client.clone(), ctx)?),
         None => None,

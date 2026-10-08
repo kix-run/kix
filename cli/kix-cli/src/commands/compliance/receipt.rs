@@ -35,11 +35,21 @@ use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
+use kix::build_source::Provenance;
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::keys;
 
 use super::shared;
-use crate::commands::bundle::LoadedBundle;
+
+/// The receipt for a build about to be deployed: from what the machine that
+/// made it recorded ([`from_provenance`]), or, for a build made here, from
+/// the flake at `flake_ref` ([`build_receipt`]).
+pub fn of_build(graph: &StoreGraph, provenance: Option<Provenance>, flake_ref: &str) -> Value {
+    match provenance {
+        Some(made) => from_provenance(graph, made),
+        None => build_receipt(graph, flake_ref),
+    }
+}
 
 /// Assemble the receipt for a build that is about to be deployed.
 pub fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
@@ -87,19 +97,13 @@ pub fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
     })
 }
 
-/// The receipt for a deploy from a bundle.
+/// The receipt for a deploy of a build made on another machine.
 ///
-/// The source, inputs and builder are what the machine that made the bundle
-/// recorded; this machine has no source tree to read them from. They are
-/// claims by whoever uploaded the bundle. The bundle's SHA-256 is not: it
-/// names exactly the bytes that were deployed.
-pub fn from_bundle(graph: &StoreGraph, loaded: &LoadedBundle) -> Value {
-    let made = loaded.header().receipt.clone().unwrap_or_default();
-    let mut source = Value::Object(made.source);
-    source["bundle"] = json!({
-        "sha256": loaded.sha256(),
-        "kixRev": loaded.header().kix_rev,
-    });
+/// The source, inputs and builder are what that machine recorded; this
+/// machine has no source tree to read them from. The build source may add
+/// to `source` what it knows itself, such as a digest of the bytes it read.
+pub fn from_provenance(graph: &StoreGraph, made: Provenance) -> Value {
+    let source = Value::Object(made.source);
     json!({
         "schema": keys::RECEIPT_SCHEMA,
         "cluster": graph.cluster_name,
@@ -513,6 +517,7 @@ mod tests {
     /// what the bundle's maker recorded about the source.
     #[test]
     fn a_bundle_receipt_names_the_bundle_and_keeps_its_makers_record() {
+        use kix::build_source::BuildSource;
         use kix::eval::bundle::Bundle;
 
         let fixture: &[u8] =
@@ -532,8 +537,16 @@ mod tests {
         );
         let file = tempfile::NamedTempFile::new().unwrap();
         contents.write(file.as_file()).unwrap();
-        let (loaded, graph) = crate::commands::bundle::load(file.path()).unwrap();
-        let r = from_bundle(&graph, &loaded);
+        let (loaded, _) = crate::commands::bundle::load(file.path()).unwrap();
+        let (source, graph) = crate::commands::bundle::from_flags(
+            Some(file.path()),
+            &[],
+            "kix-enterprise-test",
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        let r = of_build(&graph, source.provenance(), "unused");
         assert_eq!(r["source"]["revision"], "abc");
         assert_eq!(r["source"]["bundle"]["sha256"], json!(loaded.sha256()));
         assert_eq!(r["inputs"][0]["name"], "nixpkgs");

@@ -23,6 +23,7 @@
 //! B"). Listing the records is a read of our own bookkeeping, not of the
 //! objects being reasoned about.
 
+use kix::build_source::BuildSource;
 use kix::cluster::activation::{
     self, ActiveActivation, DeployingActivation, FailedActivation, KeptOrphanSource,
 };
@@ -64,6 +65,7 @@ impl FailedBaseline {
 pub async fn load_failed(
     client: &Client,
     ar: &ApiResource,
+    source: &dyn BuildSource,
     cluster: &str,
     quiet: bool,
 ) -> FailedBaseline {
@@ -81,7 +83,7 @@ pub async fn load_failed(
             out.unresolved.push(record);
             continue;
         };
-        let closure = match resolve_closure(cluster, &hash, record.built_via.as_deref()) {
+        let closure = match resolve_closure(source, cluster, &hash, record.built_via.as_deref()) {
             Ok(Some(closure)) => closure,
             Ok(None) => {
                 out.unresolved.push(record);
@@ -179,19 +181,21 @@ fn short(hash: &str) -> &str {
     &hash[..8.min(hash.len())]
 }
 
-/// The build an Activation record names, unstamped: from a
-/// `--deployed-bundle` with its identity hash, else from `built_via` or the
-/// local activation cache. `Ok(None)` when this machine has none of them.
+/// The build an Activation record names, unstamped: from `source`
+/// ([`BuildSource::deployed_build`]) by its identity hash, else from
+/// `built_via` or the local activation cache. `Ok(None)` when this machine
+/// has none of them.
 ///
 /// A build from the store must be the build the record names. `built_via`
 /// is written by whoever deployed, so a record could point at any store
 /// path on this machine.
 pub fn record_graph(
+    source: &dyn BuildSource,
     cluster: &str,
     identity_hash: &str,
     built_via: Option<&str>,
 ) -> Result<Option<StoreGraph>, String> {
-    if let Some(graph) = crate::commands::bundle::deployed_graph(identity_hash)? {
+    if let Some(graph) = source.deployed_build(identity_hash)? {
         return Ok(Some(graph));
     }
     let Some(dir) = result_dir(cluster, identity_hash, built_via) else {
@@ -212,16 +216,17 @@ pub fn record_graph(
     Ok(Some(graph))
 }
 
-/// The stamped manifests of a build, from a `--deployed-bundle`, from
-/// `built_via` when that store path is on this machine, else through the
-/// local activation cache by identity hash. `Ok(None)` when none is
-/// available, and an error when one is but will not load.
+/// The stamped manifests of a build, from `source`, from `built_via` when
+/// that store path is on this machine, else through the local activation
+/// cache by identity hash. `Ok(None)` when none is available, and an error
+/// when one is but will not load.
 fn resolve_closure(
+    source: &dyn BuildSource,
     cluster: &str,
     identity_hash: &str,
     built_via: Option<&str>,
 ) -> Result<Option<Vec<Value>>, String> {
-    let Some(mut graph) = record_graph(cluster, identity_hash, built_via)? else {
+    let Some(mut graph) = record_graph(source, cluster, identity_hash, built_via)? else {
         return Ok(None);
     };
     stamp_annotations(&mut graph);
@@ -260,10 +265,20 @@ pub struct KeptBaseline {
 
 /// Resolve the Active record's `status.orphansKeptFrom` to closures, and say
 /// how many there are so the plan's extra orphans have an explanation.
-pub fn load_kept(active: &ActiveActivation, cluster: &str, quiet: bool) -> KeptBaseline {
+pub fn load_kept(
+    active: &ActiveActivation,
+    build_source: &dyn BuildSource,
+    cluster: &str,
+    quiet: bool,
+) -> KeptBaseline {
     let mut out = KeptBaseline::default();
     for source in &active.orphans_kept_from {
-        match resolve_closure(cluster, &source.identity_hash, source.built_via.as_deref()) {
+        match resolve_closure(
+            build_source,
+            cluster,
+            &source.identity_hash,
+            source.built_via.as_deref(),
+        ) {
             Ok(Some(closure)) => {
                 out.closures.push(closure);
                 out.sources.push(source.clone());
@@ -465,7 +480,6 @@ mod tests {
 
     /// A `--deployed-bundle` that no longer verifies is an error for the
     /// build it holds, not a build this machine lacks: the caller says so.
-    /// The only test in this binary that registers deployed bundles.
     #[test]
     fn a_deployed_bundle_that_does_not_verify_is_not_taken_as_missing() {
         let dir = tempfile::tempdir().unwrap();
@@ -474,7 +488,14 @@ mod tests {
             include_bytes!("../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle")
                 .to_vec();
         std::fs::write(&path, &bytes).unwrap();
-        crate::commands::bundle::register_deployed(std::slice::from_ref(&path)).unwrap();
+        let (source, _) = crate::commands::bundle::from_flags(
+            Some(&path),
+            std::slice::from_ref(&path),
+            "kix-enterprise-test",
+            true,
+        )
+        .unwrap()
+        .unwrap();
         let activation = crate::commands::bundle::load(&path)
             .unwrap()
             .0
@@ -484,7 +505,7 @@ mod tests {
         let last = bytes.len() - 1;
         bytes[last] ^= 1;
         std::fs::write(&path, &bytes).unwrap();
-        assert!(resolve_closure("kix-enterprise-test", &hash, None).is_err());
+        assert!(resolve_closure(&source, "kix-enterprise-test", &hash, None).is_err());
     }
 
     fn m(kind: &str, name: &str, hash: &str) -> Value {

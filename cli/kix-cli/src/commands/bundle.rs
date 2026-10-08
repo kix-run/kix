@@ -1,18 +1,21 @@
-//! `kix bundle`, and reading bundles for `--bundle` and `--deployed-bundle`.
+//! `kix bundle`, and the bundle as a build source for `--bundle` and
+//! `--deployed-bundle`.
 //!
 //! A bundle (`kix::eval::bundle`) is a build as one file that loads without
 //! Nix. `--bundle` makes it the new side of `kix plan`, `kix deploy` and
-//! `kix graph`. `--deployed-bundle` supplies builds the cluster's records
-//! name, which kix otherwise looks for in the local Nix store.
+//! `kix graph`, through [`BundleSource`]. `--deployed-bundle` supplies
+//! builds the cluster's records name, which kix otherwise looks for in the
+//! local Nix store.
 
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use miette::{IntoDiagnostic, Result, miette};
+use serde_json::json;
 
+use kix::build_source::{BuildSource, Provenance};
 use kix::cluster::secrets::SopsSources;
 use kix::eval::build::build_cluster_activation_with_status;
 use kix::eval::bundle::{self, Bundle, BundleError, Header, OpenBundle};
@@ -49,14 +52,93 @@ impl LoadedBundle {
 
     /// The bundle's SOPS files. With `placeholders`, nothing is decrypted:
     /// what `kix plan` uses, so a plan made before approval reads no secret.
-    pub fn sops(&mut self, placeholders: bool) -> Result<SopsSources> {
+    /// Each file is checked against its store path again as it is read.
+    pub fn sops(&mut self, placeholders: bool) -> Result<SopsSources, String> {
         let sources = self
             .0
             .other_files()
-            .map_err(|e| miette!("cannot read the bundle's SOPS files: {e}"))?;
+            .map_err(|e| format!("cannot read the bundle's SOPS files: {e}"))?;
         SopsSources::carried(sources, placeholders)
-            .map_err(|e| miette!("cannot write the bundle's SOPS files: {e}"))
+            .map_err(|e| format!("cannot write the bundle's SOPS files: {e}"))
     }
+}
+
+/// A bundle as the source of the build `--bundle` names, with the
+/// `--deployed-bundle` files, by the identity hash of their Activation
+/// record. Made only by [`from_flags`], which verifies the bundle first.
+#[derive(Debug)]
+pub struct BundleSource {
+    bundle: LoadedBundle,
+    deployed: HashMap<String, PathBuf>,
+}
+
+impl BuildSource for BundleSource {
+    /// A bundle's build is not in the local store, and its result directory
+    /// is `bundle:sha256:<sha256>`, so it is not cached.
+    fn in_local_store(&self) -> bool {
+        false
+    }
+
+    fn sops_sources(&mut self, placeholders: bool) -> Result<SopsSources, String> {
+        self.bundle.sops(placeholders)
+    }
+
+    /// What the machine that made the bundle recorded, with the bundle's
+    /// SHA-256 and kix revision under `source.bundle`. The recorded fields
+    /// are claims by whoever uploaded the bundle. The SHA-256 is not: it
+    /// names exactly the bytes that were deployed.
+    fn provenance(&self) -> Option<Provenance> {
+        let header = self.bundle.header();
+        let mut made = header.receipt.clone().unwrap_or_default();
+        made.source.insert(
+            "bundle".to_string(),
+            json!({
+                "sha256": self.bundle.sha256(),
+                "kixRev": header.kix_rev,
+            }),
+        );
+        Some(made)
+    }
+
+    /// Reads and verifies the `--deployed-bundle` file on each call, so the
+    /// process keeps no copy of the graph beside the one it returns.
+    fn deployed_build(&self, identity_hash: &str) -> Result<Option<StoreGraph>, String> {
+        let Some(path) = self.deployed.get(identity_hash) else {
+            return Ok(None);
+        };
+        graph_of(path, identity_hash).map(Some)
+    }
+}
+
+/// The source and verified build of the bundle `--bundle` names, with the
+/// `--deployed-bundle` files opened, or `None` without `--bundle`. Refuses a
+/// bundle of a cluster other than `cluster`.
+pub fn from_flags(
+    bundle: Option<&Path>,
+    deployed: &[PathBuf],
+    cluster: &str,
+    quiet: bool,
+) -> Result<Option<(BundleSource, StoreGraph)>> {
+    let Some(path) = bundle else {
+        return Ok(None);
+    };
+    if !quiet {
+        crate::say!("Reading bundle {}...", path.display());
+    }
+    let (loaded, graph) = load(path)?;
+    if loaded.cluster() != cluster {
+        return Err(miette!(
+            "the bundle {} is for cluster '{}', not '{}'",
+            path.display(),
+            printable(loaded.cluster()),
+            cluster
+        ));
+    }
+    let source = BundleSource {
+        bundle: loaded,
+        deployed: deployed_by_hash(deployed)?,
+    };
+    Ok(Some((source, graph)))
 }
 
 fn open_file(path: &Path) -> Result<BufReader<File>> {
@@ -73,26 +155,16 @@ pub fn load(path: &Path) -> Result<(LoadedBundle, StoreGraph)> {
     Ok((LoadedBundle(bundle), graph))
 }
 
-/// The `--deployed-bundle` files, by the identity hash of their Activation
-/// record, which the header gives. Set once per process, before any record
-/// is resolved.
-static DEPLOYED: OnceLock<HashMap<String, PathBuf>> = OnceLock::new();
-
 /// Open each `--deployed-bundle` file, reading its seek table and header
-/// only. Later calls in the same process are ignored: `kix deploy --plan`
-/// prepares twice with the same arguments.
-pub fn register_deployed(paths: &[PathBuf]) -> Result<()> {
-    if DEPLOYED.get().is_some() {
-        return Ok(());
-    }
+/// only, and key it by the identity hash of its Activation record.
+fn deployed_by_hash(paths: &[PathBuf]) -> Result<HashMap<String, PathBuf>> {
     let mut by_hash = HashMap::new();
     for path in paths {
         if let Some(open) = open_deployed(path)? {
             by_hash.insert(store_hash(Path::new(open.record())), path.clone());
         }
     }
-    let _ = DEPLOYED.set(by_hash);
-    Ok(())
+    Ok(by_hash)
 }
 
 /// A `--deployed-bundle` file, opened, or `None` for a format 1 bundle. A
@@ -111,18 +183,6 @@ fn open_deployed(path: &Path) -> Result<Option<OpenBundle<BufReader<File>>>> {
         }
         Err(e) => Err(miette!("cannot use the bundle {}: {e}", path.display())),
     }
-}
-
-/// The build of the record with `identity_hash`, from `--deployed-bundle`,
-/// or `Ok(None)` when no such file was given. Reads and verifies the file on
-/// each call, so the process keeps no copy of the graph beside the one it
-/// returns. A file that no longer verifies is an error, as a result
-/// directory that does not load is.
-pub fn deployed_graph(identity_hash: &str) -> Result<Option<StoreGraph>, String> {
-    let Some(path) = DEPLOYED.get().and_then(|d| d.get(identity_hash)) else {
-        return Ok(None);
-    };
-    graph_of(path, identity_hash).map(Some)
 }
 
 /// The graph of the bundle at `path`, which must still hold the build of
