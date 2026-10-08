@@ -25,12 +25,14 @@
 //! protects (Namespace, CustomResourceDefinition); they list it as kept.
 //!
 //! In every mode, Superseded Activation records are retired under one
-//! retention policy: always keep the `--keep` newest (default 10), never more
-//! than `--keep-max` (default 50), and beyond the floor retire anything older
-//! than `--keep-for` (default 30d). They are the rollback history, so recent
-//! ones stay, but each record still on the cluster keeps one entry alive in
-//! `kix.run/activations` on every managed resource, and that annotation has a
-//! 256 KiB cap. `activation::retire_plan` decides which go; deletes are
+//! retention policy: always keep the `--keep` newest rollback targets
+//! (default 10), never more than `--keep-max` records in all (default 50),
+//! and beyond the floor retire anything older than `--keep-for` (default
+//! 30d). A record of a deploy that never finished is no rollback target: it
+//! is kept by age alone, and goes first when the cap is reached. The records
+//! are the rollback history, so recent ones stay, but each record still on
+//! the cluster keeps one entry alive in `kix.run/activations` on every
+//! managed resource, and that annotation has a 256 KiB cap. `activation::retire_plan` decides which go; deletes are
 //! conditional on the record being unchanged since it was listed; the next
 //! deploy drops the retired hashes from the resources. Soft mode needs the
 //! cluster for this, so it is no longer an offline command.

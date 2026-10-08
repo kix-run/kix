@@ -857,9 +857,10 @@ pub struct GcArgs {
     #[arg(long, requires = "hard")]
     pub include_unattributed: bool,
 
-    /// Always keep at least this many of the newest Superseded Activation
-    /// records (rollback history), whatever their age. Applies in every
-    /// mode. 0 keeps none.
+    /// Always keep at least this many of the newest rollback targets
+    /// (Superseded Activation records whose deploy finished), whatever their
+    /// age. A record of a deploy that never finished is kept by age alone.
+    /// Applies in every mode. 0 keeps none.
     #[arg(long, value_name = "N", default_value_t = kix::cluster::activation::DEFAULT_KEEP_MIN)]
     pub keep: usize,
 

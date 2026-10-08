@@ -935,20 +935,6 @@ pub async fn list_superseded_activations(
             continue;
         }
 
-        // A record that carries a failure never finished a deploy. It is
-        // Superseded because a later deploy folded its leftovers in, not
-        // because it was ever the cluster's state, so it is not a rollback
-        // target and must not count toward the retention floor of "newest
-        // targets to keep". `begin_deploy` clears the field on a retry, so a
-        // record that failed and then succeeded is not caught here.
-        if item
-            .data
-            .pointer("/status/failure")
-            .is_some_and(|v| !v.is_null())
-        {
-            continue;
-        }
-
         let name = match item.metadata.name.as_deref() {
             Some(n) => n.to_string(),
             None => continue,
@@ -1106,7 +1092,8 @@ pub struct Retired {
 /// Which Superseded records to keep and which to retire.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Retirement {
-    /// Records that stay, newest first. Rollback targets.
+    /// Records that stay, newest first. Those that were ever current are
+    /// the rollback targets.
     pub kept: Vec<SupersededActivation>,
     /// Records to delete, newest first, each with its reason.
     pub retire: Vec<Retired>,
@@ -1136,10 +1123,15 @@ pub fn deployed_at(record: &SupersededActivation) -> Option<chrono::DateTime<chr
 /// Newest first by `kix.run/deployed-at` (parsed, so offsets and precision
 /// do not matter); a record whose annotation is missing or unparseable is
 /// treated as the oldest. Ties break on name so the plan is deterministic.
-/// Then, in order: the first `keep_min` are kept whatever their age; past
-/// `keep_max` everything is retired; in between, a record is retired when
-/// the age rule is on and it is older than `keep_for` (or its age is
-/// unknown). The Active record is never in the input.
+/// Then, among the records that were ever current (rollback targets): the
+/// first `keep_min` are kept whatever their age; past `keep_max` everything
+/// is retired; in between, a record is retired when the age rule is on and
+/// it is older than `keep_for` (or its age is unknown). A record that never
+/// finished a deploy is judged by the age rule, and takes no place in the
+/// floor, so a run of failed deploys cannot push the last rollback target
+/// out. The cap still holds for everything kept: past `keep_max`, the
+/// oldest records that never finished a deploy are retired. The Active
+/// record is never in the input.
 pub fn retire_plan(
     mut superseded: Vec<SupersededActivation>,
     policy: &RetentionPolicy,
@@ -1151,17 +1143,22 @@ pub fn retire_plan(
             .then_with(|| a.name.cmp(&b.name))
     });
     let mut plan = Retirement::default();
-    for (i, record) in superseded.into_iter().enumerate() {
-        if i < policy.keep_min {
-            plan.kept.push(record);
-            continue;
-        }
-        if i >= keep_max {
-            plan.retire.push(Retired {
-                record,
-                reason: RetireReason::BeyondMax(keep_max),
-            });
-            continue;
+    let mut targets = 0;
+    for record in superseded {
+        if record.was_ever_current() {
+            let i = targets;
+            targets += 1;
+            if i < policy.keep_min {
+                plan.kept.push(record);
+                continue;
+            }
+            if i >= keep_max {
+                plan.retire.push(Retired {
+                    record,
+                    reason: RetireReason::BeyondMax(keep_max),
+                });
+                continue;
+            }
         }
         match (policy.keep_for, deployed_at(&record)) {
             (None, _) => plan.kept.push(record),
@@ -1176,6 +1173,24 @@ pub fn retire_plan(
             (Some(_), Some(_)) => plan.kept.push(record),
         }
     }
+    // The cap holds for the whole list: each record kept keeps a hash on
+    // every managed object. The records that were ever current are within
+    // it already, so the excess is records that never finished a deploy,
+    // and the oldest of them go first.
+    while plan.kept.len() > keep_max {
+        let Some(i) = plan.kept.iter().rposition(|r| !r.was_ever_current()) else {
+            break;
+        };
+        plan.retire.push(Retired {
+            record: plan.kept.remove(i),
+            reason: RetireReason::BeyondMax(keep_max),
+        });
+    }
+    plan.retire.sort_by(|a, b| {
+        deployed_at(&b.record)
+            .cmp(&deployed_at(&a.record))
+            .then_with(|| a.record.name.cmp(&b.record.name))
+    });
     plan
 }
 
@@ -1698,47 +1713,6 @@ mod phase_tests {
         }
     }
 
-    /// A record superseded out of `Failed` is not a rollback target. It was
-    /// never the cluster's state, so applying it would put the cluster into
-    /// one it has never been in.
-    #[test]
-    fn a_record_that_never_finished_is_filtered_out_of_the_superseded_list() {
-        use kube::api::DynamicObject;
-
-        let item: DynamicObject = serde_json::from_value(json!({
-            "apiVersion": keys::API_VERSION,
-            "kind": "Activation",
-            "metadata": { "name": "demo-failed" },
-            "status": {
-                "phase": PHASE_SUPERSEDED,
-                "failure": { "reason": "cancelled", "at": "2026-09-10T10:00:00Z" },
-            },
-        }))
-        .unwrap();
-        assert!(
-            item.data
-                .pointer("/status/failure")
-                .is_some_and(|v| !v.is_null()),
-            "the filter list_superseded_activations applies must see this record",
-        );
-
-        // A record that failed and was then retried successfully has the
-        // field cleared by begin_deploy, so it stays a valid target.
-        let retried: DynamicObject = serde_json::from_value(json!({
-            "apiVersion": keys::API_VERSION,
-            "kind": "Activation",
-            "metadata": { "name": "demo-ok" },
-            "status": { "phase": PHASE_SUPERSEDED, "failure": Value::Null },
-        }))
-        .unwrap();
-        assert!(
-            retried
-                .data
-                .pointer("/status/failure")
-                .is_none_or(Value::is_null),
-        );
-    }
-
     #[test]
     fn a_record_that_never_deployed_sorts_by_when_it_failed() {
         let mut record = SupersededActivation {
@@ -2070,6 +2044,64 @@ mod retire_plan_tests {
         );
     }
 
+    /// A record superseded out of `Failed`, `days` days before `now()`.
+    fn failed(name: &str, days: i64) -> SupersededActivation {
+        SupersededActivation {
+            failed_at: Some((now() - Duration::days(days)).to_rfc3339()),
+            ..rec(name, "")
+        }
+    }
+
+    /// A good deploy 40 days old, then ten failed deploys. The failed ones
+    /// take no place in the floor, so the good one, the only rollback
+    /// target, is kept; the failed ones are recent and kept by age.
+    #[test]
+    fn failed_deploys_do_not_push_the_last_rollback_target_out() {
+        let mut input = vec![aged("good", 40)];
+        input.extend((1..=10).map(|i| failed(&format!("f{i:02}"), i)));
+        let plan = retire_plan(input, &RetentionPolicy::defaults(now()));
+        assert!(plan.retire.is_empty(), "{:?}", retired(&plan.retire));
+        assert!(names(&plan.kept).contains(&"good"));
+
+        // Past the age rule a failed record is retired, whatever the floor.
+        let plan = retire_plan(
+            vec![aged("good", 40), failed("old-failure", 35)],
+            &RetentionPolicy::defaults(now()),
+        );
+        assert_eq!(names(&plan.kept), vec!["good"]);
+        assert_eq!(
+            retired(&plan.retire),
+            vec![("old-failure", "older than 30d".to_string())]
+        );
+    }
+
+    /// With the age rule off, sixty failed deploys are still capped.
+    #[test]
+    fn the_cap_holds_for_records_that_never_finished() {
+        let input: Vec<_> = (1..=60).map(|i| failed(&format!("f{i:02}"), i)).collect();
+        let plan = retire_plan(input, &policy(10, 50, None));
+        assert_eq!(plan.kept.len(), 50);
+        assert_eq!(plan.retire.len(), 10);
+        assert!(
+            plan.retire
+                .iter()
+                .all(|r| r.reason == RetireReason::BeyondMax(50))
+        );
+        assert_eq!(plan.retire[0].record.name, "f51", "newest first");
+    }
+
+    /// Over the cap with both kinds, the failed records go, oldest first,
+    /// and no rollback target within the floor is retired.
+    #[test]
+    fn over_the_cap_the_oldest_failed_records_go_first() {
+        let mut input: Vec<_> = (1..=3).map(|i| aged(&format!("good{i}"), i * 10)).collect();
+        input.extend((1..=4).map(|i| failed(&format!("f{i}"), i)));
+        let plan = retire_plan(input, &policy(2, 4, None));
+        assert_eq!(names(&plan.kept), vec!["f1", "good1", "good2", "good3"]);
+        let gone: Vec<&str> = plan.retire.iter().map(|r| r.record.name.as_str()).collect();
+        assert_eq!(gone, vec!["f2", "f3", "f4"]);
+    }
+
     #[test]
     fn unknown_age_sorts_oldest_and_is_retired_by_the_age_rule_only() {
         let input = vec![
@@ -2226,7 +2258,7 @@ mod tenancy_tests {
 }
 
 #[cfg(test)]
-mod records_exist_tests {
+mod listing_tests {
     use super::*;
 
     /// Records are found by their cluster label, in any phase, and a cluster
@@ -2248,5 +2280,86 @@ mod records_exist_tests {
         let client = api.client();
         assert!(records_exist(&client, "test-harbor").await.unwrap());
         assert!(!records_exist(&client, "harbor").await.unwrap());
+    }
+
+    /// A record superseded out of `Failed` still carries its failure. It is
+    /// listed, so `kix gc` can retire it by when it failed, and it is not a
+    /// rollback target. A record that finished a deploy and then carries a
+    /// failure, as an interrupted rollback to it leaves, is listed and is a
+    /// rollback target.
+    #[tokio::test]
+    async fn a_record_superseded_out_of_failed_is_listed_for_retention() {
+        let record = |name: &str, status: serde_json::Value, deployed_at: Option<&str>| {
+            let mut annotations = serde_json::Map::new();
+            if let Some(at) = deployed_at {
+                annotations.insert(keys::DEPLOYED_AT.into(), json!(at));
+            }
+            json!({
+                "apiVersion": keys::API_VERSION,
+                "kind": crate::manifest::lifecycle::RECORD_KIND,
+                "metadata": {
+                    "name": name,
+                    "labels": {
+                        "app.kubernetes.io/managed-by": "kix",
+                        (keys::CLUSTER_LABEL): "c",
+                    },
+                    "annotations": annotations,
+                },
+                "status": status,
+            })
+        };
+        let api = crate::cluster::fake_api::FakeApi::new([
+            record(
+                "c-ran",
+                json!({ "phase": PHASE_SUPERSEDED }),
+                Some("2026-09-01T00:00:00Z"),
+            ),
+            record(
+                "c-failed",
+                json!({
+                    "phase": PHASE_SUPERSEDED,
+                    "failure": { "reason": "cancelled", "at": "2026-08-01T00:00:00Z" },
+                }),
+                None,
+            ),
+            record(
+                "c-interrupted",
+                json!({
+                    "phase": PHASE_SUPERSEDED,
+                    "failure": { "reason": "cancelled", "at": "2026-09-20T00:00:00Z" },
+                }),
+                Some("2026-09-15T00:00:00Z"),
+            ),
+        ]);
+        let client = api.client();
+        let discovery = crate::cluster::fetch::discover_resources(&client)
+            .await
+            .unwrap();
+        let (ar, _) = find_activation_ar(&discovery).unwrap().unwrap();
+        let listed = list_superseded_activations(&client, ar, "c").await.unwrap();
+        let names: Vec<&str> = listed.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["c-interrupted", "c-ran", "c-failed"]);
+        let targets: Vec<&str> = listed
+            .iter()
+            .filter(|r| r.was_ever_current())
+            .map(|r| r.name.as_str())
+            .collect();
+        assert_eq!(targets, vec!["c-interrupted", "c-ran"]);
+
+        // Past the floor and older than the age rule, it is retired by when
+        // it failed, not kept forever.
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let policy = RetentionPolicy {
+            keep_min: 1,
+            keep_max: 50,
+            keep_for: Some(chrono::Duration::days(30)),
+            now,
+        };
+        let plan = retire_plan(listed, &policy);
+        assert_eq!(plan.retire.len(), 1);
+        assert_eq!(plan.retire[0].record.name, "c-failed");
+        assert_eq!(plan.retire[0].reason.to_string(), "older than 30d");
     }
 }
