@@ -156,6 +156,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
         OldSide::Build => {
             origin::label_builds(&mut packages);
             let mut doc = Plan::new(
+                plan::kix_build(),
                 MadeBy::Builds,
                 cluster,
                 Build::of(new),
@@ -169,6 +170,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
         }
         OldSide::Manifests => {
             let mut doc = Plan::new(
+                plan::kix_build(),
                 MadeBy::LiveRead,
                 cluster,
                 Build::of(new),
@@ -194,6 +196,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
                 origin::label_live(&mut packages, &sides)
             });
             let mut doc = Plan::new(
+                plan::kix_build(),
                 MadeBy::LiveRead,
                 cluster,
                 Build::of(new),

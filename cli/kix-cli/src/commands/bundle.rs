@@ -179,7 +179,7 @@ pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
             .collect(),
         builder: object(&receipt["builder"]),
     };
-    let kix = kix::plan::document::KixBuild::current();
+    let kix = crate::plan::kix_build();
     let kix_rev = match &kix.store_path {
         Some(path) => format!("{} ({path})", kix.version),
         None => kix.version,
@@ -247,6 +247,32 @@ mod tests {
         bytes[last] ^= 1;
         std::fs::write(&path, &bytes).unwrap();
         assert!(graph_of(&path, &hash).is_err());
+    }
+
+    /// A `--deployed-bundle` that no longer verifies is an error for the
+    /// build it holds, not a build this machine lacks: the plan says so.
+    #[test]
+    fn a_deployed_bundle_that_does_not_verify_is_not_taken_as_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("deployed.kixbundle");
+        let mut bytes =
+            include_bytes!("../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle")
+                .to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        let build = read(
+            &path,
+            std::slice::from_ref(&path),
+            "kix-enterprise-test",
+            true,
+        )
+        .unwrap();
+        let hash = store_hash(&build.graph().activation_path);
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        std::fs::write(&path, &bytes).unwrap();
+        let found =
+            kix::plan::baseline::record_graph(Some(&build), "kix-enterprise-test", &hash, None);
+        assert!(found.is_err());
     }
 
     /// A cluster deployed from a format 1 bundle still has those bytes as

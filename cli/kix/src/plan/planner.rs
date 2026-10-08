@@ -1,0 +1,649 @@
+//! The plan of a deploy: everything it decides before it writes.
+//!
+//! [`Planner::run`] runs the steps `kix plan` and `kix deploy` share, so a
+//! plan made with a deploy's flags is that deploy's plan:
+//!
+//! 1. the baseline: the closures the build is compared with (see
+//!    [`super::baseline`]);
+//! 2. the changes: the build against the Active closure, with what failed
+//!    and kept deploys left folded in;
+//! 3. the plan: the engine plan, the package diff people review, and the
+//!    check that refuses a write or delete the diff does not show
+//!    ([`super::objects::of`]).
+//!
+//! A rollback runs [`Planner::plan`], the last two steps, over the baseline
+//! of the record it returns to ([`Baseline::of_record`]). The planner prints
+//! nothing: it reports what it finds through a [`PlanEvent`] callback.
+//!
+//! A [`CheckedPlan`] is made only by the check, and nothing in it can be
+//! changed afterwards but the two changes the check allows for: the
+//! `--record-annotation` values on the record ([`Planned::annotate_record`])
+//! and the apiserver's answers in the package diff ([`Planned::overlay`]).
+//! The engine gets it as an [`Apply`], whose only way to the engine is
+//! [`Apply::run`], with the prune policy the check used.
+//!
+//! The guarantee ends there. The engine, `cluster::scheduler::run_deploy`,
+//! is public and takes any `DeployPlan`: the operator calls it directly with
+//! a plan made from the live objects, which no check holds to a package
+//! diff (see `housekeeping/2026-10-08-operator-plans-from-live-objects-not-the-planner.md`).
+
+use std::sync::Arc;
+
+use kube::client::Client;
+use serde_json::Value;
+
+use super::baseline::Baseline;
+use super::document::{DriftChange, Objects, PlanFlags};
+use super::objects;
+use super::server::Overlay;
+use super::{PackageDiff, PlanError, PlanEvent, diff_graphs};
+use crate::build_source::InstallableBuild;
+use crate::cluster::activation::KeptOrphans;
+use crate::cluster::apply::ChangeAction;
+use crate::cluster::fetch::{self, SharedOrphan};
+use crate::cluster::graph::ResourceGraph;
+use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
+use crate::cluster::ops::ClusterOps;
+use crate::cluster::preview::DryRunAnswer;
+use crate::cluster::scheduler::{self, DeployError, DeployPlan, PrunePolicy, SchedulerConfig};
+use crate::cluster::secrets::SopsSources;
+use crate::cluster::stream::{DeployObserver, DeployResult};
+use crate::eval::store_graph::StoreGraph;
+use crate::manifest::types::ResourceId;
+use crate::manifest::{keys, lifecycle};
+
+/// What [`Planner::run`] compares the new build with.
+#[derive(Debug, Clone)]
+pub enum OldSide {
+    /// The build the local activation cache names, without connecting
+    /// (`--current-activation`). The plan then cannot see failed records or
+    /// orphans earlier deploys kept.
+    LocalCache,
+    /// The cluster's records, through the kube context `context` (`None`
+    /// for the current one).
+    Cluster { context: Option<String> },
+}
+
+/// What a build changes on a cluster, before any of it is checked.
+struct Changes {
+    /// One per object of the build and per orphan.
+    actions: Vec<ChangeAction>,
+    /// The objects the build drops.
+    orphans: Vec<ResourceId>,
+    /// What the record the run finalizes lists under
+    /// `status.orphansKeptFrom` if the run leaves orphans on the cluster.
+    kept_orphans: KeptOrphans,
+}
+
+/// The engine plan, the package diff people review, and the objects the
+/// one writes and deletes as the other shows them. Made only by
+/// [`Planner::plan`] and [`Planner::run`], after the check.
+pub struct CheckedPlan {
+    flags: PlanFlags,
+    plan: DeployPlan,
+    orphans: Vec<ResourceId>,
+    shared_orphans: Vec<SharedOrphan>,
+    kept_orphans: KeptOrphans,
+    pkg_diff: PackageDiff,
+    objects: Objects,
+    activation_name: Option<String>,
+    activation_identity_hash: Option<String>,
+}
+
+impl CheckedPlan {
+    /// The flags the plan was made and checked with.
+    pub fn flags(&self) -> PlanFlags {
+        self.flags
+    }
+
+    pub fn plan(&self) -> &DeployPlan {
+        &self.plan
+    }
+
+    /// Orphans this cluster's prune may delete; ones another Kix cluster
+    /// still deploys are in [`CheckedPlan::shared_orphans`] instead.
+    pub fn orphans(&self) -> &[ResourceId] {
+        &self.orphans
+    }
+
+    pub fn shared_orphans(&self) -> &[SharedOrphan] {
+        &self.shared_orphans
+    }
+
+    /// The package-grouped comparison of the old side with the new build.
+    pub fn pkg_diff(&self) -> &PackageDiff {
+        &self.pkg_diff
+    }
+
+    /// Every object the plan writes and the prune deletes, each shown in
+    /// the package diff or re-applied; see [`super::objects`].
+    pub fn objects(&self) -> &Objects {
+        &self.objects
+    }
+
+    /// The new build's Activation record's name.
+    pub fn activation_name(&self) -> Option<&str> {
+        self.activation_name.as_deref()
+    }
+
+    /// The new build's Activation record's identity hash.
+    pub fn activation_identity_hash(&self) -> Option<&str> {
+        self.activation_identity_hash.as_deref()
+    }
+
+    /// What the engine runs, taken out of the plan to be consumed. The prune
+    /// policy and conflict handling are the flags the check used.
+    pub fn into_apply(self) -> Apply {
+        Apply {
+            prune: self.flags.prune_policy(),
+            force_conflicts: self.flags.force_conflicts,
+            plan: self.plan,
+            orphans: self.orphans,
+            kept_orphans: self.kept_orphans,
+            activation_name: self.activation_name,
+            activation_identity_hash: self.activation_identity_hash,
+        }
+    }
+}
+
+/// A checked plan as the engine takes it. Made only from a [`CheckedPlan`];
+/// read through accessors, and run with [`Apply::run`].
+pub struct Apply {
+    plan: DeployPlan,
+    orphans: Vec<ResourceId>,
+    kept_orphans: KeptOrphans,
+    activation_name: Option<String>,
+    activation_identity_hash: Option<String>,
+    prune: PrunePolicy,
+    force_conflicts: bool,
+}
+
+impl Apply {
+    pub fn plan(&self) -> &DeployPlan {
+        &self.plan
+    }
+
+    /// Orphans the prune may delete.
+    pub fn orphans(&self) -> &[ResourceId] {
+        &self.orphans
+    }
+
+    /// What the record the run finalizes lists under
+    /// `status.orphansKeptFrom` if the run leaves orphans on the cluster.
+    pub fn kept_orphans(&self) -> &KeptOrphans {
+        &self.kept_orphans
+    }
+
+    pub fn activation_name(&self) -> Option<&str> {
+        self.activation_name.as_deref()
+    }
+
+    pub fn activation_identity_hash(&self) -> Option<&str> {
+        self.activation_identity_hash.as_deref()
+    }
+
+    /// The prune policy of the flags the check used.
+    pub fn prune(&self) -> PrunePolicy {
+        self.prune
+    }
+
+    /// Whether the apply takes fields other managers own, as the check's
+    /// flags say.
+    pub fn force_conflicts(&self) -> bool {
+        self.force_conflicts
+    }
+
+    /// For a plan made without a client (`--current-activation`): once
+    /// connected, keep apart the orphans another Kix cluster still deploys,
+    /// and return them. It only ever removes orphans.
+    pub async fn keep_shared(
+        &mut self,
+        client: &Client,
+        cluster: &str,
+    ) -> Result<Vec<SharedOrphan>, PlanError> {
+        let (prune, shared) =
+            keep_shared(client, cluster, std::mem::take(&mut self.orphans)).await?;
+        self.orphans = prune;
+        Ok(shared)
+    }
+
+    /// Run the engine over the checked plan. `config.prune` is set to the
+    /// prune policy the check used, whatever it was.
+    pub async fn run(
+        self,
+        ops: Arc<dyn ClusterOps>,
+        old_manifests: &[Value],
+        mut config: SchedulerConfig,
+        observer: Arc<dyn DeployObserver>,
+    ) -> Result<DeployResult, DeployError> {
+        config.prune = self.prune;
+        scheduler::run_deploy(
+            ops,
+            self.plan,
+            &self.orphans,
+            old_manifests,
+            &config,
+            observer,
+        )
+        .await
+    }
+}
+
+/// Everything a deploy decides before it writes. Made only by
+/// [`Planner::run`].
+pub struct Planned {
+    build: InstallableBuild,
+    /// The build's manifests, with the `--record-annotation` values on the
+    /// record once [`Planned::annotate_record`] has run.
+    new_manifests: Vec<Value>,
+    client: Option<Client>,
+    baseline: Baseline,
+    migration_pairs: Vec<MigrationPair>,
+    checked: CheckedPlan,
+}
+
+/// A [`Planned`] taken apart for the apply.
+pub struct PlannedParts {
+    pub build: InstallableBuild,
+    pub new_manifests: Vec<Value>,
+    pub client: Option<Client>,
+    pub baseline: Baseline,
+    pub apply: Apply,
+}
+
+impl Planned {
+    /// The new build, stamped, and refused if it would install Kix's own
+    /// CRDs under a retired group.
+    pub fn build(&self) -> &InstallableBuild {
+        &self.build
+    }
+
+    /// [`crate::build_source::Build::sops_sources`] of the new build.
+    pub fn sops_sources(&mut self, placeholders: bool) -> Result<SopsSources, String> {
+        self.build.sops_sources(placeholders)
+    }
+
+    /// The name the build gives the cluster, which keys its records and the
+    /// local cache.
+    pub fn cluster(&self) -> &str {
+        &self.build.graph().cluster_name
+    }
+
+    pub fn new_manifests(&self) -> &[Value] {
+        &self.new_manifests
+    }
+
+    /// `None` under [`OldSide::LocalCache`], which plans without connecting.
+    pub fn client(&self) -> Option<&Client> {
+        self.client.as_ref()
+    }
+
+    pub fn baseline(&self) -> &Baseline {
+        &self.baseline
+    }
+
+    /// [`Baseline::manifests`]: the Active closure with the failed and kept
+    /// closures merged in.
+    pub fn old_manifests(&self) -> Vec<Value> {
+        self.baseline.manifests()
+    }
+
+    /// Against the Active closure only.
+    pub fn migration_pairs(&self) -> &[MigrationPair] {
+        &self.migration_pairs
+    }
+
+    pub fn checked(&self) -> &CheckedPlan {
+        &self.checked
+    }
+
+    /// The flags the plan was made and checked with.
+    pub fn flags(&self) -> PlanFlags {
+        self.checked.flags
+    }
+
+    /// Write `--record-annotation` pairs onto the Activation record, both
+    /// where the engine creates it before the first wave and where the plan
+    /// applies it last, so the two stay the same manifest. The record's
+    /// lifecycle writes are outside the objects check.
+    pub fn annotate_record(&mut self, annotations: &[(String, String)]) {
+        if annotations.is_empty() {
+            return;
+        }
+        let annotate = |manifest: &mut Value| {
+            if !lifecycle::is_record(manifest) {
+                return;
+            }
+            let meta = manifest
+                .as_object_mut()
+                .and_then(|m| m.get_mut("metadata"))
+                .and_then(Value::as_object_mut);
+            if let Some(meta) = meta {
+                let map = meta
+                    .entry("annotations")
+                    .or_insert_with(|| Value::Object(Default::default()));
+                if let Some(map) = map.as_object_mut() {
+                    for (k, v) in annotations {
+                        map.insert(k.clone(), Value::String(v.clone()));
+                    }
+                }
+            }
+        };
+        self.new_manifests.iter_mut().for_each(annotate);
+        for node in self.checked.plan.nodes.iter_mut() {
+            if let ChangeAction::Apply(manifest) = &mut node.action {
+                annotate(manifest);
+            }
+        }
+    }
+
+    /// Replace the package diff's entries with what the apiserver answered
+    /// in a dry run ([`Overlay`]), and return the drift the deploy reverts.
+    /// `None` when the deployed build's manifests are not known (the old
+    /// side was rebuilt from the live objects), so a commit's change and
+    /// drift look the same; a first deploy has no deployed build and every
+    /// change is intended.
+    pub fn overlay(&mut self, answers: &[DryRunAnswer]) -> Option<Vec<DriftChange>> {
+        let baseline = &self.baseline;
+        let first_deploy = baseline.active_hash().is_none() && baseline.active_manifests.is_empty();
+        let deployed = (baseline.active_graph().is_some() || first_deploy).then(|| {
+            baseline
+                .active_manifests
+                .iter()
+                .map(|m| (ResourceId::from_value(m), m))
+                .collect()
+        });
+        let known = deployed.is_some();
+        let drift = Overlay {
+            new_graph: self.build.graph(),
+            deployed,
+        }
+        .apply(&mut self.checked.pkg_diff, answers);
+        known.then_some(drift)
+    }
+
+    /// The parts the apply consumes.
+    pub fn into_parts(self) -> PlannedParts {
+        PlannedParts {
+            build: self.build,
+            new_manifests: self.new_manifests,
+            client: self.client,
+            baseline: self.baseline,
+            apply: self.checked.into_apply(),
+        }
+    }
+}
+
+/// Makes the plan of a deploy with `flags`, reporting what it finds to
+/// `report`.
+pub struct Planner<'a> {
+    flags: PlanFlags,
+    report: &'a dyn Fn(PlanEvent<'_>),
+}
+
+impl<'a> Planner<'a> {
+    pub fn new(flags: PlanFlags, report: &'a dyn Fn(PlanEvent<'_>)) -> Self {
+        Planner { flags, report }
+    }
+
+    /// Plan a deploy of `build` against `old`: connect, unless the old side
+    /// is the local cache, then the three steps.
+    pub async fn run(&self, build: InstallableBuild, old: &OldSide) -> Result<Planned, PlanError> {
+        let client = match old {
+            OldSide::LocalCache => None,
+            OldSide::Cluster { context } => {
+                (self.report)(PlanEvent::Connecting);
+                let client = fetch::make_client(context.as_deref())
+                    .await
+                    .map_err(|e| PlanError::Connect(Box::new(e)))?;
+                Some(client)
+            }
+        };
+        let new_graph = build.graph();
+        let baseline = match &client {
+            Some(client) => Baseline::of_cluster(client, &build, self.report).await?,
+            None => Baseline::of_cache(&new_graph.cluster_name, self.report),
+        };
+        let new_manifests = manifests_of(new_graph);
+        // A half-applied closure is not a previous intended state, so
+        // pairing against it would invent migrations nobody declared.
+        let migration_pairs = detect_migration_pairs(&new_manifests, &baseline.active_manifests);
+        let checked = self
+            .check(
+                new_graph,
+                &new_manifests,
+                &new_graph.cluster_name,
+                &baseline,
+                client.as_ref(),
+            )
+            .await?;
+        Ok(Planned {
+            build,
+            new_manifests,
+            client,
+            baseline,
+            migration_pairs,
+            checked,
+        })
+    }
+
+    /// The changes of `new_graph` against `baseline` and the engine plan for
+    /// them, with the package diff, refused unless every write and delete of
+    /// the one is shown in the other. `cluster` is the Kix cluster whose
+    /// records the baseline came from. With a `client`, the orphans another
+    /// Kix cluster still deploys are kept, and the plan's prune section
+    /// lists every other orphan; without one, `kix deploy` checks the
+    /// orphans once it connects.
+    pub async fn plan(
+        &self,
+        new_graph: &StoreGraph,
+        cluster: &str,
+        baseline: &Baseline,
+        client: Option<&Client>,
+    ) -> Result<CheckedPlan, PlanError> {
+        let new_manifests = manifests_of(new_graph);
+        self.check(new_graph, &new_manifests, cluster, baseline, client)
+            .await
+    }
+
+    /// What `new_manifests` change against `baseline` ([`Baseline::changes`]),
+    /// and the builds the new record lists as having kept orphans.
+    fn changes(&self, new_manifests: &[Value], baseline: &Baseline, read_records: bool) -> Changes {
+        let actions = baseline.changes(new_manifests, self.flags.reconcile);
+        let orphans = actions
+            .iter()
+            .filter_map(|action| match action {
+                ChangeAction::Orphan(rid) => Some(rid.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut kept_orphans = baseline.orphans_kept_from(new_manifests);
+        // A plan that did not read the Active record carries its list
+        // forward unexamined.
+        kept_orphans.carry_current = !read_records;
+        Changes {
+            actions,
+            orphans,
+            kept_orphans,
+        }
+    }
+
+    /// [`Planner::plan`] over the manifests of `new_graph`.
+    async fn check(
+        &self,
+        new_graph: &StoreGraph,
+        new_manifests: &[Value],
+        cluster: &str,
+        baseline: &Baseline,
+        client: Option<&Client>,
+    ) -> Result<CheckedPlan, PlanError> {
+        let changes = self.changes(new_manifests, baseline, client.is_some());
+        let (orphans, shared_orphans) = match client {
+            Some(client) => keep_shared(client, cluster, changes.orphans).await?,
+            None => (changes.orphans, Vec::new()),
+        };
+        let resource_graph =
+            ResourceGraph::from_manifests(new_manifests).map_err(PlanError::Graph)?;
+        let plan = DeployPlan::from_graph_and_changes(&resource_graph, &changes.actions)
+            .map_err(PlanError::Marker)?;
+
+        let record = lifecycle::record_of(new_manifests);
+        let activation_name = record.and_then(|m| {
+            m.pointer("/metadata/name")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+        let activation_identity_hash =
+            record.and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string));
+
+        let mut pkg_diff = diff_graphs(&baseline.diff_side(new_graph), new_graph);
+        pkg_diff.keep_shared(&shared_orphans);
+
+        let listed_deletes: &[ResourceId] = match client {
+            Some(_) => &orphans,
+            None => &[],
+        };
+        let objects = objects::of(
+            &pkg_diff.shown,
+            new_graph,
+            &plan,
+            &deletes_of(self.flags.prune_policy(), &orphans),
+            listed_deletes,
+            baseline.ran(),
+        )
+        .map_err(PlanError::Unshown)?;
+
+        Ok(CheckedPlan {
+            flags: self.flags,
+            plan,
+            orphans,
+            shared_orphans,
+            kept_orphans: changes.kept_orphans,
+            pkg_diff,
+            objects,
+            activation_name,
+            activation_identity_hash,
+        })
+    }
+}
+
+fn manifests_of(graph: &StoreGraph) -> Vec<Value> {
+    graph
+        .resources
+        .values()
+        .map(|r| r.manifest.clone())
+        .collect()
+}
+
+/// The orphans a run's prune deletes: under `PrunePolicy::Delete`, all but
+/// the kinds `lifecycle::never_pruned` protects.
+pub(crate) fn deletes_of(prune: PrunePolicy, orphans: &[ResourceId]) -> Vec<ResourceId> {
+    if prune != PrunePolicy::Delete {
+        return Vec::new();
+    }
+    orphans
+        .iter()
+        .filter(|rid| !lifecycle::never_pruned(&rid.kind))
+        .cloned()
+        .collect()
+}
+
+/// Split `orphans` into the ones to prune and the ones another Kix cluster's
+/// current Activation record still names. Reads each candidate, then the
+/// records.
+///
+/// Two Kix clusters on one Kubernetes cluster can both contain an object,
+/// such as an identical ClusterRole. When one of them drops it from its
+/// build, the comparison of builds plans it as an orphan, but the other
+/// cluster's current build still contains it. Every command that prunes
+/// from a plan passes its orphans through here so the plan lists such an
+/// object as kept, and deletes through `cluster::prune_guard::PruneGuard`,
+/// which checks again at the delete.
+pub async fn keep_shared(
+    client: &Client,
+    cluster: &str,
+    orphans: Vec<ResourceId>,
+) -> Result<(Vec<ResourceId>, Vec<SharedOrphan>), PlanError> {
+    if orphans.is_empty() {
+        return Ok((orphans, Vec::new()));
+    }
+    let discovery = fetch::discover_resources(client)
+        .await
+        .map_err(|e| PlanError::Discovery(Box::new(e)))?;
+    fetch::split_shared_orphans_live(client, &discovery, orphans, cluster)
+        .await
+        .map_err(|e| PlanError::SharedOrphans(Box::new(e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cluster::activation::PHASE_ACTIVE;
+    use crate::cluster::fake_api::FakeApi;
+    use crate::manifest::types::CLUSTER_SCOPED;
+    use serde_json::json;
+
+    fn record(cluster: &str, hash: &str) -> Value {
+        json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": {
+                "name": format!("rec-{hash}"),
+                "labels": { (keys::CLUSTER_LABEL): cluster },
+                "annotations": { (keys::IDENTITY_HASH): hash },
+            },
+            "status": { "phase": PHASE_ACTIVE },
+        })
+    }
+
+    fn rid(kind: &str, ns: &str, name: &str) -> ResourceId {
+        ResourceId {
+            kind: kind.into(),
+            namespace: ns.into(),
+            name: name.into(),
+        }
+    }
+
+    /// Kix cluster `a` drops a ClusterRole and a ConfigMap that `b` still
+    /// deploys, and a ConfigMap only `a` had: the plan keeps the first two.
+    /// The unnamespaced ConfigMap is read in `default`, where it was applied.
+    #[tokio::test]
+    async fn orphans_another_cluster_still_deploys_are_kept() {
+        let api = FakeApi::new([
+            record("a", "a1"),
+            record("b", "b1"),
+            json!({
+                "apiVersion": "rbac.authorization.k8s.io/v1",
+                "kind": "ClusterRole",
+                "metadata": { "name": "shared", "annotations": { (keys::ACTIVATIONS): "a1,b1" } },
+            }),
+            json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": "shared-cm",
+                    "namespace": "default",
+                    "annotations": { (keys::ACTIVATIONS): "a1,b1" },
+                },
+            }),
+            json!({
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": "mine",
+                    "namespace": "app",
+                    "annotations": { (keys::ACTIVATIONS): "a1" },
+                },
+            }),
+        ]);
+        let orphans = vec![
+            rid("ClusterRole", CLUSTER_SCOPED, "shared"),
+            rid("ConfigMap", CLUSTER_SCOPED, "shared-cm"),
+            rid("ConfigMap", "app", "mine"),
+        ];
+        let (prune, kept) = keep_shared(&api.client(), "a", orphans).await.unwrap();
+        assert_eq!(prune, vec![rid("ConfigMap", "app", "mine")]);
+        let kept: Vec<&str> = kept.iter().map(|s| s.rid.name.as_str()).collect();
+        assert_eq!(kept, vec!["shared", "shared-cm"]);
+    }
+}

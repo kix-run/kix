@@ -338,7 +338,7 @@ fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> V
         } else {
             format!(
                 "prune> {count} orphaned resources kept (warn-only; {})",
-                super::deploy::KEPT_ORPHANS_HINT
+                crate::plan::KEPT_ORPHANS_HINT
             )
         });
         lines.extend(

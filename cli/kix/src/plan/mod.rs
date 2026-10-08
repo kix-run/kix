@@ -1,31 +1,116 @@
 //! What a deploy of a build would change, as people review it.
 //!
-//! [`diff_graphs`] compares two builds package by package into a
-//! [`PackageDiff`]; [`document::Plan`] is the typed document `kix plan` and
-//! `kix diff` emit; [`objects`] holds a deploy to the objects the diff shows;
-//! [`saved`] compares a plan made now with a reviewed one. Turning any of
-//! these into text is the caller's job.
+//! [`Planner`] makes the plan of a deploy from a build and what the cluster
+//! runs ([`baseline`]). [`diff_graphs`] compares two builds package by
+//! package into a [`PackageDiff`]; [`document::Plan`] is the typed document
+//! `kix plan` and `kix diff` emit; [`objects`] holds a deploy to the objects
+//! the diff shows; [`saved`] compares a plan made now with a reviewed one.
+//! Turning any of these into text is the caller's job.
 
+pub mod baseline;
 pub mod document;
 #[cfg(any(test, feature = "test-util"))]
 pub mod fixtures;
 pub mod objects;
 pub mod origin;
+#[cfg(test)]
+mod plan_bound_properties;
+#[cfg(test)]
+mod plan_bound_tests;
+mod planner;
 pub mod saved;
 pub mod server;
+
+pub use planner::{Apply, CheckedPlan, OldSide, Planned, PlannedParts, Planner, keep_shared};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::cluster::activation::{DeployingActivation, FailedActivation, KeptOrphanSource};
+use crate::cluster::fetch::FetchError;
+use crate::cluster::graph::GraphError;
+use crate::cluster::readiness::MalformedMarker;
 use crate::eval::PackageNode;
 use crate::eval::store_graph::StoreGraph;
+use crate::legacy_domain::LegacyDomainError;
 use crate::manifest::diff::engine::structural_diff;
 use crate::manifest::diff::{DiffConfig, Difference};
 use crate::manifest::keys;
 use crate::manifest::lifecycle;
 use crate::manifest::types::{self, ResourceId};
+
+/// What the planner found, as it goes, for the caller to show.
+#[derive(Debug, Clone, Copy)]
+pub enum PlanEvent<'a> {
+    /// Connecting to the cluster, before anything is read.
+    Connecting,
+    /// `--current-activation` found no cached build: a first deploy.
+    NoCachedBuild,
+    /// `--current-activation` is loading the cached build.
+    LoadingCache,
+    /// The cluster has no Active record for the cluster: a first deploy.
+    NoActiveRecord,
+    /// The Active record the plan compares against.
+    Active {
+        name: &'a str,
+        identity_hash: &'a str,
+    },
+    /// The Active record's build is not on this machine (`error` is `None`)
+    /// or will not load, so the plan reads its objects from the cluster.
+    ReadingLive { error: Option<&'a str> },
+    /// Objects of this cluster that name only older builds, which the plan
+    /// read from the cluster leaves out.
+    OlderBuildsLeftOut(usize),
+    /// Another deploy of the cluster may still be running, so the plan
+    /// leaves the leftovers of failed deploys alone.
+    DeployInFlight(&'a DeployingActivation),
+    /// A failed deploy's build is in the plan.
+    FailedFolded(&'a FailedActivation),
+    /// A failed deploy's build was found but will not load; the plan leaves
+    /// out what that deploy applied.
+    FailedBuildUnusable { activation: &'a str, error: &'a str },
+    /// A failed deploy's build is not on this machine.
+    FailedUnresolved {
+        record: &'a FailedActivation,
+        cluster: &'a str,
+    },
+    /// The builds an earlier deploy kept orphans from that are in the plan.
+    KeptFolded(&'a [KeptOrphanSource]),
+    /// A build an earlier deploy kept orphans from was found but will not
+    /// load; the plan cannot list or delete those orphans.
+    KeptBuildUnusable { activation: &'a str, error: &'a str },
+    /// A build an earlier deploy kept orphans from is not on this machine.
+    KeptUnresolved {
+        source: &'a KeptOrphanSource,
+        cluster: &'a str,
+    },
+}
+
+/// Why a plan could not be made.
+#[derive(Debug, thiserror::Error)]
+pub enum PlanError {
+    #[error("failed to connect to cluster: {0}")]
+    Connect(Box<FetchError>),
+    #[error("{0}")]
+    Discovery(Box<FetchError>),
+    #[error("{0}")]
+    Domain(LegacyDomainError),
+    #[error(
+        "cannot reconstruct the previous state from the cluster: {0}. \
+         Refusing to plan from a partial view; retry when the apiserver is healthy."
+    )]
+    Reconstruct(String),
+    #[error("cannot check whether another Kix cluster deploys an orphan: {0}")]
+    SharedOrphans(Box<FetchError>),
+    #[error("{0}")]
+    Graph(GraphError),
+    #[error("{0}")]
+    Marker(MalformedMarker),
+    #[error("{0}")]
+    Unshown(objects::Unshown),
+}
 
 pub struct PackageDiff {
     pub added: Vec<PackageInfo>,
@@ -213,21 +298,6 @@ impl PackageInfo {
             resource_count: pkg.resource_paths.len(),
             kept,
             resources,
-        }
-    }
-
-    /// The parenthesised count after a package name: `3 resources`, or for
-    /// a removed package that leaves kept resources behind,
-    /// `2 removed, 1 kept`.
-    pub fn counts(&self) -> String {
-        if self.kept.is_empty() {
-            return format!("{} resources", self.resource_count);
-        }
-        let removed = self.resource_count - self.kept.len();
-        if removed == 0 {
-            format!("{} kept", self.kept.len())
-        } else {
-            format!("{removed} removed, {} kept", self.kept.len())
         }
     }
 }

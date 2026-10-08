@@ -46,7 +46,7 @@ kix deploy <cluster> --plan plan.json --dry-run
    before any build. A flag the plan has and the command line omits is
    taken from the plan, and the apply reads every planning flag from the
    merged set, never from the command line.
-3. `deploy::prepare` with those flags, then the dry-run pass and
+3. `kix::plan::Planner` with those flags, then the dry-run pass and
    `plan::document`, as every `kix deploy` does today.
 4. `plan::saved::compare(&reviewed, &fresh)` returns the mismatches. Any
    mismatch refuses the deploy, before the stop check and the

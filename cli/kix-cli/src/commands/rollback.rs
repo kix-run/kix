@@ -11,26 +11,25 @@ use std::sync::Arc;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
-use crate::commands::baseline;
 use kix::build_source::Build;
 use kix::cluster::activation;
 use kix::cluster::apply::ChangeAction;
-use kix::cluster::fetch::{self, SharedOrphan};
-use kix::cluster::graph::ResourceGraph;
+use kix::cluster::fetch;
 use kix::cluster::ops::{ClusterOps, KubeOps, KubeOpsConfig};
 use kix::cluster::readiness;
-use kix::cluster::scheduler::{self, DeployPlan, OnErrorPolicy, PrunePolicy, SchedulerConfig};
+use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::{DeployObserver, DeployResult};
 use kix::cluster::watchdog::StallPolicy;
 use kix::eval::store_graph::StoreGraph;
-use kix::manifest::types::ResourceId;
+use kix::plan::baseline::Baseline;
+use kix::plan::document::PlanFlags;
+use kix::plan::{CheckedPlan, PlanEvent, Planner};
 
 use crate::cli::{OutputFormat, RollbackArgs};
 use crate::output;
 use crate::plan;
 
 use super::CommandContext;
-use kix::manifest::keys;
 
 pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<()> {
     let lookup = if args.list {
@@ -340,31 +339,28 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         cluster,
         &current,
         selected,
-        prune_policy(args.prune),
+        args.prune,
         ctx.global.quiet,
     )
     .await?;
     if !ctx.global.quiet {
         planned.print(cluster, &target_name, args.prune, ctx.global.verbose > 0);
     }
-    let Planned {
+    // The merged set, so `prune_order` can topologically sort an orphan
+    // that exists in no current closure.
+    let baseline_manifests = planned.baseline.manifests();
+    let RollbackPlan {
         target_result_dir,
         target_graph,
         target_manifests,
-        plan,
-        orphan_rids,
-        baseline_manifests,
-        consumed_failed,
-        kept_orphans,
-        ..
+        baseline,
+        checked,
     } = planned;
+    let apply = checked.into_apply();
     let record = kix::manifest::lifecycle::record_of(&target_manifests);
-    let activation_name =
-        record.and_then(|m| m.pointer("/metadata/name")?.as_str().map(|s| s.to_string()));
-    let activation_identity_hash =
-        record.and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(|s| s.to_string()));
 
-    let total_apply = plan
+    let total_apply = apply
+        .plan()
         .nodes
         .iter()
         .filter(|n| matches!(n.action, ChangeAction::Apply(_)))
@@ -378,11 +374,11 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         return Ok(());
     }
 
-    if total_apply == 0 && orphan_rids.is_empty() {
+    if total_apply == 0 && apply.orphans().is_empty() {
         // Same rule as deploy: an unchanged probe under `kix.run/rerun`
         // whose last run failed still runs, and only the engine does that.
-        let failed_reruns = if plan.nodes.iter().any(|n| n.rerun.is_some()) {
-            scheduler::failed_rerun_nodes(&client, &discovery, &plan).await
+        let failed_reruns = if apply.plan().nodes.iter().any(|n| n.rerun.is_some()) {
+            scheduler::failed_rerun_nodes(&client, &discovery, apply.plan()).await
         } else {
             Vec::new()
         };
@@ -429,7 +425,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     let config = SchedulerConfig {
         timeout: readiness::DEFAULT_TIMEOUT,
         on_error: OnErrorPolicy::Stop,
-        prune: prune_policy(args.prune),
+        prune: apply.prune(),
         cancel: kix::cluster::cancel::CancelToken::new(),
         dry_run: false,
         concurrency: scheduler::CONCURRENCY,
@@ -459,8 +455,8 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         discovery,
         KubeOpsConfig {
             cluster_name,
-            activation_name: activation_name.clone(),
-            activation_identity_hash: activation_identity_hash.clone(),
+            activation_name: apply.activation_name().map(str::to_string),
+            activation_identity_hash: apply.activation_identity_hash().map(str::to_string),
             // A rollback re-applies a build from an earlier deploy, and that
             // deploy wrote its own receipt. Writing a fresh one here would
             // record the machine running the rollback as the provenance of a
@@ -470,33 +466,20 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
             // Superseded one, so this re-asserts it and marks it Deploying
             // for the duration, the same as a deploy.
             activation_manifest: record.cloned(),
-            consumed_failed,
-            kept_orphans,
+            consumed_failed: baseline.failed().consumed.clone(),
+            kept_orphans: apply.kept_orphans().clone(),
             mark_failed_on_abort: true,
             sops: Default::default(),
-            // Rollback re-applies a known-good prior activation; conflicts
-            // fail loudly rather than silently overwriting whatever the
-            // cluster has.
-            force_conflicts: false,
+            force_conflicts: apply.force_conflicts(),
             dry_run: false,
         },
     ));
     let ops: Arc<dyn ClusterOps> = kube_ops.clone();
 
-    let result = scheduler::run_deploy(
-        ops,
-        plan,
-        &orphan_rids,
-        // The merged set, so `prune_order` can topologically sort an orphan
-        // that exists in no current closure.
-        &baseline_manifests,
-        &config,
-        observer,
-    )
-    .await;
+    let result = apply.run(ops, &baseline_manifests, config, observer).await;
 
     if let Some(recorded) = kube_ops.recorded_orphans_kept_from() {
-        baseline::sync_kept_roots(cluster, &recorded);
+        kix::plan::baseline::sync_kept_roots(cluster, &recorded);
     }
 
     // Save activation path for next deploy's diff, once the target's record
@@ -656,7 +639,7 @@ async fn run_operator_async(
         cluster,
         &current,
         selected,
-        PrunePolicy::Delete,
+        true,
         ctx.global.quiet,
     )
     .await?;
@@ -756,22 +739,15 @@ async fn run_operator_async(
 
 /// A rollback to one record, planned the way `kix deploy` plans: the target
 /// build against the current one, with what failed and kept deploys left.
-struct Planned {
+struct RollbackPlan {
     target_result_dir: std::path::PathBuf,
     target_graph: StoreGraph,
     target_manifests: Vec<Value>,
-    plan: DeployPlan,
-    pkg_diff: kix::plan::PackageDiff,
-    orphan_rids: Vec<ResourceId>,
-    shared_orphans: Vec<SharedOrphan>,
-    /// The current closure with the failed and kept ones, so `prune_order`
-    /// can sort an orphan that exists in no current closure.
-    baseline_manifests: Vec<Value>,
-    consumed_failed: Vec<String>,
-    kept_orphans: activation::KeptOrphans,
+    baseline: Baseline,
+    checked: CheckedPlan,
 }
 
-impl Planned {
+impl RollbackPlan {
     fn print(&self, cluster: &str, target_name: &str, prune: bool, verbose: bool) {
         println!();
         println!(
@@ -780,39 +756,47 @@ impl Planned {
             output::bold(cluster),
             output::bold(target_name),
         );
-        plan::print_package_plan(&self.pkg_diff, verbose);
-        plan::print_plan_summary(&self.pkg_diff);
+        plan::print_package_plan(self.checked.pkg_diff(), verbose);
+        plan::print_plan_summary(self.checked.pkg_diff());
         let fate = if prune {
             "will be deleted".to_string()
         } else {
-            format!("kept; {}", super::deploy::KEPT_ORPHANS_HINT)
+            format!("kept; {}", plan::KEPT_ORPHANS_HINT)
         };
         print!(
             "{}",
-            super::deploy::render_plan_orphans(&self.orphan_rids, &fate)
+            plan::render_plan_orphans(self.checked.orphans(), &fate)
         );
-        super::shared_orphans::print(&self.shared_orphans);
+        plan::print_shared(self.checked.shared_orphans());
     }
 }
 
-fn prune_policy(prune: bool) -> PrunePolicy {
-    if prune {
-        PrunePolicy::Delete
-    } else {
-        PrunePolicy::WarnOnly
+/// A rollback's planning flags: only whether it prunes. A rollback
+/// re-applies a known-good prior activation; conflicts fail loudly rather
+/// than silently overwriting whatever the cluster has.
+fn flags(prune: bool) -> PlanFlags {
+    PlanFlags {
+        prune,
+        prune_mode: None,
+        reconcile: false,
+        force_conflicts: false,
+        accept_migrations: false,
     }
 }
 
-/// Plan a rollback of `cluster`, which runs `current`, to `selected`.
+/// Plan a rollback of `cluster`, which runs `current`, to `selected`, with
+/// the pieces of [`Planner`]: the current record's baseline, the changes,
+/// and the checked plan. Refuses a target whose plan writes or deletes an
+/// object the diff leaves out, as `kix deploy` does.
 async fn plan_rollback(
     client: &kube::Client,
     activation_ar: &kube::api::ApiResource,
     cluster: &str,
     current: &activation::ActiveActivation,
     selected: &activation::SupersededActivation,
-    prune: PrunePolicy,
+    prune: bool,
     quiet: bool,
-) -> Result<Planned> {
+) -> Result<RollbackPlan> {
     // The target's build: the path its record was built via, or a build in
     // the local store with its identity hash.
     let target_result_dir = selected
@@ -847,149 +831,21 @@ async fn plan_rollback(
         .map(|r| r.manifest.clone())
         .collect();
 
-    // 5. Resolve current activation to local store graph (for diff).
-    //    Prefer built-via, fall back to hash-based lookup.
-    let current_result_dir = current
-        .built_via
-        .as_ref()
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.join("kix-packages.json").exists())
-        .or_else(|| {
-            let hash = current.identity_hash.as_deref().unwrap_or("");
-            kix::eval::store::resolve_activation_by_hash(cluster, hash)
-        });
-    let (current_graph, current_manifests) = match current_result_dir {
-        Some(dir) => match Build::local(&dir, &|_| {}) {
-            Ok(build) => {
-                let g = build.into_graph();
-                let m = g.resources.values().map(|r| r.manifest.clone()).collect();
-                (Some(g), m)
-            }
-            Err(_) => (None, vec![]),
-        },
-        None => (None, vec![]),
-    };
-
-    // 5b. Closures of deploys that stopped part way. A rollback is the most
-    //     likely thing to run straight after one, and its baseline has exactly
-    //     the same hole as a deploy's: those objects are in neither the
-    //     current closure nor the target one (kixpkgs#82).
-    let failed_baseline = match baseline::deploy_in_flight(client, activation_ar, cluster).await {
-        Some(record) => {
-            baseline::report_in_flight(&record, quiet);
-            baseline::FailedBaseline::default()
-        }
-        None => baseline::load_failed(client, activation_ar, None, cluster, quiet).await,
-    };
-
-    // The merged set is for the plan display and for prune ordering only.
-    // The comparison itself stays against the current closure: folding the
-    // failed manifests into the old side would make an object that a failed
-    // deploy declared but never created read as already present, and if the
-    // target declares it at the same hash the plan would skip it and the
-    // rollback would finalize claiming an object that is not there.
-    // Builds whose orphans an earlier warn-only deploy kept, as in deploy.
-    let kept_baseline = baseline::load_kept(current, None, cluster, quiet);
-    let baseline_manifests = kix::cluster::apply::baseline_manifests(
-        &current_manifests,
-        &[
-            failed_baseline.closures.as_slice(),
-            kept_baseline.closures.as_slice(),
-        ]
-        .concat(),
-    );
-
-    // Compute changes from current to target, then fold in what failed
-    //    deploys may have left behind.
-    let all_actions = kix::cluster::apply::fold_kept_closures(
-        kix::cluster::apply::fold_failed_closures(
-            kix::cluster::apply::detect_changes(&target_manifests, &current_manifests),
-            &target_manifests,
-            &failed_baseline.closures,
-        ),
-        &target_manifests,
-        &kept_baseline.closures,
-    );
-    let kept_orphans = baseline::orphans_kept_from(
-        &target_manifests,
-        Some(current),
-        &current_manifests,
-        &failed_baseline,
-        &kept_baseline,
-    );
-
-    let mut orphan_rids: Vec<ResourceId> = Vec::new();
-    for action in &all_actions {
-        if let ChangeAction::Orphan(rid) = action {
-            orphan_rids.push(rid.clone());
-        }
-    }
-    let (orphan_rids, shared_orphans) =
-        super::shared_orphans::keep_shared(client, cluster, orphan_rids).await?;
-
-    let (plan, pkg_diff) = checked_plan(
-        current_graph.as_ref(),
-        &target_graph,
-        &target_manifests,
-        &all_actions,
-        &orphan_rids,
-        &shared_orphans,
-        prune,
-        current_manifests
-            .iter()
-            .chain(failed_baseline.closures.iter().flatten())
-            .chain(kept_baseline.closures.iter().flatten()),
-    )?;
-    Ok(Planned {
+    let report = |event: PlanEvent<'_>| plan::progress::print(event, quiet);
+    let baseline = Baseline::of_record(client, activation_ar, cluster, current, &report).await;
+    // The records and the orphans another Kix cluster deploys are looked up
+    // under `cluster`, the name the rollback resolved its records by.
+    let checked = Planner::new(flags(prune), &report)
+        .plan(&target_graph, cluster, &baseline, Some(client))
+        .await
+        .map_err(|e| miette!("{e}"))?;
+    Ok(RollbackPlan {
         target_result_dir,
         target_graph,
         target_manifests,
-        plan,
-        pkg_diff,
-        orphan_rids,
-        shared_orphans,
-        baseline_manifests,
-        consumed_failed: failed_baseline.consumed,
-        kept_orphans,
+        baseline,
+        checked,
     })
-}
-
-/// The rollback's engine plan and the package diff it shows. Refuses a
-/// target whose plan writes or deletes an object the diff leaves out, as
-/// `kix deploy` does (see [`kix::plan::objects`]). `ran` are the manifests of the
-/// builds the cluster ran: the current one and the failed and kept ones.
-#[allow(clippy::too_many_arguments)]
-fn checked_plan<'a>(
-    current_graph: Option<&StoreGraph>,
-    target_graph: &StoreGraph,
-    target_manifests: &[Value],
-    all_actions: &[ChangeAction],
-    orphan_rids: &[ResourceId],
-    shared_orphans: &[SharedOrphan],
-    prune: PrunePolicy,
-    ran: impl IntoIterator<Item = &'a Value>,
-) -> Result<(DeployPlan, kix::plan::PackageDiff)> {
-    let resource_graph = ResourceGraph::from_manifests(target_manifests).into_diagnostic()?;
-    let plan =
-        DeployPlan::from_graph_and_changes(&resource_graph, all_actions).into_diagnostic()?;
-    let mut pkg_diff = match current_graph {
-        Some(old) => kix::plan::diff_graphs(old, target_graph),
-        None => {
-            kix::plan::diff_graphs(&StoreGraph::empty(&target_graph.cluster_name), target_graph)
-        }
-    };
-    pkg_diff.keep_shared(shared_orphans);
-    // The rollback read the cluster, and its plan lists every orphan.
-    kix::plan::objects::of(
-        &pkg_diff.shown,
-        target_graph,
-        &plan,
-        &super::deploy::deletes_of(prune, orphan_rids),
-        orphan_rids,
-        ran,
-    )
-    .map_err(|e| miette!("{e}"))?;
-    Ok((plan, pkg_diff))
 }
 
 /// Shared formatter for a list of superseded activations used by both the
@@ -1059,77 +915,4 @@ fn print_summary(r: &DeployResult, succeeded: bool) {
             output::dim(&failed_str)
         },
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::commands::deploy::plan_bound_tests::{
-        add_package, build, package_instance, stamped,
-    };
-
-    /// What `plan_rollback` checks for a rollback from `current` to
-    /// `target`, with no failed or kept deploys.
-    fn checked(current: &StoreGraph, target: &StoreGraph) -> Result<kix::plan::PackageDiff> {
-        let (current_graph, current_manifests) = stamped(current);
-        let (target_graph, target_manifests) = stamped(target);
-        let all_actions =
-            kix::cluster::apply::detect_changes(&target_manifests, &current_manifests);
-        let orphan_rids: Vec<ResourceId> = all_actions
-            .iter()
-            .filter_map(|a| match a {
-                ChangeAction::Orphan(rid) => Some(rid.clone()),
-                _ => None,
-            })
-            .collect();
-        checked_plan(
-            Some(&current_graph),
-            &target_graph,
-            &target_manifests,
-            &all_actions,
-            &orphan_rids,
-            &[],
-            PrunePolicy::Delete,
-            current_manifests.iter(),
-        )
-        .map(|(_, pkg_diff)| pkg_diff)
-    }
-
-    /// Two PackageInstances of one instance in the target: the plan shows
-    /// one of them, and the rollback would apply both.
-    #[test]
-    fn a_target_whose_plan_hides_an_object_is_refused() {
-        let current = build();
-        let mut target = build();
-        let id = add_package(
-            &mut target,
-            "evil",
-            package_instance("shop-2", Some("shop")),
-            "shop",
-        );
-        let Err(refused) = checked(&current, &target) else {
-            panic!("the rollback was not refused");
-        };
-        let refused = refused.to_string();
-        assert!(
-            refused.contains("objects the plan does not show"),
-            "{refused}"
-        );
-        assert!(refused.contains(&id.display_id()), "{refused}");
-    }
-
-    /// A rollback whose target lacks an object deletes it under `--prune`,
-    /// and the plan lists it as removed.
-    #[test]
-    fn a_rollback_deletes_what_its_plan_shows() {
-        let mut current = build();
-        let target = build();
-        add_package(
-            &mut current,
-            "extra",
-            package_instance("extra", None),
-            "extra",
-        );
-        checked(&current, &target).unwrap();
-    }
 }

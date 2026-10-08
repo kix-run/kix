@@ -16,6 +16,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::cluster::migrate::MigrationPair;
+use crate::cluster::scheduler::PrunePolicy;
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::diff::{DiffKind, Difference};
 use crate::manifest::types::ResourceId;
@@ -96,14 +97,15 @@ pub struct KixBuild {
 }
 
 impl KixBuild {
-    /// The running binary.
-    pub fn current() -> Self {
+    /// The running binary, whose crate version is `version`: the binary's
+    /// own `CARGO_PKG_VERSION`, not this library's.
+    pub fn current(version: &str) -> Self {
         let store_path = std::env::current_exe()
             .and_then(std::fs::canonicalize)
             .ok()
             .and_then(|exe| store_path_of(&exe.to_string_lossy()));
         KixBuild {
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            version: version.to_string(),
             store_path,
         }
     }
@@ -190,6 +192,19 @@ pub struct PlanFlags {
 pub enum PruneModeFlag {
     Default,
     No,
+}
+
+impl PlanFlags {
+    /// The prune policy the flags ask for. `--prune-mode=no` skips, plain
+    /// `deploy` reports orphans without deleting (warn-only), `--prune`
+    /// deletes.
+    pub fn prune_policy(&self) -> PrunePolicy {
+        match self.prune_mode.unwrap_or(PruneModeFlag::Default) {
+            PruneModeFlag::No => PrunePolicy::Skip,
+            PruneModeFlag::Default if !self.prune => PrunePolicy::WarnOnly,
+            PruneModeFlag::Default => PrunePolicy::Delete,
+        }
+    }
 }
 
 /// How a [`Plan`] was made, which bounds what it can know.
@@ -561,8 +576,11 @@ pub enum Detail<'a> {
 }
 
 impl Plan {
-    /// A plan with every check not run for `reason`, migrations aside.
+    /// A plan made by `kix`, with every check not run for `reason`,
+    /// migrations aside.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
+        kix: KixBuild,
         made_by: MadeBy,
         cluster: &str,
         build: Build,
@@ -574,7 +592,7 @@ impl Plan {
         Plan {
             schema_version: SCHEMA_VERSION.to_string(),
             made_by,
-            kix: KixBuild::current(),
+            kix,
             cluster: cluster.to_string(),
             build,
             deployed: None,
@@ -828,6 +846,7 @@ mod tests {
             &crate::eval::store_graph::StoreGraph::empty("c"),
         );
         let mut plan = Plan::new(
+            KixBuild::current(env!("CARGO_PKG_VERSION")),
             MadeBy::DryRun,
             "c",
             Build::of(&crate::eval::store_graph::StoreGraph::empty("c")),

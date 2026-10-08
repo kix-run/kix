@@ -7,14 +7,19 @@
 //! [`kix::plan::document::Plan`], come from the library; this module and
 //! [`render`] only display them.
 
+pub mod progress;
 pub mod render;
 
 use std::collections::BTreeMap;
 
+use kix::cluster::fetch::SharedOrphan;
 use kix::manifest::diff::DiffConfig;
 use kix::manifest::diff::display::format_diffs;
 use kix::manifest::types::ResourceId;
-use kix::plan::{CLUSTER_LEVEL_KEY, PackageChangeDiff, PackageDiff, PackageInfo, without_secrets};
+use kix::plan::{
+    CLUSTER_LEVEL_KEY, PackageChangeDiff, PackageDiff, PackageInfo, split_never_pruned,
+    without_secrets,
+};
 
 use crate::output;
 
@@ -166,7 +171,7 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
                 out,
                 "- `{}`{ver} ({})",
                 output::printable(&p.key),
-                p.counts()
+                counts(p)
             );
         }
         let _ = writeln!(out);
@@ -185,7 +190,7 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
                 out,
                 "- `{}`{ver} ({})",
                 output::printable(&p.key),
-                p.counts()
+                counts(p)
             );
             for id in &p.kept {
                 let _ = writeln!(out, "  - kept, never deleted automatically: `{id}`");
@@ -301,7 +306,7 @@ fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
                         output::red("-"),
                         output::red(name),
                         ver_str,
-                        info.counts(),
+                        counts(info),
                     );
                     if verbose {
                         for id in &info.kept {
@@ -423,6 +428,20 @@ fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
     out
 }
 
+/// The parenthesised count after a package name: `3 resources`, or for a
+/// removed package that leaves kept resources behind, `2 removed, 1 kept`.
+fn counts(info: &PackageInfo) -> String {
+    if info.kept.is_empty() {
+        return format!("{} resources", info.resource_count);
+    }
+    let removed = info.resource_count - info.kept.len();
+    if removed == 0 {
+        format!("{} kept", info.kept.len())
+    } else {
+        format!("{removed} removed, {} kept", info.kept.len())
+    }
+}
+
 /// A resource that left the build, but deploy and gc never delete.
 fn write_kept_line(out: &mut String, id: &ResourceId) {
     use std::fmt::Write;
@@ -467,6 +486,44 @@ pub fn render_never_pruned(kept: &[ResourceId]) -> String {
         ),
     );
     out
+}
+
+/// This binary, as a plan document names the Kix that made it: its own
+/// crate version, not the library's.
+pub fn kix_build() -> kix::plan::document::KixBuild {
+    kix::plan::document::KixBuild::current(env!("CARGO_PKG_VERSION"))
+}
+
+/// What deletes the orphans a warn-only run keeps. Both work because the
+/// record the run finalizes lists the builds they came from under
+/// `status.orphansKeptFrom`.
+pub const KEPT_ORPHANS_HINT: &str = "`kix deploy --prune` or `kix gc` deletes them";
+
+/// The orphan lines of a deploy's or rollback's plan. `fate` says what the
+/// run does with the orphans prune may delete; the kinds
+/// `lifecycle::never_pruned` protects are listed apart and are never
+/// counted as orphans.
+pub fn render_plan_orphans(orphans: &[ResourceId], fate: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let (prunable, kept) = split_never_pruned(orphans.to_vec());
+    if !prunable.is_empty() {
+        let orphan_str = prunable.len().to_string();
+        let _ = writeln!(out, "  {} orphaned ({fate})", output::red(&orphan_str));
+        for rid in &prunable {
+            let _ = writeln!(out, "    {} {}", output::red("-"), rid.display_id());
+        }
+    }
+    out.push_str(&render_never_pruned(&kept));
+    out
+}
+
+/// One line per orphan the prune keeps because another Kix cluster still
+/// deploys it.
+pub fn print_shared(shared: &[SharedOrphan]) {
+    for s in shared {
+        crate::say!("  {} prune: {}", output::yellow("="), s.describe());
+    }
 }
 
 /// Print plan summary line.
@@ -743,5 +800,27 @@ mod render_tests {
                 "{shown}"
             );
         }
+    }
+
+    /// A deploy's plan counts a Namespace orphan as kept, not as an orphan.
+    #[test]
+    fn plan_orphans_list_a_namespace_as_kept() {
+        let orphans = [
+            ResourceId {
+                kind: "ConfigMap".into(),
+                name: "old".into(),
+                namespace: "app".into(),
+            },
+            ResourceId {
+                kind: "Namespace".into(),
+                name: "gone".into(),
+                namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
+            },
+        ];
+        let text = render_plan_orphans(&orphans, "will be deleted");
+        assert!(text.contains("1 orphaned (will be deleted)"), "{text}");
+        assert!(text.contains("- ConfigMap/old@app"), "{text}");
+        assert!(!text.contains("- Namespace"), "{text}");
+        assert!(text.contains("! Namespace/gone"), "{text}");
     }
 }

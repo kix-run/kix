@@ -52,9 +52,9 @@ use kix::manifest::lifecycle;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use crate::cli::GcArgs;
-use crate::commands::baseline;
 use crate::output;
 use crate::plan::{self, print_never_pruned};
+use kix::plan::baseline;
 use kix::plan::split_never_pruned;
 
 use super::CommandContext;
@@ -176,7 +176,10 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     // Orphans a warn-only deploy kept. The cached build is usually the one
     // that deploy made, so the diff above cannot see them.
     let kept_baseline = match &records.active {
-        Some(active) => baseline::load_kept(active, None, &cluster, ctx.global.quiet),
+        Some(active) => {
+            let quiet = ctx.global.quiet;
+            baseline::load_kept(active, None, &cluster, &|e| plan::progress::print(e, quiet))
+        }
         None => baseline::KeptBaseline::default(),
     };
     let kept_garbage = kept_garbage(
@@ -231,11 +234,14 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .runtime
         .block_on(fetch::make_client(global.context.as_deref()))
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-    let (ordered_rids, shared) = ctx.runtime.block_on(super::shared_orphans::keep_shared(
-        &client,
-        &new_graph.cluster_name,
-        ordered_rids,
-    ))?;
+    let (ordered_rids, shared) = ctx
+        .runtime
+        .block_on(kix::plan::keep_shared(
+            &client,
+            &new_graph.cluster_name,
+            ordered_rids,
+        ))
+        .map_err(|e| miette!("{e}"))?;
 
     // 6. Display package-grouped garbage plan.
     //    Always render per-resource detail because the user
@@ -268,7 +274,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     if !ctx.global.quiet {
         print_record_plan(&records, &policy);
         print_never_pruned(&kept);
-        super::shared_orphans::print(&shared);
+        plan::print_shared(&shared);
     }
     if ordered_rids.is_empty() && records.plan.retire.is_empty() {
         return Ok(());
@@ -554,7 +560,7 @@ async fn run_hard_async(
 
     if !shared.is_empty() && !global.quiet {
         println!();
-        super::shared_orphans::print(&shared);
+        plan::print_shared(&shared);
     }
 
     // Hard gc judges every live object against the build, so once it has
