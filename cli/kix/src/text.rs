@@ -11,9 +11,9 @@ pub const MAX_SHOWN_CHARS: usize = 512;
 /// characters, which can move the cursor or clear the screen, and Unicode's
 /// format characters and line and paragraph separators, which are
 /// invisible, reorder text (bidirectional controls), or break a line. For
-/// text kix did not write, such as a name from a bundle, so two names that
-/// differ always look different. Only the first [`MAX_SHOWN_CHARS`]
-/// characters show, and the rest is counted.
+/// text kix did not write, such as a name from a build made elsewhere, so
+/// two names that differ always look different. Only the first
+/// [`MAX_SHOWN_CHARS`] characters show, and the rest is counted.
 pub fn printable(s: &str) -> String {
     printable_up_to(s, MAX_SHOWN_CHARS)
 }
