@@ -201,6 +201,7 @@ pub struct ScriptedOps {
     default_node: Mutex<NodeScript>,
     rediscover: Mutex<VecDeque<Behaviour<Result<(), String>>>>,
     default_rediscover: Mutex<Behaviour<Result<(), String>>>,
+    begin: Mutex<Behaviour<Result<(), String>>>,
     checkpoint: Mutex<Behaviour<Result<(), String>>>,
     stamp: Mutex<Behaviour<Result<(), String>>>,
     delete: Mutex<Behaviour<Result<Pruned, String>>>,
@@ -226,6 +227,7 @@ impl ScriptedOps {
             default_node: Mutex::new(NodeScript::default()),
             rediscover: Mutex::new(VecDeque::new()),
             default_rediscover: Mutex::new(Behaviour::Now(Ok(()))),
+            begin: Mutex::new(Behaviour::Now(Ok(()))),
             checkpoint: Mutex::new(Behaviour::Now(Ok(()))),
             stamp: Mutex::new(Behaviour::Now(Ok(()))),
             delete: Mutex::new(Behaviour::Now(Ok(Pruned::Deleted))),
@@ -270,6 +272,11 @@ impl ScriptedOps {
 
     pub fn default_rediscover(&self, b: Behaviour<Result<(), String>>) -> &Self {
         *self.default_rediscover.lock().unwrap() = b;
+        self
+    }
+
+    pub fn begin_behaviour(&self, b: Behaviour<Result<(), String>>) -> &Self {
+        *self.begin.lock().unwrap() = b;
         self
     }
 
@@ -502,8 +509,10 @@ impl ResourceIo for ScriptedOps {
 
 #[async_trait]
 impl DeployRecord for ScriptedOps {
-    async fn begin(&self) {
+    async fn begin(&self) -> Result<(), RecordWriteError> {
         self.record(Call::Begin);
+        let b = self.begin.lock().unwrap().clone();
+        b.run().await.map_err(RecordWriteError::Scripted)
     }
 
     async fn discovery_refreshed(&self) {}

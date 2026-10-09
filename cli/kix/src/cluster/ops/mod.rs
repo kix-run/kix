@@ -132,7 +132,10 @@ pub(crate) trait DeployRecord: Send + Sync + 'static {
     /// says what it was attempting (kixpkgs#82). On a cluster's first deploy
     /// the record's own CRD is not served yet, so the implementation may
     /// defer the create to [`DeployRecord::discovery_refreshed`].
-    async fn begin(&self);
+    ///
+    /// An error stops the run before its first node: there is a record to
+    /// write and it cannot be written ([`RecordWriteError::Domain`]).
+    async fn begin(&self) -> Result<(), RecordWriteError>;
 
     /// Discovery was refreshed after CRDs landed. On a cluster's first
     /// deploy this is the first moment the Activation CRD is established,

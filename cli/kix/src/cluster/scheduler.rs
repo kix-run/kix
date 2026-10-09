@@ -251,6 +251,14 @@ pub struct SchedulerConfig {
 
 #[derive(Error, Debug)]
 pub enum DeployError {
+    /// The run's Activation record could not be begun, so nothing was
+    /// applied.
+    #[error("Nothing was applied: the deployment record could not be started. {message}")]
+    BeginFailed {
+        message: String,
+        partial: DeployResult,
+    },
+
     #[error("deployment stopped: {count} resource operations failed")]
     NodesFailed { count: usize, partial: DeployResult },
 
@@ -293,7 +301,8 @@ impl DeployError {
     /// The counts accumulated before the run stopped.
     pub fn partial(&self) -> &DeployResult {
         match self {
-            DeployError::NodesFailed { partial, .. }
+            DeployError::BeginFailed { partial, .. }
+            | DeployError::NodesFailed { partial, .. }
             | DeployError::DiscoveryFailed { partial, .. }
             | DeployError::Cancelled { partial, .. }
             | DeployError::Internal { partial, .. }
@@ -412,15 +421,26 @@ pub(crate) async fn run_deploy(
 
     // Nothing is in flight yet, so awaiting this inline parks nobody. It is
     // still bounded: the watchdog only watches nodes.
-    if let Some(record) = &record
-        && tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.begin())
-            .await
-            .is_err()
-    {
-        emit(DeployEvent::BestEffortFailed {
-            what: "activation begin".into(),
-            message: format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
-        });
+    if let Some(record) = &record {
+        match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.begin()).await {
+            Ok(Ok(())) => {}
+            // There is a record to write and it cannot be written; nothing
+            // has been applied yet, so stop here.
+            Ok(Err(e)) => {
+                let message = e.to_string();
+                emit(DeployEvent::Stopped {
+                    reason: message.clone(),
+                });
+                return Err(DeployError::BeginFailed {
+                    message,
+                    partial: result,
+                });
+            }
+            Err(_) => emit(DeployEvent::BestEffortFailed {
+                what: "activation begin".into(),
+                message: format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
+            }),
+        }
     }
 
     // Preauthorized delete set for immutable-conflict recovery.
@@ -2795,6 +2815,33 @@ mod engine_tests {
             !calls.iter().any(|c| matches!(c, Call::Abort { .. })),
             "a clean run must not abort: {calls:?}",
         );
+    }
+
+    /// A record that cannot be begun stops the run before any node is
+    /// applied, and the run does not abort a record it never began.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_begin_stops_the_run_before_any_node() {
+        let manifests = vec![m("Deployment", "a", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        ops.begin_behaviour(Behaviour::Now(Err("records under a retired group".into())));
+        let rec = Arc::new(Recorder::default());
+
+        let err = run(
+            &ops,
+            plan_of(&manifests),
+            &config(quiet_watchdog()),
+            rec.clone(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, DeployError::BeginFailed { .. }), "{err}");
+        assert!(
+            err.to_string().contains("records under a retired group"),
+            "{err}"
+        );
+        assert_eq!(ops.calls(), vec![Call::Begin]);
+        assert!(rec.stopped().is_some());
     }
 
     /// An abort that will not go through is reported, not fatal. The run has

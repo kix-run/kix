@@ -164,13 +164,23 @@ impl ActivationRecord {
 
 #[async_trait]
 impl DeployRecord for ActivationRecord {
-    async fn begin(&self) {
-        let Some(records) = self.logged_records().await else {
+    async fn begin(&self) -> Result<(), RecordWriteError> {
+        // A run with a record to write cannot write it on a cluster whose
+        // records sit under a retired group, so it stops before applying.
+        let records = match self.config.name {
+            Some(_) => self
+                .resources
+                .records()
+                .await
+                .map_err(RecordWriteError::Domain)?,
+            None => self.logged_records().await,
+        };
+        let Some(records) = records else {
             // No record CRD served yet. On a cluster's first deploy the CRD is
             // in this very plan, so the record is created at the CRD barrier
             // instead; see `discovery_refreshed`.
             self.pending.store(true, Ordering::SeqCst);
-            return;
+            return Ok(());
         };
 
         // Read the live set BEFORE creating the record, so the annotation
@@ -182,6 +192,7 @@ impl DeployRecord for ActivationRecord {
         if !self.create().await {
             self.pending.store(true, Ordering::SeqCst);
         }
+        Ok(())
     }
 
     async fn discovery_refreshed(&self) {
@@ -351,8 +362,8 @@ mod tests {
     }
 
     /// On a cluster whose records sit under a retired group, a run with a
-    /// record to write fails its checkpoint, abort and finalize with the
-    /// gate's refusal instead of finalizing as if there were no record. A
+    /// record to write fails its begin, checkpoint, abort and finalize with
+    /// the gate's refusal instead of finalizing as if there were no record. A
     /// run that writes no lifecycle is not affected.
     #[tokio::test]
     async fn the_domain_gate_fails_the_record_writes() {
@@ -360,6 +371,7 @@ mod tests {
         api.serve_retired_records();
         let named = record(&api, Some("act")).await;
         for err in [
+            named.begin().await.unwrap_err(),
             named.checkpoint(1, 0, false).await.unwrap_err(),
             named.abort("stopped").await.unwrap_err(),
             named.finalize(false, false).await.unwrap_err(),
@@ -369,6 +381,7 @@ mod tests {
         }
 
         let unnamed = record(&api, None).await;
+        assert!(unnamed.begin().await.is_ok());
         assert!(unnamed.checkpoint(1, 0, false).await.is_ok());
         assert!(unnamed.finalize(false, false).await.unwrap().is_none());
     }
