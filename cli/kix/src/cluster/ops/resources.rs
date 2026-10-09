@@ -123,19 +123,11 @@ impl KubeResources {
         Records::open(&self.client, &d)
     }
 
-    /// The records for a lifecycle write, or `None` when there are none to
-    /// write to: no record CRD yet, or a cluster whose records sit under a
-    /// retired group, which is logged. Skipping a lifecycle write deletes
-    /// nothing. A prune does not come through here: it refuses on the
-    /// gate's error (see [`KubeResources::prune`]).
-    pub(super) async fn records(&self) -> Option<Records> {
-        match self.opened().await {
-            Ok(opened) => opened.into_records(),
-            Err(e) => {
-                tracing::error!("{e}");
-                None
-            }
-        }
+    /// The records for a lifecycle write, `None` when the record CRD is not
+    /// served yet, or the gate's refusal for a cluster whose records sit
+    /// under a retired group.
+    pub(super) async fn records(&self) -> Result<Option<Records>, LegacyDomainError> {
+        self.opened().await.map(OpenedRecords::into_records)
     }
 
     /// Kind lookup from the cache, no refresh.

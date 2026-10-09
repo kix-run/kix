@@ -253,6 +253,10 @@ pub(crate) struct NotDiscovered {
 pub(crate) enum RecordWriteError {
     #[error("{}", describe(.0))]
     Records(RecordsError),
+    /// The records sit under a retired group, so there is no record to
+    /// write.
+    #[error(transparent)]
+    Domain(LegacyDomainError),
     /// The write did not answer within the implementation's bound.
     #[error("no answer within {}s", .0.as_secs())]
     NoAnswer(Duration),

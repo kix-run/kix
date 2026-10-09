@@ -9,7 +9,9 @@ use serde_json::Value;
 
 use crate::manifest::types::ResourceId;
 
-use super::super::activation::{self, KeptOrphanSource, KeptOrphans, WaveRecord, WaveStatus};
+use super::super::activation::{
+    self, KeptOrphanSource, KeptOrphans, Records, WaveRecord, WaveStatus,
+};
 use super::super::apply;
 use super::super::errors::{FailureClass, classify};
 use super::{DeployRecord, Finalized, KubeResources, RecordWriteError, StampError};
@@ -84,6 +86,32 @@ impl ActivationRecord {
         self.recorded_kept.lock().ok().and_then(|g| g.clone())
     }
 
+    /// The records, for a write the run can do without: `None` when the
+    /// record CRD is not served yet or the domain gate refuses, which is
+    /// logged. The later writes report the refusal.
+    async fn logged_records(&self) -> Option<Records> {
+        self.resources.records().await.unwrap_or_else(|e| {
+            tracing::error!("{e}");
+            None
+        })
+    }
+
+    /// The record's name and the records to write it through. `None` when
+    /// the run writes no lifecycle or the record CRD is not served yet; the
+    /// gate's refusal is an error, so a run on a cluster whose records sit
+    /// under a retired group does not finalize as if it had none.
+    async fn named_records(&self) -> Result<Option<(&str, Records)>, RecordWriteError> {
+        let Some(name) = self.config.name.as_deref() else {
+            return Ok(None);
+        };
+        let records = self
+            .resources
+            .records()
+            .await
+            .map_err(RecordWriteError::Domain)?;
+        Ok(records.map(|records| (name, records)))
+    }
+
     /// Create the Activation record and mark it Deploying.
     ///
     /// Returns false when the record CRD is not served yet, which is a
@@ -97,7 +125,7 @@ impl ActivationRecord {
         let Some(name) = self.config.name.as_ref() else {
             return true;
         };
-        let Some(records) = self.resources.records().await else {
+        let Some(records) = self.logged_records().await else {
             return false;
         };
 
@@ -141,7 +169,7 @@ impl ActivationRecord {
 #[async_trait]
 impl DeployRecord for ActivationRecord {
     async fn begin(&self) {
-        let Some(records) = self.resources.records().await else {
+        let Some(records) = self.logged_records().await else {
             // No record CRD served yet. On a cluster's first deploy the CRD is
             // in this very plan, so the record is created at the CRD barrier
             // instead; see `discovery_refreshed`.
@@ -166,7 +194,7 @@ impl DeployRecord for ActivationRecord {
         // engine only refreshes discovery once a CRD it applied is
         // Established.
         if self.pending.load(Ordering::SeqCst)
-            && let Some(records) = self.resources.records().await
+            && let Some(records) = self.logged_records().await
         {
             self.resources
                 .set_live_activations(records.live_hashes().await);
@@ -182,8 +210,7 @@ impl DeployRecord for ActivationRecord {
         failed: usize,
         finalizing: bool,
     ) -> Result<(), RecordWriteError> {
-        let (Some(records), Some(name)) = (self.resources.records().await, &self.config.name)
-        else {
+        let Some((name, records)) = self.named_records().await? else {
             return Ok(());
         };
         // One synthetic "wave" until the Activation schema moves to per-node
@@ -243,8 +270,7 @@ impl DeployRecord for ActivationRecord {
         if !self.config.mark_failed_on_abort {
             return Ok(());
         }
-        let (Some(records), Some(name)) = (self.resources.records().await, &self.config.name)
-        else {
+        let Some((name, records)) = self.named_records().await? else {
             return Ok(());
         };
         match tokio::time::timeout(BEST_EFFORT_TIMEOUT, records.fail_deploy(name, reason)).await {
@@ -262,8 +288,7 @@ impl DeployRecord for ActivationRecord {
         had_failures: bool,
         orphans_left: bool,
     ) -> Result<Option<Finalized>, RecordWriteError> {
-        let (Some(records), Some(name)) = (self.resources.records().await, &self.config.name)
-        else {
+        let Some((name, records)) = self.named_records().await? else {
             return Ok(None);
         };
         let cluster = self.resources.cluster();
@@ -273,7 +298,7 @@ impl DeployRecord for ActivationRecord {
                 current.as_ref().map(|c| c.orphans_kept_from.as_slice()),
                 orphans_left,
             );
-            let old = current.filter(|old| &old.name != name);
+            let old = current.filter(|old| old.name != name);
             records
                 .finalize_deploy(
                     cluster,
@@ -289,7 +314,7 @@ impl DeployRecord for ActivationRecord {
                 *recorded = Some(kept);
             }
             Ok::<_, activation::RecordsError>(Finalized {
-                activation: name.clone(),
+                activation: name.to_string(),
                 previous: old.map(|a| a.name),
             })
         };
@@ -298,5 +323,57 @@ impl DeployRecord for ActivationRecord {
             Ok(Err(e)) => Err(RecordWriteError::Records(e)),
             Err(_) => Err(RecordWriteError::NoAnswer(BEST_EFFORT_TIMEOUT)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cluster::fake_api::FakeApi;
+    use crate::cluster::fetch;
+
+    async fn record(api: &FakeApi, name: Option<&str>) -> ActivationRecord {
+        let client = api.client();
+        let discovery = fetch::discover_resources(&client).await.unwrap();
+        ActivationRecord::new(
+            Arc::new(KubeResources::new(
+                client,
+                discovery,
+                "a".into(),
+                None,
+                false,
+            )),
+            RecordConfig {
+                name: name.map(str::to_string),
+                manifest: None,
+                receipt: None,
+                consumed_failed: Vec::new(),
+                kept_orphans: KeptOrphans::default(),
+                mark_failed_on_abort: true,
+            },
+        )
+    }
+
+    /// On a cluster whose records sit under a retired group, a run with a
+    /// record to write fails its checkpoint, abort and finalize with the
+    /// gate's refusal instead of finalizing as if there were no record. A
+    /// run that writes no lifecycle is not affected.
+    #[tokio::test]
+    async fn the_domain_gate_fails_the_record_writes() {
+        let api = FakeApi::new([]);
+        api.serve_retired_records();
+        let named = record(&api, Some("act")).await;
+        for err in [
+            named.checkpoint(1, 0, false).await.unwrap_err(),
+            named.abort("stopped").await.unwrap_err(),
+            named.finalize(false, false).await.unwrap_err(),
+        ] {
+            assert!(matches!(err, RecordWriteError::Domain(_)), "{err}");
+            assert!(err.to_string().contains("kix migrate domain"), "{err}");
+        }
+
+        let unnamed = record(&api, None).await;
+        assert!(unnamed.checkpoint(1, 0, false).await.is_ok());
+        assert!(unnamed.finalize(false, false).await.unwrap().is_none());
     }
 }
