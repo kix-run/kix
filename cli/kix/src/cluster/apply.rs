@@ -18,7 +18,6 @@ use kube::{
 };
 use serde_json::Value;
 use thiserror::Error;
-use tokio::task::JoinSet;
 
 /// Does this manifest opt into the rerun rule? Jobs only: the rule deletes
 /// the live object, and for anything with a rollout (a Deployment stuck on
@@ -578,7 +577,7 @@ pub fn detect_changes_live(
 ///
 /// Leave `kix.run/applied-hash` unchanged because no content was applied.
 /// Writes nothing when the annotation already says the right thing.
-pub async fn record_activation_on_skipped(
+pub(crate) async fn record_activation_on_skipped(
     client: &Client,
     ar: &ApiResource,
     scope: Scope,
@@ -603,7 +602,7 @@ pub async fn record_activation_on_skipped(
 /// If `activation_hash` is provided, the resource's `kix.run/activations`
 /// annotation is updated to include this activation (read-modify-write).
 #[allow(clippy::too_many_arguments)]
-pub async fn apply_resource(
+pub(crate) async fn apply_resource(
     client: &Client,
     ar: &ApiResource,
     scope: Scope,
@@ -1086,110 +1085,6 @@ async fn update_bookkeeping_annotations(
     api.patch(name, &pp, &Patch::Merge(&patch)).await?;
 
     Ok(())
-}
-
-/// Apply all resources in a wave in parallel.
-///
-/// If `activation_hash` is provided, each applied resource gets the activation
-/// merged into its `kix.run/activations` annotation.
-///
-/// Returns a vec of (ResourceId, Result) pairs for each action in the wave.
-pub async fn apply_wave(
-    client: &Client,
-    discovery: &[(ApiResource, Scope)],
-    wave: &[ChangeAction],
-    dry_run: bool,
-    activation_hash: Option<&str>,
-    force_conflicts: bool,
-) -> Vec<(ResourceId, Result<ApplyResult, ApplyError>)> {
-    // Build kind -> (ApiResource, Scope) lookup
-    let ar_by_kind: HashMap<String, (ApiResource, Scope)> = discovery
-        .iter()
-        .map(|pair| (pair.0.kind.clone(), (pair.0.clone(), pair.1.clone())))
-        .collect();
-
-    let mut set = JoinSet::new();
-
-    for action in wave {
-        match action {
-            ChangeAction::Apply(manifest) => {
-                let rid = ResourceId::from_value(manifest);
-                let kind = rid.kind.clone();
-
-                let Some((ar, scope)) = ar_by_kind.get(&kind) else {
-                    let rid_clone = rid.clone();
-                    set.spawn(async move {
-                        (
-                            rid_clone.clone(),
-                            Err(ApplyError::UnknownKind {
-                                kind: rid_clone.kind.clone(),
-                            }),
-                        )
-                    });
-                    continue;
-                };
-
-                let client = client.clone();
-                let ar = ar.clone();
-                let scope = scope.clone();
-                let manifest = manifest.clone();
-                let act_hash = activation_hash.map(|s| s.to_string());
-                set.spawn(async move {
-                    let result = apply_resource(
-                        &client,
-                        &ar,
-                        scope,
-                        &manifest,
-                        dry_run,
-                        act_hash.as_deref(),
-                        None,
-                        force_conflicts,
-                    )
-                    .await;
-                    (rid, result)
-                });
-            }
-            ChangeAction::Skip(rid) => {
-                let rid = rid.clone();
-                set.spawn(async move {
-                    (
-                        rid.clone(),
-                        Ok(ApplyResult {
-                            action: ApplyAction::Unchanged,
-                            resource_id: rid,
-                            preview: None,
-                        }),
-                    )
-                });
-            }
-            ChangeAction::Orphan(rid) => {
-                // Orphans are handled separately (prune phase),
-                // but we report them here for tracking
-                let rid = rid.clone();
-                set.spawn(async move {
-                    (
-                        rid.clone(),
-                        Ok(ApplyResult {
-                            action: ApplyAction::Skipped,
-                            resource_id: rid,
-                            preview: None,
-                        }),
-                    )
-                });
-            }
-        }
-    }
-
-    let mut results = Vec::new();
-    while let Some(join_result) = set.join_next().await {
-        match join_result {
-            Ok(pair) => results.push(pair),
-            Err(e) => {
-                tracing::warn!(error = %e, "task join error during apply wave");
-            }
-        }
-    }
-    results
 }
 
 #[cfg(test)]

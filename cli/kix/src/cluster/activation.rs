@@ -863,7 +863,7 @@ impl Records {
     /// empty slice removes the field.
     // The parameters have distinct types and this function has one call site.
     #[allow(clippy::too_many_arguments)]
-    pub async fn finalize_deploy(
+    pub(crate) async fn finalize_deploy(
         &self,
         cluster_name: &str,
         new_activation_name: &str,
@@ -982,7 +982,7 @@ impl Records {
     /// created. Sets `status.phase = Deploying` and `status.totalWaves = n`,
     /// unless the record is the current one being re-deployed (see
     /// [`phase_on_begin`]), in which case only the wave counters are reset.
-    pub async fn begin_deploy(
+    pub(crate) async fn begin_deploy(
         &self,
         activation_name: &str,
         total_waves: usize,
@@ -1009,7 +1009,7 @@ impl Records {
     /// not take this patch is one the next deploy has to cope with anyway. It is
     /// conditional on the record still being `Deploying`, so a re-deploy of the
     /// current closure that aborts leaves the Active record alone.
-    pub async fn fail_deploy(
+    pub(crate) async fn fail_deploy(
         &self,
         activation_name: &str,
         reason: &str,
@@ -1044,7 +1044,7 @@ impl Records {
     /// Patches `status.waves` with the full accumulated list. The caller
     /// tracks wave records in memory and passes the complete list each time,
     /// eliminating the need for a GET-before-PATCH round-trip.
-    pub async fn record_waves(
+    pub(crate) async fn record_waves(
         &self,
         activation_name: &str,
         waves: &[WaveRecord],
