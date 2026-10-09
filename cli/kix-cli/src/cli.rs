@@ -1,10 +1,17 @@
+use std::ffi::OsString;
 use std::path::PathBuf;
 
+use clap::builder::FalseyValueParser;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
 #[derive(Parser)]
-#[command(name = "kix", version, about = "Kubernetes manifest generator")]
+#[command(
+    name = "kix",
+    version,
+    about = "Kubernetes manifest generator",
+    after_help = "Plugins: `kix NAME ARGS...` runs `kix-NAME ARGS...` from PATH."
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -16,15 +23,15 @@ pub struct Cli {
 #[derive(clap::Args, Debug, Clone)]
 pub struct GlobalArgs {
     /// Output format (text, json, yaml, markdown). Default varies by command.
-    #[arg(short, long, global = true)]
+    #[arg(short, long, global = true, env = "KIX_OUTPUT")]
     pub output: Option<OutputFormat>,
 
     /// Increase verbosity (-v, -vv, etc.)
-    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    #[arg(short, long, global = true, env = "KIX_VERBOSE", action = clap::ArgAction::Count)]
     pub verbose: u8,
 
     /// Suppress non-essential output
-    #[arg(short, long, global = true)]
+    #[arg(short, long, global = true, env = "KIX_QUIET", value_parser = FalseyValueParser::new())]
     pub quiet: bool,
 
     /// Disable colored output (also respects NO_COLOR env per no-color.org spec)
@@ -32,21 +39,23 @@ pub struct GlobalArgs {
     pub no_color: bool,
 
     /// Kubeconfig context to use
-    #[arg(long, global = true)]
+    #[arg(long, global = true, env = "KIX_CONTEXT")]
     pub context: Option<String>,
 
     /// Flake reference to evaluate clusters from (default: current directory)
-    #[arg(long, global = true, default_value = ".")]
+    #[arg(long, global = true, env = "KIX_FLAKE", default_value = ".")]
     pub flake: String,
 
     /// Skip the SQLite eval cache (always re-evaluate from Nix)
-    #[arg(long, global = true)]
+    #[arg(long, global = true, env = "KIX_NO_CACHE", value_parser = FalseyValueParser::new())]
     pub no_cache: bool,
 
     /// Override a flake input's URL. Mirrors `nix --override-input`.
     /// Repeatable; takes a name and a URL each time:
     ///   `--override-input kixpkgs path:/nix/store/...kixpkgs`
     /// All overrides are forwarded to every underlying `nix` subprocess.
+    /// Without the flag, `KIX_OVERRIDE_INPUT` gives the names and URLs,
+    /// separated by spaces.
     #[arg(
         long = "override-input",
         global = true,
@@ -59,7 +68,8 @@ pub struct GlobalArgs {
 
 impl GlobalArgs {
     /// Pair up the raw `--override-input NAME URL` tokens into `(name, url)`.
-    /// clap's `num_args = 2` guarantees the vector length is always even.
+    /// The length is even: clap checks the flag's pairs, and `main` those
+    /// read from `KIX_OVERRIDE_INPUT`.
     pub fn input_overrides(&self) -> Vec<(String, String)> {
         self.override_input
             .chunks_exact(2)
@@ -345,6 +355,11 @@ pub enum Command {
     /// Resolve image references and record them in a committed pin file
     #[command(subcommand)]
     Pin(PinCommand),
+
+    /// Any other name: the plugin `kix-NAME` from PATH, with the arguments
+    /// after the name
+    #[command(external_subcommand)]
+    Plugin(Vec<OsString>),
 }
 
 impl Command {
@@ -380,7 +395,9 @@ impl Command {
             Command::Snapshot(a) => match &a.command {
                 SnapshotCommand::Save(s) => Some(&s.cluster),
             },
-            Command::Completions(_) | Command::Drift(_) | Command::Pin(_) => None,
+            Command::Completions(_) | Command::Drift(_) | Command::Pin(_) | Command::Plugin(_) => {
+                None
+            }
         }
     }
 }
