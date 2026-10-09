@@ -4,9 +4,11 @@
 //! ([`super::Planner`]). The operator plans against every live object of
 //! its Kix cluster instead: those already include what failed and kept
 //! deploys left, and the same loop corrects drift. [`LiveChanges::sweep`]
-//! reads the live objects itself, and [`LivePlan`] is made only from its
-//! result, so the plan the operator runs is always one made from them. No
-//! check holds it to a package diff.
+//! takes the Activation record being reconciled, opens the records and reads
+//! the live objects itself, and [`LivePlan`] is made only from its result.
+//! So the plan the operator runs is always one made from the live objects,
+//! and the run writes the record it was made for. No check holds the plan to
+//! a package diff.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -17,7 +19,7 @@ use kube::discovery::{ApiResource, Scope};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::cluster::activation::{OpenedRecords, Records};
+use crate::cluster::activation::{Record, Records};
 use crate::cluster::apply::{ChangeAction, detect_changes_live};
 use crate::cluster::fetch::{self, FetchError, SharedOrphan};
 use crate::cluster::graph::{GraphError, ResourceGraph};
@@ -26,13 +28,37 @@ use crate::cluster::readiness::MalformedMarker;
 use crate::cluster::scheduler::{self, DeployError, DeployPlan, SchedulerConfig};
 use crate::cluster::stream::{DeployObserver, DeployResult};
 use crate::cluster::tenancy::Tenancy;
+use crate::legacy_domain::LegacyDomainError;
+use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
+
+/// The Kix cluster an Activation record belongs to: its `kix.run/cluster`
+/// label, which the compiler stamps on every record, else `spec.cluster`,
+/// which a record built by Nix lacks until the CLI finalizes it.
+pub fn cluster_of(activation: &DynamicObject) -> Option<String> {
+    activation
+        .metadata
+        .labels
+        .as_ref()
+        .and_then(|l| keys::get_meta(l, keys::CLUSTER_LABEL))
+        .or_else(|| {
+            activation
+                .data
+                .pointer("/spec/cluster")
+                .and_then(|v| v.as_str())
+        })
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
 
 /// Why [`LiveChanges::sweep`] or [`LiveChanges::plan`] made no plan.
 #[derive(Debug, Error)]
 pub enum LivePlanError {
     #[error(transparent)]
     Discovery(Box<FetchError>),
+    /// The records sit under a retired group.
+    #[error(transparent)]
+    Domain(LegacyDomainError),
     #[error(transparent)]
     Sweep(Box<FetchError>),
     #[error(transparent)]
@@ -47,6 +73,7 @@ pub struct LiveChanges {
     client: Client,
     discovery: Vec<(ApiResource, Scope)>,
     cluster: String,
+    record: Record,
     desired: Vec<Value>,
     actions: Vec<ChangeAction>,
     orphans: Vec<ResourceId>,
@@ -59,26 +86,28 @@ pub struct LiveChanges {
 }
 
 impl LiveChanges {
-    /// Read the live objects of `cluster` and compare `desired` with them.
-    /// `cluster` is the Kix cluster's name, empty for a record that names
-    /// none, under which no record counts as this cluster's own.
+    /// Read the live objects of the Kix cluster `activation` belongs to
+    /// ([`cluster_of`]) and compare `desired` with them. A record that names
+    /// no cluster sweeps under the empty name, under which no record counts
+    /// as this cluster's own.
     pub async fn sweep(
         client: &Client,
-        records: &Records,
-        cluster: &str,
+        activation: &DynamicObject,
         desired: Vec<Value>,
     ) -> Result<LiveChanges, LivePlanError> {
+        let cluster = cluster_of(activation).unwrap_or_default();
         let discovery = fetch::discover_resources(client)
             .await
             .map_err(|e| LivePlanError::Discovery(Box::new(e)))?;
+        let records = Records::open(client, &discovery).map_err(LivePlanError::Domain)?;
         // Only this Kix cluster's objects: every other Kix cluster's objects
         // are absent from this build and would otherwise be pruned as
         // orphans.
         let sweep = fetch::sweep_managed(
             client,
             &discovery,
-            &OpenedRecords::from(records.clone()),
-            fetch::SweepScope::Cluster(cluster),
+            &records,
+            fetch::SweepScope::Cluster(&cluster),
         )
         .await
         .map_err(|e| LivePlanError::Sweep(Box::new(e)))?;
@@ -99,7 +128,8 @@ impl LiveChanges {
         Ok(LiveChanges {
             client: client.clone(),
             discovery,
-            cluster: cluster.to_string(),
+            cluster,
+            record: Record::of(activation),
             desired,
             actions,
             orphans,
@@ -153,6 +183,7 @@ impl LiveChanges {
             client: self.client,
             discovery: self.discovery,
             cluster: self.cluster,
+            record: self.record,
             plan,
             orphans: self.orphans,
             live: self.live,
@@ -166,23 +197,24 @@ pub struct LivePlan {
     client: Client,
     discovery: Vec<(ApiResource, Scope)>,
     cluster: String,
+    record: Record,
     plan: DeployPlan,
     orphans: Vec<ResourceId>,
     live: Vec<Value>,
 }
 
 impl LivePlan {
-    /// Run the engine over the plan.
+    /// Run the engine over the plan, stamping the record's identity hash
+    /// into `kix.run/activations` on every object it writes.
     ///
-    /// `activation` is the record whose lifecycle the run writes, `None` to
-    /// correct drift without touching it. `identity_hash` is the record's,
-    /// stamped into `kix.run/activations` on every object the run writes.
-    /// The run never marks the record Failed: a reconcile that returns early
-    /// is retried on requeue, and failing the record would fight that.
+    /// With `manage_lifecycle` the run writes the record's lifecycle (begin,
+    /// checkpoints, finalize); without, it corrects drift and leaves the
+    /// record alone. The run never marks the record Failed: a reconcile that
+    /// returns early is retried on requeue, and failing the record would
+    /// fight that.
     pub async fn run(
         self,
-        activation: Option<&str>,
-        identity_hash: Option<String>,
+        manage_lifecycle: bool,
         config: SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
     ) -> Result<DeployResult, DeployError> {
@@ -190,7 +222,7 @@ impl LivePlan {
             self.client,
             self.discovery,
             self.cluster,
-            identity_hash,
+            self.record.identity_hash,
             // The operator runs unattended; surface conflicts in Activation
             // status rather than silently clobbering fields owned by other
             // controllers.
@@ -199,7 +231,7 @@ impl LivePlan {
         let record = Arc::new(ActivationRecord::new(
             resources.clone(),
             RecordConfig {
-                name: activation.map(str::to_string),
+                name: manage_lifecycle.then_some(self.record.name),
                 // The operator created the record itself and owns
                 // `spec.source`; it has no stamped manifest to re-apply and
                 // needs none.
@@ -261,7 +293,6 @@ fn live_changes(
 mod tests {
     use super::*;
     use crate::cluster::activation::PHASE_ACTIVE;
-    use crate::manifest::keys;
     use serde_json::json;
 
     fn annotated(kind: &str, name: &str, hash: &str, activations: &str) -> Value {
@@ -366,5 +397,18 @@ mod tests {
         let desired = [annotated("ConfigMap", "a-web", "h-web", "")];
         let (actions, _) = live_changes(&desired, &sweep.managed, &tenancy);
         assert_eq!(orphans(&actions), vec!["leftover"]);
+    }
+
+    /// A record's cluster comes from its label before `spec.cluster`, and
+    /// a record naming neither has no cluster.
+    #[test]
+    fn a_records_cluster_comes_from_its_label() {
+        let mut rec = record("a", "a1");
+        rec.data = json!({ "spec": { "cluster": "stale" } });
+        assert_eq!(cluster_of(&rec).as_deref(), Some("a"));
+        rec.metadata.labels = None;
+        assert_eq!(cluster_of(&rec).as_deref(), Some("stale"));
+        rec.data = json!({});
+        assert_eq!(cluster_of(&rec), None);
     }
 }

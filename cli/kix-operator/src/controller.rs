@@ -47,7 +47,7 @@ use kix::cluster::scheduler::{self, OnErrorPolicy, PrunePolicy, SchedulerConfig}
 use kix::cluster::stream::DeployObserver;
 use kix::cluster::watchdog::StallPolicy;
 use kix::manifest::types::ResourceId;
-use kix::plan::live::{LiveChanges, LivePlanError};
+use kix::plan::live::{LiveChanges, LivePlanError, cluster_of};
 
 use crate::k8s_events::{CompositeObserver, K8sEventObserver};
 use crate::observer::OperatorObserver;
@@ -116,25 +116,6 @@ fn source_path(activation: &DynamicObject) -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
-/// The Kix cluster an Activation CR belongs to: its `kix.run/cluster`
-/// label, which the compiler stamps on every record, else `spec.cluster`,
-/// which a record built by Nix lacks until the CLI finalizes it.
-fn cluster_name(activation: &DynamicObject) -> Option<String> {
-    activation
-        .metadata
-        .labels
-        .as_ref()
-        .and_then(|l| keys::get_meta(l, keys::CLUSTER_LABEL))
-        .or_else(|| {
-            activation
-                .data
-                .pointer("/spec/cluster")
-                .and_then(|v| v.as_str())
-        })
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
 // ---------------------------------------------------------------------------
 // Store graph loading
 // ---------------------------------------------------------------------------
@@ -162,7 +143,7 @@ fn load_manifests(path: &Path) -> Result<Vec<Value>, OperatorError> {
 /// the step that failed.
 fn operator_error(e: LivePlanError) -> OperatorError {
     match e {
-        LivePlanError::Discovery(_) | LivePlanError::Sweep(_) => {
+        LivePlanError::Discovery(_) | LivePlanError::Domain(_) | LivePlanError::Sweep(_) => {
             OperatorError::DiscoveryError(e.to_string())
         }
         LivePlanError::Graph(_) | LivePlanError::Marker(_) => {
@@ -186,7 +167,7 @@ pub async fn reconcile_activation(
     // Records are looked up by the cluster label, so a record that names no
     // cluster finds only itself. The sweep and the prune get an empty name
     // instead, under which no record counts as this cluster's own.
-    let own_cluster = cluster_name(&activation).unwrap_or_default();
+    let own_cluster = cluster_of(&activation).unwrap_or_default();
     let cluster = if own_cluster.is_empty() {
         name.to_string()
     } else {
@@ -278,7 +259,7 @@ pub async fn reconcile_activation(
             ensure_finalizer(&ctx.records, name, &activation).await?;
 
             // Run reconcile with lifecycle management (will set phase to Active on success)
-            return run_reconcile(&activation, &ctx, name, &own_cluster, true).await;
+            return run_reconcile(&activation, &ctx, name, true).await;
         }
 
         // Active and Degraded records run drift detection on requeue. Degraded means the
@@ -305,7 +286,7 @@ pub async fn reconcile_activation(
             ensure_finalizer(&ctx.records, name, &activation).await?;
 
             // Run reconcile without lifecycle management (already Active)
-            return run_reconcile(&activation, &ctx, name, &own_cluster, false).await;
+            return run_reconcile(&activation, &ctx, name, false).await;
         }
 
         // Deploying: a resume, the same as a Queued one already transitioning.
@@ -328,7 +309,7 @@ pub async fn reconcile_activation(
             }
             tracing::info!(name, "Resuming Deploying activation");
             ensure_finalizer(&ctx.records, name, &activation).await?;
-            return run_reconcile(&activation, &ctx, name, &own_cluster, true).await;
+            return run_reconcile(&activation, &ctx, name, true).await;
         }
 
         // Failed is terminal. The deploy that owned it has stopped, and the
@@ -348,16 +329,13 @@ pub async fn reconcile_activation(
 
 /// Unified reconcile: load desired state, fetch live state, diff, wave-plan, apply.
 ///
-/// If `manage_lifecycle` is true, passes `activation_name` to the reconcile engine
-/// so it runs begin_deploy/record_waves/finalize_deploy. Used for new deployments.
+/// If `manage_lifecycle` is true, the run writes the record's lifecycle
+/// (begin_deploy/record_waves/finalize_deploy). Used for new deployments.
 /// If false, run drift correction without lifecycle changes.
-///
-/// `cluster` is the record's Kix cluster, empty when it names none.
 async fn run_reconcile(
     activation: &DynamicObject,
     ctx: &Context,
     name: &str,
-    cluster: &str,
     manage_lifecycle: bool,
 ) -> Result<Action, OperatorError> {
     // 1. Resolve source store path
@@ -391,7 +369,7 @@ async fn run_reconcile(
 
     // 4. Compare desired vs live by identity-hash, over this Kix cluster's
     //    live objects only.
-    let changes = LiveChanges::sweep(&ctx.client, &ctx.records, cluster, managed_manifests)
+    let changes = LiveChanges::sweep(&ctx.client, activation, managed_manifests)
         .await
         .map_err(operator_error)?;
     for (owner, count) in changes.foreign() {
@@ -448,15 +426,7 @@ async fn run_reconcile(
             Some(name.to_string()),
         )) as Arc<dyn DeployObserver>,
     ]));
-    let lifecycle_of = if manage_lifecycle { Some(name) } else { None };
-    let result = plan
-        .run(
-            lifecycle_of,
-            Record::of(activation).identity_hash,
-            config,
-            observer,
-        )
-        .await;
+    let result = plan.run(manage_lifecycle, config, observer).await;
 
     match result {
         Ok(r) => {
@@ -646,33 +616,6 @@ pub fn error_policy(
 mod tests {
     use super::*;
     use serde_json::json;
-
-    fn record(cluster: &str, hash: &str) -> DynamicObject {
-        serde_json::from_value(json!({
-            "apiVersion": keys::API_VERSION,
-            "kind": "Activation",
-            "metadata": {
-                "name": cluster,
-                "labels": { (keys::CLUSTER_LABEL): cluster },
-                "annotations": { (keys::IDENTITY_HASH): hash },
-            },
-            "status": { "phase": PHASE_ACTIVE },
-        }))
-        .unwrap()
-    }
-
-    /// The operator reads a record's cluster from its label before
-    /// `spec.cluster`, and a record naming neither has no cluster.
-    #[test]
-    fn a_records_cluster_comes_from_its_label() {
-        let mut rec = record("a", "a1");
-        rec.data = json!({ "spec": { "cluster": "stale" } });
-        assert_eq!(cluster_name(&rec).as_deref(), Some("a"));
-        rec.metadata.labels = None;
-        assert_eq!(cluster_name(&rec).as_deref(), Some("stale"));
-        rec.data = json!({});
-        assert_eq!(cluster_name(&rec), None);
-    }
 
     /// Deleting `b`'s Active record tears down `b`'s closure but leaves the
     /// ClusterRole `a`'s current build also contains.
