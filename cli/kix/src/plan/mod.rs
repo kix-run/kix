@@ -852,7 +852,7 @@ fn shown_manifest(is_secret: bool, manifest: &Value, old: Option<&Value>) -> Val
 }
 
 /// `value`, found at `path`, with every secret value in it hidden (see
-/// [`hide_secrets`]), or a size note when it is larger than `max_bytes`.
+/// `hide_secrets`), or a size note when it is larger than `max_bytes`.
 /// `old` is the old side's value at the same path, given for a new value.
 pub fn shown_value(
     is_secret: bool,
@@ -870,7 +870,7 @@ pub fn shown_value(
     value
 }
 
-/// `d` with the values [`is_secret_path`] covers hidden, for the text plan.
+/// `d` with the values `is_secret_path` covers hidden, for the text plan.
 /// Unlike the JSON it keeps large values, which the text diff prints line
 /// by line.
 pub fn without_secrets(is_secret: bool, d: &Difference) -> Difference {

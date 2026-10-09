@@ -16,12 +16,12 @@ static COLOR_ENABLED: OnceLock<bool> = OnceLock::new();
 static PROGRESS_TO_STDERR: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-/// Send the lines [`say!`] prints to stderr from now on.
+/// Send the lines [`say!`](crate::say) prints to stderr from now on.
 pub fn progress_to_stderr() {
     PROGRESS_TO_STDERR.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Whether [`say!`] prints to stderr.
+/// Whether [`say!`](crate::say) prints to stderr.
 pub fn progress_on_stderr() -> bool {
     PROGRESS_TO_STDERR.load(std::sync::atomic::Ordering::Relaxed)
 }

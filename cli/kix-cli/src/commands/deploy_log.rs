@@ -1,6 +1,6 @@
 //! Non-interactive deploy observers.
 //!
-//! Two output modes beyond the colored [`StreamCliObserver`]:
+//! Two output modes beyond the colored [`StreamCliObserver`](super::deploy::StreamCliObserver):
 //!
 //! - [`LineObserver`]: one line per terminal verdict,
 //!   phase boundary, prune event, or finalization. No ANSI codes, no cursor

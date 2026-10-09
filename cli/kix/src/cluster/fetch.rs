@@ -111,7 +111,7 @@ fn resource_fqn(ar: &ApiResource) -> String {
 ///
 /// Before returning, the client has exchanged one request with the
 /// apiserver, so every caller past this point is talking to an endpoint that
-/// answers. See [`probe_apiserver`] for why that matters.
+/// answers. See `probe_apiserver` for why that matters.
 pub async fn make_client(context: Option<&str>) -> Result<Client, FetchError> {
     let config = match context {
         Some(ctx) => {
@@ -945,7 +945,7 @@ pub async fn split_shared_orphans_live(
 
 /// The API a request about `rid` goes to. For a namespaced kind keyed
 /// [`CLUSTER_SCOPED`] (its manifest names no namespace) that is `default`:
-/// [`crate::cluster::apply::apply_resource`] refuses to create such an
+/// `apply::apply_resource` refuses to create such an
 /// object, but Kix CLIs before that check applied it there, and a prune of
 /// an old build reads and deletes it there.
 pub fn api_for(
@@ -1022,7 +1022,7 @@ pub fn normalize_for_diff(obj: &mut DynamicObject) {
 /// fall back to the whole object with server metadata stripped.
 ///
 /// A Secret's view holds no live value: every `data` key reads
-/// [`HIDDEN_SECRET_VALUE`] (see [`redact_secret`]). Values kix applied
+/// [`HIDDEN_SECRET_VALUE`] (see `redact_secret`). Values kix applied
 /// through `stringData` are absent, since the server stores them only in
 /// `data` and kix's fieldset lists `stringData`.
 /// [`kix_owned_manifests_against`] compares both against a build.
@@ -1200,7 +1200,7 @@ pub fn kix_owned_manifests(
 /// An object is unchanged when its `kix.run/identity-hash` names a manifest
 /// in `built`, [`super::drift::check_object`] finds it in sync, and every
 /// field that manifest sets holds the same value in the kix-owned view (see
-/// [`build_holds_in`]). The view may carry fields the build does not set,
+/// `build_holds_in`). The view may carry fields the build does not set,
 /// such as the `publisher` StackGres's mutating webhook adds to each
 /// extension; those are what the replacement hides. In sync alone is not
 /// enough: it means the live fields match the apply response, which already
@@ -1208,7 +1208,7 @@ pub fn kix_owned_manifests(
 /// overwrote. The replacement keeps the live `kix.run/*` annotations, because
 /// both hashes leave them out and a package move would otherwise not show.
 ///
-/// Every other object is compared through its view, with [`redact_secret`]
+/// Every other object is compared through its view, with `redact_secret`
 /// run against the build manifest of the same name, so no live Secret value
 /// leaves this function. A Secret kix applied with `stringData` always takes
 /// that path (the server stores no `stringData`). A changed value shows there

@@ -9,7 +9,7 @@
 //! differs in amount, still shows.
 //!
 //! The rules match on the field path alone, not on the object's kind, so
-//! [`SERVER_DEFAULTS`] also applies inside a custom resource with a field of
+//! `SERVER_DEFAULTS` also applies inside a custom resource with a field of
 //! the same name (a `readinessProbe` an operator defaults differently), and
 //! to the content match `StoreGraph::synthesize` uses to give a manifest its
 //! reference path. Such a field set to the core default on one side and

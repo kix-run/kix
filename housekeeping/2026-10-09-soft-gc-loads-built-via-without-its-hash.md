@@ -1,0 +1,3 @@
+# 2026-10-09 · `cli/kix-cli/src/commands/gc.rs` · Soft `kix gc` loads the Active record's build from `built_via` without checking it is the record's build.
+
+`baseline::active_build_dir` returns the `built_via` path whenever it holds a `kix-packages.json`, and gc loads it as the old build. A path reused for another build would make that build the one gc compares against, and objects of the real Active build could read as garbage. Deploy and rollback load a record's build through `baseline::record_graph`, which checks the activation store hash against the record's identity hash and falls back to the cache by hash; gc does not.

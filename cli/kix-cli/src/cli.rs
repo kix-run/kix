@@ -1060,6 +1060,8 @@ pub struct BundleArgs {
     pub cluster: String,
 
     /// Where to write the bundle [default: <CLUSTER>.kixbundle]
+    // The text is clap's help, so it keeps `<CLUSTER>` as the user reads it.
+    #[allow(rustdoc::invalid_html_tags)]
     #[arg(value_name = "FILE")]
     pub file: Option<std::path::PathBuf>,
 }

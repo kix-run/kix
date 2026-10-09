@@ -603,7 +603,7 @@ pub async fn wait_for_expectations(
 const CRASHLOOP_RESTART_THRESHOLD: i64 = 3;
 
 /// Classification of a terminal workload failure. Bubbles up from the per-pod
-/// and per-workload classifiers in [`classify_terminal_failure`] so callers
+/// and per-workload classifiers ([`classify_pod_terminal`], [`classify_workload_terminal`]) so callers
 /// can render the machine-readable reason distinctly from the free-form message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalReason {

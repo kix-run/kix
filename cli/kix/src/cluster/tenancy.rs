@@ -6,7 +6,7 @@
 //! builds contain it ([`super::fetch::attribute`]), and tell a prune which
 //! objects another Kix cluster still deploys ([`super::prune_guard`]).
 //!
-//! It reads the records through [`Records`], so the domain gate has run: on
+//! It reads the records through [`Records`](super::activation::Records), so the domain gate has run: on
 //! a cluster whose records sit under a retired group every record would be
 //! missing, every object would look unattributed, and a view of one Kix
 //! cluster would hold all of them.

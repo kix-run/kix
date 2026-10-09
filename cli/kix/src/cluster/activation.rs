@@ -606,7 +606,7 @@ impl Records {
     }
 
     /// Every Superseded record for a cluster, most recent first by
-    /// [`Record::retention_time`].
+    /// `Record::retention_time`.
     ///
     /// Every Superseded record, including ones that never finished a deploy,
     /// so that `kix gc` can retire them: a listing that hid them would leave a
@@ -620,7 +620,7 @@ impl Records {
     }
 
     /// The Superseded records that really were the cluster's state
-    /// ([`Record::was_ever_current`]), most recent first. A deploy that
+    /// (`Record::was_ever_current`), most recent first. A deploy that
     /// stopped part way is Superseded once a later plan folded its leftovers
     /// in, but it was never running, so rolling back to it would apply a state
     /// the cluster has never been in.
@@ -1090,7 +1090,7 @@ fn current_of<'a>(items: &'a [DynamicObject], cluster: &str) -> Option<&'a Dynam
     current_record(current)
 }
 
-/// Most recent first by [`Record::retention_time`], ties broken on name.
+/// Most recent first by `Record::retention_time`, ties broken on name.
 fn sort_newest_first(records: &mut [Record]) {
     records.sort_by(|a, b| {
         b.retention_time()
@@ -1147,7 +1147,7 @@ pub enum RetireReason {
     OlderThan(chrono::Duration),
     /// No usable timestamp at all, so its age is unknown and it sorts oldest.
     /// A record that never finished a deploy still has `status.failure.at` or
-    /// a creation timestamp to go on (see [`Record::retention_time`]), so
+    /// a creation timestamp to go on (see `Record::retention_time`), so
     /// reaching this means every one of those was missing or malformed.
     UnknownAge,
 }
@@ -1172,7 +1172,7 @@ pub struct Retirement {
 /// Split a cluster's Superseded records into kept and retired under a
 /// [`RetentionPolicy`] (`kix gc --keep`, kixpkgs#59 follow-up).
 ///
-/// Newest first by [`Record::retention_time`] (parsed, so offsets and
+/// Newest first by `Record::retention_time` (parsed, so offsets and
 /// precision do not matter); a record with no usable timestamp is treated as
 /// the oldest. Ties break on name so the plan is deterministic.
 /// Then, among the records that were ever current (rollback targets): the

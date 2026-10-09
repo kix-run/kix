@@ -57,7 +57,7 @@ pub enum SopsSources {
     #[default]
     Local,
     /// Only the SOPS files the build carries with it
-    /// ([`SopsSources::carried`]).
+    /// (`SopsSources::carried`).
     Carried(Arc<CarriedSources>),
 }
 

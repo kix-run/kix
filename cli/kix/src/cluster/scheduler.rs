@@ -1802,7 +1802,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
 ///
 /// `kix deploy` and `kix rollback` stop before the engine when the plan has
 /// nothing to apply. An unchanged probe whose last run failed still has to
-/// run, and only the engine's Skip path does that (see [`execute_node`]),
+/// run, and only the engine's Skip path does that (see `execute_node`),
 /// so the commands ask this first and run the engine when it names
 /// anything. A read that fails counts as "not failed": the engine reports
 /// it on its own path if the run goes ahead for another reason.

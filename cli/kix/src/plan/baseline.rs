@@ -17,7 +17,7 @@
 //! [`load_kept`] resolves them the same way.
 //!
 //! Everything here resolves a record to a closure in the local store. Nothing
-//! reads the cluster's objects, except [`Baseline::of_cluster`] when the
+//! reads the cluster's objects, except `Baseline::of_cluster` when the
 //! Active record's build is not on this machine: the kix invariant is that
 //! live state is consulted to execute and to observe, never to decide
 //! (`v2_discussions/81_deploy_as_lifecycle_engine.md`, "Closure A to closure

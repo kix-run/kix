@@ -116,12 +116,12 @@ pub enum ApplyError {
 /// Is `rid` of a namespaced kind but keyed [`CLUSTER_SCOPED`], because its
 /// manifest names no namespace? The apiserver would store such an object in
 /// the requester's namespace, where no later comparison with the build finds
-/// it, so [`apply_resource`] refuses it.
+/// it, so `apply_resource` refuses it.
 pub fn is_namespaceless(scope: &Scope, rid: &ResourceId) -> bool {
     matches!(scope, Scope::Namespaced) && rid.namespace == CLUSTER_SCOPED
 }
 
-/// The resources among `rids` that [`apply_resource`] would refuse as
+/// The resources among `rids` that `apply_resource` would refuse as
 /// [`ApplyError::NoNamespace`], judged by `discovery`. A kind discovery does
 /// not know yet (a CRD the same deploy creates) is not reported.
 pub fn namespaceless<'a>(

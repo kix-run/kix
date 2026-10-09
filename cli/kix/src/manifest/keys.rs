@@ -3,8 +3,8 @@
 //!
 //! # One literal
 //!
-//! The domain is spelled exactly once in this crate, in [`domain`]. Every key
-//! is built from it with [`key`], so a rename is a one-line change here.
+//! The domain is spelled exactly once in this crate, in `domain!`. Every key
+//! is built from it with `key!`, so a rename is a one-line change here.
 //! A test in this module walks the source tree and fails if any other file
 //! spells a Kix domain, so the invariant cannot rot.
 //!

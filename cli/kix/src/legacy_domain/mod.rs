@@ -21,7 +21,7 @@
 //!    `cluster::apply`. Server-side apply drops the build-time keys on its
 //!    own because the `kix` field manager owns them; these two are written
 //!    by patch and would otherwise stay on the object forever.
-//! 4. [`check_discovery`] and [`check_build`], the gate. Every command that
+//! 4. [`check_discovery`] and `check_build`, the gate. Every command that
 //!    reads Kix records opens them through
 //!    [`crate::cluster::activation::Records::open`], which refuses a cluster
 //!    that has not been migrated and names the command to run. `Build`

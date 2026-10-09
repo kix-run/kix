@@ -214,7 +214,7 @@ impl Build {
     /// The build, for a command that installs its CRDs. Refused when the
     /// build, as loaded, renders Kix's own CRDs under a retired group: a
     /// kixpkgs pin from before the domain move
-    /// ([`legacy_domain::check_build`]). A build an Activation record names
+    /// (`legacy_domain::check_build`). A build an Activation record names
     /// may predate the move, so a command that only reads one does not ask.
     pub fn installable(self) -> Result<InstallableBuild, LegacyDomainError> {
         match self.legacy_domain {
@@ -240,7 +240,7 @@ impl Build {
 
     /// The SOPS sources of the build's Secrets. A local build reads the
     /// files they name on this machine. A carried build reads only the files
-    /// it carries ([`carried_sops`]). With `placeholders`, nothing is
+    /// it carries (`carried_sops`). With `placeholders`, nothing is
     /// decrypted: each Secret gets placeholder values, so a plan made before
     /// anyone approved it reads no secret.
     pub fn sops_sources(&mut self, placeholders: bool) -> Result<SopsSources, String> {
