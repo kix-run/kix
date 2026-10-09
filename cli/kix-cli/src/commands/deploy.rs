@@ -150,7 +150,6 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     let cluster = p.build.graph().cluster_name.clone();
-    let old_manifests = p.baseline.manifests();
     let active_hash = p.baseline.active_hash().map(str::to_string);
 
     // Imports are applied like any other resource (SSA); readiness polls the
@@ -261,7 +260,6 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         args,
         &global,
         p.checked,
-        &old_manifests,
         &cluster,
         Some(&receipt),
         p.client,
@@ -787,7 +785,6 @@ async fn run_deploy_async(
     args: &DeployArgs,
     global: &crate::cli::GlobalArgs,
     mut checked: CheckedPlan,
-    old_manifests: &[Value],
     cluster_name: &str,
     receipt: Option<&Value>,
     pre_client: Option<kube::Client>,
@@ -816,9 +813,10 @@ async fn run_deploy_async(
         }
     };
 
-    let discovery = fetch::discover_resources(&client)
+    let target = Target::connect(client, sops)
         .await
         .map_err(|e| miette!("{e}"))?;
+    let discovery = target.discovery();
 
     // The gate, again, here. `Baseline::of_cluster` opens the records too,
     // but `--current-activation` reads the previous build from the local
@@ -826,7 +824,7 @@ async fn run_deploy_async(
     // that flag skips the gate, and with `--prune` the deploy would compute
     // the retired CRDs as orphans and delete them, which cascades away every
     // Activation record on the cluster.
-    let records = Records::open(&client, &discovery)
+    let records = Records::open(target.client(), discovery)
         .map_err(|e| miette!("{e}"))?
         .into_records();
 
@@ -853,7 +851,7 @@ async fn run_deploy_async(
     // The engine would refuse each of these on its own, part way through
     // the run; refusing here applies nothing.
     let namespaceless = kix::cluster::apply::namespaceless(
-        &discovery,
+        discovery,
         checked.plan().nodes.iter().filter_map(|n| match &n.id {
             NodeId::Resource(rid) => Some(rid),
             _ => None,
@@ -940,15 +938,7 @@ async fn run_deploy_async(
         }),
     };
 
-    let target = Target {
-        client,
-        discovery,
-        cluster: cluster_name.to_string(),
-        sops,
-    };
-    let (result, kept) = checked
-        .run(target, receipt.cloned(), old_manifests, config, observer)
-        .await;
+    let (result, kept) = checked.run(target, receipt.cloned(), config, observer).await;
 
     // Tear down the TUI before the summary prints so it lands in normal
     // scrollback below the history lines.

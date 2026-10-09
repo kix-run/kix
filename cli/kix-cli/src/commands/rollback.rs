@@ -16,9 +16,9 @@ use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
+use kix::cluster::secrets::SopsSources;
 use kix::cluster::stream::{DeployObserver, DeployResult};
 use kix::cluster::watchdog::StallPolicy;
-use kix::eval::store_graph::StoreGraph;
 use kix::plan::baseline::Baseline;
 use kix::plan::document::PlanFlags;
 use kix::plan::{CheckedPlan, PlanEvent, Planner, Target};
@@ -211,11 +211,14 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
-    let discovery = fetch::discover_resources(&client)
+    // SOPS sources are read from the paths the target's Secrets name, on
+    // this machine.
+    let target = Target::connect(client.clone(), SopsSources::Local)
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    let records = Records::open_installed(&client, &discovery).map_err(|e| miette!("{e}"))?;
+    let records =
+        Records::open_installed(&client, target.discovery()).map_err(|e| miette!("{e}"))?;
 
     // 2. Find current Active activation
     let current = records
@@ -327,14 +330,9 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     if !ctx.global.quiet {
         planned.print(cluster, &target_name, args.prune, ctx.global.verbose > 0);
     }
-    // The merged set, so `prune_order` can topologically sort an orphan
-    // that exists in no current closure.
-    let baseline_manifests = planned.baseline.manifests();
     let RollbackPlan {
         target_result_dir,
-        target_graph,
         checked,
-        ..
     } = planned;
 
     let total_apply = checked
@@ -356,7 +354,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         // Same rule as deploy: an unchanged probe under `kix.run/rerun`
         // whose last run failed still runs, and only the engine does that.
         let failed_reruns = if checked.plan().nodes.iter().any(|n| n.rerun.is_some()) {
-            scheduler::failed_rerun_nodes(&client, &discovery, checked.plan()).await
+            scheduler::failed_rerun_nodes(&client, target.discovery(), checked.plan()).await
         } else {
             Vec::new()
         };
@@ -428,19 +426,12 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     // A rollback's target record already exists on the cluster as a
     // Superseded one, so the run re-asserts it and marks it Deploying for the
     // duration, the same as a deploy.
-    let target = Target {
-        client: client.clone(),
-        discovery,
-        cluster: target_graph.cluster_name.clone(),
-        sops: Default::default(),
-    };
+    //
     // A rollback re-applies a build from an earlier deploy, and that deploy
     // wrote its own receipt. Writing a fresh one here would record the
     // machine running the rollback as the provenance of a build it did not
     // make.
-    let (result, kept) = checked
-        .run(target, None, &baseline_manifests, config, observer)
-        .await;
+    let (result, kept) = checked.run(target, None, config, observer).await;
 
     if let Some(recorded) = kept {
         kix::plan::baseline::sync_kept_roots(cluster, &recorded);
@@ -686,8 +677,6 @@ async fn run_operator_async(
 /// build against the current one, with what failed and kept deploys left.
 struct RollbackPlan {
     target_result_dir: std::path::PathBuf,
-    target_graph: StoreGraph,
-    baseline: Baseline,
     checked: CheckedPlan,
 }
 
@@ -780,8 +769,6 @@ async fn plan_rollback(
         .map_err(|e| miette!("{e}"))?;
     Ok(RollbackPlan {
         target_result_dir,
-        target_graph,
-        baseline,
         checked,
     })
 }

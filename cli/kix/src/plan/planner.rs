@@ -45,7 +45,7 @@ use super::{PackageDiff, PlanError, PlanEvent, diff_graphs};
 use crate::build_source::InstallableBuild;
 use crate::cluster::activation::{KeptOrphanSource, KeptOrphans, Records};
 use crate::cluster::apply::ChangeAction;
-use crate::cluster::fetch::{self, SharedOrphan};
+use crate::cluster::fetch::{self, FetchError, SharedOrphan};
 use crate::cluster::graph::ResourceGraph;
 use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use crate::cluster::ops::{
@@ -82,17 +82,36 @@ struct Changes {
     kept_orphans: KeptOrphans,
 }
 
-/// Where a plan runs: the cluster, and what the run needs from this machine.
+/// Where a plan runs: a connection to the cluster, its discovery read
+/// through that connection, and the SOPS sources of this machine or the
+/// build. Made only by [`Target::connect`], so the run's records are opened
+/// from what that cluster serves.
 pub struct Target {
-    pub client: Client,
-    /// Discovery as the caller read it. The run refreshes it after CRDs land.
-    pub discovery: Vec<(ApiResource, Scope)>,
-    /// The Kix cluster whose records the run writes and whose orphans it
-    /// prunes.
-    pub cluster: String,
-    /// Where SOPS sources come from: this machine, or the files a build
-    /// carries.
-    pub sops: SopsSources,
+    client: Client,
+    discovery: Vec<(ApiResource, Scope)>,
+    sops: SopsSources,
+}
+
+impl Target {
+    /// Discover what the cluster behind `client` serves.
+    pub async fn connect(client: Client, sops: SopsSources) -> Result<Target, FetchError> {
+        let discovery = fetch::discover_resources(&client).await?;
+        Ok(Target {
+            client,
+            discovery,
+            sops,
+        })
+    }
+
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
+    /// What the cluster served when the target connected. The run
+    /// refreshes it after CRDs land.
+    pub fn discovery(&self) -> &[(ApiResource, Scope)] {
+        &self.discovery
+    }
 }
 
 /// The engine plan, the package diff people review, and the objects the
@@ -117,6 +136,12 @@ pub struct CheckedPlan {
     /// Failed records whose leftovers the plan folded in. Superseded when
     /// the run finalizes.
     consumed_failed: Vec<String>,
+    /// The Kix cluster the check found its records and shared orphans by.
+    /// The run finalizes its record and prunes under it.
+    cluster: String,
+    /// The baseline's manifests ([`Baseline::manifests`]), which order the
+    /// prune.
+    old_manifests: Vec<Value>,
 }
 
 impl CheckedPlan {
@@ -177,7 +202,6 @@ impl CheckedPlan {
     pub async fn dry_run(
         &self,
         target: Target,
-        old_manifests: &[Value],
         mut config: SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
     ) -> (Result<DeployResult, DeployError>, Vec<DryRunAnswer>) {
@@ -185,7 +209,7 @@ impl CheckedPlan {
             KubeResources::new(
                 target.client,
                 target.discovery,
-                target.cluster,
+                self.cluster.clone(),
                 self.activation_identity_hash.clone(),
                 self.flags.force_conflicts,
             ),
@@ -196,7 +220,7 @@ impl CheckedPlan {
             Cluster::dry_run(dry.clone()),
             self.plan.clone(),
             &self.orphans,
-            old_manifests,
+            &self.old_manifests,
             &config,
             observer,
         )
@@ -214,7 +238,6 @@ impl CheckedPlan {
         self,
         target: Target,
         receipt: Option<Value>,
-        old_manifests: &[Value],
         mut config: SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
     ) -> (
@@ -224,7 +247,7 @@ impl CheckedPlan {
         let resources = Arc::new(KubeResources::new(
             target.client,
             target.discovery,
-            target.cluster,
+            self.cluster,
             self.activation_identity_hash,
             self.flags.force_conflicts,
         ));
@@ -248,7 +271,7 @@ impl CheckedPlan {
             Cluster::new(resources, record.clone(), SopsHydrator::new(target.sops)),
             self.plan,
             &self.orphans,
-            old_manifests,
+            &self.old_manifests,
             &config,
             observer,
         )
@@ -513,6 +536,8 @@ impl<'a> Planner<'a> {
             activation_identity_hash,
             record: record.cloned(),
             consumed_failed: baseline.failed().consumed.clone(),
+            cluster: cluster.to_string(),
+            old_manifests: baseline.manifests(),
         })
     }
 }

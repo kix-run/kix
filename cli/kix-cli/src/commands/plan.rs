@@ -15,7 +15,6 @@ use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
 use kix::build_source::InstallableBuild;
-use kix::cluster::fetch;
 use kix::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer, Refusal};
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, PrunePolicy, SchedulerConfig};
@@ -232,12 +231,15 @@ pub(crate) fn dry_run(
     let sops = p.sops_sources(placeholders).map_err(|e| miette!("{e}"))?;
     let p = &*p;
     ctx.runtime.block_on(async {
-        let discovery = fetch::discover_resources(&client)
+        let target = Target::connect(client, sops)
             .await
             .map_err(|e| miette!("{e}"))?;
-        kix::legacy_domain::check_discovery(&discovery).map_err(|e| miette!("{e}"))?;
-        let served_kinds: HashSet<String> =
-            discovery.iter().map(|(ar, _)| ar.kind.clone()).collect();
+        kix::legacy_domain::check_discovery(target.discovery()).map_err(|e| miette!("{e}"))?;
+        let served_kinds: HashSet<String> = target
+            .discovery()
+            .iter()
+            .map(|(ar, _)| ar.kind.clone())
+            .collect();
 
         let config = SchedulerConfig {
             timeout: readiness::DEFAULT_TIMEOUT,
@@ -259,16 +261,7 @@ pub(crate) fn dry_run(
             .filter(|n| !matches!(n.kind, TransitionKind::Skip))
             .count();
         let observer = Arc::new(DryRunObserver::new(writes, quiet));
-        let target = Target {
-            client,
-            discovery,
-            cluster: p.build.graph().cluster_name.clone(),
-            sops,
-        };
-        let (result, answers) = p
-            .checked
-            .dry_run(target, &p.baseline.manifests(), config, observer.clone())
-            .await;
+        let (result, answers) = p.checked.dry_run(target, config, observer.clone()).await;
         // Cancelling the token ends its interrupt watcher, so Ctrl-C at the
         // deploy's confirmation exits the process.
         let interrupted = cancel.is_cancelled();
