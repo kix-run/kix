@@ -46,6 +46,8 @@ use crate::build_source::InstallableBuild;
 use crate::build_source::SopsSources;
 use crate::cluster::activation::{KeptOrphanSource, KeptOrphans, Records};
 use crate::cluster::apply::ChangeAction;
+use crate::cluster::client::{self, ResiliencePolicy};
+use crate::cluster::discovery;
 use crate::cluster::errors::FetchError;
 use crate::cluster::graph::ResourceGraph;
 use crate::cluster::inventory;
@@ -55,7 +57,6 @@ use crate::cluster::ops::{Cluster, DryRun, KubeResources, RecordConfig};
 use crate::cluster::preview::DryRunAnswer;
 use crate::cluster::scheduler::{self, DeployError, DeployPlan, PrunePolicy, SchedulerConfig};
 use crate::cluster::stream::{DeployObserver, DeployResult};
-use crate::cluster::{client, discovery};
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
@@ -68,8 +69,11 @@ pub enum OldSide {
     /// orphans earlier deploys kept.
     LocalCache,
     /// The cluster's records, through the kube context `context` (`None`
-    /// for the current one).
-    Cluster { context: Option<String> },
+    /// for the current one), with the transport policy `policy`.
+    Cluster {
+        context: Option<String>,
+        policy: ResiliencePolicy,
+    },
 }
 
 /// What a build changes on a cluster, before any of it is checked.
@@ -401,9 +405,9 @@ impl<'a> Planner<'a> {
     pub async fn run(&self, build: InstallableBuild, old: &OldSide) -> Result<Planned, PlanError> {
         let client = match old {
             OldSide::LocalCache => None,
-            OldSide::Cluster { context } => {
+            OldSide::Cluster { context, policy } => {
                 (self.report)(PlanEvent::Connecting);
-                let client = client::make_client(context.as_deref())
+                let client = client::make_client(context.as_deref(), policy.clone())
                     .await
                     .map_err(|e| PlanError::Connect(Box::new(e)))?;
                 Some(client)

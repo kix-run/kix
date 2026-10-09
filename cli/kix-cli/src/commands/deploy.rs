@@ -14,8 +14,10 @@ use std::time::Duration;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
+use crate::client;
 use kix::cluster::activation::{OpenedRecords, Records};
 use kix::cluster::apply::{ApplyAction, ChangeAction};
+use kix::cluster::discovery;
 use kix::cluster::migrate::MigrationPair;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
@@ -24,7 +26,6 @@ use kix::cluster::stream::{
     Verdict,
 };
 use kix::cluster::watchdog::StallPolicy;
-use kix::cluster::{client, discovery};
 use kix::manifest::types::ResourceId;
 use kix::plan::document::PlanFlags;
 use kix::plan::{CheckedPlan, Target};

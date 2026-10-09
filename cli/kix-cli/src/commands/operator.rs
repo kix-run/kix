@@ -15,7 +15,8 @@ use kube::client::Client;
 use miette::{Result, miette};
 use serde_json::Value;
 
-use kix::cluster::{client, discovery};
+use crate::client;
+use kix::cluster::discovery;
 
 use crate::output;
 

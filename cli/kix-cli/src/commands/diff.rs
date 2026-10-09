@@ -4,12 +4,13 @@ use std::path::{Path, PathBuf};
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
+use crate::client;
 use kix::build_source;
 use kix::cluster::activation::{self, Records};
 use kix::cluster::apply::ApplyError;
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use kix::cluster::owned_view;
-use kix::cluster::{client, discovery, inventory};
+use kix::cluster::{discovery, inventory};
 use kix::eval::store_graph::{KixPackageIndex, StoreGraph, store_hash};
 use kix::manifest::keys;
 use kix::manifest::lifecycle::{self, Lifecycle};

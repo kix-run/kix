@@ -105,6 +105,7 @@ fn old_side(args: &PlanArgs, ctx: &CommandContext) -> OldSide {
     } else {
         OldSide::Cluster {
             context: ctx.global.context.clone(),
+            policy: crate::client::policy(),
         }
     }
 }

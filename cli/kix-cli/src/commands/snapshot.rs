@@ -3,8 +3,9 @@ use std::path::Path;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
+use crate::client;
 use kix::cluster::activation::Records;
-use kix::cluster::{client, discovery, inventory, owned_view};
+use kix::cluster::{discovery, inventory, owned_view};
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::Client;
 use kube::api::DynamicObject;

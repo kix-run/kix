@@ -8,8 +8,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use miette::{Result, miette};
 
+use crate::client;
 use kix::cluster::activation::{OpenedRecords, Record, Records};
-use kix::cluster::{client, discovery, inventory};
+use kix::cluster::{discovery, inventory};
 use kix::manifest::types::{ResourceId, to_manifest_value};
 
 use crate::cli::HealthArgs;

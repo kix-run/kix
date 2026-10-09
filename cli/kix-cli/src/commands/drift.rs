@@ -4,9 +4,10 @@
 
 use miette::{IntoDiagnostic, Result, miette};
 
+use crate::client;
 use kix::cluster::activation::Records;
+use kix::cluster::discovery;
 use kix::cluster::drift::{self, DriftReport, DriftVerdict, ForeignOwner, UnrecordedScale};
-use kix::cluster::{client, discovery};
 
 use crate::cli::{DriftArgs, GlobalArgs, OutputFormat};
 use crate::output;

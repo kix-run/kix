@@ -10,14 +10,15 @@ use std::sync::Arc;
 
 use miette::{IntoDiagnostic, Result, miette};
 
+use crate::client;
 use kix::build_source::SopsSources;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::apply::ChangeAction;
+use kix::cluster::discovery;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::{DeployObserver, DeployResult};
 use kix::cluster::watchdog::StallPolicy;
-use kix::cluster::{client, discovery};
 use kix::plan::baseline::{self, Baseline};
 use kix::plan::document::PlanFlags;
 use kix::plan::{CheckedPlan, PlanEvent, Planner, Target};

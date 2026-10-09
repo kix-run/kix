@@ -3,11 +3,12 @@ use std::collections::HashMap;
 use miette::{IntoDiagnostic, Result, miette};
 
 use crate::cli::StatusArgs;
+use crate::client;
 use crate::output::{self, CommandResponse};
 use kix::build_source::Build;
 use kix::cluster::activation::Records;
 use kix::cluster::readiness;
-use kix::cluster::{client, discovery, inventory};
+use kix::cluster::{discovery, inventory};
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 

@@ -54,6 +54,9 @@ pub struct ResiliencePolicy {
     pub request_timeout: Option<Duration>,
     /// TCP connect timeout, applied on kube's connector.
     pub connect_timeout: Duration,
+    /// Whether [`make_client`] proves the endpoint answers before handing
+    /// the client over.
+    pub preflight: bool,
 }
 
 impl Default for ResiliencePolicy {
@@ -66,6 +69,7 @@ impl Default for ResiliencePolicy {
             budget: Duration::from_secs(60),
             request_timeout: Some(Duration::from_secs(120)),
             connect_timeout: Duration::from_secs(15),
+            preflight: true,
         }
     }
 }
@@ -76,13 +80,14 @@ pub(crate) const RETRY_ATTEMPTS_ENV: &str = "KIX_RETRY_ATTEMPTS";
 pub(crate) const REQUEST_TIMEOUT_ENV: &str = "KIX_REQUEST_TIMEOUT";
 /// Env var: TCP connect timeout in whole seconds.
 pub(crate) const CONNECT_TIMEOUT_ENV: &str = "KIX_CONNECT_TIMEOUT";
-/// Env var: set to `0` to skip the first-contact probe in
-/// [`super::client::make_client`].
+/// Env var: set to `0` to skip the first-contact probe in [`make_client`].
 pub(crate) const PREFLIGHT_ENV: &str = "KIX_PREFLIGHT";
 
 impl ResiliencePolicy {
     /// The defaults with environment overrides applied. Unparseable values
-    /// are ignored with a warning rather than failing the command.
+    /// are ignored with a warning rather than failing the command. The
+    /// binaries call this once; nothing in this crate reads the transport
+    /// policy from the environment.
     pub fn from_env() -> Self {
         let mut policy = Self::default();
         if let Some(n) = env_number(RETRY_ATTEMPTS_ENV) {
@@ -95,6 +100,9 @@ impl ResiliencePolicy {
             && n > 0
         {
             policy.connect_timeout = Duration::from_secs(n);
+        }
+        if let Some(n) = env_number(PREFLIGHT_ENV) {
+            policy.preflight = n > 0;
         }
         policy
     }
@@ -111,11 +119,6 @@ pub(crate) struct FirstContact;
 /// Mark a request as first contact. See [`FirstContact`].
 pub(crate) fn mark_first_contact<T>(req: &mut Request<T>) {
     req.extensions_mut().insert(FirstContact);
-}
-
-/// Whether to run the first-contact probe. `KIX_PREFLIGHT=0` disables it.
-pub(crate) fn preflight_enabled() -> bool {
-    env_number(PREFLIGHT_ENV).is_none_or(|n| n > 0)
 }
 
 /// Read a whole-number environment variable, warning on garbage.
@@ -515,14 +518,17 @@ where
 
 /// Create a kube client, optionally targeting a specific context.
 ///
-/// The client carries the transport policy from [`super::client`]: retries
-/// with backoff and per-request deadlines. Every command and the operator
-/// build their client here.
+/// The client carries `policy`: retries with backoff and per-request
+/// deadlines. Every command builds its client here, with the policy the
+/// environment sets ([`ResiliencePolicy::from_env`]).
 ///
-/// Before returning, the client has exchanged one request with the
-/// apiserver, so every caller past this point is talking to an endpoint that
-/// answers. See `probe_apiserver` for why that matters.
-pub async fn make_client(context: Option<&str>) -> Result<Client, FetchError> {
+/// With `policy.preflight`, the client has exchanged one request with the
+/// apiserver before returning, so every caller past this point is talking
+/// to an endpoint that answers. See `probe_apiserver` for why that matters.
+pub async fn make_client(
+    context: Option<&str>,
+    policy: ResiliencePolicy,
+) -> Result<Client, FetchError> {
     let config = match context {
         Some(ctx) => {
             let kubeconfig =
@@ -540,15 +546,15 @@ pub async fn make_client(context: Option<&str>) -> Result<Client, FetchError> {
             .map_err(|e| FetchError::ClientError(Box::new(e)))?,
     };
 
-    let policy = ResiliencePolicy::from_env();
     let endpoint = config.cluster_url.to_string();
     let deadline = policy.connect_timeout + PROBE_GRACE;
+    let preflight = policy.preflight;
 
     let client = build_client(config, policy)
         .await
         .map_err(|e| FetchError::ClientError(Box::new(e)))?;
 
-    if preflight_enabled() {
+    if preflight {
         probe_apiserver(&client, &endpoint, deadline).await?;
     }
     Ok(client)
@@ -652,6 +658,7 @@ mod tests {
             budget: Duration::from_secs(5),
             request_timeout: Some(Duration::from_millis(500)),
             connect_timeout: Duration::from_secs(1),
+            preflight: true,
         }
     }
 
@@ -1166,18 +1173,22 @@ mod tests {
             std::env::set_var(RETRY_ATTEMPTS_ENV, "1");
             std::env::set_var(REQUEST_TIMEOUT_ENV, "0");
             std::env::set_var(CONNECT_TIMEOUT_ENV, "7");
+            std::env::set_var(PREFLIGHT_ENV, "0");
         }
         let p = ResiliencePolicy::from_env();
         assert_eq!(p.max_attempts, 1);
         assert_eq!(p.request_timeout, None);
         assert_eq!(p.connect_timeout, Duration::from_secs(7));
+        assert!(!p.preflight);
         unsafe {
             std::env::set_var(RETRY_ATTEMPTS_ENV, "many");
             std::env::remove_var(REQUEST_TIMEOUT_ENV);
             std::env::remove_var(CONNECT_TIMEOUT_ENV);
+            std::env::remove_var(PREFLIGHT_ENV);
         }
         let p = ResiliencePolicy::from_env();
         assert_eq!(p.max_attempts, ResiliencePolicy::default().max_attempts);
+        assert!(p.preflight);
         unsafe {
             std::env::remove_var(RETRY_ATTEMPTS_ENV);
         }

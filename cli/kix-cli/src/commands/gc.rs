@@ -44,11 +44,12 @@ use std::path::PathBuf;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
+use crate::client;
 use kix::build_source::{Build, FlakeBuildError};
+use kix::cluster::discovery;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::inventory;
 use kix::cluster::prune_guard::{PruneGuard, Pruned};
-use kix::cluster::{client, discovery};
 use kix::eval::store;
 use kix::eval::store_graph::store_hash;
 use kix::manifest::lifecycle;

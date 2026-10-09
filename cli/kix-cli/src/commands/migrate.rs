@@ -9,8 +9,8 @@ use std::io::Write;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
+use crate::client;
 use kix::build_source::InstallableBuild;
-use kix::cluster::client;
 use kix::legacy_domain::{KubeMigrationOps, migrate};
 use kix::manifest::keys;
 

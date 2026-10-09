@@ -76,7 +76,8 @@ pub fn build_attestation(
 
 /// Read the receipt from the cluster's active Activation.
 async fn fetch_receipt(cluster: &str, context: Option<&str>) -> Result<Value> {
-    use kix::cluster::{activation::Records, client, discovery};
+    use crate::client;
+    use kix::cluster::{activation::Records, discovery};
 
     let client = client::make_client(context)
         .await
