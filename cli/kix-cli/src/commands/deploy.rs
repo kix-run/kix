@@ -1199,7 +1199,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let source_path = result_path.display().to_string();
 
     let reconciled = ctx.runtime.block_on(async {
-        let (client, ar) =
+        let (_, records) =
             super::operator::connect_and_verify(global.context.as_deref(), global.quiet).await?;
 
         if !global.quiet {
@@ -1211,8 +1211,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
 
         super::operator::apply_activation(
-            &client,
-            &ar,
+            &records,
             &activation_name,
             &cluster,
             &source_path,
@@ -1229,8 +1228,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
 
         let reconciled = super::operator::watch_activation_progress(
-            &client,
-            &ar,
+            &records,
             &activation_name,
             &source_path,
             global.quiet,

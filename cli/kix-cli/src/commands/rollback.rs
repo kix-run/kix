@@ -512,15 +512,9 @@ async fn run_operator_async(
     ctx: &CommandContext,
 ) -> Result<()> {
     // 1. Connect and find current + superseded activations
-    let (client, ar) =
+    let (client, records) =
         super::operator::connect_and_verify(ctx.global.context.as_deref(), ctx.global.quiet)
             .await?;
-
-    let discovery = kix::cluster::fetch::discover_resources(&client)
-        .await
-        .map_err(|e| miette!("{e}"))?;
-
-    let records = Records::open_installed(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
     // 2. Find current Active activation
     let current = records
@@ -670,8 +664,7 @@ async fn run_operator_async(
     }
 
     super::operator::apply_activation(
-        &client,
-        &ar,
+        &records,
         &current.name,
         cluster,
         &target_source_path,
@@ -690,8 +683,7 @@ async fn run_operator_async(
     }
 
     let reconciled = super::operator::watch_activation_progress(
-        &client,
-        &ar,
+        &records,
         &current.name,
         &target_source_path,
         ctx.global.quiet,

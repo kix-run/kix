@@ -925,15 +925,9 @@ fn print_garbage_plan(garbage: &[GarbageEntry]) {
 // ---------------------------------------------------------------------------
 
 async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Result<()> {
-    let (client, ar) =
+    let (_, store) =
         super::operator::connect_and_verify(ctx.global.context.as_deref(), ctx.global.quiet)
             .await?;
-
-    let discovery = kix::cluster::fetch::discover_resources(&client)
-        .await
-        .map_err(|e| miette!("{e}"))?;
-
-    let store = Records::open_installed(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
     // Superseded activations under the retention policy
     let policy = retention_policy(args)?;
@@ -979,7 +973,7 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
         match store.retire(&retired.record).await {
             Ok(_) => {
                 // Wait for finalizer to complete deletion
-                super::operator::wait_for_deletion(&client, &ar, name, ctx.global.quiet).await?;
+                super::operator::wait_for_deletion(&store, name, ctx.global.quiet).await?;
                 deleted += 1;
             }
             Err(e) => {

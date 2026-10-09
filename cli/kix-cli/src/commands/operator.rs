@@ -7,33 +7,18 @@
 
 use std::time::Duration;
 
-use kube::api::{Api, DynamicObject, ListParams, Patch, PatchParams};
+use kix::cluster::activation::Records;
 use kube::client::Client;
-use kube::discovery::ApiResource;
 use miette::{Result, miette};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use kix::cluster::fetch;
 
 use crate::output;
-use kix::manifest::keys;
 
-/// Build the ApiResource descriptor for kix Activation CRs.
-pub fn activation_api_resource() -> ApiResource {
-    ApiResource {
-        group: keys::GROUP.into(),
-        version: "v1alpha1".into(),
-        api_version: keys::API_VERSION.into(),
-        kind: kix::manifest::lifecycle::RECORD_KIND.into(),
-        plural: "activations".into(),
-    }
-}
-
-/// Connect to the cluster and verify the operator is running (Activation CRD exists).
-pub async fn connect_and_verify(
-    context: Option<&str>,
-    quiet: bool,
-) -> Result<(Client, ApiResource)> {
+/// Connect to the cluster and open its Activation records, which runs the
+/// domain gate, then check that this client can read them.
+pub async fn connect_and_verify(context: Option<&str>, quiet: bool) -> Result<(Client, Records)> {
     if !quiet {
         println!("Connecting to cluster...");
     }
@@ -41,25 +26,29 @@ pub async fn connect_and_verify(
     let client = fetch::make_client(context)
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-
-    let ar = activation_api_resource();
-    let api: Api<DynamicObject> = Api::all_with(client.clone(), &ar);
-
-    // Verify CRD exists
-    api.list(&ListParams::default().limit(1))
-        .await
-        .map_err(|e| {
-            miette!(
-                "could not access Kix Activation records on this cluster: {e}\n\
-                 Check the Kubernetes context, access permissions, and that the Kix operator and CRDs are installed."
-            )
-        })?;
+    let records = open_records(&client).await?;
 
     if !quiet {
         println!("  {} Activation CRD found", output::green("✓"));
     }
 
-    Ok((client, ar))
+    Ok((client, records))
+}
+
+/// The cluster's Activation records, past the domain gate and readable by
+/// this client.
+async fn open_records(client: &Client) -> Result<Records> {
+    let discovery = fetch::discover_resources(client)
+        .await
+        .map_err(|e| miette!("{e}"))?;
+    let records = Records::open_installed(client, &discovery).map_err(|e| miette!("{e}"))?;
+    records.reachable().await.map_err(|e| {
+        miette!(
+            "could not access Kix Activation records on this cluster: {e}\n\
+             Check the Kubernetes context, access permissions, and that the Kix operator and CRDs are installed."
+        )
+    })?;
+    Ok(records)
 }
 
 /// Create or update an Activation CR to trigger operator reconciliation.
@@ -67,69 +56,25 @@ pub async fn connect_and_verify(
 /// The CR is created without a phase. The operator treats it as Queued and
 /// advances it through Deploying to Active.
 pub async fn apply_activation(
-    client: &Client,
-    ar: &ApiResource,
+    records: &Records,
     activation_name: &str,
     cluster_name: &str,
     source_path: &str,
     identity_hash: Option<&str>,
     receipt: Option<&Value>,
 ) -> Result<()> {
-    let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
-
-    let mut annotations = serde_json::Map::new();
-    if let Some(hash) = identity_hash {
-        annotations.insert(
-            keys::IDENTITY_HASH.to_string(),
-            Value::String(hash.to_string()),
-        );
-    }
-    annotations.insert(
-        keys::BUILT_VIA.to_string(),
-        Value::String(source_path.to_string()),
-    );
-
-    let patch = json!({
-        "apiVersion": keys::API_VERSION,
-        "kind": kix::manifest::lifecycle::RECORD_KIND,
-        "metadata": {
-            "name": activation_name,
-            "labels": {
-                "app.kubernetes.io/managed-by": "kix",
-                keys::CLUSTER_LABEL: cluster_name,
-            },
-            "annotations": annotations,
-        },
-        "spec": {
-            "cluster": cluster_name,
-            "source": {
-                "type": "storePath",
-                "path": source_path,
-            },
-        },
-    });
-
-    api.patch(
-        activation_name,
-        &PatchParams::apply("kix-cli").force(),
-        &Patch::Apply(&patch),
-    )
-    .await
-    .map_err(|e| miette!("failed to apply Activation CR: {e}"))?;
+    records
+        .submit(activation_name, cluster_name, source_path, identity_hash)
+        .await
+        .map_err(|e| miette!("failed to apply Activation CR: {e}"))?;
 
     // The operator has no source tree, so it cannot compute provenance. The
     // CLI that submitted this activation does, so it writes the receipt here.
-    // A merge patch on the status subresource leaves everything else alone,
-    // so it does not matter whether the operator has already started.
     if let Some(receipt) = receipt {
-        let status = json!({ "status": { keys::RECEIPT_FIELD: receipt } });
-        api.patch_status(
-            activation_name,
-            &PatchParams::default(),
-            &Patch::Merge(&status),
-        )
-        .await
-        .map_err(|e| miette!("failed to record the deploy receipt: {e}"))?;
+        records
+            .write_receipt(activation_name, receipt)
+            .await
+            .map_err(|e| miette!("failed to record the deploy receipt: {e}"))?;
     }
 
     Ok(())
@@ -150,13 +95,11 @@ pub enum Reconciled {
 /// Returns when `status.phase` is `Active` or `Degraded`; `Failed`,
 /// `Superseded`, and a 10 minute timeout are errors.
 pub async fn watch_activation_progress(
-    client: &Client,
-    ar: &ApiResource,
+    records: &Records,
     activation_name: &str,
     _expected_source: &str,
     quiet: bool,
 ) -> Result<Reconciled> {
-    let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
     let poll_interval = Duration::from_secs(2);
     let timeout = Duration::from_secs(600);
     let start = std::time::Instant::now();
@@ -172,8 +115,8 @@ pub async fn watch_activation_progress(
             ));
         }
 
-        let act = api
-            .get(activation_name)
+        let act = records
+            .object(activation_name)
             .await
             .map_err(|e| miette!("failed to get Activation '{}': {e}", activation_name))?;
 
@@ -292,12 +235,10 @@ pub async fn watch_activation_progress(
 
 /// Wait for an Activation CR to be fully deleted (finalizer cleanup complete).
 pub async fn wait_for_deletion(
-    client: &Client,
-    ar: &ApiResource,
+    records: &Records,
     activation_name: &str,
     quiet: bool,
 ) -> Result<()> {
-    let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
     let poll_interval = Duration::from_secs(2);
     let timeout = Duration::from_secs(300);
     let start = std::time::Instant::now();
@@ -310,7 +251,7 @@ pub async fn wait_for_deletion(
             ));
         }
 
-        match api.get(activation_name).await {
+        match records.object(activation_name).await {
             Ok(act) => {
                 // Check if deletion is in progress
                 if act.metadata.deletion_timestamp.is_some() && !quiet {
@@ -347,7 +288,9 @@ pub async fn wait_for_deletion(
 mod tests {
     use super::*;
     use kix::cluster::fake_api::FakeApi;
+    use kix::manifest::keys;
     use kix::manifest::lifecycle::RECORD_KIND;
+    use serde_json::json;
 
     fn record(name: &str, phase: &str) -> Value {
         json!({
@@ -361,10 +304,18 @@ mod tests {
     async fn watch(phase: &str) -> Result<Reconciled> {
         let api = FakeApi::new([record("rec", phase)]);
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
-        let records =
-            kix::cluster::activation::Records::open_installed(&client, &discovery).unwrap();
-        watch_activation_progress(&client, records.resource(), "rec", "", true).await
+        let records = open_records(&client).await.unwrap();
+        watch_activation_progress(&records, "rec", "", true).await
+    }
+
+    /// Operator mode opens the records through discovery, so a discovery
+    /// that fails stops it rather than skipping the domain gate.
+    #[tokio::test]
+    async fn operator_mode_opens_records_only_through_discovery() {
+        let api = FakeApi::new([]);
+        api.fail_next("/apis", 1, 500);
+        assert!(open_records(&api.client()).await.is_err());
+        assert!(open_records(&api.client()).await.is_ok());
     }
 
     /// A Degraded record is reported apart from an Active one, so

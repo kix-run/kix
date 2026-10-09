@@ -668,6 +668,83 @@ impl Records {
         .await
     }
 
+    /// List one record, to check that this client may read them.
+    pub async fn reachable(&self) -> Result<(), kube::Error> {
+        self.api().list(&ListParams::default().limit(1)).await?;
+        Ok(())
+    }
+
+    /// The record named `name` as the cluster holds it, for a caller that
+    /// polls fields [`Record`] does not carry: wave progress, a deletion in
+    /// progress.
+    pub async fn object(&self, name: &str) -> Result<DynamicObject, kube::Error> {
+        self.api().get(name).await
+    }
+
+    /// Create or update a record for the operator to deploy: the build at
+    /// `source_path`, of Kix cluster `cluster`.
+    ///
+    /// The record carries no phase. The operator treats it as Queued and
+    /// advances it through Deploying to Active.
+    pub async fn submit(
+        &self,
+        name: &str,
+        cluster: &str,
+        source_path: &str,
+        identity_hash: Option<&str>,
+    ) -> Result<(), kube::Error> {
+        let mut annotations = serde_json::Map::new();
+        if let Some(hash) = identity_hash {
+            annotations.insert(
+                keys::IDENTITY_HASH.to_string(),
+                Value::String(hash.to_string()),
+            );
+        }
+        annotations.insert(
+            keys::BUILT_VIA.to_string(),
+            Value::String(source_path.to_string()),
+        );
+
+        let patch = json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": crate::manifest::lifecycle::RECORD_KIND,
+            "metadata": {
+                "name": name,
+                "labels": {
+                    "app.kubernetes.io/managed-by": "kix",
+                    keys::CLUSTER_LABEL: cluster,
+                },
+                "annotations": annotations,
+            },
+            "spec": {
+                "cluster": cluster,
+                "source": {
+                    "type": "storePath",
+                    "path": source_path,
+                },
+            },
+        });
+        self.api()
+            .patch(
+                name,
+                &PatchParams::apply("kix-cli").force(),
+                &Patch::Apply(&patch),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Write a deploy receipt to a record's status. A merge patch on the
+    /// status subresource leaves everything else alone, so it does not
+    /// matter whether the operator has already started on the record.
+    pub async fn write_receipt(&self, name: &str, receipt: &Value) -> Result<(), kube::Error> {
+        let status = json!({ "status": { keys::RECEIPT_FIELD: receipt } });
+        self.api()
+            .patch_status(name, &PatchParams::default(), &Patch::Merge(&status))
+            .await?;
+        Ok(())
+    }
+
     /// Set a record's `metadata.finalizers`, for the operator's own.
     pub async fn set_finalizers(
         &self,
