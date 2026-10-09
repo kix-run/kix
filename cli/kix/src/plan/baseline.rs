@@ -26,7 +26,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use kube::{client::Client, discovery::ApiResource};
 use serde_json::Value;
@@ -651,24 +651,79 @@ pub fn record_graph(
     if let Some(graph) = build.map_or(Ok(None), |b| b.deployed_build(identity_hash))? {
         return Ok(Some(graph));
     }
-    let Some(dir) = result_dir(cluster, identity_hash, built_via) else {
-        return Ok(None);
+    let built_via = built_via
+        .map(PathBuf::from)
+        .filter(|p| p.join("kix-packages.json").exists());
+    checked_build(
+        identity_hash,
+        built_via,
+        || crate::eval::store::resolve_activation_by_hash(cluster, identity_hash),
+        load_build,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Load the build in a result dir, stamped. A record's build can predate
+/// the domain move, so it is not refused for one ([`Build::installable`]).
+fn load_build(dir: &Path) -> Result<StoreGraph, crate::eval::KixEvalError> {
+    Build::local(dir, &|_| {}).map(Build::into_graph)
+}
+
+/// Why a record's build could not be used.
+#[derive(Debug, thiserror::Error)]
+enum BuildRefusal {
+    #[error("the build at {} would not load: {source}", .dir.display())]
+    Load {
+        dir: PathBuf,
+        source: crate::eval::KixEvalError,
+    },
+    /// The build at the path is another build.
+    #[error("the build at {} is activation {}, not {}", .dir.display(), short(.found), short(.expected))]
+    Another {
+        dir: PathBuf,
+        found: String,
+        expected: String,
+    },
+}
+
+/// The first of `built_via` and the cached build (`cached`) that loads and
+/// is the build `identity_hash` names. The cache is tried when `built_via`
+/// is absent, will not load, or holds another build, so a path reused for
+/// another build does not hide the record's own build on this machine.
+/// When neither is the record's build, the refusal is `built_via`'s.
+fn checked_build(
+    identity_hash: &str,
+    built_via: Option<PathBuf>,
+    cached: impl FnOnce() -> Option<PathBuf>,
+    load: impl Fn(&Path) -> Result<StoreGraph, crate::eval::KixEvalError>,
+) -> Result<Option<StoreGraph>, BuildRefusal> {
+    let check = |dir: PathBuf| -> Result<StoreGraph, BuildRefusal> {
+        let graph = load(&dir).map_err(|source| BuildRefusal::Load {
+            dir: dir.clone(),
+            source,
+        })?;
+        let found = crate::eval::store_graph::store_hash(&graph.activation_path);
+        if found != identity_hash {
+            return Err(BuildRefusal::Another {
+                dir,
+                found,
+                expected: identity_hash.to_string(),
+            });
+        }
+        Ok(graph)
     };
-    // A record's build can predate the domain move, so it is not refused
-    // for one ([`Build::installable`]).
-    let graph = Build::local(&dir, &|_| {})
-        .map_err(|e| format!("the build at {} would not load: {e}", dir.display()))?
-        .into_graph();
-    let found = crate::eval::store_graph::store_hash(&graph.activation_path);
-    if found != identity_hash {
-        return Err(format!(
-            "the build at {} is activation {}, not {}",
-            dir.display(),
-            short(&found),
-            short(identity_hash),
-        ));
+    let refused = match built_via.clone().map(check) {
+        Some(Ok(graph)) => return Ok(Some(graph)),
+        Some(Err(e)) => Some(e),
+        None => None,
+    };
+    match cached().filter(|dir| Some(dir) != built_via.as_ref()) {
+        Some(dir) => match check(dir) {
+            Ok(graph) => Ok(Some(graph)),
+            Err(e) => Err(refused.unwrap_or(e)),
+        },
+        None => refused.map_or(Ok(None), Err),
     }
-    Ok(Some(graph))
 }
 
 /// The stamped manifests of a build, from `build`, from `built_via` when
@@ -1127,6 +1182,32 @@ mod tests {
         );
         let new = StoreGraph::synthesize(&[m("ConfigMap", "web", "h1")], &StoreGraph::empty("c"));
         assert!(baseline.diff_side(&new).resources.is_empty());
+    }
+
+    /// A build at the record's path that is another build does not hide
+    /// the record's own build in the cache; with no cached build, the path's
+    /// refusal stands.
+    #[test]
+    fn a_reused_build_path_falls_back_to_the_cache_by_hash() {
+        let graph_of = |hash: &str| {
+            let mut graph = StoreGraph::empty("c");
+            graph.activation_path = PathBuf::from(format!("/nix/store/{hash}-activation"));
+            graph
+        };
+        let load = |dir: &Path| {
+            let hash = dir.file_name().unwrap().to_str().unwrap();
+            Ok(graph_of(hash))
+        };
+        let reused = Some(PathBuf::from("/builds").join(PROD));
+        let cached = PathBuf::from("/cache").join(STAGING);
+
+        let found = checked_build(STAGING, reused.clone(), || Some(cached.clone()), load)
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.activation_path, graph_of(STAGING).activation_path);
+
+        let err = checked_build(STAGING, reused, || None, load).unwrap_err();
+        assert!(matches!(err, BuildRefusal::Another { .. }), "{err}");
     }
 
     /// A current build that is not on this machine is reported, and the
