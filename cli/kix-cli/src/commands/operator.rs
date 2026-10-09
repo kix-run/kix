@@ -202,8 +202,9 @@ pub async fn watch_activation_progress(
 
         if phase == PHASE_FAILED {
             return Err(miette!(
-                "Operator reconciliation failed for '{}': unknown error",
+                "Operator reconciliation failed for '{}': {}",
                 activation_name,
+                act.failure_reason.as_deref().unwrap_or("unknown error"),
             ));
         }
 
@@ -345,5 +346,21 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert_eq!(err, "Activation 'rec' no longer exists");
+    }
+
+    /// A Failed record's error names the reason the deploy stopped, from
+    /// `status.failure.reason`, which is where Kix writes it.
+    #[tokio::test]
+    async fn a_failed_record_reports_why() {
+        let mut failed = record("rec", "Failed");
+        failed["status"]["failure"] =
+            json!({ "reason": "cancelled", "at": "2026-10-09T00:00:00Z" });
+        let api = FakeApi::new([failed]);
+        let records = open_records(&api.client()).await.unwrap();
+        let err = watch_activation_progress(&records, "rec", true)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.ends_with("'rec': cancelled"), "{err}");
     }
 }
