@@ -59,8 +59,8 @@ pub fn crd_name(record: RecordKind, domain: &str) -> String {
 
 /// Everything the migration does to a cluster.
 ///
-/// A trait so the steps can be tested without an apiserver. `KubeOps` in
-/// `kix-cli` is the real implementation.
+/// A trait so the steps can be tested without an apiserver.
+/// [`super::KubeMigrationOps`] is the real implementation.
 #[async_trait]
 pub trait MigrationOps: Send + Sync {
     /// Is this CustomResourceDefinition registered?

@@ -1,6 +1,6 @@
 # 2026-09-27 · `kix deploy` · A first deploy reports its Activation as configured because the record already exists.
 
-`ClusterOps::create_record` (`cli/kix/src/cluster/ops/kube.rs`) applies the
+`ActivationRecord::create` (`cli/kix/src/cluster/ops/record.rs`) applies the
 Activation record and marks it Deploying before the apply loop runs. When the
 plan's own Activation node is applied later, the object is already there, and
 the deploy prints `~ Activation/<name> configured` where a first deploy
