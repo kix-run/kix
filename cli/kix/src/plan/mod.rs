@@ -74,6 +74,12 @@ pub enum PlanEvent<'a> {
     /// the record's, or the record names none; the rollback compares with no
     /// current build.
     ActiveBuildUnusable { activation: &'a str, error: &'a str },
+    /// A rollback's current record has no identity hash, so it names no
+    /// build to look for, and no list can carry it for a later prune.
+    ActiveWithoutHash {
+        activation: &'a str,
+        cluster: &'a str,
+    },
     /// A rollback's current build is not on this machine; the rollback
     /// compares with no current build.
     ActiveUnresolved { record: &'a Record },

@@ -392,9 +392,9 @@ impl Baseline {
         // hash names no build to look for.
         let graph = match current.identity_hash.as_deref() {
             None => {
-                report(PlanEvent::ActiveBuildUnusable {
+                report(PlanEvent::ActiveWithoutHash {
                     activation: &current.name,
-                    error: "the record has no identity hash",
+                    cluster,
                 });
                 None
             }
@@ -1388,9 +1388,7 @@ mod tests {
         assert!(matches!(baseline.source, ActiveSource::Unavailable));
         let events = events.into_inner();
         assert!(
-            events
-                .iter()
-                .any(|e| e.starts_with("ActiveBuildUnusable") && e.contains("no identity hash")),
+            events.iter().any(|e| e.starts_with("ActiveWithoutHash")),
             "{events:?}"
         );
     }

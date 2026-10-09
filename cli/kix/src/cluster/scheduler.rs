@@ -380,7 +380,7 @@ async fn abort_activation(record: Option<&Arc<dyn DeployRecord>>, reason: &str) 
 /// dependents are still tried.
 ///
 /// Private to the library, so the plan it runs is one the library made: a
-/// checked plan (`plan::Apply::run`, `plan::CheckedPlan::dry_run`) or the
+/// checked plan (`plan::CheckedPlan::run`, `plan::CheckedPlan::dry_run`) or the
 /// operator's plan from the live objects (`plan::live::LivePlan::run`).
 pub(crate) async fn run_deploy(
     cluster: Cluster,

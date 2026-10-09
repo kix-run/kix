@@ -18,6 +18,21 @@ pub fn print(event: PlanEvent<'_>, quiet: bool) {
         PlanEvent::ActiveBuildUnusable { activation, error } => {
             unusable_build(activation, error, NO_CURRENT_BUILD)
         }
+        PlanEvent::ActiveWithoutHash {
+            activation,
+            cluster,
+        } => {
+            eprintln!(
+                "{} the current deployment {} has no identity hash, so this rollback cannot find its build.",
+                output::yellow("warning:"),
+                output::bold(activation),
+            );
+            eprintln!(
+                "  This rollback compares with no current build: it applies every object of the \
+                 target and deletes only what failed and kept deploys left. Nothing names the \
+                 current build afterwards, so remove what it leaves with `kix gc --hard {cluster}`."
+            );
+        }
         PlanEvent::ActiveUnresolved { record } => eprintln!(
             "{} cannot read the build of the current deployment {} on this machine. {NO_CURRENT_BUILD}",
             output::yellow("warning:"),
@@ -132,13 +147,13 @@ pub fn print(event: PlanEvent<'_>, quiet: bool) {
     }
 }
 
-/// Say that the build of `activation` was found but will not load, and what
-/// the plan does without it.
 /// What a rollback does without its current build.
 const NO_CURRENT_BUILD: &str = "This rollback compares with no current build: it applies every \
     object of the target and deletes only what failed and kept deploys left. The target's \
     record keeps naming the current build, so a later prune that can read it removes its objects.";
 
+/// Say that the build of `activation` was found but will not load, and what
+/// the plan does without it.
 fn unusable_build(activation: &str, error: &str, without_it: &str) {
     eprintln!(
         "{} cannot use the build of activation {}: {error}. {without_it}",
