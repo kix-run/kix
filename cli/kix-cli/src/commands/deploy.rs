@@ -218,10 +218,10 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // Build the deployment receipt before confirmation so dirty source state
     // is visible in the prompt.
-    let receipt = crate::commands::compliance::receipt::of_build(&p.build, &ctx.global.flake);
+    let receipt = ctx.receipts.of_build(&p.build, &ctx.global.flake);
 
     if !ctx.global.quiet {
-        print_dirty_source_warning(&receipt, !p.build.is_local());
+        print_warnings(&ctx.receipts.warnings(&receipt));
     }
 
     // The nodes: do they carry the labels the plan's placement rules name?
@@ -1161,9 +1161,9 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // The receipt, same as the direct path. The operator has no source tree,
     // so provenance is computed here and written onto the Activation when it
     // is applied.
-    let receipt = crate::commands::compliance::receipt::of_build(&build, &ctx.global.flake);
+    let receipt = ctx.receipts.of_build(&build, &ctx.global.flake);
     if !ctx.global.quiet {
-        print_dirty_source_warning(&receipt, !build.is_local());
+        print_warnings(&ctx.receipts.warnings(&receipt));
     }
 
     // Confirm before submitting the Activation.
@@ -1274,74 +1274,20 @@ fn print_migration_pairs(pairs: &[MigrationPair]) {
     println!();
 }
 
-/// Print [`dirty_source_warning`], if any.
-fn print_dirty_source_warning(receipt: &Value, made_elsewhere: bool) {
-    let Some((warning, revision)) = dirty_source_warning(receipt, made_elsewhere) else {
+/// Print `lines` after a blank line, if there are any.
+fn print_warnings(lines: &[String]) {
+    if lines.is_empty() {
         return;
-    };
+    }
     println!();
-    for line in warning {
-        println!("{}", output::yellow(line));
+    for line in lines {
+        println!("{line}");
     }
-    if let Some(rev) = revision {
-        println!("  {}", output::dim(&rev));
-    }
-}
-
-/// The warning to print before confirming a deploy whose receipt records a
-/// dirty source, and the recorded revision. A dirty tree is allowed, but
-/// its recorded commit does not fully describe the deployed source. For a
-/// build `made_elsewhere`, the receipt says what the machine that made it
-/// recorded, so the revision is shown with its control characters escaped.
-fn dirty_source_warning(
-    receipt: &Value,
-    made_elsewhere: bool,
-) -> Option<([&'static str; 2], Option<String>)> {
-    if receipt["source"]["dirty"] != Value::Bool(true) {
-        return None;
-    }
-    let warning = if made_elsewhere {
-        [
-            "The build was made from a source tree with uncommitted changes, so the commit it",
-            "records does not contain what is about to be applied. The record will say so.",
-        ]
-    } else {
-        [
-            "The working tree has uncommitted changes, so the commit recorded for this deploy",
-            "does not contain what is about to be applied. The record will say so.",
-        ]
-    };
-    Some((
-        warning,
-        receipt["source"]["revision"]
-            .as_str()
-            .map(output::printable),
-    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A bundle's receipt is written by whoever made the bundle: its text
-    /// reaches the terminal without control characters, and the warning
-    /// is about the bundle's source, not the operator's tree.
-    #[test]
-    fn a_dirty_bundle_source_is_named_as_the_bundles_and_escaped() {
-        let receipt = serde_json::json!({"source": {
-            "dirty": true, "revision": "abc\u{1b}[2J\u{202e}-dirty"}});
-        let (warning, revision) = dirty_source_warning(&receipt, true).unwrap();
-        let text = warning.join(" ");
-        assert!(text.contains("The build was made"), "{text}");
-        assert!(!text.contains("working tree"), "{text}");
-        let revision = revision.unwrap();
-        assert!(
-            !revision.chars().any(|c| c.is_control() || c == '\u{202e}'),
-            "{revision:?}"
-        );
-        let (warning, _) = dirty_source_warning(&receipt, false).unwrap();
-        assert!(warning.join(" ").contains("working tree"));
-    }
 
     fn orphans() -> Vec<ResourceId> {
         vec![

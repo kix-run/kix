@@ -100,7 +100,10 @@ fn main() -> miette::Result<()> {
         validate_cluster_name(name)?;
     }
 
-    let mut ctx = commands::CommandContext::new(&cli.global)?;
+    let mut ctx = commands::CommandContext::new(
+        &cli.global,
+        &commands::compliance::receipt::ComplianceReceipts,
+    )?;
 
     match &cli.command {
         Command::Build(args) => commands::build::run(args, &mut ctx),

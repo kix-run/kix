@@ -166,8 +166,8 @@ pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
     if !quiet {
         eprint!("\r\x1b[2K");
     }
+    let receipt = ctx.receipts.of_build(&build, &ctx.global.flake);
     let graph = build.graph();
-    let receipt = super::compliance::receipt::build_receipt(graph, &ctx.global.flake);
     let object = |v: &serde_json::Value| v.as_object().cloned().unwrap_or_default();
     let provenance = bundle::Provenance {
         source: object(&receipt["source"]),

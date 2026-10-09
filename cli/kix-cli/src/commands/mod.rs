@@ -33,20 +33,36 @@ use miette::IntoDiagnostic;
 
 use crate::cli::{GlobalArgs, OutputFormat};
 
+/// Makes the receipt a deploy records on its Activation. `kix bundle` also
+/// fills the bundle's `Provenance` from the receipt's `source`, `inputs` and
+/// `builder`. Both treat the receipt as opaque otherwise, so what goes into
+/// it is chosen once, in `main`.
+pub trait ReceiptMaker {
+    /// The receipt for a deploy of `build`. A local build reads its source
+    /// from the flake at `flake_ref`.
+    fn of_build(&self, build: &Build, flake_ref: &str) -> serde_json::Value;
+
+    /// Styled lines to print before the deploy is confirmed. Empty when
+    /// there is nothing to say.
+    fn warnings(&self, receipt: &serde_json::Value) -> Vec<String>;
+}
+
 pub struct CommandContext {
     pub evaluator: kix::eval::KixEvaluator,
     pub global: GlobalArgs,
     pub runtime: tokio::runtime::Runtime,
+    pub receipts: &'static dyn ReceiptMaker,
 }
 
 impl CommandContext {
-    pub fn new(global: &GlobalArgs) -> miette::Result<Self> {
+    pub fn new(global: &GlobalArgs, receipts: &'static dyn ReceiptMaker) -> miette::Result<Self> {
         let evaluator = create_evaluator(&global.flake, global.no_cache, global.input_overrides())?;
         let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;
         Ok(Self {
             evaluator,
             global: global.clone(),
             runtime,
+            receipts,
         })
     }
 
@@ -227,7 +243,7 @@ mod tests {
     fn context(flake: &str) -> CommandContext {
         let cli = crate::cli::Cli::try_parse_from(["kix", "--flake", flake, "health", "x"])
             .expect("arguments parse");
-        CommandContext::new(&cli.global).expect("context")
+        CommandContext::new(&cli.global, &compliance::receipt::ComplianceReceipts).expect("context")
     }
 
     fn eval_error() -> kix::eval::error::KixEvalError {
