@@ -36,6 +36,28 @@ pub const PACKAGE_INSTANCE_KIND: &str = "PackageInstance";
 /// The mode value that marks an import.
 pub const IMPORT_MODE: &str = "import";
 
+/// Activation phase values (stored in status.phase).
+pub const PHASE_QUEUED: &str = "Queued";
+pub const PHASE_ACTIVE: &str = "Active";
+pub const PHASE_SUPERSEDED: &str = "Superseded";
+pub const PHASE_DEPLOYING: &str = "Deploying";
+/// Deploy completed but some resources failed to apply or become ready.
+/// Treated as the "current state" for diffing/drift purposes: the next deploy
+/// must be able to find this CR to compute a meaningful plan.
+pub const PHASE_DEGRADED: &str = "Degraded";
+/// The deploy stopped before it could finalize: cancelled, a node failed under
+/// a Stop policy, discovery broke, or the process died and something later
+/// marked the record.
+///
+/// Terminal and never a current state.
+/// [`Records::active`](crate::cluster::activation::Records::active) must not
+/// return one: a half-applied closure is not what the cluster is running, and
+/// diffing against it would compute every object only the still-Active closure
+/// has as an orphan. The next deploy reads it only as an extra baseline, to
+/// re-apply what it may have changed and prune what it left behind, and
+/// supersedes it once that plan finalizes.
+pub const PHASE_FAILED: &str = "Failed";
+
 /// How kix treats a manifest. See the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lifecycle {

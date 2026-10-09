@@ -35,13 +35,13 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::cluster::secrets::SopsSources;
 use crate::eval::KixEvalError;
 use crate::eval::build::build_cluster_activation;
 use crate::eval::stamp::stamp_annotations;
@@ -274,6 +274,60 @@ impl Build {
             .map_err(|e| format!("the build source's activation {identity_hash}: {e}"))?;
         stamp_annotations(&mut graph);
         Ok(Some(graph))
+    }
+}
+
+/// Where SOPS sources are read from.
+#[derive(Debug, Clone, Default)]
+pub enum SopsSources {
+    /// The path in each Secret's `kix.run/sops-source`, on this machine.
+    #[default]
+    Local,
+    /// Only the SOPS files the build carries with it
+    /// (`SopsSources::carried`).
+    Carried(Arc<CarriedSources>),
+}
+
+/// The SOPS files a build carries, written to a private directory.
+#[derive(Debug)]
+pub struct CarriedSources {
+    /// Store path named by `kix.run/sops-source` to the file on disk.
+    pub(crate) files: HashMap<String, PathBuf>,
+    /// Plan without decrypting: each Secret gets placeholder values for
+    /// the keys it declares.
+    pub(crate) placeholders: bool,
+    _dir: tempfile::TempDir,
+}
+
+impl SopsSources {
+    /// Write the SOPS files a build carries, by store path, to a fresh
+    /// directory, each under its SHA-256 and the end of its store name, and
+    /// read them only from there. The caller has checked each file's store
+    /// path against its bytes: see [`Build::sops_sources`].
+    pub(crate) fn carried(
+        sources: HashMap<String, Vec<u8>>,
+        placeholders: bool,
+    ) -> std::io::Result<Self> {
+        let dir = tempfile::tempdir()?;
+        let mut files = HashMap::new();
+        for (store_path, bytes) in sources {
+            let digest: String = Sha256::digest(&bytes)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            let name = store_path::name_of(&store_path).unwrap_or("source");
+            // A file name holds at most 255 bytes. The end of the store name
+            // keeps its extension, which sops reads for the file's format.
+            let name = name.get(name.len().saturating_sub(190)..).unwrap_or(name);
+            let file = dir.path().join(format!("{digest}-{name}"));
+            std::fs::write(&file, &bytes)?;
+            files.insert(store_path, file);
+        }
+        Ok(SopsSources::Carried(Arc::new(CarriedSources {
+            files,
+            placeholders,
+            _dir: dir,
+        })))
     }
 }
 

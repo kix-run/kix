@@ -1265,7 +1265,7 @@ fn unchanged_since_apply(
         .filter(|(k, _)| keys::is_kix_key(k))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    super::normalize::strip_kix_annotations(&mut out);
+    crate::manifest::hash::strip_kix_annotations(&mut out);
     if !live_stamps.is_empty()
         && let Some(meta) = out.get_mut("metadata").and_then(|m| m.as_object_mut())
         && let Some(annotations) = meta
@@ -1478,6 +1478,7 @@ fn absorb(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::lifecycle;
     use kube::api::ObjectMeta;
     use serde_json::{Value, json};
 
@@ -2462,17 +2463,17 @@ mod tests {
     fn two_clusters(cluster: &str) -> Tenancy {
         Tenancy::from_records(
             &[
-                record(Some("a"), "a1", activation::PHASE_SUPERSEDED),
-                record(Some("a"), "a2", activation::PHASE_ACTIVE),
-                record(Some("b"), "b0", activation::PHASE_SUPERSEDED),
-                record(Some("b"), "b1", activation::PHASE_ACTIVE),
+                record(Some("a"), "a1", lifecycle::PHASE_SUPERSEDED),
+                record(Some("a"), "a2", lifecycle::PHASE_ACTIVE),
+                record(Some("b"), "b0", lifecycle::PHASE_SUPERSEDED),
+                record(Some("b"), "b1", lifecycle::PHASE_ACTIVE),
             ],
             cluster,
         )
     }
 
     fn one_cluster() -> Tenancy {
-        Tenancy::from_records(&[record(Some("a"), "a2", activation::PHASE_ACTIVE)], "a")
+        Tenancy::from_records(&[record(Some("a"), "a2", lifecycle::PHASE_ACTIVE)], "a")
     }
 
     /// A stamped object naming `activations` (comma-separated) under `key`.
@@ -2542,11 +2543,11 @@ mod tests {
     fn a_record_is_attributed_by_its_own_hash() {
         let t = two_clusters("a");
         assert_eq!(
-            attribute(&record(Some("b"), "b1", activation::PHASE_ACTIVE), &t),
+            attribute(&record(Some("b"), "b1", lifecycle::PHASE_ACTIVE), &t),
             Attribution::Foreign(vec!["b".into()])
         );
         assert_eq!(
-            attribute(&record(Some("a"), "a2", activation::PHASE_ACTIVE), &t),
+            attribute(&record(Some("a"), "a2", lifecycle::PHASE_ACTIVE), &t),
             Attribution::Ours
         );
     }

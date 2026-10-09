@@ -15,11 +15,12 @@ use super::super::fetch::FetchError;
 use super::super::preview::{DryRunAnswer, DryRunOutcome, Journal, PruneAnswer, Refusal};
 use super::super::prune_guard::Pruned;
 use super::super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
-use super::super::secrets::{HydrationResult, SecretError, SopsSources};
+use super::super::secrets::{HydrationResult, SecretError};
 use super::{
     DeleteError, KubeResources, OnStatus, ReadError, RecreateError, ResourceIo, SecretHydrator,
     SopsHydrator,
 };
+use crate::build_source::SopsSources;
 
 /// [`KubeResources`] and [`SopsHydrator`] with every write sent as
 /// `dryRun=All`: the resources are made here, as dry-run ones, so no path

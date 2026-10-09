@@ -881,10 +881,10 @@ async fn of_live(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cluster::activation::{
+    use crate::cluster::fake_api::FakeApi;
+    use crate::manifest::lifecycle::{
         PHASE_ACTIVE, PHASE_DEPLOYING, PHASE_FAILED, PHASE_SUPERSEDED,
     };
-    use crate::cluster::fake_api::FakeApi;
     use serde_json::json;
 
     fn m(kind: &str, name: &str, hash: &str) -> Value {

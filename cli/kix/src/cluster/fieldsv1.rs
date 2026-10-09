@@ -11,7 +11,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry;
 use kube::api::DynamicObject;
 use serde_json::{Map, Value};
 
-use super::normalize;
+use crate::manifest::hash;
 
 /// The field manager kix uses for server-side apply.
 pub const KIX_FIELD_MANAGER: &str = "kix";
@@ -195,8 +195,8 @@ pub fn applied_content_hash(obj: &DynamicObject) -> Option<String> {
 /// Steps 3 and 4 of [`applied_content_hash`], for a projection the caller
 /// has already built or edited.
 pub fn projection_hash(mut projection: Value) -> String {
-    normalize::strip_kix_annotations(&mut projection);
-    normalize::hash_value(&normalize::sort_keys(&projection))
+    hash::strip_kix_annotations(&mut projection);
+    hash::hash_value(&hash::sort_keys(&projection))
 }
 
 /// The part of a live object kix's server-side apply owns: typed metadata

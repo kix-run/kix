@@ -268,7 +268,7 @@ fn live_changes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cluster::activation::PHASE_ACTIVE;
+    use crate::manifest::lifecycle::PHASE_ACTIVE;
     use serde_json::json;
 
     fn annotated(kind: &str, name: &str, hash: &str, activations: &str) -> Value {

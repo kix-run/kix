@@ -827,7 +827,7 @@ async fn run_deploy_async(
     receipt: Option<&Value>,
     pre_client: Option<kube::Client>,
     cached_baseline: Option<&str>,
-    sops: kix::cluster::secrets::SopsSources,
+    sops: kix::build_source::SopsSources,
 ) -> Result<RunEnd> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
 
@@ -1373,10 +1373,10 @@ mod prune_flag_tests {
 #[cfg(test)]
 mod cached_baseline_tests {
     use super::*;
-    use kix::cluster::activation::PHASE_ACTIVE;
     use kix::cluster::fake_api::FakeApi;
     use kix::manifest::keys;
     use kix::manifest::lifecycle;
+    use kix::manifest::lifecycle::PHASE_ACTIVE;
     use serde_json::json;
 
     fn record(cluster: &str, hash: &str, phase: &str) -> Value {

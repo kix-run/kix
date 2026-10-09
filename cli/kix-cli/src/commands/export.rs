@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
-use kix::cluster::normalize::strip_kix_annotations;
+use kix::manifest::hash::strip_kix_annotations;
 use kix::manifest::serialize::strip_nulls;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
@@ -122,7 +122,7 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
 }
 
 /// Apply the per-mode manifest transform. `Exit` strips kix.run/* annotations
-/// (using the shared helper in `cluster::normalize`) and null values. `Audit`
+/// (using the shared helper in `manifest::hash`) and null values. `Audit`
 /// is a passthrough because compliance needs the full stamped manifest.
 fn transform_manifest(manifest: &Value, mode: ExportMode) -> Value {
     let mut v = manifest.clone();

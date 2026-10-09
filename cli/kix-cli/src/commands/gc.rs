@@ -1648,8 +1648,8 @@ mod prompt_tests {
 #[cfg(test)]
 mod delete_tests {
     use super::*;
-    use kix::cluster::activation::PHASE_ACTIVE;
     use kix::cluster::fake_api::FakeApi;
+    use kix::manifest::lifecycle::PHASE_ACTIVE;
     use serde_json::json;
 
     fn rid(kind: &str, name: &str) -> ResourceId {
@@ -1739,8 +1739,8 @@ mod delete_tests {
 #[cfg(test)]
 mod hard_scope_tests {
     use super::*;
-    use kix::cluster::activation::PHASE_ACTIVE;
     use kix::cluster::tenancy::Tenancy;
+    use kix::manifest::lifecycle::PHASE_ACTIVE;
     use kube::api::DynamicObject;
     use serde_json::json;
 

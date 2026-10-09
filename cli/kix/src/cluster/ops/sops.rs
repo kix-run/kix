@@ -3,8 +3,9 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::super::secrets::{self, HydrationResult, SecretError, SopsSources};
+use super::super::secrets::{self, HydrationResult, SecretError};
 use super::SecretHydrator;
+use crate::build_source::SopsSources;
 
 /// Decrypts SOPS-backed Secret data with the `sops` binary.
 pub(crate) struct SopsHydrator {

@@ -140,9 +140,9 @@ impl PruneGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cluster::activation;
     use crate::cluster::fake_api::FakeApi;
     use crate::manifest::keys;
+    use crate::manifest::lifecycle;
     use crate::manifest::types::CLUSTER_SCOPED;
     use serde_json::{Value, json};
 
@@ -197,9 +197,9 @@ mod tests {
     #[tokio::test]
     async fn an_object_another_cluster_still_deploys_is_kept() {
         let api = FakeApi::new([
-            record("a", "a1", activation::PHASE_ACTIVE),
-            record("b", "b0", activation::PHASE_SUPERSEDED),
-            record("b", "b1", activation::PHASE_ACTIVE),
+            record("a", "a1", lifecycle::PHASE_ACTIVE),
+            record("b", "b0", lifecycle::PHASE_SUPERSEDED),
+            record("b", "b1", lifecycle::PHASE_ACTIVE),
             role("shared", "a1,b1"),
             role("once-shared", "a1,b0"),
         ]);
@@ -223,7 +223,7 @@ mod tests {
     #[tokio::test]
     async fn an_object_changed_after_the_read_is_left_in_place() {
         let api = FakeApi::new([
-            record("a", "a1", activation::PHASE_ACTIVE),
+            record("a", "a1", lifecycle::PHASE_ACTIVE),
             role("mine", "a1"),
         ]);
         api.after_get("mine", |o| {
@@ -240,7 +240,7 @@ mod tests {
     #[tokio::test]
     async fn a_record_created_after_the_first_read_is_seen() {
         let api = FakeApi::new([
-            record("a", "a1", activation::PHASE_ACTIVE),
+            record("a", "a1", lifecycle::PHASE_ACTIVE),
             role("first", "a1"),
         ]);
         let (g, d) = guard(&api, "a").await;
@@ -248,7 +248,7 @@ mod tests {
         assert_eq!(delete(&g, &d, &first).await, Pruned::Deleted);
 
         // `b`'s first deploy: its record, then an object naming it.
-        api.insert(record("b", "b1", activation::PHASE_DEPLOYING));
+        api.insert(record("b", "b1", lifecycle::PHASE_DEPLOYING));
         api.insert(role("later", "a1,b1"));
         let later = rid("ClusterRole", CLUSTER_SCOPED, "later");
         assert!(matches!(delete(&g, &d, &later).await, Pruned::Kept(_)));
@@ -259,8 +259,8 @@ mod tests {
     #[tokio::test]
     async fn a_namespaced_object_without_a_namespace_is_read_in_default() {
         let api = FakeApi::new([
-            record("a", "a1", activation::PHASE_ACTIVE),
-            record("b", "b1", activation::PHASE_ACTIVE),
+            record("a", "a1", lifecycle::PHASE_ACTIVE),
+            record("b", "b1", lifecycle::PHASE_ACTIVE),
             json!({
                 "apiVersion": "v1",
                 "kind": "ConfigMap",

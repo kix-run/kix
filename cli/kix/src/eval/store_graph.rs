@@ -624,7 +624,7 @@ impl StoreGraph {
                 None => (
                     PathBuf::from(format!(
                         "/nix/store/{}-synthetic-{i}",
-                        &crate::cluster::normalize::content_hash(m)[..32]
+                        &crate::manifest::hash::content_hash(m)[..32]
                     )),
                     m.clone(),
                 ),

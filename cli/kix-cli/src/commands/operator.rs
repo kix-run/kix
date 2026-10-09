@@ -7,9 +7,9 @@
 
 use std::time::Duration;
 
-use kix::cluster::activation::{
-    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_SUPERSEDED, Record, Records,
-    WaveStatus,
+use kix::cluster::activation::{Record, Records, WaveStatus};
+use kix::manifest::lifecycle::{
+    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_SUPERSEDED,
 };
 use kube::client::Client;
 use miette::{Result, miette};

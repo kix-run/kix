@@ -24,6 +24,9 @@ use std::collections::HashSet;
 
 use crate::legacy_domain::{self, LegacyDomainError};
 use crate::manifest::keys;
+use crate::manifest::lifecycle::{
+    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
+};
 use kube::{
     api::{Api, DeleteParams, DynamicObject, ListParams, Patch, PatchParams, Preconditions},
     client::Client,
@@ -31,27 +34,6 @@ use kube::{
 };
 use serde_json::{Value, json};
 use thiserror::Error;
-
-/// Activation phase values (stored in status.phase).
-pub const PHASE_QUEUED: &str = "Queued";
-pub const PHASE_ACTIVE: &str = "Active";
-pub const PHASE_SUPERSEDED: &str = "Superseded";
-pub const PHASE_DEPLOYING: &str = "Deploying";
-/// Deploy completed but some resources failed to apply or become ready.
-/// Treated as the "current state" for diffing/drift purposes: the next deploy
-/// must be able to find this CR to compute a meaningful plan.
-pub const PHASE_DEGRADED: &str = "Degraded";
-/// The deploy stopped before it could finalize: cancelled, a node failed under
-/// a Stop policy, discovery broke, or the process died and something later
-/// marked the record.
-///
-/// Terminal and never a current state. [`Records::active`] must not
-/// return one: a half-applied closure is not what the cluster is running, and
-/// diffing against it would compute every object only the still-Active closure
-/// has as an orphan. The next deploy reads it only as an extra baseline, to
-/// re-apply what it may have changed and prune what it left behind, and
-/// supersedes it once that plan finalizes.
-pub const PHASE_FAILED: &str = "Failed";
 
 /// The apiserver failed `op` on the record `name`, or on the list of
 /// records when `name` is `None`.

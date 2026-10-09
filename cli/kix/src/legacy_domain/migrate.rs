@@ -23,9 +23,9 @@
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::cluster::activation::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{PACKAGE_INSTANCE_KIND, RECORD_KIND};
+use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING};
 
 use super::DOMAINS;
 

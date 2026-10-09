@@ -43,6 +43,7 @@ use super::objects;
 use super::server::Overlay;
 use super::{PackageDiff, PlanError, PlanEvent, diff_graphs};
 use crate::build_source::InstallableBuild;
+use crate::build_source::SopsSources;
 use crate::cluster::activation::{KeptOrphanSource, KeptOrphans, Records};
 use crate::cluster::apply::ChangeAction;
 use crate::cluster::fetch::{self, FetchError, SharedOrphan};
@@ -51,7 +52,6 @@ use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use crate::cluster::ops::{Cluster, DryRun, KubeResources, RecordConfig};
 use crate::cluster::preview::DryRunAnswer;
 use crate::cluster::scheduler::{self, DeployError, DeployPlan, PrunePolicy, SchedulerConfig};
-use crate::cluster::secrets::SopsSources;
 use crate::cluster::stream::{DeployObserver, DeployResult};
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::types::ResourceId;
@@ -590,8 +590,8 @@ pub async fn keep_shared(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cluster::activation::PHASE_ACTIVE;
     use crate::cluster::fake_api::FakeApi;
+    use crate::manifest::lifecycle::PHASE_ACTIVE;
     use crate::manifest::types::CLUSTER_SCOPED;
     use serde_json::json;
 

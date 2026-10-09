@@ -36,16 +36,16 @@ use serde_json::Value;
 use thiserror::Error;
 
 use kix::build_source::Build;
-use kix::cluster::activation::{
-    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
-    Record, Records,
-};
+use kix::cluster::activation::{Record, Records};
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::prune_guard::{PruneGuard, Pruned};
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::DeployObserver;
 use kix::cluster::watchdog::StallPolicy;
+use kix::manifest::lifecycle::{
+    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
+};
 use kix::manifest::types::ResourceId;
 use kix::plan::live::{LivePlan, LivePlanError, cluster_of};
 

@@ -10,12 +10,12 @@ use std::sync::Arc;
 
 use miette::{IntoDiagnostic, Result, miette};
 
+use kix::build_source::SopsSources;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
-use kix::cluster::secrets::SopsSources;
 use kix::cluster::stream::{DeployObserver, DeployResult};
 use kix::cluster::watchdog::StallPolicy;
 use kix::plan::baseline::{self, Baseline};

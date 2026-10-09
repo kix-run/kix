@@ -13,7 +13,6 @@ pub mod fetch;
 pub mod fieldsv1;
 pub mod graph;
 pub mod migrate;
-pub mod normalize;
 pub(crate) mod ops;
 pub mod preview;
 pub mod prune_guard;

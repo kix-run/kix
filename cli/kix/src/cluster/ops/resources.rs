@@ -494,7 +494,7 @@ mod prune_tests {
                     "labels": { (keys::CLUSTER_LABEL): cluster },
                     "annotations": { (keys::IDENTITY_HASH): hash },
                 },
-                "status": { "phase": crate::cluster::activation::PHASE_ACTIVE },
+                "status": { "phase": crate::manifest::lifecycle::PHASE_ACTIVE },
             })
         };
         let role = |name: &str, activations: &str| {

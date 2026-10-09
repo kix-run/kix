@@ -8,13 +8,13 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 
 use serde::de::{DeserializeSeed, IgnoredAny};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::build_source::{CarriedSources, SopsSources};
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 
@@ -48,60 +48,6 @@ pub enum SecretError {
     /// age recipients alone.
     #[error("SOPS file {path} must be encrypted to age recipients only: {message}")]
     NotAgeOnly { path: String, message: String },
-}
-
-/// Where SOPS sources are read from.
-#[derive(Debug, Clone, Default)]
-pub enum SopsSources {
-    /// The path in each Secret's `kix.run/sops-source`, on this machine.
-    #[default]
-    Local,
-    /// Only the SOPS files the build carries with it
-    /// (`SopsSources::carried`).
-    Carried(Arc<CarriedSources>),
-}
-
-/// The SOPS files a build carries, written to a private directory.
-#[derive(Debug)]
-pub struct CarriedSources {
-    /// Store path named by `kix.run/sops-source` to the file on disk.
-    files: HashMap<String, PathBuf>,
-    /// Plan without decrypting: each Secret gets placeholder values for
-    /// the keys it declares.
-    placeholders: bool,
-    _dir: tempfile::TempDir,
-}
-
-impl SopsSources {
-    /// Write the SOPS files a build carries, by store path, to a fresh
-    /// directory, each under its SHA-256 and the end of its store name, and
-    /// read them only from there. The caller has checked each file's store
-    /// path against its bytes: see [`crate::build_source::Build::sops_sources`].
-    pub(crate) fn carried(
-        sources: HashMap<String, Vec<u8>>,
-        placeholders: bool,
-    ) -> std::io::Result<Self> {
-        let dir = tempfile::tempdir()?;
-        let mut files = HashMap::new();
-        for (store_path, bytes) in sources {
-            let digest: String = Sha256::digest(&bytes)
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
-            let name = crate::eval::store_path::name_of(&store_path).unwrap_or("source");
-            // A file name holds at most 255 bytes. The end of the store name
-            // keeps its extension, which sops reads for the file's format.
-            let name = name.get(name.len().saturating_sub(190)..).unwrap_or(name);
-            let file = dir.path().join(format!("{digest}-{name}"));
-            std::fs::write(&file, &bytes)?;
-            files.insert(store_path, file);
-        }
-        Ok(SopsSources::Carried(Arc::new(CarriedSources {
-            files,
-            placeholders,
-            _dir: dir,
-        })))
-    }
 }
 
 /// Result of hydrating a single secret.

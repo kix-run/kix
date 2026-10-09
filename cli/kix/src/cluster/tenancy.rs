@@ -15,8 +15,9 @@ use std::collections::{HashMap, HashSet};
 
 use kube::api::DynamicObject;
 
-use super::activation::{OpenedRecords, PHASE_SUPERSEDED, Record, RecordsError};
+use super::activation::{OpenedRecords, Record, RecordsError};
 use crate::manifest::keys;
+use crate::manifest::lifecycle::PHASE_SUPERSEDED;
 
 /// Which Activation records on this Kubernetes cluster belong to which Kix
 /// cluster, keyed by identity hash.
@@ -177,7 +178,7 @@ pub async fn read(records: &OpenedRecords, cluster: &str) -> Result<Tenancy, Rec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cluster::activation::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING};
+    use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING};
     use serde_json::json;
 
     fn record(cluster: Option<&str>, hash: Option<&str>, phase: &str) -> DynamicObject {

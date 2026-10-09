@@ -45,7 +45,8 @@ use super::errors::describe;
 use super::fetch::FetchError;
 use super::prune_guard::{PruneError, Pruned};
 use super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
-use super::secrets::{HydrationResult, SecretError, SopsSources};
+use super::secrets::{HydrationResult, SecretError};
+use crate::build_source::SopsSources;
 
 mod dry_run;
 mod record;
