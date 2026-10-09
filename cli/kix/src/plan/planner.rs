@@ -15,17 +15,19 @@
 //! of the record it returns to ([`Baseline::of_record`]). The planner prints
 //! nothing: it reports what it finds through a [`PlanEvent`] callback.
 //!
-//! A [`CheckedPlan`] is made only by the check, and nothing in it can be
-//! changed afterwards but the two changes the check allows for: the
-//! `--record-annotation` values on the record ([`Planned::annotate_record`])
-//! and the apiserver's answers in the package diff ([`Planned::overlay`]).
-//! The engine gets it as an [`Apply`], whose only way to the engine is
-//! [`Apply::run`], with the prune policy the check used.
+//! [`Planned`] is plain data: the build, its manifests, the baseline and the
+//! [`CheckedPlan`]. A [`CheckedPlan`] comes only from the check, its fields
+//! are private, and after the check it changes only by the
+//! `--record-annotation` values on the record ([`Planned::annotate_record`]),
+//! the apiserver's answers in the package diff ([`Planned::overlay`]), and
+//! orphans dropped from the prune ([`CheckedPlan::keep_shared`]).
+//! [`CheckedPlan::run`] gives it to the engine with the prune policy the
+//! check used.
 //!
-//! The guarantee ends there. The engine, `cluster::scheduler::run_deploy`,
-//! is public and takes any `DeployPlan`: the operator calls it directly with
-//! a plan made from the live objects, which no check holds to a package
-//! diff (see `housekeeping/2026-10-08-operator-plans-from-live-objects-not-the-planner.md`).
+//! The engine, `cluster::scheduler::run_deploy`, is public and takes any
+//! `DeployPlan`: the operator calls it directly with a plan made from the
+//! live objects, which no check holds to a package diff (see
+//! `housekeeping/2026-10-08-operator-plans-from-live-objects-not-the-planner.md`).
 
 use std::sync::Arc;
 
@@ -78,6 +80,9 @@ struct Changes {
 /// The engine plan, the package diff people review, and the objects the
 /// one writes and deletes as the other shows them. Made only by
 /// [`Planner::plan`] and [`Planner::run`], after the check.
+/// [`CheckedPlan::keep_shared`] later narrows the prune and the package
+/// diff but leaves `objects` as reviewed, so it may list deletes that
+/// will not run, never fewer.
 pub struct CheckedPlan {
     flags: PlanFlags,
     plan: DeployPlan,
@@ -110,6 +115,12 @@ impl CheckedPlan {
         &self.shared_orphans
     }
 
+    /// What the record the run finalizes lists under
+    /// `status.orphansKeptFrom` if the run leaves orphans on the cluster.
+    pub fn kept_orphans(&self) -> &KeptOrphans {
+        &self.kept_orphans
+    }
+
     /// The package-grouped comparison of the old side with the new build.
     pub fn pkg_diff(&self) -> &PackageDiff {
         &self.pkg_diff
@@ -131,80 +142,14 @@ impl CheckedPlan {
         self.activation_identity_hash.as_deref()
     }
 
-    /// What the engine runs, taken out of the plan to be consumed. The prune
-    /// policy and conflict handling are the flags the check used.
-    pub fn into_apply(self) -> Apply {
-        Apply {
-            prune: self.flags.prune_policy(),
-            force_conflicts: self.flags.force_conflicts,
-            plan: self.plan,
-            orphans: self.orphans,
-            kept_orphans: self.kept_orphans,
-            activation_name: self.activation_name,
-            activation_identity_hash: self.activation_identity_hash,
-        }
-    }
-}
-
-/// A checked plan as the engine takes it. Made only from a [`CheckedPlan`];
-/// read through accessors, and run with [`Apply::run`].
-pub struct Apply {
-    plan: DeployPlan,
-    orphans: Vec<ResourceId>,
-    kept_orphans: KeptOrphans,
-    activation_name: Option<String>,
-    activation_identity_hash: Option<String>,
-    prune: PrunePolicy,
-    force_conflicts: bool,
-}
-
-impl Apply {
-    pub fn plan(&self) -> &DeployPlan {
-        &self.plan
-    }
-
-    /// Orphans the prune may delete.
-    pub fn orphans(&self) -> &[ResourceId] {
-        &self.orphans
-    }
-
-    /// What the record the run finalizes lists under
-    /// `status.orphansKeptFrom` if the run leaves orphans on the cluster.
-    pub fn kept_orphans(&self) -> &KeptOrphans {
-        &self.kept_orphans
-    }
-
-    pub fn activation_name(&self) -> Option<&str> {
-        self.activation_name.as_deref()
-    }
-
-    pub fn activation_identity_hash(&self) -> Option<&str> {
-        self.activation_identity_hash.as_deref()
-    }
-
-    /// The prune policy of the flags the check used.
-    pub fn prune(&self) -> PrunePolicy {
-        self.prune
-    }
-
-    /// Whether the apply takes fields other managers own, as the check's
-    /// flags say.
-    pub fn force_conflicts(&self) -> bool {
-        self.force_conflicts
-    }
-
     /// For a plan made without a client (`--current-activation`): once
-    /// connected, keep apart the orphans another Kix cluster still deploys,
-    /// and return them. It only ever removes orphans.
-    pub async fn keep_shared(
-        &mut self,
-        client: &Client,
-        cluster: &str,
-    ) -> Result<Vec<SharedOrphan>, PlanError> {
-        let (prune, shared) =
-            keep_shared(client, cluster, std::mem::take(&mut self.orphans)).await?;
-        self.orphans = prune;
-        Ok(shared)
+    /// connected, keep apart the orphans another Kix cluster still deploys
+    /// ([`keep_shared`]). It only ever removes orphans from the prune.
+    pub fn keep_shared(&mut self, shared: &[SharedOrphan]) {
+        self.orphans
+            .retain(|rid| !shared.iter().any(|s| &s.rid == rid));
+        self.pkg_diff.keep_shared(shared);
+        self.shared_orphans.extend(shared.iter().cloned());
     }
 
     /// Run the engine over the checked plan. `config.prune` is set to the
@@ -216,7 +161,7 @@ impl Apply {
         mut config: SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
     ) -> Result<DeployResult, DeployError> {
-        config.prune = self.prune;
+        config.prune = self.flags.prune_policy();
         scheduler::run_deploy(
             ops,
             self.plan,
@@ -232,74 +177,30 @@ impl Apply {
 /// Everything a deploy decides before it writes. Made only by
 /// [`Planner::run`].
 pub struct Planned {
-    build: InstallableBuild,
+    /// The new build, stamped, and refused if it would install Kix's own
+    /// CRDs under a retired group.
+    pub build: InstallableBuild,
     /// The build's manifests, with the `--record-annotation` values on the
     /// record once [`Planned::annotate_record`] has run.
+    // Private so that annotate_record, which refuses Kix's own keys, is the
+    // only way to change it.
     new_manifests: Vec<Value>,
-    client: Option<Client>,
-    baseline: Baseline,
-    migration_pairs: Vec<MigrationPair>,
-    checked: CheckedPlan,
-}
-
-/// A [`Planned`] taken apart for the apply.
-pub struct PlannedParts {
-    pub build: InstallableBuild,
-    pub new_manifests: Vec<Value>,
+    /// `None` under [`OldSide::LocalCache`], which plans without connecting.
     pub client: Option<Client>,
     pub baseline: Baseline,
-    pub apply: Apply,
+    /// Against the Active closure only.
+    pub migration_pairs: Vec<MigrationPair>,
+    pub checked: CheckedPlan,
 }
 
 impl Planned {
-    /// The new build, stamped, and refused if it would install Kix's own
-    /// CRDs under a retired group.
-    pub fn build(&self) -> &InstallableBuild {
-        &self.build
-    }
-
     /// [`crate::build_source::Build::sops_sources`] of the new build.
     pub fn sops_sources(&mut self, placeholders: bool) -> Result<SopsSources, String> {
         self.build.sops_sources(placeholders)
     }
 
-    /// The name the build gives the cluster, which keys its records and the
-    /// local cache.
-    pub fn cluster(&self) -> &str {
-        &self.build.graph().cluster_name
-    }
-
     pub fn new_manifests(&self) -> &[Value] {
         &self.new_manifests
-    }
-
-    /// `None` under [`OldSide::LocalCache`], which plans without connecting.
-    pub fn client(&self) -> Option<&Client> {
-        self.client.as_ref()
-    }
-
-    pub fn baseline(&self) -> &Baseline {
-        &self.baseline
-    }
-
-    /// [`Baseline::manifests`]: the Active closure with the failed and kept
-    /// closures merged in.
-    pub fn old_manifests(&self) -> Vec<Value> {
-        self.baseline.manifests()
-    }
-
-    /// Against the Active closure only.
-    pub fn migration_pairs(&self) -> &[MigrationPair] {
-        &self.migration_pairs
-    }
-
-    pub fn checked(&self) -> &CheckedPlan {
-        &self.checked
-    }
-
-    /// The flags the plan was made and checked with.
-    pub fn flags(&self) -> PlanFlags {
-        self.checked.flags
     }
 
     /// Write `--record-annotation` pairs onto the Activation record, both
@@ -374,17 +275,6 @@ impl Planned {
         }
         .apply(&mut self.checked.pkg_diff, answers);
         known.then_some(drift)
-    }
-
-    /// The parts the apply consumes.
-    pub fn into_parts(self) -> PlannedParts {
-        PlannedParts {
-            build: self.build,
-            new_manifests: self.new_manifests,
-            client: self.client,
-            baseline: self.baseline,
-            apply: self.checked.into_apply(),
-        }
     }
 }
 

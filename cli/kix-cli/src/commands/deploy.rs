@@ -28,8 +28,8 @@ use kix::cluster::stream::{
 use kix::cluster::watchdog::StallPolicy;
 use kix::manifest::lifecycle;
 use kix::manifest::types::ResourceId;
+use kix::plan::CheckedPlan;
 use kix::plan::document::PlanFlags;
-use kix::plan::{Apply, PlannedParts};
 
 use crate::cli::{DeployArgs, Detail, OnError, PlanArgs};
 use crate::output;
@@ -67,9 +67,9 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         .map_err(|e| miette!("{e}"))?;
 
     // Detect stateful migration pairs and require --accept-migrations.
-    if !p.migration_pairs().is_empty() {
-        print_migration_pairs(p.migration_pairs());
-        if !p.flags().accept_migrations {
+    if !p.migration_pairs.is_empty() {
+        print_migration_pairs(&p.migration_pairs);
+        if !p.checked.flags().accept_migrations {
             eprintln!(
                 "{}",
                 output::red(
@@ -99,14 +99,14 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // run, so what the apiserver would refuse shows before anything is
     // applied.
     let total_apply = p
-        .checked()
+        .checked
         .plan()
         .nodes
         .iter()
         .filter(|n| matches!(n.action, ChangeAction::Apply(_)))
         .count();
-    let report = match p.client() {
-        Some(client) if total_apply > 0 || !p.checked().orphans().is_empty() => {
+    let report = match &p.client {
+        Some(client) if total_apply > 0 || !p.checked.orphans().is_empty() => {
             let client = client.clone();
             Some(dry_run(&mut p, false, client, ctx)?)
         }
@@ -151,42 +151,35 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         std::process::exit(1);
     }
 
-    let cluster = p.cluster().to_string();
-    let old_manifests = p.old_manifests();
-    let PlannedParts {
-        build,
-        new_manifests,
-        client,
-        baseline,
-        apply,
-    } = p.into_parts();
-    let active_hash = baseline.active_hash().map(str::to_string);
+    let cluster = p.build.graph().cluster_name.clone();
+    let old_manifests = p.baseline.manifests();
+    let active_hash = p.baseline.active_hash().map(str::to_string);
 
     // Imports are applied like any other resource (SSA); readiness polls the
     // cluster for the described resource via `wait_for_import_target`, which
     // is triggered when the import node becomes eligible under the DAG.
 
-    if total_apply == 0 && apply.orphans().is_empty() {
+    if total_apply == 0 && p.checked.orphans().is_empty() {
         // An unchanged plan can still owe a run: a probe Job under
         // `kix.run/rerun` whose last run failed (the failure kept the
         // activation from switching, so the next deploy sees the same
         // hashes). The engine's Skip path recreates it, but only if the
         // engine runs.
-        let has_reruns = apply.plan().nodes.iter().any(|n| n.rerun.is_some());
-        let failed_reruns = match &client {
+        let has_reruns = p.checked.plan().nodes.iter().any(|n| n.rerun.is_some());
+        let failed_reruns = match &p.client {
             Some(client) if has_reruns => ctx.runtime.block_on(async {
                 let discovery = fetch::discover_resources(client)
                     .await
                     .map_err(|e| miette!("{e}"))?;
                 Ok::<_, miette::Report>(
-                    scheduler::failed_rerun_nodes(client, &discovery, apply.plan()).await,
+                    scheduler::failed_rerun_nodes(client, &discovery, p.checked.plan()).await,
                 )
             })?,
             _ => Vec::new(),
         };
         // Without a client here (`--current-activation`) the engine's Skip
         // path makes the call instead: it reads the live objects itself.
-        let engine_decides = client.is_none() && has_reruns;
+        let engine_decides = p.client.is_none() && has_reruns;
         if failed_reruns.is_empty() && !engine_decides {
             // A folded-in record still has to be superseded, even when its
             // closure turned out to differ from the plan only in things
@@ -194,11 +187,11 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             // never runs on this path, and `finalize_deploy` is where records
             // are normally consumed, so do it here or report the same failed
             // deploy on every deploy from now on.
-            if let Some(client) = &client {
-                supersede_consumed(ctx, client, &baseline.failed().consumed, ctx.global.quiet);
+            if let Some(client) = &p.client {
+                supersede_consumed(ctx, client, &p.baseline.failed().consumed, ctx.global.quiet);
             }
             if !ctx.global.quiet {
-                match (apply.activation_identity_hash(), active_hash.as_deref()) {
+                match (p.checked.activation_identity_hash(), active_hash.as_deref()) {
                     (Some(new), Some(old)) if new == old => println!(
                         "{} activation identical to active ({}...). Nothing to apply.",
                         output::dim("="),
@@ -228,19 +221,19 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // Build the deployment receipt before confirmation so dirty source state
     // is visible in the prompt.
-    let receipt = crate::commands::compliance::receipt::of_build(&build, &ctx.global.flake);
+    let receipt = crate::commands::compliance::receipt::of_build(&p.build, &ctx.global.flake);
 
     if !ctx.global.quiet {
-        print_dirty_source_warning(&receipt, !build.is_local());
+        print_dirty_source_warning(&receipt, !p.build.is_local());
     }
 
     // The nodes: do they carry the labels the plan's placement rules name?
     // Only when a connection already exists: --current-activation is the
     // no-cluster-before-confirm mode.
-    if let Some(client) = &client
+    if let Some(client) = &p.client
         && !ctx.global.quiet
     {
-        report_topology_labels(ctx, client, &new_manifests);
+        report_topology_labels(ctx, client, p.new_manifests());
     }
 
     // Confirm before writing to the cluster.
@@ -265,18 +258,18 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
-    let activation_manifest = lifecycle::record_of(&new_manifests);
+    let activation_manifest = lifecycle::record_of(p.new_manifests()).cloned();
     let global = ctx.global.clone();
     let end = ctx.runtime.block_on(run_deploy_async(
         args,
         &global,
-        apply,
+        p.checked,
         &old_manifests,
         &cluster,
         Some(&receipt),
-        client,
-        activation_manifest,
-        &baseline.failed().consumed,
+        p.client,
+        activation_manifest.as_ref(),
+        &p.baseline.failed().consumed,
         if args.plan.current_activation {
             active_hash.as_deref()
         } else {
@@ -291,8 +284,9 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // makes soft gc treat the current closure as garbage, and makes the next
     // `--current-activation` plan skip the nodes this run never applied.
     if end.current
-        && build.is_local()
-        && let Err(e) = kix::eval::store::save_activation_path(&cluster, &build.graph().result_dir)
+        && p.build.is_local()
+        && let Err(e) =
+            kix::eval::store::save_activation_path(&cluster, &p.build.graph().result_dir)
     {
         tracing::warn!(
             "could not save the local build path; later commands may be unable to find this deployment: {e}"
@@ -351,7 +345,7 @@ fn check_saved_plan(saved: &SavedPlan, args: &PlanArgs, ctx: &mut CommandContext
     let Some(mut p) = prepare(args, saved.flags, ctx)? else {
         return Ok(());
     };
-    let report = match p.client().cloned() {
+    let report = match p.client.clone() {
         Some(client) => Some(dry_run(&mut p, false, client, ctx)?),
         None => None,
     };
@@ -789,15 +783,15 @@ fn apply_symbol(action: &ApplyAction) -> (std::borrow::Cow<'static, str>, &'stat
     }
 }
 
-/// `apply` is the checked plan, with the prune policy and conflict handling
-/// of the flags it was checked with: `args.plan`'s, or a saved plan's under
+/// `checked` is the plan, with the prune policy and conflict handling of
+/// the flags it was checked with: `args.plan`'s, or a saved plan's under
 /// `--plan`. The apply never reads `args.plan`'s flags, so it does what the
 /// plan it was compared on does.
 #[allow(clippy::too_many_arguments)]
 async fn run_deploy_async(
     args: &DeployArgs,
     global: &crate::cli::GlobalArgs,
-    mut apply: Apply,
+    mut checked: CheckedPlan,
     old_manifests: &[Value],
     cluster_name: &str,
     receipt: Option<&Value>,
@@ -817,10 +811,11 @@ async fn run_deploy_async(
             let client = fetch::make_client(global.context.as_deref())
                 .await
                 .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-            let shared = apply
-                .keep_shared(&client, cluster_name)
-                .await
-                .map_err(|e| miette!("{e}"))?;
+            let (_, shared) =
+                kix::plan::keep_shared(&client, cluster_name, checked.orphans().to_vec())
+                    .await
+                    .map_err(|e| miette!("{e}"))?;
+            checked.keep_shared(&shared);
             if !global.quiet {
                 plan::print_shared(&shared);
             }
@@ -851,9 +846,11 @@ async fn run_deploy_async(
         check_cached_baseline(&client, &discovery, cluster_name, hash).await?;
     }
 
-    if let (Some(name), Some(hash)) = (apply.activation_name(), apply.activation_identity_hash())
-        && let Some((ar, _)) =
-            activation::find_activation_ar(&discovery).map_err(|e| miette!("{e}"))?
+    if let (Some(name), Some(hash)) = (
+        checked.activation_name(),
+        checked.activation_identity_hash(),
+    ) && let Some((ar, _)) =
+        activation::find_activation_ar(&discovery).map_err(|e| miette!("{e}"))?
         && let Some(found) = activation::identity_hash_of(&client, ar, name)
             .await
             .map_err(|e| miette!("{e}"))?
@@ -869,7 +866,7 @@ async fn run_deploy_async(
     // the run; refusing here applies nothing.
     let namespaceless = kix::cluster::apply::namespaceless(
         &discovery,
-        apply.plan().nodes.iter().filter_map(|n| match &n.id {
+        checked.plan().nodes.iter().filter_map(|n| match &n.id {
             NodeId::Resource(rid) => Some(rid),
             _ => None,
         }),
@@ -898,7 +895,7 @@ async fn run_deploy_async(
     let config = SchedulerConfig {
         timeout,
         on_error,
-        prune: apply.prune(),
+        prune: checked.flags().prune_policy(),
         cancel: kix::cluster::cancel::CancelToken::new(),
         dry_run: false,
         concurrency: scheduler::CONCURRENCY,
@@ -914,10 +911,10 @@ async fn run_deploy_async(
         discovery,
         KubeOpsConfig {
             cluster_name: cluster_name.to_string(),
-            activation_name: apply.activation_name().map(str::to_string),
-            activation_identity_hash: apply.activation_identity_hash().map(str::to_string),
+            activation_name: checked.activation_name().map(str::to_string),
+            activation_identity_hash: checked.activation_identity_hash().map(str::to_string),
             receipt: receipt.cloned(),
-            force_conflicts: apply.force_conflicts(),
+            force_conflicts: checked.flags().force_conflicts,
             dry_run: false,
             // Create the record before the first wave, so a run that stops
             // part way leaves something that says what it was attempting
@@ -925,7 +922,7 @@ async fn run_deploy_async(
             // last node, which is then an unchanged no-op.
             activation_manifest: activation_manifest.cloned(),
             consumed_failed: consumed_failed.to_vec(),
-            kept_orphans: apply.kept_orphans().clone(),
+            kept_orphans: checked.kept_orphans().clone(),
             mark_failed_on_abort: true,
             sops,
         },
@@ -980,7 +977,7 @@ async fn run_deploy_async(
         }),
     };
 
-    let result = apply.run(ops, old_manifests, config, observer).await;
+    let result = checked.run(ops, old_manifests, config, observer).await;
 
     // Tear down the TUI before the summary prints so it lands in normal
     // scrollback below the history lines.
@@ -1138,7 +1135,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let Some(p) = prepare(&args.plan, operator_flags(flags_of(&args.plan)), ctx)? else {
         return Ok(());
     };
-    let checked = p.checked();
+    let checked = &p.checked;
     let activation_name = checked
         .activation_name()
         .map(str::to_string)
@@ -1157,8 +1154,8 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     }
     // Operator-mode is non-interactive on the operator side, so the CLI
     // must enforce the migration gate before handing off the Activation CR.
-    if !p.migration_pairs().is_empty() {
-        print_migration_pairs(p.migration_pairs());
+    if !p.migration_pairs.is_empty() {
+        print_migration_pairs(&p.migration_pairs);
         if !args.plan.accept_migrations {
             eprintln!(
                 "{}",
@@ -1169,9 +1166,9 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             std::process::exit(1);
         }
     }
-    let cluster = p.cluster().to_string();
-    let PlannedParts { build, apply, .. } = p.into_parts();
-    let activation_identity_hash = apply.activation_identity_hash().map(str::to_string);
+    let cluster = p.build.graph().cluster_name.clone();
+    let activation_identity_hash = p.checked.activation_identity_hash().map(str::to_string);
+    let build = p.build;
     let result_path = build.graph().result_dir.clone();
 
     // The receipt, same as the direct path. The operator has no source tree,

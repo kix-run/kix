@@ -58,7 +58,7 @@ pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Resu
     // A plan decrypts no SOPS file the build carries: those Secrets get
     // placeholder values, so planning before anyone has approved reads no
     // secret.
-    let report = match p.client().cloned() {
+    let report = match p.client.clone() {
         Some(client) => Some(dry_run(&mut p, true, client, ctx)?),
         None => None,
     };
@@ -70,14 +70,15 @@ pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Resu
         OutputFormat::Markdown => print!("{}", markdown(&p, &doc)),
         OutputFormat::Text => {
             if !ctx.global.quiet {
-                print_migrations(&doc, p.flags().accept_migrations);
+                print_migrations(&doc, p.checked.flags().accept_migrations);
                 // A plan exists to be read, so it always shows each change.
                 print_text(&p, &doc, true);
             }
         }
     }
 
-    let migrations_refused = !doc.migrations.items().is_empty() && !p.flags().accept_migrations;
+    let migrations_refused =
+        !doc.migrations.items().is_empty() && !p.checked.flags().accept_migrations;
     if doc.stops() || migrations_refused {
         std::process::exit(EXIT_WOULD_STOP);
     }
@@ -249,13 +250,10 @@ pub(crate) fn dry_run(
             client,
             Arc::new(tokio::sync::RwLock::new(discovery)),
             KubeOpsConfig {
-                cluster_name: p.cluster().to_string(),
-                activation_name: p.checked().activation_name().map(str::to_string),
-                activation_identity_hash: p
-                    .checked()
-                    .activation_identity_hash()
-                    .map(str::to_string),
-                force_conflicts: p.flags().force_conflicts,
+                cluster_name: p.build.graph().cluster_name.clone(),
+                activation_name: p.checked.activation_name().map(str::to_string),
+                activation_identity_hash: p.checked.activation_identity_hash().map(str::to_string),
+                force_conflicts: p.checked.flags().force_conflicts,
                 dry_run: true,
                 sops,
                 ..Default::default()
@@ -264,7 +262,7 @@ pub(crate) fn dry_run(
         let config = SchedulerConfig {
             timeout: readiness::DEFAULT_TIMEOUT,
             on_error: OnErrorPolicy::Continue,
-            prune: p.flags().prune_policy(),
+            prune: p.checked.flags().prune_policy(),
             cancel: kix::cluster::cancel::CancelToken::new(),
             dry_run: true,
             concurrency: scheduler::CONCURRENCY,
@@ -274,7 +272,7 @@ pub(crate) fn dry_run(
         config.cancel.cancel_on_interrupt();
 
         let writes = p
-            .checked()
+            .checked
             .plan()
             .nodes
             .iter()
@@ -284,9 +282,9 @@ pub(crate) fn dry_run(
         let dyn_ops: Arc<dyn ClusterOps> = ops.clone();
         let result = scheduler::run_deploy(
             dyn_ops,
-            p.checked().plan().clone(),
-            p.checked().orphans(),
-            &p.old_manifests(),
+            p.checked.plan().clone(),
+            p.checked.orphans(),
+            &p.baseline.manifests(),
             &config,
             observer.clone(),
         )
@@ -411,7 +409,7 @@ impl DeployObserver for DryRunObserver {
 /// Make the plan document, and overlay the apiserver's answers on the
 /// package diff, which the text renderers read ([`Planned::overlay`]).
 pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, detail: DetailArg) -> Plan {
-    let connected = p.client().is_some();
+    let connected = p.client.is_some();
     let made_by = if connected {
         MadeBy::DryRun
     } else {
@@ -424,14 +422,14 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, detail: D
     // old side is rebuilt from the old manifests, as the package diff is.
     let rebuilt;
     let index = if detail == DetailArg::Manifests {
-        let old = match p.baseline().active_graph() {
+        let old = match p.baseline.active_graph() {
             Some(old) => old,
             None => {
-                rebuilt = StoreGraph::synthesize(&p.old_manifests(), p.build().graph());
+                rebuilt = StoreGraph::synthesize(&p.baseline.manifests(), p.build.graph());
                 &rebuilt
             }
         };
-        Some(manifest_index(old, p.build().graph(), answers))
+        Some(manifest_index(old, p.build.graph(), answers))
     } else {
         None
     };
@@ -444,21 +442,21 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, detail: D
     let mut doc = Plan::new(
         plan::kix_build(),
         made_by,
-        p.cluster(),
-        Build::of(p.build().graph()),
-        p.checked().pkg_diff(),
+        &p.build.graph().cluster_name,
+        Build::of(p.build.graph()),
+        p.checked.pkg_diff(),
         detail,
-        p.migration_pairs(),
+        &p.migration_pairs,
         NotCheckedReason::BuildsOnly,
     );
-    doc.deployed = p.baseline().active().map(|a| DeployedBuild {
+    doc.deployed = p.baseline.active().map(|a| DeployedBuild {
         activation: a.name.clone(),
         identity_hash: a.identity_hash.clone(),
         store_path: a.built_via.clone(),
     });
-    doc.flags = Some(p.flags());
-    doc.objects_digest = Some(kix::plan::objects::digest(p.checked().objects()));
-    doc.objects = Some(p.checked().objects().clone());
+    doc.flags = Some(p.checked.flags());
+    doc.objects_digest = Some(kix::plan::objects::digest(p.checked.objects()));
+    doc.objects = Some(p.checked.objects().clone());
     if !connected {
         return doc;
     }
@@ -697,9 +695,9 @@ impl BuildCrds {
 
 /// Every resource that leaves the build, with what the deploy does to it.
 fn prune_entries(p: &Planned, answers: &HashMap<ResourceId, PruneAnswer>) -> Vec<PruneEntry> {
-    let policy = p.flags().prune_policy();
+    let policy = p.checked.flags().prune_policy();
     let mut entries: Vec<PruneEntry> = p
-        .checked()
+        .checked
         .orphans()
         .iter()
         .map(|rid| {
@@ -733,7 +731,7 @@ fn prune_entries(p: &Planned, answers: &HashMap<ResourceId, PruneAnswer>) -> Vec
             }
         })
         .collect();
-    entries.extend(p.checked().shared_orphans().iter().map(|s| PruneEntry {
+    entries.extend(p.checked.shared_orphans().iter().map(|s| PruneEntry {
         resource: s.rid.display_id(),
         fate: PruneFate::KeptShared,
         detail: Some(s.describe()),
@@ -777,13 +775,13 @@ fn print_migrations(doc: &Plan, accepted: bool) {
 /// The text plan: the package list, the summary, and every section of
 /// `doc` that found something. `verbose` lists each resource and field.
 pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
-    plan::print_package_plan(p.checked().pkg_diff(), verbose);
-    plan::print_plan_summary(p.checked().pkg_diff());
+    plan::print_package_plan(p.checked.pkg_diff(), verbose);
+    plan::print_plan_summary(p.checked.pkg_diff());
 
     // Jobs under the rerun rule that changed: the engine deletes and
     // recreates them, so the preview says so.
     let reruns: Vec<String> = p
-        .checked()
+        .checked
         .plan()
         .nodes
         .iter()
@@ -802,10 +800,10 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
         );
     }
 
-    let deletes = p.flags().prune_policy() == PrunePolicy::Delete;
-    let fate = if p.flags().prune_mode == Some(PruneModeFlag::No) {
+    let deletes = p.checked.flags().prune_policy() == PrunePolicy::Delete;
+    let fate = if p.checked.flags().prune_mode == Some(PruneModeFlag::No) {
         "kept (--prune-mode=no)".to_string()
-    } else if deletes && p.client().is_none() {
+    } else if deletes && p.client.is_none() {
         // `--current-activation` has not contacted the cluster, so it
         // cannot yet tell which orphans another Kix cluster deploys.
         "will be deleted, except any another Kix cluster still deploys; \
@@ -817,17 +815,14 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
         format!("kept; {}", plan::KEPT_ORPHANS_HINT)
     };
     // Shared orphans are listed with the prune section of `render::render_text`.
-    print!(
-        "{}",
-        plan::render_plan_orphans(p.checked().orphans(), &fate)
-    );
+    print!("{}", plan::render_plan_orphans(p.checked.orphans(), &fate));
 
     // Where the extra work in this plan came from. Without this the reader
     // sees a deploy of an unchanged config proposing changes, and has no way
     // to tell why.
-    if !p.baseline().failed().is_empty() {
+    if !p.baseline.failed().is_empty() {
         let names: Vec<&str> = p
-            .baseline()
+            .baseline
             .failed()
             .consumed
             .iter()
@@ -849,7 +844,7 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
 }
 
 fn markdown(p: &Planned, doc: &Plan) -> String {
-    let mut out = plan::render_package_diff_markdown(p.checked().pkg_diff()).replacen(
+    let mut out = plan::render_package_diff_markdown(p.checked.pkg_diff()).replacen(
         "### kix diff",
         "### kix plan",
         1,

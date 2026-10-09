@@ -21,7 +21,7 @@ mod planner;
 pub mod saved;
 pub mod server;
 
-pub use planner::{Apply, CheckedPlan, OldSide, Planned, PlannedParts, Planner, keep_shared};
+pub use planner::{CheckedPlan, OldSide, Planned, Planner, keep_shared};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};

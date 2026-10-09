@@ -356,10 +356,9 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         baseline,
         checked,
     } = planned;
-    let apply = checked.into_apply();
     let record = kix::manifest::lifecycle::record_of(&target_manifests);
 
-    let total_apply = apply
+    let total_apply = checked
         .plan()
         .nodes
         .iter()
@@ -374,11 +373,11 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         return Ok(());
     }
 
-    if total_apply == 0 && apply.orphans().is_empty() {
+    if total_apply == 0 && checked.orphans().is_empty() {
         // Same rule as deploy: an unchanged probe under `kix.run/rerun`
         // whose last run failed still runs, and only the engine does that.
-        let failed_reruns = if apply.plan().nodes.iter().any(|n| n.rerun.is_some()) {
-            scheduler::failed_rerun_nodes(&client, &discovery, apply.plan()).await
+        let failed_reruns = if checked.plan().nodes.iter().any(|n| n.rerun.is_some()) {
+            scheduler::failed_rerun_nodes(&client, &discovery, checked.plan()).await
         } else {
             Vec::new()
         };
@@ -425,7 +424,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     let config = SchedulerConfig {
         timeout: readiness::DEFAULT_TIMEOUT,
         on_error: OnErrorPolicy::Stop,
-        prune: apply.prune(),
+        prune: checked.flags().prune_policy(),
         cancel: kix::cluster::cancel::CancelToken::new(),
         dry_run: false,
         concurrency: scheduler::CONCURRENCY,
@@ -455,8 +454,8 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         discovery,
         KubeOpsConfig {
             cluster_name,
-            activation_name: apply.activation_name().map(str::to_string),
-            activation_identity_hash: apply.activation_identity_hash().map(str::to_string),
+            activation_name: checked.activation_name().map(str::to_string),
+            activation_identity_hash: checked.activation_identity_hash().map(str::to_string),
             // A rollback re-applies a build from an earlier deploy, and that
             // deploy wrote its own receipt. Writing a fresh one here would
             // record the machine running the rollback as the provenance of a
@@ -467,16 +466,18 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
             // for the duration, the same as a deploy.
             activation_manifest: record.cloned(),
             consumed_failed: baseline.failed().consumed.clone(),
-            kept_orphans: apply.kept_orphans().clone(),
+            kept_orphans: checked.kept_orphans().clone(),
             mark_failed_on_abort: true,
             sops: Default::default(),
-            force_conflicts: apply.force_conflicts(),
+            force_conflicts: checked.flags().force_conflicts,
             dry_run: false,
         },
     ));
     let ops: Arc<dyn ClusterOps> = kube_ops.clone();
 
-    let result = apply.run(ops, &baseline_manifests, config, observer).await;
+    let result = checked
+        .run(ops, &baseline_manifests, config, observer)
+        .await;
 
     if let Some(recorded) = kube_ops.recorded_orphans_kept_from() {
         kix::plan::baseline::sync_kept_roots(cluster, &recorded);
