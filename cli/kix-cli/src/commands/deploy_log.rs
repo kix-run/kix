@@ -205,118 +205,126 @@ fn summary_json(
 impl DeployObserver for JsonObserver {
     fn on_event(&self, event: &DeployEvent) {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
-        let obj = match event {
-            DeployEvent::PlanComputed { nodes, edges } => json!({
-                "type": "plan",
-                "elapsed_ms": elapsed_ms,
-                "nodes": nodes
-                    .iter()
-                    .map(|n| json!({
-                        "id": json_node_id(&n.id),
-                        "kind": transition_kind_str(n.kind),
-                        "package": n.meta.package,
-                        "namespace": n.meta.namespace,
-                        "import": n.meta.import_target.as_ref().map(|t| json!({
-                            "kind": t.kind,
-                            "name": t.name,
-                            "apiVersion": t.api_version,
-                            "namespace": t.namespace,
-                        })),
-                    }))
-                    .collect::<Vec<_>>(),
-                "edges": edges
-                    .iter()
-                    .map(|(dep, pred)| json!({
-                        "dependent": json_node_id(dep),
-                        "predecessor": json_node_id(pred),
-                    }))
-                    .collect::<Vec<_>>(),
-            }),
-            DeployEvent::NodeStateChanged {
-                node,
-                kind,
-                verdict,
-                detail,
-            } => {
-                // Suppress mid-flight readiness-progress entirely: the log
-                // emits one `created` + one `ready` event per resource and
-                // nothing in between. Structured progress belongs in the TUI.
-                if matches!(detail, Some(NodeDetail::ReadinessProgress(_))) {
-                    return;
-                }
-                json!({
-                    "type": "node",
-                    "elapsed_ms": elapsed_ms,
-                    "id": json_node_id(node),
-                    "kind": transition_kind_str(*kind),
-                    "verdict": json_verdict(verdict),
-                    "detail": detail.as_ref().map(json_detail),
-                })
-            }
-            DeployEvent::CrdRediscovery => json!({
-                "type": "crd_rediscovery",
-                "elapsed_ms": elapsed_ms,
-            }),
-            DeployEvent::PruneStart {
-                count,
-                resources,
-                kept,
-                delete,
-            } => json!({
-                "type": "prune_start",
-                "elapsed_ms": elapsed_ms,
-                "count": count,
-                "delete": delete,
-                "resources": resources.iter().map(|r| r.display_id()).collect::<Vec<_>>(),
-                "kept": kept.iter().map(|r| r.display_id()).collect::<Vec<_>>(),
-            }),
-            DeployEvent::PruneKept { resource, reason } => json!({
-                "type": "prune_kept",
-                "elapsed_ms": elapsed_ms,
-                "resource": resource.display_id(),
-                "reason": reason,
-            }),
-            DeployEvent::Finalized {
-                activation,
-                previous,
-            } => json!({
-                "type": "finalized",
-                "elapsed_ms": elapsed_ms,
-                "activation": activation,
-                "previous": previous,
-            }),
-            DeployEvent::Stopped { reason } => json!({
-                "type": "stopped",
-                "elapsed_ms": elapsed_ms,
-                "reason": reason,
-            }),
-            DeployEvent::Stalled {
-                idle,
-                in_flight,
-                aborting,
-            } => json!({
-                "type": "stalled",
-                "elapsed_ms": elapsed_ms,
-                "idle_ms": idle.as_millis() as u64,
-                "aborting": aborting,
-                "in_flight": in_flight
-                    .iter()
-                    .map(|f| json!({
-                        "node": node_label(&f.node),
-                        "phase": f.phase.as_str(),
-                        "since_ms": f.since.as_millis() as u64,
-                    }))
-                    .collect::<Vec<_>>(),
-            }),
-            DeployEvent::BestEffortFailed { what, message } => json!({
-                "type": "best_effort_failed",
-                "elapsed_ms": elapsed_ms,
-                "what": what,
-                "message": message,
-            }),
-        };
-        println!("{obj}");
+        if let Some(obj) = event_json(event, elapsed_ms) {
+            println!("{obj}");
+        }
     }
+}
+
+/// The NDJSON object for `event`, `elapsed_ms` into the run. `None` for an
+/// event the log leaves out.
+fn event_json(event: &DeployEvent, elapsed_ms: u64) -> Option<serde_json::Value> {
+    let obj = match event {
+        DeployEvent::PlanComputed { nodes, edges } => json!({
+            "type": "plan",
+            "elapsed_ms": elapsed_ms,
+            "nodes": nodes
+                .iter()
+                .map(|n| json!({
+                    "id": json_node_id(&n.id),
+                    "kind": transition_kind_str(n.kind),
+                    "package": n.meta.package,
+                    "namespace": n.meta.namespace,
+                    "import": n.meta.import_target.as_ref().map(|t| json!({
+                        "kind": t.kind,
+                        "name": t.name,
+                        "apiVersion": t.api_version,
+                        "namespace": t.namespace,
+                    })),
+                }))
+                .collect::<Vec<_>>(),
+            "edges": edges
+                .iter()
+                .map(|(dep, pred)| json!({
+                    "dependent": json_node_id(dep),
+                    "predecessor": json_node_id(pred),
+                }))
+                .collect::<Vec<_>>(),
+        }),
+        DeployEvent::NodeStateChanged {
+            node,
+            kind,
+            verdict,
+            detail,
+        } => {
+            // Suppress mid-flight readiness-progress entirely: the log
+            // emits one `created` + one `ready` event per resource and
+            // nothing in between. Structured progress belongs in the TUI.
+            if matches!(detail, Some(NodeDetail::ReadinessProgress(_))) {
+                return None;
+            }
+            json!({
+                "type": "node",
+                "elapsed_ms": elapsed_ms,
+                "id": json_node_id(node),
+                "kind": transition_kind_str(*kind),
+                "verdict": json_verdict(verdict),
+                "detail": detail.as_ref().map(json_detail),
+            })
+        }
+        DeployEvent::CrdRediscovery => json!({
+            "type": "crd_rediscovery",
+            "elapsed_ms": elapsed_ms,
+        }),
+        DeployEvent::PruneStart {
+            count,
+            resources,
+            kept,
+            delete,
+        } => json!({
+            "type": "prune_start",
+            "elapsed_ms": elapsed_ms,
+            "count": count,
+            "delete": delete,
+            "resources": resources.iter().map(|r| r.display_id()).collect::<Vec<_>>(),
+            "kept": kept.iter().map(|r| r.display_id()).collect::<Vec<_>>(),
+        }),
+        DeployEvent::PruneKept { resource, reason } => json!({
+            "type": "prune_kept",
+            "elapsed_ms": elapsed_ms,
+            "resource": resource.display_id(),
+            "reason": reason,
+        }),
+        DeployEvent::Finalized {
+            activation,
+            previous,
+        } => json!({
+            "type": "finalized",
+            "elapsed_ms": elapsed_ms,
+            "activation": activation,
+            "previous": previous,
+        }),
+        DeployEvent::Stopped { reason } => json!({
+            "type": "stopped",
+            "elapsed_ms": elapsed_ms,
+            "reason": reason,
+        }),
+        DeployEvent::Stalled {
+            idle,
+            in_flight,
+            aborting,
+        } => json!({
+            "type": "stalled",
+            "elapsed_ms": elapsed_ms,
+            "idle_ms": idle.as_millis() as u64,
+            "aborting": aborting,
+            "in_flight": in_flight
+                .iter()
+                .map(|f| json!({
+                    "node": node_label(&f.node),
+                    "phase": f.phase.as_str(),
+                    "since_ms": f.since.as_millis() as u64,
+                }))
+                .collect::<Vec<_>>(),
+        }),
+        DeployEvent::BestEffortFailed { what, message } => json!({
+            "type": "best_effort_failed",
+            "elapsed_ms": elapsed_ms,
+            "what": what,
+            "message": message,
+        }),
+    };
+    Some(obj)
 }
 
 /// `LineObserver`'s lines for a `PruneStart`: the orphans prune deletes or
@@ -468,6 +476,299 @@ mod tests {
             name: name.into(),
             namespace: "app".into(),
         }
+    }
+
+    fn node(kind: &str, name: &str) -> NodeId {
+        NodeId::Resource(rid(kind, name))
+    }
+
+    fn state(
+        id: NodeId,
+        kind: TransitionKind,
+        verdict: Verdict,
+        detail: Option<NodeDetail>,
+    ) -> DeployEvent {
+        DeployEvent::NodeStateChanged {
+            node: id,
+            kind,
+            verdict,
+            detail,
+        }
+    }
+
+    /// Every kind of event, with every verdict and every detail, as a
+    /// deploy can send them.
+    fn every_event() -> Vec<DeployEvent> {
+        use kix::cluster::readiness::ImportTarget;
+        use kix::cluster::stream::{InFlight, NodeMeta, Phase, PlanNode};
+        use std::time::Duration;
+        let crd = NodeId::Resource(ResourceId {
+            kind: "CustomResourceDefinition".into(),
+            name: "things.example.com".into(),
+            namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
+        });
+        let gate = NodeId::Synthetic("pause-1".into());
+        let web = || node("Deployment", "web");
+        vec![
+            DeployEvent::PlanComputed {
+                nodes: vec![
+                    PlanNode {
+                        id: web(),
+                        kind: TransitionKind::Apply,
+                        meta: NodeMeta {
+                            package: Some("web".into()),
+                            namespace: Some("app".into()),
+                            import_target: None,
+                        },
+                    },
+                    PlanNode {
+                        id: crd.clone(),
+                        kind: TransitionKind::Skip,
+                        meta: NodeMeta {
+                            package: Some("crds".into()),
+                            namespace: None,
+                            import_target: Some(ImportTarget {
+                                kind: "CustomResourceDefinition".into(),
+                                api_version: "apiextensions.k8s.io/v1".into(),
+                                name: "things.example.com".into(),
+                                namespace: None,
+                                expected_keys: vec!["unused".into()],
+                                served_versions: vec!["v1".into()],
+                            }),
+                        },
+                    },
+                    PlanNode {
+                        id: gate.clone(),
+                        kind: TransitionKind::Pause,
+                        meta: NodeMeta {
+                            package: None,
+                            namespace: None,
+                            import_target: None,
+                        },
+                    },
+                    PlanNode {
+                        id: node("ImportMarker", "db-creds"),
+                        kind: TransitionKind::Apply,
+                        meta: NodeMeta {
+                            package: Some("web".into()),
+                            namespace: Some("app".into()),
+                            import_target: Some(ImportTarget {
+                                kind: "Secret".into(),
+                                api_version: "v1".into(),
+                                name: "db-creds".into(),
+                                namespace: Some("app".into()),
+                                expected_keys: vec!["password".into()],
+                                served_versions: vec![],
+                            }),
+                        },
+                    },
+                ],
+                edges: vec![(web(), crd.clone()), (gate.clone(), web())],
+            },
+            state(web(), TransitionKind::Apply, Verdict::Pending, None),
+            state(
+                web(),
+                TransitionKind::Apply,
+                Verdict::Running,
+                Some(NodeDetail::Applied(ApplyAction::Created)),
+            ),
+            state(
+                web(),
+                TransitionKind::Apply,
+                Verdict::Running,
+                Some(NodeDetail::ReadinessProgress("1/2 ready".into())),
+            ),
+            state(
+                web(),
+                TransitionKind::Apply,
+                Verdict::Ready,
+                Some(NodeDetail::Applied(ApplyAction::Configured)),
+            ),
+            state(
+                crd.clone(),
+                TransitionKind::Skip,
+                Verdict::Ready,
+                Some(NodeDetail::Applied(ApplyAction::Unchanged)),
+            ),
+            state(
+                node("Job", "probe"),
+                TransitionKind::Recreate,
+                Verdict::Ready,
+                Some(NodeDetail::Rerun {
+                    reason: "its last run failed".into(),
+                }),
+            ),
+            state(
+                node("StatefulSet", "db"),
+                TransitionKind::Migrate,
+                Verdict::Ready,
+                Some(NodeDetail::RecreatedInPlace {
+                    reason: "spec.selector is immutable".into(),
+                }),
+            ),
+            state(
+                node("DaemonSet", "agent"),
+                TransitionKind::Apply,
+                Verdict::Ready,
+                Some(NodeDetail::PendingRestart {
+                    stale: 2,
+                    message: "OnDelete".into(),
+                }),
+            ),
+            state(
+                node("Secret", "creds"),
+                TransitionKind::Apply,
+                Verdict::Running,
+                Some(NodeDetail::SecretHydrated { keys: 3 }),
+            ),
+            state(
+                node("Secret", "creds"),
+                TransitionKind::Apply,
+                Verdict::Failed {
+                    message: "cannot decrypt".into(),
+                },
+                Some(NodeDetail::SecretHydrationFailed("no key".into())),
+            ),
+            state(
+                node("Service", "web"),
+                TransitionKind::Apply,
+                Verdict::Failed {
+                    message: "refused".into(),
+                },
+                Some(NodeDetail::ApplyFailed("field is immutable".into())),
+            ),
+            state(
+                node("Deployment", "slow"),
+                TransitionKind::Apply,
+                Verdict::Failed {
+                    message: "timed out".into(),
+                },
+                Some(NodeDetail::ReadinessTimeout {
+                    elapsed: Duration::from_secs(300),
+                    message: "0/1 ready".into(),
+                }),
+            ),
+            state(
+                node("Job", "check"),
+                TransitionKind::Apply,
+                Verdict::Failed {
+                    message: "probe failed".into(),
+                },
+                Some(NodeDetail::ReadinessFailed {
+                    message: "probe failed".into(),
+                    missing_keys: vec!["password".into()],
+                    output: vec!["FAIL: \"quoted\" \u{1b}[31m".into()],
+                }),
+            ),
+            state(
+                node("Pod", "after"),
+                TransitionKind::Drain,
+                Verdict::Cancelled {
+                    because: CancelReason::PredecessorFailed(rid("Job", "check")),
+                },
+                None,
+            ),
+            state(
+                node("ConfigMap", "old"),
+                TransitionKind::Delete,
+                Verdict::Cancelled {
+                    because: CancelReason::External,
+                },
+                Some(NodeDetail::Applied(ApplyAction::Skipped)),
+            ),
+            state(
+                gate.clone(),
+                TransitionKind::Pause,
+                Verdict::AwaitingInput {
+                    prompt: "approve?".into(),
+                },
+                None,
+            ),
+            state(
+                web(),
+                TransitionKind::Apply,
+                Verdict::DriftDetected {
+                    since: Duration::from_millis(1500),
+                    message: "replicas changed".into(),
+                },
+                None,
+            ),
+            DeployEvent::CrdRediscovery,
+            DeployEvent::PruneStart {
+                count: 1,
+                resources: vec![rid("ConfigMap", "old")],
+                kept: vec![rid("Namespace", "gone")],
+                delete: true,
+            },
+            DeployEvent::PruneKept {
+                resource: rid("ConfigMap", "shared"),
+                reason: "Kix cluster other still deploys it".into(),
+            },
+            DeployEvent::Finalized {
+                activation: "act-2".into(),
+                previous: Some("act-1".into()),
+            },
+            DeployEvent::Finalized {
+                activation: "act-1".into(),
+                previous: None,
+            },
+            DeployEvent::Stopped {
+                reason: "halted on first failure".into(),
+            },
+            DeployEvent::Stalled {
+                idle: Duration::from_secs(90),
+                in_flight: vec![
+                    InFlight {
+                        node: web(),
+                        phase: Phase::Readiness,
+                        since: Duration::from_secs(30),
+                    },
+                    InFlight {
+                        node: gate,
+                        phase: Phase::Discovery,
+                        since: Duration::from_millis(250),
+                    },
+                    InFlight {
+                        node: node("Secret", "creds"),
+                        phase: Phase::Hydrate,
+                        since: Duration::from_millis(40),
+                    },
+                    InFlight {
+                        node: node("Service", "web"),
+                        phase: Phase::Apply,
+                        since: Duration::from_secs(2),
+                    },
+                ],
+                aborting: true,
+            },
+            DeployEvent::BestEffortFailed {
+                what: "checkpoint".into(),
+                message: "conflict".into(),
+            },
+        ]
+    }
+
+    /// The deploy log, line by line, as consumers read it. The file holds
+    /// every event of [`every_event`], then a summary. A change here breaks
+    /// whoever parses the log.
+    #[test]
+    fn the_log_lines_are_unchanged() {
+        let counts = DeployResult {
+            created: 1,
+            configured: 2,
+            unchanged: 3,
+            failed: 4,
+            cancelled: 5,
+            pruned: 6,
+        };
+        let lines: Vec<String> = every_event()
+            .iter()
+            .filter_map(|e| event_json(e, 7))
+            .chain([summary_json(&counts, true, false, 7)])
+            .map(|v| v.to_string())
+            .collect();
+        let golden = include_str!("../../tests/fixtures/deploy-log.ndjson");
+        assert_eq!(lines, golden.lines().collect::<Vec<_>>());
     }
 
     #[test]
