@@ -21,6 +21,7 @@ use serde_json::Value;
 use kix::eval::store_graph::StoreGraph;
 
 use crate::cli::{ComplianceAttestArgs, OutputFormat};
+use crate::output;
 
 use super::receipt;
 use crate::commands::CommandContext;
@@ -46,7 +47,7 @@ pub fn run(args: &ComplianceAttestArgs, ctx: &mut CommandContext) -> Result<()> 
         )
     };
 
-    let text = match ctx.output_format(OutputFormat::Json) {
+    let text = match output::format() {
         OutputFormat::Yaml => serde_yml::to_string(&statement).into_diagnostic()?,
         _ => serde_json::to_string_pretty(&statement).into_diagnostic()?,
     };

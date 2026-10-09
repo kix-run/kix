@@ -31,7 +31,7 @@ use std::path::PathBuf;
 use kix::build_source::{Build, FlakeBuildError};
 use miette::IntoDiagnostic;
 
-use crate::cli::{GlobalArgs, OutputFormat};
+use crate::cli::GlobalArgs;
 
 /// Makes the receipt a deploy records on its Activation. `kix bundle` also
 /// fills the bundle's `Provenance` from the receipt's `source`, `inputs` and
@@ -64,10 +64,6 @@ impl CommandContext {
             runtime,
             receipts,
         })
-    }
-
-    pub fn output_format(&self, default: OutputFormat) -> OutputFormat {
-        self.global.output.unwrap_or(default)
     }
 
     /// The name that identifies the cluster `arg` names, for every lookup a

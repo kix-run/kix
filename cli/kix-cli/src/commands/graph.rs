@@ -1,6 +1,6 @@
 use miette::{IntoDiagnostic, Result};
 
-use crate::cli::{GraphArgs, GraphFormat, OutputFormat};
+use crate::cli::{GraphArgs, GraphFormat};
 use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
@@ -64,10 +64,7 @@ pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
                 tree: graph.to_tree(),
                 json: graph.to_json(),
             };
-            println!(
-                "{}",
-                output::render(&response, ctx.output_format(OutputFormat::Text))?
-            );
+            output::result(&response)?;
         }
     }
 

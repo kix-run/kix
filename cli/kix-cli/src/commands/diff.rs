@@ -112,7 +112,7 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     };
     let result = diff_graphs(&old_graph, &new_graph, &side, detail);
 
-    match ctx.output_format(OutputFormat::Text) {
+    match output::format() {
         OutputFormat::Json => println!("{}", result.doc.to_json()),
         OutputFormat::Yaml => print!("{}", result.doc.to_yaml().into_diagnostic()?),
         OutputFormat::Markdown => print_markdown_output(&result),

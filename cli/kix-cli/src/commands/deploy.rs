@@ -331,10 +331,7 @@ fn load_saved_plan(path: &std::path::Path, given: &PlanFlags) -> Result<SavedPla
 /// when the reviewed plan matches or [`EXIT_STALE`] when not.
 /// The dry run always runs when connected, as `kix plan` does.
 fn check_saved_plan(saved: &SavedPlan, args: &PlanArgs, ctx: &mut CommandContext) -> Result<()> {
-    let format = ctx.output_format(crate::cli::OutputFormat::Text);
-    if format != crate::cli::OutputFormat::Text {
-        output::progress_to_stderr();
-    }
+    let format = output::format();
     let Some(mut p) = prepare(args, saved.flags, ctx)? else {
         return Ok(());
     };

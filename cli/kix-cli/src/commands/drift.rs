@@ -14,7 +14,7 @@ use crate::output;
 pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;
 
-    let json = global.output == Some(OutputFormat::Json);
+    let json = output::format() == OutputFormat::Json;
     if !global.quiet && !json {
         println!("Connecting to cluster...");
     }

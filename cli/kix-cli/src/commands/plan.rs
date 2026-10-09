@@ -46,10 +46,7 @@ pub(crate) const EXIT_WOULD_STOP: i32 = 3;
 const EXIT_CHANGES: i32 = 2;
 
 pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Result<()> {
-    let format = ctx.output_format(OutputFormat::Text);
-    if format != OutputFormat::Text {
-        output::progress_to_stderr();
-    }
+    let format = output::format();
     let Some(mut p) = prepare(args, flags_of(args), ctx)? else {
         return Ok(());
     };

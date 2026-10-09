@@ -137,7 +137,7 @@ pub fn run(args: &ImagesArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let response = ImagesResponse { images };
 
-    match ctx.output_format(OutputFormat::Text) {
+    match output::format() {
         OutputFormat::Text | OutputFormat::Markdown => {
             if args.sources {
                 // Verbose text: show sources per image
@@ -154,12 +154,7 @@ pub fn run(args: &ImagesArgs, ctx: &mut CommandContext) -> Result<()> {
                 print!("{}", response.format_text());
             }
         }
-        OutputFormat::Json => {
-            println!("{}", output::render(&response, OutputFormat::Json)?);
-        }
-        OutputFormat::Yaml => {
-            println!("{}", output::render(&response, OutputFormat::Yaml)?);
-        }
+        OutputFormat::Json | OutputFormat::Yaml => output::result(&response)?,
     }
 
     Ok(())

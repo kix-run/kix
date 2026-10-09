@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 use kix::eval::store_graph::{PackageNode, StoreGraph};
 
 use crate::cli::{ComplianceSbomArgs, OutputFormat};
+use crate::output;
 
 use super::shared;
 use crate::commands::CommandContext;
@@ -29,7 +30,7 @@ pub fn run(args: &ComplianceSbomArgs, ctx: &mut CommandContext) -> Result<()> {
     let graph = shared::build_and_load(ctx, &args.cluster)?;
     let sbom = build_sbom(&graph, &ctx.global.flake);
 
-    let text = match ctx.output_format(OutputFormat::Json) {
+    let text = match output::format() {
         OutputFormat::Yaml => serde_yml::to_string(&sbom).into_diagnostic()?,
         _ => serde_json::to_string_pretty(&sbom).into_diagnostic()?,
     };

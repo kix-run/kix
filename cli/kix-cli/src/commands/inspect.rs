@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use miette::Result;
 
-use crate::cli::{InspectArgs, OutputFormat};
+use crate::cli::InspectArgs;
 use crate::output::{self, CommandResponse};
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
@@ -114,9 +114,5 @@ pub fn run(args: &InspectArgs, ctx: &mut CommandContext) -> Result<()> {
         kind_counts,
     };
 
-    let format = ctx.output_format(OutputFormat::Text);
-    let rendered = output::render(&response, format)?;
-    println!("{rendered}");
-
-    Ok(())
+    output::result(&response)
 }

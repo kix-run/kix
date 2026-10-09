@@ -3,7 +3,7 @@ use std::io::IsTerminal;
 
 use miette::{IntoDiagnostic, Result, miette};
 
-use crate::cli::{OutputFormat, StatusArgs};
+use crate::cli::StatusArgs;
 use crate::output::{self, CommandResponse};
 use kix::build_source::Build;
 use kix::cluster::activation::Records;
@@ -309,10 +309,7 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
         unowned,
     };
 
-    let format = global.output.unwrap_or(OutputFormat::Text);
-    println!("{}", output::render(&response, format)?);
-
-    Ok(())
+    output::result(&response)
 }
 
 /// Build the package-grouped view by joining store graph packages with live cluster resources.
@@ -543,10 +540,7 @@ async fn run_flat_async(cluster: &str, global: &crate::cli::GlobalArgs) -> Resul
     });
 
     let response = StatusResponse { statuses };
-    let format = global.output.unwrap_or(OutputFormat::Text);
-    println!("{}", output::render(&response, format)?);
-
-    Ok(())
+    output::result(&response)
 }
 
 /// Compute a human-readable status string for a resource.

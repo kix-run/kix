@@ -51,7 +51,7 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
     };
     let pins_file = located.path.as_path();
     if !global.quiet
-        && global.output != Some(OutputFormat::Json)
+        && output::format() != OutputFormat::Json
         && let Some(note) = located.note()
     {
         println!("{}", output::dim(&note));
@@ -174,7 +174,7 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
         file.write(args.force).into_diagnostic()?;
     }
 
-    if global.output == Some(OutputFormat::Json) {
+    if output::format() == OutputFormat::Json {
         let doc = serde_json::json!({
             "pinsFile": pins_file.display().to_string(),
             "key": args.key,
@@ -309,7 +309,7 @@ fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<()> {
 
     let failed = results.iter().any(|(_, v)| v.failed()) || !stale.is_empty();
 
-    if global.output == Some(OutputFormat::Json) {
+    if output::format() == OutputFormat::Json {
         let doc = serde_json::json!({
             "pinsFile": pins_file.display().to_string(),
             "pins": results.iter().map(|(k, v)| serde_json::json!({
@@ -469,13 +469,13 @@ fn list(args: &PinListArgs, global: &GlobalArgs) -> Result<()> {
     let pins_file = located.path.as_path();
     let file = PinFile::read(pins_file).into_diagnostic()?;
     if !global.quiet
-        && global.output != Some(OutputFormat::Json)
+        && output::format() != OutputFormat::Json
         && let Some(note) = located.note()
     {
         println!("{}", output::dim(&note));
     }
 
-    if global.output == Some(OutputFormat::Json) {
+    if output::format() == OutputFormat::Json {
         println!(
             "{}",
             serde_json::to_string_pretty(&file.pins).into_diagnostic()?

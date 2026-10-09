@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 
 use miette::Result;
 
-use crate::cli::{CheckArgs, OutputFormat};
+use crate::cli::CheckArgs;
 use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
@@ -288,10 +288,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     let response = CheckResponse { results };
-    println!(
-        "{}",
-        output::render(&response, ctx.output_format(OutputFormat::Text))?
-    );
+    output::result(&response)?;
 
     if has_failure {
         std::process::exit(1);

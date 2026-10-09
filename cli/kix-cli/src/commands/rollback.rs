@@ -73,7 +73,7 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    let format = ctx.output_format(OutputFormat::Text);
+    let format = output::format();
     match format {
         OutputFormat::Json | OutputFormat::Yaml => {
             let value = serde_json::json!({
