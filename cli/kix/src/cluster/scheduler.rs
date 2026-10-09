@@ -335,27 +335,6 @@ enum Done {
     Checkpoint(Result<(), RecordWriteError>),
 }
 
-/// Mark the Activation record Failed because the run is ending without
-/// finalizing. Returns the message to report when it did not work. A dry run
-/// has no record, so there is nothing to mark.
-///
-/// Every early return below `begin` goes through this. A run that stops part
-/// way has applied some of its closure, and the record is the only thing that
-/// will tell the next deploy so (kixpkgs#82). Best-effort: the run is already
-/// over, and a cluster that will not take the patch is one the next deploy has
-/// to cope with anyway.
-async fn abort_activation(record: Option<&Arc<dyn DeployRecord>>, reason: &str) -> Option<String> {
-    let record = record?;
-    match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.abort(reason)).await {
-        Ok(Ok(())) => None,
-        Ok(Err(e)) => Some(e.to_string()),
-        Err(_) => Some(format!(
-            "no answer within {}s",
-            INLINE_BEST_EFFORT_TIMEOUT.as_secs()
-        )),
-    }
-}
-
 /// Execute a DAG-streaming deploy.
 ///
 /// The scheduler maintains a ready-queue; a node becomes ready the moment all
@@ -391,501 +370,695 @@ pub(crate) async fn run_deploy(
     config: &SchedulerConfig,
     observer: Arc<dyn DeployObserver>,
 ) -> Result<DeployResult, DeployError> {
-    let mut result = DeployResult::default();
-    let progress = Arc::new(Progress::new());
-    let emit = |event: DeployEvent| {
-        progress.touch();
-        observer.on_event(&event);
-    };
+    let mut run = Run::new(
+        &cluster,
+        &plan,
+        orphan_rids,
+        old_manifests,
+        prune,
+        config,
+        observer,
+    );
 
     // The watchdog is its own task with its own timer, so it runs even if
-    // this loop has a bug that parks it. It reports through the observer and
+    // the run has a bug that parks it. It reports through the observer and
     // stops the run through the cancel token; it never touches the cluster.
     let _watchdog = AbortOnDrop(tokio::spawn(watchdog::run(
         config.stall,
-        progress.clone(),
+        run.progress.clone(),
         config.cancel.clone(),
-        observer.clone(),
+        run.observer.clone(),
     )));
 
     // Publish the plan skeleton so renderers can paint the tree before any
     // node has executed.
-    emit(DeployEvent::PlanComputed {
+    run.emit(DeployEvent::PlanComputed {
         nodes: plan.to_plan_nodes(),
         edges: plan.edges.clone(),
     });
 
-    let dry_run = cluster.is_dry_run();
-    let resources = cluster.resources().clone();
-    let record = cluster.record().cloned();
+    run.begin().await?;
+    run.run_nodes().await?;
+    run.close_out().await?;
+    if run.stop_partial_closure().await {
+        return Ok(run.result);
+    }
+    run.stamp_unchanged().await;
+    let orphans_left = run.prune().await;
+    run.finalize(orphans_left).await
+}
 
-    // Nothing is in flight yet, so awaiting this inline parks nobody. It is
-    // still bounded: the watchdog only watches nodes.
-    if let Some(record) = &record {
+/// One run of [`run_deploy`]: what it writes through, the node phase's
+/// bookkeeping, and the counts so far. Each phase is a method, called in
+/// order.
+struct Run<'a> {
+    config: &'a SchedulerConfig,
+    /// What the build drops, and the old build's manifests, which order the
+    /// prune.
+    orphan_rids: &'a [ResourceId],
+    old_manifests: &'a [Value],
+    prune: PrunePolicy,
+    progress: Arc<Progress>,
+    observer: Arc<dyn DeployObserver>,
+    dry_run: bool,
+    resources: Arc<dyn ResourceIo>,
+    record: Option<Arc<dyn DeployRecord>>,
+    ctx: Arc<NodeCtx>,
+    result: DeployResult,
+
+    state: SchedulerState,
+    tasks: JoinSet<Done>,
+    // Which task is which, so an aborted or panicked task can be accounted
+    // for by kind: an aborted node is a Cancelled verdict, a panicked
+    // checkpoint is a best-effort failure, a panicked node is a bug.
+    kinds: HashMap<tokio::task::Id, TaskKind>,
+    nodes_in_flight: usize,
+    barrier: CrdBarrier,
+    checkpoints: Checkpoints,
+    // Set when the cancel token fires: every task is aborted and the loop
+    // drains their results before the run returns `Cancelled`.
+    cancelling: bool,
+    /// Set by a stop-worthy failure under on_error=Stop, a failed discovery
+    /// refresh, or a cancel.
+    halting: bool,
+    halting_reason: Option<String>,
+    discovery_failed: Option<String>,
+    // Unchanged resources still belong to this activation; they just have
+    // nothing to apply. Collected here, stamped in one pass once every node is
+    // terminal (see `DeployRecord::stamp_unchanged`).
+    skipped: Vec<ResourceId>,
+    /// Orphans an immutable-conflict recovery deleted and created again.
+    /// They are this build's now, so the prune leaves them.
+    consumed_orphans: HashSet<ResourceId>,
+}
+
+impl<'a> Run<'a> {
+    fn new(
+        cluster: &Cluster,
+        plan: &DeployPlan,
+        orphan_rids: &'a [ResourceId],
+        old_manifests: &'a [Value],
+        prune: PrunePolicy,
+        config: &'a SchedulerConfig,
+        observer: Arc<dyn DeployObserver>,
+    ) -> Self {
+        let progress = Arc::new(Progress::new());
+        let dry_run = cluster.is_dry_run();
+        let resources = cluster.resources().clone();
+        let ctx = Arc::new(NodeCtx {
+            resources: resources.clone(),
+            secrets: cluster.secrets().clone(),
+            cancel: config.cancel.clone(),
+            timeout: config.timeout,
+            // Preauthorized delete set for immutable-conflict recovery.
+            orphan_set: orphan_rids.iter().cloned().collect(),
+            dry_run,
+            rerun_failed: config.rerun_failed,
+            progress: progress.clone(),
+            observer: observer.clone(),
+        });
+        Self {
+            config,
+            orphan_rids,
+            old_manifests,
+            prune,
+            progress,
+            observer,
+            dry_run,
+            resources,
+            record: cluster.record().cloned(),
+            ctx,
+            result: DeployResult::default(),
+            state: SchedulerState::new(plan),
+            tasks: JoinSet::new(),
+            kinds: HashMap::new(),
+            nodes_in_flight: 0,
+            barrier: CrdBarrier::default(),
+            checkpoints: Checkpoints::default(),
+            cancelling: false,
+            halting: false,
+            halting_reason: None,
+            discovery_failed: None,
+            skipped: Vec::new(),
+            consumed_orphans: HashSet::new(),
+        }
+    }
+
+    fn emit(&self, event: DeployEvent) {
+        self.progress.touch();
+        self.observer.on_event(&event);
+    }
+
+    /// The counts so far, for the error that ends the run.
+    fn partial(&mut self) -> DeployResult {
+        std::mem::take(&mut self.result)
+    }
+
+    /// Begin the Activation record. A record that cannot be begun stops the
+    /// run before anything is applied.
+    async fn begin(&mut self) -> Result<(), DeployError> {
+        // Nothing is in flight yet, so awaiting this inline parks nobody. It is
+        // still bounded: the watchdog only watches nodes.
+        let Some(record) = &self.record else {
+            return Ok(());
+        };
         match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.begin()).await {
             Ok(Ok(())) => {}
             // There is a record to write and it cannot be written; nothing
             // has been applied yet, so stop here.
             Ok(Err(e)) => {
                 let message = e.to_string();
-                emit(DeployEvent::Stopped {
+                self.emit(DeployEvent::Stopped {
                     reason: message.clone(),
                 });
                 return Err(DeployError::BeginFailed {
                     message,
-                    partial: result,
+                    partial: self.partial(),
                 });
             }
-            Err(_) => emit(DeployEvent::BestEffortFailed {
+            Err(_) => self.emit(DeployEvent::BestEffortFailed {
                 what: "activation begin".into(),
                 message: format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
             }),
         }
+        Ok(())
     }
 
-    // Preauthorized delete set for immutable-conflict recovery.
-    let orphan_set: HashSet<ResourceId> = orphan_rids.iter().cloned().collect();
-    let mut consumed_orphans: HashSet<ResourceId> = HashSet::new();
+    /// The node phase: run every node the plan allows, at most
+    /// `concurrency` at a time, until none is running or ready.
+    async fn run_nodes(&mut self) -> Result<(), DeployError> {
+        self.state.seed_ready();
+        let config = self.config;
+        loop {
+            self.admit_ready();
 
-    let mut state = SchedulerState::new(&plan);
+            // No node running, no refresh in flight, nothing admitted or
+            // waiting to be: the node phase is over. A checkpoint still in
+            // flight is best-effort and must not hold the run open;
+            // `shutdown` below aborts it and the final checkpoint in
+            // `close_out` records the totals.
+            if self.nodes_in_flight == 0
+                && !self.barrier.in_flight
+                && (self.halting || self.state.ready_is_empty())
+            {
+                break;
+            }
 
-    let ctx = Arc::new(NodeCtx {
-        resources: resources.clone(),
-        secrets: cluster.secrets().clone(),
-        cancel: config.cancel.clone(),
-        timeout: config.timeout,
-        orphan_set: orphan_set.clone(),
-        dry_run,
-        rerun_failed: config.rerun_failed,
-        progress: progress.clone(),
-        observer: observer.clone(),
-    });
+            let joined = if self.cancelling {
+                self.tasks.join_next_with_id().await
+            } else {
+                tokio::select! {
+                    biased;
+                    _ = config.cancel.cancelled() => {
+                        // Stop admitting, abort everything, then keep looping
+                        // to drain: a node that finished just before the
+                        // cancel is still counted, an aborted one becomes
+                        // Cancelled.
+                        self.cancelling = true;
+                        self.halting = true;
+                        self.halting_reason = Some(cancel_reason(config));
+                        self.tasks.abort_all();
+                        continue;
+                    }
+                    joined = self.tasks.join_next_with_id() => joined,
+                }
+            };
 
-    let mut tasks: JoinSet<Done> = JoinSet::new();
-    // Which task is which, so an aborted or panicked task can be accounted
-    // for by kind: an aborted node is a Cancelled verdict, a panicked
-    // checkpoint is a best-effort failure, a panicked node is a bug.
-    let mut kinds: HashMap<tokio::task::Id, TaskKind> = HashMap::new();
-    let mut nodes_in_flight = 0usize;
-    let mut barrier = CrdBarrier::default();
-    let mut checkpoints = Checkpoints::default();
-    // Set when the cancel token fires: every task is aborted and the loop
-    // drains their results before the run returns `Cancelled`.
-    let mut cancelling = false;
+            match joined {
+                None => break,
+                Some(Ok((task_id, done))) => {
+                    self.kinds.remove(&task_id);
+                    self.on_done(done);
+                }
+                Some(Err(join_err)) => self.on_join_error(join_err).await?,
+            }
+        }
 
-    state.seed_ready();
+        // From here on nothing is in flight, so inline awaits park nobody.
+        // They are still bounded: a best-effort write that never answers must
+        // not hold the run open.
+        self.tasks.shutdown().await;
+        Ok(())
+    }
 
-    let mut halting = false; // Set when stop-worthy failure under on_error=Stop.
-    let mut halting_reason: Option<String> = None;
-    let mut discovery_failed: Option<String> = None;
-
-    // Unchanged resources still belong to this activation; they just have
-    // nothing to apply. Collected here, stamped in one pass once every node is
-    // terminal (see `DeployRecord::stamp_unchanged`).
-    let mut skipped: Vec<ResourceId> = Vec::new();
-
-    let concurrency = config.concurrency.max(1);
-
-    loop {
-        // Fill in-flight up to the concurrency cap.
-        while !halting && nodes_in_flight < concurrency {
-            let Some(node_id) = state.pop_ready() else {
+    /// Fill in-flight up to the concurrency cap.
+    fn admit_ready(&mut self) {
+        let concurrency = self.config.concurrency.max(1);
+        while !self.halting && self.nodes_in_flight < concurrency {
+            let Some(node_id) = self.state.pop_ready() else {
                 break;
             };
-            let entry = state.node_entry(&node_id).clone();
+            let entry = self.state.node_entry(&node_id).clone();
 
             // Skip nodes terminate immediately: no task, just two events
             // back-to-back. A skipped resource under the rerun rule is the
             // exception: its live object may have failed, so it runs a task
             // that reads it.
             if matches!(entry.kind, TransitionKind::Skip) && entry.rerun.is_none() {
-                emit(DeployEvent::NodeStateChanged {
+                self.emit(DeployEvent::NodeStateChanged {
                     node: node_id.clone(),
                     kind: entry.kind,
                     verdict: Verdict::Running,
                     detail: None,
                 });
-                emit(DeployEvent::NodeStateChanged {
+                self.emit(DeployEvent::NodeStateChanged {
                     node: node_id.clone(),
                     kind: entry.kind,
                     verdict: Verdict::Ready,
                     detail: Some(NodeDetail::Applied(ApplyAction::Unchanged)),
                 });
-                result.unchanged += 1;
+                self.result.unchanged += 1;
                 if let NodeId::Resource(rid) = &node_id {
-                    skipped.push(rid.clone());
+                    self.skipped.push(rid.clone());
                 }
-                state.mark_terminal(&node_id, true);
-                checkpoints.terminal();
+                self.state.mark_terminal(&node_id, true);
+                self.checkpoints.terminal();
                 continue;
             }
 
-            emit(DeployEvent::NodeStateChanged {
+            self.emit(DeployEvent::NodeStateChanged {
                 node: node_id.clone(),
                 kind: entry.kind,
                 verdict: Verdict::Running,
                 detail: None,
             });
-            let ctx = ctx.clone();
+            let ctx = self.ctx.clone();
             let id = node_id.clone();
-            nodes_in_flight += 1;
-            let handle = tasks.spawn(async move {
+            self.nodes_in_flight += 1;
+            let handle = self.tasks.spawn(async move {
                 let out = execute_node(&ctx, &entry).await;
                 Done::Node(id, out)
             });
-            kinds.insert(handle.id(), TaskKind::Node(node_id));
+            self.kinds.insert(handle.id(), TaskKind::Node(node_id));
         }
+    }
 
-        // No node running, no refresh in flight, nothing admitted or waiting
-        // to be: the node phase is over. A checkpoint still in flight is
-        // best-effort and must not hold the run open; `shutdown` below
-        // aborts it and the final checkpoint after the loop records the
-        // totals.
-        if nodes_in_flight == 0 && !barrier.in_flight && (halting || state.ready_is_empty()) {
-            break;
+    /// A task ended without reporting: it was aborted or it panicked. Only a
+    /// panicked node stops the run here.
+    async fn on_join_error(&mut self, join_err: tokio::task::JoinError) -> Result<(), DeployError> {
+        let aborted = join_err.is_cancelled();
+        match self.kinds.remove(&join_err.id()) {
+            Some(TaskKind::Node(node_id)) => {
+                self.nodes_in_flight -= 1;
+                self.progress.clear(&node_id);
+                if aborted {
+                    let entry = self.state.node_entry(&node_id).clone();
+                    self.result.cancelled += 1;
+                    self.emit(DeployEvent::NodeStateChanged {
+                        node: node_id.clone(),
+                        kind: entry.kind,
+                        verdict: Verdict::Cancelled {
+                            because: CancelReason::External,
+                        },
+                        detail: None,
+                    });
+                    self.state.mark_terminal(&node_id, false);
+                    return Ok(());
+                }
+                // A panic in a node task is a bug, never a cluster
+                // condition.
+                let message = format!("a deploy task panicked: {join_err}");
+                self.emit(DeployEvent::Stopped {
+                    reason: message.clone(),
+                });
+                self.tasks.shutdown().await;
+                self.abort_record(&message).await;
+                Err(DeployError::Internal {
+                    message,
+                    partial: self.partial(),
+                })
+            }
+            Some(TaskKind::Rediscovery) => {
+                self.barrier.in_flight = false;
+                self.progress.clear(&DISCOVERY_NODE);
+                if !aborted {
+                    let message = format!("discovery refresh task panicked: {join_err}");
+                    self.discovery_failed = Some(message.clone());
+                    self.halting = true;
+                    self.halting_reason = Some(message);
+                }
+                Ok(())
+            }
+            Some(TaskKind::Checkpoint) | None => {
+                self.checkpoints.in_flight = false;
+                if !aborted {
+                    self.emit(DeployEvent::BestEffortFailed {
+                        what: "activation checkpoint".into(),
+                        message: format!("task panicked: {join_err}"),
+                    });
+                }
+                Ok(())
+            }
         }
+    }
 
-        let joined = if cancelling {
-            tasks.join_next_with_id().await
-        } else {
-            tokio::select! {
-                biased;
-                _ = config.cancel.cancelled() => {
-                    // Stop admitting, abort everything, then keep looping to
-                    // drain: a node that finished just before the cancel is
-                    // still counted, an aborted one becomes Cancelled.
-                    cancelling = true;
-                    halting = true;
-                    halting_reason = Some(
-                        config
-                            .cancel
-                            .reason()
-                            .unwrap_or_else(|| "cancelled".to_string()),
-                    );
-                    tasks.abort_all();
-                    continue;
-                }
-                joined = tasks.join_next_with_id() => joined,
-            }
-        };
-
-        let done = match joined {
-            None => break,
-            Some(Ok((task_id, done))) => {
-                kinds.remove(&task_id);
-                done
-            }
-            Some(Err(join_err)) => {
-                let aborted = join_err.is_cancelled();
-                match kinds.remove(&join_err.id()) {
-                    Some(TaskKind::Node(node_id)) => {
-                        nodes_in_flight -= 1;
-                        progress.clear(&node_id);
-                        if aborted {
-                            let entry = state.node_entry(&node_id).clone();
-                            result.cancelled += 1;
-                            emit(DeployEvent::NodeStateChanged {
-                                node: node_id.clone(),
-                                kind: entry.kind,
-                                verdict: Verdict::Cancelled {
-                                    because: CancelReason::External,
-                                },
-                                detail: None,
-                            });
-                            state.mark_terminal(&node_id, false);
-                            continue;
-                        }
-                        // A panic in a node task is a bug, never a cluster
-                        // condition.
-                        let message = format!("a deploy task panicked: {join_err}");
-                        emit(DeployEvent::Stopped {
-                            reason: message.clone(),
-                        });
-                        tasks.shutdown().await;
-                        if let Some(m) = abort_activation(record.as_ref(), &message).await {
-                            emit(DeployEvent::BestEffortFailed {
-                                what: "activation abort".into(),
-                                message: m,
-                            });
-                        }
-                        return Err(DeployError::Internal {
-                            message,
-                            partial: result,
-                        });
-                    }
-                    Some(TaskKind::Rediscovery) => {
-                        barrier.in_flight = false;
-                        progress.clear(&DISCOVERY_NODE);
-                        if !aborted {
-                            let message = format!("discovery refresh task panicked: {join_err}");
-                            discovery_failed = Some(message.clone());
-                            halting = true;
-                            halting_reason = Some(message);
-                        }
-                        continue;
-                    }
-                    Some(TaskKind::Checkpoint) | None => {
-                        checkpoints.in_flight = false;
-                        if !aborted {
-                            emit(DeployEvent::BestEffortFailed {
-                                what: "activation checkpoint".into(),
-                                message: format!("task panicked: {join_err}"),
-                            });
-                        }
-                        continue;
-                    }
-                }
-            }
-        };
-
+    fn on_done(&mut self, done: Done) {
         match done {
             Done::Rediscovery(outcome) => {
-                barrier.in_flight = false;
-                progress.clear(&DISCOVERY_NODE);
+                self.barrier.in_flight = false;
+                self.progress.clear(&DISCOVERY_NODE);
                 match outcome {
                     Ok(()) => {
-                        for id in barrier.covered.drain(..) {
-                            state.promote_dependents(&id);
+                        for id in std::mem::take(&mut self.barrier.covered) {
+                            self.state.promote_dependents(&id);
                         }
-                        if !halting {
-                            barrier.start_if_needed(
-                                &mut tasks,
-                                &mut kinds,
-                                &resources,
-                                record.as_ref(),
-                                &progress,
-                                &emit,
-                            );
+                        if !self.halting {
+                            self.start_rediscovery_if_needed();
                         }
                     }
                     Err(message) => {
                         // A stale discovery view is a partial view; the run
                         // does not continue on it. In-flight nodes finish.
-                        discovery_failed = Some(message.clone());
-                        halting = true;
-                        halting_reason =
+                        self.discovery_failed = Some(message.clone());
+                        self.halting = true;
+                        self.halting_reason =
                             Some(format!("API rediscovery failed after CRD apply: {message}"));
                     }
                 }
-                continue;
             }
             Done::Checkpoint(outcome) => {
-                checkpoints.in_flight = false;
+                self.checkpoints.in_flight = false;
                 if let Err(e) = outcome {
-                    emit(DeployEvent::BestEffortFailed {
+                    self.emit(DeployEvent::BestEffortFailed {
                         what: "activation checkpoint".into(),
                         message: e.to_string(),
                     });
                 }
-                checkpoints.start_if_due(&mut tasks, &mut kinds, record.as_ref());
-                continue;
+                self.start_checkpoint_if_due();
             }
             Done::Node(node_id, outcome) => {
-                nodes_in_flight -= 1;
-                progress.clear(&node_id);
-                let entry = state.node_entry(&node_id).clone();
-                match outcome {
-                    NodeOutcome::Ready { apply_action } => {
-                        checkpoints.count(&apply_action, &mut result);
-                        // A rerun-annotated Skip node that found its live
-                        // object healthy is an unchanged resource like any
-                        // other and still belongs to this activation.
-                        if matches!(entry.kind, TransitionKind::Skip)
-                            && let NodeId::Resource(rid) = &node_id
-                        {
-                            skipped.push(rid.clone());
-                        }
-                        emit(DeployEvent::NodeStateChanged {
-                            node: node_id.clone(),
-                            kind: entry.kind,
-                            verdict: Verdict::Ready,
-                            detail: Some(NodeDetail::Applied(apply_action)),
-                        });
-                        finish_success(&mut state, &mut barrier, &node_id, &entry);
-                    }
-                    NodeOutcome::PendingRestart {
-                        apply_action,
-                        stale,
-                        message,
-                    } => {
-                        checkpoints.count(&apply_action, &mut result);
-                        if matches!(entry.kind, TransitionKind::Skip)
-                            && let NodeId::Resource(rid) = &node_id
-                        {
-                            skipped.push(rid.clone());
-                        }
-                        emit(DeployEvent::NodeStateChanged {
-                            node: node_id.clone(),
-                            kind: entry.kind,
-                            verdict: Verdict::Ready,
-                            detail: Some(NodeDetail::PendingRestart { stale, message }),
-                        });
-                        finish_success(&mut state, &mut barrier, &node_id, &entry);
-                    }
-                    NodeOutcome::Rerun {
-                        apply_action,
-                        reason,
-                    } => {
-                        checkpoints.count(&apply_action, &mut result);
-                        emit(DeployEvent::NodeStateChanged {
-                            node: node_id.clone(),
-                            kind: entry.kind,
-                            verdict: Verdict::Ready,
-                            detail: Some(NodeDetail::Rerun { reason }),
-                        });
-                        finish_success(&mut state, &mut barrier, &node_id, &entry);
-                    }
-                    NodeOutcome::Recreated {
-                        apply_action,
-                        reason,
-                    } => {
-                        if let NodeId::Resource(rid) = &node_id {
-                            consumed_orphans.insert(rid.clone());
-                        }
-                        checkpoints.count(&apply_action, &mut result);
-                        emit(DeployEvent::NodeStateChanged {
-                            node: node_id.clone(),
-                            kind: entry.kind,
-                            verdict: Verdict::Ready,
-                            detail: Some(NodeDetail::RecreatedInPlace { reason }),
-                        });
-                        finish_success(&mut state, &mut barrier, &node_id, &entry);
-                    }
-                    NodeOutcome::Failed { detail, message } => {
-                        result.failed += 1;
-                        checkpoints.failed += 1;
-                        emit(DeployEvent::NodeStateChanged {
-                            node: node_id.clone(),
-                            kind: entry.kind,
-                            verdict: Verdict::Failed {
-                                message: message.clone(),
-                            },
-                            detail: Some(detail),
-                        });
-                        state.mark_terminal(&node_id, false);
-
-                        // A dry run persists nothing, so a dependent's own
-                        // dry run answers as much after a refused
-                        // predecessor as after an accepted one. A preview
-                        // that stopped at the first refusal would hide every
-                        // refusal behind it.
-                        let cancelled = if dry_run {
-                            state.promote_dependents(&node_id);
-                            Vec::new()
-                        } else {
-                            // Cancel all transitive dependents.
-                            state.cascade_cancel(&node_id)
-                        };
-                        let because = match &node_id {
-                            NodeId::Resource(rid) => CancelReason::PredecessorFailed(rid.clone()),
-                            NodeId::Synthetic(_) => CancelReason::External,
-                        };
-                        for dep_id in cancelled {
-                            let dep_entry = state.node_entry(&dep_id).clone();
-                            result.cancelled += 1;
-                            emit(DeployEvent::NodeStateChanged {
-                                node: dep_id,
-                                kind: dep_entry.kind,
-                                verdict: Verdict::Cancelled {
-                                    because: because.clone(),
-                                },
-                                detail: None,
-                            });
-                        }
-
-                        if config.on_error == OnErrorPolicy::Stop && !halting {
-                            halting = true;
-                            halting_reason = Some(format!("halt-on-first-failure: {message}"));
-                        }
-                    }
-                    NodeOutcome::Cancelled => {
-                        result.cancelled += 1;
-                        emit(DeployEvent::NodeStateChanged {
-                            node: node_id.clone(),
-                            kind: entry.kind,
-                            verdict: Verdict::Cancelled {
-                                because: CancelReason::External,
-                            },
-                            detail: None,
-                        });
-                        state.mark_terminal(&node_id, false);
-                    }
+                self.nodes_in_flight -= 1;
+                self.progress.clear(&node_id);
+                self.on_node(node_id, outcome);
+                if !self.halting {
+                    self.start_rediscovery_if_needed();
                 }
-                if !halting {
-                    barrier.start_if_needed(
-                        &mut tasks,
-                        &mut kinds,
-                        &resources,
-                        record.as_ref(),
-                        &progress,
-                        &emit,
-                    );
-                }
-                checkpoints.terminal();
-                checkpoints.start_if_due(&mut tasks, &mut kinds, record.as_ref());
+                self.checkpoints.terminal();
+                self.start_checkpoint_if_due();
             }
         }
     }
 
-    // From here on nothing is in flight, so inline awaits park nobody. They
-    // are still bounded: a best-effort write that never answers must not
-    // hold the run open.
-    tasks.shutdown().await;
-
-    // A cancel that landed as the last node finished may have let the loop
-    // exit on its own; it must still stop the run here, before anything is
-    // pruned or finalized.
-    if config.cancel.is_cancelled() && !cancelling {
-        cancelling = true;
-        halting = true;
-        halting_reason = Some(
-            config
-                .cancel
-                .reason()
-                .unwrap_or_else(|| "cancelled".to_string()),
-        );
+    /// Record a node's verdict and release or cancel its dependents.
+    fn on_node(&mut self, node_id: NodeId, outcome: NodeOutcome) {
+        let entry = self.state.node_entry(&node_id).clone();
+        match outcome {
+            NodeOutcome::Ready { apply_action } => {
+                // A rerun-annotated Skip node that found its live object
+                // healthy is an unchanged resource like any other and still
+                // belongs to this activation.
+                self.push_skipped(&node_id, &entry);
+                let detail = NodeDetail::Applied(apply_action.clone());
+                self.node_ready(&node_id, &entry, &apply_action, detail);
+            }
+            NodeOutcome::PendingRestart {
+                apply_action,
+                stale,
+                message,
+            } => {
+                self.push_skipped(&node_id, &entry);
+                let detail = NodeDetail::PendingRestart { stale, message };
+                self.node_ready(&node_id, &entry, &apply_action, detail);
+            }
+            NodeOutcome::Rerun {
+                apply_action,
+                reason,
+            } => {
+                let detail = NodeDetail::Rerun { reason };
+                self.node_ready(&node_id, &entry, &apply_action, detail);
+            }
+            NodeOutcome::Recreated {
+                apply_action,
+                reason,
+            } => {
+                if let NodeId::Resource(rid) = &node_id {
+                    self.consumed_orphans.insert(rid.clone());
+                }
+                let detail = NodeDetail::RecreatedInPlace { reason };
+                self.node_ready(&node_id, &entry, &apply_action, detail);
+            }
+            NodeOutcome::Failed { detail, message } => {
+                self.node_failed(&node_id, &entry, detail, message);
+            }
+            NodeOutcome::Cancelled => {
+                self.result.cancelled += 1;
+                self.emit(DeployEvent::NodeStateChanged {
+                    node: node_id.clone(),
+                    kind: entry.kind,
+                    verdict: Verdict::Cancelled {
+                        because: CancelReason::External,
+                    },
+                    detail: None,
+                });
+                self.state.mark_terminal(&node_id, false);
+            }
+        }
     }
 
-    // Whatever stopped the run, every node that never reached a verdict gets
-    // one now, so renderers never leave a row Pending under a `Stopped`
-    // footer and the counts add up to the plan.
-    if halting {
-        for node_id in state.non_terminal() {
-            let entry = state.node_entry(&node_id).clone();
-            result.cancelled += 1;
-            emit(DeployEvent::NodeStateChanged {
-                node: node_id.clone(),
-                kind: entry.kind,
+    /// A Skip node that ran a task is unchanged, and stamped as such.
+    fn push_skipped(&mut self, node_id: &NodeId, entry: &PlanNodeEntry) {
+        if matches!(entry.kind, TransitionKind::Skip)
+            && let NodeId::Resource(rid) = node_id
+        {
+            self.skipped.push(rid.clone());
+        }
+    }
+
+    /// A node succeeded. CRD-like nodes hold their dependents until the next
+    /// discovery refresh completes (the barrier); everything else promotes at
+    /// once.
+    fn node_ready(
+        &mut self,
+        node_id: &NodeId,
+        entry: &PlanNodeEntry,
+        apply_action: &ApplyAction,
+        detail: NodeDetail,
+    ) {
+        self.checkpoints.count(apply_action, &mut self.result);
+        self.emit(DeployEvent::NodeStateChanged {
+            node: node_id.clone(),
+            kind: entry.kind,
+            verdict: Verdict::Ready,
+            detail: Some(detail),
+        });
+        if is_crd_like(entry) {
+            self.state.mark_terminal_deferred(node_id);
+            self.barrier.awaiting.push(node_id.clone());
+        } else {
+            self.state.mark_terminal(node_id, true);
+        }
+    }
+
+    fn node_failed(
+        &mut self,
+        node_id: &NodeId,
+        entry: &PlanNodeEntry,
+        detail: NodeDetail,
+        message: String,
+    ) {
+        self.result.failed += 1;
+        self.checkpoints.failed += 1;
+        self.emit(DeployEvent::NodeStateChanged {
+            node: node_id.clone(),
+            kind: entry.kind,
+            verdict: Verdict::Failed {
+                message: message.clone(),
+            },
+            detail: Some(detail),
+        });
+        self.state.mark_terminal(node_id, false);
+
+        // A dry run persists nothing, so a dependent's own dry run answers as
+        // much after a refused predecessor as after an accepted one. A preview
+        // that stopped at the first refusal would hide every refusal behind it.
+        let cancelled = if self.dry_run {
+            self.state.promote_dependents(node_id);
+            Vec::new()
+        } else {
+            // Cancel all transitive dependents.
+            self.state.cascade_cancel(node_id)
+        };
+        let because = match node_id {
+            NodeId::Resource(rid) => CancelReason::PredecessorFailed(rid.clone()),
+            NodeId::Synthetic(_) => CancelReason::External,
+        };
+        for dep_id in cancelled {
+            let dep_entry = self.state.node_entry(&dep_id).clone();
+            self.result.cancelled += 1;
+            self.emit(DeployEvent::NodeStateChanged {
+                node: dep_id,
+                kind: dep_entry.kind,
                 verdict: Verdict::Cancelled {
-                    because: CancelReason::External,
+                    because: because.clone(),
                 },
                 detail: None,
             });
-            state.mark_terminal(&node_id, false);
+        }
+
+        if self.config.on_error == OnErrorPolicy::Stop && !self.halting {
+            self.halting = true;
+            self.halting_reason = Some(format!("halt-on-first-failure: {message}"));
         }
     }
 
-    if cancelling {
-        let reason = halting_reason.unwrap_or_else(|| "cancelled".to_string());
-        emit(DeployEvent::Stopped {
-            reason: reason.clone(),
+    /// Start one discovery refresh for the CRDs that became Ready since the
+    /// last one, unless one is in flight.
+    fn start_rediscovery_if_needed(&mut self) {
+        if self.barrier.in_flight || self.barrier.awaiting.is_empty() {
+            return;
+        }
+        self.barrier.covered = std::mem::take(&mut self.barrier.awaiting);
+        self.barrier.in_flight = true;
+        self.emit(DeployEvent::CrdRediscovery);
+        self.progress.set_phase(&DISCOVERY_NODE, Phase::Discovery);
+        let resources = self.resources.clone();
+        let record = self.record.clone();
+        let handle = self.tasks.spawn(async move {
+            let refreshed = resources.rediscover().await;
+            if refreshed.is_ok()
+                && let Some(record) = record
+            {
+                record.discovery_refreshed().await;
+            }
+            Done::Rediscovery(refreshed.map_err(|e| e.to_string()))
         });
-        if let Some(m) = abort_activation(record.as_ref(), &reason).await {
-            emit(DeployEvent::BestEffortFailed {
-                what: "activation abort".into(),
-                message: m,
+        self.kinds.insert(handle.id(), TaskKind::Rediscovery);
+    }
+
+    /// Write a checkpoint when [`CHECKPOINT_BATCH`] verdicts have landed
+    /// since the last, unless one is in flight.
+    fn start_checkpoint_if_due(&mut self) {
+        let Some(record) = &self.record else {
+            return;
+        };
+        let checkpoints = &mut self.checkpoints;
+        if checkpoints.in_flight || checkpoints.since_last < CHECKPOINT_BATCH {
+            return;
+        }
+        checkpoints.since_last = 0;
+        checkpoints.in_flight = true;
+        let record = record.clone();
+        let (applied, failed) = (checkpoints.applied, checkpoints.failed);
+        let handle = self.tasks.spawn(async move {
+            Done::Checkpoint(record.checkpoint(applied, failed, false).await)
+        });
+        self.kinds.insert(handle.id(), TaskKind::Checkpoint);
+    }
+
+    /// Mark the Activation record Failed because the run is ending without
+    /// finalizing, and report a write that did not land. A dry run has no
+    /// record, so there is nothing to mark.
+    ///
+    /// Every early return below `begin` goes through this. A run that stops
+    /// part way has applied some of its closure, and the record is the only
+    /// thing that will tell the next deploy so (kixpkgs#82). Best-effort: the
+    /// run is already over, and a cluster that will not take the patch is one
+    /// the next deploy has to cope with anyway.
+    async fn abort_record(&self, reason: &str) {
+        let Some(record) = &self.record else {
+            return;
+        };
+        let failed =
+            match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.abort(reason)).await {
+                Ok(Ok(())) => return,
+                Ok(Err(e)) => e.to_string(),
+                Err(_) => format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
+            };
+        self.emit(DeployEvent::BestEffortFailed {
+            what: "activation abort".into(),
+            message: failed,
+        });
+    }
+
+    /// End the node phase: give every node a verdict, write the final
+    /// checkpoint, and stop the run if it was cancelled, lost discovery, or
+    /// halted on a failure.
+    async fn close_out(&mut self) -> Result<(), DeployError> {
+        // A cancel that landed as the last node finished may have let the loop
+        // exit on its own; it must still stop the run here, before anything is
+        // pruned or finalized.
+        if self.config.cancel.is_cancelled() && !self.cancelling {
+            self.cancelling = true;
+            self.halting = true;
+            self.halting_reason = Some(cancel_reason(self.config));
+        }
+
+        // Whatever stopped the run, every node that never reached a verdict
+        // gets one now, so renderers never leave a row Pending under a
+        // `Stopped` footer and the counts add up to the plan.
+        if self.halting {
+            for node_id in self.state.non_terminal() {
+                let entry = self.state.node_entry(&node_id).clone();
+                self.result.cancelled += 1;
+                self.emit(DeployEvent::NodeStateChanged {
+                    node: node_id.clone(),
+                    kind: entry.kind,
+                    verdict: Verdict::Cancelled {
+                        because: CancelReason::External,
+                    },
+                    detail: None,
+                });
+                self.state.mark_terminal(&node_id, false);
+            }
+        }
+
+        if self.cancelling {
+            let reason = self
+                .halting_reason
+                .take()
+                .unwrap_or_else(|| "cancelled".to_string());
+            self.emit(DeployEvent::Stopped {
+                reason: reason.clone(),
+            });
+            self.abort_record(&reason).await;
+            return Err(DeployError::Cancelled {
+                reason,
+                partial: self.partial(),
             });
         }
-        return Err(DeployError::Cancelled {
-            reason,
-            partial: result,
-        });
+
+        self.final_checkpoint().await;
+
+        if let Some(message) = self.discovery_failed.take() {
+            let reason = self
+                .halting_reason
+                .take()
+                .unwrap_or_else(|| message.clone());
+            self.emit(DeployEvent::Stopped { reason });
+            self.abort_record(&message).await;
+            return Err(DeployError::DiscoveryFailed {
+                message,
+                partial: self.partial(),
+            });
+        }
+
+        if self.halting {
+            let reason = self
+                .halting_reason
+                .take()
+                .unwrap_or_else(|| "halting".into());
+            self.emit(DeployEvent::Stopped {
+                reason: reason.clone(),
+            });
+            self.abort_record(&reason).await;
+            let count = self.result.failed;
+            return Err(DeployError::NodesFailed {
+                count,
+                partial: self.partial(),
+            });
+        }
+        Ok(())
     }
 
-    // Final checkpoint / close-out if the cadence didn't already cover it.
-    if let Some(record) = &record
-        && (checkpoints.since_last > 0 || checkpoints.applied + checkpoints.failed > 0)
-    {
+    /// Final checkpoint / close-out if the cadence didn't already cover it.
+    async fn final_checkpoint(&self) {
+        let Some(record) = &self.record else {
+            return;
+        };
+        let checkpoints = &self.checkpoints;
+        if checkpoints.since_last == 0 && checkpoints.applied + checkpoints.failed == 0 {
+            return;
+        }
         match tokio::time::timeout(
             INLINE_BEST_EFFORT_TIMEOUT,
             record.checkpoint(checkpoints.applied, checkpoints.failed, true),
@@ -893,100 +1066,72 @@ pub(crate) async fn run_deploy(
         .await
         {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => emit(DeployEvent::BestEffortFailed {
+            Ok(Err(e)) => self.emit(DeployEvent::BestEffortFailed {
                 what: "activation checkpoint".into(),
                 message: e.to_string(),
             }),
-            Err(_) => emit(DeployEvent::BestEffortFailed {
+            Err(_) => self.emit(DeployEvent::BestEffortFailed {
                 what: "activation checkpoint".into(),
                 message: format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
             }),
         }
     }
 
-    if let Some(message) = discovery_failed {
-        emit(DeployEvent::Stopped {
-            reason: halting_reason.unwrap_or_else(|| message.clone()),
-        });
-        if let Some(m) = abort_activation(record.as_ref(), &message).await {
-            emit(DeployEvent::BestEffortFailed {
-                what: "activation abort".into(),
-                message: m,
-            });
+    /// Stop a run that left part of its closure unapplied. Returns whether it
+    /// stopped.
+    ///
+    /// A node that was never attempted means the closure is only partly
+    /// applied, which is not a state anything may diff against. Under
+    /// `--on-error=continue` a failed node cascades Cancelled to its
+    /// dependents and the loop exits without `halting`, so without this the
+    /// run would finalize and mark the record Degraded, and Degraded IS a
+    /// current state: the next deploy of the same closure would then skip
+    /// every node this one never ran.
+    ///
+    /// It has to happen above the skip stamping and the prune. Pruning deletes
+    /// the orphans of the closure being replaced, and this run is not
+    /// replacing anything: the record ends Failed and the previous activation
+    /// stays Active, so a prune here would delete objects the still current
+    /// closure cannot get back.
+    ///
+    /// The run still returns `Ok` with the counts. Callers read `failed` and
+    /// `cancelled` to decide the outcome; `kix deploy` exits non-zero.
+    async fn stop_partial_closure(&self) -> bool {
+        if self.dry_run || self.result.cancelled == 0 {
+            return false;
         }
-        return Err(DeployError::DiscoveryFailed {
-            message,
-            partial: result,
-        });
-    }
-
-    if halting {
-        let reason = halting_reason.unwrap_or_else(|| "halting".into());
-        emit(DeployEvent::Stopped {
-            reason: reason.clone(),
-        });
-        if let Some(m) = abort_activation(record.as_ref(), &reason).await {
-            emit(DeployEvent::BestEffortFailed {
-                what: "activation abort".into(),
-                message: m,
-            });
-        }
-        return Err(DeployError::NodesFailed {
-            count: result.failed,
-            partial: result,
-        });
-    }
-
-    // A node that was never attempted means the closure is only partly
-    // applied, which is not a state anything may diff against. Under
-    // `--on-error=continue` a failed node cascades Cancelled to its
-    // dependents and the loop exits without `halting`, so without this the
-    // run would finalize and mark the record Degraded, and Degraded IS a
-    // current state: the next deploy of the same closure would then skip
-    // every node this one never ran.
-    //
-    // It has to happen above the skip stamping and the prune. Pruning deletes
-    // the orphans of the closure being replaced, and this run is not
-    // replacing anything: the record ends Failed and the previous activation
-    // stays Active, so a prune here would delete objects the still current
-    // closure cannot get back.
-    //
-    // The run still returns `Ok` with the counts. Callers read `failed` and
-    // `cancelled` to decide the outcome; `kix deploy` exits non-zero.
-    if !dry_run && result.cancelled > 0 {
         let reason = format!(
             "{} failed, {} never attempted",
-            result.failed, result.cancelled
+            self.result.failed, self.result.cancelled
         );
-        emit(DeployEvent::Stopped {
+        self.emit(DeployEvent::Stopped {
             reason: reason.clone(),
         });
-        if let Some(m) = abort_activation(record.as_ref(), &reason).await {
-            emit(DeployEvent::BestEffortFailed {
-                what: "activation abort".into(),
-                message: m,
-            });
-        }
-        return Ok(result);
+        self.abort_record(&reason).await;
+        true
     }
 
-    // Stamp this activation onto the resources we skipped. They were skipped
-    // because their content already matches, not because they left the
-    // activation; without this the annotation only ever records the deploys
-    // that happened to change a resource, and stable leaves (ServiceAccounts,
-    // ConfigMaps, import markers) drift arbitrarily far behind.
-    //
-    // Best-effort by design, unlike the applied path: nothing was written to
-    // these resources, so a failure here leaves the cluster exactly as it was
-    // and cannot corrupt the applied state. Failures are counted and reported
-    // rather than halting a deploy that otherwise succeeded. A dry run has no
-    // record to stamp from, and the record stamps nothing when the run has no
-    // activation hash.
-    if !skipped.is_empty()
-        && let Some(record) = &record
-    {
+    /// Stamp this activation onto the resources we skipped. They were skipped
+    /// because their content already matches, not because they left the
+    /// activation; without this the annotation only ever records the deploys
+    /// that happened to change a resource, and stable leaves (ServiceAccounts,
+    /// ConfigMaps, import markers) drift arbitrarily far behind.
+    ///
+    /// Best-effort by design, unlike the applied path: nothing was written to
+    /// these resources, so a failure here leaves the cluster exactly as it was
+    /// and cannot corrupt the applied state. Failures are counted and reported
+    /// rather than halting a deploy that otherwise succeeded. A dry run has no
+    /// record to stamp from, and the record stamps nothing when the run has no
+    /// activation hash.
+    async fn stamp_unchanged(&self) {
+        let Some(record) = &self.record else {
+            return;
+        };
+        if self.skipped.is_empty() {
+            return;
+        }
         let mut failures = 0usize;
-        for chunk in skipped.chunks(concurrency) {
+        for chunk in self.skipped.chunks(self.config.concurrency.max(1)) {
             let mut set = JoinSet::new();
             for rid in chunk {
                 let record = record.clone();
@@ -1015,32 +1160,37 @@ pub(crate) async fn run_deploy(
             }
         }
         if failures > 0 {
-            emit(DeployEvent::BestEffortFailed {
+            self.emit(DeployEvent::BestEffortFailed {
                 what: "activation stamp on unchanged resources".into(),
                 message: format!(
                     "{failures} of {} not stamped; the deploy itself is unaffected and the next deploy retries",
-                    skipped.len()
+                    self.skipped.len()
                 ),
             });
         }
     }
 
-    // Prune orphans (after all nodes terminal).
-    let effective_orphans: Vec<ResourceId> = orphan_rids
-        .iter()
-        .filter(|rid| !consumed_orphans.contains(rid))
-        .cloned()
-        .collect();
-    // Whether any prunable orphan is still on the cluster after this phase.
-    // Finalize records the builds they came from when it is.
-    let mut orphans_left = prune != PrunePolicy::Delete
-        && effective_orphans.iter().any(|rid| !never_pruned(&rid.kind));
-    if !effective_orphans.is_empty() && prune != PrunePolicy::Skip {
-        let ordered = prune_order(&effective_orphans, old_manifests);
+    /// Prune orphans (after all nodes terminal). Returns whether any
+    /// prunable orphan is still on the cluster after this phase; finalize
+    /// records the builds they came from when it is.
+    async fn prune(&mut self) -> bool {
+        let prune = self.prune;
+        let effective_orphans: Vec<ResourceId> = self
+            .orphan_rids
+            .iter()
+            .filter(|rid| !self.consumed_orphans.contains(rid))
+            .cloned()
+            .collect();
+        let mut orphans_left = prune != PrunePolicy::Delete
+            && effective_orphans.iter().any(|rid| !never_pruned(&rid.kind));
+        if effective_orphans.is_empty() || prune == PrunePolicy::Skip {
+            return orphans_left;
+        }
+        let ordered = prune_order(&effective_orphans, self.old_manifests);
         let delete = prune == PrunePolicy::Delete;
         let (kept, prunable): (Vec<ResourceId>, Vec<ResourceId>) =
             ordered.iter().cloned().partition(|r| never_pruned(&r.kind));
-        emit(DeployEvent::PruneStart {
+        self.emit(DeployEvent::PruneStart {
             count: prunable.len(),
             resources: prunable,
             kept,
@@ -1057,18 +1207,16 @@ pub(crate) async fn run_deploy(
                 // explicit operation. See `never_pruned`.
                 continue;
             }
-            let deleted = match tokio::time::timeout(
-                INLINE_BEST_EFFORT_TIMEOUT,
-                resources.prune(rid),
-            )
-            .await
-            {
-                Ok(outcome) => outcome.map_err(|e| e.to_string()),
-                Err(_) => Err(format!(
-                    "no answer within {}s",
-                    INLINE_BEST_EFFORT_TIMEOUT.as_secs()
-                )),
-            };
+            let deleted =
+                match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, self.resources.prune(rid))
+                    .await
+                {
+                    Ok(outcome) => outcome.map_err(|e| e.to_string()),
+                    Err(_) => Err(format!(
+                        "no answer within {}s",
+                        INLINE_BEST_EFFORT_TIMEOUT.as_secs()
+                    )),
+                };
             match deleted {
                 Ok(outcome @ (Pruned::Kept(_) | Pruned::Changed(_))) => {
                     // A changed object is still this cluster's orphan, so the
@@ -1077,14 +1225,14 @@ pub(crate) async fn run_deploy(
                     if matches!(outcome, Pruned::Changed(_)) {
                         orphans_left = true;
                     }
-                    emit(DeployEvent::PruneKept {
+                    self.emit(DeployEvent::PruneKept {
                         resource: rid.clone(),
                         reason: outcome.kept_reason().unwrap_or_default(),
                     });
                 }
                 Ok(Pruned::Deleted | Pruned::Gone) => {
-                    result.pruned += 1;
-                    emit(DeployEvent::NodeStateChanged {
+                    self.result.pruned += 1;
+                    self.emit(DeployEvent::NodeStateChanged {
                         node: NodeId::Resource(rid.clone()),
                         kind: TransitionKind::Delete,
                         verdict: Verdict::Ready,
@@ -1092,9 +1240,9 @@ pub(crate) async fn run_deploy(
                     });
                 }
                 Err(message) => {
-                    result.failed += 1;
+                    self.result.failed += 1;
                     orphans_left = true;
-                    emit(DeployEvent::NodeStateChanged {
+                    self.emit(DeployEvent::NodeStateChanged {
                         node: NodeId::Resource(rid.clone()),
                         kind: TransitionKind::Delete,
                         verdict: Verdict::Failed { message },
@@ -1103,45 +1251,57 @@ pub(crate) async fn run_deploy(
                 }
             }
         }
+        orphans_left
     }
 
-    // Finalize Activation lifecycle (unless pure no-op or dry-run).
-    let actually_changed =
-        result.created > 0 || result.configured > 0 || result.pruned > 0 || result.failed > 0;
-
-    if let Some(record) = &record
-        && actually_changed
-    {
-        match tokio::time::timeout(
-            INLINE_BEST_EFFORT_TIMEOUT,
-            record.finalize(result.failed > 0, orphans_left),
-        )
-        .await
+    /// Finalize Activation lifecycle (unless pure no-op or dry-run).
+    async fn finalize(self, orphans_left: bool) -> Result<DeployResult, DeployError> {
+        let r = &self.result;
+        let actually_changed = r.created > 0 || r.configured > 0 || r.pruned > 0 || r.failed > 0;
+        if let Some(record) = &self.record
+            && actually_changed
         {
-            Ok(Ok(Some(f))) => emit(DeployEvent::Finalized {
-                activation: f.activation,
-                previous: f.previous,
-            }),
-            Ok(Ok(None)) => {}
-            // The record did not become current, so the run has not
-            // succeeded and its build must not be cached as the one the
-            // cluster runs.
-            Ok(Err(e)) => {
-                return Err(DeployError::FinalizeFailed {
-                    message: e.to_string(),
-                    partial: result,
-                });
-            }
-            Err(_) => {
-                return Err(DeployError::FinalizeFailed {
-                    message: format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
-                    partial: result,
-                });
+            match tokio::time::timeout(
+                INLINE_BEST_EFFORT_TIMEOUT,
+                record.finalize(r.failed > 0, orphans_left),
+            )
+            .await
+            {
+                Ok(Ok(Some(f))) => self.emit(DeployEvent::Finalized {
+                    activation: f.activation,
+                    previous: f.previous,
+                }),
+                Ok(Ok(None)) => {}
+                // The record did not become current, so the run has not
+                // succeeded and its build must not be cached as the one the
+                // cluster runs.
+                Ok(Err(e)) => {
+                    return Err(DeployError::FinalizeFailed {
+                        message: e.to_string(),
+                        partial: self.result,
+                    });
+                }
+                Err(_) => {
+                    return Err(DeployError::FinalizeFailed {
+                        message: format!(
+                            "no answer within {}s",
+                            INLINE_BEST_EFFORT_TIMEOUT.as_secs()
+                        ),
+                        partial: self.result,
+                    });
+                }
             }
         }
+        Ok(self.result)
     }
+}
 
-    Ok(result)
+/// The reason the cancel token gives, or "cancelled".
+fn cancel_reason(config: &SchedulerConfig) -> String {
+    config
+        .cancel
+        .reason()
+        .unwrap_or_else(|| "cancelled".to_string())
 }
 
 /// [`run_deploy`] over any plan, against the scripted fake. For tests of
@@ -1177,23 +1337,6 @@ impl Drop for AbortOnDrop {
     }
 }
 
-/// A node succeeded. CRD-like nodes hold their dependents until the next
-/// discovery refresh completes (the barrier); everything else promotes at
-/// once.
-fn finish_success(
-    state: &mut SchedulerState,
-    barrier: &mut CrdBarrier,
-    node_id: &NodeId,
-    entry: &PlanNodeEntry,
-) {
-    if is_crd_like(entry) {
-        state.mark_terminal_deferred(node_id);
-        barrier.awaiting.push(node_id.clone());
-    } else {
-        state.mark_terminal(node_id, true);
-    }
-}
-
 /// CRD barrier bookkeeping.
 #[derive(Default)]
 struct CrdBarrier {
@@ -1202,38 +1345,6 @@ struct CrdBarrier {
     /// CRD nodes covered by the refresh in flight.
     covered: Vec<NodeId>,
     in_flight: bool,
-}
-
-impl CrdBarrier {
-    fn start_if_needed(
-        &mut self,
-        tasks: &mut JoinSet<Done>,
-        kinds: &mut HashMap<tokio::task::Id, TaskKind>,
-        resources: &Arc<dyn ResourceIo>,
-        record: Option<&Arc<dyn DeployRecord>>,
-        progress: &Progress,
-        emit: &impl Fn(DeployEvent),
-    ) {
-        if self.in_flight || self.awaiting.is_empty() {
-            return;
-        }
-        self.covered = std::mem::take(&mut self.awaiting);
-        self.in_flight = true;
-        emit(DeployEvent::CrdRediscovery);
-        progress.set_phase(&DISCOVERY_NODE, Phase::Discovery);
-        let resources = resources.clone();
-        let record = record.cloned();
-        let handle = tasks.spawn(async move {
-            let refreshed = resources.rediscover().await;
-            if refreshed.is_ok()
-                && let Some(record) = record
-            {
-                record.discovery_refreshed().await;
-            }
-            Done::Rediscovery(refreshed.map_err(|e| e.to_string()))
-        });
-        kinds.insert(handle.id(), TaskKind::Rediscovery);
-    }
 }
 
 /// Checkpoint cadence. Running totals, one write in flight at most.
@@ -1264,28 +1375,6 @@ impl Checkpoints {
 
     fn terminal(&mut self) {
         self.since_last += 1;
-    }
-
-    fn start_if_due(
-        &mut self,
-        tasks: &mut JoinSet<Done>,
-        kinds: &mut HashMap<tokio::task::Id, TaskKind>,
-        record: Option<&Arc<dyn DeployRecord>>,
-    ) {
-        let Some(record) = record else {
-            return;
-        };
-        if self.in_flight || self.since_last < CHECKPOINT_BATCH {
-            return;
-        }
-        self.since_last = 0;
-        self.in_flight = true;
-        let record = record.clone();
-        let (applied, failed) = (self.applied, self.failed);
-        let handle = tasks.spawn(async move {
-            Done::Checkpoint(record.checkpoint(applied, failed, false).await)
-        });
-        kinds.insert(handle.id(), TaskKind::Checkpoint);
     }
 }
 
