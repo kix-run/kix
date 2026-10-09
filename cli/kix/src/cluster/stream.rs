@@ -11,6 +11,9 @@
 
 use std::time::Duration;
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 use crate::manifest::types::ResourceId;
 
 use super::apply::ApplyAction;
@@ -19,8 +22,10 @@ use super::readiness::ImportTarget;
 /// What kind of operation a node represents.
 ///
 /// The planner tags every node in the plan with one of these. Rendering and
-/// scheduling both branch on this tag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// scheduling both branch on this tag. The deploy log names it in
+/// snake_case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum TransitionKind {
     /// Server-side apply a manifest.
     Apply,
@@ -29,7 +34,7 @@ pub enum TransitionKind {
     Skip,
     /// Delete the live object, then apply. Tagged `recreate` because that
     /// is the act, whatever the trigger. The current producer is the
-    /// rerun rule: a manifest carrying `kix.run/rerun` (a probe Job) whose
+    /// rerun rule: a manifest carrying the rerun annotation (a probe Job) whose
     /// identity hash changed is run again, never patched, and the reason
     /// rides [`NodeDetail::Rerun`]. The executor applies plainly when
     /// nothing is live.
@@ -123,6 +128,17 @@ pub enum NodeId {
     Synthetic(String),
 }
 
+/// The resource as [`ResourceId`] shows it, or a synthetic node's id in
+/// `⟦…⟧`.
+impl std::fmt::Display for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeId::Resource(rid) => write!(f, "{rid}"),
+            NodeId::Synthetic(s) => write!(f, "⟦{s}⟧"),
+        }
+    }
+}
+
 impl From<ResourceId> for NodeId {
     fn from(rid: ResourceId) -> Self {
         NodeId::Resource(rid)
@@ -132,8 +148,8 @@ impl From<ResourceId> for NodeId {
 /// Structured per-node detail piggy-backed on state changes.
 ///
 /// The renderer reads this to build the "2/3 ready, rollout 0/1" per-kind
-/// strings. JSON logs serialize the variants directly; other renderers format
-/// them for display.
+/// strings. The deploy log mirrors them in [`super::deploy_log::Detail`];
+/// other renderers format them for display.
 #[derive(Debug, Clone)]
 pub enum NodeDetail {
     /// Apply returned this outcome (Created/Configured/Unchanged/Skipped).
@@ -256,7 +272,8 @@ pub enum DeployEvent {
 }
 
 /// What a node in flight is doing. Reported by the watchdog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum Phase {
     /// Decrypting SOPS secrets before apply.
     Hydrate,

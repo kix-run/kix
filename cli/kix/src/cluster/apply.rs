@@ -162,8 +162,11 @@ pub struct ApplyPreview {
     pub result: Value,
 }
 
-/// The action taken during apply.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The action taken during apply. The deploy log names it in snake_case.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum ApplyAction {
     /// Resource was created (didn't exist before).
     Created,

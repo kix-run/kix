@@ -4,6 +4,7 @@ pub mod activation;
 pub mod apply;
 pub mod cancel;
 pub mod client;
+pub mod deploy_log;
 pub mod drift;
 pub mod errors;
 #[cfg(any(test, feature = "test-util"))]

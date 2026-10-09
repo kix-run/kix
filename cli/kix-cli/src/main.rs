@@ -2,6 +2,8 @@ mod cli;
 mod commands;
 mod output;
 mod plan;
+#[cfg(test)]
+mod schemas;
 pub mod trace_sink;
 
 use clap::FromArgMatches;

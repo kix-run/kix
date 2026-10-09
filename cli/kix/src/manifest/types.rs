@@ -15,7 +15,9 @@ pub fn is_secret(manifest: &serde_json::Value) -> bool {
 }
 
 /// Unique identifier for a K8s resource.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct ResourceId {
     pub kind: String,
     pub namespace: String, // "_cluster" for cluster-scoped

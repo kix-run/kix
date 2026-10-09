@@ -598,34 +598,6 @@ fn split_key(key: &str) -> (String, &str) {
 }
 
 #[cfg(test)]
-mod schema_tests {
-    /// Where the committed schema lives, relative to this crate.
-    const SCHEMA_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/schema/plan.schema.json");
-
-    /// The committed schema is the type's schema. Regenerate it with
-    /// `KIX_WRITE_PLAN_SCHEMA=1 cargo test -p kix-cli plan::schema`, and
-    /// set `SCHEMA_VERSION` to the day's date when the change is not backward
-    /// compatible.
-    #[test]
-    fn the_committed_schema_matches_the_type() {
-        let schema = serde_json::to_value(schemars::schema_for!(kix::plan::document::Plan))
-            .expect("a schema serializes");
-        let generated = serde_json::to_string_pretty(&schema).unwrap() + "\n";
-        if std::env::var_os("KIX_WRITE_PLAN_SCHEMA").is_some() {
-            std::fs::create_dir_all(std::path::Path::new(SCHEMA_PATH).parent().unwrap()).unwrap();
-            std::fs::write(SCHEMA_PATH, &generated).unwrap();
-        }
-        let committed = std::fs::read_to_string(SCHEMA_PATH).unwrap_or_default();
-        assert!(
-            committed == generated,
-            "kix-cli/schema/plan.schema.json does not match the Plan type. \
-             Regenerate it with KIX_WRITE_PLAN_SCHEMA=1 cargo test -p kix-cli plan::schema \
-             and set SCHEMA_VERSION to the day's date if the change is not backward compatible."
-        );
-    }
-}
-
-#[cfg(test)]
 mod render_tests {
     use super::*;
     use kix::eval::store_graph::StoreGraph;

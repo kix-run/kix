@@ -648,7 +648,7 @@ impl StreamCliObserver {
         verdict: &Verdict,
         detail: Option<&NodeDetail>,
     ) {
-        let label = self.node_label(node);
+        let label = node.to_string();
         let tag = kind
             .tag()
             .map(|t| format!("{} ", output::dim(t)))
@@ -797,13 +797,6 @@ impl StreamCliObserver {
                     output::yellow(message),
                 );
             }
-        }
-    }
-
-    fn node_label(&self, node: &NodeId) -> String {
-        match node {
-            NodeId::Resource(rid) => rid.to_string(),
-            NodeId::Synthetic(s) => format!("⟦{s}⟧"),
         }
     }
 }
