@@ -737,7 +737,19 @@ async fn plan_rollback(
     // the domain move, and stamping upgrades its keys, its record's API
     // group and Kix's own CRDs, so what gets applied names the current
     // domain throughout.
-    let target_graph = baseline::target_build(cluster, selected).map_err(|e| miette!("{e}"))?;
+    let target_hash = selected.identity_hash.as_deref().ok_or_else(|| {
+        miette!(
+            "superseded activation '{}' has no identity hash",
+            selected.name
+        )
+    })?;
+    let target_graph = baseline::target_build(
+        cluster,
+        &selected.name,
+        target_hash,
+        selected.built_via.as_deref(),
+    )
+    .map_err(|e| miette!("{e}"))?;
     let target_result_dir = target_graph.result_dir.clone();
     same_cluster(&selected.name, &target_graph.cluster_name, cluster)?;
 
