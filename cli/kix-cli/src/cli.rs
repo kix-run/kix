@@ -857,6 +857,13 @@ pub struct GcArgs {
     #[arg(long, requires = "hard")]
     pub include_unattributed: bool,
 
+    /// With --hard, also judge copies of Kix objects that a controller made:
+    /// objects that carry Kix's annotations and an owner reference but no
+    /// Kix apply record. Kix did not apply them, so by default --hard only
+    /// reports them.
+    #[arg(long, requires = "hard")]
+    pub include_copies: bool,
+
     /// Always keep at least this many of the newest rollback targets
     /// (Superseded Activation records whose deploy finished), whatever their
     /// age. A record of a deploy that never finished is kept by age alone.
