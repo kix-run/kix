@@ -99,7 +99,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let total_apply = p
         .checked
         .plan()
-        .nodes
+        .nodes()
         .iter()
         .filter(|n| matches!(n.action, ChangeAction::Apply(_)))
         .count();
@@ -162,7 +162,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         // activation from switching, so the next deploy sees the same
         // hashes). The engine's Skip path recreates it, but only if the
         // engine runs.
-        let has_reruns = p.checked.plan().nodes.iter().any(|n| n.rerun.is_some());
+        let has_reruns = p.checked.plan().nodes().iter().any(|n| n.rerun.is_some());
         let failed_reruns = match &p.client {
             Some(client) if has_reruns => ctx.runtime.block_on(async {
                 let discovery = fetch::discover_resources(client)
@@ -852,7 +852,7 @@ async fn run_deploy_async(
     // the run; refusing here applies nothing.
     let namespaceless = kix::cluster::apply::namespaceless(
         discovery,
-        checked.plan().nodes.iter().filter_map(|n| match &n.id {
+        checked.plan().nodes().iter().filter_map(|n| match &n.id {
             NodeId::Resource(rid) => Some(rid),
             _ => None,
         }),
@@ -1474,9 +1474,8 @@ mod cached_baseline_tests {
 #[cfg(test)]
 mod run_end_tests {
     use super::*;
-    use kix::cluster::graph::ResourceGraph;
-    use kix::cluster::ops::scripted::{ApplyFailure, Behaviour, NodeScript, ScriptedOps};
     use kix::cluster::scheduler::{DeployPlan, PrunePolicy};
+    use kix::cluster::scripted::{ApplyFailure, Behaviour, NodeScript, ScriptedOps};
     use kix::cluster::stream::NullObserver;
     use kix::manifest::keys;
     use serde_json::json;
@@ -1501,13 +1500,6 @@ mod run_end_tests {
             namespace: "default".into(),
             name: name.into(),
         }
-    }
-
-    fn apply_all(manifests: &[Value]) -> DeployPlan {
-        let graph = ResourceGraph::from_manifests(manifests).unwrap();
-        let changes: Vec<ChangeAction> =
-            manifests.iter().cloned().map(ChangeAction::Apply).collect();
-        DeployPlan::from_graph_and_changes(&graph, &changes).unwrap()
     }
 
     /// A run's engine settings and its prune policy.
@@ -1549,7 +1541,7 @@ mod run_end_tests {
     ) -> std::result::Result<DeployResult, scheduler::DeployError> {
         scheduler::run_scripted(
             ops.clone(),
-            apply_all(manifests),
+            DeployPlan::applying(manifests),
             orphans,
             old,
             settings.prune,

@@ -13,11 +13,15 @@ pub mod fieldsv1;
 pub mod graph;
 pub mod migrate;
 pub mod normalize;
-pub mod ops;
+pub(crate) mod ops;
 pub mod preview;
 pub mod prune_guard;
 pub mod readiness;
 pub mod scheduler;
+/// The scripted fake of the engine's seams, for tests of the engine's
+/// callers.
+#[cfg(any(test, feature = "test-util"))]
+pub use ops::scripted;
 pub mod secrets;
 pub mod stream;
 pub mod tenancy;

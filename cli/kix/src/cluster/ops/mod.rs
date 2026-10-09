@@ -116,8 +116,11 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
 ///
 /// Every method is best-effort from the engine's point of view: it reports
 /// a failure as a `BestEffortFailed` event and carries on, except that a
-/// failed [`DeployRecord::finalize`] means the run did not succeed. Each is
-/// bounded in time by the implementation.
+/// failed [`DeployRecord::finalize`] means the run did not succeed. The
+/// engine bounds each call in time; [`ActivationRecord`] also bounds its
+/// checkpoint, abort and finalize with a shorter limit of its own.
+/// [`DeployRecord::discovery_refreshed`] runs inside the discovery refresh,
+/// which the watchdog watches.
 #[async_trait]
 pub(crate) trait DeployRecord: Send + Sync + 'static {
     /// Start of run. Creates the Activation record, marks it Deploying, and
@@ -265,6 +268,10 @@ pub(crate) enum RecordWriteError {
     /// The write did not answer within the implementation's bound.
     #[error("no answer within {}s", .0.as_secs())]
     NoAnswer(Duration),
+    /// A failure a test scripted, with its message.
+    #[cfg(any(test, feature = "test-util"))]
+    #[error("{0}")]
+    Scripted(String),
 }
 
 /// Why [`ResourceIo::get_live`] could not read the live object.
@@ -274,6 +281,10 @@ pub(crate) enum ReadError {
     NotDiscovered(#[from] NotDiscovered),
     #[error("get failed: {}", describe(.0))]
     Get(kube::Error),
+    /// A failure a test scripted, with its message.
+    #[cfg(any(test, feature = "test-util"))]
+    #[error("{0}")]
+    Scripted(String),
 }
 
 /// Why [`ResourceIo::recreate_in_place`] did not recreate the object.
@@ -291,6 +302,10 @@ pub(crate) enum RecreateError {
     Reapply(ApplyError),
     #[error("dry-run re-apply failed: {0}")]
     DryRunReapply(ApplyError),
+    /// A failure a test scripted, with its message.
+    #[cfg(any(test, feature = "test-util"))]
+    #[error("{0}")]
+    Scripted(String),
 }
 
 /// Why [`DeployRecord::stamp_unchanged`] did not stamp a resource.
@@ -300,6 +315,10 @@ pub(crate) enum StampError {
     NotDiscovered,
     #[error(transparent)]
     Apply(ApplyError),
+    /// A failure a test scripted, with its message.
+    #[cfg(any(test, feature = "test-util"))]
+    #[error("{0}")]
+    Scripted(String),
 }
 
 /// Why [`ResourceIo::prune`] did not delete an orphan.
@@ -313,4 +332,8 @@ pub(crate) enum DeleteError {
     Domain(LegacyDomainError),
     #[error(transparent)]
     Prune(PruneError),
+    /// A failure a test scripted, with its message.
+    #[cfg(any(test, feature = "test-util"))]
+    #[error("{0}")]
+    Scripted(String),
 }

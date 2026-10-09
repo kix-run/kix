@@ -337,7 +337,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
 
     let total_apply = checked
         .plan()
-        .nodes
+        .nodes()
         .iter()
         .filter(|n| matches!(n.action, ChangeAction::Apply(_)))
         .count();
@@ -353,7 +353,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     if total_apply == 0 && checked.orphans().is_empty() {
         // Same rule as deploy: an unchanged probe under `kix.run/rerun`
         // whose last run failed still runs, and only the engine does that.
-        let failed_reruns = if checked.plan().nodes.iter().any(|n| n.rerun.is_some()) {
+        let failed_reruns = if checked.plan().nodes().iter().any(|n| n.rerun.is_some()) {
             scheduler::failed_rerun_nodes(&client, target.discovery(), checked.plan()).await
         } else {
             Vec::new()

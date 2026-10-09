@@ -69,14 +69,15 @@ pub struct PlanNodeEntry {
     pub rerun: Option<Value>,
 }
 
-/// The planner's output, which the engine (`run_deploy`) consumes.
+/// The planner's output, which the engine (`run_deploy`) consumes. Made
+/// only inside the library; callers read its [`DeployPlan::nodes`].
 ///
 /// `edges` is `(dependent, predecessor)`; the dependent waits on the
 /// predecessor. Both endpoints must also appear in `nodes`.
 #[derive(Debug, Clone, Default)]
 pub struct DeployPlan {
-    pub nodes: Vec<PlanNodeEntry>,
-    pub edges: Vec<(NodeId, NodeId)>,
+    pub(crate) nodes: Vec<PlanNodeEntry>,
+    pub(crate) edges: Vec<(NodeId, NodeId)>,
 }
 
 impl DeployPlan {
@@ -89,7 +90,7 @@ impl DeployPlan {
     /// Fails on the first import marker the library would not have written
     /// (see [`readiness::import_target_from_manifest`]), before anything is
     /// applied.
-    pub fn from_graph_and_changes(
+    pub(crate) fn from_graph_and_changes(
         graph: &ResourceGraph,
         changes: &[ChangeAction],
     ) -> Result<Self, readiness::MalformedMarker> {
@@ -157,6 +158,21 @@ impl DeployPlan {
         }
 
         Ok(DeployPlan { nodes, edges })
+    }
+
+    /// Every node of the plan, in graph order.
+    pub fn nodes(&self) -> &[PlanNodeEntry] {
+        &self.nodes
+    }
+
+    /// A plan that applies every manifest, for tests of what callers make
+    /// of a run.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn applying(manifests: &[Value]) -> Self {
+        let graph = ResourceGraph::from_manifests(manifests).expect("a test plan's graph");
+        let changes: Vec<ChangeAction> =
+            manifests.iter().cloned().map(ChangeAction::Apply).collect();
+        Self::from_graph_and_changes(&graph, &changes).expect("a test plan's markers")
     }
 
     fn to_plan_nodes(&self) -> Vec<PlanNode> {

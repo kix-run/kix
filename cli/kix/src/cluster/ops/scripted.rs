@@ -25,16 +25,16 @@ use tokio_util::sync::CancellationToken;
 
 use crate::manifest::types::ResourceId;
 
-use super::super::activation::RecordsError;
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
 use super::super::fetch::FetchError;
-use super::super::prune_guard::{PruneError, Pruned};
+use super::super::prune_guard::Pruned;
 use super::super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
 use super::super::secrets::{HydrationResult, SecretError};
+pub use super::Finalized;
 use super::{
-    DeleteError, DeployRecord, Finalized, OnStatus, ReadError, RecordWriteError, RecreateError,
-    ResourceIo, SecretHydrator, StampError,
+    DeleteError, DeployRecord, OnStatus, ReadError, RecordWriteError, RecreateError, ResourceIo,
+    SecretHydrator, StampError,
 };
 
 /// A latch many calls can wait on. Opened once by the test.
@@ -351,21 +351,6 @@ impl ScriptedOps {
     }
 }
 
-/// A kube error carrying a scripted message, for the typed errors whose
-/// message a test scripts.
-fn scripted_error(message: String) -> kube::Error {
-    kube::Error::Discovery(kube::error::DiscoveryError::MissingKind(message))
-}
-
-/// A failed write to the Activation record, with a scripted message.
-fn record_error(message: String) -> RecordWriteError {
-    RecordWriteError::Records(RecordsError {
-        op: "patch",
-        name: None,
-        source: scripted_error(message),
-    })
-}
-
 /// Counts applies in flight for the duration of a borrow.
 struct InFlightApply<'a>(&'a ScriptedOps);
 
@@ -433,11 +418,7 @@ impl ResourceIo for ScriptedOps {
     async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, ReadError> {
         self.record(Call::GetLive(rid.clone()));
         let script = self.node_script(rid);
-        script
-            .live
-            .run()
-            .await
-            .map_err(|m| ReadError::Get(scripted_error(m)))
+        script.live.run().await.map_err(ReadError::Scripted)
     }
 
     async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, RecreateError> {
@@ -453,7 +434,7 @@ impl ResourceIo for ScriptedOps {
                 resource_id: rid,
                 preview: None,
             })
-            .map_err(|m| RecreateError::Delete(scripted_error(m)))
+            .map_err(RecreateError::Scripted)
     }
 
     async fn wait_ready(
@@ -515,9 +496,7 @@ impl ResourceIo for ScriptedOps {
     async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
         self.record(Call::Delete(rid.clone()));
         let b = self.delete.lock().unwrap().clone();
-        b.run()
-            .await
-            .map_err(|m| DeleteError::Prune(PruneError::Kube(scripted_error(m))))
+        b.run().await.map_err(DeleteError::Scripted)
     }
 }
 
@@ -541,15 +520,13 @@ impl DeployRecord for ScriptedOps {
             finalizing,
         });
         let b = self.checkpoint.lock().unwrap().clone();
-        b.run().await.map_err(record_error)
+        b.run().await.map_err(RecordWriteError::Scripted)
     }
 
     async fn stamp_unchanged(&self, rid: &ResourceId) -> Result<(), StampError> {
         self.record(Call::Stamp(rid.clone()));
         let b = self.stamp.lock().unwrap().clone();
-        b.run()
-            .await
-            .map_err(|kind| StampError::Apply(ApplyError::UnknownKind { kind }))
+        b.run().await.map_err(StampError::Scripted)
     }
 
     async fn finalize(
@@ -562,7 +539,7 @@ impl DeployRecord for ScriptedOps {
             orphans_left,
         });
         let b = self.finalize.lock().unwrap().clone();
-        b.run().await.map_err(record_error)
+        b.run().await.map_err(RecordWriteError::Scripted)
     }
 
     async fn abort(&self, reason: &str) -> Result<(), RecordWriteError> {
@@ -570,6 +547,6 @@ impl DeployRecord for ScriptedOps {
             reason: reason.to_string(),
         });
         let b = self.abort.lock().unwrap().clone();
-        b.run().await.map_err(record_error)
+        b.run().await.map_err(RecordWriteError::Scripted)
     }
 }

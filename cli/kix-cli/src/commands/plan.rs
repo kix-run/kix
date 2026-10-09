@@ -255,7 +255,7 @@ pub(crate) fn dry_run(
         let writes = p
             .checked
             .plan()
-            .nodes
+            .nodes()
             .iter()
             .filter(|n| !matches!(n.kind, TransitionKind::Skip))
             .count();
@@ -754,7 +754,7 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
     let reruns: Vec<String> = p
         .checked
         .plan()
-        .nodes
+        .nodes()
         .iter()
         .filter(|n| matches!(n.kind, TransitionKind::Recreate))
         .map(|n| match &n.id {
