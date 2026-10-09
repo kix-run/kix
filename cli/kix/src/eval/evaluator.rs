@@ -1,7 +1,7 @@
 //! Core evaluator: trait-based Nix backend abstraction with caching.
 //!
 //! The `NixBackend` trait allows swapping between:
-//! - `MockNixBackend` (for testing, available now)
+//! - `MockNixBackend` (in this crate's tests)
 //! - A real FFI backend using `nix-bindings-*` crates (added in Step 9)
 
 use std::path::{Path, PathBuf};

@@ -13,8 +13,8 @@
 //!   Default backend for production use. Benefits from Nix's built-in
 //!   eval cache for fast repeated invocations.
 //!
-//! - [`mock::MockNixBackend`] returns canned data and is always available,
-//!   used for testing and development without a Nix installation.
+//! - `mock::MockNixBackend` returns canned data, for this crate's tests
+//!   without a Nix installation.
 //!
 //! - `FfiNixBackend`, gated behind `#[cfg(feature = "nix-ffi")]`, provides
 //!   direct FFI evaluation via `nix-bindings-*` crates. It is experimental and
@@ -27,7 +27,8 @@ pub mod cli_backend;
 pub mod error;
 pub mod evaluator;
 pub mod manifest_json;
-pub mod mock;
+#[cfg(test)]
+mod mock;
 pub mod stamp;
 pub mod store;
 pub mod store_graph;
