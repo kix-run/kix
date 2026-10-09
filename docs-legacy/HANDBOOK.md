@@ -187,7 +187,7 @@ ls result/
 | `kix list packages` | List registered packages | `--cluster <name>` |
 | `kix graph <cluster>` | DAG visualization | `--format tree|dot|json` |
 | `kix inspect <cluster>` | Rendered resources by namespace and kind | |
-| `kix gc <cluster>` | Garbage-collect stale resources; retire old Activation records | `--hard`, `--operator`, `--keep N` (always keep the N newest, default 10), `--keep-max N` (never more than N, default 50), `--keep-for 30d` (retire older, default 30d, `0` off), `--include-unstamped`, `--include-unattributed`, `-y` |
+| `kix gc <cluster>` | Garbage-collect stale resources; retire old Activation records | `--hard`, `--operator`, `--keep N` (always keep the N newest rollback targets, default 10), `--keep-max N` (never more than N, default 50), `--keep-for 30d` (retire older, default 30d, `0` off), `--include-unstamped`, `--include-unattributed`, `-y` |
 | `kix rollback <cluster>` | Roll back to a previous activation | `-y`, `--dry-run`, `--prune`, `--list`, `--operator` |
 | `kix health <cluster>` | Drift detection vs live | |
 | `kix snapshot save <cluster> <dir>` | Dump one Kix cluster's live state | |

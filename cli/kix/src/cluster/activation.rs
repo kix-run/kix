@@ -1171,9 +1171,13 @@ impl RetentionPolicy {
 /// Why a record is retired.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetireReason {
-    /// Past the `keep_max` newest.
+    /// Past the cap of `keep_max` records kept: a rollback target past the
+    /// `keep_max` newest, or a record of a deploy that never finished,
+    /// oldest first, once everything kept would exceed the cap.
     BeyondMax(usize),
-    /// Older than `keep_for` and past the `keep_min` newest.
+    /// Older than `keep_for`: a rollback target past the `keep_min` newest,
+    /// or any record of a deploy that never finished, which the floor does
+    /// not cover.
     OlderThan(chrono::Duration),
     /// No usable timestamp at all, so its age is unknown and it sorts oldest.
     /// A record that never finished a deploy still has `status.failure.at` or
@@ -1857,6 +1861,76 @@ mod retire_plan_tests {
         let plan = retire_plan(input, &policy(2, 2, None));
         assert_eq!(names(&plan.kept), vec!["a", "b"]);
         assert_eq!(plan.retire[0].record.name, "c");
+    }
+}
+
+#[cfg(test)]
+mod retire_plan_properties {
+    use super::*;
+    use chrono::{Duration, TimeZone, Utc};
+    use proptest::prelude::*;
+
+    /// A record by kind (0: a finished deploy, 1: a failed one, 2: one with
+    /// only a creation time) and age in hours before `now()`.
+    fn record(i: usize, kind: u8, hours: i64) -> Record {
+        let now = Utc.with_ymd_and_hms(2026, 9, 7, 12, 0, 0).unwrap();
+        let at = now - Duration::hours(hours);
+        let mut record = Record {
+            name: format!("r{i:03}"),
+            ..Default::default()
+        };
+        match kind {
+            0 => record.deployed_at = Some(at.to_rfc3339()),
+            1 => record.failed_at = Some(at.to_rfc3339()),
+            _ => record.created_at = Some(at),
+        }
+        record
+    }
+
+    proptest! {
+        /// Whatever the mix: every record is kept or retired, once; no more
+        /// than the cap is kept; and the floor's newest rollback targets
+        /// are kept.
+        #[test]
+        fn retention_keeps_the_floor_and_the_cap(
+            records in prop::collection::vec((0u8..3, 0i64..3000), 0..90),
+            keep_min in 0usize..15,
+            keep_max in 0usize..60,
+            keep_for_days in prop::option::of(0i64..60),
+        ) {
+            let input: Vec<Record> = records
+                .iter()
+                .enumerate()
+                .map(|(i, (kind, hours))| record(i, *kind, *hours))
+                .collect();
+            let policy = RetentionPolicy {
+                keep_min,
+                keep_max,
+                keep_for: keep_for_days.map(Duration::days),
+                now: Utc.with_ymd_and_hms(2026, 9, 7, 12, 0, 0).unwrap(),
+            };
+            let plan = retire_plan(input.clone(), &policy);
+
+            let mut seen: Vec<&str> = plan
+                .kept
+                .iter()
+                .map(|r| r.name.as_str())
+                .chain(plan.retire.iter().map(|r| r.record.name.as_str()))
+                .collect();
+            seen.sort();
+            let mut all: Vec<&str> = input.iter().map(|r| r.name.as_str()).collect();
+            all.sort();
+            prop_assert_eq!(seen, all);
+
+            prop_assert!(plan.kept.len() <= keep_min.max(keep_max));
+
+            let mut targets: Vec<Record> =
+                input.into_iter().filter(Record::was_ever_current).collect();
+            sort_newest_first(&mut targets);
+            for floor in targets.iter().take(keep_min) {
+                prop_assert!(plan.kept.contains(floor), "{} retired", floor.name);
+            }
+        }
     }
 }
 

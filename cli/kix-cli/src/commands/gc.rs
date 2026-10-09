@@ -776,8 +776,8 @@ enum GarbageReason {
     /// Resource has no `kix.run/identity-hash` annotation. It looks kix-managed
     /// (matched the managed-by label) but was never properly stamped.
     NoIdentityHash,
-    /// An `Activation` CR in phase `Superseded` older than the `--keep`
-    /// newest. Rollback history beyond the retention window.
+    /// A Superseded `Activation` record the retention policy retires
+    /// (`--keep`, `--keep-max`, `--keep-for`).
     RetiredActivation,
 }
 
@@ -786,7 +786,7 @@ impl GarbageReason {
         match self {
             GarbageReason::HashNotExpected => "identity-hash not in expected set",
             GarbageReason::NoIdentityHash => "missing identity-hash",
-            GarbageReason::RetiredActivation => "superseded activation older than --keep",
+            GarbageReason::RetiredActivation => "activation record retired by retention",
         }
     }
 }
@@ -1160,10 +1160,24 @@ fn describe_policy(policy: &RetentionPolicy) -> String {
         None => String::new(),
     };
     format!(
-        "keeping at least the {} newest, at most {}{age}",
+        "keeping at least the {} newest rollback targets, at most {} records{age}",
         policy.keep_min,
         policy.keep_max.max(policy.keep_min)
     )
+}
+
+/// The time retention judged a record by, in words: when it was deployed,
+/// else when its deploy failed, else when it was created.
+fn judged_by(record: &Record) -> String {
+    if let Some(at) = record.deployed_at.as_deref().filter(|at| !at.is_empty()) {
+        at.to_string()
+    } else if let Some(at) = &record.failed_at {
+        format!("failed {at}")
+    } else if let Some(at) = record.created_at {
+        format!("created {}", at.to_rfc3339())
+    } else {
+        "no timestamp".to_string()
+    }
 }
 
 /// Why a record is retired, in words.
@@ -1204,12 +1218,7 @@ fn print_record_plan(retirement: &RecordRetirement, policy: &RetentionPolicy) {
         describe_policy(policy),
     );
     for retired in &plan.retire {
-        let when = retired
-            .record
-            .deployed_at
-            .clone()
-            .filter(|at| !at.is_empty())
-            .unwrap_or_else(|| "no deployed-at".to_string());
+        let when = judged_by(&retired.record);
         println!(
             "  {} Activation/{} {}",
             output::red("-"),
@@ -1656,6 +1665,20 @@ mod record_garbage_tests {
         );
         assert_eq!(reason(RetireReason::BeyondMax(3)), "beyond the 3 newest");
         assert_eq!(reason(RetireReason::UnknownAge), "age unknown");
+    }
+
+    /// A record of a deploy that never finished is shown by when it failed,
+    /// the time retention judged it by.
+    #[test]
+    fn a_retired_record_is_shown_by_the_time_it_was_judged_by() {
+        assert_eq!(
+            judged_by(&rec("c-1", "2026-09-01T00:00:00Z")),
+            "2026-09-01T00:00:00Z"
+        );
+        let mut failed = Record::default();
+        failed.failed_at = Some("2026-09-02T00:00:00Z".into());
+        assert_eq!(judged_by(&failed), "failed 2026-09-02T00:00:00Z");
+        assert_eq!(judged_by(&Record::default()), "no timestamp");
     }
 }
 
