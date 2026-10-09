@@ -26,8 +26,8 @@ use kix::cluster::stream::{
 };
 use kix::cluster::watchdog::StallPolicy;
 use kix::manifest::types::ResourceId;
-use kix::plan::{CheckedPlan, Target};
 use kix::plan::document::PlanFlags;
+use kix::plan::{CheckedPlan, Target};
 
 use crate::cli::{DeployArgs, Detail, OnError, PlanArgs};
 use crate::output;
@@ -439,6 +439,70 @@ async fn check_cached_baseline(
     ))
 }
 
+/// Refuse, before anything is written, what would go wrong part way through
+/// the run: an Activation record of this name that belongs to another build,
+/// and objects the engine would refuse for a missing namespace. Deploy and
+/// rollback both run it once connected.
+pub(crate) async fn refuse_before_writing(
+    checked: &CheckedPlan,
+    records: Option<&Records>,
+    discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
+) -> Result<()> {
+    if let (Some(name), Some(hash)) = (
+        checked.activation_name(),
+        checked.activation_identity_hash(),
+    ) && let Some(records) = records
+    {
+        refuse_name_taken(records, name, hash).await?;
+    }
+    refuse_namespaceless(discovery, checked.plan())
+}
+
+/// Refuse a record name the cluster already has for another build.
+async fn refuse_name_taken(records: &Records, name: &str, hash: &str) -> Result<()> {
+    if let Some(found) = records
+        .identity_hash_of(name)
+        .await
+        .map_err(|e| miette!("{e}"))?
+        && found != hash
+    {
+        return Err(miette!(
+            "the cluster already has an Activation named {name} for another build \
+             (identity hash {found}, this build is {hash}). Nothing was applied."
+        ));
+    }
+    Ok(())
+}
+
+/// The engine would refuse each of these on its own, part way through the
+/// run; refusing here applies nothing.
+fn refuse_namespaceless(
+    discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
+    plan: &kix::cluster::scheduler::DeployPlan,
+) -> Result<()> {
+    let namespaceless = kix::cluster::apply::namespaceless(
+        discovery,
+        plan.nodes().iter().filter_map(|n| match &n.id {
+            NodeId::Resource(rid) => Some(rid),
+            _ => None,
+        }),
+    );
+    if namespaceless.is_empty() {
+        return Ok(());
+    }
+    Err(miette!(
+        "{}",
+        namespaceless
+            .iter()
+            .map(|rid| kix::cluster::apply::ApplyError::NoNamespace {
+                resource: rid.display_id()
+            }
+            .to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    ))
+}
+
 /// Mark records Superseded whose leftovers this run has nothing left to do
 /// about.
 ///
@@ -832,45 +896,7 @@ async fn run_deploy_async(
         check_cached_baseline(records.as_ref(), cluster_name, hash).await?;
     }
 
-    if let (Some(name), Some(hash)) = (
-        checked.activation_name(),
-        checked.activation_identity_hash(),
-    ) && let Some(records) = &records
-        && let Some(found) = records
-            .identity_hash_of(name)
-            .await
-            .map_err(|e| miette!("{e}"))?
-        && found != hash
-    {
-        return Err(miette!(
-            "the cluster already has an Activation named {name} for another build \
-             (identity hash {found}, this build is {hash}). Nothing was applied."
-        ));
-    }
-
-    // The engine would refuse each of these on its own, part way through
-    // the run; refusing here applies nothing.
-    let namespaceless = kix::cluster::apply::namespaceless(
-        discovery,
-        checked.plan().nodes().iter().filter_map(|n| match &n.id {
-            NodeId::Resource(rid) => Some(rid),
-            _ => None,
-        }),
-    );
-    if !namespaceless.is_empty() {
-        return Err(miette!(
-            "{}",
-            namespaceless
-                .iter()
-                .map(|rid| kix::cluster::apply::ApplyError::NoNamespace {
-                    resource: rid.display_id()
-                }
-                .to_string())
-                .collect::<Vec<_>>()
-                .join("\n")
-        ));
-    }
-
+    refuse_before_writing(&checked, records.as_ref(), discovery).await?;
 
     let on_error = match args.on_error {
         OnError::Stop => OnErrorPolicy::Stop,
@@ -937,7 +963,9 @@ async fn run_deploy_async(
         }),
     };
 
-    let (result, kept) = checked.run(target, receipt.cloned(), config, observer).await;
+    let (result, kept) = checked
+        .run(target, receipt.cloned(), config, observer)
+        .await;
 
     // Tear down the TUI before the summary prints so it lands in normal
     // scrollback below the history lines.
@@ -1468,6 +1496,42 @@ mod cached_baseline_tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("no Active record"), "{err}");
+    }
+
+    /// A record name the cluster has for another build is refused; the same
+    /// build's, or an unknown name, is not.
+    #[tokio::test]
+    async fn a_record_name_held_by_another_build_is_refused() {
+        let api = FakeApi::new([record("a", "a2", PHASE_ACTIVE)]);
+        let client = api.client();
+        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let records = Records::open(&client, &discovery)
+            .unwrap()
+            .into_records()
+            .unwrap();
+        assert!(refuse_name_taken(&records, "rec-a2", "a2").await.is_ok());
+        assert!(refuse_name_taken(&records, "rec-new", "n1").await.is_ok());
+        let err = refuse_name_taken(&records, "rec-a2", "n1")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("identity hash a2, this build is n1"), "{err}");
+    }
+
+    /// A namespaced object without a namespace is refused before the run.
+    #[tokio::test]
+    async fn an_object_without_its_namespace_is_refused() {
+        let api = FakeApi::new([]);
+        let discovery = fetch::discover_resources(&api.client()).await.unwrap();
+        let plan = kix::cluster::scheduler::DeployPlan::applying(&[json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": { "name": "c" },
+        })]);
+        let err = refuse_namespaceless(&discovery, &plan)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("ConfigMap"), "{err}");
     }
 }
 

@@ -397,6 +397,8 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         }
     }
 
+    super::deploy::refuse_before_writing(&checked, Some(&records), target.discovery()).await?;
+
     // 9. Apply via DAG-streaming scheduler.
     let config = SchedulerConfig {
         timeout: readiness::DEFAULT_TIMEOUT,
