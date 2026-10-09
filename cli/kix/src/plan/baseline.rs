@@ -663,6 +663,51 @@ pub fn record_graph(
     .map_err(|e| e.to_string())
 }
 
+/// The build a rollback returns to: `target`'s `built_via`, else the
+/// local activation cache by its identity hash, refused unless it is the
+/// build the record names. Errors are the rollback's refusals: no such
+/// build on this machine, one that will not load, and one that is another
+/// build.
+pub fn target_build(cluster: &str, target: &Record) -> Result<StoreGraph, String> {
+    let hash = target.identity_hash.as_deref();
+    let built_via = target
+        .built_via
+        .as_deref()
+        .map(PathBuf::from)
+        .filter(|p| p.join("kix-packages.json").exists());
+    let found = checked_build(
+        hash.unwrap_or_default(),
+        built_via,
+        || crate::eval::store::resolve_activation_by_hash(cluster, hash?),
+        load_build,
+    );
+    match found {
+        Ok(Some(graph)) => Ok(graph),
+        Ok(None) => Err(format!(
+            "store path for activation '{}' not found locally (hash: {}). \
+             The build may have been garbage-collected or created on another machine. Restore it to the local Nix store or run the rollback on a machine that still has it.",
+            target.name,
+            hash.unwrap_or("none"),
+        )),
+        Err(refusal) => Err(target_refusal(&target.name, refusal)),
+    }
+}
+
+/// A rollback's refusal of its target's build, as `kix rollback` prints it.
+fn target_refusal(name: &str, refusal: BuildRefusal) -> String {
+    match refusal {
+        BuildRefusal::Load { source, .. } => format!("failed to load target activation: {source}"),
+        BuildRefusal::Another {
+            dir,
+            found,
+            expected,
+        } => format!(
+            "activation '{name}' has identity hash {expected}, but the build at {} has {found}. Nothing was applied.",
+            dir.display()
+        ),
+    }
+}
+
 /// Load the build in a result dir, stamped. A record's build can predate
 /// the domain move, so it is not refused for one ([`Build::installable`]).
 fn load_build(dir: &Path) -> Result<StoreGraph, crate::eval::KixEvalError> {
@@ -1208,6 +1253,37 @@ mod tests {
 
         let err = checked_build(STAGING, reused, || None, load).unwrap_err();
         assert!(matches!(err, BuildRefusal::Another { .. }), "{err}");
+    }
+
+    /// A rollback target whose build is not on this machine is refused with
+    /// the record's name, and one that is another build names the record,
+    /// both full hashes and that nothing was applied.
+    #[test]
+    fn a_rollback_target_must_be_its_records_build() {
+        // `e` and `u` are outside Nix's base32 alphabet, so this hash names
+        // no store path on this machine.
+        let hash = "eeeeuuuueeeeuuuueeeeuuuueeeeuuuu";
+        let err = target_build("c", &active_of(hash, None)).unwrap_err();
+        assert!(
+            err.contains(&format!("'rec-{hash}' not found locally (hash: {hash})")),
+            "{err}"
+        );
+
+        let err = target_refusal(
+            "rec-1",
+            BuildRefusal::Another {
+                dir: "/nix/store/x-activation".into(),
+                found: PROD.into(),
+                expected: STAGING.into(),
+            },
+        );
+        assert_eq!(
+            err,
+            format!(
+                "activation 'rec-1' has identity hash {STAGING}, but the build at \
+                 /nix/store/x-activation has {PROD}. Nothing was applied."
+            )
+        );
     }
 
     /// A current build that is not on this machine is reported, and the

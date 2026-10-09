@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use miette::{IntoDiagnostic, Result, miette};
 
-use kix::build_source::Build;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch;
@@ -19,7 +18,7 @@ use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::secrets::SopsSources;
 use kix::cluster::stream::{DeployObserver, DeployResult};
 use kix::cluster::watchdog::StallPolicy;
-use kix::plan::baseline::Baseline;
+use kix::plan::baseline::{self, Baseline};
 use kix::plan::document::PlanFlags;
 use kix::plan::{CheckedPlan, PlanEvent, Planner, Target};
 
@@ -732,32 +731,14 @@ async fn plan_rollback(
     quiet: bool,
 ) -> Result<RollbackPlan> {
     // The target's build: the path its record was built via, or a build in
-    // the local store with its identity hash.
-    let target_result_dir = selected
-        .built_via
-        .as_ref()
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.join("kix-packages.json").exists())
-        .or_else(|| {
-            kix::eval::store::resolve_activation_by_hash(cluster, selected.identity_hash.as_deref()?)
-        })
-        .ok_or_else(|| {
-            miette!(
-                "store path for activation '{}' not found locally (hash: {}). \
-                 The build may have been garbage-collected or created on another machine. Restore it to the local Nix store or run the rollback on a machine that still has it.",
-                selected.name,
-                selected.identity_hash.as_deref().unwrap_or("none"),
-            )
-        })?;
-
-    // Not refused for a retired domain (`Build::installable`). A rollback
-    // target can be a build from before the domain move, and refusing it
-    // would make every record the migration carefully preserved unusable.
-    // Stamping upgrades its keys, its record's API group and Kix's own CRDs,
-    // so what gets applied names the current domain throughout.
-    let target_graph = Build::local(&target_result_dir, &|_| {})
-        .map_err(|e| miette!("failed to load target activation: {e}"))?
-        .into_graph();
+    // the local store with its identity hash, refused unless it is the
+    // build the record names. Not refused for a retired domain
+    // (`Build::installable`): a rollback target can be a build from before
+    // the domain move, and stamping upgrades its keys, its record's API
+    // group and Kix's own CRDs, so what gets applied names the current
+    // domain throughout.
+    let target_graph = baseline::target_build(cluster, selected).map_err(|e| miette!("{e}"))?;
+    let target_result_dir = target_graph.result_dir.clone();
     same_cluster(&selected.name, &target_graph.cluster_name, cluster)?;
 
     let report = |event: PlanEvent<'_>| plan::progress::print(event, quiet);
