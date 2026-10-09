@@ -1,10 +1,10 @@
 //! What the apiserver answered for each object of a dry-run deploy.
 //!
 //! A dry-run deploy runs the same engine as a real one with every write sent
-//! as `dryRun=All` (`KubeOpsConfig::dry_run`). The engine only needs a
-//! verdict per node, but `kix plan` reports what each write would do, so
-//! [`super::ops::KubeOps`] keeps the apiserver's answers in a [`Journal`]:
-//! the object an apply would produce, or the typed reason it was refused.
+//! as `dryRun=All` (`super::ops::DryRun`). The engine only needs a verdict
+//! per node, but `kix plan` reports what each write would do, so the dry run
+//! keeps the apiserver's answers in a `Journal`: the object an apply would
+//! produce, or the typed reason it was refused.
 
 use std::sync::Mutex;
 
@@ -132,7 +132,7 @@ impl Refusal {
     }
 
     /// Classify an apply failure.
-    pub fn of_apply(err: &ApplyError) -> Refusal {
+    pub(crate) fn of_apply(err: &ApplyError) -> Refusal {
         let source = match err {
             ApplyError::UnknownKind { kind } => {
                 return Refusal::UnknownKind { kind: kind.clone() };
@@ -163,7 +163,7 @@ impl Refusal {
     /// The message leaves out the hashes of a [`SecretError::HashMismatch`]:
     /// the actual one is a hash of the decrypted data, and a plan is meant
     /// to be shared.
-    pub fn of_hydration(err: &SecretError) -> Refusal {
+    pub(crate) fn of_hydration(err: &SecretError) -> Refusal {
         let message = match err {
             SecretError::HashMismatch { name, .. } => format!(
                 "content hash mismatch for secret '{name}': the SOPS file does not hold \
@@ -179,7 +179,7 @@ impl Refusal {
     /// Classify an apiserver error status by its code and message. The
     /// messages are the apiserver's own wording (`k8s.io/apiserver`
     /// admission and `structured-merge-diff` conflicts).
-    pub fn of_status(code: u16, message: &str) -> Option<Refusal> {
+    pub(crate) fn of_status(code: u16, message: &str) -> Option<Refusal> {
         let message = message.to_string();
         if message.contains("does not support dry run") {
             return Some(Refusal::WebhookNoDryRun {
@@ -245,7 +245,7 @@ fn quoted_after_with(message: &str, prefix: &str, quote: char) -> Option<String>
 /// `Apply failed with 1 conflict: conflict with "kubectl-scale" using
 /// apps/v1: .spec.replicas`; several list each manager's fields as
 /// `- .path` lines under `conflicts with "m" using v:`.
-pub fn conflict_owners(message: &str) -> Vec<ConflictOwner> {
+pub(crate) fn conflict_owners(message: &str) -> Vec<ConflictOwner> {
     let mut owners: Vec<ConflictOwner> = Vec::new();
     let mut rest = message;
     while let Some(at) = rest.find(" with \"") {
@@ -292,18 +292,18 @@ fn field_paths(text: &str) -> Vec<String> {
 
 /// The answers a dry run collected, in the order they arrived.
 #[derive(Debug, Default)]
-pub struct Journal {
+pub(crate) struct Journal {
     answers: Mutex<Vec<DryRunAnswer>>,
 }
 
 impl Journal {
-    pub fn record(&self, rid: ResourceId, outcome: DryRunOutcome) {
+    pub(crate) fn record(&self, rid: ResourceId, outcome: DryRunOutcome) {
         if let Ok(mut answers) = self.answers.lock() {
             answers.push(DryRunAnswer { rid, outcome });
         }
     }
 
-    pub fn take(&self) -> Vec<DryRunAnswer> {
+    pub(crate) fn take(&self) -> Vec<DryRunAnswer> {
         self.answers
             .lock()
             .map(|mut a| std::mem::take(&mut *a))

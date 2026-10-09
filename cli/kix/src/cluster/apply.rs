@@ -18,20 +18,19 @@ use kube::{
 };
 use serde_json::Value;
 use thiserror::Error;
-use tokio::task::JoinSet;
 
 /// Does this manifest opt into the rerun rule? Jobs only: the rule deletes
 /// the live object, and for anything with a rollout (a Deployment stuck on
 /// its progress deadline is "failed" too) that would be an outage, not a
 /// retry. The Nix side refuses the annotation on other kinds as well
 /// (cross-resource check 16).
-pub fn wants_rerun(manifest: &Value) -> bool {
+pub(crate) fn wants_rerun(manifest: &Value) -> bool {
     manifest.get("kind").and_then(Value::as_str) == Some("Job")
         && manifest
             .pointer("/metadata/annotations")
             .and_then(|a| a.get(keys::RERUN))
             .and_then(Value::as_str)
-            == Some("on-change")
+            == Some(keys::RERUN_ON_CHANGE)
 }
 
 /// Field manager name for server-side apply.
@@ -117,12 +116,12 @@ pub enum ApplyError {
 /// Is `rid` of a namespaced kind but keyed [`CLUSTER_SCOPED`], because its
 /// manifest names no namespace? The apiserver would store such an object in
 /// the requester's namespace, where no later comparison with the build finds
-/// it, so [`apply_resource`] refuses it.
-pub fn is_namespaceless(scope: &Scope, rid: &ResourceId) -> bool {
+/// it, so `apply_resource` refuses it.
+pub(crate) fn is_namespaceless(scope: &Scope, rid: &ResourceId) -> bool {
     matches!(scope, Scope::Namespaced) && rid.namespace == CLUSTER_SCOPED
 }
 
-/// The resources among `rids` that [`apply_resource`] would refuse as
+/// The resources among `rids` that `apply_resource` would refuse as
 /// [`ApplyError::NoNamespace`], judged by `discovery`. A kind discovery does
 /// not know yet (a CRD the same deploy creates) is not reported.
 pub fn namespaceless<'a>(
@@ -142,11 +141,9 @@ pub fn namespaceless<'a>(
 
 /// Result of applying a single resource.
 #[derive(Debug, Clone)]
-pub struct ApplyResult {
+pub(crate) struct ApplyResult {
     /// What action was taken.
     pub action: ApplyAction,
-    /// The resource that was acted upon.
-    pub resource_id: ResourceId,
     /// What the apiserver answered to a dry-run apply. `None` for a real
     /// apply, and for a dry run that never reached the apiserver.
     pub preview: Option<Box<ApplyPreview>>,
@@ -163,8 +160,11 @@ pub struct ApplyPreview {
     pub result: Value,
 }
 
-/// The action taken during apply.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The action taken during apply. The deploy log names it in snake_case.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum ApplyAction {
     /// Resource was created (didn't exist before).
     Created,
@@ -206,7 +206,10 @@ fn manifest_identity_hash(manifest: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<ChangeAction> {
+pub(crate) fn detect_changes(
+    new_manifests: &[Value],
+    old_manifests: &[Value],
+) -> Vec<ChangeAction> {
     // Index old manifests by K8s identity (kind/ns/name) → identity-hash.
     // The previous deploy's record stays in this index so an unchanged
     // build (same record name, same hash) still comes out as Skip and the
@@ -296,7 +299,7 @@ pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<C
 ///
 /// Every input is a compiler output. This function does not read live cluster
 /// state when deciding how to combine closures.
-pub fn fold_failed_closures(
+pub(crate) fn fold_failed_closures(
     actions: Vec<ChangeAction>,
     new_manifests: &[Value],
     failed_closures: &[Vec<Value>],
@@ -391,7 +394,7 @@ pub fn fold_failed_closures(
 /// with them. What they add is the objects the new build no longer declares,
 /// under the same rules [`detect_changes`] uses: stamped, prunable, and not
 /// a record.
-pub fn fold_kept_closures(
+pub(crate) fn fold_kept_closures(
     mut actions: Vec<ChangeAction>,
     new_manifests: &[Value],
     kept_closures: &[Vec<Value>],
@@ -432,7 +435,7 @@ pub fn fold_kept_closures(
 /// A deploy that keeps its orphans records each build this is true for, so
 /// the list on the record names only builds that still have something to
 /// delete.
-pub fn leaves_orphans(closure: &[Value], new_manifests: &[Value]) -> bool {
+pub(crate) fn leaves_orphans(closure: &[Value], new_manifests: &[Value]) -> bool {
     let id_of = |m: &Value| {
         let rid = ResourceId::from_value(m);
         format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
@@ -452,7 +455,7 @@ pub fn leaves_orphans(closure: &[Value], new_manifests: &[Value]) -> bool {
 /// `run_deploy` needs this so `prune_order` can topologically sort orphans
 /// that exist in no current closure, and the plan display needs it so those
 /// orphans have a manifest to describe.
-pub fn baseline_manifests(active: &[Value], failed: &[Vec<Value>]) -> Vec<Value> {
+pub(crate) fn baseline_manifests(active: &[Value], failed: &[Vec<Value>]) -> Vec<Value> {
     let id_of = |m: &Value| {
         let rid = ResourceId::from_value(m);
         format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
@@ -482,7 +485,7 @@ pub fn baseline_manifests(active: &[Value], failed: &[Vec<Value>]) -> Vec<Value>
 ///
 /// This replaces `detect_changes` for the operator, where the cluster
 /// is the source of truth for "old state" rather than a local manifest set.
-pub fn detect_changes_live(
+pub(crate) fn detect_changes_live(
     desired_manifests: &[Value],
     live_resources: &[DynamicObject],
 ) -> Vec<ChangeAction> {
@@ -578,7 +581,7 @@ pub fn detect_changes_live(
 ///
 /// Leave `kix.run/applied-hash` unchanged because no content was applied.
 /// Writes nothing when the annotation already says the right thing.
-pub async fn record_activation_on_skipped(
+pub(crate) async fn record_activation_on_skipped(
     client: &Client,
     ar: &ApiResource,
     scope: Scope,
@@ -586,7 +589,7 @@ pub async fn record_activation_on_skipped(
     activation_hash: &str,
     live_activations: Option<&HashSet<String>>,
 ) -> Result<(), ApplyError> {
-    let api = super::fetch::api_for(client, ar, &scope, rid);
+    let api = super::discovery::api_for(client, ar, &scope, rid);
     update_bookkeeping_annotations_checked(
         &api,
         &rid.name,
@@ -603,7 +606,7 @@ pub async fn record_activation_on_skipped(
 /// If `activation_hash` is provided, the resource's `kix.run/activations`
 /// annotation is updated to include this activation (read-modify-write).
 #[allow(clippy::too_many_arguments)]
-pub async fn apply_resource(
+pub(crate) async fn apply_resource(
     client: &Client,
     ar: &ApiResource,
     scope: Scope,
@@ -623,7 +626,7 @@ pub async fn apply_resource(
             resource: rid.display_id(),
         });
     }
-    let api: Api<DynamicObject> = super::fetch::api_for(client, ar, &scope, &rid);
+    let api: Api<DynamicObject> = super::discovery::api_for(client, ar, &scope, &rid);
 
     // Default to non-force SSA so ownership conflicts return their field paths
     // and current manager. --force-conflicts opts into taking ownership.
@@ -723,11 +726,7 @@ pub async fn apply_resource(
             result: serde_json::to_value(&echo).unwrap_or(Value::Null),
         })
     });
-    Ok(ApplyResult {
-        action,
-        resource_id: rid,
-        preview,
-    })
+    Ok(ApplyResult { action, preview })
 }
 
 /// Send the SSA patch and classify a failure: 409 conflicts become
@@ -1086,110 +1085,6 @@ async fn update_bookkeeping_annotations(
     api.patch(name, &pp, &Patch::Merge(&patch)).await?;
 
     Ok(())
-}
-
-/// Apply all resources in a wave in parallel.
-///
-/// If `activation_hash` is provided, each applied resource gets the activation
-/// merged into its `kix.run/activations` annotation.
-///
-/// Returns a vec of (ResourceId, Result) pairs for each action in the wave.
-pub async fn apply_wave(
-    client: &Client,
-    discovery: &[(ApiResource, Scope)],
-    wave: &[ChangeAction],
-    dry_run: bool,
-    activation_hash: Option<&str>,
-    force_conflicts: bool,
-) -> Vec<(ResourceId, Result<ApplyResult, ApplyError>)> {
-    // Build kind -> (ApiResource, Scope) lookup
-    let ar_by_kind: HashMap<String, (ApiResource, Scope)> = discovery
-        .iter()
-        .map(|pair| (pair.0.kind.clone(), (pair.0.clone(), pair.1.clone())))
-        .collect();
-
-    let mut set = JoinSet::new();
-
-    for action in wave {
-        match action {
-            ChangeAction::Apply(manifest) => {
-                let rid = ResourceId::from_value(manifest);
-                let kind = rid.kind.clone();
-
-                let Some((ar, scope)) = ar_by_kind.get(&kind) else {
-                    let rid_clone = rid.clone();
-                    set.spawn(async move {
-                        (
-                            rid_clone.clone(),
-                            Err(ApplyError::UnknownKind {
-                                kind: rid_clone.kind.clone(),
-                            }),
-                        )
-                    });
-                    continue;
-                };
-
-                let client = client.clone();
-                let ar = ar.clone();
-                let scope = scope.clone();
-                let manifest = manifest.clone();
-                let act_hash = activation_hash.map(|s| s.to_string());
-                set.spawn(async move {
-                    let result = apply_resource(
-                        &client,
-                        &ar,
-                        scope,
-                        &manifest,
-                        dry_run,
-                        act_hash.as_deref(),
-                        None,
-                        force_conflicts,
-                    )
-                    .await;
-                    (rid, result)
-                });
-            }
-            ChangeAction::Skip(rid) => {
-                let rid = rid.clone();
-                set.spawn(async move {
-                    (
-                        rid.clone(),
-                        Ok(ApplyResult {
-                            action: ApplyAction::Unchanged,
-                            resource_id: rid,
-                            preview: None,
-                        }),
-                    )
-                });
-            }
-            ChangeAction::Orphan(rid) => {
-                // Orphans are handled separately (prune phase),
-                // but we report them here for tracking
-                let rid = rid.clone();
-                set.spawn(async move {
-                    (
-                        rid.clone(),
-                        Ok(ApplyResult {
-                            action: ApplyAction::Skipped,
-                            resource_id: rid,
-                            preview: None,
-                        }),
-                    )
-                });
-            }
-        }
-    }
-
-    let mut results = Vec::new();
-    while let Some(join_result) = set.join_next().await {
-        match join_result {
-            Ok(pair) => results.push(pair),
-            Err(e) => {
-                tracing::warn!(error = %e, "task join error during apply wave");
-            }
-        }
-    }
-    results
 }
 
 #[cfg(test)]
@@ -2077,12 +1972,12 @@ mod tests {
     /// ClusterRole, a ConfigMap with a namespace, or a kind discovery lacks.
     #[tokio::test]
     async fn a_namespaced_kind_without_a_namespace_is_refused() {
-        use crate::cluster::{fake_api::FakeApi, fetch};
+        use crate::cluster::{discovery, fake_api::FakeApi};
         use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
         let api = FakeApi::default();
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
         let before = api.requests().len();
         let cm = serde_json::json!({
             "apiVersion": "v1",

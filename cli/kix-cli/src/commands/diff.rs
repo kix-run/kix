@@ -1,29 +1,28 @@
 use std::collections::{HashMap, HashSet};
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
-use kix::cluster::activation;
+use crate::client;
+use kix::build_source;
+use kix::cluster::activation::{self, Records};
 use kix::cluster::apply::ApplyError;
-use kix::cluster::fetch;
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
-use kix::eval::build_cluster_activation_with_status;
+use kix::cluster::owned_view;
+use kix::cluster::{discovery, inventory};
 use kix::eval::store_graph::{KixPackageIndex, StoreGraph, store_hash};
 use kix::manifest::keys;
 use kix::manifest::lifecycle::{self, Lifecycle};
 use kix::manifest::serialize::load_manifests_from_dir;
-use kix::manifest::stamp::stamp_annotations;
-use kix::manifest::types::ResourceId;
+use kix::manifest::types::{ResourceId, to_manifest_value};
 
 use crate::cli::{Detail as DetailArg, DiffArgs, OutputFormat};
 use crate::output;
-use crate::plan::document::{
-    Build, Checked, DeployedBuild, Detail, MadeBy, NotCheckedReason, Plan,
-};
-use crate::plan::origin::{self, Sides};
-use crate::plan::{self, ManifestIndex, PackageDiff, render};
+use crate::plan::{self, render};
+use kix::plan::document::{Build, Checked, DeployedBuild, Detail, MadeBy, NotCheckedReason, Plan};
+use kix::plan::origin::{self, Sides};
+use kix::plan::{ManifestIndex, PackageDiff};
 
 use super::CommandContext;
 
@@ -59,11 +58,15 @@ enum OldSide {
 /// kix-owned view. Same renderers as the deploy plan, so what `kix diff`
 /// shows is what `kix deploy` will show.
 pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
-    let flake_path = resolve_flake_path(&ctx.global.flake)?;
-
-    let spinner = make_spinner(ctx, &format!("Building cluster '{}'...", args.cluster));
-    let overrides = ctx.global.input_overrides();
-    let new_graph = build_store_graph(&flake_path, &args.cluster, &overrides, &spinner)?;
+    let spinner = output::spinner(format!("Building cluster '{}'...", args.cluster));
+    let status = |msg: &str| set_spinner(&spinner, msg);
+    let new_graph = super::build_flake(
+        &ctx.global,
+        &args.cluster,
+        &status,
+        super::ACTIVATION_BUILD_FAILED,
+    )?
+    .into_graph();
     clear_spinner(&spinner);
 
     let (old_graph, side) = if let Some(from) = &args.from {
@@ -71,9 +74,11 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
         if !path.is_dir() {
             return Err(miette!("from directory does not exist: {from}"));
         }
-        let spinner = make_spinner(ctx, "Loading old side...");
+        let spinner = output::spinner("Loading old side...");
         let loaded = if path.join("kix-packages.json").is_file() {
-            (load_old_graph(&path, &spinner)?, OldSide::Build)
+            let status = |msg: &str| set_spinner(&spinner, msg);
+            let old = build_source::Build::local(&path, &status).into_diagnostic()?;
+            (old.into_graph(), OldSide::Build)
         } else {
             let manifests: Vec<Value> = load_manifests_from_dir(&path)
                 .map_err(|e| miette!("failed to load manifest directory {from}: {e}"))?
@@ -88,7 +93,7 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
         clear_spinner(&spinner);
         loaded
     } else {
-        let spinner = make_spinner(ctx, "Fetching live cluster state...");
+        let spinner = output::spinner("Fetching live cluster state...");
         let global = ctx.global.clone();
         let live = ctx
             .runtime
@@ -108,11 +113,11 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     };
     let result = diff_graphs(&old_graph, &new_graph, &side, detail);
 
-    match ctx.output_format(OutputFormat::Text) {
+    match output::format() {
         OutputFormat::Json => println!("{}", result.doc.to_json()),
         OutputFormat::Yaml => print!("{}", result.doc.to_yaml().into_diagnostic()?),
         OutputFormat::Markdown => print_markdown_output(&result),
-        OutputFormat::Text => print_text_output(&result, &ctx.global),
+        OutputFormat::Text => print_text_output(&result),
     }
     if let OldSide::Live(live) = &side {
         for rid in &live.namespaceless {
@@ -133,34 +138,6 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
     Ok(())
 }
 
-fn build_store_graph(
-    flake_path: &Path,
-    cluster_name: &str,
-    input_overrides: &[(String, String)],
-    spinner: &Option<indicatif::ProgressBar>,
-) -> Result<StoreGraph> {
-    let status = |msg: &str| set_spinner(spinner, msg);
-
-    let result_path =
-        build_cluster_activation_with_status(flake_path, cluster_name, input_overrides, &status)
-            .map_err(|e| miette!("failed to build cluster activation: {e}"))?;
-
-    let mut graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
-        .map_err(|e| miette!("{e}"))?;
-
-    set_spinner(spinner, "Stamping annotations...");
-    stamp_annotations(&mut graph);
-    Ok(graph)
-}
-
-fn load_old_graph(path: &Path, spinner: &Option<indicatif::ProgressBar>) -> Result<StoreGraph> {
-    let status = |msg: &str| set_spinner(spinner, msg);
-    let mut graph = StoreGraph::from_result_dir_with_status(path, &status).into_diagnostic()?;
-    set_spinner(spinner, "Stamping annotations...");
-    stamp_annotations(&mut graph);
-    Ok(graph)
-}
-
 fn set_spinner(spinner: &Option<indicatif::ProgressBar>, msg: &str) {
     if let Some(sp) = spinner {
         sp.set_message(msg.to_string());
@@ -173,13 +150,14 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
     // Fail-closed: live objects that predate the lifecycle stamp carry no
     // `kix.run/lifecycle`, and then no pairs fire.
     let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests);
-    let mut packages = plan::diff_graphs(old, new);
+    let mut packages = kix::plan::diff_graphs(old, new);
     let cluster = &new.cluster_name;
 
     let doc = match side {
         OldSide::Build => {
             origin::label_builds(&mut packages);
             let mut doc = Plan::new(
+                plan::kix_build(),
                 MadeBy::Builds,
                 cluster,
                 Build::of(new),
@@ -193,6 +171,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
         }
         OldSide::Manifests => {
             let mut doc = Plan::new(
+                plan::kix_build(),
                 MadeBy::LiveRead,
                 cluster,
                 Build::of(new),
@@ -218,6 +197,7 @@ fn diff_graphs(old: &StoreGraph, new: &StoreGraph, side: &OldSide, detail: Detai
                 origin::label_live(&mut packages, &sides)
             });
             let mut doc = Plan::new(
+                plan::kix_build(),
                 MadeBy::LiveRead,
                 cluster,
                 Build::of(new),
@@ -292,8 +272,7 @@ fn deployed_build(
     if !dir.join("kix-packages.json").is_file() {
         return None;
     }
-    let mut graph = StoreGraph::from_result_dir_with_status(dir, &|_: &str| {}).ok()?;
-    stamp_annotations(&mut graph);
+    let graph = build_source::Build::local(dir, &|_| {}).ok()?.into_graph();
     Some(Deployed::Loaded(Box::new(graph)))
 }
 
@@ -316,61 +295,48 @@ async fn fetch_live_manifests(
     global: &crate::cli::GlobalArgs,
     new_graph: &StoreGraph,
 ) -> Result<LiveSide> {
-    let client = fetch::make_client(global.context.as_deref())
+    let client = client::make_client(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
-    if !global.quiet {
-        eprintln!("Discovering API resources...");
-    }
+    crate::esay!("Discovering API resources...");
 
-    let discovery = fetch::discover_resources(&client)
+    let discovery = discovery::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    // The gate. `kix diff` never calls `find_activation_ar`, so it never
-    // reaches the check inside it that every other cluster command goes
-    // through. It still needs one: the live objects below are upgraded
+    // The gate, which opening the records runs. Beyond the records the sweep
+    // reads, `kix diff` needs it because the live objects below are upgraded
     // to the current domain before they are compared, which on an
     // unmigrated cluster renames the live `activations.<retired>` CRD to the
     // name the build uses and reports it as matching. The answer would be
     // "in sync" about a resource that does not exist under that name.
-    kix::legacy_domain::check_cluster(
-        &discovery
-            .iter()
-            .filter(|(ar, _)| kix::manifest::lifecycle::is_record_kind(&ar.kind))
-            .map(|(ar, _)| ar.group.as_str())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|e| miette!("{e}"))?;
+    let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
-    if !global.quiet {
-        eprintln!(
-            "Fetching managed resources ({} resource types)...",
-            discovery.len()
-        );
-    }
+    crate::esay!(
+        "Fetching managed resources ({} resource types)...",
+        discovery.len()
+    );
 
     // Only this Kix cluster's objects: another cluster sharing the
     // Kubernetes cluster is not a removal.
-    let sweep = fetch::sweep_managed(
+    let sweep = inventory::sweep_managed(
         &client,
         &discovery,
-        fetch::SweepScope::Cluster(&new_graph.cluster_name),
+        &records,
+        inventory::SweepScope::Cluster(&new_graph.cluster_name),
     )
     .await
     .map_err(|e| miette!("failed to fetch resources: {e}"))?;
 
-    if !global.quiet {
-        eprintln!(
-            "Fetched {} resources across {} resource types{}",
-            sweep.managed.len(),
-            discovery.len() - sweep.forbidden.len(),
-            crate::output::forbidden_note(&sweep.forbidden),
-        );
-        for note in sweep.scope_notes() {
-            eprintln!("{note}");
-        }
+    crate::esay!(
+        "Fetched {} resources across {} resource types{}",
+        sweep.managed.len(),
+        discovery.len() - sweep.forbidden.len(),
+        crate::output::forbidden_note(&sweep.forbidden),
+    );
+    for note in sweep.scope_notes() {
+        crate::esay!("{note}");
     }
 
     // An object this build drops but another Kix cluster still deploys is
@@ -384,11 +350,11 @@ async fn fetch_live_manifests(
     namespaceless.sort();
     let tenancy = &sweep.tenancy;
     let (elsewhere, mut compared): (Vec<_>, Vec<_>) = sweep.managed.into_iter().partition(|obj| {
-        !in_build.contains(&ResourceId::from_value(&fetch::to_manifest_value(obj)))
+        !in_build.contains(&ResourceId::from_value(&to_manifest_value(obj)))
             && !tenancy.still_deployed_by_others(obj).is_empty()
     });
-    if !global.quiet && !elsewhere.is_empty() {
-        eprintln!(
+    if !elsewhere.is_empty() {
+        crate::esay!(
             "Not comparing {} objects this build drops that another Kix cluster still deploys.",
             elsewhere.len()
         );
@@ -421,15 +387,15 @@ async fn fetch_live_manifests(
     let managed: HashMap<ResourceId, Value> = compared
         .iter()
         .filter_map(|obj| {
-            let rid = ResourceId::from_value(&fetch::to_manifest_value(obj));
+            let rid = ResourceId::from_value(&to_manifest_value(obj));
             serde_json::to_value(obj).ok().map(|v| (rid, v))
         })
         .collect();
-    let mut manifests = fetch::kix_owned_manifests_against(compared, &built);
+    let mut manifests = owned_view::kix_owned_manifests_against(compared, &built);
 
     let reaped = reaped_since_deploy(new_graph, current.as_ref(), &manifests);
-    if !global.quiet && !reaped.is_empty() {
-        eprintln!(
+    if !reaped.is_empty() {
+        crate::esay!(
             "Not comparing {} run-once resources that the deployed build ran and that were deleted after finishing, as their manifests ask.",
             reaped.len()
         );
@@ -512,48 +478,18 @@ fn deployed_hashes(
         .unwrap_or_default()
 }
 
-fn make_spinner(ctx: &CommandContext, msg: &str) -> Option<indicatif::ProgressBar> {
-    if std::io::stderr().is_terminal() && !ctx.global.quiet {
-        let sp = indicatif::ProgressBar::new_spinner();
-        sp.set_style(
-            indicatif::ProgressStyle::default_spinner()
-                .template("{spinner:.cyan} {msg}")
-                .expect("valid template"),
-        );
-        sp.set_message(msg.to_string());
-        sp.enable_steady_tick(std::time::Duration::from_millis(80));
-        Some(sp)
-    } else {
-        None
-    }
-}
-
 fn clear_spinner(spinner: &Option<indicatif::ProgressBar>) {
     if let Some(sp) = spinner {
         sp.finish_and_clear();
     }
 }
 
-fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
-    if flake.contains(':') {
-        Ok(PathBuf::from(flake))
-    } else {
-        let path = PathBuf::from(flake);
-        if path.is_absolute() {
-            Ok(path)
-        } else {
-            let cwd = std::env::current_dir().into_diagnostic()?;
-            Ok(cwd.join(path))
-        }
-    }
-}
-
-fn print_text_output(result: &DiffResult, global: &crate::cli::GlobalArgs) {
+fn print_text_output(result: &DiffResult) {
     let pkg = &result.packages;
 
     let total_pkgs = pkg.added.len() + pkg.removed.len() + pkg.changed.len() + pkg.unchanged;
-    if !global.quiet && total_pkgs > 0 {
-        println!(
+    if total_pkgs > 0 {
+        crate::say!(
             "{} packages: {} unchanged, {} changed, {} added, {} removed",
             total_pkgs,
             pkg.unchanged,
@@ -565,7 +501,7 @@ fn print_text_output(result: &DiffResult, global: &crate::cli::GlobalArgs) {
 
     // The deploy plan renderer, always with resource-level detail: a diff
     // exists to be read.
-    plan::print_package_plan(pkg, true);
+    print!("{}", plan::render_package_plan(pkg, true));
 
     if let Some(a) = &pkg.activation {
         println!();

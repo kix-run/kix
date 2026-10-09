@@ -1,14 +1,20 @@
 //! Classify Kubernetes API failures for retry and reporting decisions.
 //!
-//! [`super::client`] uses the classification for retries, [`super::fetch`]
+//! [`super::client`] uses the classification for retries, [`super::inventory`]
 //! distinguishes forbidden requests from other failures, and apply and
 //! readiness handle conflicts and missing resources from the same table.
+//! [`FetchError`] is what a failed read of the cluster returns.
 
 use std::error::Error as StdError;
+use std::time::Duration;
+
+use thiserror::Error;
+
+use super::activation;
 
 /// What kind of failure an apiserver call produced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FailureClass {
+pub(crate) enum FailureClass {
     /// HTTP 429. The server refused the request before doing any work. Safe to
     /// retry for every method, after the interval it asked for.
     RateLimited,
@@ -37,22 +43,8 @@ pub enum FailureClass {
     Other,
 }
 
-impl FailureClass {
-    /// Whether retry policy may repeat the same request.
-    pub fn is_transient(self) -> bool {
-        matches!(
-            self,
-            FailureClass::RateLimited
-                | FailureClass::Unavailable
-                | FailureClass::ServerError
-                | FailureClass::Transport
-                | FailureClass::Timeout
-        )
-    }
-}
-
 /// Classify an HTTP status code from the apiserver.
-pub fn classify_status(code: u16) -> FailureClass {
+pub(crate) fn classify_status(code: u16) -> FailureClass {
     match code {
         429 => FailureClass::RateLimited,
         502..=504 => FailureClass::Unavailable,
@@ -68,7 +60,7 @@ pub fn classify_status(code: u16) -> FailureClass {
 }
 
 /// Classify a `kube::Error`.
-pub fn classify(err: &kube::Error) -> FailureClass {
+pub(crate) fn classify(err: &kube::Error) -> FailureClass {
     match err {
         kube::Error::Api(resp) => classify_status(resp.code),
         kube::Error::HyperError(_) => FailureClass::Transport,
@@ -81,8 +73,8 @@ pub fn classify(err: &kube::Error) -> FailureClass {
 ///
 /// The transport layer's own timeout error is recognised by type. Anything
 /// else at this level is a connection-level failure.
-pub fn classify_service_error(err: &(dyn StdError + 'static)) -> FailureClass {
-    if error_chain_contains::<super::client::RequestTimeout>(err) {
+pub(crate) fn classify_service_error(err: &(dyn StdError + 'static)) -> FailureClass {
+    if error_chain_contains::<RequestTimeout>(err) {
         FailureClass::Timeout
     } else {
         FailureClass::Transport
@@ -109,7 +101,7 @@ pub fn describe(err: &(dyn StdError + 'static)) -> String {
 }
 
 /// Walk an error's `source()` chain looking for a concrete type.
-pub fn error_chain_contains<T: StdError + 'static>(err: &(dyn StdError + 'static)) -> bool {
+pub(crate) fn error_chain_contains<T: StdError + 'static>(err: &(dyn StdError + 'static)) -> bool {
     let mut current: Option<&(dyn StdError + 'static)> = Some(err);
     while let Some(e) = current {
         if e.is::<T>() {
@@ -121,7 +113,7 @@ pub fn error_chain_contains<T: StdError + 'static>(err: &(dyn StdError + 'static
 }
 
 /// Walk an error's `source()` chain and return the first value of a type.
-pub fn error_chain_find<'a, T: StdError + 'static>(
+pub(crate) fn error_chain_find<'a, T: StdError + 'static>(
     err: &'a (dyn StdError + 'static),
 ) -> Option<&'a T> {
     let mut current: Option<&(dyn StdError + 'static)> = Some(err);
@@ -132,6 +124,87 @@ pub fn error_chain_find<'a, T: StdError + 'static>(
         current = e.source();
     }
     None
+}
+
+/// The error the per-attempt deadline produces. Classified as
+/// [`FailureClass::Timeout`] by [`classify`].
+#[derive(Debug)]
+pub(crate) struct RequestTimeout(pub Duration);
+
+impl std::fmt::Display for RequestTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "no response from the apiserver within {:?}", self.0)
+    }
+}
+
+impl std::error::Error for RequestTimeout {}
+
+/// Errors from cluster fetching operations.
+#[derive(Error, Debug)]
+pub enum FetchError {
+    #[error("failed to create Kubernetes client: {0}")]
+    ClientError(#[source] Box<dyn std::error::Error + Send + Sync>),
+
+    /// The endpoint swallowed the first-contact probe: no answer at all
+    /// within the deadline. A stale `server:` address, a routing blackhole, a
+    /// VPN or tailnet that is not up, or a load balancer that terminates TLS
+    /// in front of an apiserver that has stopped answering all land here.
+    #[error(
+        "no response from the Kubernetes API server at {endpoint} within {}s. \
+         Check the server address in your kubeconfig, or try --context <name>. \
+         If the connection is working but needs more time, increase KIX_CONNECT_TIMEOUT (seconds).",
+        timeout.as_secs()
+    )]
+    Unreachable { endpoint: String, timeout: Duration },
+
+    /// First contact failed outright: DNS, connection refused, TLS, or a
+    /// credential plugin that could not produce a token.
+    #[error(
+        "cannot reach the Kubernetes API server at {endpoint}: {}. \
+         Check your kubeconfig, or try --context <name>.",
+        describe(source)
+    )]
+    ConnectFailed {
+        endpoint: String,
+        #[source]
+        source: kube::Error,
+    },
+
+    #[error("could not discover the resource types supported by the Kubernetes API: {}", describe(.0))]
+    DiscoveryError(#[source] kube::Error),
+
+    /// `/apis` kept listing group versions that answered 404 for
+    /// `discovery::DISCOVERY_SETTLE`. `missing` holds their paths.
+    #[error(
+        "could not discover the resource types supported by the Kubernetes API: \
+         the API server lists {} but answered 404 for {} for {}s. \
+         `kubectl get --raw {}` shows what it answers now.",
+        missing.join(", "),
+        if missing.len() == 1 { "it" } else { "them" },
+        waited.as_secs(),
+        missing.first().map_or("/apis", String::as_str)
+    )]
+    DiscoveryUnsettled {
+        missing: Vec<String>,
+        waited: Duration,
+    },
+
+    #[error("failed to list {resource}: {}", describe(source))]
+    ListError {
+        resource: String,
+        #[source]
+        source: kube::Error,
+    },
+
+    #[error("failed to read {resource}: {}", describe(source))]
+    GetError {
+        resource: String,
+        #[source]
+        source: kube::Error,
+    },
+
+    #[error("{0}")]
+    RecordsError(#[source] activation::RecordsError),
 }
 
 #[cfg(test)]
@@ -159,30 +232,6 @@ mod tests {
         ];
         for (code, want) in cases {
             assert_eq!(classify_status(code), want, "status {code}");
-        }
-    }
-
-    #[test]
-    fn transient_means_retryable() {
-        for class in [
-            FailureClass::RateLimited,
-            FailureClass::Unavailable,
-            FailureClass::ServerError,
-            FailureClass::Transport,
-            FailureClass::Timeout,
-        ] {
-            assert!(class.is_transient(), "{class:?}");
-        }
-        for class in [
-            FailureClass::Unauthorized,
-            FailureClass::Forbidden,
-            FailureClass::NotFound,
-            FailureClass::Conflict,
-            FailureClass::Invalid,
-            FailureClass::ClientError,
-            FailureClass::Other,
-        ] {
-            assert!(!class.is_transient(), "{class:?}");
         }
     }
 
@@ -235,9 +284,9 @@ mod tests {
 
     #[test]
     fn chain_walk_finds_nested_timeout() {
-        let inner = super::super::client::RequestTimeout(std::time::Duration::from_secs(1));
+        let inner = RequestTimeout(std::time::Duration::from_secs(1));
         let outer = Outer(Box::new(inner));
-        assert!(error_chain_contains::<super::super::client::RequestTimeout>(&outer));
+        assert!(error_chain_contains::<RequestTimeout>(&outer));
         assert_eq!(classify_service_error(&outer), FailureClass::Timeout);
         let plain = Outer(Box::new(std::io::Error::other("reset")));
         assert_eq!(classify_service_error(&plain), FailureClass::Transport);

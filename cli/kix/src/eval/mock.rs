@@ -1,8 +1,6 @@
-//! Mock Nix backend for testing.
+//! Mock Nix backend for this crate's tests.
 //!
 //! Returns canned responses without any real Nix evaluation.
-//! Commands can use this for downstream testing
-//! without a Nix installation.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -13,49 +11,21 @@ use super::error::KixEvalError;
 use super::evaluator::{ClusterOutput, ClusterPackageInfo, NixBackend, PackageInfo};
 
 /// Mock backend that returns pre-configured cluster data.
-pub struct MockNixBackend {
+pub(crate) struct MockNixBackend {
     clusters: HashMap<String, Vec<Value>>,
-    call_count: usize,
-    call_limit: Option<usize>,
 }
 
 impl MockNixBackend {
     /// Create an empty mock backend.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             clusters: HashMap::new(),
-            call_count: 0,
-            call_limit: None,
         }
     }
 
     /// Register a cluster with its manifest data.
-    pub fn add_cluster(&mut self, name: &str, manifests: Vec<Value>) {
+    pub(crate) fn add_cluster(&mut self, name: &str, manifests: Vec<Value>) {
         self.clusters.insert(name.to_string(), manifests);
-    }
-
-    /// Set a maximum number of eval calls allowed (for cache testing).
-    /// After this limit, `eval_cluster` will panic.
-    pub fn set_call_limit(&mut self, limit: usize) {
-        self.call_limit = Some(limit);
-    }
-
-    /// Load cluster data from a JSON file. The file should contain an array
-    /// of K8s manifest objects.
-    pub fn add_cluster_from_file(&mut self, name: &str, path: &Path) -> Result<(), KixEvalError> {
-        let contents = std::fs::read_to_string(path).map_err(|e| KixEvalError::EvalFailed {
-            flake: path.display().to_string(),
-            attr: name.to_string(),
-            source: e.into(),
-        })?;
-        let manifests: Vec<Value> =
-            serde_json::from_str(&contents).map_err(|e| KixEvalError::EvalFailed {
-                flake: path.display().to_string(),
-                attr: name.to_string(),
-                source: e.into(),
-            })?;
-        self.clusters.insert(name.to_string(), manifests);
-        Ok(())
     }
 }
 
@@ -71,16 +41,6 @@ impl NixBackend for MockNixBackend {
         _flake_path: &Path,
         cluster_name: &str,
     ) -> Result<ClusterOutput, KixEvalError> {
-        if let Some(limit) = self.call_limit
-            && self.call_count >= limit
-        {
-            panic!(
-                "MockNixBackend: eval_cluster called {} times, limit is {limit}",
-                self.call_count + 1
-            );
-        }
-        self.call_count += 1;
-
         let manifests = self
             .clusters
             .get(cluster_name)

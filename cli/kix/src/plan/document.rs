@@ -8,18 +8,19 @@
 //! read differently.
 //!
 //! The JSON Schema of this type is committed at
-//! `kix-cli/schema/plan.schema.json`; a test fails when the type and the file
-//! disagree. Set [`SCHEMA_VERSION`] to the day's date when a change is not
+//! `kix-cli/schema/plan.schema.json`, beside the CLI that prints the
+//! document; a test there fails when the type and the file disagree. Set [`SCHEMA_VERSION`] to the day's date when a change is not
 //! backward compatible: a field removed or renamed, or a value's meaning
 //! changed.
 
 use std::collections::{BTreeMap, HashMap};
 
-use kix::cluster::migrate::MigrationPair;
-use kix::eval::store_graph::StoreGraph;
-use kix::manifest::diff::{DiffKind, Difference};
-use kix::manifest::types::ResourceId;
-use kix::manifest::{keys, lifecycle};
+use crate::cluster::migrate::MigrationPair;
+use crate::cluster::scheduler::PrunePolicy;
+use crate::eval::store_graph::StoreGraph;
+use crate::manifest::diff::{DiffKind, Difference};
+use crate::manifest::types::ResourceId;
+use crate::manifest::{keys, lifecycle};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -96,14 +97,15 @@ pub struct KixBuild {
 }
 
 impl KixBuild {
-    /// The running binary.
-    pub fn current() -> Self {
+    /// The running binary, whose crate version is `version`: the binary's
+    /// own `CARGO_PKG_VERSION`, not this library's.
+    pub fn current(version: &str) -> Self {
         let store_path = std::env::current_exe()
             .and_then(std::fs::canonicalize)
             .ok()
             .and_then(|exe| store_path_of(&exe.to_string_lossy()));
         KixBuild {
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            version: version.to_string(),
             store_path,
         }
     }
@@ -190,6 +192,19 @@ pub struct PlanFlags {
 pub enum PruneModeFlag {
     Default,
     No,
+}
+
+impl PlanFlags {
+    /// The prune policy the flags ask for. `--prune-mode=no` skips, plain
+    /// `deploy` reports orphans without deleting (warn-only), `--prune`
+    /// deletes.
+    pub fn prune_policy(&self) -> PrunePolicy {
+        match self.prune_mode.unwrap_or(PruneModeFlag::Default) {
+            PruneModeFlag::No => PrunePolicy::Skip,
+            PruneModeFlag::Default if !self.prune => PrunePolicy::WarnOnly,
+            PruneModeFlag::Default => PrunePolicy::Delete,
+        }
+    }
 }
 
 /// How a [`Plan`] was made, which bounds what it can know.
@@ -561,8 +576,11 @@ pub enum Detail<'a> {
 }
 
 impl Plan {
-    /// A plan with every check not run for `reason`, migrations aside.
+    /// A plan made by `kix`, with every check not run for `reason`,
+    /// migrations aside.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
+        kix: KixBuild,
         made_by: MadeBy,
         cluster: &str,
         build: Build,
@@ -574,7 +592,7 @@ impl Plan {
         Plan {
             schema_version: SCHEMA_VERSION.to_string(),
             made_by,
-            kix: KixBuild::current(),
+            kix,
             cluster: cluster.to_string(),
             build,
             deployed: None,
@@ -629,12 +647,6 @@ impl Plan {
     pub fn to_yaml(&self) -> Result<String, serde_yml::Error> {
         serde_yml::to_string(self)
     }
-}
-
-/// The JSON Schema of [`Plan`], as committed.
-#[cfg(test)]
-pub fn schema() -> Value {
-    serde_json::to_value(schemars::schema_for!(Plan)).expect("a schema serializes")
 }
 
 impl From<&MigrationPair> for Migration {
@@ -769,7 +781,7 @@ impl FieldChange {
     /// the build and the cluster hold them: a password written as a literal
     /// container `env` value, or into a ConfigMap, is not recognised as
     /// secret.
-    pub fn of(is_secret: bool, d: &Difference) -> Self {
+    pub(crate) fn of(is_secret: bool, d: &Difference) -> Self {
         let change = match d.kind {
             DiffKind::MissingInB => ChangeKind::Removed,
             DiffKind::ExtraInB => ChangeKind::Added,
@@ -793,29 +805,6 @@ impl FieldChange {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Where the committed schema lives, relative to this crate.
-    const SCHEMA_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/schema/plan.schema.json");
-
-    /// The committed schema is the type's schema. Regenerate it with
-    /// `KIX_WRITE_PLAN_SCHEMA=1 cargo test -p kix-cli plan::document`, and
-    /// set `SCHEMA_VERSION` to the day's date when the change is not backward
-    /// compatible.
-    #[test]
-    fn the_committed_schema_matches_the_type() {
-        let generated = serde_json::to_string_pretty(&schema()).unwrap() + "\n";
-        if std::env::var_os("KIX_WRITE_PLAN_SCHEMA").is_some() {
-            std::fs::create_dir_all(std::path::Path::new(SCHEMA_PATH).parent().unwrap()).unwrap();
-            std::fs::write(SCHEMA_PATH, &generated).unwrap();
-        }
-        let committed = std::fs::read_to_string(SCHEMA_PATH).unwrap_or_default();
-        assert!(
-            committed == generated,
-            "kix-cli/schema/plan.schema.json does not match the Plan type. \
-             Regenerate it with KIX_WRITE_PLAN_SCHEMA=1 cargo test -p kix-cli plan::document \
-             and set SCHEMA_VERSION to the day's date if the change is not backward compatible."
-        );
-    }
 
     #[test]
     fn a_store_path_is_the_store_entry_of_a_path_inside_it() {
@@ -853,13 +842,14 @@ mod tests {
     #[test]
     fn a_prune_delete_alone_is_a_change() {
         let empty = super::super::diff_graphs(
-            &kix::eval::store_graph::StoreGraph::empty("c"),
-            &kix::eval::store_graph::StoreGraph::empty("c"),
+            &crate::eval::store_graph::StoreGraph::empty("c"),
+            &crate::eval::store_graph::StoreGraph::empty("c"),
         );
         let mut plan = Plan::new(
+            KixBuild::current(env!("CARGO_PKG_VERSION")),
             MadeBy::DryRun,
             "c",
-            Build::of(&kix::eval::store_graph::StoreGraph::empty("c")),
+            Build::of(&crate::eval::store_graph::StoreGraph::empty("c")),
             &empty,
             Detail::Plain,
             &[],

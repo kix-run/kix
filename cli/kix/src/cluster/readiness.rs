@@ -8,7 +8,7 @@
 //! the same per-kind readiness checks as managed resources". Used to gate waves
 //! on CRDs installed by operators outside Kix (e.g. stackgres `INSTALL_CRDS=true`)
 //! and on platform-provided workloads (e.g. coredns Deployment).
-//! See [`ImportTarget`] and [`wait_for_import_target`].
+//! See [`ImportTarget`] and `wait_for_import_target`.
 
 use std::time::{Duration, Instant};
 
@@ -21,8 +21,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::cancel::CancelToken;
+use super::discovery;
 use super::errors::{FailureClass, classify};
-use super::fetch;
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 
@@ -50,7 +50,7 @@ async fn probe_crd_discovery(client: &Client, crd: &Value) -> bool {
     loop {
         // One group, not a full walk: a full walk waits out every listed
         // group version that answers 404, which would outlast this budget.
-        if let Ok(walk) = fetch::discover_group(client, group).await
+        if let Ok(walk) = discovery::discover_group(client, group).await
             && walk
                 .resources
                 .iter()
@@ -223,7 +223,7 @@ pub fn import_target_from_manifest(
 /// Scope is determined by the target kind: `CustomResourceDefinition` is
 /// cluster-scoped, everything else is namespaced and queried in
 /// `target.namespace` (sourced from the marker's own `metadata.namespace`).
-pub async fn wait_for_import_target(
+pub(crate) async fn wait_for_import_target(
     client: &Client,
     target: &ImportTarget,
     timeout: Duration,
@@ -491,7 +491,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Errors from readiness polling.
 #[derive(Error, Debug)]
-pub enum ReadinessError {
+pub(crate) enum ReadinessError {
     #[error("failed to fetch resource for readiness check: {0}")]
     FetchError(#[source] kube::Error),
     #[error("malformed import target: {0}")]
@@ -504,7 +504,7 @@ pub enum ReadinessError {
 
 /// One object a manifest expects something else to have created.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Expectation {
+pub(crate) struct Expectation {
     pub api_version: String,
     pub kind: String,
     pub name: String,
@@ -517,7 +517,7 @@ impl Expectation {
 }
 
 /// The `kix.run/expects` entries of a manifest, malformed ones dropped.
-pub fn expectations(manifest: &Value) -> Vec<Expectation> {
+pub(crate) fn expectations(manifest: &Value) -> Vec<Expectation> {
     manifest
         .pointer("/metadata/annotations")
         .and_then(|a| a.get(keys::EXPECTS))
@@ -546,7 +546,7 @@ pub fn expectations(manifest: &Value) -> Vec<Expectation> {
 /// Wait until every object the manifest expects exists, in the manifest's
 /// namespace (or at cluster scope for a cluster-scoped kind). Returns the
 /// first expectation still unmet at the timeout, with the reason.
-pub async fn wait_for_expectations(
+pub(crate) async fn wait_for_expectations(
     client: &Client,
     manifest: &Value,
     timeout: Duration,
@@ -603,7 +603,7 @@ pub async fn wait_for_expectations(
 const CRASHLOOP_RESTART_THRESHOLD: i64 = 3;
 
 /// Classification of a terminal workload failure. Bubbles up from the per-pod
-/// and per-workload classifiers in [`classify_terminal_failure`] so callers
+/// and per-workload classifiers ([`classify_pod_terminal`], [`classify_workload_terminal`]) so callers
 /// can render the machine-readable reason distinctly from the free-form message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalReason {
@@ -633,7 +633,7 @@ impl TerminalReason {
 
 /// Result of a readiness check.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReadinessResult {
+pub(crate) enum ReadinessResult {
     /// Resource is ready.
     Ready,
     /// An `OnDelete` DaemonSet is ready, but `stale` of its pods still run
@@ -991,7 +991,7 @@ struct ScanResult {
 /// something. At most the last [`TERMINATION_OUTPUT_LINES`] lines are
 /// kept; a truncated result starts with a line saying how many were
 /// dropped.
-pub fn termination_output(pods: &[Value]) -> Vec<String> {
+pub(crate) fn termination_output(pods: &[Value]) -> Vec<String> {
     let newest = pods.iter().max_by_key(|p| {
         p.pointer("/status/startTime")
             .or_else(|| p.pointer("/metadata/creationTimestamp"))
@@ -1038,7 +1038,7 @@ pub fn termination_output(pods: &[Value]) -> Vec<String> {
 }
 
 /// How many lines of a failed container's output the deploy shows.
-pub const TERMINATION_OUTPUT_LINES: usize = 20;
+pub(crate) const TERMINATION_OUTPUT_LINES: usize = 20;
 
 /// Full terminal-failure scan: checks workload-level signals first, then
 /// pod-level signals for pod-backed kinds. Returns on the first hit (in
@@ -1177,7 +1177,7 @@ const HARD_CEILING: Duration = Duration::from_secs(5 * 60);
 /// either the idle or hard budget elapsing, or `Cancelled` if the cancel
 /// token flips mid-wait.
 #[allow(clippy::too_many_arguments)]
-pub async fn wait_for_ready(
+pub(crate) async fn wait_for_ready(
     client: &Client,
     ar: &ApiResource,
     scope: &Scope,
@@ -1192,7 +1192,7 @@ pub async fn wait_for_ready(
         return Ok(ReadinessResult::Ready);
     }
 
-    let api: Api<DynamicObject> = fetch::api_for(client, ar, scope, rid);
+    let api: Api<DynamicObject> = discovery::api_for(client, ar, scope, rid);
 
     let idle_budget = timeout;
     let hard_ceiling = HARD_CEILING;
@@ -1547,7 +1547,7 @@ fn is_on_delete(data: &Value) -> bool {
 /// The number of pods of an `OnDelete` DaemonSet that still run a previous
 /// pod template, or `None` when there are none or the DaemonSet rolls its
 /// pods itself.
-pub fn daemonset_pending_restart(data: &Value) -> Option<i64> {
+pub(crate) fn daemonset_pending_restart(data: &Value) -> Option<i64> {
     if !is_on_delete(data) {
         return None;
     }

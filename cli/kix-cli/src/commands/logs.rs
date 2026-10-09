@@ -12,28 +12,19 @@ use crate::cli::LogsArgs;
 use crate::output;
 
 use super::CommandContext;
-use super::workload::{resolve_flake_path, resolve_package_workload};
+use super::workload::resolve_package_workload;
 
 pub fn run(args: &LogsArgs, ctx: &mut CommandContext) -> Result<()> {
-    let flake_path = resolve_flake_path(&ctx.global.flake)?;
-    let target = resolve_package_workload(
-        &flake_path,
-        &args.cluster,
-        &args.package,
-        &ctx.global.input_overrides(),
-        ctx.global.quiet,
-    )?;
+    let target = resolve_package_workload(&ctx.global, &args.cluster, &args.package)?;
 
-    if !ctx.global.quiet {
-        eprintln!(
-            "  {} {} {} in {} (selector: {})",
-            output::dim("→ kubectl logs for"),
-            output::bold(&target.kind),
-            output::bold(&target.name),
-            output::bold(&target.namespace),
-            output::dim(&target.selector),
-        );
-    }
+    crate::esay!(
+        "  {} {} {} in {} (selector: {})",
+        output::dim("→ kubectl logs for"),
+        output::bold(&target.kind),
+        output::bold(&target.name),
+        output::bold(&target.namespace),
+        output::dim(&target.selector),
+    );
 
     let mut cmd = Command::new("kubectl");
     cmd.arg("logs");

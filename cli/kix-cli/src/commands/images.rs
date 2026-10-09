@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::io::IsTerminal;
 
 use miette::Result;
 use serde::Serialize;
@@ -50,19 +49,7 @@ impl CommandResponse for ImagesResponse {
 }
 
 pub fn run(args: &ImagesArgs, ctx: &mut CommandContext) -> Result<()> {
-    let spinner = if std::io::stderr().is_terminal() && !ctx.global.quiet {
-        let sp = indicatif::ProgressBar::new_spinner();
-        sp.set_style(
-            indicatif::ProgressStyle::default_spinner()
-                .template("{spinner:.cyan} {msg}")
-                .expect("valid template"),
-        );
-        sp.set_message(format!("Evaluating cluster '{}'...", args.cluster));
-        sp.enable_steady_tick(std::time::Duration::from_millis(80));
-        Some(sp)
-    } else {
-        None
-    };
+    let spinner = output::spinner(format!("Evaluating cluster '{}'...", args.cluster));
 
     let cluster_output = ctx.eval_cluster_or_suggest(&args.cluster);
 
@@ -137,7 +124,7 @@ pub fn run(args: &ImagesArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let response = ImagesResponse { images };
 
-    match ctx.output_format(OutputFormat::Text) {
+    match output::format() {
         OutputFormat::Text | OutputFormat::Markdown => {
             if args.sources {
                 // Verbose text: show sources per image
@@ -154,12 +141,7 @@ pub fn run(args: &ImagesArgs, ctx: &mut CommandContext) -> Result<()> {
                 print!("{}", response.format_text());
             }
         }
-        OutputFormat::Json => {
-            println!("{}", output::render(&response, OutputFormat::Json)?);
-        }
-        OutputFormat::Yaml => {
-            println!("{}", output::render(&response, OutputFormat::Yaml)?);
-        }
+        OutputFormat::Json | OutputFormat::Yaml => output::result(&response)?,
     }
 
     Ok(())

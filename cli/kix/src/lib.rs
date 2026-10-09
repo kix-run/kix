@@ -8,16 +8,23 @@
 //! - [`manifest`]: Kubernetes types, diffs, annotation stamping, and validation
 //! - [`cluster`]: apply, fetch, DAG, readiness, activation lifecycle, and reconcile
 //!
-//! Three smaller modules sit beside them: [`pins`], the committed record of
+//! [`plan`] sits on top of them: what a deploy of a build would change, the
+//! plan document `kix plan` and `kix diff` print, and the check that holds a
+//! deploy to the objects its plan shows.
+//!
+//! Four smaller modules sit beside them: [`build_source`], the checked build
+//! a command plans and deploys and where it came from, [`pins`], the committed record of
 //! what each image reference resolved to, [`registry`], the one place Kix asks
 //! a container registry a question, and [`text`], for printing text kix did
 //! not write.
 
+pub mod build_source;
 pub mod cluster;
 pub mod eval;
 pub mod legacy_domain;
 pub mod manifest;
 pub mod pins;
+pub mod plan;
 pub mod registry;
 pub mod text;
 
@@ -76,7 +83,7 @@ pub(crate) mod allocated {
 
     /// The most bytes this thread held while `f` ran, beyond what it held
     /// when `f` started.
-    pub fn peak_during<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    pub(crate) fn peak_during<T>(f: impl FnOnce() -> T) -> (T, usize) {
         let start = NOW.with(Cell::get);
         PEAK.with(|peak| peak.set(start));
         let out = f();

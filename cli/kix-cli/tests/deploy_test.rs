@@ -146,3 +146,37 @@ fn deploy_reads_the_cache_under_the_cluster_name_not_the_attribute() {
         ))
         .stdout(predicate::str::contains("First deploy").not());
 }
+
+/// `kix deploy --log-format json` keeps stdout to the log: the build, the
+/// plan and everything else a person reads before the run go to stderr.
+/// Offline the deploy stops when it connects to apply, after the plan.
+#[test]
+fn the_json_deploy_log_has_stdout_to_itself() {
+    let cache = tempfile::tempdir().unwrap();
+    let out = kix()
+        .env("XDG_CACHE_HOME", cache.path())
+        .args([
+            "deploy",
+            "example",
+            "--current-activation",
+            "--yes",
+            "--log-format",
+            "json",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    for line in stdout.lines() {
+        serde_json::from_str::<serde_json::Value>(line)
+            .unwrap_or_else(|e| panic!("stdout line is not JSON ({e}): {line}"));
+    }
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("Cluster example:"), "{stderr}");
+    assert!(
+        stderr.contains("No previous activation. First deploy."),
+        "{stderr}"
+    );
+    assert!(stderr.contains("failed to connect to cluster"), "{stderr}");
+}

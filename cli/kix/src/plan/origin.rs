@@ -9,12 +9,12 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use kix::cluster::drift;
-use kix::cluster::fieldsv1::KIX_FIELD_MANAGER;
-use kix::manifest::diff::engine::structural_diff;
-use kix::manifest::diff::{DiffConfig, DiffKind, Difference};
-use kix::manifest::keys;
-use kix::manifest::types::{self, ResourceId};
+use crate::cluster::drift;
+use crate::cluster::fieldsv1::KIX_FIELD_MANAGER;
+use crate::manifest::diff::engine::structural_diff;
+use crate::manifest::diff::{DiffConfig, DiffKind, Difference};
+use crate::manifest::keys;
+use crate::manifest::types::{self, ResourceId};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -39,7 +39,7 @@ pub enum ChangeLabel {
 
 /// A field where the live object differs from the deployed build.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Drifted {
+pub(crate) struct Drifted {
     pub path: String,
     pub deployed: Option<Value>,
     pub live: Option<Value>,
@@ -48,7 +48,7 @@ pub struct Drifted {
 }
 
 /// The objects one resource's labels are computed from.
-pub struct ThreeWay<'a> {
+pub(crate) struct ThreeWay<'a> {
     /// The deployed build's manifest; `None` when the deployed build does
     /// not contain the resource, which makes every change intended.
     pub deployed: Option<&'a Value>,
@@ -69,7 +69,7 @@ pub struct ThreeWay<'a> {
 impl ThreeWay<'_> {
     /// One label list per change in `changes`, in order, and the drifted
     /// fields those changes touch.
-    pub fn label(&self, changes: &[Difference]) -> (Vec<Vec<ChangeLabel>>, Vec<Drifted>) {
+    pub(crate) fn label(&self, changes: &[Difference]) -> (Vec<Vec<ChangeLabel>>, Vec<Drifted>) {
         let config = DiffConfig::new("deployed", "other");
         // Both builds: a list in another order is a change the build makes.
         let intended: Option<Vec<Difference>> = self
@@ -224,7 +224,7 @@ pub fn label_builds(diff: &mut super::PackageDiff) {
 }
 
 /// Whether one diff path is the other or lies under it.
-pub fn overlaps(a: &str, b: &str) -> bool {
+pub(crate) fn overlaps(a: &str, b: &str) -> bool {
     let under = |child: &str, parent: &str| {
         child.len() > parent.len()
             && child.starts_with(parent)
@@ -241,7 +241,7 @@ fn is_secret_value_path(path: &str) -> bool {
 /// in `obj`. Map keys may contain dots (annotation keys), so each step takes
 /// the longest key that matches; a list element is found by the key the
 /// diff engine matched it on, or by position.
-pub fn value_at<'v>(obj: &'v Value, path: &str) -> Option<&'v Value> {
+pub(crate) fn value_at<'v>(obj: &'v Value, path: &str) -> Option<&'v Value> {
     let mut node = obj;
     let mut rest = path.strip_prefix('$')?;
     let mut field = "";
@@ -265,7 +265,7 @@ pub fn value_at<'v>(obj: &'v Value, path: &str) -> Option<&'v Value> {
             node = items
                 .iter()
                 .find(|item| {
-                    kix::manifest::diff::keyed_lists::extract_key(field, item).as_deref()
+                    crate::manifest::diff::keyed_lists::extract_key(field, item).as_deref()
                         == Some(wanted)
                         || item.get("name").and_then(Value::as_str) == Some(wanted)
                 })

@@ -51,12 +51,9 @@
 //!
 //! # One parser
 //!
-//! [`parse_manifest`] parses every manifest and every index, from bundles
-//! and from result directories. It refuses a key given twice, a key that
-//! starts `$serde_json::private::` (serde_json's `Value`, with the
-//! `raw_value` feature this workspace turns on, reads an object with that
-//! key as the raw JSON its value holds), and nesting past serde_json's own
-//! limit of 128.
+//! Every manifest and the index are parsed with
+//! `manifest_json::parse_manifest`, the parser a result directory's are read
+//! with.
 //!
 //! # Two readers
 //!
@@ -70,8 +67,8 @@
 //!
 //! [`Bundle::read`] is for the agent and the CLI. It does the same, then
 //! parses every manifest and the index and gives the build's [`StoreGraph`],
-//! built by [`StoreGraph::assemble`] and checked by
-//! [`StoreGraph::validate`], as a result directory's is. It keeps every
+//! built by `StoreGraph::assemble` and checked by
+//! `StoreGraph::validate`, as a result directory's is. It keeps every
 //! manifest parsed, so the process's memory limit bounds it.
 //!
 //! [`OpenBundle::open`] reads only the seek table and the header, for a
@@ -90,9 +87,9 @@
 //!
 //! After [`Bundle::read`], also:
 //!
-//! - every manifest and the index parse with [`parse_manifest`], and every
+//! - every manifest and the index parse with `parse_manifest`, and every
 //!   path the index lists is a manifest in the bundle;
-//! - [`StoreGraph::validate`] holds: one Activation record, at the record's
+//! - `StoreGraph::validate` holds: one Activation record, at the record's
 //!   path, labelled with the index's cluster; each object (kind, namespace,
 //!   name) once; one package per namespace and instance, each with its
 //!   PackageInstance; only import markers listed by more than one package;
@@ -105,12 +102,12 @@
 //! | Cap or refusal | Protects |
 //! |---|---|
 //! | [`MAX_STORED_BYTES`], 64 MiB | server: bytes read and hashed per upload |
-//! | [`MAX_HEADER_BYTES`], 32 MiB | server: memory for the header |
-//! | [`MAX_FILES`], 200,000 | server: memory per file and per seek-table entry, counted before the header is kept |
-//! | [`MAX_REFERENCES`], 1,600,000 | server: time to hash the references of every path, and memory for them |
-//! | [`MAX_RECEIPT_BYTES`], 256 KiB | server: memory to parse the receipt |
-//! | [`MAX_FRAME_BYTES`], 32 MiB | server: memory for one frame, so also the largest file |
-//! | [`MAX_CONTENT_BYTES`], 1 GiB | server: time to decompress and hash the files |
+//! | `MAX_HEADER_BYTES`, 32 MiB | server: memory for the header |
+//! | `MAX_FILES`, 200,000 | server: memory per file and per seek-table entry, counted before the header is kept |
+//! | `MAX_REFERENCES`, 1,600,000 | server: time to hash the references of every path, and memory for them |
+//! | `MAX_RECEIPT_BYTES`, 256 KiB | server: memory to parse the receipt |
+//! | `MAX_FRAME_BYTES`, 32 MiB | server: memory for one frame, so also the largest file |
+//! | `MAX_CONTENT_BYTES`, 1 GiB | server: time to decompress and hash the files |
 //! | [`MAX_RECORD_BYTES`], 256 KiB | server: memory to parse the record |
 //! | `cluster::secrets` 8 MiB of SOPS text, aliases expanded | agent: a plan parses SOPS files before anyone approves it |
 //! | `WrongFormat`, `Format1` | another format is never read as this one; `--deployed-bundle` sets format 1 aside |
@@ -135,41 +132,43 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 
-use serde::de::{DeserializeSeed, Error as _, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::de::{IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use zstd::zstd_safe;
 
 use super::error::KixEvalError;
-use super::store_graph::{KixPackageIndex, StoreGraph, store_name};
+use super::manifest_json::{NotJson, parse_index, parse_manifest};
+use super::store_graph::{StoreGraph, store_name};
 use super::store_path;
+pub use crate::build_source::Provenance;
 use crate::manifest::{keys, lifecycle};
 use crate::text::printable;
 
 /// The `format` field of every bundle header.
-pub const FORMAT: &str = "kix-bundle";
+pub(crate) const FORMAT: &str = "kix-bundle";
 /// The version this kix writes and reads. A reader refuses any other.
-pub const VERSION: u32 = 3;
+pub(crate) const VERSION: u32 = 3;
 /// The file extension `kix bundle` suggests.
 pub const EXTENSION: &str = "kixbundle";
 /// The store name of the package index.
-pub const INDEX_NAME: &str = "kix-packages.json";
+pub(crate) const INDEX_NAME: &str = "kix-packages.json";
 
 /// The largest bundle file kix reads.
 pub const MAX_STORED_BYTES: u64 = 64 * 1024 * 1024;
 /// The largest header, decompressed. A header takes about 100 bytes a file.
-pub const MAX_HEADER_BYTES: u64 = 32 * 1024 * 1024;
+pub(crate) const MAX_HEADER_BYTES: u64 = 32 * 1024 * 1024;
 /// The most files a bundle may hold.
-pub const MAX_FILES: usize = 200_000;
+pub(crate) const MAX_FILES: usize = 200_000;
 /// The most references the header may give over all its files. A build
 /// gives about 3.5 a file.
-pub const MAX_REFERENCES: usize = 8 * MAX_FILES;
+pub(crate) const MAX_REFERENCES: usize = 8 * MAX_FILES;
 /// The largest data frame, decompressed, and so the largest file. The
 /// largest file is `kix-packages.json`, at about 130 bytes for each file it
 /// lists: about 26 MB at [`MAX_FILES`].
-pub const MAX_FRAME_BYTES: u64 = 32 * 1024 * 1024;
+pub(crate) const MAX_FRAME_BYTES: u64 = 32 * 1024 * 1024;
 /// The most bytes the files may add up to, as the header lists them.
-pub const MAX_CONTENT_BYTES: u64 = 1024 * 1024 * 1024;
+pub(crate) const MAX_CONTENT_BYTES: u64 = 1024 * 1024 * 1024;
 /// The largest Activation record. A record lists the build's package
 /// instances, about 2 KB for each Lithus cluster, and parses to about a
 /// hundred times its size at worst.
@@ -177,7 +176,7 @@ pub const MAX_RECORD_BYTES: u64 = 256 * 1024;
 /// The largest receipt in the header, as JSON. A receipt names the build's
 /// source and inputs, a few KB, and parses to about sixteen times its size
 /// at worst.
-pub const MAX_RECEIPT_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_RECEIPT_BYTES: usize = 256 * 1024;
 
 /// The writer starts a new frame before a file that would take a frame past
 /// this size. Larger frames compress better, since files of one kind repeat
@@ -194,9 +193,9 @@ const FOOTER_BYTES: usize = 9;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Header {
-    /// Always [`FORMAT`].
+    /// Always `FORMAT`.
     pub format: String,
-    /// Always [`VERSION`].
+    /// Always `VERSION`.
     pub version: u32,
     /// The kix revision that wrote the bundle, for the record.
     pub kix_rev: String,
@@ -257,19 +256,6 @@ fn stream_order(a: &str, b: &str) -> Ordering {
     let name_a = store_path::name_of(a).unwrap_or_default();
     let name_b = store_path::name_of(b).unwrap_or_default();
     name_a.cmp(name_b).then_with(|| a.cmp(b))
-}
-
-/// What the machine that wrote a bundle recorded about the build's source:
-/// the deploy receipt's `source`, `inputs` and `builder`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Provenance {
-    #[serde(default)]
-    pub source: serde_json::Map<String, serde_json::Value>,
-    #[serde(default)]
-    pub inputs: Vec<serde_json::Map<String, serde_json::Value>>,
-    #[serde(default)]
-    pub builder: serde_json::Map<String, serde_json::Value>,
 }
 
 /// What a bundle holds. [`Contents::write`] makes a bundle of it.
@@ -350,10 +336,16 @@ pub enum BundleError {
     Unreachable(String),
     #[error("{} is not a JSON manifest: {}", printable(.path), printable(.message))]
     NotJson { path: String, message: String },
-    /// [`StoreGraph::assemble`] or [`StoreGraph::validate`] refused the
+    /// `StoreGraph::assemble` or `StoreGraph::validate` refused the
     /// build. Their messages are escaped already.
     #[error("{0}")]
     Build(String),
+}
+
+impl From<NotJson> for BundleError {
+    fn from(NotJson { path, message }: NotJson) -> Self {
+        BundleError::NotJson { path, message }
+    }
 }
 
 impl Contents {
@@ -402,7 +394,7 @@ impl Contents {
     /// Write the bundle. The same contents give the same bytes from the
     /// same kix and libzstd: the order is fixed, and zstd runs on one
     /// thread at its default level. Fails on a file over
-    /// [`MAX_FRAME_BYTES`], naming it.
+    /// `MAX_FRAME_BYTES`, naming it.
     pub fn write(&self, mut out: impl Write) -> io::Result<()> {
         let header = self.header()?;
         if let Some(f) = header.files.iter().find(|f| f.size > MAX_FRAME_BYTES) {
@@ -665,7 +657,7 @@ impl<R: Read + Seek> Bundle<R> {
         let checked = read_checked(input, |path, role, bytes| {
             match role {
                 Role::Record | Role::Manifest => {
-                    manifests.insert(PathBuf::from(path), parse_manifest(path, bytes)?);
+                    manifests.insert(PathBuf::from(path), bytes.to_vec());
                 }
                 Role::Index => index = Some(parse_index(path, bytes)?),
                 Role::Other => {}
@@ -694,7 +686,10 @@ impl<R: Read + Seek> Bundle<R> {
             &|_| {},
         )
         .and_then(|graph| graph.validate().map(|()| graph))
-        .map_err(|e| BundleError::Build(e.to_string()))?;
+        .map_err(|e| match e {
+            KixEvalError::NotJson(e) => BundleError::from(e),
+            e => BundleError::Build(e.to_string()),
+        })?;
         Ok((Bundle(checked), graph))
     }
 }
@@ -1161,95 +1156,6 @@ fn ref_cache_of(header: &Header) -> HashMap<PathBuf, Vec<PathBuf>> {
         }
     }
     ref_cache
-}
-
-/// `bytes`, the manifest at `path`, parsed as JSON: the one parser for
-/// manifests and indexes. Refuses a key given twice and a key with
-/// serde_json's reserved prefix; serde_json refuses nesting past 128. An
-/// integer outside `i64` and `u64` reads as the nearest `f64`.
-pub fn parse_manifest(path: &str, bytes: &[u8]) -> Result<serde_json::Value, BundleError> {
-    let mut de = serde_json::Deserializer::from_slice(bytes);
-    Strict
-        .deserialize(&mut de)
-        .and_then(|v| de.end().map(|()| v))
-        .map_err(|e| BundleError::NotJson {
-            path: path.to_string(),
-            message: e.to_string(),
-        })
-}
-
-/// `kix-packages.json` at `path`, parsed with [`parse_manifest`].
-pub fn parse_index(path: &str, bytes: &[u8]) -> Result<KixPackageIndex, BundleError> {
-    serde_json::from_value(parse_manifest(path, bytes)?).map_err(|e| BundleError::NotJson {
-        path: path.to_string(),
-        message: e.to_string(),
-    })
-}
-
-/// The prefix of the keys serde_json reserves for its own types. With the
-/// `raw_value` feature, `serde_json::Value` reads an object whose one key is
-/// `$serde_json::private::RawValue` as the JSON text its value holds.
-const SERDE_JSON_PRIVATE: &str = "$serde_json::private::";
-
-/// A JSON value parsed by [`parse_manifest`]'s rules.
-struct Strict;
-
-impl<'de> DeserializeSeed<'de> for Strict {
-    type Value = serde_json::Value;
-    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
-        d.deserialize_any(self)
-    }
-}
-
-impl<'de> Visitor<'de> for Strict {
-    type Value = serde_json::Value;
-    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("a JSON value")
-    }
-    fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E> {
-        Ok(v.into())
-    }
-    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
-        Ok(v.into())
-    }
-    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> {
-        Ok(v.into())
-    }
-    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E> {
-        Ok(v.into())
-    }
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> {
-        Ok(v.into())
-    }
-    fn visit_string<E>(self, v: String) -> Result<Self::Value, E> {
-        Ok(v.into())
-    }
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(serde_json::Value::Null)
-    }
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-        let mut out = Vec::new();
-        while let Some(v) = seq.next_element_seed(Strict)? {
-            out.push(v);
-        }
-        Ok(out.into())
-    }
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-        let mut out = serde_json::Map::new();
-        while let Some(key) = map.next_key::<String>()? {
-            if key.starts_with(SERDE_JSON_PRIVATE) {
-                return Err(A::Error::custom(format!(
-                    "the key '{key}' is reserved by serde_json"
-                )));
-            }
-            if out.contains_key(&key) {
-                return Err(A::Error::custom(format!("the key '{key}' is given twice")));
-            }
-            let value = map.next_value_seed(Strict)?;
-            out.insert(key, value);
-        }
-        Ok(out.into())
-    }
 }
 
 fn unreadable(e: impl std::fmt::Display) -> BundleError {

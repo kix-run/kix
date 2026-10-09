@@ -1,7 +1,7 @@
 //! The migration against a real apiserver.
 //!
 //! The only file in the compatibility layer that knows `kube::Api`, the way
-//! `cluster::ops::kube` is for the deploy engine. Its counterpart is the
+//! `cluster/ops/resources.rs` is for the deploy engine. Its counterpart is the
 //! scripted fake in [`super::migrate`]'s tests.
 
 use std::time::Duration;

@@ -10,7 +10,7 @@
 //! honest build's objects with no build to compare) with one set of flags.
 //!
 //! What is checked when kix accepts the bundle, computed apart from
-//! `plan::objects::of`:
+//! [`super::objects::of`]:
 //! - The writes of the engine plan, each matched to the one build file
 //!   whose manifest it applies, equal the plan document's `objects.writes`,
 //!   and the deletes equal its `objects.deletes`.
@@ -22,27 +22,29 @@
 //!
 //! `PROPTEST_CASES` sets the number of cases (256 by default, about ten
 //! seconds in a debug build). A long run:
-//! `PROPTEST_CASES=20000 cargo test -p kix-cli --release --bin kix plan_bound_properties`.
+//! `PROPTEST_CASES=20000 cargo test -p kix-lib --release --lib plan_bound_properties`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use clap::Parser;
-use kix::eval::bundle::{Bundle, BundleError, BundleFile, Contents, INDEX_NAME, Provenance};
-use kix::eval::store_graph::{KixPackageIndex, store_hash};
-use kix::eval::store_path::{self, Method};
-use kix::manifest::diff::equivalence::equivalent_to_unset;
-use kix::manifest::types;
 use proptest::prelude::*;
 use proptest::test_runner::{Config, TestCaseError, TestRunner};
-use serde_json::json;
+use serde_json::{Value, json};
 
-use super::*;
-use crate::cli::{Cli, Command};
-use crate::plan::document::{Packages, WriteChange};
-use crate::plan::{CLUSTER_LEVEL_KEY, ManifestIndex};
+use super::baseline::{ActiveSource, Baseline};
+use super::document::{Packages, WriteChange};
+use super::plan_bound_tests::{flags, plan, stamped};
+use super::planner::deletes_of;
+use super::{CLUSTER_LEVEL_KEY, ManifestIndex, PlanError};
+use crate::cluster::apply::ChangeAction;
+use crate::eval::bundle::{Bundle, BundleError, BundleFile, Contents, INDEX_NAME, Provenance};
+use crate::eval::store_graph::{KixPackageIndex, StoreGraph, store_hash};
+use crate::eval::store_path::{self, Method};
+use crate::manifest::diff::equivalence::equivalent_to_unset;
+use crate::manifest::types::{self, ResourceId};
+use crate::manifest::{keys, lifecycle};
 
 /// Honest bundles: the kix-enterprise-test build on stage1, and kixpkgs'
 /// `bundle-alias` and `immich` test clusters, the second with import
@@ -50,15 +52,15 @@ use crate::plan::{CLUSTER_LEVEL_KEY, ManifestIndex};
 const SEEDS: &[(&str, &[u8])] = &[
     (
         "kix-enterprise-test",
-        include_bytes!("../../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle"),
+        include_bytes!("../../tests/fixtures/bundles/kix-enterprise-test.kixbundle"),
     ),
     (
         "bundle-alias",
-        include_bytes!("../../../../kix/tests/fixtures/bundles/bundle-alias.kixbundle"),
+        include_bytes!("../../tests/fixtures/bundles/bundle-alias.kixbundle"),
     ),
     (
         "immich",
-        include_bytes!("../../../../kix/tests/fixtures/bundles/immich.kixbundle"),
+        include_bytes!("../../tests/fixtures/bundles/immich.kixbundle"),
     ),
 ];
 
@@ -385,7 +387,7 @@ fn values() -> Vec<Option<Value>> {
     .map(|s| Some(json!(s)))
     .collect();
     v.extend(
-        kix::legacy_domain::legacy_spellings(keys::API_VERSION)
+        crate::legacy_domain::legacy_spellings(keys::API_VERSION)
             .into_iter()
             .map(|s| Some(json!(s))),
     );
@@ -421,7 +423,7 @@ fn annotations() -> Vec<String> {
     .to_vec();
     a.push(format!("{}.x", keys::IDENTITY_HASH));
     a.push(format!("{}.extra", keys::DEPENDS_ON));
-    a.extend(kix::legacy_domain::legacy_spellings(keys::IDENTITY_HASH));
+    a.extend(crate::legacy_domain::legacy_spellings(keys::IDENTITY_HASH));
     a
 }
 
@@ -1154,26 +1156,6 @@ enum Outcome {
     Checked,
 }
 
-fn deploy_args(extra: &[&str]) -> PlanArgs {
-    let mut argv = vec!["kix", "deploy", "x"];
-    argv.extend_from_slice(extra);
-    match Cli::try_parse_from(argv).expect("args parse").command {
-        Command::Deploy(args) => args.plan,
-        _ => unreachable!(),
-    }
-}
-
-fn stamped(graph: &StoreGraph) -> (StoreGraph, Vec<Value>) {
-    let mut graph = graph.clone();
-    stamp_annotations(&mut graph);
-    let manifests = graph
-        .resources
-        .values()
-        .map(|r| r.manifest.clone())
-        .collect();
-    (graph, manifests)
-}
-
 /// A manifest without the annotations a dependency's change propagates,
 /// and without the fields the plan's diff reads as absent
 /// (`equivalent_to_unset`: null, an empty list, a server default).
@@ -1205,7 +1187,7 @@ fn without_propagation(manifest: &Value) -> Value {
             keys::BUILT_VIA,
         ] {
             annotations.remove(key);
-            for legacy in kix::legacy_domain::legacy_spellings(key) {
+            for legacy in crate::legacy_domain::legacy_spellings(key) {
                 annotations.remove(&legacy);
             }
         }
@@ -1213,52 +1195,41 @@ fn without_propagation(manifest: &Value) -> Value {
     m
 }
 
-/// Plan a deploy of `new` over `old` with `flags`, as `prepare` does
-/// before it reads the cluster, and check what it would write and delete
-/// against the plan. `Err` is a violation of the property.
+/// Plan a deploy of `new` over `old` with `flags`, as [`super::Planner`]
+/// does before it reads the cluster, and check what it would write and
+/// delete against the plan. `Err` is a violation of the property.
 fn plan_and_check(
     new: &StoreGraph,
     honest: &StoreGraph,
     old: OldSide,
-    flags: &[&str],
+    extra: &[&str],
 ) -> Result<Outcome, String> {
-    let args = deploy_args(flags);
-    let (new_graph, new_manifests) = stamped(new);
+    let flags = flags(extra);
+    let (new_graph, _) = stamped(new);
     let (honest_graph, honest_manifests) = stamped(honest);
-    let (old_graph, active_manifests) = match old {
-        OldSide::Nothing => (StoreGraph::empty(&new.cluster_name), Vec::new()),
-        OldSide::Deployed => (honest_graph, honest_manifests),
-        OldSide::ObjectsOnly => (
-            StoreGraph::synthesize(&honest_manifests, &new_graph),
-            honest_manifests,
-        ),
+    let baseline = match old {
+        OldSide::Nothing => Baseline::empty(),
+        OldSide::Deployed => Baseline {
+            source: ActiveSource::Build(Box::new(honest_graph)),
+            active_manifests: honest_manifests,
+            ..Baseline::empty()
+        },
+        OldSide::ObjectsOnly => Baseline {
+            source: ActiveSource::Live,
+            active_manifests: honest_manifests,
+            ..Baseline::empty()
+        },
     };
-    let all_actions = actions(&new_manifests, &active_manifests, &[], &[], args.reconcile);
-    let orphans: Vec<ResourceId> = all_actions
-        .iter()
-        .filter_map(|a| match a {
-            ChangeAction::Orphan(rid) => Some(rid.clone()),
-            _ => None,
-        })
-        .collect();
-    let Ok(resource_graph) = ResourceGraph::from_manifests(&new_manifests) else {
-        return Ok(Outcome::PlanningRefused);
+    let checked = match plan(&baseline, new, flags) {
+        Ok(checked) => checked,
+        Err(PlanError::Graph(_) | PlanError::Marker(_)) => return Ok(Outcome::PlanningRefused),
+        Err(PlanError::Unshown(_)) => return Ok(Outcome::ObjectsRefused),
+        Err(e) => return Err(format!("the plan failed: {e}")),
     };
-    let Ok(plan) = DeployPlan::from_graph_and_changes(&resource_graph, &all_actions) else {
-        return Ok(Outcome::PlanningRefused);
-    };
-    let pkg_diff = plan::diff_graphs(&old_graph, &new_graph);
-    let deletes = deletes_of(prune_policy_for(&args), &orphans);
-    let Ok(objects) = plan::objects::of(
-        &pkg_diff.shown,
-        &new_graph,
-        &plan,
-        &deletes,
-        &[],
-        active_manifests.iter(),
-    ) else {
-        return Ok(Outcome::ObjectsRefused);
-    };
+    let (plan, pkg_diff, objects) = (checked.plan(), checked.pkg_diff(), checked.objects());
+    let deletes = deletes_of(flags.prune_policy(), checked.orphans());
+    let old_graph = baseline.diff_side(&new_graph);
+    let active_manifests = &baseline.active_manifests;
 
     // What the deploy writes, each matched to the build file whose
     // manifest it applies.
@@ -1337,7 +1308,7 @@ fn plan_and_check(
 
     // Each listed write and delete, as the plan document shows it.
     let index = ManifestIndex::new(&old_graph, &new_graph);
-    let doc = Packages::of(&pkg_diff, plan::document::Detail::Manifests(&index));
+    let doc = Packages::of(pkg_diff, super::document::Detail::Manifests(&index));
     let old_of = |id: &ResourceId| {
         old_graph
             .resources
@@ -1356,14 +1327,14 @@ fn plan_and_check(
             listed[&(kind.clone(), namespace.clone(), name.clone(), hash.clone())];
         let old = old_of(&id);
         let is_secret = types::is_secret(manifest) || old.is_some_and(types::is_secret);
-        let expected = plan::shown_value(
+        let expected = super::shown_value(
             is_secret,
             "$",
             manifest,
             old,
-            plan::MAX_SHOWN_MANIFEST_BYTES,
+            super::MAX_SHOWN_MANIFEST_BYTES,
         );
-        let shows = |sides: Option<&BTreeMap<String, plan::document::ManifestSides>>| {
+        let shows = |sides: Option<&BTreeMap<String, super::document::ManifestSides>>| {
             sides
                 .and_then(|s| s.get(&shown_id))
                 .and_then(|s| s.new.as_ref())
@@ -1489,6 +1460,8 @@ fn every_seed_reads_and_rebuilds_unchanged() {
 }
 
 #[test]
+// The case counts show how far the cases reached, under `--nocapture`.
+#[allow(clippy::print_stderr)]
 fn a_changed_bundle_is_refused_or_deploys_what_its_plan_shows() {
     let honest: Vec<(Contents, StoreGraph)> = SEEDS
         .iter()

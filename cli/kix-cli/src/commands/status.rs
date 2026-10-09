@@ -1,15 +1,15 @@
 use std::collections::HashMap;
-use std::io::IsTerminal;
 
 use miette::{IntoDiagnostic, Result, miette};
 
-use crate::cli::{OutputFormat, StatusArgs};
+use crate::cli::StatusArgs;
+use crate::client;
 use crate::output::{self, CommandResponse};
-use kix::cluster::activation;
-use kix::cluster::fetch;
+use kix::build_source::Build;
+use kix::cluster::activation::Records;
 use kix::cluster::readiness;
+use kix::cluster::{discovery, inventory};
 use kix::eval::store_graph::StoreGraph;
-use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
 use super::CommandContext;
@@ -230,72 +230,44 @@ fn run_operator(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
 }
 
 async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs) -> Result<()> {
-    let spinner = make_spinner(global);
+    let spinner = output::spinner("Fetching cluster status...");
 
     // 1. Connect and discover
-    let client = fetch::make_client(global.context.as_deref())
+    let client = client::make_client(global.context.as_deref())
         .await
         .into_diagnostic()?;
-    let discovery = fetch::discover_resources(&client).await.into_diagnostic()?;
+    let discovery = discovery::discover_resources(&client)
+        .await
+        .into_diagnostic()?;
 
     // 2. Find the Active Activation CR
-    let (activation_status, built_via) =
-        match activation::find_activation_ar(&discovery).map_err(|e| miette!("{e}"))? {
-            Some((ar, _)) => {
-                match activation::find_active(&client, ar, cluster_name)
-                    .await
-                    .into_diagnostic()?
-                {
-                    Some(act) => {
-                        // Read the full CR for age
-                        let api: kube::api::Api<kube::api::DynamicObject> =
-                            kube::api::Api::all_with(client.clone(), ar);
-                        let full = api.get(&act.name).await.into_diagnostic()?;
-                        let phase = full
-                            .data
-                            .pointer("/status/phase")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Unknown")
-                            .to_string();
-                        let age = compute_age_from_obj(&full);
-                        let hash = act.identity_hash.clone().unwrap_or_default();
-                        let built = act.built_via.clone();
-                        (
-                            Some(ActivationStatus {
-                                name: act.name,
-                                phase,
-                                identity_hash: hash,
-                                age,
-                            }),
-                            built,
-                        )
-                    }
-                    None => (None, None),
-                }
-            }
-            None => (None, None),
-        };
+    let opened = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
+    let active = match opened.records() {
+        Some(records) => records.active(cluster_name).await.into_diagnostic()?,
+        None => None,
+    };
+    let built_via = active.as_ref().and_then(|act| act.built_via.clone());
+    let activation_status = active.map(|act| ActivationStatus {
+        age: compute_age(act.created_at),
+        identity_hash: act.identity_hash.unwrap_or_default(),
+        phase: act.phase,
+        name: act.name,
+    });
 
     // 3. Load store graph for package grouping (if we have a built-via path)
     let store_graph = built_via
         .as_ref()
         .map(std::path::PathBuf::from)
         .filter(|p| p.join("kix-packages.json").exists())
-        .and_then(|result_dir| {
-            let noop = |_: &str| {};
-            StoreGraph::from_result_dir_with_status(&result_dir, &noop)
-                .ok()
-                .map(|mut g| {
-                    stamp_annotations(&mut g);
-                    g
-                })
-        });
+        .and_then(|result_dir| Build::local(&result_dir, &|_| {}).ok())
+        .map(Build::into_graph);
 
     // 4. Fetch this cluster's live resources
-    let sweep = fetch::sweep_managed(
+    let sweep = inventory::sweep_managed(
         &client,
         &discovery,
-        fetch::SweepScope::Cluster(cluster_name),
+        &opened,
+        inventory::SweepScope::Cluster(cluster_name),
     )
     .await
     .into_diagnostic()?;
@@ -303,10 +275,8 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
     if let Some(sp) = &spinner {
         sp.finish_and_clear();
     }
-    if !global.quiet {
-        for note in sweep.scope_notes() {
-            eprintln!("{note}");
-        }
+    for note in sweep.scope_notes() {
+        crate::esay!("{note}");
     }
     let live_resources = sweep.managed;
 
@@ -339,10 +309,7 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
         unowned,
     };
 
-    let format = global.output.unwrap_or(OutputFormat::Text);
-    println!("{}", output::render(&response, format)?);
-
-    Ok(())
+    output::result(&response)
 }
 
 /// Build the package-grouped view by joining store graph packages with live cluster resources.
@@ -479,25 +446,13 @@ fn resource_status_from_obj(obj: &kube::api::DynamicObject) -> PackageResourceSt
     }
 }
 
-fn make_spinner(global: &crate::cli::GlobalArgs) -> Option<indicatif::ProgressBar> {
-    if std::io::stderr().is_terminal() && !global.quiet {
-        let sp = indicatif::ProgressBar::new_spinner();
-        sp.set_style(
-            indicatif::ProgressStyle::default_spinner()
-                .template("{spinner:.cyan} {msg}")
-                .expect("valid template"),
-        );
-        sp.set_message("Fetching cluster status...");
-        sp.enable_steady_tick(std::time::Duration::from_millis(80));
-        Some(sp)
-    } else {
-        None
-    }
+fn compute_age_from_obj(obj: &kube::api::DynamicObject) -> String {
+    compute_age(obj.metadata.creation_timestamp.as_ref().map(|t| t.0))
 }
 
-fn compute_age_from_obj(obj: &kube::api::DynamicObject) -> String {
-    let timestamp = obj.metadata.creation_timestamp.as_ref().map(|t| t.0);
-    match timestamp {
+/// How long ago `created` was, or "-" without one.
+fn compute_age(created: Option<chrono::DateTime<chrono::Utc>>) -> String {
+    match created {
         Some(created) => {
             let now = chrono::Utc::now();
             let duration = now.signed_duration_since(created);
@@ -508,24 +463,32 @@ fn compute_age_from_obj(obj: &kube::api::DynamicObject) -> String {
 }
 
 async fn run_flat_async(cluster: &str, global: &crate::cli::GlobalArgs) -> Result<()> {
-    let spinner = make_spinner(global);
+    let spinner = output::spinner("Fetching cluster status...");
 
-    let client = fetch::make_client(global.context.as_deref())
+    let client = client::make_client(global.context.as_deref())
         .await
         .into_diagnostic()?;
-    let discovery = fetch::discover_resources(&client).await.into_diagnostic()?;
-    let sweep = fetch::sweep_managed(&client, &discovery, fetch::SweepScope::Cluster(cluster))
+    let discovery = discovery::discover_resources(&client)
         .await
         .into_diagnostic()?;
+    // Past the domain gate: on a cluster whose records sit under a retired
+    // group every object would be listed as this cluster's.
+    let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
+    let sweep = inventory::sweep_managed(
+        &client,
+        &discovery,
+        &records,
+        inventory::SweepScope::Cluster(cluster),
+    )
+    .await
+    .into_diagnostic()?;
 
     if let Some(sp) = &spinner {
         sp.finish_and_clear();
     }
 
-    if !global.quiet {
-        for note in sweep.scope_notes() {
-            eprintln!("{note}");
-        }
+    for note in sweep.scope_notes() {
+        crate::esay!("{note}");
     }
     let resources = sweep.managed;
     if resources.is_empty() {
@@ -561,10 +524,7 @@ async fn run_flat_async(cluster: &str, global: &crate::cli::GlobalArgs) -> Resul
     });
 
     let response = StatusResponse { statuses };
-    let format = global.output.unwrap_or(OutputFormat::Text);
-    println!("{}", output::render(&response, format)?);
-
-    Ok(())
+    output::result(&response)
 }
 
 /// Compute a human-readable status string for a resource.

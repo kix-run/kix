@@ -1,5 +1,3 @@
-use std::io::IsTerminal;
-
 use miette::Result;
 
 use crate::cli::{BuildArgs, OutputFormat};
@@ -23,20 +21,7 @@ impl CommandResponse for BuildResponse {
 }
 
 pub fn run(args: &BuildArgs, ctx: &mut CommandContext) -> Result<()> {
-    // Show spinner if on a TTY and not quiet
-    let spinner = if std::io::stderr().is_terminal() && !ctx.global.quiet {
-        let sp = indicatif::ProgressBar::new_spinner();
-        sp.set_style(
-            indicatif::ProgressStyle::default_spinner()
-                .template("{spinner:.cyan} {msg}")
-                .expect("valid template"),
-        );
-        sp.set_message(format!("Evaluating cluster '{}'...", args.cluster));
-        sp.enable_steady_tick(std::time::Duration::from_millis(80));
-        Some(sp)
-    } else {
-        None
-    };
+    let spinner = output::spinner(format!("Evaluating cluster '{}'...", args.cluster));
 
     let cluster_output = ctx.eval_cluster_or_suggest(&args.cluster);
 
@@ -51,13 +36,11 @@ pub fn run(args: &BuildArgs, ctx: &mut CommandContext) -> Result<()> {
     };
 
     // Build defaults to YAML; both Text and Yaml use multi-document YAML format
-    match ctx.output_format(OutputFormat::Yaml) {
+    match output::format() {
         OutputFormat::Yaml | OutputFormat::Text | OutputFormat::Markdown => {
             print!("{}", response.format_text());
         }
-        OutputFormat::Json => {
-            println!("{}", output::render(&response, OutputFormat::Json)?);
-        }
+        OutputFormat::Json => output::result(&response)?,
     }
 
     Ok(())

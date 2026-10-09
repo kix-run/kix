@@ -31,7 +31,7 @@ impl Default for CliNixBackend {
 }
 
 impl CliNixBackend {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             input_overrides: Vec::new(),
         }
@@ -55,27 +55,15 @@ impl NixBackend for CliNixBackend {
         flake_path: &Path,
         cluster_name: &str,
     ) -> Result<ClusterOutput, KixEvalError> {
-        if !cluster_name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(KixEvalError::not_found(cluster_name));
-        }
-
-        tracing::info!(cluster = cluster_name, "building cluster activation");
-
-        // Build the activation via nix build (same path as deploy/diff/gc)
         let result_dir = super::build::build_cluster_activation(
             flake_path,
             cluster_name,
             &self.input_overrides,
+            &|_| {},
         )?;
 
-        // Load the StoreGraph, stamp identity-hash + package annotations,
-        // then extract manifests. Without stamping, kix.run/depends-on edges
-        // can't be resolved (they reference identity hashes).
-        let mut graph = super::store_graph::StoreGraph::from_result_dir(&result_dir)?;
-        crate::manifest::stamp::stamp_annotations(&mut graph);
+        // Stamped, because kix.run/depends-on edges name identity hashes.
+        let graph = crate::build_source::Build::local(&result_dir, &|_| {})?.into_graph();
 
         let mut raw_manifests: Vec<serde_json::Value> = graph
             .resources

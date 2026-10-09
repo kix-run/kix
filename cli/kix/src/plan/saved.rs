@@ -6,16 +6,10 @@
 //! deploy: the deploy never applies anything read from it.
 
 use std::collections::BTreeSet;
-use std::fmt::Write as _;
 
 use serde::Serialize;
 
 use super::document::{Checked, MadeBy, Plan, PlanFlags, PruneFate};
-use crate::output;
-
-/// Exit status of `kix deploy --plan` when the reviewed plan no longer
-/// matches.
-pub const EXIT_STALE: i32 = 4;
 
 /// One comparison rule, numbered as in doc 158.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -33,7 +27,8 @@ pub enum Rule {
 }
 
 impl Rule {
-    fn label(self) -> &'static str {
+    /// The rule as a deploy names it.
+    pub fn label(self) -> &'static str {
         match self {
             Rule::Cluster => "cluster",
             Rule::NewBuild => "new build",
@@ -445,12 +440,12 @@ fn objects_differ(reviewed: &Plan, fresh: &Plan) -> Vec<String> {
 
 /// An object's id as the plan shows it, its build-supplied text escaped.
 fn object_id(kind: &str, namespace: &str, name: &str) -> String {
-    let id = kix::manifest::types::ResourceId {
+    let id = crate::manifest::types::ResourceId {
         kind: kind.to_string(),
         namespace: namespace.to_string(),
         name: name.to_string(),
     };
-    kix::text::printable_up_to(&id.display_id(), 300)
+    crate::text::printable_up_to(&id.display_id(), 300)
 }
 
 fn or_unknown(hash: &Option<String>) -> &str {
@@ -496,74 +491,6 @@ fn describe_flags(flags: Option<&PlanFlags>) -> String {
     }
 }
 
-/// The comparison as the deploy prints it. `path` names the saved plan.
-pub fn render_text(c: &Comparison, reviewed: &Plan, path: &str) -> String {
-    let mut out = String::new();
-    let path = match &c.plan_sha256 {
-        Some(sha) => format!("{path}, {sha}"),
-        None => path.to_string(),
-    };
-    if c.matches {
-        let _ = writeln!(
-            out,
-            "{}",
-            output::green(&format!("The reviewed plan matches ({path})."))
-        );
-    } else {
-        let _ = writeln!(
-            out,
-            "{}",
-            output::red(&format!("The reviewed plan no longer matches ({path}):"))
-        );
-        for m in &c.mismatches {
-            for (i, item) in m.items.iter().enumerate() {
-                let label = if i == 0 {
-                    format!("[{}]", m.rule.label())
-                } else {
-                    String::new()
-                };
-                let _ = writeln!(out, "  {label:<20} {item}");
-            }
-        }
-    }
-    if !c.skipped.is_empty() {
-        let what: Vec<&str> = c
-            .skipped
-            .iter()
-            .map(|r| match r {
-                Rule::NewRefusal => "conflicts and admission",
-                Rule::NewRevertedDrift => "drift",
-                Rule::NewPruneDelete => "prune",
-                _ => r.label(),
-            })
-            .collect();
-        let kind = if reviewed.made_by == MadeBy::LiveRead {
-            "the reviewed plan is a kix diff"
-        } else {
-            "the reviewed plan did not check them"
-        };
-        let _ = writeln!(
-            out,
-            "{}",
-            output::dim(&format!("Not compared, {kind}: {}.", what.join(", ")))
-        );
-    }
-    if let Some((r, f)) = &c.kix_differs {
-        let _ = writeln!(
-            out,
-            "{}",
-            output::yellow(&format!(
-                "note: the plan was made by {r}, and this deploy runs {f}. The deploy writes \
-                 and deletes the objects the plan lists, so this is not refused."
-            ))
-        );
-    }
-    if !c.matches {
-        let _ = writeln!(out, "Review a new plan, or deploy without --plan.");
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::document::{
@@ -575,10 +502,11 @@ mod tests {
 
     fn plan() -> Plan {
         let empty = super::super::diff_graphs(
-            &kix::eval::store_graph::StoreGraph::empty("c"),
-            &kix::eval::store_graph::StoreGraph::empty("c"),
+            &crate::eval::store_graph::StoreGraph::empty("c"),
+            &crate::eval::store_graph::StoreGraph::empty("c"),
         );
         let mut p = Plan::new(
+            KixBuild::current(env!("CARGO_PKG_VERSION")),
             MadeBy::DryRun,
             "c",
             Build {

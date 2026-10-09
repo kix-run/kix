@@ -165,13 +165,6 @@ pub enum PinError {
         "{path} was not written by `kix pin`, so Kix has not overwritten it. Review the file, then rerun with --force if you want Kix to replace it."
     )]
     NotManaged { path: String },
-
-    #[error("{path} has no pin named '{key}'. Pins in that file: {known}. Add it with --init.")]
-    UnknownKey {
-        path: String,
-        key: String,
-        known: String,
-    },
 }
 
 impl PinFile {
@@ -199,7 +192,7 @@ impl PinFile {
     }
 
     /// A pin file that does not exist yet.
-    pub fn empty(path: &Path) -> Self {
+    pub(crate) fn empty(path: &Path) -> Self {
         Self {
             path: path.to_path_buf(),
             pins: BTreeMap::new(),
@@ -216,20 +209,8 @@ impl PinFile {
         }
     }
 
-    pub fn get(&self, key: &str) -> Result<&Pin, PinError> {
-        self.pins.get(key).ok_or_else(|| PinError::UnknownKey {
-            path: self.path.display().to_string(),
-            key: key.to_string(),
-            known: if self.pins.is_empty() {
-                "none".to_string()
-            } else {
-                self.pins.keys().cloned().collect::<Vec<_>>().join(", ")
-            },
-        })
-    }
-
     /// Render the canonical form. Deterministic: same pins, same bytes.
-    pub fn render(&self) -> String {
+    pub(crate) fn render(&self) -> String {
         let envelope = Envelope {
             version: VERSION,
             managed_by: MANAGED_BY.to_string(),
@@ -302,7 +283,7 @@ fn parse_file(text: &str) -> Result<(BTreeMap<String, Pin>, bool), String> {
 
 /// Turn a bare map of pins into pins, refusing anything that would render a
 /// reference Kix cannot pull.
-pub fn parse_pins(value: &serde_json::Value) -> Result<BTreeMap<String, Pin>, String> {
+pub(crate) fn parse_pins(value: &serde_json::Value) -> Result<BTreeMap<String, Pin>, String> {
     let obj = value
         .as_object()
         .ok_or_else(|| "A pin file must be a JSON object.".to_string())?;

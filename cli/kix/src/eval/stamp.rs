@@ -1,6 +1,8 @@
 //! Annotation stamping: add `kix.run/*` annotations to resource manifests.
 //!
-//! After building a `StoreGraph`, this module stamps each resource with:
+//! A loaded `StoreGraph` is stamped once, as [`crate::build_source::Build`]
+//! makes it (or the evaluator's [`super::cli_backend`] loads it), so
+//! commands see only stamped graphs. Each resource gets:
 //! - `kix.run/identity-hash`: the 32-character Nix store hash
 //! - `kix.run/package`: owning package instance name
 //! - `kix.run/package-namespace`: namespace of the owning package
@@ -11,7 +13,7 @@
 
 use std::path::PathBuf;
 
-use crate::eval::store_graph::{StoreGraph, store_hash};
+use super::store_graph::{StoreGraph, store_hash};
 use crate::manifest::keys;
 
 /// Collected stamping info for a single resource.
@@ -26,7 +28,9 @@ struct StampEntry {
 /// Stamp kix.run annotations onto every resource manifest in the graph.
 /// Modifies manifests in place.
 ///
-/// Uses StoreGraph's bulk-loaded ref_cache without spawning subprocesses.
+/// Commands get a graph stamped by [`crate::build_source::Build`]. This is
+/// public for `kix bundle`, which stamps the bundle it reads back to compare
+/// it with the build, and for tests that change a graph before stamping.
 pub fn stamp_annotations(graph: &mut StoreGraph) {
     // A build loaded from an activation that predates a domain move carries
     // the retired keys in its store paths. Bring them to the current domain

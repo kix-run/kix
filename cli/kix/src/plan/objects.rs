@@ -2,7 +2,7 @@
 //! shows.
 //!
 //! A deploy runs the engine plan, a flat list of the build's objects, while
-//! people review the package-grouped [`super::PackageDiff`]. [`of`] joins
+//! people review the package-grouped [`super::PackageDiff`]. `of` joins
 //! the two before anything is sent, so `kix plan` and `kix deploy` refuse a
 //! build whose package view leaves out an object the deploy would write or
 //! delete:
@@ -45,11 +45,11 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
 
-use kix::cluster::apply::ChangeAction;
-use kix::cluster::scheduler::DeployPlan;
-use kix::eval::store_graph::{StoreGraph, store_hash};
-use kix::manifest::keys;
-use kix::manifest::types::ResourceId;
+use crate::cluster::apply::ChangeAction;
+use crate::cluster::scheduler::DeployPlan;
+use crate::eval::store_graph::{StoreGraph, store_hash};
+use crate::manifest::keys;
+use crate::manifest::types::ResourceId;
 use serde_json::Value;
 
 use super::document::{ObjectDelete, ObjectWrite, Objects, WriteChange};
@@ -62,7 +62,7 @@ use super::{CLUSTER_LEVEL_KEY, Shown};
 /// orphans the prune deletes; `listed_deletes` are the orphans the plan's
 /// `prune` section lists, none when it did not read the cluster. `old` are
 /// the manifests of the builds the cluster ran (see the module docs).
-pub fn of<'a>(
+pub(crate) fn of<'a>(
     shown: &Shown,
     graph: &StoreGraph,
     plan: &DeployPlan,
@@ -240,7 +240,7 @@ impl std::error::Error for Unshown {}
 
 /// `id` for an error, its build-supplied text escaped.
 fn shown_id(id: &ResourceId) -> String {
-    kix::text::printable_up_to(&id.display_id(), 300)
+    crate::text::printable_up_to(&id.display_id(), 300)
 }
 
 /// The key of the package that owns the file at `path`, as the diff names

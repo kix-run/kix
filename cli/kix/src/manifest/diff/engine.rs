@@ -15,7 +15,12 @@ use super::{DiffConfig, Difference};
 /// [`DiffConfig::ordered`], a list whose shared items sit in another order
 /// is also a difference, at the list's path. Spellings the API server
 /// treats as equal are not differences: see [`super::equivalence`].
-pub fn structural_diff(a: &Value, b: &Value, path: &str, config: &DiffConfig) -> Vec<Difference> {
+pub(crate) fn structural_diff(
+    a: &Value,
+    b: &Value,
+    path: &str,
+    config: &DiffConfig,
+) -> Vec<Difference> {
     if path_ignored(path, &config.ignore_paths) {
         return Vec::new();
     }

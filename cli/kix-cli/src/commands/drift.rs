@@ -4,8 +4,10 @@
 
 use miette::{IntoDiagnostic, Result, miette};
 
+use crate::client;
+use kix::cluster::activation::Records;
+use kix::cluster::discovery;
 use kix::cluster::drift::{self, DriftReport, DriftVerdict, ForeignOwner, UnrecordedScale};
-use kix::cluster::fetch;
 
 use crate::cli::{DriftArgs, GlobalArgs, OutputFormat};
 use crate::output;
@@ -13,21 +15,25 @@ use crate::output;
 pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;
 
-    let json = global.output == Some(OutputFormat::Json);
-    if !global.quiet && !json {
-        println!("Connecting to cluster...");
+    let json = output::format() == OutputFormat::Json;
+    if !json {
+        crate::say!("Connecting to cluster...");
     }
 
     let reports = runtime.block_on(async {
-        let client = fetch::make_client(global.context.as_deref())
+        let client = client::make_client(global.context.as_deref())
             .await
             .map_err(|e| miette!("failed to connect: {e}"))?;
-        let discovery = fetch::discover_resources(&client)
+        let discovery = discovery::discover_resources(&client)
             .await
             .map_err(|e| miette!("{e}"))?;
-        let (reports, tenancy) = drift::check_cluster(&client, &discovery, args.cluster.as_deref())
-            .await
-            .map_err(|e| miette!("drift check failed: {e}"))?;
+        // Past the domain gate: on a cluster whose records sit under a
+        // retired group no object could be attributed to a Kix cluster.
+        let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
+        let (reports, tenancy) =
+            drift::check_cluster(&client, &discovery, &records, args.cluster.as_deref())
+                .await
+                .map_err(|e| miette!("drift check failed: {e}"))?;
         if args.cluster.is_some() {
             tenancy.require_records().map_err(|e| miette!("{e}"))?;
         }
@@ -48,7 +54,7 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
             .iter()
             .flat_map(|r| r.clusters.iter().map(String::as_str))
             .collect();
-        print_text(&reports, global.quiet, clusters.len() > 1);
+        print_text(&reports, clusters.len() > 1);
     }
 
     if drifted > 0 {
@@ -57,11 +63,9 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
     Ok(())
 }
 
-fn print_text(reports: &[DriftReport], quiet: bool, name_clusters: bool) {
-    if !quiet {
-        println!("{} kix-managed resources", reports.len());
-        println!();
-    }
+fn print_text(reports: &[DriftReport], name_clusters: bool) {
+    crate::say!("{} kix-managed resources", reports.len());
+    crate::say!();
 
     for report in reports {
         let rid = if name_clusters {

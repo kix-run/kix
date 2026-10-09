@@ -41,7 +41,7 @@ pub struct StoreGraph {
     /// Resource store path to owning PI store path.
     pub resource_owner: HashMap<PathBuf, PathBuf>,
     /// Cached direct store references by path.
-    /// Populated by bulk_load_graph, reusable by stamp_annotations.
+    /// Populated by bulk_load_graph.
     pub ref_cache: HashMap<PathBuf, Vec<PathBuf>>,
 }
 
@@ -161,7 +161,7 @@ pub fn store_hash(path: &Path) -> String {
 }
 
 /// Human-readable part of a store path (after the hash-).
-pub fn store_name(path: &Path) -> String {
+pub(crate) fn store_name(path: &Path) -> String {
     path.file_name()
         .and_then(|n| n.to_str())
         .filter(|n| n.len() > 33 && n.as_bytes()[32] == b'-')
@@ -174,15 +174,10 @@ fn is_k8s_path(path: &Path) -> bool {
     store_name(path).starts_with("k8s-")
 }
 
-/// Read a manifest from a store path, parsed as a bundle's are.
-fn read_store_json(path: &Path) -> Result<serde_json::Value, KixEvalError> {
-    let bytes = std::fs::read(path).map_err(|e| KixEvalError::StoreGraphError {
+/// Read a file from a store path.
+fn read_store_file(path: &Path) -> Result<Vec<u8>, KixEvalError> {
+    std::fs::read(path).map_err(|e| KixEvalError::StoreGraphError {
         message: format!("failed to read store path {}: {e}", path.display()),
-    })?;
-    super::bundle::parse_manifest(&path.to_string_lossy(), &bytes).map_err(|e| {
-        KixEvalError::StoreGraphError {
-            message: e.to_string(),
-        }
     })
 }
 
@@ -240,10 +235,11 @@ impl StoreGraph {
         }
     }
 
-    /// Build a StoreGraph from a result directory.
+    /// Build a StoreGraph from a result directory. Commands load one through
+    /// [`crate::build_source::Build::local`], which stamps it.
     ///
     /// `status_fn` is called with progress messages during loading.
-    pub fn from_result_dir_with_status(
+    pub(crate) fn from_result_dir(
         result_dir: &Path,
         status_fn: &dyn Fn(&str),
     ) -> Result<Self, KixEvalError> {
@@ -256,11 +252,9 @@ impl StoreGraph {
                 index_path.display()
             ),
         })?;
-        let index =
-            super::bundle::parse_index(&index_path.to_string_lossy(), &bytes).map_err(|e| {
-                KixEvalError::StoreGraphError {
-                    message: e.to_string(),
-                }
+        let index = super::manifest_json::parse_index(&index_path.to_string_lossy(), &bytes)
+            .map_err(|e| KixEvalError::StoreGraphError {
+                message: e.to_string(),
             })?;
 
         // 2. Resolve activation symlink
@@ -282,7 +276,7 @@ impl StoreGraph {
             activation_path,
             result_dir.to_path_buf(),
             ref_cache,
-            &mut read_store_json,
+            &mut read_store_file,
             status_fn,
         )?;
         graph.validate()?;
@@ -290,18 +284,21 @@ impl StoreGraph {
     }
 
     /// Steps 4 to 6 of loading a build: read every manifest, group them by
-    /// package, and work out the cross-package dependencies. Shared by a
-    /// result directory and a bundle (`eval::bundle`), which differ only in
-    /// where a file's bytes come from (`read`). Calls `read` once for each
-    /// path the index lists and each `k8s-` path among the references, and
-    /// fails when it fails: a build is not deployed without a file it names.
+    /// package, and work out the cross-package dependencies. Shared by
+    /// every reader of a build, which differ only in where a file's bytes
+    /// come from (`read`). Each file is parsed here, with
+    /// [`super::manifest_json::parse_manifest`], so every reader parses
+    /// alike. A reader runs [`StoreGraph::validate`] on the result. Calls
+    /// `read` once for each path the index lists and each `k8s-` path among
+    /// the references, and fails when it fails: a build is not deployed
+    /// without a file it names.
     /// A package that lists a path twice holds it once.
     pub(crate) fn assemble(
         index: KixPackageIndex,
         activation_path: PathBuf,
         result_dir: PathBuf,
         ref_cache: HashMap<PathBuf, Vec<PathBuf>>,
-        read: &mut dyn FnMut(&Path) -> Result<serde_json::Value, KixEvalError>,
+        read: &mut dyn FnMut(&Path) -> Result<Vec<u8>, KixEvalError>,
         status_fn: &dyn Fn(&str),
     ) -> Result<Self, KixEvalError> {
         // 4. Read every manifest once. A k8s path among the references that
@@ -319,9 +316,13 @@ impl StoreGraph {
             .filter(|p| is_k8s_path(p));
         for path in listed.chain(referenced) {
             if !resources.contains_key(path) {
+                let bytes = read(path)?;
                 let node = ResourceNode {
                     store_path: path.clone(),
-                    manifest: read(path)?,
+                    manifest: super::manifest_json::parse_manifest(
+                        &path.to_string_lossy(),
+                        &bytes,
+                    )?,
                 };
                 resources.insert(path.clone(), node);
             }
@@ -433,9 +434,9 @@ impl StoreGraph {
     }
 
     /// Check that the graph is one build as plan shows it and deploy
-    /// requests it. Run on every build, from a bundle or a result
-    /// directory; a graph [`StoreGraph::synthesize`] makes describes live
-    /// objects, not a build, and is not checked. Refuses:
+    /// requests it. Run on every build, whichever reader read it; a graph
+    /// [`StoreGraph::synthesize`] makes describes live objects, not a
+    /// build, and is not checked. Refuses:
     ///
     /// - a manifest whose kind, `apiVersion` parts, name, or namespace is
     ///   not one URL path segment, since kube-rs puts them in request paths
@@ -451,7 +452,7 @@ impl StoreGraph {
     /// - a resource two packages list that is not an import marker. Plan
     ///   shows each other resource under the one package that lists it, or
     ///   as cluster-level.
-    pub fn validate(&self) -> Result<(), KixEvalError> {
+    pub(crate) fn validate(&self) -> Result<(), KixEvalError> {
         let fail = |message: String| Err(KixEvalError::StoreGraphError { message });
         let mut paths: Vec<&PathBuf> = self.resources.keys().collect();
         paths.sort();
@@ -623,7 +624,7 @@ impl StoreGraph {
                 None => (
                     PathBuf::from(format!(
                         "/nix/store/{}-synthetic-{i}",
-                        &crate::cluster::normalize::content_hash(m)[..32]
+                        &crate::manifest::hash::content_hash(m)[..32]
                     )),
                     m.clone(),
                 ),
@@ -756,41 +757,6 @@ impl StoreGraph {
         }
 
         graph
-    }
-
-    /// Build a StoreGraph from a result directory (no progress callback).
-    pub fn from_result_dir(result_dir: &Path) -> Result<Self, KixEvalError> {
-        Self::from_result_dir_with_status(result_dir, &|_| {})
-    }
-
-    /// Look up which package owns a resource.
-    pub fn package_for_resource(&self, res_path: &Path) -> Option<&PackageNode> {
-        self.resource_owner
-            .get(res_path)
-            .and_then(|pi| self.packages.get(pi))
-    }
-
-    /// Get cross-package store references for a specific resource.
-    /// Uses the bulk-loaded ref_cache without spawning subprocesses.
-    pub fn cross_pkg_refs(&self, res_path: &Path) -> Vec<PathBuf> {
-        let owner = match self.resource_owner.get(res_path) {
-            Some(o) => o,
-            None => return vec![],
-        };
-
-        let empty = vec![];
-        let refs = self.ref_cache.get(res_path).unwrap_or(&empty);
-
-        refs.iter()
-            .filter(|r| {
-                is_k8s_path(r)
-                    && self
-                        .resource_owner
-                        .get(r.as_path())
-                        .is_some_and(|o| o != owner)
-            })
-            .cloned()
-            .collect()
     }
 }
 
@@ -1127,7 +1093,7 @@ mod tests {
         /// `(store hash seed, PackageInstance, [(seed, resource)])`.
         type BuiltPackage<'a> = (&'a str, Value, Vec<(&'a str, Value)>);
 
-        /// A build graph shaped like `from_result_dir` makes one: each
+        /// A build graph shaped like `Build::local` makes one: each
         /// package lists `(seed, manifest)` resources by store path, a seed
         /// listed under two packages is one store path, every PackageInstance
         /// is in `resources`, and `stamp_annotations` has run.
@@ -1169,7 +1135,7 @@ mod tests {
                     },
                 );
             }
-            crate::manifest::stamp::stamp_annotations(&mut g);
+            crate::eval::stamp::stamp_annotations(&mut g);
             g
         }
 

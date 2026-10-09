@@ -1,61 +1,95 @@
-//! `kix bundle`, and reading bundles for `--bundle` and `--deployed-bundle`.
+//! `kix bundle`, and the bundle as a build source for `--bundle` and
+//! `--deployed-bundle`.
 //!
 //! A bundle (`kix::eval::bundle`) is a build as one file that loads without
 //! Nix. `--bundle` makes it the new side of `kix plan`, `kix deploy` and
-//! `kix graph`. `--deployed-bundle` supplies builds the cluster's records
-//! name, which kix otherwise looks for in the local Nix store.
+//! `kix graph`, through [`read`]. `--deployed-bundle` supplies
+//! builds the cluster's records name, which kix otherwise looks for in the
+//! local Nix store.
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Cursor, Read};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use miette::{IntoDiagnostic, Result, miette};
+use serde_json::json;
 
-use kix::cluster::secrets::SopsSources;
-use kix::eval::build::build_cluster_activation_with_status;
-use kix::eval::bundle::{self, Bundle, BundleError, Header, OpenBundle};
+use kix::build_source::{Build, CarriedBuild, Provenance};
+use kix::eval::bundle::{self, Bundle, BundleError, OpenBundle};
+use kix::eval::stamp::stamp_annotations;
 use kix::eval::store_graph::{StoreGraph, store_hash};
 use kix::text::printable;
 
 use crate::cli::BundleArgs;
+use crate::output;
 
 use super::CommandContext;
 
-/// A bundle file, verified. Files are read from it as they are needed.
-#[derive(Debug)]
-pub struct LoadedBundle(Bundle<BufReader<File>>);
+/// The build in the bundle at `path`, with the `deployed` bundles, which
+/// must be a build of `cluster`. Its result directory is
+/// `bundle:sha256:<sha256>`.
+pub(crate) fn read(path: &Path, deployed: &[PathBuf], cluster: &str) -> Result<Build> {
+    let bytes = read_file(path)?;
+    let deployed = deployed_by_hash(deployed)?;
+    Build::carried(bytes, cluster, |bytes| {
+        let (bundle, graph) = Bundle::read(Cursor::new(bytes)).map_err(|e| e.to_string())?;
+        Ok((BundleSource { bundle, deployed }, graph))
+    })
+    .map_err(|e| miette!("cannot use the bundle {}: {e}", path.display()))
+}
 
-impl LoadedBundle {
-    pub fn header(&self) -> &Header {
-        self.0.header()
+/// The bytes of the bundle file at `path`. Reads no more than a bundle may
+/// hold, so a larger file is refused before it fills memory.
+fn read_file(path: &Path) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    open_file(path)?
+        .take(bundle::MAX_STORED_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| miette!("cannot read the bundle {}: {e}", path.display()))?;
+    if bytes.len() as u64 > bundle::MAX_STORED_BYTES {
+        return Err(miette!(
+            "the bundle {} is larger than the {} bytes a bundle may hold",
+            path.display(),
+            bundle::MAX_STORED_BYTES
+        ));
     }
+    Ok(bytes)
+}
 
-    /// The store path of the Activation record.
-    pub fn record(&self) -> &str {
-        self.0.record()
-    }
+/// A bundle as a build made elsewhere, with the `--deployed-bundle` files,
+/// by the identity hash of their Activation record.
+struct BundleSource {
+    bundle: Bundle<Cursor<Vec<u8>>>,
+    deployed: HashMap<String, PathBuf>,
+}
 
-    /// The cluster the Activation record is labelled with.
-    pub fn cluster(&self) -> &str {
-        self.0.cluster()
-    }
-
-    /// The SHA-256 of the file's bytes.
-    pub fn sha256(&self) -> &str {
-        self.0.sha256()
-    }
-
-    /// The bundle's SOPS files. With `placeholders`, nothing is decrypted:
-    /// what `kix plan` uses, so a plan made before approval reads no secret.
-    pub fn sops(&mut self, placeholders: bool) -> Result<SopsSources> {
-        let sources = self
-            .0
+impl CarriedBuild for BundleSource {
+    /// The bundle's files that are neither manifests nor its index. Each is
+    /// checked against its store path again as it is read.
+    fn sops_files(&mut self) -> Result<HashMap<String, Vec<u8>>, String> {
+        self.bundle
             .other_files()
-            .map_err(|e| miette!("cannot read the bundle's SOPS files: {e}"))?;
-        SopsSources::from_bundle(sources, placeholders)
-            .map_err(|e| miette!("cannot write the bundle's SOPS files: {e}"))
+            .map_err(|e| format!("cannot read the bundle's SOPS files: {e}"))
+    }
+
+    /// What the machine that made the bundle recorded, with the kix
+    /// revision the bundle names under `source.bundle`.
+    fn provenance(&self) -> Provenance {
+        let header = self.bundle.header();
+        let mut made = header.receipt.clone().unwrap_or_default();
+        made.source
+            .insert("bundle".to_string(), json!({ "kixRev": header.kix_rev }));
+        made
+    }
+
+    /// Reads and verifies the `--deployed-bundle` file on each call, so the
+    /// process keeps no copy of the graph beside the one it returns.
+    fn deployed_build(&self, identity_hash: &str) -> Result<Option<StoreGraph>, String> {
+        let Some(path) = self.deployed.get(identity_hash) else {
+            return Ok(None);
+        };
+        graph_of(path, identity_hash).map(Some)
     }
 }
 
@@ -65,34 +99,23 @@ fn open_file(path: &Path) -> Result<BufReader<File>> {
         .map_err(|e| miette!("cannot read the bundle {}: {e}", path.display()))
 }
 
-/// Read and verify a bundle, and give it with its build, whose result
-/// directory is `bundle:sha256:<sha256>`.
-pub fn load(path: &Path) -> Result<(LoadedBundle, StoreGraph)> {
-    let (bundle, graph) = Bundle::read(open_file(path)?)
-        .map_err(|e| miette!("cannot use the bundle {}: {e}", path.display()))?;
-    Ok((LoadedBundle(bundle), graph))
+/// Read and verify the bundle at `path`, and give it with its build.
+fn load(path: &Path) -> Result<(Bundle<Cursor<Vec<u8>>>, StoreGraph)> {
+    let bytes = read_file(path)?;
+    Bundle::read(Cursor::new(bytes))
+        .map_err(|e| miette!("cannot use the bundle {}: {e}", path.display()))
 }
 
-/// The `--deployed-bundle` files, by the identity hash of their Activation
-/// record, which the header gives. Set once per process, before any record
-/// is resolved.
-static DEPLOYED: OnceLock<HashMap<String, PathBuf>> = OnceLock::new();
-
 /// Open each `--deployed-bundle` file, reading its seek table and header
-/// only. Later calls in the same process are ignored: `kix deploy --plan`
-/// prepares twice with the same arguments.
-pub fn register_deployed(paths: &[PathBuf]) -> Result<()> {
-    if DEPLOYED.get().is_some() {
-        return Ok(());
-    }
+/// only, and key it by the identity hash of its Activation record.
+fn deployed_by_hash(paths: &[PathBuf]) -> Result<HashMap<String, PathBuf>> {
     let mut by_hash = HashMap::new();
     for path in paths {
         if let Some(open) = open_deployed(path)? {
             by_hash.insert(store_hash(Path::new(open.record())), path.clone());
         }
     }
-    let _ = DEPLOYED.set(by_hash);
-    Ok(())
+    Ok(by_hash)
 }
 
 /// A `--deployed-bundle` file, opened, or `None` for a format 1 bundle. A
@@ -113,18 +136,6 @@ fn open_deployed(path: &Path) -> Result<Option<OpenBundle<BufReader<File>>>> {
     }
 }
 
-/// The build of the record with `identity_hash`, from `--deployed-bundle`,
-/// or `Ok(None)` when no such file was given. Reads and verifies the file on
-/// each call, so the process keeps no copy of the graph beside the one it
-/// returns. A file that no longer verifies is an error, as a result
-/// directory that does not load is.
-pub fn deployed_graph(identity_hash: &str) -> Result<Option<StoreGraph>, String> {
-    let Some(path) = DEPLOYED.get().and_then(|d| d.get(identity_hash)) else {
-        return Ok(None);
-    };
-    graph_of(path, identity_hash).map(Some)
-}
-
 /// The graph of the bundle at `path`, which must still hold the build of
 /// the record with `identity_hash`.
 fn graph_of(path: &Path, identity_hash: &str) -> Result<StoreGraph, String> {
@@ -143,22 +154,17 @@ fn graph_of(path: &Path, identity_hash: &str) -> Result<StoreGraph, String> {
 
 /// `kix bundle <cluster> [FILE]`.
 pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
-    let flake_path = super::deploy::resolve_flake_path(&ctx.global.flake)?;
-    let quiet = ctx.global.quiet;
     let status = |msg: &str| {
-        if !quiet {
+        if !output::quiet() {
             eprint!("\r\x1b[2K  {msg}");
         }
     };
-    let overrides = ctx.global.input_overrides();
-    let result_dir =
-        build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &status)
-            .map_err(|e| miette!("failed to build cluster: {e}"))?;
-    if !quiet {
+    let build = super::build_flake(&ctx.global, &args.cluster, &status, super::BUILD_FAILED)?;
+    if !output::quiet() {
         eprint!("\r\x1b[2K");
     }
-    let graph = StoreGraph::from_result_dir(&result_dir).map_err(|e| miette!("{e}"))?;
-    let receipt = super::compliance::receipt::build_receipt(&graph, &ctx.global.flake);
+    let receipt = ctx.receipts.of_build(&build, &ctx.global.flake);
+    let graph = build.graph();
     let object = |v: &serde_json::Value| v.as_object().cloned().unwrap_or_default();
     let provenance = bundle::Provenance {
         source: object(&receipt["source"]),
@@ -170,12 +176,12 @@ pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
             .collect(),
         builder: object(&receipt["builder"]),
     };
-    let kix = crate::plan::document::KixBuild::current();
+    let kix = crate::plan::kix_build();
     let kix_rev = match &kix.store_path {
         Some(path) => format!("{} ({path})", kix.version),
         None => kix.version,
     };
-    let contents = bundle::from_result_dir(&result_dir, &kix_rev, Some(provenance))
+    let contents = bundle::from_result_dir(&graph.result_dir, &kix_rev, Some(provenance))
         .map_err(|e| miette!("{e}"))?;
     let file = args
         .file
@@ -192,24 +198,26 @@ pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
         .map_err(|e| miette!("cannot write {}: {e}", file.display()))?;
     // Read back what was written, so a bundle that would be refused, or
     // that a deploy would read as another build, is never left at `file`.
+    // A deploy reads it stamped, so it is compared stamped, as `build` is.
+    // Stamped here, not through `Build`, because stamping records the result
+    // directory, which must first be the build's.
     let (written, mut read_back) =
         load(temp.path()).map_err(|e| miette!("the build did not make a valid bundle: {e}"))?;
     read_back.result_dir = graph.result_dir.clone();
-    if read_back != graph || !read_back.packages.keys().eq(graph.packages.keys()) {
+    stamp_annotations(&mut read_back);
+    if read_back != *graph || !read_back.packages.keys().eq(graph.packages.keys()) {
         return Err(miette!(
             "the bundle reads back as another build than {}",
-            result_dir.display()
+            graph.result_dir.display()
         ));
     }
     temp.persist(&file).into_diagnostic()?;
-    if !quiet {
-        eprintln!(
-            "Wrote {} ({} files, sha256:{})",
-            file.display(),
-            written.header().files.len(),
-            written.sha256()
-        );
-    }
+    crate::esay!(
+        "Wrote {} ({} files, sha256:{})",
+        file.display(),
+        written.header().files.len(),
+        written.sha256()
+    );
     Ok(())
 }
 
@@ -234,6 +242,26 @@ mod tests {
         bytes[last] ^= 1;
         std::fs::write(&path, &bytes).unwrap();
         assert!(graph_of(&path, &hash).is_err());
+    }
+
+    /// A `--deployed-bundle` that no longer verifies is an error for the
+    /// build it holds, not a build this machine lacks: the plan says so.
+    #[test]
+    fn a_deployed_bundle_that_does_not_verify_is_not_taken_as_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("deployed.kixbundle");
+        let mut bytes =
+            include_bytes!("../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle")
+                .to_vec();
+        std::fs::write(&path, &bytes).unwrap();
+        let build = read(&path, std::slice::from_ref(&path), "kix-enterprise-test").unwrap();
+        let hash = store_hash(&build.graph().activation_path);
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        std::fs::write(&path, &bytes).unwrap();
+        let found =
+            kix::plan::baseline::record_graph(Some(&build), "kix-enterprise-test", &hash, None);
+        assert!(found.is_err());
     }
 
     /// A cluster deployed from a format 1 bundle still has those bytes as

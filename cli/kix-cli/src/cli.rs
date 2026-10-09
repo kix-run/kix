@@ -731,7 +731,8 @@ pub struct DeployArgs {
     pub operator: bool,
 
     /// Write an annotation onto this deploy's Activation record, as
-    /// KEY=VALUE. KEY may not be under `kix.run/`. Repeat for several
+    /// KEY=VALUE. KEY may not be under `kix.run/`, a subdomain of it, or a
+    /// retired Kix domain: Kix reads those off the record. Repeat for several
     #[arg(
         long = "record-annotation",
         value_name = "KEY=VALUE",
@@ -856,9 +857,10 @@ pub struct GcArgs {
     #[arg(long, requires = "hard")]
     pub include_unattributed: bool,
 
-    /// Always keep at least this many of the newest Superseded Activation
-    /// records (rollback history), whatever their age. Applies in every
-    /// mode. 0 keeps none.
+    /// Always keep at least this many of the newest rollback targets
+    /// (Superseded Activation records whose deploy finished), whatever their
+    /// age. A record of a deploy that never finished is kept by age alone.
+    /// Applies in every mode. 0 keeps none.
     #[arg(long, value_name = "N", default_value_t = kix::cluster::activation::DEFAULT_KEEP_MIN)]
     pub keep: usize,
 
@@ -1058,6 +1060,8 @@ pub struct BundleArgs {
     pub cluster: String,
 
     /// Where to write the bundle [default: <CLUSTER>.kixbundle]
+    // The text is clap's help, so it keeps `<CLUSTER>` as the user reads it.
+    #[allow(rustdoc::invalid_html_tags)]
     #[arg(value_name = "FILE")]
     pub file: Option<std::path::PathBuf>,
 }
@@ -1107,11 +1111,7 @@ fn parse_record_annotation(s: &str) -> Result<(String, String), String> {
         .ok_or_else(|| format!("expected KEY=VALUE, got '{s}'"))?;
     // Kix reads its own keys, and those of the retired domain, off the
     // record: the identity hash, built-via, and more.
-    let prefix = key.split_once('/').map_or("", |(p, _)| p);
-    let kix_owned = std::iter::once(kix::manifest::keys::DOMAIN)
-        .chain(kix::legacy_domain::DOMAINS.iter().copied())
-        .any(|d| prefix == d || prefix.ends_with(&format!(".{d}")));
-    if key.is_empty() || kix_owned {
+    if key.is_empty() || kix::manifest::keys::is_kix_domain_key(key) {
         return Err(format!(
             "'{key}' is not allowed: the key must be set and not under {}",
             kix::manifest::keys::DOMAIN

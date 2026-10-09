@@ -8,18 +8,18 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 
 use serde::de::{DeserializeSeed, IgnoredAny};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::build_source::{CarriedSources, SopsSources};
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 
 #[derive(Error, Debug)]
-pub enum SecretError {
+pub(crate) enum SecretError {
     #[error("SOPS decryption failed for {path}: {message}")]
     DecryptionFailed { path: String, message: String },
 
@@ -39,77 +39,26 @@ pub enum SecretError {
     #[error("failed to parse SOPS output as YAML/JSON for {path}: {message}")]
     ParseFailed { path: String, message: String },
 
-    /// A bundle's Secret names a SOPS source the bundle does not carry, or
-    /// carries none and no content hash.
+    /// A Secret names a SOPS source the build does not carry, or declares
+    /// no content hash, when the build carries its SOPS files.
     #[error("secret '{name}': {message}")]
-    NotInBundle { name: String, message: String },
+    NotCarried { name: String, message: String },
 
-    /// A SOPS file from a bundle is encrypted to something other than age
-    /// recipients alone.
+    /// A SOPS file the build carries is encrypted to something other than
+    /// age recipients alone.
     #[error("SOPS file {path} must be encrypted to age recipients only: {message}")]
     NotAgeOnly { path: String, message: String },
 }
 
-/// Where SOPS sources are read from.
-#[derive(Debug, Clone, Default)]
-pub enum SopsSources {
-    /// The path in each Secret's `kix.run/sops-source`, on this machine.
-    #[default]
-    Local,
-    /// Only the files a bundle carries ([`SopsSources::from_bundle`]).
-    Bundle(Arc<BundleSources>),
-}
-
-/// The SOPS files of a bundle, written to a private directory.
-#[derive(Debug)]
-pub struct BundleSources {
-    /// Store path named by `kix.run/sops-source` to the file on disk.
-    files: HashMap<String, PathBuf>,
-    /// Plan without decrypting: each Secret gets placeholder values for
-    /// the keys it declares.
-    placeholders: bool,
-    _dir: tempfile::TempDir,
-}
-
-impl SopsSources {
-    /// Write a bundle's SOPS files to a fresh directory, each under its
-    /// SHA-256 and the end of its store name, and read them only from there.
-    pub fn from_bundle(
-        sources: HashMap<String, Vec<u8>>,
-        placeholders: bool,
-    ) -> std::io::Result<Self> {
-        let dir = tempfile::tempdir()?;
-        let mut files = HashMap::new();
-        for (store_path, bytes) in sources {
-            let digest: String = Sha256::digest(&bytes)
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
-            let name = crate::eval::store_path::name_of(&store_path).unwrap_or("source");
-            // A file name holds at most 255 bytes. The end of the store name
-            // keeps its extension, which sops reads for the file's format.
-            let name = name.get(name.len().saturating_sub(190)..).unwrap_or(name);
-            let file = dir.path().join(format!("{digest}-{name}"));
-            std::fs::write(&file, &bytes)?;
-            files.insert(store_path, file);
-        }
-        Ok(SopsSources::Bundle(Arc::new(BundleSources {
-            files,
-            placeholders,
-            _dir: dir,
-        })))
-    }
-}
-
 /// Result of hydrating a single secret.
 #[derive(Debug)]
-pub struct HydrationResult {
+pub(crate) struct HydrationResult {
     pub rid: ResourceId,
     pub keys_injected: usize,
 }
 
 /// Check if a manifest is a Secret that needs SOPS hydration.
-pub fn needs_hydration(manifest: &Value) -> bool {
+pub(crate) fn needs_hydration(manifest: &Value) -> bool {
     let kind = manifest
         .pointer("/kind")
         .and_then(Value::as_str)
@@ -124,7 +73,8 @@ pub fn needs_hydration(manifest: &Value) -> bool {
         .is_some_and(|s| !s.is_empty())
 }
 
-/// Hydrate all secrets in a list of manifests (mutates in place).
+/// Hydrate all secrets in a list of manifests (mutates in place), reading
+/// SOPS sources from `sources`.
 ///
 /// For each Secret with a `kix.run/sops-source` annotation:
 /// 1. Locate the SOPS file (store path or repo-relative path)
@@ -133,19 +83,14 @@ pub fn needs_hydration(manifest: &Value) -> bool {
 /// 4. Inject decrypted key-value pairs into `stringData`
 ///
 /// Returns the list of hydrated secrets, or the first error encountered.
-pub fn hydrate_secrets(manifests: &mut [Value]) -> Result<Vec<HydrationResult>, SecretError> {
-    hydrate_secrets_from(manifests, &SopsSources::Local)
-}
-
-/// [`hydrate_secrets`], reading SOPS sources from `sources`.
 ///
-/// From a bundle, a source must be one of the bundle's files, the file must
+/// From the files a build carries, a source must be one of them, the file must
 /// be encrypted to age recipients only (so decrypting never reaches a cloud
 /// KMS or Vault with this machine's credentials), and the Secret must
 /// declare a content hash. With placeholders, nothing is decrypted: each
 /// declared key (`kix.run/secret-keys`) gets a value valid for the Secret's
 /// type.
-pub fn hydrate_secrets_from(
+pub(crate) fn hydrate_secrets_from(
     manifests: &mut [Value],
     sources: &SopsSources,
 ) -> Result<Vec<HydrationResult>, SecretError> {
@@ -161,7 +106,7 @@ pub fn hydrate_secrets_from(
 
         let result = match sources {
             SopsSources::Local => hydrate_single(manifest)?,
-            SopsSources::Bundle(bundle) => hydrate_from_bundle(manifest, bundle, &mut read)?,
+            SopsSources::Carried(carried) => hydrate_carried(manifest, carried, &mut read)?,
         };
         results.push(result);
     }
@@ -169,7 +114,7 @@ pub fn hydrate_secrets_from(
     Ok(results)
 }
 
-/// What one SOPS source from a bundle gave: its keys, stored in clear, its
+/// What one SOPS source the build carries gave: its keys, stored in clear, its
 /// format, and, once decrypted, its values.
 struct ReadSource {
     keys: Vec<String>,
@@ -177,26 +122,26 @@ struct ReadSource {
     data: Option<BTreeMap<String, String>>,
 }
 
-fn hydrate_from_bundle(
+fn hydrate_carried(
     manifest: &mut Value,
-    bundle: &BundleSources,
+    carried: &CarriedSources,
     read: &mut HashMap<PathBuf, ReadSource>,
 ) -> Result<HydrationResult, SecretError> {
     let rid = ResourceId::from_value(manifest);
-    let not_in_bundle = |message: String| SecretError::NotInBundle {
+    let not_carried = |message: String| SecretError::NotCarried {
         name: rid.name.clone(),
         message,
     };
     let source = keys::get(manifest, keys::SOPS_SOURCE)
         .unwrap_or_default()
         .to_string();
-    let path = bundle
+    let path = carried
         .files
         .get(&source)
-        .ok_or_else(|| not_in_bundle(format!("its SOPS source {source} is not in the bundle")))?;
+        .ok_or_else(|| not_carried(format!("its SOPS source {source} is not in the build")))?;
     let expected = keys::get(manifest, keys::CONTENT_HASH)
         .map(str::to_string)
-        .ok_or_else(|| not_in_bundle(format!("it declares no {}", keys::CONTENT_HASH)))?;
+        .ok_or_else(|| not_carried(format!("it declares no {}", keys::CONTENT_HASH)))?;
     let source = match read.entry(path.clone()) {
         std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
         std::collections::hash_map::Entry::Vacant(e) => {
@@ -209,7 +154,7 @@ fn hydrate_from_bundle(
         }
     };
 
-    let data: BTreeMap<String, String> = if bundle.placeholders {
+    let data: BTreeMap<String, String> = if carried.placeholders {
         placeholders(manifest, &source.keys)
     } else {
         let data = match &source.data {
@@ -265,7 +210,8 @@ fn placeholders(manifest: &Value, keys: &[String]) -> BTreeMap<String, String> {
 /// Refuse a SOPS file whose metadata names any key source but age, and
 /// return the file's keys (stored in clear; only values are encrypted) and
 /// its format, `json` or `yaml`. sops must be told that format: by default
-/// it goes by the file's extension, and a bundle chooses the name.
+/// it goes by the file's extension, and whoever made the build chose the
+/// name.
 ///
 /// An allowlist: SOPS adds key sources over time (and `key_groups` can hold
 /// any of them), so a field this code does not know is refused.
@@ -317,14 +263,14 @@ fn age_only_keys(path: &Path) -> Result<(Vec<String>, &'static str), SecretError
         return Err(refuse(
             problem
                 .get()
-                .unwrap_or("only YAML or JSON SOPS files can come from a bundle"),
+                .unwrap_or("only YAML or JSON SOPS files can come with a build"),
         ));
     }
     let doc: Value = match input_type {
         "json" => serde_json::from_str(&text).map_err(|e| e.to_string()),
         _ => serde_yml::from_str(&text).map_err(|e| e.to_string()),
     }
-    .map_err(|_| refuse("only YAML or JSON SOPS files can come from a bundle"))?;
+    .map_err(|_| refuse("only YAML or JSON SOPS files can come with a build"))?;
     // yaml.v3 matches `sops` exactly; Go's encoding/json does not.
     if let Some(key) = doc
         .as_object()
@@ -380,7 +326,7 @@ fn folds_to_sops(key: &str) -> bool {
     }) && chars.next().is_none()
 }
 
-/// The most a SOPS file from a bundle may hold, counting one byte for each
+/// The most a SOPS file the build carries may hold, counting one byte for each
 /// value plus the bytes of each key and string, and a YAML alias as all its
 /// anchor holds: parsing copies an anchor's values each time an alias names
 /// it, so a small file can stand for a large document. A file without
@@ -634,7 +580,7 @@ fn parse_secret_data(
 ///
 /// Uses canonical form: sorted keys, each line is `key=value\n`.
 /// Returns `sha256-<base64>` format (matching Nix SRI hashes).
-pub fn compute_content_hash(data: &BTreeMap<String, String>) -> String {
+pub(crate) fn compute_content_hash(data: &BTreeMap<String, String>) -> String {
     let mut hasher = Sha256::new();
     for (key, value) in data {
         hasher.update(key.as_bytes());
@@ -745,7 +691,7 @@ mod tests {
         let name = format!("{}.sops.yaml", "a".repeat(201));
         let path = format!("/nix/store/0h5dy43cxa771fiz9dsx14c0vf32sn67-{name}");
         let sources = HashMap::from([(path, b"x: 1\n".to_vec())]);
-        assert!(SopsSources::from_bundle(sources, true).is_ok());
+        assert!(SopsSources::carried(sources, true).is_ok());
     }
 
     #[test]
@@ -848,7 +794,7 @@ mod tests {
     }
 
     fn from_bundle(text: &str, placeholders: bool) -> SopsSources {
-        SopsSources::from_bundle(
+        SopsSources::carried(
             HashMap::from([(SOURCE.to_string(), text.as_bytes().to_vec())]),
             placeholders,
         )
@@ -886,14 +832,14 @@ mod tests {
         let other = "/nix/store/0h5dy43cxa771fiz9dsx14c0vf32sn67-db.sops.yaml";
         let mut manifests = [bundle_secret(other, Some("sha256-x"))];
         let err = hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap_err();
-        assert!(matches!(err, SecretError::NotInBundle { .. }), "{err}");
+        assert!(matches!(err, SecretError::NotCarried { .. }), "{err}");
     }
 
     #[test]
     fn a_secret_from_a_bundle_must_declare_a_content_hash() {
         let mut manifests = [bundle_secret(SOURCE, None)];
         let err = hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap_err();
-        assert!(matches!(err, SecretError::NotInBundle { .. }), "{err}");
+        assert!(matches!(err, SecretError::NotCarried { .. }), "{err}");
     }
 
     /// sops reads a file in the format its extension names unless told

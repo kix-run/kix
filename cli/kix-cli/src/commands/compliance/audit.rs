@@ -45,7 +45,7 @@ pub fn run(args: &ComplianceAuditArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     // Build once, reuse StoreGraph + the cluster output for scorecard data.
-    let (_result_path, graph) = shared::build_and_load(ctx, &args.cluster)?;
+    let graph = shared::build_and_load(ctx, &args.cluster)?;
 
     // The scorecard findings come from the KixEvaluator (ClusterOutput),
     // not the StoreGraph, so we run a cached eval in addition to the build.
@@ -77,20 +77,20 @@ pub fn run(args: &ComplianceAuditArgs, ctx: &mut CommandContext) -> Result<()> {
     let md = build_markdown_summary(&graph, &scorecard_findings, args.framework);
     fs::write(out_dir.join("audit-report.md"), md).into_diagnostic()?;
 
-    if !ctx.global.quiet {
-        let (errors, warnings, infos) = count_findings(&scorecard_findings);
-        eprintln!();
-        eprintln!(
-            "  {} audit bundle to {}",
-            output::green("Wrote"),
-            out_dir.display()
-        );
-        eprintln!(
-            "    scorecard: {} errors, {} warnings, {} info",
-            errors, warnings, infos
-        );
-        eprintln!("    framework: {}", framework_label(args.framework));
-    }
+    let (errors, warnings, infos) = count_findings(&scorecard_findings);
+    crate::esay!();
+    crate::esay!(
+        "  {} audit bundle to {}",
+        output::green("Wrote"),
+        out_dir.display()
+    );
+    crate::esay!(
+        "    scorecard: {} errors, {} warnings, {} info",
+        errors,
+        warnings,
+        infos
+    );
+    crate::esay!("    framework: {}", framework_label(args.framework));
 
     Ok(())
 }

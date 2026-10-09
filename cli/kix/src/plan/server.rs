@@ -10,12 +10,12 @@
 
 use std::collections::HashMap;
 
-use kix::cluster::preview::{DryRunAnswer, DryRunOutcome, Refusal};
-use kix::eval::store_graph::StoreGraph;
-use kix::manifest::diff::engine::structural_diff;
-use kix::manifest::diff::{DiffConfig, Difference};
-use kix::manifest::lifecycle;
-use kix::manifest::types::{self, ResourceId};
+use crate::cluster::preview::{DryRunAnswer, DryRunOutcome, Refusal};
+use crate::eval::store_graph::StoreGraph;
+use crate::manifest::diff::engine::structural_diff;
+use crate::manifest::diff::{DiffConfig, Difference};
+use crate::manifest::lifecycle;
+use crate::manifest::types::{self, ResourceId};
 use serde_json::Value;
 
 use super::document::DriftChange;
@@ -59,7 +59,7 @@ pub fn comparable(obj: &Value) -> Value {
 
 /// What applying the build changes on the live object: `live` compared with
 /// the dry-run `result`, with every secret value hidden.
-pub fn field_changes(live: &Value, result: &Value) -> Vec<Difference> {
+pub(crate) fn field_changes(live: &Value, result: &Value) -> Vec<Difference> {
     let config = DiffConfig::new("live", "planned");
     let mut diffs = structural_diff(&comparable(live), &comparable(result), "$", &config);
     let is_secret = types::is_secret(live) || types::is_secret(result);
@@ -76,7 +76,7 @@ pub fn field_changes(live: &Value, result: &Value) -> Vec<Difference> {
 }
 
 /// What the server answers change about the package diff.
-pub struct Overlay<'a> {
+pub(crate) struct Overlay<'a> {
     pub new_graph: &'a StoreGraph,
     /// The deployed build's manifests, when the deployed build is known.
     /// Without them no field change is labelled and drift is not reported.
@@ -87,7 +87,11 @@ impl Overlay<'_> {
     /// Replace each answered object's entry in `diff` with the server's
     /// answer, label every field change when the deployed build is known,
     /// and return the drift the deploy reverts.
-    pub fn apply(&self, diff: &mut PackageDiff, answers: &[DryRunAnswer]) -> Vec<DriftChange> {
+    pub(crate) fn apply(
+        &self,
+        diff: &mut PackageDiff,
+        answers: &[DryRunAnswer],
+    ) -> Vec<DriftChange> {
         let membership = membership(self.new_graph);
         let new_by_rid: HashMap<ResourceId, &Value> = self
             .new_graph
@@ -317,8 +321,8 @@ fn prune_empty(diff: &mut PackageDiff) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kix::cluster::apply::ApplyPreview;
-    use kix::manifest::keys;
+    use crate::cluster::apply::ApplyPreview;
+    use crate::manifest::keys;
     use serde_json::json;
 
     fn configmap(ns: &str, name: &str, hash: &str, data: Value) -> Value {
@@ -552,6 +556,7 @@ mod tests {
         // kix diff: the live view is the deployed build.
         let diff_side = super::super::diff_graphs(&deployed_graph, &new_graph);
         let diff_doc = Plan::new(
+            super::super::document::KixBuild::current(env!("CARGO_PKG_VERSION")),
             MadeBy::LiveRead,
             "c",
             Build::of(&new_graph),
@@ -578,6 +583,7 @@ mod tests {
         }
         .apply(&mut plan_side, &answers);
         let plan_doc = Plan::new(
+            super::super::document::KixBuild::current(env!("CARGO_PKG_VERSION")),
             MadeBy::DryRun,
             "c",
             Build::of(&new_graph),

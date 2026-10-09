@@ -1,7 +1,7 @@
 //! Cancellation primitive for the deploy engine.
 //!
 //! A thin wrapper over `tokio_util::sync::CancellationToken`. The engine's
-//! supervisor loop selects on [`CancelToken::cancelled`] so a cancel from the
+//! supervisor loop selects on `CancelToken::cancelled` so a cancel from the
 //! caller (Ctrl-C, operator supersession) or from the progress watchdog is
 //! observed even while every node is in flight. Readiness polls keep checking
 //! the flag between polls as before.
@@ -119,7 +119,7 @@ impl CancelToken {
     }
 
     /// Signal cancellation and record why. The first reason wins.
-    pub fn cancel_with_reason(&self, reason: impl Into<String>) {
+    pub(crate) fn cancel_with_reason(&self, reason: impl Into<String>) {
         if let Ok(mut slot) = self.reason.lock()
             && slot.is_none()
         {
@@ -135,13 +135,13 @@ impl CancelToken {
 
     /// The reason given to [`cancel_with_reason`](Self::cancel_with_reason),
     /// if any.
-    pub fn reason(&self) -> Option<String> {
+    pub(crate) fn reason(&self) -> Option<String> {
         self.reason.lock().ok().and_then(|r| r.clone())
     }
 
     /// Resolves when the token is cancelled. Resolves at once if it already
     /// is.
-    pub async fn cancelled(&self) {
+    pub(crate) async fn cancelled(&self) {
         self.inner.cancelled().await
     }
 }

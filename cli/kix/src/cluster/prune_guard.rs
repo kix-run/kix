@@ -4,7 +4,7 @@
 //! such as an identical ClusterRole. When one drops it from its build, its
 //! prune plans the object as an orphan while the other's current build still
 //! contains it. Every prune path (deploy and rollback through
-//! [`super::ops::KubeOps`], soft and hard gc, the operator's reconcile and
+//! `super::ops::KubeResources`, soft and hard gc, the operator's reconcile and
 //! finalizer) deletes through [`PruneGuard::delete`], which reads the object,
 //! then the Activation records, and deletes only an object no other Kix
 //! cluster's current record names. The delete carries the read's uid and
@@ -19,8 +19,10 @@ use kube::{
 use thiserror::Error;
 use tokio::sync::Mutex;
 
-use super::activation::{self, ActivationError, Tenancy};
-use super::fetch::{self, SharedOrphan};
+use super::activation::{OpenedRecords, RecordsError};
+use super::discovery;
+use super::inventory::SharedOrphan;
+use super::tenancy::{self, Tenancy};
 use crate::manifest::types::ResourceId;
 
 /// What [`PruneGuard::delete`] did.
@@ -54,13 +56,16 @@ pub enum PruneError {
     #[error("{}", super::errors::describe(.0))]
     Kube(#[from] kube::Error),
     #[error("cannot tell whether another Kix cluster still deploys it: {0}")]
-    Records(#[from] ActivationError),
+    Records(#[from] RecordsError),
 }
 
 /// Deletes orphans of one Kix cluster. See the module docs.
 pub struct PruneGuard {
     client: Client,
-    records: Option<ApiResource>,
+    /// What [`Records::open`](super::activation::Records::open) returned.
+    /// When the cluster serves no Activation kind, no other cluster has
+    /// records.
+    records: OpenedRecords,
     cluster: String,
     /// The last records read. Reread when an object names a hash it lacks,
     /// which is how a record created after the last read shows up.
@@ -68,13 +73,12 @@ pub struct PruneGuard {
 }
 
 impl PruneGuard {
-    /// A guard for `cluster`'s prune. `discovery` locates the Activation
-    /// kind; without it no other cluster can have records, and the guard
-    /// only adds the preconditions.
-    pub fn new(client: Client, discovery: &[(ApiResource, Scope)], cluster: &str) -> Self {
+    /// A guard for `cluster`'s prune. When `records` holds none, no other
+    /// cluster can have records, and the guard only adds the preconditions.
+    pub fn new(client: Client, records: OpenedRecords, cluster: &str) -> Self {
         PruneGuard {
             client,
-            records: activation::find_current_activation_ar(discovery).map(|(ar, _)| ar.clone()),
+            records,
             cluster: cluster.to_string(),
             tenancy: Mutex::new(None),
         }
@@ -89,7 +93,7 @@ impl PruneGuard {
         rid: &ResourceId,
         params: &DeleteParams,
     ) -> Result<Pruned, PruneError> {
-        let api = fetch::api_for(&self.client, ar, scope, rid);
+        let api = discovery::api_for(&self.client, ar, scope, rid);
         let Some(obj) = api.get_opt(&rid.name).await? else {
             return Ok(Pruned::Gone);
         };
@@ -124,16 +128,14 @@ impl PruneGuard {
     /// overstate what other clusters still deploy.
     async fn tenancy_naming(&self, obj: &DynamicObject) -> Result<Tenancy, PruneError> {
         let mut slot = self.tenancy.lock().await;
-        let fresh = match &*slot {
-            Some(t) => activation::named_hashes(obj).all(|h| t.knows(h)),
-            None => false,
-        };
-        if !fresh {
-            let read = activation::tenancy_from(&self.client, self.records.as_ref(), &self.cluster)
-                .await?;
-            *slot = Some(read);
+        if let Some(t) = &*slot
+            && tenancy::named_hashes(obj).all(|h| t.knows(h))
+        {
+            return Ok(t.clone());
         }
-        Ok(slot.clone().unwrap_or_default())
+        let read = tenancy::read(&self.records, &self.cluster).await?;
+        *slot = Some(read.clone());
+        Ok(read)
     }
 }
 
@@ -142,6 +144,7 @@ mod tests {
     use super::*;
     use crate::cluster::fake_api::FakeApi;
     use crate::manifest::keys;
+    use crate::manifest::lifecycle;
     use crate::manifest::types::CLUSTER_SCOPED;
     use serde_json::{Value, json};
 
@@ -179,8 +182,9 @@ mod tests {
 
     async fn guard(api: &FakeApi, cluster: &str) -> (PruneGuard, Vec<(ApiResource, Scope)>) {
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
-        (PruneGuard::new(client, &discovery, cluster), discovery)
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let records = crate::cluster::activation::Records::open(&client, &discovery).unwrap();
+        (PruneGuard::new(client, records, cluster), discovery)
     }
 
     async fn delete(g: &PruneGuard, d: &[(ApiResource, Scope)], rid: &ResourceId) -> Pruned {
@@ -195,9 +199,9 @@ mod tests {
     #[tokio::test]
     async fn an_object_another_cluster_still_deploys_is_kept() {
         let api = FakeApi::new([
-            record("a", "a1", activation::PHASE_ACTIVE),
-            record("b", "b0", activation::PHASE_SUPERSEDED),
-            record("b", "b1", activation::PHASE_ACTIVE),
+            record("a", "a1", lifecycle::PHASE_ACTIVE),
+            record("b", "b0", lifecycle::PHASE_SUPERSEDED),
+            record("b", "b1", lifecycle::PHASE_ACTIVE),
             role("shared", "a1,b1"),
             role("once-shared", "a1,b0"),
         ]);
@@ -221,7 +225,7 @@ mod tests {
     #[tokio::test]
     async fn an_object_changed_after_the_read_is_left_in_place() {
         let api = FakeApi::new([
-            record("a", "a1", activation::PHASE_ACTIVE),
+            record("a", "a1", lifecycle::PHASE_ACTIVE),
             role("mine", "a1"),
         ]);
         api.after_get("mine", |o| {
@@ -238,7 +242,7 @@ mod tests {
     #[tokio::test]
     async fn a_record_created_after_the_first_read_is_seen() {
         let api = FakeApi::new([
-            record("a", "a1", activation::PHASE_ACTIVE),
+            record("a", "a1", lifecycle::PHASE_ACTIVE),
             role("first", "a1"),
         ]);
         let (g, d) = guard(&api, "a").await;
@@ -246,7 +250,7 @@ mod tests {
         assert_eq!(delete(&g, &d, &first).await, Pruned::Deleted);
 
         // `b`'s first deploy: its record, then an object naming it.
-        api.insert(record("b", "b1", activation::PHASE_DEPLOYING));
+        api.insert(record("b", "b1", lifecycle::PHASE_DEPLOYING));
         api.insert(role("later", "a1,b1"));
         let later = rid("ClusterRole", CLUSTER_SCOPED, "later");
         assert!(matches!(delete(&g, &d, &later).await, Pruned::Kept(_)));
@@ -257,8 +261,8 @@ mod tests {
     #[tokio::test]
     async fn a_namespaced_object_without_a_namespace_is_read_in_default() {
         let api = FakeApi::new([
-            record("a", "a1", activation::PHASE_ACTIVE),
-            record("b", "b1", activation::PHASE_ACTIVE),
+            record("a", "a1", lifecycle::PHASE_ACTIVE),
+            record("b", "b1", lifecycle::PHASE_ACTIVE),
             json!({
                 "apiVersion": "v1",
                 "kind": "ConfigMap",

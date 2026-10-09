@@ -469,7 +469,7 @@ Garbage-collect stale kix-managed resources.
 - **Hard GC** (`--hard`): Full cluster-wide scan, matches identity-hashes against expected set. Judges only the named Kix cluster's objects, attributed through the Activation record hashes in `kix.run/activations`; objects another Kix cluster's current build contains are kept.
 - `--include-unattributed`: With `--hard`, also judge objects that name no Activation record while another Kix cluster has records on the Kubernetes cluster. Without it they are listed and kept.
 - `--operator`: Deletes retired Activation CRs under the retention policy. They are all Superseded, so the operator only removes its finalizer and deletes no resources.
-- Record retention, in every mode — Superseded Activation records are rollback history, but each one still on the cluster keeps one entry in `kix.run/activations` on every managed resource, and that annotation is capped at 256 KiB, so they cannot be kept forever. `--keep N` (default 10) always keeps the N newest whatever their age; `--keep-max N` (default 50) never keeps more; `--keep-for 30d` (default) retires anything older beyond the floor (`0` or `off` disables the age rule). Deletes are conditional on the record being unchanged since it was listed. The next deploy drops the retired entries.
+- Record retention, in every mode — Superseded Activation records are rollback history, but each one still on the cluster keeps one entry in `kix.run/activations` on every managed resource, and that annotation is capped at 256 KiB, so they cannot be kept forever. `--keep N` (default 10) always keeps the N newest rollback targets (records whose deploy finished) whatever their age; `--keep-max N` (default 50) never keeps more records in all, retiring the oldest records of deploys that never finished first; `--keep-for 30d` (default) retires anything older beyond the floor (`0` or `off` disables the age rule). Deletes are conditional on the record being unchanged since it was listed. The next deploy drops the retired entries.
 - Deletes in reverse dependency order (dependents first).
 - Never deletes a Namespace or CustomResourceDefinition, the same kinds `deploy --prune` keeps: they are listed under "Kept" for removal with kubectl.
 
@@ -572,7 +572,7 @@ Long-lived K8s controller watching Activation CRs.
 - **Stamping:** Annotation injection (identity-hash, depends-on, package metadata).
 
 ### cluster module
-- **Activation:** find_active, list_superseded_activations, retire_plan (`gc --keep`), Activation CR lifecycle management.
+- **Activation:** `Records` (the one handle on the Activation records: active, superseded, rollback targets, lifecycle writes), retire_plan (`gc --keep`), Activation CR lifecycle management.
 - **Apply:** `detect_changes` → ChangeAction (Apply, Skip, Orphan). ApplyAction (Created, Configured, Unchanged, Skipped).
 - **Fetch:** API resource discovery, fetch all kix-managed resources, normalize for diff (strip server-side fields).
 - **Graph:** ResourceGraph with tree/dot/json output.

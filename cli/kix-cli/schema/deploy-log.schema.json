@@ -1,0 +1,853 @@
+{
+  "$defs": {
+    "ApplyAction": {
+      "description": "The action taken during apply. The deploy log names it in snake_case.",
+      "oneOf": [
+        {
+          "const": "created",
+          "description": "Resource was created (didn't exist before).",
+          "type": "string"
+        },
+        {
+          "const": "configured",
+          "description": "Resource was updated (identity-hash changed).",
+          "type": "string"
+        },
+        {
+          "const": "unchanged",
+          "description": "Resource was skipped (identity-hash matched).",
+          "type": "string"
+        },
+        {
+          "const": "skipped",
+          "description": "Resource was skipped for another reason.",
+          "type": "string"
+        }
+      ]
+    },
+    "Because": {
+      "description": "Why a node was cancelled.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "This node waited on the one that failed.",
+          "properties": {
+            "predecessor_failed": {
+              "$ref": "#/$defs/ResourceId"
+            }
+          },
+          "required": [
+            "predecessor_failed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The run was cancelled. Always `true`.",
+          "properties": {
+            "external": {
+              "const": true,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "external"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Busy": {
+      "description": "A node in flight when the run stalled.",
+      "properties": {
+        "node": {
+          "description": "The node, as the text log names it.",
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        },
+        "since_ms": {
+          "description": "How long it has been in this phase.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "node",
+        "phase",
+        "since_ms"
+      ],
+      "type": "object"
+    },
+    "Detail": {
+      "description": "What a node's state change carries, named by its one key.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "applied": {
+              "$ref": "#/$defs/ApplyAction"
+            }
+          },
+          "required": [
+            "applied"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "apply_failed": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "apply_failed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "readiness_timeout": {
+              "properties": {
+                "elapsed_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "elapsed_ms",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "readiness_timeout"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "readiness_failed": {
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "missing_keys": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "output": {
+                  "description": "The last lines a failed container wrote.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "message",
+                "missing_keys",
+                "output"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "readiness_failed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "How many keys were decrypted into the Secret.",
+          "properties": {
+            "secret_hydrated": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "secret_hydrated"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "secret_hydration_failed": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "secret_hydration_failed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "recreated_in_place": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "recreated_in_place"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "rerun": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "rerun"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`stale` pods run the previous template until someone deletes them.",
+          "properties": {
+            "pending_restart": {
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "stale": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "stale",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "pending_restart"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Edge": {
+      "description": "`dependent` waits on `predecessor`.",
+      "properties": {
+        "dependent": {
+          "$ref": "#/$defs/NodeRef"
+        },
+        "predecessor": {
+          "$ref": "#/$defs/NodeRef"
+        }
+      },
+      "required": [
+        "dependent",
+        "predecessor"
+      ],
+      "type": "object"
+    },
+    "Import": {
+      "description": "The resource an import marker waits for.",
+      "properties": {
+        "apiVersion": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "apiVersion"
+      ],
+      "type": "object"
+    },
+    "NodeRef": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResourceId"
+        },
+        {
+          "properties": {
+            "synthetic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "synthetic"
+          ],
+          "type": "object"
+        }
+      ],
+      "description": "A node: a resource, or a step that is not one (`synthetic`)."
+    },
+    "Phase": {
+      "description": "What a node in flight is doing. Reported by the watchdog.",
+      "oneOf": [
+        {
+          "const": "hydrate",
+          "description": "Decrypting SOPS secrets before apply.",
+          "type": "string"
+        },
+        {
+          "const": "apply",
+          "description": "Server-side apply request outstanding (including transport retries).",
+          "type": "string"
+        },
+        {
+          "const": "readiness",
+          "description": "Polling the object for readiness.",
+          "type": "string"
+        },
+        {
+          "const": "discovery",
+          "description": "Not a node: the API discovery refresh behind a CRD barrier.",
+          "type": "string"
+        }
+      ]
+    },
+    "PlannedNode": {
+      "description": "A node of the plan.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NodeRef"
+        },
+        "import": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Import"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For an import marker, the resource it waits for."
+        },
+        "kind": {
+          "$ref": "#/$defs/TransitionKind"
+        },
+        "namespace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "package": {
+          "description": "The Kix package instance the node belongs to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ResourceId": {
+      "description": "Unique identifier for a K8s resource.",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "namespace",
+        "name"
+      ],
+      "type": "object"
+    },
+    "State": {
+      "description": "A node's verdict, named by `state`.",
+      "oneOf": [
+        {
+          "properties": {
+            "state": {
+              "const": "pending",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "state": {
+              "const": "running",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "state": {
+              "const": "ready",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "state": {
+              "const": "failed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "because": {
+              "$ref": "#/$defs/Because"
+            },
+            "state": {
+              "const": "cancelled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "because"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "prompt": {
+              "type": "string"
+            },
+            "state": {
+              "const": "awaiting_input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "prompt"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Was ready, and readiness now says otherwise.",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "since_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "state": {
+              "const": "drift",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "since_ms",
+            "message"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TransitionKind": {
+      "description": "What kind of operation a node represents.\n\nThe planner tags every node in the plan with one of these. Rendering and\nscheduling both branch on this tag. The deploy log names it in\nsnake_case.",
+      "oneOf": [
+        {
+          "const": "apply",
+          "description": "Server-side apply a manifest.",
+          "type": "string"
+        },
+        {
+          "const": "skip",
+          "description": "Identity-hash unchanged; no work needed. Rendered dim, folded\naggressively.",
+          "type": "string"
+        },
+        {
+          "const": "recreate",
+          "description": "Delete the live object, then apply. Tagged `recreate` because that\nis the act, whatever the trigger. The current producer is the\nrerun rule: a manifest carrying the rerun annotation (a probe Job) whose\nidentity hash changed is run again, never patched, and the reason\nrides [`NodeDetail::Rerun`]. The executor applies plainly when\nnothing is live.",
+          "type": "string"
+        },
+        {
+          "const": "migrate",
+          "description": "Stateful migration pair barrier. Detection currently happens before\nscheduling.",
+          "type": "string"
+        },
+        {
+          "const": "drain",
+          "description": "Drain consumers before deleting their provider.",
+          "type": "string"
+        },
+        {
+          "const": "delete",
+          "description": "Delete an orphaned resource.",
+          "type": "string"
+        },
+        {
+          "const": "pause",
+          "description": "Wait for operator approval.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One line of the log.",
+  "oneOf": [
+    {
+      "description": "The plan, before any node runs. `edges` say which node waits on which.",
+      "properties": {
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/Edge"
+          },
+          "type": "array"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/PlannedNode"
+          },
+          "type": "array"
+        },
+        "type": {
+          "const": "plan",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "nodes",
+        "edges"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "A node's verdict advanced.",
+      "properties": {
+        "detail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Detail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/NodeRef"
+        },
+        "kind": {
+          "$ref": "#/$defs/TransitionKind"
+        },
+        "type": {
+          "const": "node",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/State"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "kind",
+        "verdict"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "CRDs were applied, so API discovery ran again.",
+      "properties": {
+        "type": {
+          "const": "crd_rediscovery",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The orphans: `resources` may be deleted, in prune order, and `count`\nis how many. `delete` says whether this run deletes them or only\nreports them. `kept` are orphans no prune policy deletes.",
+      "properties": {
+        "count": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "delete": {
+          "type": "boolean"
+        },
+        "kept": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "resources": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "type": {
+          "const": "prune_start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "count",
+        "delete",
+        "resources",
+        "kept"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The prune left `resource` in place when it came to delete it.",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "resource": {
+          "type": "string"
+        },
+        "type": {
+          "const": "prune_kept",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "resource",
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The new Activation record is current, and `previous` is superseded.",
+      "properties": {
+        "activation": {
+          "type": "string"
+        },
+        "previous": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "finalized",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "activation"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The run stopped: cancelled, or halted at a failure.",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "type": {
+          "const": "stopped",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reason"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Nothing has happened for `idle_ms`. `aborting` is true on the last\none, when the run gives up.",
+      "properties": {
+        "aborting": {
+          "type": "boolean"
+        },
+        "idle_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "in_flight": {
+          "items": {
+            "$ref": "#/$defs/Busy"
+          },
+          "type": "array"
+        },
+        "type": {
+          "const": "stalled",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "idle_ms",
+        "aborting",
+        "in_flight"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "A write that the next deploy redoes failed.",
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "type": {
+          "const": "best_effort_failed",
+          "type": "string"
+        },
+        "what": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "what",
+        "message"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The counts the text summary line shows.",
+      "properties": {
+        "cancelled": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "configured": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "created": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "failed": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pruned": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "succeeded": {
+          "type": "boolean"
+        },
+        "type": {
+          "const": "summary",
+          "type": "string"
+        },
+        "unchanged": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "dry_run",
+        "succeeded",
+        "created",
+        "configured",
+        "unchanged",
+        "failed",
+        "cancelled",
+        "pruned"
+      ],
+      "type": "object"
+    }
+  ],
+  "properties": {
+    "elapsed_ms": {
+      "description": "Milliseconds since the deploy started.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "schema_version": {
+      "description": "The date, `YYYY-MM-DD`, of the log shape's last change that was not\nbackward compatible. On every line, so each line can be read alone.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "elapsed_ms"
+  ],
+  "title": "Line",
+  "type": "object"
+}

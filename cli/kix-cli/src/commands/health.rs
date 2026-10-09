@@ -8,9 +8,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use miette::{Result, miette};
 
-use kix::cluster::activation::{self, ActiveActivation};
-use kix::cluster::fetch;
-use kix::manifest::types::ResourceId;
+use crate::client;
+use kix::cluster::activation::{OpenedRecords, Record, Records};
+use kix::cluster::{discovery, inventory};
+use kix::manifest::types::{ResourceId, to_manifest_value};
 
 use crate::cli::HealthArgs;
 use crate::output;
@@ -127,34 +128,32 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
     let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::ReadOnly)?;
 
     // 1. Connect to cluster
-    if !ctx.global.quiet {
-        println!("Connecting to cluster...");
-    }
+    crate::say!("Connecting to cluster...");
 
     let (activation, resources) = ctx.runtime.block_on(async {
-        let client = fetch::make_client(ctx.global.context.as_deref())
+        let client = client::make_client(ctx.global.context.as_deref())
             .await
             .map_err(|e| miette!("failed to connect: {e}"))?;
 
-        let discovery = fetch::discover_resources(&client)
+        let discovery = discovery::discover_resources(&client)
             .await
             .map_err(|e| miette!("{e}"))?;
 
         // 2. Find active Activation CR
-        let activation_ar = activation::find_activation_ar(&discovery)
-            .map_err(|e| miette!("{e}"))?
-            .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?;
+        let records = Records::open_installed(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
-        let active = activation::find_active(&client, &activation_ar.0, &cluster)
+        let active = records
+            .active(&cluster)
             .await
-            .map_err(|e| miette!("failed to find activation: {e}"))?
+            .map_err(|e| miette!("{e}"))?
             .ok_or_else(|| miette!("no active deployment record found for cluster '{cluster}'"))?;
 
         // 3. Fetch this cluster's kix-managed resources
-        let live_objects = fetch::fetch_managed_resources(
+        let live_objects = inventory::fetch_managed_resources(
             &client,
             &discovery,
-            fetch::SweepScope::Cluster(&cluster),
+            &OpenedRecords::from(records.clone()),
+            inventory::SweepScope::Cluster(&cluster),
         )
         .await
         .map_err(|e| miette!("failed to fetch resources: {e}"))?;
@@ -162,20 +161,18 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
         Ok::<_, miette::Report>((active, live_objects))
     })?;
 
-    if !ctx.global.quiet {
-        println!(
-            "Activation: {} (hash: {})",
-            output::bold(&activation.name),
-            activation.identity_hash.as_deref().unwrap_or("unknown"),
-        );
-    }
+    crate::say!(
+        "Activation: {} (hash: {})",
+        output::bold(&activation.name),
+        activation.identity_hash.as_deref().unwrap_or("unknown"),
+    );
 
     // 4. Parse live resources and build identity-hash index
     let mut live_by_hash: HashMap<String, LiveResource> = HashMap::new();
 
     for obj in resources {
         // Whole object: metadata lives on the typed field, not in `.data`.
-        let rid = ResourceId::from_value(&fetch::to_manifest_value(&obj));
+        let rid = ResourceId::from_value(&to_manifest_value(&obj));
 
         // Read annotations from typed metadata (more reliable than raw data)
         let annotations = obj.metadata.annotations.as_ref();
@@ -238,16 +235,14 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
         .filter(|(h, _)| reachable.contains(h))
         .collect();
 
-    if !ctx.global.quiet {
-        println!("{} kix-managed resources on cluster", live_by_hash.len());
-    }
+    crate::say!("{} kix-managed resources on cluster", live_by_hash.len());
 
     // 6. Walk the dependency graph from activation root
     let health_map = walk_graph(&activation, &live_by_hash, ctx.global.verbose);
 
     // 7. Group by package and display
     let packages = group_by_package(&live_by_hash, &health_map);
-    display_results(&packages, ctx.global.verbose, ctx.global.quiet);
+    display_results(&packages, ctx.global.verbose);
 
     let has_issues = packages.iter().any(|p| !p.is_healthy());
     if has_issues {
@@ -260,7 +255,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
 /// Check every resource's dependencies against the live index.
 /// Checks all resources directly; no root is required.
 fn walk_graph(
-    _activation: &ActiveActivation,
+    _activation: &Record,
     live_by_hash: &HashMap<String, LiveResource>,
     verbose: u8,
 ) -> BTreeMap<String, ResourceHealth> {
@@ -484,10 +479,8 @@ fn group_by_package(
         .collect()
 }
 
-fn display_results(packages: &[PackageHealth], verbose: u8, quiet: bool) {
-    if !quiet {
-        println!();
-    }
+fn display_results(packages: &[PackageHealth], verbose: u8) {
+    crate::say!();
 
     // Package summary table
     println!("{}", output::bold("Packages:"));

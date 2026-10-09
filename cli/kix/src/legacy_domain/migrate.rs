@@ -5,7 +5,7 @@
 //!
 //! It deletes CustomResourceDefinitions and rewrites deploy history. Both
 //! deserve a person, a dry run and a prompt. The gate in
-//! [`super::check_cluster`] is what makes it unmissable: until it has run,
+//! [`super::check_discovery`] is what makes it unmissable: until it has run,
 //! every command that reads a Kix record refuses and names it.
 //!
 //! # Order, and why it is fixed
@@ -23,9 +23,9 @@
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-use crate::cluster::activation::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::{PACKAGE_INSTANCE_KIND, RECORD_KIND};
+use crate::manifest::lifecycle::{PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING};
 
 use super::DOMAINS;
 
@@ -59,8 +59,8 @@ pub fn crd_name(record: RecordKind, domain: &str) -> String {
 
 /// Everything the migration does to a cluster.
 ///
-/// A trait so the steps can be tested without an apiserver. `KubeOps` in
-/// `kix-cli` is the real implementation.
+/// A trait so the steps can be tested without an apiserver.
+/// [`super::KubeMigrationOps`] is the real implementation.
 #[async_trait]
 pub trait MigrationOps: Send + Sync {
     /// Is this CustomResourceDefinition registered?
@@ -137,7 +137,7 @@ pub struct Report {
     /// question this only raises.
     pub finalizers_present: bool,
     /// Records whose phase is Active or Degraded. Exactly one is the
-    /// healthy case; `find_active` takes the first the apiserver returns,
+    /// healthy case; `Records::active` takes the most recently deployed,
     /// so more than one means the deploy after this migration may diff
     /// against the wrong build.
     pub current_records: Vec<String>,
@@ -145,7 +145,7 @@ pub struct Report {
 
 impl Report {
     /// Nothing to do: no retired group on this cluster.
-    pub fn nothing_to_do() -> Self {
+    pub(crate) fn nothing_to_do() -> Self {
         Self::default()
     }
 

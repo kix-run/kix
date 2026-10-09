@@ -97,7 +97,7 @@ impl Reference {
     }
 
     /// The host to send registry API requests to.
-    pub fn api_host(&self) -> &str {
+    pub(crate) fn api_host(&self) -> &str {
         if self.registry == "docker.io" {
             DOCKER_HUB_API
         } else {
@@ -107,7 +107,7 @@ impl Reference {
 
     /// The key credentials are stored under. Docker Hub's is historical and
     /// every credential helper on disk still uses it.
-    pub fn credential_key(&self) -> &str {
+    pub(crate) fn credential_key(&self) -> &str {
         if self.registry == "docker.io" {
             "https://index.docker.io/v1/"
         } else {
@@ -117,7 +117,7 @@ impl Reference {
 
     /// `https://host` unless the host is plainly local, where a registry
     /// commonly speaks http. `localhost:5000` is the case that matters.
-    pub fn scheme(&self) -> &'static str {
+    pub(crate) fn scheme(&self) -> &'static str {
         let host = self.api_host();
         let bare = host.split(':').next().unwrap_or(host);
         if bare == "localhost" || bare == "127.0.0.1" || bare == "::1" {
@@ -129,14 +129,8 @@ impl Reference {
 
     /// What to ask the manifest endpoint for: the digest when we have one,
     /// otherwise the tag.
-    pub fn manifest_selector(&self) -> Option<&str> {
+    pub(crate) fn manifest_selector(&self) -> Option<&str> {
         self.digest.as_deref().or(self.tag.as_deref())
-    }
-
-    /// `registry/repository`, no tag or digest. This is what a pin file
-    /// stores as `repository`.
-    pub fn canonical_repository(&self) -> String {
-        format!("{}/{}", self.registry, self.repository)
     }
 }
 
@@ -196,10 +190,6 @@ mod tests {
         let r = parse("registry.example.com/lithus/atlas-server:sha-5d5dda2");
         assert_eq!(r.registry, "registry.example.com");
         assert_eq!(r.repository, "lithus/atlas-server");
-        assert_eq!(
-            r.canonical_repository(),
-            "registry.example.com/lithus/atlas-server"
-        );
     }
 
     #[test]
