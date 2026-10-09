@@ -1795,6 +1795,8 @@ pub async fn failed_rerun_nodes(
 }
 
 /// Reverse-topological ordering of orphaned resources in `old_manifests`.
+/// An orphan with no manifest there has no known dependencies and goes last;
+/// leaving it out would keep it on the cluster with nothing recording it.
 fn prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> Vec<ResourceId> {
     let orphan_set: HashSet<String> = orphan_rids
         .iter()
@@ -1808,10 +1810,18 @@ fn prune_order(orphan_rids: &[ResourceId], old_manifests: &[Value]) -> Vec<Resou
         })
         .cloned()
         .collect();
-    match ResourceGraph::from_manifests(&orphan_manifests) {
+    let mut ordered = match ResourceGraph::from_manifests(&orphan_manifests) {
         Ok(graph) => graph.reverse_topo_ids(),
-        Err(_) => orphan_rids.to_vec(),
-    }
+        Err(_) => return orphan_rids.to_vec(),
+    };
+    let listed: HashSet<ResourceId> = ordered.iter().cloned().collect();
+    ordered.extend(
+        orphan_rids
+            .iter()
+            .filter(|rid| !listed.contains(*rid))
+            .cloned(),
+    );
+    ordered
 }
 
 fn is_crd_like(entry: &PlanNodeEntry) -> bool {
@@ -3461,6 +3471,40 @@ mod engine_tests {
             clusters: vec!["b".into()],
         });
         assert!(!orphans_left(PrunePolicy::Delete, &cm, Behaviour::Now(Ok(shared))).await);
+    }
+
+    /// An orphan with no manifest among the old manifests is still pruned,
+    /// after the ones the graph orders.
+    #[tokio::test(start_paused = true)]
+    async fn an_orphan_the_old_manifests_lack_is_still_pruned() {
+        let manifests = vec![m("ConfigMap", "keep", &[])];
+        let ops = Arc::new(ScriptedOps::new());
+        let mut cfg = config(quiet_watchdog());
+        cfg.prune = PrunePolicy::Delete;
+        let orphans = [rid("ConfigMap", "listed"), rid("ConfigMap", "unlisted")];
+        let old = [m("ConfigMap", "listed", &[])];
+
+        let result = run_with_orphans(
+            &ops,
+            plan_of(&manifests),
+            &orphans,
+            &old,
+            &cfg,
+            Arc::new(Recorder::default()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.pruned, 2);
+        let deleted: Vec<ResourceId> = ops
+            .calls()
+            .into_iter()
+            .filter_map(|c| match c {
+                Call::Delete(rid) => Some(rid),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(deleted, orphans.to_vec());
     }
 
     /// An orphan the prune guard keeps is reported as kept, not as pruned or
