@@ -42,7 +42,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::eval::KixEvalError;
-use crate::eval::build::build_cluster_activation;
+use crate::eval::nix::build_cluster_activation;
 use crate::eval::stamp::stamp_annotations;
 use crate::eval::store_graph::{StoreGraph, store_hash};
 use crate::eval::store_path;

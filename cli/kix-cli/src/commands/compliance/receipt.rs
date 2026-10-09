@@ -92,7 +92,7 @@ pub(super) fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
         "arch": std::env::consts::ARCH,
         "os": std::env::consts::OS,
     });
-    if let Some(v) = shared::nix_version() {
+    if let Some(v) = kix::eval::nix::version() {
         builder["nixVersion"] = json!(v);
     }
 

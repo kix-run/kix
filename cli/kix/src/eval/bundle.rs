@@ -1202,30 +1202,8 @@ pub fn from_result_dir(
             result_dir.display()
         ))
     })?;
-    let output = std::process::Command::new("nix")
-        .args([
-            "path-info",
-            "--json",
-            "--recursive",
-            "--extra-experimental-features",
-            "nix-command",
-        ])
-        .arg(&activation)
-        .output()
-        .map_err(|e| err(format!("failed to run nix path-info: {e}")))?;
-    if !output.status.success() {
-        return Err(err(format!(
-            "nix path-info failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-    let info: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|e| {
-        err(format!(
-            "nix path-info printed something other than JSON: {e}"
-        ))
-    })?;
     let mut files = BTreeMap::new();
-    for (path, references) in path_info_references(&info) {
+    for (path, references) in super::nix::path_info(&activation)? {
         let bytes = std::fs::read(&path).map_err(|e| err(format!("failed to read {path}: {e}")))?;
         files.insert(path, BundleFile { bytes, references });
     }
@@ -1234,29 +1212,6 @@ pub fn from_result_dir(
         receipt,
         files,
     })
-}
-
-/// `(path, references)` from `nix path-info --json`, which is an object keyed
-/// by path in Nix 2.19 and later and an array of `{path, references}` before.
-fn path_info_references(info: &serde_json::Value) -> Vec<(String, Vec<String>)> {
-    let refs = |v: &serde_json::Value| -> Vec<String> {
-        v.get("references")
-            .and_then(|r| r.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    match info {
-        serde_json::Value::Object(map) => map.iter().map(|(p, v)| (p.clone(), refs(v))).collect(),
-        serde_json::Value::Array(items) => items
-            .iter()
-            .filter_map(|v| Some((v.get("path")?.as_str()?.to_string(), refs(v))))
-            .collect(),
-        _ => Vec::new(),
-    }
 }
 
 #[cfg(test)]
@@ -2289,19 +2244,6 @@ mod tests {
                 matches!(result, Err(BundleError::TooLarge(_))),
                 "{:?}",
                 result.err()
-            );
-        }
-    }
-
-    #[test]
-    fn path_info_in_either_shape() {
-        let refs = vec!["/nix/store/b".to_string()];
-        let new = json!({"/nix/store/a": {"references": ["/nix/store/b"]}});
-        let old = json!([{"path": "/nix/store/a", "references": ["/nix/store/b"]}]);
-        for info in [new, old] {
-            assert_eq!(
-                path_info_references(&info),
-                vec![("/nix/store/a".to_string(), refs.clone())]
             );
         }
     }

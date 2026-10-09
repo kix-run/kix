@@ -18,6 +18,9 @@ pub enum KixEvalError {
     #[error("could not read the built resources and their dependencies: {message}")]
     StoreGraphError { message: String },
 
+    #[error(transparent)]
+    Nix(#[from] super::nix::NixCommandError),
+
     /// A manifest of the build that the one parser refused.
     #[error("could not read the built resources and their dependencies: {0}")]
     NotJson(#[from] super::manifest_json::NotJson),

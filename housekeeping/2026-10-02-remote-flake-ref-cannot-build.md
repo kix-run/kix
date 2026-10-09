@@ -1,3 +1,3 @@
-# 2026-10-02 · `cli/kix/src/eval/build.rs` · `kix --flake github:org/repo <command>` cannot build, although the CLI says remote flake references are accepted.
+# 2026-10-02 · `cli/kix/src/eval/nix.rs` · `kix --flake github:org/repo <command>` cannot build, although the CLI says remote flake references are accepted.
 
 `resolve_flake_path` passes a reference containing `:` through as a `PathBuf`, and `build_cluster_activation` (reached through `Build::of_flake`) then runs `nix build .#cluster-<name>-activation` with `current_dir` set to that "path". Spawning fails because no directory `github:org/repo` exists. Every `nix eval` in `cli_backend.rs` except `eval_cluster_name` shares the shape, so only a local checkout works. The `--flake` help in `cli/kix-cli/src/cli.rs` and the comment on `resolve_flake_path` in `commands/mod.rs` suggest otherwise.

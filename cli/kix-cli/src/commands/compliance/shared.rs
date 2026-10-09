@@ -114,20 +114,6 @@ fn run_git(path: &Path, args: &[&str]) -> Option<String> {
     Some(String::from_utf8(out.stdout).ok()?.trim().to_string())
 }
 
-/// Try to resolve the nix version string. `None` if `nix` is unavailable.
-pub fn nix_version() -> Option<String> {
-    let out = std::process::Command::new("nix")
-        .arg("--version")
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8(out.stdout)
-        .ok()
-        .map(|s| s.trim().to_string())
-}
-
 /// UUID v4 as a string. kix doesn't pull in `uuid` as a workspace dep, and
 /// OSCAL only requires the value be a syntactically valid UUID, so we build
 /// one from `blake3` over a random-ish seed.

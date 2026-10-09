@@ -11,7 +11,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -41,7 +40,7 @@ pub struct StoreGraph {
     /// Resource store path to owning PI store path.
     pub resource_owner: HashMap<PathBuf, PathBuf>,
     /// Cached direct store references by path.
-    /// Populated by bulk_load_graph.
+    /// Populated by `nix::closure_graph`.
     pub ref_cache: HashMap<PathBuf, Vec<PathBuf>>,
 }
 
@@ -79,75 +78,6 @@ pub struct CrossDep {
     pub to_resource: String,
     /// Store path of the target PackageInstance.
     pub target_package: PathBuf,
-}
-
-/// Bulk-load the entire dependency graph with one `nix-store -q --graph` call.
-/// Parses the dot output and returns direct references by path.
-///
-/// A failure is an error. An empty graph would load the build with no
-/// resources, and a plan against that would prune everything.
-fn bulk_load_graph(root_path: &Path) -> Result<HashMap<PathBuf, Vec<PathBuf>>, KixEvalError> {
-    let command = format!("nix-store -q --graph {}", root_path.display());
-    let out = Command::new("nix-store")
-        .args(["-q", "--graph"])
-        .arg(root_path)
-        .output()
-        .map_err(|e| KixEvalError::StoreGraphError {
-            message: format!("`{command}` did not run: {e}"),
-        })?;
-    if !out.status.success() {
-        return Err(KixEvalError::StoreGraphError {
-            message: format!(
-                "`{command}` failed ({}): {}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
-        });
-    }
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let nix_store = "/nix/store/";
-    let mut deps: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
-
-    for line in stdout.lines() {
-        let line = line.trim();
-        if !line.contains("->") {
-            continue;
-        }
-        let Some((src_part, dst_part)) = line.split_once("->") else {
-            continue;
-        };
-        let src_base = src_part.trim().trim_matches('"').trim();
-        let dst_base = dst_part
-            .split('[')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .trim_matches('"')
-            .trim()
-            .trim_end_matches(';');
-
-        if src_base.is_empty() || dst_base.is_empty() {
-            continue;
-        }
-
-        let src = PathBuf::from(format!("{nix_store}{src_base}"));
-        let dst = PathBuf::from(format!("{nix_store}{dst_base}"));
-
-        // Dot edges run from dependency to dependent. Store the inverse map.
-        deps.entry(dst).or_default().push(src);
-    }
-
-    // Sort references for deterministic output
-    for refs in deps.values_mut() {
-        refs.sort_by(|a, b| {
-            store_name(a)
-                .to_lowercase()
-                .cmp(&store_name(b).to_lowercase())
-        });
-    }
-
-    Ok(deps)
 }
 
 /// Extract the 32-char base32 hash from a Nix store path.
@@ -269,7 +199,7 @@ impl StoreGraph {
 
         // 3. Bulk-load the entire store graph in one nix-store call
         status_fn("Loading store graph...");
-        let ref_cache = bulk_load_graph(&activation_path)?;
+        let ref_cache = super::nix::closure_graph(&activation_path)?;
 
         let graph = Self::assemble(
             index,
@@ -1332,14 +1262,5 @@ mod tests {
             let node = &old.resources[&old_pkg.resource_paths[0]];
             assert_eq!(node.manifest["spec"]["replicas"], json!(3));
         }
-    }
-
-    /// Before, any failure gave an empty graph, and the build loaded with
-    /// no resources.
-    #[test]
-    fn a_graph_query_that_fails_is_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let err = bulk_load_graph(dir.path()).unwrap_err();
-        assert!(err.to_string().contains("nix-store -q --graph"), "{err}");
     }
 }
