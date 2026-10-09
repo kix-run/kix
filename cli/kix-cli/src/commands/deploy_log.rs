@@ -6,11 +6,11 @@
 //!   phase boundary, prune event, or finalization. No ANSI codes, no cursor
 //!   motion. Safe to pipe into `less`, CI logs, `tee`. Used automatically
 //!   when `--log-format=pretty` is requested against a non-TTY stdout.
-//! - [`JsonObserver`]: one NDJSON object per [`DeployEvent`],
-//!   flushed immediately, then one `summary` object with the counts and
-//!   whether the run succeeded. Shape is stable across events (every object
-//!   carries `type` and timestamp); consumers can `jq -c` or pipe to log
-//!   aggregators. Readiness progress events are left out, as the `line`
+//! - [`JsonObserver`]: one NDJSON object per [`DeployEvent`], a
+//!   [`kix::cluster::deploy_log::Line`], flushed immediately, then one
+//!   `summary` object with the counts and whether the run succeeded. Every
+//!   object carries `type`, `elapsed_ms` and `schema_version`; consumers can
+//!   `jq -c` or pipe to log aggregators. Readiness progress events are left out, as the `line`
 //!   format leaves them out.
 //!
 //! Both observers are allocation-light and do not

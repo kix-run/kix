@@ -838,9 +838,14 @@
       "format": "uint64",
       "minimum": 0,
       "type": "integer"
+    },
+    "schema_version": {
+      "description": "The date, `YYYY-MM-DD`, of the log shape's last change that was not\nbackward compatible. On every line, so each line can be read alone.",
+      "type": "string"
     }
   },
   "required": [
+    "schema_version",
     "elapsed_ms"
   ],
   "title": "Line",

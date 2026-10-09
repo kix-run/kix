@@ -4,7 +4,9 @@
 //! Programs read this log, so its shape is a contract. The JSON Schema of
 //! [`Line`] is committed at `kix-cli/schema/deploy-log.schema.json`, beside
 //! the CLI that prints the log; a test there fails when the type and the file
-//! disagree.
+//! disagree. Set [`SCHEMA_VERSION`] to the day's date when a change is not
+//! backward compatible: a field removed or renamed, or a value's meaning
+//! changed.
 //!
 //! These types mirror the events rather than serialize them directly, so the
 //! events can change without the log changing by accident.
@@ -18,9 +20,17 @@ use super::stream::{
 };
 use crate::manifest::types::ResourceId;
 
+/// Version of the log's shape: the date, `YYYY-MM-DD`, of its last change
+/// that was not backward compatible. Readers should refuse a version they
+/// do not know.
+pub const SCHEMA_VERSION: &str = "2026-10-09";
+
 /// One line of the log.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Line {
+    /// The date, `YYYY-MM-DD`, of the log shape's last change that was not
+    /// backward compatible. On every line, so each line can be read alone.
+    pub schema_version: String,
     /// Milliseconds since the deploy started.
     pub elapsed_ms: u64,
     #[serde(flatten)]
@@ -33,6 +43,7 @@ impl Line {
     /// not every poll on the way.
     pub fn of(event: &DeployEvent, elapsed_ms: u64) -> Option<Line> {
         Some(Line {
+            schema_version: SCHEMA_VERSION.to_string(),
             elapsed_ms,
             event: Event::of(event)?,
         })
@@ -42,6 +53,7 @@ impl Line {
     /// matches the exit status.
     pub fn summary(r: &DeployResult, dry_run: bool, succeeded: bool, elapsed_ms: u64) -> Line {
         Line {
+            schema_version: SCHEMA_VERSION.to_string(),
             elapsed_ms,
             event: Event::Summary {
                 dry_run,
