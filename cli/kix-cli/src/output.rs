@@ -215,7 +215,7 @@ pub trait CommandResponse {
     fn as_json(&self) -> serde_json::Value;
 }
 
-/// Print a command's answer to stdout in the output [`format`].
+/// Print a command's answer to stdout in the output [`format()`].
 ///
 /// `Markdown` is not a generic `CommandResponse` format. Only specific commands
 /// (`kix plan`, `kix diff`) implement it. For other commands we fall back to
