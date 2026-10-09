@@ -47,7 +47,7 @@ use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::DeployObserver;
 use kix::cluster::watchdog::StallPolicy;
 use kix::manifest::types::ResourceId;
-use kix::plan::live::{LiveChanges, LivePlanError, cluster_of};
+use kix::plan::live::{LivePlan, LivePlanError, cluster_of};
 
 use crate::k8s_events::{CompositeObserver, K8sEventObserver};
 use crate::observer::OperatorObserver;
@@ -143,7 +143,7 @@ fn load_manifests(path: &Path) -> Result<Vec<Value>, OperatorError> {
 /// the step that failed.
 fn operator_error(e: LivePlanError) -> OperatorError {
     match e {
-        LivePlanError::Discovery(_) | LivePlanError::Domain(_) | LivePlanError::Sweep(_) => {
+        LivePlanError::Fetch(_) | LivePlanError::Domain(_) => {
             OperatorError::DiscoveryError(e.to_string())
         }
         LivePlanError::Graph(_) | LivePlanError::Marker(_) => {
@@ -368,37 +368,34 @@ async fn run_reconcile(
     }
 
     // 4. Compare desired vs live by identity-hash, over this Kix cluster's
-    //    live objects only.
-    let changes = LiveChanges::sweep(&ctx.client, activation, managed_manifests)
+    //    live objects only, and plan the changes.
+    let plan = LivePlan::sweep(&ctx.client, activation, &managed_manifests)
         .await
         .map_err(operator_error)?;
-    for (owner, count) in changes.foreign() {
+    for (owner, count) in plan.foreign() {
         tracing::debug!(name, owner = %owner, count, "left out objects of another Kix cluster");
     }
-    if changes.unattributed() > 0 {
+    if plan.unattributed() > 0 {
         tracing::info!(
             name,
-            count = changes.unattributed(),
+            count = plan.unattributed(),
             "left out Kix objects that name no Activation record; another Kix cluster deploys here",
         );
     }
-    for s in changes.shared_orphans() {
+    for s in plan.shared_orphans() {
         tracing::info!(name, resource = %s.rid, clusters = ?s.clusters, "prune: {}", s.describe());
     }
 
     tracing::info!(
         name,
-        apply = changes.applies(),
-        orphans = changes.orphans().len(),
-        unchanged = changes.unchanged(),
+        apply = plan.applies(),
+        orphans = plan.orphans().len(),
+        unchanged = plan.unchanged(),
         lifecycle = manage_lifecycle,
         "Live change detection complete"
     );
 
-    // 5. Build the streaming plan.
-    let plan = changes.plan().map_err(operator_error)?;
-
-    // 6. Run the DAG-streaming scheduler.
+    // 5. Run the DAG-streaming scheduler.
     //
     // TODO(operator-cancel): wire this token to a per-Activation supervisor
     // so a newer Activation can cancel the in-flight loop. This caller does

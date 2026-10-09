@@ -3,12 +3,12 @@
 //! The CLI plans against the builds the cluster's records name
 //! ([`super::Planner`]). The operator plans against every live object of
 //! its Kix cluster instead: those already include what failed and kept
-//! deploys left, and the same loop corrects drift. [`LiveChanges::sweep`]
-//! takes the Activation record being reconciled, opens the records and reads
-//! the live objects itself, and [`LivePlan`] is made only from its result.
-//! So the plan the operator runs is always one made from the live objects,
-//! and the run writes the record it was made for. No check holds the plan to
-//! a package diff.
+//! deploys left, and the same loop corrects drift. [`LivePlan::sweep`]
+//! takes the Activation record being reconciled, opens the records, reads
+//! the live objects itself and plans from them, and it is the only way to
+//! make a [`LivePlan`]. So the plan the operator runs is always one made
+//! from the live objects, and the run writes the record it was made for. No
+//! check holds the plan to a package diff.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -51,54 +51,54 @@ pub fn cluster_of(activation: &DynamicObject) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Why [`LiveChanges::sweep`] or [`LiveChanges::plan`] made no plan.
+/// Why [`LivePlan::sweep`] made no plan.
 #[derive(Debug, Error)]
 pub enum LivePlanError {
+    /// Discovery, or the sweep of the live objects, failed.
     #[error(transparent)]
-    Discovery(Box<FetchError>),
+    Fetch(Box<FetchError>),
     /// The records sit under a retired group.
     #[error(transparent)]
     Domain(LegacyDomainError),
-    #[error(transparent)]
-    Sweep(Box<FetchError>),
     #[error(transparent)]
     Graph(GraphError),
     #[error(transparent)]
     Marker(MalformedMarker),
 }
 
-/// What a build changes against the live objects of one Kix cluster. Made
-/// only by [`LiveChanges::sweep`].
-pub struct LiveChanges {
+/// A build planned against the live objects of one Kix cluster, with the
+/// counts the operator logs. Made only by [`LivePlan::sweep`]; run with
+/// [`LivePlan::run`].
+pub struct LivePlan {
     client: Client,
     discovery: Vec<(ApiResource, Scope)>,
     cluster: String,
     record: Record,
-    desired: Vec<Value>,
-    actions: Vec<ChangeAction>,
+    plan: DeployPlan,
     orphans: Vec<ResourceId>,
     shared_orphans: Vec<SharedOrphan>,
     /// The live objects, which order the prune.
     live: Vec<Value>,
     applies: usize,
+    unchanged: usize,
     foreign: BTreeMap<String, usize>,
     unattributed: usize,
 }
 
-impl LiveChanges {
+impl LivePlan {
     /// Read the live objects of the Kix cluster `activation` belongs to
-    /// ([`cluster_of`]) and compare `desired` with them. A record that names
-    /// no cluster sweeps under the empty name, under which no record counts
-    /// as this cluster's own.
+    /// ([`cluster_of`]), compare `desired` with them, and plan the changes.
+    /// A record that names no cluster sweeps under the empty name, under
+    /// which no record counts as this cluster's own.
     pub async fn sweep(
         client: &Client,
         activation: &DynamicObject,
-        desired: Vec<Value>,
-    ) -> Result<LiveChanges, LivePlanError> {
+        desired: &[Value],
+    ) -> Result<LivePlan, LivePlanError> {
         let cluster = cluster_of(activation).unwrap_or_default();
         let discovery = fetch::discover_resources(client)
             .await
-            .map_err(|e| LivePlanError::Discovery(Box::new(e)))?;
+            .map_err(|e| LivePlanError::Fetch(Box::new(e)))?;
         let records = Records::open(client, &discovery).map_err(LivePlanError::Domain)?;
         // Only this Kix cluster's objects: every other Kix cluster's objects
         // are absent from this build and would otherwise be pruned as
@@ -110,9 +110,9 @@ impl LiveChanges {
             fetch::SweepScope::Cluster(&cluster),
         )
         .await
-        .map_err(|e| LivePlanError::Sweep(Box::new(e)))?;
+        .map_err(|e| LivePlanError::Fetch(Box::new(e)))?;
 
-        let (actions, shared_orphans) = live_changes(&desired, &sweep.managed, &sweep.tenancy);
+        let (actions, shared_orphans) = live_changes(desired, &sweep.managed, &sweep.tenancy);
         let applies = actions
             .iter()
             .filter(|a| matches!(a, ChangeAction::Apply(_)))
@@ -124,18 +124,22 @@ impl LiveChanges {
                 _ => None,
             })
             .collect();
+        let unchanged = actions.len() - applies - orphans.len();
+        let graph = ResourceGraph::from_manifests(desired).map_err(LivePlanError::Graph)?;
+        let plan =
+            DeployPlan::from_graph_and_changes(&graph, &actions).map_err(LivePlanError::Marker)?;
 
-        Ok(LiveChanges {
+        Ok(LivePlan {
             client: client.clone(),
             discovery,
             cluster,
             record: Record::of(activation),
-            desired,
-            actions,
+            plan,
             orphans,
             shared_orphans,
             live: sweep.managed.into_iter().map(|obj| obj.data).collect(),
             applies,
+            unchanged,
             foreign: sweep.foreign,
             unattributed: sweep.unattributed.len(),
         })
@@ -148,7 +152,7 @@ impl LiveChanges {
 
     /// Objects the build leaves as they are.
     pub fn unchanged(&self) -> usize {
-        self.actions.len() - self.applies - self.orphans.len()
+        self.unchanged
     }
 
     /// Orphans the prune may delete.
@@ -174,36 +178,6 @@ impl LiveChanges {
         self.unattributed
     }
 
-    /// The engine plan for the changes.
-    pub fn plan(self) -> Result<LivePlan, LivePlanError> {
-        let graph = ResourceGraph::from_manifests(&self.desired).map_err(LivePlanError::Graph)?;
-        let plan = DeployPlan::from_graph_and_changes(&graph, &self.actions)
-            .map_err(LivePlanError::Marker)?;
-        Ok(LivePlan {
-            client: self.client,
-            discovery: self.discovery,
-            cluster: self.cluster,
-            record: self.record,
-            plan,
-            orphans: self.orphans,
-            live: self.live,
-        })
-    }
-}
-
-/// A build planned against the live objects of one Kix cluster. Made only
-/// by [`LiveChanges::plan`]; run with [`LivePlan::run`].
-pub struct LivePlan {
-    client: Client,
-    discovery: Vec<(ApiResource, Scope)>,
-    cluster: String,
-    record: Record,
-    plan: DeployPlan,
-    orphans: Vec<ResourceId>,
-    live: Vec<Value>,
-}
-
-impl LivePlan {
     /// Run the engine over the plan, stamping the record's identity hash
     /// into `kix.run/activations` on every object it writes.
     ///
