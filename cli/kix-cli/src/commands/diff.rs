@@ -499,7 +499,7 @@ fn print_text_output(result: &DiffResult) {
 
     // The deploy plan renderer, always with resource-level detail: a diff
     // exists to be read.
-    plan::print_package_plan(pkg, true);
+    print!("{}", plan::render_package_plan(pkg, true));
 
     if let Some(a) = &pkg.activation {
         println!();

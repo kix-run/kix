@@ -751,7 +751,7 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
         })
         .collect();
     if !reruns.is_empty() {
-        println!(
+        crate::say!(
             "  {} {} under the rerun rule (deleted first when live): {}",
             output::yellow("↻"),
             reruns.len(),
@@ -774,7 +774,7 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
         format!("kept; {}", plan::KEPT_ORPHANS_HINT)
     };
     // Shared orphans are listed with the prune section of `render::render_text`.
-    print!("{}", plan::render_plan_orphans(p.checked.orphans(), &fate));
+    output::progress_text(&plan::render_plan_orphans(p.checked.orphans(), &fate));
 
     // Where the extra work in this plan came from. Without this the reader
     // sees a deploy of an unchanged config proposing changes, and has no way
@@ -787,7 +787,7 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
             .iter()
             .map(String::as_str)
             .collect();
-        println!(
+        crate::say!(
             "  {} reconciling what {} left behind ({})",
             output::yellow("!"),
             if names.len() == 1 {
@@ -799,7 +799,7 @@ pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
         );
     }
 
-    print!("{}", render::render_text(doc));
+    output::progress_text(&render::render_text(doc));
 }
 
 fn markdown(p: &Planned, doc: &Plan) -> String {

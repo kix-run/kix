@@ -238,13 +238,13 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             );
             std::process::exit(1);
         }
-        print!("\nProceed with deploy? [y/N] ");
+        output::progress_text("\nProceed with deploy? [y/N] ");
         std::io::stdout().flush().into_diagnostic()?;
         let mut input = String::new();
         std::io::stdin().read_line(&mut input).into_diagnostic()?;
         let input = input.trim().to_lowercase();
         if input != "y" && input != "yes" {
-            println!("Deploy cancelled.");
+            output::progress_text("Deploy cancelled.\n");
             return Ok(());
         }
     }
@@ -552,17 +552,17 @@ fn report_topology_labels(ctx: &CommandContext, client: &kube::Client, manifests
                 } else {
                     output::dim("note:")
                 };
-                println!("{tag} {}", finding.describe());
+                crate::say!("{tag} {}", finding.describe());
             }
         }
         Ok(NodesOutcome::Forbidden) => {
-            println!(
+            crate::say!(
                 "{}",
                 output::dim("note: topology labels not checked; this account may not list nodes")
             );
         }
         Err(e) => {
-            println!(
+            crate::say!(
                 "{} could not list nodes to check topology labels: {}",
                 output::yellow("warn:"),
                 kix::cluster::errors::describe(&e)
@@ -1218,23 +1218,34 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 /// Render detected stateful migration pairs. The user must handle data movement before
 /// re-running deploy with --accept-migrations.
 fn print_migration_pairs(pairs: &[MigrationPair]) {
-    println!();
-    println!(
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
         "{}",
         output::bold(&format!("Stateful migrations detected ({}):", pairs.len()))
     );
     for p in pairs {
-        println!("  {} {}", output::yellow("~"), output::yellow(&p.summary()));
-        println!(
+        let _ = writeln!(
+            out,
+            "  {} {}",
+            output::yellow("~"),
+            output::yellow(&p.summary())
+        );
+        let _ = writeln!(
+            out,
             "      source: {}/{}/{}",
             p.source.kind, p.source.namespace, p.source.name
         );
-        println!(
+        let _ = writeln!(
+            out,
             "      target: {}/{}/{}",
             p.target.kind, p.target.namespace, p.target.name
         );
     }
-    println!();
+    let _ = writeln!(out);
+    output::progress_text(&out);
 }
 
 /// Print `lines` as progress after a blank line, if there are any.

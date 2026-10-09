@@ -83,17 +83,18 @@ fn output_mode(cli: &Cli) -> output::Mode {
         _ => OutputFormat::Text,
     };
     let format = cli.global.output.unwrap_or(default);
-    // The commands that print a plan document: the progress on the way to it
-    // goes through `say!`.
-    let prints_plan = match &cli.command {
-        Command::Plan(_) => true,
-        Command::Deploy(args) => args.dry_run,
+    // Whether stdout carries a document: a plan, from `kix plan` and
+    // `kix deploy --dry-run` under `-o`, or the deploy log.
+    let document = match &cli.command {
+        Command::Plan(_) => format != OutputFormat::Text,
+        Command::Deploy(args) if args.dry_run => format != OutputFormat::Text,
+        Command::Deploy(args) => !args.operator && args.log_format == cli::LogFormat::Json,
         _ => false,
     };
     output::Mode {
         quiet: cli.global.quiet,
         format,
-        progress_on_stderr: prints_plan && format != OutputFormat::Text,
+        progress_on_stderr: document,
     }
 }
 
@@ -215,17 +216,22 @@ mod output_mode_tests {
         output_mode(&Cli::from_arg_matches(&matches).unwrap())
     }
 
-    /// Only a plan document on stdout sends the progress before it to
-    /// stderr: `kix plan` and `kix deploy --dry-run` with `-o` other than
-    /// text.
+    /// Only a document on stdout sends the progress before it to stderr: a
+    /// plan from `kix plan` and `kix deploy --dry-run` with `-o` other than
+    /// text, and the deploy log.
     #[test]
-    fn progress_goes_to_stderr_only_beside_a_plan_document() {
+    fn progress_goes_to_stderr_only_beside_a_document() {
         assert!(mode(&["kix", "plan", "c", "-o", "json"]).progress_on_stderr);
         assert!(mode(&["kix", "plan", "c", "-o", "markdown"]).progress_on_stderr);
         assert!(!mode(&["kix", "plan", "c"]).progress_on_stderr);
         assert!(mode(&["kix", "deploy", "c", "--dry-run", "-o", "yaml"]).progress_on_stderr);
         assert!(!mode(&["kix", "deploy", "c", "-o", "json"]).progress_on_stderr);
         assert!(!mode(&["kix", "status", "c", "-o", "json"]).progress_on_stderr);
+        assert!(mode(&["kix", "deploy", "c", "--log-format", "json"]).progress_on_stderr);
+        assert!(!mode(&["kix", "deploy", "c", "--log-format", "line"]).progress_on_stderr);
+        assert!(
+            !mode(&["kix", "deploy", "c", "--operator", "--log-format", "json"]).progress_on_stderr
+        );
     }
 
     #[test]

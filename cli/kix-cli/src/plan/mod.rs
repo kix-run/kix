@@ -226,13 +226,14 @@ pub fn render_package_diff_markdown(diff: &PackageDiff) -> String {
     out
 }
 
-/// Print a package-grouped plan. Only shows changes.
+/// Print a package-grouped plan, on the way to an answer. Only shows
+/// changes.
 pub fn print_package_plan(diff: &PackageDiff, verbose: bool) {
-    print!("{}", render_package_plan(diff, verbose));
+    output::progress_text(&render_package_plan(diff, verbose));
 }
 
 /// The text `print_package_plan` prints.
-fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
+pub fn render_package_plan(diff: &PackageDiff, verbose: bool) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     let color = output::color_enabled();
@@ -556,17 +557,17 @@ pub fn print_plan_summary(diff: &PackageDiff) {
     }
 
     if parts.is_empty() && diff.activation.is_none() {
-        println!();
-        println!("  {}", output::green("Everything up to date."));
+        crate::say!();
+        crate::say!("  {}", output::green("Everything up to date."));
     } else if parts.is_empty() {
-        println!();
-        println!(
+        crate::say!();
+        crate::say!(
             "  Plan: {}",
             output::dim("only the activation record changes")
         );
     } else {
-        println!();
-        println!("  Plan: {}", parts.join(", "));
+        crate::say!();
+        crate::say!("  Plan: {}", parts.join(", "));
         if totals.any() {
             let kept = if totals.kept > 0 {
                 format!(", {} kept", totals.kept)
@@ -577,7 +578,7 @@ pub fn print_plan_summary(diff: &PackageDiff) {
                 "  Resources: {} real content{kept}, {} dep-affected",
                 totals.real_content, totals.dep_affected,
             );
-            println!("{}", output::dim(&res_line));
+            crate::say!("{}", output::dim(&res_line));
         }
     }
 }

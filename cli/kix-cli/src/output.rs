@@ -26,8 +26,8 @@ pub struct Mode {
     /// `-o`, or the command's default when it is not given.
     pub format: OutputFormat,
     /// Stdout carries a machine-readable document that the progress lines
-    /// [`say!`](crate::say) prints must not interleave with, so they go to
-    /// stderr.
+    /// [`say!`](crate::say) and [`progress_text`] print must not interleave
+    /// with, so they go to stderr.
     pub progress_on_stderr: bool,
 }
 
@@ -76,6 +76,18 @@ macro_rules! say {
             }
         }
     };
+}
+
+/// `print!` for text printed on the way to the answer, such as the plan a
+/// deploy shows before it asks: stdout, or stderr when stdout carries a
+/// machine-readable document. Unlike [`say!`](crate::say), `-q` does not
+/// silence it.
+pub fn progress_text(text: &str) {
+    if progress_on_stderr() {
+        eprint!("{text}");
+    } else {
+        print!("{text}");
+    }
 }
 
 /// A spinner on stderr showing `msg`. `None` under `-q`, or when stderr is
