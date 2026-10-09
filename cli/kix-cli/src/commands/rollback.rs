@@ -768,6 +768,7 @@ async fn plan_rollback(
     let target_graph = Build::local(&target_result_dir, &|_| {})
         .map_err(|e| miette!("failed to load target activation: {e}"))?
         .into_graph();
+    same_cluster(&selected.name, &target_graph.cluster_name, cluster)?;
 
     let report = |event: PlanEvent<'_>| plan::progress::print(event, quiet);
     let baseline = Baseline::of_record(records, cluster, current, &report).await;
@@ -783,6 +784,19 @@ async fn plan_rollback(
         baseline,
         checked,
     })
+}
+
+/// Refuses a rollback target whose build names another Kix cluster than
+/// `cluster`, the one the rollback found its records by. The run finalizes
+/// under the plan's cluster, so a build of another one would supersede that
+/// cluster's records and prune as if it were it.
+fn same_cluster(record: &str, build_cluster: &str, cluster: &str) -> Result<()> {
+    if build_cluster == cluster {
+        return Ok(());
+    }
+    Err(miette!(
+        "activation '{record}' is a build of Kix cluster '{build_cluster}', not '{cluster}'. Nothing was applied."
+    ))
 }
 
 /// Shared formatter for a list of superseded activations used by both the
@@ -849,4 +863,21 @@ fn print_summary(r: &DeployResult, succeeded: bool) {
             output::dim(&failed_str)
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A target built for the cluster the records were found by is
+    /// accepted; one built for another Kix cluster is refused, naming both.
+    #[test]
+    fn a_target_built_for_another_cluster_is_refused() {
+        assert!(same_cluster("act-1", "prod", "prod").is_ok());
+        let err = same_cluster("act-1", "staging", "prod")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("'staging'") && err.contains("'prod'"), "{err}");
+        assert!(err.contains("Nothing was applied"), "{err}");
+    }
 }
