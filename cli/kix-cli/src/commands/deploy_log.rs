@@ -10,13 +10,12 @@
 //!   flushed immediately, then one `summary` object with the counts and
 //!   whether the run succeeded. Shape is stable across events (every object
 //!   carries `type` and timestamp); consumers can `jq -c` or pipe to log
-//!   aggregators. Readiness progress events are suppressed unless `-v` is
-//!   on to match the `line` format's suppression rule.
+//!   aggregators. Readiness progress events are left out, as the `line`
+//!   format leaves them out.
 //!
 //! Both observers are allocation-light and do not
 //! track state beyond a `started_at` timestamp for elapsed fields.
 
-use std::io::{self, Write};
 use std::time::Instant;
 
 use serde_json::json;
@@ -158,17 +157,16 @@ impl DeployObserver for LineObserver {
                 eprintln!("warn> {what} failed: {message}");
             }
         }
-        // Line format is unbuffered so CI logs land promptly.
-        let _ = io::stdout().flush();
     }
 }
 
 pub struct JsonObserver {
-    pub started_at: Instant,
+    started_at: Instant,
 }
 
 impl JsonObserver {
-    pub fn new(_verbose: bool) -> Self {
+    /// An observer whose elapsed times count from now.
+    pub fn new() -> Self {
         Self {
             started_at: Instant::now(),
         }
@@ -179,7 +177,6 @@ impl JsonObserver {
     pub fn summary(&self, counts: &DeployResult, dry_run: bool, succeeded: bool) {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
         println!("{}", summary_json(counts, dry_run, succeeded, elapsed_ms));
-        let _ = io::stdout().flush();
     }
 }
 
@@ -319,7 +316,6 @@ impl DeployObserver for JsonObserver {
             }),
         };
         println!("{obj}");
-        let _ = io::stdout().flush();
     }
 }
 

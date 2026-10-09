@@ -202,9 +202,7 @@ fn print_history_text(cluster: &str, current: Option<&Record>, superseded: &[Rec
 
 async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Result<()> {
     // 1. Connect to cluster
-    if !ctx.global.quiet {
-        println!("Connecting to cluster...");
-    }
+    crate::say!("Connecting to cluster...");
 
     let client = fetch::make_client(ctx.global.context.as_deref())
         .await
@@ -231,18 +229,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
             )
         })?;
 
-    if !ctx.global.quiet {
-        let hash_preview = current
-            .identity_hash
-            .as_deref()
-            .map(|h| format!(" ({}...)", &h[..8.min(h.len())]))
-            .unwrap_or_default();
-        println!(
-            "Current activation: {}{}",
-            output::bold(&current.name),
-            hash_preview,
-        );
-    }
+    print_current(&current);
 
     // 3. Find available Superseded activations
     // Only records that really were the cluster's state. A deploy that
@@ -308,25 +295,14 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         )
     })?;
 
-    if !ctx.global.quiet {
-        println!(
-            "Rollback target:   {} ({}...)",
-            output::bold(&target_name),
-            &target_hash[..8.min(target_hash.len())],
-        );
-    }
+    crate::say!(
+        "Rollback target:   {} ({}...)",
+        output::bold(&target_name),
+        &target_hash[..8.min(target_hash.len())],
+    );
 
-    let planned = plan_rollback(
-        &client,
-        &records,
-        cluster,
-        &current,
-        selected,
-        args.prune,
-        ctx.global.quiet,
-    )
-    .await?;
-    if !ctx.global.quiet {
+    let planned = plan_rollback(&client, &records, cluster, &current, selected, args.prune).await?;
+    if !output::quiet() {
         planned.print(cluster, &target_name, args.prune, ctx.global.verbose > 0);
     }
     let RollbackPlan {
@@ -342,10 +318,8 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         .count();
 
     if args.dry_run {
-        if !ctx.global.quiet {
-            println!();
-            println!("{}", output::dim("Dry run. No changes applied."));
-        }
+        crate::say!();
+        crate::say!("{}", output::dim("Dry run. No changes applied."));
         return Ok(());
     }
 
@@ -358,20 +332,16 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
             Vec::new()
         };
         if failed_reruns.is_empty() {
-            if !ctx.global.quiet {
-                println!("Nothing to change. Cluster already matches target activation.");
-            }
+            crate::say!("Nothing to change. Cluster already matches target activation.");
             return Ok(());
         }
-        if !ctx.global.quiet {
-            let names: Vec<String> = failed_reruns.iter().map(|r| r.to_string()).collect();
-            println!(
-                "{} nothing changed, but {} failed on the last run and will run again: {}",
-                output::yellow("↻"),
-                failed_reruns.len(),
-                names.join(", "),
-            );
-        }
+        let names: Vec<String> = failed_reruns.iter().map(|r| r.to_string()).collect();
+        crate::say!(
+            "{} nothing changed, but {} failed on the last run and will run again: {}",
+            output::yellow("↻"),
+            failed_reruns.len(),
+            names.join(", "),
+        );
     }
 
     // 8. Confirmation
@@ -414,7 +384,6 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         })
     } else {
         Arc::new(super::deploy::StreamCliObserver {
-            quiet: ctx.global.quiet,
             verbose: ctx.global.verbose > 0,
         })
     };
@@ -479,8 +448,7 @@ async fn run_operator_async(
 ) -> Result<()> {
     // 1. Connect and find current + superseded activations
     let (client, records) =
-        super::operator::connect_and_verify(ctx.global.context.as_deref(), ctx.global.quiet)
-            .await?;
+        super::operator::connect_and_verify(ctx.global.context.as_deref()).await?;
 
     // 2. Find current Active activation
     let current = records
@@ -494,18 +462,7 @@ async fn run_operator_async(
             )
         })?;
 
-    if !ctx.global.quiet {
-        let hash_preview = current
-            .identity_hash
-            .as_deref()
-            .map(|h| format!(" ({}...)", &h[..8.min(h.len())]))
-            .unwrap_or_default();
-        println!(
-            "Current activation: {}{}",
-            output::bold(&current.name),
-            hash_preview,
-        );
-    }
+    print_current(&current);
 
     // 3. Find superseded activations
     // Only records that really were the cluster's state. A deploy that
@@ -566,35 +523,22 @@ async fn run_operator_async(
     let target_name = selected.name.clone();
     let target_hash = selected.identity_hash.clone();
 
-    if !ctx.global.quiet {
-        println!(
-            "Rollback target:   {} (via operator)",
-            output::bold(&target_name),
-        );
-    }
+    crate::say!(
+        "Rollback target:   {} (via operator)",
+        output::bold(&target_name),
+    );
 
     // The plan a direct rollback would show, with its check, though the
     // operator plans again against the live objects and always prunes.
-    let planned = plan_rollback(
-        &client,
-        &records,
-        cluster,
-        &current,
-        selected,
-        true,
-        ctx.global.quiet,
-    )
-    .await?;
-    if !ctx.global.quiet {
+    let planned = plan_rollback(&client, &records, cluster, &current, selected, true).await?;
+    if !output::quiet() {
         planned.print(cluster, &target_name, true, ctx.global.verbose > 0);
     }
     let target_source_path = planned.target_result_dir.display().to_string();
 
     if args.dry_run {
-        if !ctx.global.quiet {
-            println!();
-            println!("{}", output::dim("Dry run. No changes applied."));
-        }
+        crate::say!();
+        crate::say!("{}", output::dim("Dry run. No changes applied."));
         return Ok(());
     }
 
@@ -622,12 +566,10 @@ async fn run_operator_async(
 
     // 6. Patch the current Activation CR to point to the target's source path
     //    The operator will detect the source change and reconcile.
-    if !ctx.global.quiet {
-        println!(
-            "Updating Activation CR '{}' to point to rollback target...",
-            output::bold(&current.name),
-        );
-    }
+    crate::say!(
+        "Updating Activation CR '{}' to point to rollback target...",
+        output::bold(&current.name),
+    );
 
     super::operator::apply_activation(
         &records,
@@ -641,16 +583,12 @@ async fn run_operator_async(
     )
     .await?;
 
-    if !ctx.global.quiet {
-        println!(
-            "  {} Activation CR updated. Waiting for operator...",
-            output::green("✓"),
-        );
-    }
+    crate::say!(
+        "  {} Activation CR updated. Waiting for operator...",
+        output::green("✓"),
+    );
 
-    let reconciled =
-        super::operator::watch_activation_progress(&records, &current.name, ctx.global.quiet)
-            .await?;
+    let reconciled = super::operator::watch_activation_progress(&records, &current.name).await?;
 
     println!();
     match reconciled {
@@ -671,6 +609,20 @@ async fn run_operator_async(
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// The current activation, with the start of its identity hash.
+fn print_current(current: &Record) {
+    let hash_preview = current
+        .identity_hash
+        .as_deref()
+        .map(|h| format!(" ({}...)", &h[..8.min(h.len())]))
+        .unwrap_or_default();
+    crate::say!(
+        "Current activation: {}{}",
+        output::bold(&current.name),
+        hash_preview,
+    );
 }
 
 /// A rollback to one record, planned the way `kix deploy` plans: the target
@@ -728,7 +680,6 @@ async fn plan_rollback(
     current: &Record,
     selected: &Record,
     prune: bool,
-    quiet: bool,
 ) -> Result<RollbackPlan> {
     // The target's build: the path its record was built via, or a build in
     // the local store with its identity hash, refused unless it is the
@@ -753,7 +704,7 @@ async fn plan_rollback(
     let target_result_dir = target_graph.result_dir.clone();
     same_cluster(&selected.name, &target_graph.cluster_name, cluster)?;
 
-    let report = |event: PlanEvent<'_>| plan::progress::print(event, quiet);
+    let report = |event: PlanEvent<'_>| plan::progress::print(event);
     let baseline = Baseline::of_record(records, cluster, current, &report).await;
     // The records and the orphans another Kix cluster deploys are looked up
     // under `cluster`, the name the rollback resolved its records by.

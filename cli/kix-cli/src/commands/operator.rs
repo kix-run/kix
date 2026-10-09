@@ -21,19 +21,15 @@ use crate::output;
 
 /// Connect to the cluster and open its Activation records, which runs the
 /// domain gate, then check that this client can read them.
-pub async fn connect_and_verify(context: Option<&str>, quiet: bool) -> Result<(Client, Records)> {
-    if !quiet {
-        println!("Connecting to cluster...");
-    }
+pub async fn connect_and_verify(context: Option<&str>) -> Result<(Client, Records)> {
+    crate::say!("Connecting to cluster...");
 
     let client = fetch::make_client(context)
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let records = open_records(&client).await?;
 
-    if !quiet {
-        println!("  {} Activation CRD found", output::green("✓"));
-    }
+    crate::say!("  {} Activation CRD found", output::green("✓"));
 
     Ok((client, records))
 }
@@ -141,7 +137,6 @@ impl Progress {
 pub async fn watch_activation_progress(
     records: &Records,
     activation_name: &str,
-    quiet: bool,
 ) -> Result<Reconciled> {
     let poll_interval = Duration::from_secs(2);
     let timeout = Duration::from_secs(600);
@@ -164,27 +159,23 @@ pub async fn watch_activation_progress(
             .ok_or_else(|| miette!("Activation '{activation_name}' no longer exists"))?;
         let phase = act.phase.as_str();
         for line in progress.lines(&act) {
-            if !quiet {
-                println!("{line}");
-            }
+            crate::say!("{line}");
         }
 
         // Completion: phase is Active or Degraded (deploy finished, possibly
         // with failures; Activation status contains the failed-resource list.)
         if phase == PHASE_ACTIVE || phase == PHASE_DEGRADED {
-            if !quiet {
-                let phase_colored = if phase == PHASE_ACTIVE {
-                    output::green(phase)
-                } else {
-                    output::yellow(phase)
-                };
-                println!(
-                    "  {} Activation '{}' is {}",
-                    output::green("✓"),
-                    activation_name,
-                    phase_colored,
-                );
-            }
+            let phase_colored = if phase == PHASE_ACTIVE {
+                output::green(phase)
+            } else {
+                output::yellow(phase)
+            };
+            crate::say!(
+                "  {} Activation '{}' is {}",
+                output::green("✓"),
+                activation_name,
+                phase_colored,
+            );
             return Ok(if phase == PHASE_ACTIVE {
                 Reconciled::Active
             } else {
@@ -213,11 +204,7 @@ pub async fn watch_activation_progress(
 }
 
 /// Wait for an Activation CR to be fully deleted (finalizer cleanup complete).
-pub async fn wait_for_deletion(
-    records: &Records,
-    activation_name: &str,
-    quiet: bool,
-) -> Result<()> {
+pub async fn wait_for_deletion(records: &Records, activation_name: &str) -> Result<()> {
     let poll_interval = Duration::from_secs(2);
     let timeout = Duration::from_secs(300);
     let start = std::time::Instant::now();
@@ -232,19 +219,17 @@ pub async fn wait_for_deletion(
 
         match records.get(activation_name).await {
             Ok(Some(act)) => {
-                if act.deleting && !quiet {
+                if act.deleting && !output::quiet() {
                     eprint!("\r  {} Finalizer cleanup in progress...", output::dim("•"),);
                 }
             }
             Ok(None) => {
-                if !quiet {
-                    eprintln!();
-                    println!(
-                        "  {} Activation '{}' deleted",
-                        output::green("✓"),
-                        activation_name,
-                    );
-                }
+                crate::esay!();
+                crate::say!(
+                    "  {} Activation '{}' deleted",
+                    output::green("✓"),
+                    activation_name,
+                );
                 return Ok(());
             }
             Err(e) => {
@@ -277,7 +262,7 @@ mod tests {
         let api = FakeApi::new([record("rec", phase)]);
         let client = api.client();
         let records = open_records(&client).await.unwrap();
-        watch_activation_progress(&records, "rec", true).await
+        watch_activation_progress(&records, "rec").await
     }
 
     /// Operator mode opens the records through discovery and the domain
@@ -349,7 +334,7 @@ mod tests {
     async fn a_record_that_vanishes_is_named() {
         let api = FakeApi::new([]);
         let records = open_records(&api.client()).await.unwrap();
-        let err = watch_activation_progress(&records, "rec", true)
+        let err = watch_activation_progress(&records, "rec")
             .await
             .unwrap_err()
             .to_string();
@@ -365,7 +350,7 @@ mod tests {
             json!({ "reason": "cancelled", "at": "2026-10-09T00:00:00Z" });
         let api = FakeApi::new([failed]);
         let records = open_records(&api.client()).await.unwrap();
-        let err = watch_activation_progress(&records, "rec", true)
+        let err = watch_activation_progress(&records, "rec")
             .await
             .unwrap_err()
             .to_string();

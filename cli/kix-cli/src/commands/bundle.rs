@@ -22,16 +22,14 @@ use kix::eval::store_graph::{StoreGraph, store_hash};
 use kix::text::printable;
 
 use crate::cli::BundleArgs;
+use crate::output;
 
 use super::CommandContext;
 
 /// The build in the bundle at `path`, with the `deployed` bundles, which
 /// must be a build of `cluster`. Its result directory is
 /// `bundle:sha256:<sha256>`.
-pub(crate) fn read(path: &Path, deployed: &[PathBuf], cluster: &str, quiet: bool) -> Result<Build> {
-    if !quiet {
-        crate::say!("Reading bundle {}...", path.display());
-    }
+pub(crate) fn read(path: &Path, deployed: &[PathBuf], cluster: &str) -> Result<Build> {
     let bytes = read_file(path)?;
     let deployed = deployed_by_hash(deployed)?;
     Build::carried(bytes, cluster, |bytes| {
@@ -156,14 +154,13 @@ fn graph_of(path: &Path, identity_hash: &str) -> Result<StoreGraph, String> {
 
 /// `kix bundle <cluster> [FILE]`.
 pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
-    let quiet = ctx.global.quiet;
     let status = |msg: &str| {
-        if !quiet {
+        if !output::quiet() {
             eprint!("\r\x1b[2K  {msg}");
         }
     };
     let build = super::build_flake(&ctx.global, &args.cluster, &status, super::BUILD_FAILED)?;
-    if !quiet {
+    if !output::quiet() {
         eprint!("\r\x1b[2K");
     }
     let receipt = ctx.receipts.of_build(&build, &ctx.global.flake);
@@ -215,14 +212,12 @@ pub fn run(args: &BundleArgs, ctx: &mut CommandContext) -> Result<()> {
         ));
     }
     temp.persist(&file).into_diagnostic()?;
-    if !quiet {
-        eprintln!(
-            "Wrote {} ({} files, sha256:{})",
-            file.display(),
-            written.header().files.len(),
-            written.sha256()
-        );
-    }
+    crate::esay!(
+        "Wrote {} ({} files, sha256:{})",
+        file.display(),
+        written.header().files.len(),
+        written.sha256()
+    );
     Ok(())
 }
 
@@ -259,13 +254,7 @@ mod tests {
             include_bytes!("../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle")
                 .to_vec();
         std::fs::write(&path, &bytes).unwrap();
-        let build = read(
-            &path,
-            std::slice::from_ref(&path),
-            "kix-enterprise-test",
-            true,
-        )
-        .unwrap();
+        let build = read(&path, std::slice::from_ref(&path), "kix-enterprise-test").unwrap();
         let hash = store_hash(&build.graph().activation_path);
         let last = bytes.len() - 1;
         bytes[last] ^= 1;

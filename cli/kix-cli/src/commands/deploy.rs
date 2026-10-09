@@ -82,14 +82,12 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             );
             std::process::exit(1);
         }
-        if !ctx.global.quiet {
-            println!(
-                "{}",
-                output::yellow(
-                    "--accept-migrations set: continuing deployment. Kix will not copy data. Workloads using the new storage will see only the data already present there."
-                )
-            );
-        }
+        crate::say!(
+            "{}",
+            output::yellow(
+                "--accept-migrations set: continuing deployment. Kix will not copy data. Workloads using the new storage will see only the data already present there."
+            )
+        );
     }
 
     // The plan the deploy shows is the one `kix plan` makes: when connected
@@ -112,7 +110,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     };
     let doc = document(&mut p, report.as_ref(), Detail::Plain);
 
-    if !ctx.global.quiet {
+    if !output::quiet() {
         print_text(&p, &doc, ctx.global.verbose > 0);
     }
 
@@ -185,29 +183,27 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             // are normally consumed, so do it here or report the same failed
             // deploy on every deploy from now on.
             if let Some(client) = &p.client {
-                supersede_consumed(ctx, client, &p.baseline.failed().consumed, ctx.global.quiet);
+                supersede_consumed(ctx, client, &p.baseline.failed().consumed);
             }
-            if !ctx.global.quiet {
-                match (p.checked.activation_identity_hash(), active_hash.as_deref()) {
-                    (Some(new), Some(old)) if new == old => println!(
-                        "{} activation identical to active ({}...). Nothing to apply.",
-                        output::dim("="),
-                        &new[..8.min(new.len())],
-                    ),
-                    _ => println!("Nothing to apply."),
-                }
+            match (p.checked.activation_identity_hash(), active_hash.as_deref()) {
+                (Some(new), Some(old)) if new == old => crate::say!(
+                    "{} activation identical to active ({}...). Nothing to apply.",
+                    output::dim("="),
+                    &new[..8.min(new.len())],
+                ),
+                _ => crate::say!("Nothing to apply."),
             }
             return Ok(());
         }
-        if !ctx.global.quiet && engine_decides {
-            println!(
+        if engine_decides {
+            crate::say!(
                 "{} nothing changed; the engine reads the live probe Jobs to see whether one must run again",
                 output::yellow("↻"),
             );
         }
-        if !ctx.global.quiet && !failed_reruns.is_empty() {
+        if !failed_reruns.is_empty() {
             let names: Vec<String> = failed_reruns.iter().map(|r| r.to_string()).collect();
-            println!(
+            crate::say!(
                 "{} nothing changed, but {} failed on the last run and will run again: {}",
                 output::yellow("↻"),
                 failed_reruns.len(),
@@ -220,15 +216,13 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // is visible in the prompt.
     let receipt = ctx.receipts.of_build(&p.build, &ctx.global.flake);
 
-    if !ctx.global.quiet {
-        print_warnings(&ctx.receipts.warnings(&receipt));
-    }
+    print_warnings(&ctx.receipts.warnings(&receipt));
 
     // The nodes: do they carry the labels the plan's placement rules name?
     // Only when a connection already exists: --current-activation is the
     // no-cluster-before-confirm mode.
     if let Some(client) = &p.client
-        && !ctx.global.quiet
+        && !output::quiet()
     {
         report_topology_labels(ctx, client, p.new_manifests());
     }
@@ -507,12 +501,7 @@ fn refuse_namespaceless(
 /// goes through `finalize_deploy`, which does this as part of the lifecycle.
 /// Best-effort: a record that will not supersede is reported again next time,
 /// which is annoying but not wrong.
-fn supersede_consumed(
-    ctx: &CommandContext,
-    client: &kube::Client,
-    consumed: &[String],
-    quiet: bool,
-) {
+fn supersede_consumed(ctx: &CommandContext, client: &kube::Client, consumed: &[String]) {
     if consumed.is_empty() {
         return;
     }
@@ -535,8 +524,8 @@ fn supersede_consumed(
         }
         done
     });
-    if done > 0 && !quiet {
-        println!(
+    if done > 0 {
+        crate::say!(
             "  {} {done} failed deploy record(s) had nothing left to reconcile; marked superseded",
             output::dim("="),
         );
@@ -587,7 +576,6 @@ fn report_topology_labels(ctx: &CommandContext, client: &kube::Client, manifests
 /// heartbeats land on stderr with `-v`.
 ///
 pub(crate) struct StreamCliObserver {
-    pub(crate) quiet: bool,
     pub(crate) verbose: bool,
 }
 
@@ -595,9 +583,7 @@ impl DeployObserver for StreamCliObserver {
     fn on_event(&self, event: &DeployEvent) {
         match event {
             DeployEvent::PlanComputed { nodes, .. } => {
-                if !self.quiet {
-                    println!("{} {} nodes", output::dim("plan:"), nodes.len(),);
-                }
+                crate::say!("{} {} nodes", output::dim("plan:"), nodes.len(),);
             }
             DeployEvent::NodeStateChanged {
                 node,
@@ -623,16 +609,14 @@ impl DeployObserver for StreamCliObserver {
                 activation,
                 previous,
             } => {
-                if !self.quiet {
-                    if let Some(prev) = previous {
-                        println!("  {} activation '{}' → Superseded", output::dim("•"), prev);
-                    }
-                    println!(
-                        "  {} activation '{}' → Active",
-                        output::green("•"),
-                        activation,
-                    );
+                if let Some(prev) = previous {
+                    crate::say!("  {} activation '{}' → Superseded", output::dim("•"), prev);
                 }
+                crate::say!(
+                    "  {} activation '{}' → Active",
+                    output::green("•"),
+                    activation,
+                );
             }
             DeployEvent::Stopped { reason } => {
                 eprintln!("\n{} {}", output::red("✗"), output::red(reason));
@@ -673,13 +657,13 @@ impl StreamCliObserver {
             Verdict::Pending => {}
             Verdict::Running => match detail {
                 Some(NodeDetail::Applied(action))
-                    if (!self.quiet || !matches!(action, ApplyAction::Unchanged)) =>
+                    if (!output::quiet() || !matches!(action, ApplyAction::Unchanged)) =>
                 {
                     let (symbol, lbl) = apply_symbol(action);
                     println!("  {} {}{} {}", symbol, tag, label, output::dim(lbl));
                 }
-                Some(NodeDetail::SecretHydrated { keys }) if !self.quiet => {
-                    println!(
+                Some(NodeDetail::SecretHydrated { keys }) => {
+                    crate::say!(
                         "  {} {} hydrated ({} keys from SOPS)",
                         output::green("🔓"),
                         label,
@@ -867,9 +851,7 @@ async fn run_deploy_async(
                     .await
                     .map_err(|e| miette!("{e}"))?;
             checked.keep_shared(&shared);
-            if !global.quiet {
-                plan::print_shared(&shared);
-            }
+            plan::print_shared(&shared);
             client
         }
     };
@@ -945,13 +927,12 @@ async fn run_deploy_async(
     // The JSON log ends with a summary object in place of the summary line,
     // so its stdout stays NDJSON.
     let json_log = (tui_driver.is_none() && args.log_format == crate::cli::LogFormat::Json)
-        .then(|| Arc::new(super::deploy_log::JsonObserver::new(global.verbose > 0)));
+        .then(|| Arc::new(super::deploy_log::JsonObserver::new()));
     let observer: Arc<dyn DeployObserver> = match (&tui_driver, &json_log) {
         (Some(d), _) => d.observer(),
         (None, Some(json)) => json.clone(),
         (None, None) if args.log_format == crate::cli::LogFormat::Pretty && interactive => {
             Arc::new(StreamCliObserver {
-                quiet: global.quiet,
                 verbose: global.verbose > 0,
             })
         }
@@ -1124,7 +1105,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         .activation_name()
         .map(str::to_string)
         .ok_or_else(|| miette!("no Activation resource found in cluster manifests"))?;
-    if !ctx.global.quiet {
+    if !output::quiet() {
         plan::print_package_plan(checked.pkg_diff(), ctx.global.verbose > 0);
         plan::print_plan_summary(checked.pkg_diff());
         print!(
@@ -1159,9 +1140,7 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // so provenance is computed here and written onto the Activation when it
     // is applied.
     let receipt = ctx.receipts.of_build(&build, &ctx.global.flake);
-    if !ctx.global.quiet {
-        print_warnings(&ctx.receipts.warnings(&receipt));
-    }
+    print_warnings(&ctx.receipts.warnings(&receipt));
 
     // Confirm before submitting the Activation.
     if !args.yes {
@@ -1190,16 +1169,13 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let source_path = result_path.display().to_string();
 
     let reconciled = ctx.runtime.block_on(async {
-        let (_, records) =
-            super::operator::connect_and_verify(global.context.as_deref(), global.quiet).await?;
+        let (_, records) = super::operator::connect_and_verify(global.context.as_deref()).await?;
 
-        if !global.quiet {
-            println!(
-                "Applying Activation CR '{}' (source: {})...",
-                output::bold(&activation_name),
-                output::dim(&source_path),
-            );
-        }
+        crate::say!(
+            "Applying Activation CR '{}' (source: {})...",
+            output::bold(&activation_name),
+            output::dim(&source_path),
+        );
 
         super::operator::apply_activation(
             &records,
@@ -1211,16 +1187,13 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         )
         .await?;
 
-        if !global.quiet {
-            println!(
-                "  {} Activation CR applied. Waiting for operator...",
-                output::green("✓"),
-            );
-        }
+        crate::say!(
+            "  {} Activation CR applied. Waiting for operator...",
+            output::green("✓"),
+        );
 
         let reconciled =
-            super::operator::watch_activation_progress(&records, &activation_name, global.quiet)
-                .await?;
+            super::operator::watch_activation_progress(&records, &activation_name).await?;
 
         let (ending, phase) = match reconciled {
             Reconciled::Active => (output::green("complete"), output::green("Active")),
@@ -1271,14 +1244,14 @@ fn print_migration_pairs(pairs: &[MigrationPair]) {
     println!();
 }
 
-/// Print `lines` after a blank line, if there are any.
+/// Print `lines` as progress after a blank line, if there are any.
 fn print_warnings(lines: &[String]) {
     if lines.is_empty() {
         return;
     }
-    println!();
+    crate::say!();
     for line in lines {
-        println!("{line}");
+        crate::say!("{line}");
     }
 }
 

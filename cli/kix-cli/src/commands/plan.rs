@@ -64,7 +64,7 @@ pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Resu
         OutputFormat::Yaml => print!("{}", doc.to_yaml().into_diagnostic()?),
         OutputFormat::Markdown => print!("{}", markdown(&p, &doc)),
         OutputFormat::Text => {
-            if !ctx.global.quiet {
+            if !output::quiet() {
                 print_migrations(&doc, p.checked.flags().accept_migrations);
                 // A plan exists to be read, so it always shows each change.
                 print_text(&p, &doc, true);
@@ -118,26 +118,21 @@ pub(crate) fn prepare(
     flags: PlanFlags,
     ctx: &CommandContext,
 ) -> Result<Option<Planned>> {
-    let quiet = ctx.global.quiet;
     let build = new_build(args, ctx)?;
-    if !quiet {
+    if !output::quiet() {
         eprint!("\r\x1b[2K");
     }
     let graph = build.graph();
-    if !quiet {
-        crate::say!(
-            "Cluster {}: {} manifests",
-            output::bold(&graph.cluster_name),
-            graph.resources.len(),
-        );
-    }
+    crate::say!(
+        "Cluster {}: {} manifests",
+        output::bold(&graph.cluster_name),
+        graph.resources.len(),
+    );
     if graph.resources.is_empty() {
-        if !quiet {
-            crate::say!("Nothing to deploy.");
-        }
+        crate::say!("Nothing to deploy.");
         return Ok(None);
     }
-    let report = |event: PlanEvent<'_>| plan::progress::print(event, quiet);
+    let report = |event: PlanEvent<'_>| plan::progress::print(event);
     let planned = ctx
         .runtime
         .block_on(Planner::new(flags, &report).run(build, &old_side(args, ctx)))
@@ -153,21 +148,17 @@ pub(crate) fn prepare(
 /// groups live, which the CLI cannot tell apart, so it is refused.
 fn new_build(args: &PlanArgs, ctx: &CommandContext) -> Result<InstallableBuild> {
     let build = match &args.bundle {
-        Some(path) => super::bundle::read(
-            path,
-            &args.deployed_bundles,
-            &args.cluster,
-            ctx.global.quiet,
-        )?,
+        Some(path) => {
+            crate::say!("Reading bundle {}...", path.display());
+            super::bundle::read(path, &args.deployed_bundles, &args.cluster)?
+        }
         None => {
             let status = |msg: &str| {
-                if !ctx.global.quiet {
+                if !output::quiet() {
                     eprint!("\r\x1b[2K  {msg}");
                 }
             };
-            if !ctx.global.quiet {
-                crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
-            }
+            crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
             super::build_flake(&ctx.global, &args.cluster, &status, super::BUILD_FAILED)?
         }
     };
@@ -224,7 +215,6 @@ pub(crate) fn dry_run(
     client: kube::Client,
     ctx: &CommandContext,
 ) -> Result<DryRunReport> {
-    let quiet = ctx.global.quiet;
     let sops = p.sops_sources(placeholders).map_err(|e| miette!("{e}"))?;
     let p = &*p;
     ctx.runtime.block_on(async {
@@ -256,7 +246,7 @@ pub(crate) fn dry_run(
             .iter()
             .filter(|n| !matches!(n.kind, TransitionKind::Skip))
             .count();
-        let observer = Arc::new(DryRunObserver::new(writes, quiet));
+        let observer = Arc::new(DryRunObserver::new(writes));
         let (result, answers) = p.checked.dry_run(target, config, observer.clone()).await;
         // Cancelling the token ends its interrupt watcher, so Ctrl-C at the
         // deploy's confirmation exits the process.
@@ -303,7 +293,8 @@ struct DryRunObserver {
 }
 
 impl DryRunObserver {
-    fn new(writes: usize, quiet: bool) -> Self {
+    fn new(writes: usize) -> Self {
+        let quiet = output::quiet();
         let bar = (!quiet && std::io::stderr().is_terminal() && writes > 0).then(|| {
             let bar = indicatif::ProgressBar::new(writes as u64);
             bar.set_style(

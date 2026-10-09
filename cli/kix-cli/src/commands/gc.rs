@@ -103,25 +103,21 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         eprintln!("{} {warning}", output::yellow("warning:"));
     }
     let Some(old_result_dir) = old_path else {
-        if !ctx.global.quiet {
-            let what = if retirement.active.is_some() {
-                "The Active build of"
-            } else {
-                "No Active record, so no previous build, for"
-            };
-            println!(
-                "{what} '{}' is not on this machine. Run {} first, or use {}.",
-                output::bold(&cluster),
-                output::bold("kix deploy"),
-                output::bold("kix gc --hard"),
-            );
-        }
+        let what = if retirement.active.is_some() {
+            "The Active build of"
+        } else {
+            "No Active record, so no previous build, for"
+        };
+        crate::say!(
+            "{what} '{}' is not on this machine. Run {} first, or use {}.",
+            output::bold(&cluster),
+            output::bold("kix deploy"),
+            output::bold("kix gc --hard"),
+        );
         return Ok(());
     };
 
-    if !ctx.global.quiet {
-        println!("Loading old activation...");
-    }
+    crate::say!("Loading old activation...");
     let old_graph = Build::local(&old_result_dir, &|_| {})
         .map_err(|e| {
             miette!("could not read the previous build's resources and dependencies: {e}")
@@ -129,11 +125,9 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .into_graph();
 
     // 3. Build new activation
-    if !ctx.global.quiet {
-        println!("Building cluster '{}'...", output::bold(&args.cluster));
-    }
+    crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
     let status = |msg: &str| {
-        if !ctx.global.quiet {
+        if !output::quiet() {
             eprint!("\r\x1b[2K  {msg}");
         }
     };
@@ -147,7 +141,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
             }
         })?
         .into_graph();
-    if !ctx.global.quiet {
+    if !output::quiet() {
         eprint!("\r\x1b[2K");
     }
     // The records and the old build were read under the name resolved before
@@ -178,10 +172,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     // Orphans a warn-only deploy kept. The cached build is usually the one
     // that deploy made, so the diff above cannot see them.
     let kept_baseline = match &retirement.active {
-        Some(active) => {
-            let quiet = ctx.global.quiet;
-            baseline::load_kept(active, None, &cluster, &|e| plan::progress::print(e, quiet))
-        }
+        Some(active) => baseline::load_kept(active, None, &cluster, &plan::progress::print),
         None => baseline::KeptBaseline::default(),
     };
     let kept_garbage = kept_garbage(
@@ -206,16 +197,13 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
             &retirement,
             kept_baseline.unresolved.is_empty(),
             new_activation_hash.as_deref(),
-            ctx.global.quiet,
         ));
-        if !ctx.global.quiet {
-            println!(
-                "{} ({} resources unchanged, {})",
-                output::green("No garbage found."),
-                new_hashes.len(),
-                retirement.kept_note(),
-            );
-        }
+        crate::say!(
+            "{} ({} resources unchanged, {})",
+            output::green("No garbage found."),
+            new_hashes.len(),
+            retirement.kept_note(),
+        );
         return Ok(());
     }
 
@@ -252,7 +240,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     if !garbage_manifests.is_empty() {
         let mut pkg_diff = kix::plan::diff_garbage(&old_graph, &new_graph);
         pkg_diff.keep_shared(&shared);
-        if !ctx.global.quiet {
+        if !output::quiet() {
             println!();
             println!("{}", output::bold("Garbage collection plan"));
             plan::print_package_plan(&pkg_diff, true);
@@ -263,18 +251,18 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .iter()
         .filter(|r| !lifecycle::never_pruned(&r.kind) && !shared.iter().any(|s| &s.rid == *r))
         .collect();
-    if !kept_rids.is_empty() && !ctx.global.quiet {
-        println!();
-        println!(
+    if !kept_rids.is_empty() {
+        crate::say!();
+        crate::say!(
             "{}",
             output::bold("Orphans kept by earlier deploys (warn-only)")
         );
         kept_rids.sort();
         for rid in kept_rids {
-            println!("  {} {rid}", output::red("-"));
+            crate::say!("  {} {rid}", output::red("-"));
         }
     }
-    if !ctx.global.quiet {
+    if !output::quiet() {
         print_record_plan(&retirement, &policy);
         print_never_pruned(&kept);
         plan::print_shared(&shared);
@@ -297,18 +285,16 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         &new_graph.cluster_name,
         &ordered_rids,
     ))?;
-    let (retired, records_failed) = ctx.runtime.block_on(delete_records(&global, &retirement))?;
+    let (retired, records_failed) = ctx.runtime.block_on(delete_records(&retirement))?;
     if done.failed == 0 && done.changed == 0 {
         ctx.runtime.block_on(clear_kept(
             &cluster,
             &retirement,
             kept_baseline.unresolved.is_empty(),
             new_activation_hash.as_deref(),
-            ctx.global.quiet,
         ));
     }
     finish(
-        &global,
         done.deleted,
         done.failed + records_failed,
         Some((retired, retirement.plan.kept.len())),
@@ -353,7 +339,6 @@ async fn clear_kept(
     retirement: &RecordRetirement,
     examined_all: bool,
     build_hash: Option<&str>,
-    quiet: bool,
 ) {
     let (Some(records), Some(active)) = (&retirement.records, &retirement.active) else {
         return;
@@ -364,13 +349,11 @@ async fn clear_kept(
     match records.clear_orphans_kept_from(&active.name).await {
         Ok(()) => {
             baseline::sync_kept_roots(cluster, &[]);
-            if !quiet {
-                println!(
-                    "  {} Activation/{}: no kept orphans left to record",
-                    output::dim("="),
-                    active.name
-                );
-            }
+            crate::say!(
+                "  {} Activation/{}: no kept orphans left to record",
+                output::dim("="),
+                active.name
+            );
         }
         Err(e) => {
             tracing::warn!(activation = %active.name, error = %e, "could not clear orphansKeptFrom")
@@ -398,9 +381,7 @@ fn may_clear_kept(active: &Record, examined_all: bool, build_hash: Option<&str>)
 
 fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     // 1. Build new activation
-    if !ctx.global.quiet {
-        println!("Building cluster '{}'...", output::bold(&args.cluster));
-    }
+    crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
     let graph =
         super::build_flake(&ctx.global, &args.cluster, &|_| {}, super::BUILD_FAILED)?.into_graph();
 
@@ -417,13 +398,11 @@ fn run_hard(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         .map(|r| k8s_identity(&r.manifest))
         .collect();
 
-    if !ctx.global.quiet {
-        println!(
-            "Cluster {}: {} expected resources",
-            output::bold(&graph.cluster_name),
-            expected_hashes.len(),
-        );
-    }
+    crate::say!(
+        "Cluster {}: {} expected resources",
+        output::bold(&graph.cluster_name),
+        expected_hashes.len(),
+    );
 
     let build_hash = lifecycle::record_of(
         &graph
@@ -455,9 +434,7 @@ async fn run_hard_async(
     cluster_name: &str,
     build_hash: Option<&str>,
 ) -> Result<()> {
-    if !global.quiet {
-        println!("Fetching live cluster state...");
-    }
+    crate::say!("Fetching live cluster state...");
 
     let client = fetch::make_client(global.context.as_deref())
         .await
@@ -483,7 +460,7 @@ async fn run_hard_async(
     .map_err(|e| miette!("failed to fetch live resources: {e}"))?;
     let tenancy = sweep.tenancy.clone();
 
-    if !global.quiet {
+    if !output::quiet() {
         println!(
             "Found {} live kix-managed resources ({} unstamped label carriers){}",
             sweep.managed.len(),
@@ -525,8 +502,8 @@ async fn run_hard_async(
         .iter()
         .filter(|obj| kix::legacy_domain::stamped_before_move(|key| has_key(obj, key)))
         .count();
-    if stale > 0 && !global.quiet {
-        println!(
+    if stale > 0 {
+        crate::say!(
             "{} {stale} resources still carry identity annotations from before the {} \
              move. Their hashes cannot match a build made now, so they are judged by \
              Kubernetes identity instead, the rule soft gc already uses. One deploy \
@@ -559,12 +536,12 @@ async fn run_hard_async(
                 && !args.include_unstamped
                 && !lifecycle::never_pruned(&g.id.kind)
         });
-    if !unstamped.is_empty() && !global.quiet {
+    if !unstamped.is_empty() && !output::quiet() {
         print_unstamped(&unstamped);
     }
 
-    if !shared.is_empty() && !global.quiet {
-        println!();
+    if !shared.is_empty() {
+        crate::say!();
         plan::print_shared(&shared);
     }
 
@@ -576,21 +553,12 @@ async fn run_hard_async(
     let examined_all = forbidden_none && unattributed_judged;
 
     if garbage.is_empty() {
-        clear_kept(
-            cluster_name,
-            &retirement,
-            examined_all,
-            build_hash,
-            global.quiet,
-        )
-        .await;
-        if !global.quiet {
-            println!(
-                "{} ({})",
-                output::green("No garbage found."),
-                retirement.kept_note()
-            );
-        }
+        clear_kept(cluster_name, &retirement, examined_all, build_hash).await;
+        crate::say!(
+            "{} ({})",
+            output::green("No garbage found."),
+            retirement.kept_note()
+        );
         return Ok(());
     }
 
@@ -603,7 +571,7 @@ async fn run_hard_async(
     if !resource_entries.is_empty() {
         print_garbage_plan(&resource_entries);
     }
-    if !global.quiet {
+    if !output::quiet() {
         let kept: Vec<ResourceId> = kept.into_iter().map(|g| g.id).collect();
         print_never_pruned(&kept);
         print_record_plan(&retirement, &policy);
@@ -621,19 +589,11 @@ async fn run_hard_async(
 
     let rids: Vec<ResourceId> = resource_entries.iter().map(|g| g.id.clone()).collect();
     let done = delete_resources(&client, cluster_name, &rids).await?;
-    let (retired, records_failed) = delete_records(global, &retirement).await?;
+    let (retired, records_failed) = delete_records(&retirement).await?;
     if done.failed == 0 && done.changed == 0 {
-        clear_kept(
-            cluster_name,
-            &retirement,
-            examined_all,
-            build_hash,
-            global.quiet,
-        )
-        .await;
+        clear_kept(cluster_name, &retirement, examined_all, build_hash).await;
     }
     finish(
-        global,
         done.deleted,
         done.failed + records_failed,
         Some((retired, retirement.plan.kept.len())),
@@ -927,35 +887,29 @@ fn print_garbage_plan(garbage: &[GarbageEntry]) {
 // ---------------------------------------------------------------------------
 
 async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Result<()> {
-    let (_, records) =
-        super::operator::connect_and_verify(ctx.global.context.as_deref(), ctx.global.quiet)
-            .await?;
+    let (_, records) = super::operator::connect_and_verify(ctx.global.context.as_deref()).await?;
 
     // Superseded activations under the retention policy
     let policy = retention_policy(args)?;
     let retirement = plan_records_with(Some(records.clone()), cluster, &policy).await?;
 
     if retirement.plan.retire.is_empty() {
-        if !ctx.global.quiet {
-            println!(
-                "{} No activation records to retire ({}).",
-                output::green("✓"),
-                retirement.kept_note(),
-            );
-        }
+        crate::say!(
+            "{} No activation records to retire ({}).",
+            output::green("✓"),
+            retirement.kept_note(),
+        );
         return Ok(());
     }
 
     print_record_plan(&retirement, &policy);
-    if !ctx.global.quiet {
-        println!(
-            "  {}",
-            output::dim(
-                "The operator removes its finalizer from each deleted record; \
-                 it deletes no resources for a Superseded record."
-            )
-        );
-    }
+    crate::say!(
+        "  {}",
+        output::dim(
+            "The operator removes its finalizer from each deleted record; \
+             it deletes no resources for a Superseded record."
+        )
+    );
 
     if !confirm(args, &deletion_prompt(0, retirement.plan.retire.len()))? {
         return Ok(());
@@ -968,14 +922,12 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
 
     for retired in &retirement.plan.retire {
         let name = &retired.record.name;
-        if !ctx.global.quiet {
-            println!("Deleting Activation '{}'...", output::bold(name));
-        }
+        crate::say!("Deleting Activation '{}'...", output::bold(name));
 
         match records.retire(&retired.record).await {
             Ok(_) => {
                 // Wait for finalizer to complete deletion
-                super::operator::wait_for_deletion(&records, name, ctx.global.quiet).await?;
+                super::operator::wait_for_deletion(&records, name).await?;
                 deleted += 1;
             }
             Err(e) => {
@@ -1240,10 +1192,7 @@ fn print_record_plan(retirement: &RecordRetirement, policy: &RetentionPolicy) {
 /// Delete the retired records, each only if unchanged since it was listed.
 /// Returns `(retired, failed)`; the caller prints the summary and sets the
 /// exit code.
-async fn delete_records(
-    global: &crate::cli::GlobalArgs,
-    retirement: &RecordRetirement,
-) -> Result<(usize, usize)> {
+async fn delete_records(retirement: &RecordRetirement) -> Result<(usize, usize)> {
     let Some(records) = &retirement.records else {
         return Ok((0, 0));
     };
@@ -1252,13 +1201,11 @@ async fn delete_records(
     for r in &retirement.plan.retire {
         match records.retire(&r.record).await {
             Ok(()) => {
-                if !global.quiet {
-                    println!(
-                        "  {} deleted Activation/{}",
-                        output::red("-"),
-                        r.record.name
-                    );
-                }
+                crate::say!(
+                    "  {} deleted Activation/{}",
+                    output::red("-"),
+                    r.record.name
+                );
                 retired += 1;
             }
             Err(e) => {
@@ -1277,31 +1224,24 @@ async fn delete_records(
 
 /// The one closing line, then the exit code. `records` is
 /// `(retired, kept)` when the run considered records.
-fn finish(
-    global: &crate::cli::GlobalArgs,
-    deleted: usize,
-    failed: usize,
-    records: Option<(usize, usize)>,
-) -> Result<()> {
-    if !global.quiet {
-        println!();
-        let failed_str = failed.to_string();
-        let records_note = match records {
-            Some((retired, kept)) if retired > 0 || kept > 0 => {
-                format!(", {retired} activation record(s) retired, {kept} kept")
-            }
-            _ => String::new(),
-        };
-        println!(
-            "GC complete: {} deleted, {} failed{records_note}",
-            output::green(&deleted.to_string()),
-            if failed > 0 {
-                output::red(&failed_str)
-            } else {
-                output::dim(&failed_str)
-            },
-        );
-    }
+fn finish(deleted: usize, failed: usize, records: Option<(usize, usize)>) -> Result<()> {
+    crate::say!();
+    let failed_str = failed.to_string();
+    let records_note = match records {
+        Some((retired, kept)) if retired > 0 || kept > 0 => {
+            format!(", {retired} activation record(s) retired, {kept} kept")
+        }
+        _ => String::new(),
+    };
+    crate::say!(
+        "GC complete: {} deleted, {} failed{records_note}",
+        output::green(&deleted.to_string()),
+        if failed > 0 {
+            output::red(&failed_str)
+        } else {
+            output::dim(&failed_str)
+        },
+    );
     if failed > 0 {
         std::process::exit(1);
     }

@@ -6,9 +6,9 @@ use kix::plan::PlanEvent;
 
 use crate::output;
 
-/// Print `event`. Under `quiet` only a build that was found and will not
+/// Print `event`. Under `-q` only a build that was found and will not
 /// load is reported: a plan made without it must show why.
-pub fn print(event: PlanEvent<'_>, quiet: bool) {
+pub fn print(event: PlanEvent<'_>) {
     match event {
         PlanEvent::FailedBuildUnusable { activation, error } => unusable_build(
             activation,
@@ -43,7 +43,6 @@ pub fn print(event: PlanEvent<'_>, quiet: bool) {
             error,
             "This plan cannot list or delete the orphans an earlier deploy kept from it.",
         ),
-        _ if quiet => {}
         PlanEvent::Connecting => crate::say!("Connecting to cluster..."),
         PlanEvent::NoCachedBuild => crate::say!("No previous activation. First deploy."),
         PlanEvent::LoadingCache => crate::say!("Loading previous activation from cache..."),
@@ -75,24 +74,24 @@ pub fn print(event: PlanEvent<'_>, quiet: bool) {
                 .created_at
                 .map(|t| format!(", started {}", t.to_rfc3339()))
                 .unwrap_or_default();
-            eprintln!(
+            crate::esay!(
                 "{} activation {}{since} is still marked as deploying, so this plan leaves \
                  resources from incomplete deployments unchanged.",
                 output::yellow("note:"),
                 output::bold(&record.name),
             );
-            eprintln!(
+            crate::esay!(
                 "  If that deployment is still running, let it finish. If its process has stopped, mark the"
             );
-            eprintln!(
+            crate::esay!(
                 "  record as failed and rerun this command so Kix can account for its resources:"
             );
-            eprintln!(
+            crate::esay!(
                 "    kubectl patch {}/{} --subresource=status --type=merge \\",
                 keys::ACTIVATIONS_CRD,
                 record.name,
             );
-            eprintln!(
+            crate::esay!(
                 "      -p '{{\"status\":{{\"phase\":\"Failed\",\"failure\":{{\"reason\":\"abandoned\"}}}}}}'"
             );
         }
@@ -108,17 +107,17 @@ pub fn print(event: PlanEvent<'_>, quiet: bool) {
             }
         }
         PlanEvent::FailedUnresolved { record, cluster } => {
-            eprintln!(
+            crate::esay!(
                 "{} cannot read the build for failed deployment {} on this machine. It may have left resources on the cluster.",
                 output::yellow("warning:"),
                 output::bold(&record.name),
             );
-            eprintln!(
+            crate::esay!(
                 "  Kix cannot determine which resources it applied, so this plan will not clean them up. Deploy from \
                  the machine that built it, or review and remove unused resources with `kix gc --hard {cluster}` and \
                  then mark the failed record as superseded (hard GC does not update it):"
             );
-            eprintln!(
+            crate::esay!(
                 "    kubectl patch {}/{} --subresource=status --type=merge \
                  -p '{{\"status\":{{\"phase\":\"Superseded\"}}}}'",
                 keys::ACTIVATIONS_CRD,
@@ -134,12 +133,12 @@ pub fn print(event: PlanEvent<'_>, quiet: bool) {
             );
         }
         PlanEvent::KeptUnresolved { source, cluster } => {
-            eprintln!(
+            crate::esay!(
                 "{} cannot read the build of activation {} on this machine. An earlier deploy kept orphans from it.",
                 output::yellow("warning:"),
                 output::bold(&source.activation),
             );
-            eprintln!(
+            crate::esay!(
                 "  This plan cannot list or delete them. Deploy from the machine that built it, or \
                  remove them with `kix gc --hard {cluster}`."
             );
