@@ -580,13 +580,15 @@ pub fn load_kept(
     out
 }
 
-/// A build's result dir: `built_via` when that store path is on this
-/// machine, else the local activation cache by identity hash.
-fn result_dir(cluster: &str, identity_hash: &str, built_via: Option<&str>) -> Option<PathBuf> {
-    built_via
-        .map(PathBuf::from)
-        .filter(|p| p.join("kix-packages.json").exists())
-        .or_else(|| crate::eval::store::resolve_activation_by_hash(cluster, identity_hash))
+/// The result dir of the build of `identity_hash` on this machine, found and
+/// checked as [`record_graph`] finds and checks it. `Err` says why a build
+/// that was found is not that build.
+fn checked_dir(
+    cluster: &str,
+    identity_hash: &str,
+    built_via: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
+    record_graph(None, cluster, identity_hash, built_via).map(|g| g.map(|g| g.result_dir))
 }
 
 /// The result dir of the build the Active record `active` names, for a plan
@@ -597,11 +599,23 @@ fn result_dir(cluster: &str, identity_hash: &str, built_via: Option<&str>) -> Op
 /// so it can hold the build another kube context deployed under the same
 /// name. It is used only when its identity hash is the Active record's.
 /// Otherwise the build comes from the record (`built_via`, else the store by
-/// hash). With no Active record there is no old build.
+/// hash), used only when it is the record's ([`record_graph`]); the warning
+/// then says why one that was found is not. With no Active record there is
+/// no old build.
 pub fn active_build_dir(
     cluster: &str,
     cached: Option<PathBuf>,
     active: Option<&Record>,
+) -> (Option<PathBuf>, Option<String>) {
+    active_build_dir_with(cluster, cached, active, checked_dir)
+}
+
+/// [`active_build_dir`], with `find` in place of [`checked_dir`].
+fn active_build_dir_with(
+    cluster: &str,
+    cached: Option<PathBuf>,
+    active: Option<&Record>,
+    find: impl FnOnce(&str, &str, Option<&str>) -> Result<Option<PathBuf>, String>,
 ) -> (Option<PathBuf>, Option<String>) {
     let cached_hash = cached
         .as_deref()
@@ -627,7 +641,16 @@ pub fn active_build_dir(
         )
     });
     let built_via = active.and_then(|a| a.built_via.as_deref());
-    (result_dir(cluster, hash, built_via), warning)
+    match find(cluster, hash, built_via) {
+        Ok(dir) => (dir, warning),
+        Err(refused) => {
+            let warning = match warning {
+                Some(warning) => format!("{warning}, but {refused}"),
+                None => refused,
+            };
+            (None, Some(warning))
+        }
+    }
 }
 
 fn short(hash: &str) -> &str {
@@ -793,14 +816,17 @@ fn manifests_of(graph: &StoreGraph) -> Vec<Value> {
 }
 
 /// Keep a Nix GC root for every build `recorded` lists that this machine
-/// can resolve, and drop the roots of builds it no longer lists. A listed
+/// can resolve and is that build ([`record_graph`]), and drop the roots of
+/// builds it no longer lists. A listed
 /// build that loses its store path cannot be read by the next plan, so its
 /// orphans would be carried unexamined until `kix gc --hard`.
 pub fn sync_kept_roots(cluster: &str, recorded: &[KeptOrphanSource]) {
     let listed: Vec<(String, Option<PathBuf>)> = recorded
         .iter()
         .map(|source| {
-            let dir = result_dir(cluster, &source.identity_hash, source.built_via.as_deref());
+            let dir = checked_dir(cluster, &source.identity_hash, source.built_via.as_deref())
+                .ok()
+                .flatten();
             (source.identity_hash.clone(), dir)
         })
         .collect();
@@ -1067,10 +1093,18 @@ mod tests {
         let prod = result_dir_of(root.path(), PROD);
         let staging = result_dir_of(root.path(), STAGING);
 
-        let (dir, warning) = active_build_dir(
+        // The record's own build, as `checked_dir` finds it on a machine
+        // that has it.
+        let records_build = |_: &str, hash: &str, built_via: Option<&str>| {
+            Ok(built_via
+                .map(PathBuf::from)
+                .filter(|dir| crate::eval::store::build_hash_of(dir).as_deref() == Some(hash)))
+        };
+        let (dir, warning) = active_build_dir_with(
             "web",
             Some(prod.clone()),
             Some(&active_of(STAGING, Some(&staging))),
+            records_build,
         );
         assert_eq!(dir, Some(staging));
         assert!(warning.unwrap().contains("is not the Active build"));
@@ -1083,6 +1117,26 @@ mod tests {
             active_build_dir("web", Some(prod.clone()), Some(&active_of(PROD, None)));
         assert_eq!(dir, Some(prod));
         assert_eq!(warning, None);
+    }
+
+    /// A record whose `built_via` path holds another build has no build
+    /// here: soft gc does not compare against it, and the kept-orphan roots
+    /// do not pin it.
+    #[test]
+    fn a_build_path_holding_another_build_is_not_the_records() {
+        let root = tempfile::tempdir().unwrap();
+        let prod = result_dir_of(root.path(), PROD);
+        // `e` and `u` are outside Nix's base32 alphabet, so this hash names
+        // no store path on this machine.
+        let hash = "eeeeuuuueeeeuuuueeeeuuuueeeeuuuu";
+
+        let (dir, warning) = active_build_dir("gc-test", None, Some(&active_of(hash, Some(&prod))));
+        assert_eq!(dir, None);
+        let warning = warning.unwrap();
+        assert!(warning.contains(&prod.display().to_string()), "{warning}");
+
+        let pinned = checked_dir("gc-test", hash, Some(&prod.to_string_lossy()));
+        assert!(!matches!(pinned, Ok(Some(_))), "{pinned:?}");
     }
 
     fn record(cluster: &str, hash: &str, phase: &str) -> Value {
