@@ -430,7 +430,6 @@ async fn run_reconcile(
         on_error: OnErrorPolicy::Stop,
         prune: PrunePolicy::Delete,
         cancel: kix::cluster::cancel::CancelToken::new(),
-        dry_run: false,
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
         // Never retry a failed probe from the reconcile loop: it would

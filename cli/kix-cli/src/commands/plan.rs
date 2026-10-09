@@ -244,7 +244,6 @@ pub(crate) fn dry_run(
             on_error: OnErrorPolicy::Continue,
             prune: p.checked.flags().prune_policy(),
             cancel: kix::cluster::cancel::CancelToken::new(),
-            dry_run: true,
             concurrency: scheduler::CONCURRENCY,
             stall: StallPolicy::from_env(),
             rerun_failed: true,

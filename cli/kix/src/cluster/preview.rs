@@ -1,10 +1,10 @@
 //! What the apiserver answered for each object of a dry-run deploy.
 //!
 //! A dry-run deploy runs the same engine as a real one with every write sent
-//! as `dryRun=All` (`KubeOpsConfig::dry_run`). The engine only needs a
-//! verdict per node, but `kix plan` reports what each write would do, so
-//! [`super::ops::KubeOps`] keeps the apiserver's answers in a [`Journal`]:
-//! the object an apply would produce, or the typed reason it was refused.
+//! as `dryRun=All` (`super::ops::DryRun`). The engine only needs a verdict
+//! per node, but `kix plan` reports what each write would do, so the dry run
+//! keeps the apiserver's answers in a [`Journal`]: the object an apply would
+//! produce, or the typed reason it was refused.
 
 use std::sync::Mutex;
 

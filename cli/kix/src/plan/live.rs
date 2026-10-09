@@ -21,7 +21,7 @@ use crate::cluster::activation::{OpenedRecords, Records};
 use crate::cluster::apply::{ChangeAction, detect_changes_live};
 use crate::cluster::fetch::{self, FetchError, SharedOrphan};
 use crate::cluster::graph::{GraphError, ResourceGraph};
-use crate::cluster::ops::{KubeOps, KubeOpsConfig};
+use crate::cluster::ops::{ActivationRecord, Cluster, KubeResources, RecordConfig, SopsHydrator};
 use crate::cluster::readiness::MalformedMarker;
 use crate::cluster::scheduler::{self, DeployError, DeployPlan, SchedulerConfig};
 use crate::cluster::stream::{DeployObserver, DeployResult};
@@ -186,26 +186,28 @@ impl LivePlan {
         config: SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
     ) -> Result<DeployResult, DeployError> {
-        let ops = Arc::new(KubeOps::new(
+        let resources = Arc::new(KubeResources::new(
             self.client,
-            Arc::new(tokio::sync::RwLock::new(self.discovery)),
-            KubeOpsConfig {
-                cluster_name: self.cluster,
-                activation_name: activation.map(str::to_string),
-                activation_identity_hash: identity_hash,
+            self.discovery,
+            self.cluster,
+            identity_hash,
+            // The operator runs unattended; surface conflicts in Activation
+            // status rather than silently clobbering fields owned by other
+            // controllers.
+            false,
+        ));
+        let record = Arc::new(ActivationRecord::new(
+            resources.clone(),
+            RecordConfig {
+                name: activation.map(str::to_string),
+                // The operator created the record itself and owns
+                // `spec.source`; it has no stamped manifest to re-apply and
+                // needs none.
+                manifest: None,
                 // The operator reconciles a build somebody else made, from
                 // inside the cluster, with no source tree to read provenance
                 // from. The receipt the deploy wrote stays as it is.
                 receipt: None,
-                // The operator runs unattended; surface conflicts in
-                // Activation status rather than silently clobbering fields
-                // owned by other controllers.
-                force_conflicts: false,
-                dry_run: false,
-                // The operator created the record itself and owns
-                // `spec.source`; it has no stamped manifest to re-apply and
-                // needs none.
-                activation_manifest: None,
                 // The live objects already show a failed deploy's leftovers,
                 // so there is nothing to fold and nothing to supersede.
                 consumed_failed: Vec::new(),
@@ -213,12 +215,18 @@ impl LivePlan {
                 // again, so there are no builds to record.
                 kept_orphans: Default::default(),
                 mark_failed_on_abort: false,
-                sops: Default::default(),
             },
         ));
-        let mut config = config;
-        config.dry_run = false;
-        scheduler::run_deploy(ops, self.plan, &self.orphans, &self.live, &config, observer).await
+        let cluster = Cluster::new(resources, record, SopsHydrator::new(Default::default()));
+        scheduler::run_deploy(
+            cluster,
+            self.plan,
+            &self.orphans,
+            &self.live,
+            &config,
+            observer,
+        )
+        .await
     }
 }
 

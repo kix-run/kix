@@ -1,4 +1,5 @@
-//! A scripted [`ClusterOps`] for engine tests. No cluster.
+//! A scripted [`ResourceIo`], [`DeployRecord`] and [`SecretHydrator`] for
+//! engine tests. No cluster.
 //!
 //! The rule that makes this useful: **nothing completes unless the script
 //! says so.** A fake that answers on the first poll cannot show a parked
@@ -32,8 +33,8 @@ use super::super::prune_guard::{PruneError, Pruned};
 use super::super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
 use super::super::secrets::{HydrationResult, SecretError};
 use super::{
-    ClusterOps, DeleteError, Finalized, OnStatus, ReadError, RecordWriteError, RecreateError,
-    StampError,
+    DeleteError, DeployRecord, Finalized, OnStatus, ReadError, RecordWriteError, RecreateError,
+    ResourceIo, SecretHydrator, StampError,
 };
 
 /// A latch many calls can wait on. Opened once by the test.
@@ -111,7 +112,7 @@ pub struct NodeScript {
     pub apply: Behaviour<Result<ApplyAction, ApplyFailure>>,
     pub recreate: Behaviour<Result<ApplyAction, String>>,
     pub ready: Behaviour<Ready>,
-    /// What [`ClusterOps::get_live`] answers. Default: nothing is live.
+    /// What [`ResourceIo::get_live`] answers. Default: nothing is live.
     pub live: Behaviour<Result<Option<Value>, String>>,
 }
 
@@ -237,10 +238,15 @@ impl ScriptedOps {
         }
     }
 
-    /// What [`ClusterOps::dry_run`] answers.
+    /// Whether the engine runs against the fake as a dry run, which has no
+    /// record (see [`super::Cluster::scripted`]).
     pub fn set_dry_run(&self, dry_run: bool) -> &Self {
         self.dry_run.store(dry_run, Ordering::SeqCst);
         self
+    }
+
+    pub(crate) fn is_dry_run(&self) -> bool {
+        self.dry_run.load(Ordering::SeqCst)
     }
 
     /// Script one node. Unscripted nodes use [`Self::default_node`].
@@ -378,15 +384,7 @@ impl Drop for InFlightApply<'_> {
 }
 
 #[async_trait]
-impl ClusterOps for ScriptedOps {
-    fn dry_run(&self) -> bool {
-        self.dry_run.load(Ordering::SeqCst)
-    }
-
-    async fn begin(&self) {
-        self.record(Call::Begin);
-    }
-
+impl SecretHydrator for ScriptedOps {
     async fn hydrate(&self, manifest: Value) -> Result<(Value, Vec<HydrationResult>), SecretError> {
         let rid = ResourceId::from_value(&manifest);
         self.record(Call::HydrateStart(rid.clone()));
@@ -405,7 +403,10 @@ impl ClusterOps for ScriptedOps {
             }),
         }
     }
+}
 
+#[async_trait]
+impl ResourceIo for ScriptedOps {
     async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError> {
         let rid = ResourceId::from_value(manifest);
         let _in_flight = InFlightApply::enter(self);
@@ -511,6 +512,23 @@ impl ClusterOps for ScriptedOps {
         })
     }
 
+    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
+        self.record(Call::Delete(rid.clone()));
+        let b = self.delete.lock().unwrap().clone();
+        b.run()
+            .await
+            .map_err(|m| DeleteError::Guard(PruneError::Kube(scripted_error(m))))
+    }
+}
+
+#[async_trait]
+impl DeployRecord for ScriptedOps {
+    async fn begin(&self) {
+        self.record(Call::Begin);
+    }
+
+    async fn discovery_refreshed(&self) {}
+
     async fn checkpoint(
         &self,
         applied: usize,
@@ -526,20 +544,12 @@ impl ClusterOps for ScriptedOps {
         b.run().await.map_err(record_error)
     }
 
-    async fn record_activation_on_skipped(&self, rid: &ResourceId) -> Result<(), StampError> {
+    async fn stamp_unchanged(&self, rid: &ResourceId) -> Result<(), StampError> {
         self.record(Call::Stamp(rid.clone()));
         let b = self.stamp.lock().unwrap().clone();
         b.run()
             .await
             .map_err(|kind| StampError::Apply(ApplyError::UnknownKind { kind }))
-    }
-
-    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
-        self.record(Call::Delete(rid.clone()));
-        let b = self.delete.lock().unwrap().clone();
-        b.run()
-            .await
-            .map_err(|m| DeleteError::Guard(PruneError::Kube(scripted_error(m))))
     }
 
     async fn finalize(

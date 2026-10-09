@@ -13,8 +13,10 @@
 //! remain spawned because an unpolled future makes no progress and fires no
 //! deadline.
 //!
-//! Every cluster call goes through [`ClusterOps`], so the loop runs under
-//! test against `ops::scripted::ScriptedOps` with no cluster.
+//! Every cluster call goes through the seams of one [`Cluster`]: its
+//! resources, its deploy record and its secret hydrator. So the loop runs
+//! under test against `ops::scripted::ScriptedOps` with no cluster. Whether
+//! a run is dry is the [`Cluster`]'s to say.
 //!
 //! [`run_deploy`] is private to the library. Callers reach it through a plan
 //! the library made; see its docs.
@@ -34,7 +36,7 @@ use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use super::apply::{ApplyAction, ApplyError, ApplyResult, ChangeAction, wants_rerun};
 use super::cancel::CancelToken;
 use super::graph::ResourceGraph;
-use super::ops::{ClusterOps, RecordWriteError};
+use super::ops::{Cluster, DeployRecord, RecordWriteError, ResourceIo, SecretHydrator};
 use super::prune_guard::Pruned;
 use super::readiness::{self, ImportTarget, ReadinessResult};
 use super::secrets;
@@ -45,8 +47,6 @@ use super::stream::{
 use super::watchdog::{self, Progress, StallPolicy};
 use crate::manifest::keys;
 use crate::manifest::lifecycle::never_pruned;
-
-pub use super::ops::kube::delete_propagation_for;
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
@@ -218,12 +218,6 @@ pub struct SchedulerConfig {
     pub on_error: OnErrorPolicy,
     pub prune: PrunePolicy,
     pub cancel: CancelToken,
-    /// When true: SSA + DELETE go to the apiserver with `?dryRun=All`, the
-    /// Activation CR's `status` subresource is never patched, and readiness
-    /// short-circuits to Ready (because nothing was persisted to poll for).
-    /// The same DeployEvent stream is emitted, so the same renderer paints
-    /// dry-run output as the real path.
-    pub dry_run: bool,
     /// Max nodes in flight. See [`CONCURRENCY`].
     pub concurrency: usize,
     /// When the progress watchdog warns and when it gives up.
@@ -318,15 +312,17 @@ enum Done {
 }
 
 /// Mark the Activation record Failed because the run is ending without
-/// finalizing. Returns the message to report when it did not work.
+/// finalizing. Returns the message to report when it did not work. A dry run
+/// has no record, so there is nothing to mark.
 ///
 /// Every early return below `begin` goes through this. A run that stops part
 /// way has applied some of its closure, and the record is the only thing that
 /// will tell the next deploy so (kixpkgs#82). Best-effort: the run is already
 /// over, and a cluster that will not take the patch is one the next deploy has
 /// to cope with anyway.
-async fn abort_activation(ops: &Arc<dyn ClusterOps>, reason: &str) -> Option<String> {
-    match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, ops.abort(reason)).await {
+async fn abort_activation(record: Option<&Arc<dyn DeployRecord>>, reason: &str) -> Option<String> {
+    let record = record?;
+    match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.abort(reason)).await {
         Ok(Ok(())) => None,
         Ok(Err(e)) => Some(e.to_string()),
         Err(_) => Some(format!(
@@ -353,11 +349,17 @@ async fn abort_activation(ops: &Arc<dyn ClusterOps>, reason: &str) -> Option<Str
 /// pruned (in reverse-topological order of the old graph) and the Activation
 /// CR is finalized.
 ///
+/// A dry run ([`Cluster::dry_run`]) sends every write with `dryRun=All` and
+/// writes no record. It emits the same event stream, so the same renderer
+/// paints it, with two differences: readiness short-circuits to Ready,
+/// because nothing was persisted to poll for, and a failed node's
+/// dependents are still tried.
+///
 /// Private to the library, so the plan it runs is one the library made: a
 /// checked plan (`plan::Apply::run`, `plan::CheckedPlan::dry_run`) or the
 /// operator's plan from the live objects (`plan::live::LivePlan::run`).
 pub(crate) async fn run_deploy(
-    ops: Arc<dyn ClusterOps>,
+    cluster: Cluster,
     plan: DeployPlan,
     orphan_rids: &[ResourceId],
     old_manifests: &[Value],
@@ -388,26 +390,16 @@ pub(crate) async fn run_deploy(
         edges: plan.edges.clone(),
     });
 
-    if ops.dry_run() != config.dry_run {
-        let message = format!(
-            "dry-run flags disagree: engine {} vs cluster ops {}",
-            config.dry_run,
-            ops.dry_run()
-        );
-        emit(DeployEvent::Stopped {
-            reason: message.clone(),
-        });
-        return Err(DeployError::Internal {
-            message,
-            partial: result,
-        });
-    }
+    let dry_run = cluster.is_dry_run();
+    let resources = cluster.resources().clone();
+    let record = cluster.record().cloned();
 
     // Nothing is in flight yet, so awaiting this inline parks nobody. It is
     // still bounded: the watchdog only watches nodes.
-    if tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, ops.begin())
-        .await
-        .is_err()
+    if let Some(record) = &record
+        && tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, record.begin())
+            .await
+            .is_err()
     {
         emit(DeployEvent::BestEffortFailed {
             what: "activation begin".into(),
@@ -422,11 +414,12 @@ pub(crate) async fn run_deploy(
     let mut state = SchedulerState::new(&plan);
 
     let ctx = Arc::new(NodeCtx {
-        ops: ops.clone(),
+        resources: resources.clone(),
+        secrets: cluster.secrets().clone(),
         cancel: config.cancel.clone(),
         timeout: config.timeout,
         orphan_set: orphan_set.clone(),
-        dry_run: config.dry_run,
+        dry_run,
         rerun_failed: config.rerun_failed,
         progress: progress.clone(),
         observer: observer.clone(),
@@ -452,7 +445,7 @@ pub(crate) async fn run_deploy(
 
     // Unchanged resources still belong to this activation; they just have
     // nothing to apply. Collected here, stamped in one pass once every node is
-    // terminal (see `record_activation_on_skipped`).
+    // terminal (see `DeployRecord::stamp_unchanged`).
     let mut skipped: Vec<ResourceId> = Vec::new();
 
     let concurrency = config.concurrency.max(1);
@@ -573,7 +566,7 @@ pub(crate) async fn run_deploy(
                             reason: message.clone(),
                         });
                         tasks.shutdown().await;
-                        if let Some(m) = abort_activation(&ops, &message).await {
+                        if let Some(m) = abort_activation(record.as_ref(), &message).await {
                             emit(DeployEvent::BestEffortFailed {
                                 what: "activation abort".into(),
                                 message: m,
@@ -619,7 +612,14 @@ pub(crate) async fn run_deploy(
                             state.promote_dependents(&id);
                         }
                         if !halting {
-                            barrier.start_if_needed(&mut tasks, &mut kinds, &ops, &progress, &emit);
+                            barrier.start_if_needed(
+                                &mut tasks,
+                                &mut kinds,
+                                &resources,
+                                record.as_ref(),
+                                &progress,
+                                &emit,
+                            );
                         }
                     }
                     Err(message) => {
@@ -641,7 +641,7 @@ pub(crate) async fn run_deploy(
                         message: e.to_string(),
                     });
                 }
-                checkpoints.start_if_due(&mut tasks, &mut kinds, &ops, config.dry_run);
+                checkpoints.start_if_due(&mut tasks, &mut kinds, record.as_ref());
                 continue;
             }
             Done::Node(node_id, outcome) => {
@@ -733,7 +733,7 @@ pub(crate) async fn run_deploy(
                         // predecessor as after an accepted one. A preview
                         // that stopped at the first refusal would hide every
                         // refusal behind it.
-                        let cancelled = if config.dry_run {
+                        let cancelled = if dry_run {
                             state.promote_dependents(&node_id);
                             Vec::new()
                         } else {
@@ -776,10 +776,17 @@ pub(crate) async fn run_deploy(
                     }
                 }
                 if !halting {
-                    barrier.start_if_needed(&mut tasks, &mut kinds, &ops, &progress, &emit);
+                    barrier.start_if_needed(
+                        &mut tasks,
+                        &mut kinds,
+                        &resources,
+                        record.as_ref(),
+                        &progress,
+                        &emit,
+                    );
                 }
                 checkpoints.terminal();
-                checkpoints.start_if_due(&mut tasks, &mut kinds, &ops, config.dry_run);
+                checkpoints.start_if_due(&mut tasks, &mut kinds, record.as_ref());
             }
         }
     }
@@ -827,7 +834,7 @@ pub(crate) async fn run_deploy(
         emit(DeployEvent::Stopped {
             reason: reason.clone(),
         });
-        if let Some(m) = abort_activation(&ops, &reason).await {
+        if let Some(m) = abort_activation(record.as_ref(), &reason).await {
             emit(DeployEvent::BestEffortFailed {
                 what: "activation abort".into(),
                 message: m,
@@ -840,12 +847,12 @@ pub(crate) async fn run_deploy(
     }
 
     // Final checkpoint / close-out if the cadence didn't already cover it.
-    if !config.dry_run
+    if let Some(record) = &record
         && (checkpoints.since_last > 0 || checkpoints.applied + checkpoints.failed > 0)
     {
         match tokio::time::timeout(
             INLINE_BEST_EFFORT_TIMEOUT,
-            ops.checkpoint(checkpoints.applied, checkpoints.failed, true),
+            record.checkpoint(checkpoints.applied, checkpoints.failed, true),
         )
         .await
         {
@@ -865,7 +872,7 @@ pub(crate) async fn run_deploy(
         emit(DeployEvent::Stopped {
             reason: halting_reason.unwrap_or_else(|| message.clone()),
         });
-        if let Some(m) = abort_activation(&ops, &message).await {
+        if let Some(m) = abort_activation(record.as_ref(), &message).await {
             emit(DeployEvent::BestEffortFailed {
                 what: "activation abort".into(),
                 message: m,
@@ -882,7 +889,7 @@ pub(crate) async fn run_deploy(
         emit(DeployEvent::Stopped {
             reason: reason.clone(),
         });
-        if let Some(m) = abort_activation(&ops, &reason).await {
+        if let Some(m) = abort_activation(record.as_ref(), &reason).await {
             emit(DeployEvent::BestEffortFailed {
                 what: "activation abort".into(),
                 message: m,
@@ -910,7 +917,7 @@ pub(crate) async fn run_deploy(
     //
     // The run still returns `Ok` with the counts. Callers read `failed` and
     // `cancelled` to decide the outcome; `kix deploy` exits non-zero.
-    if !config.dry_run && result.cancelled > 0 {
+    if !dry_run && result.cancelled > 0 {
         let reason = format!(
             "{} failed, {} never attempted",
             result.failed, result.cancelled
@@ -918,7 +925,7 @@ pub(crate) async fn run_deploy(
         emit(DeployEvent::Stopped {
             reason: reason.clone(),
         });
-        if let Some(m) = abort_activation(&ops, &reason).await {
+        if let Some(m) = abort_activation(record.as_ref(), &reason).await {
             emit(DeployEvent::BestEffortFailed {
                 what: "activation abort".into(),
                 message: m,
@@ -936,19 +943,22 @@ pub(crate) async fn run_deploy(
     // Best-effort by design, unlike the applied path: nothing was written to
     // these resources, so a failure here leaves the cluster exactly as it was
     // and cannot corrupt the applied state. Failures are counted and reported
-    // rather than halting a deploy that otherwise succeeded. `KubeOps` makes
-    // this a no-op under dry-run and when there is no activation hash.
-    if !skipped.is_empty() && !config.dry_run {
+    // rather than halting a deploy that otherwise succeeded. A dry run has no
+    // record to stamp from, and the record stamps nothing when the run has no
+    // activation hash.
+    if !skipped.is_empty()
+        && let Some(record) = &record
+    {
         let mut failures = 0usize;
         for chunk in skipped.chunks(concurrency) {
             let mut set = JoinSet::new();
             for rid in chunk {
-                let ops = ops.clone();
+                let record = record.clone();
                 let rid = rid.clone();
                 set.spawn(async move {
                     match tokio::time::timeout(
                         INLINE_BEST_EFFORT_TIMEOUT,
-                        ops.record_activation_on_skipped(&rid),
+                        record.stamp_unchanged(&rid),
                     )
                     .await
                     {
@@ -1012,7 +1022,8 @@ pub(crate) async fn run_deploy(
                 continue;
             }
             let deleted =
-                match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, ops.delete(rid)).await {
+                match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, resources.delete(rid)).await
+                {
                     Ok(outcome) => outcome.map_err(|e| e.to_string()),
                     Err(_) => Err(format!(
                         "no answer within {}s",
@@ -1059,10 +1070,12 @@ pub(crate) async fn run_deploy(
     let actually_changed =
         result.created > 0 || result.configured > 0 || result.pruned > 0 || result.failed > 0;
 
-    if !config.dry_run && actually_changed {
+    if let Some(record) = &record
+        && actually_changed
+    {
         match tokio::time::timeout(
             INLINE_BEST_EFFORT_TIMEOUT,
-            ops.finalize(result.failed > 0, orphans_left),
+            record.finalize(result.failed > 0, orphans_left),
         )
         .await
         {
@@ -1103,7 +1116,15 @@ pub async fn run_scripted(
     config: &SchedulerConfig,
     observer: Arc<dyn DeployObserver>,
 ) -> Result<DeployResult, DeployError> {
-    run_deploy(ops, plan, orphan_rids, old_manifests, config, observer).await
+    run_deploy(
+        Cluster::scripted(ops),
+        plan,
+        orphan_rids,
+        old_manifests,
+        config,
+        observer,
+    )
+    .await
 }
 
 /// Aborts the wrapped task when dropped, on every return path.
@@ -1147,7 +1168,8 @@ impl CrdBarrier {
         &mut self,
         tasks: &mut JoinSet<Done>,
         kinds: &mut HashMap<tokio::task::Id, TaskKind>,
-        ops: &Arc<dyn ClusterOps>,
+        resources: &Arc<dyn ResourceIo>,
+        record: Option<&Arc<dyn DeployRecord>>,
         progress: &Progress,
         emit: &impl Fn(DeployEvent),
     ) {
@@ -1158,9 +1180,16 @@ impl CrdBarrier {
         self.in_flight = true;
         emit(DeployEvent::CrdRediscovery);
         progress.set_phase(&DISCOVERY_NODE, Phase::Discovery);
-        let ops = ops.clone();
+        let resources = resources.clone();
+        let record = record.cloned();
         let handle = tasks.spawn(async move {
-            Done::Rediscovery(ops.rediscover().await.map_err(|e| e.to_string()))
+            let refreshed = resources.rediscover().await;
+            if refreshed.is_ok()
+                && let Some(record) = record
+            {
+                record.discovery_refreshed().await;
+            }
+            Done::Rediscovery(refreshed.map_err(|e| e.to_string()))
         });
         kinds.insert(handle.id(), TaskKind::Rediscovery);
     }
@@ -1200,18 +1229,21 @@ impl Checkpoints {
         &mut self,
         tasks: &mut JoinSet<Done>,
         kinds: &mut HashMap<tokio::task::Id, TaskKind>,
-        ops: &Arc<dyn ClusterOps>,
-        dry_run: bool,
+        record: Option<&Arc<dyn DeployRecord>>,
     ) {
-        if dry_run || self.in_flight || self.since_last < CHECKPOINT_BATCH {
+        let Some(record) = record else {
+            return;
+        };
+        if self.in_flight || self.since_last < CHECKPOINT_BATCH {
             return;
         }
         self.since_last = 0;
         self.in_flight = true;
-        let ops = ops.clone();
+        let record = record.clone();
         let (applied, failed) = (self.applied, self.failed);
-        let handle = tasks
-            .spawn(async move { Done::Checkpoint(ops.checkpoint(applied, failed, false).await) });
+        let handle = tasks.spawn(async move {
+            Done::Checkpoint(record.checkpoint(applied, failed, false).await)
+        });
         kinds.insert(handle.id(), TaskKind::Checkpoint);
     }
 }
@@ -1373,7 +1405,8 @@ fn node_sort_key(id: &NodeId) -> (String, String, String) {
 }
 
 struct NodeCtx {
-    ops: Arc<dyn ClusterOps>,
+    resources: Arc<dyn ResourceIo>,
+    secrets: Arc<dyn SecretHydrator>,
     cancel: CancelToken,
     timeout: Duration,
     orphan_set: HashSet<ResourceId>,
@@ -1421,7 +1454,7 @@ enum NodeOutcome {
 ///
 /// A skipped resource carrying `kix.run/rerun` is recreated when its live
 /// object failed. Other skipped resources do not reach this function.
-/// Delete and re-create one resource through `ClusterOps::recreate_in_place`,
+/// Delete and re-create one resource through `ResourceIo::recreate_in_place`,
 /// unless `recreate_refusal` refuses its kind. Every scheduler path that
 /// deletes a resource to replace it goes through here.
 async fn recreate(
@@ -1432,7 +1465,7 @@ async fn recreate(
     if let Some(refusal) = recreate_refusal(rid) {
         return Err(refusal);
     }
-    ctx.ops
+    ctx.resources
         .recreate_in_place(manifest)
         .await
         .map_err(|e| e.to_string())
@@ -1468,7 +1501,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
         (ChangeAction::Skip(rid), Some(manifest)) => {
             // Rerun a failed probe even when its manifest is unchanged.
             // When reruns are disabled, preserve its failed result.
-            let live = ctx.ops.get_live(rid).await;
+            let live = ctx.resources.get_live(rid).await;
             let terminal = match &live {
                 Ok(Some(obj)) => readiness::classify_workload_terminal(obj, &rid.kind),
                 _ => None,
@@ -1524,7 +1557,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
     // Hydrate SOPS secrets before apply.
     let manifest = if secrets::needs_hydration(&manifest) {
         ctx.progress.set_phase(&node, Phase::Hydrate);
-        match ctx.ops.hydrate(manifest).await {
+        match ctx.secrets.hydrate(manifest).await {
             Ok((manifest, results)) => {
                 for hr in &results {
                     ctx.emit(DeployEvent::NodeStateChanged {
@@ -1553,7 +1586,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
     // patched. When something is live it is deleted first (foreground, so
     // a Job's pod goes with it); when nothing is, a plain apply creates it.
     if matches!(entry.kind, TransitionKind::Recreate) && rerun_reason.is_none() {
-        match ctx.ops.get_live(&rid).await {
+        match ctx.resources.get_live(&rid).await {
             Ok(Some(_)) => rerun_reason = Some("changed since the last run"),
             Ok(None) => {}
             Err(e) => {
@@ -1584,7 +1617,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
             }
         }
     } else {
-        match ctx.ops.apply(&manifest).await {
+        match ctx.resources.apply(&manifest).await {
             Ok(result) => {
                 applied_action = result.action;
             }
@@ -1657,7 +1690,7 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
         });
     };
     let outcome = ctx
-        .ops
+        .resources
         .wait_ready(
             &rid,
             import_target.as_ref(),
@@ -2128,7 +2161,6 @@ mod engine_tests {
             on_error: OnErrorPolicy::Continue,
             prune: PrunePolicy::WarnOnly,
             cancel: CancelToken::new(),
-            dry_run: false,
             concurrency: CONCURRENCY,
             stall,
             rerun_failed: true,
@@ -2233,10 +2265,9 @@ mod engine_tests {
         config: &SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
     ) -> Result<DeployResult, DeployError> {
-        let ops: Arc<dyn ClusterOps> = ops.clone();
         tokio::time::timeout(
             secs(3600),
-            run_deploy(ops, plan, &[], &[], config, observer),
+            run_scripted(ops.clone(), plan, &[], &[], config, observer),
         )
         .await
         .expect("engine parked: nothing runnable for an hour of virtual time")
@@ -2251,10 +2282,9 @@ mod engine_tests {
         config: &SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
     ) -> Result<DeployResult, DeployError> {
-        let ops: Arc<dyn ClusterOps> = ops.clone();
         tokio::time::timeout(
             secs(3600),
-            run_deploy(ops, plan, orphans, old_manifests, config, observer),
+            run_scripted(ops.clone(), plan, orphans, old_manifests, config, observer),
         )
         .await
         .expect("engine parked: nothing runnable for an hour of virtual time")
@@ -2640,7 +2670,6 @@ mod engine_tests {
         );
         let mut cfg = config(quiet_watchdog());
         cfg.on_error = OnErrorPolicy::Continue;
-        cfg.dry_run = true;
         let rec = Arc::new(Recorder::default());
 
         let result = run(&ops, plan_of(&manifests), &cfg, rec.clone())
@@ -3164,8 +3193,7 @@ mod engine_tests {
                 .live(Behaviour::Now(Ok(Some(live_job(false)))))
                 .recreate(Behaviour::Now(Ok(ApplyAction::Created))),
         );
-        let mut cfg = config(quiet_watchdog());
-        cfg.dry_run = true;
+        let cfg = config(quiet_watchdog());
         let rec = Arc::new(Recorder::default());
         let result = run(&ops, plan_of(&manifests), &cfg, rec.clone())
             .await
@@ -3691,11 +3719,10 @@ mod engine_tests {
         });
         let manifests = case_manifests(&case);
         let plan = plan_of(&manifests);
-        let ops_dyn: Arc<dyn ClusterOps> = ops.clone();
         let rec = Arc::new(Recorder::default());
         let outcome = rt.block_on(tokio::time::timeout(
             secs(3600),
-            run_deploy(ops_dyn, plan, &[], &[], &cfg, rec.clone()),
+            run_scripted(ops.clone(), plan, &[], &[], &cfg, rec.clone()),
         ));
         let outcome = match outcome {
             Ok(o) => o,

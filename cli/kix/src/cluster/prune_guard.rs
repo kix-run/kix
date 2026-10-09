@@ -4,7 +4,7 @@
 //! such as an identical ClusterRole. When one drops it from its build, its
 //! prune plans the object as an orphan while the other's current build still
 //! contains it. Every prune path (deploy and rollback through
-//! [`super::ops::KubeOps`], soft and hard gc, the operator's reconcile and
+//! `super::ops::KubeResources`, soft and hard gc, the operator's reconcile and
 //! finalizer) deletes through [`PruneGuard::delete`], which reads the object,
 //! then the Activation records, and deletes only an object no other Kix
 //! cluster's current record names. The delete carries the read's uid and

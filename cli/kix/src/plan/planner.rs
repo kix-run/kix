@@ -48,7 +48,9 @@ use crate::cluster::apply::ChangeAction;
 use crate::cluster::fetch::{self, SharedOrphan};
 use crate::cluster::graph::ResourceGraph;
 use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
-use crate::cluster::ops::{KubeOps, KubeOpsConfig};
+use crate::cluster::ops::{
+    ActivationRecord, Cluster, DryRun, KubeResources, RecordConfig, SopsHydrator,
+};
 use crate::cluster::preview::DryRunAnswer;
 use crate::cluster::scheduler::{self, DeployError, DeployPlan, PrunePolicy, SchedulerConfig};
 use crate::cluster::secrets::SopsSources;
@@ -179,23 +181,19 @@ impl CheckedPlan {
         mut config: SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
     ) -> (Result<DeployResult, DeployError>, Vec<DryRunAnswer>) {
-        let ops = Arc::new(KubeOps::new(
-            target.client,
-            Arc::new(tokio::sync::RwLock::new(target.discovery)),
-            KubeOpsConfig {
-                cluster_name: target.cluster,
-                activation_name: self.activation_name.clone(),
-                activation_identity_hash: self.activation_identity_hash.clone(),
-                force_conflicts: self.flags.force_conflicts,
-                dry_run: true,
-                sops: target.sops,
-                ..Default::default()
-            },
+        let dry = Arc::new(DryRun::new(
+            KubeResources::new(
+                target.client,
+                target.discovery,
+                target.cluster,
+                self.activation_identity_hash.clone(),
+                self.flags.force_conflicts,
+            ),
+            SopsHydrator::new(target.sops),
         ));
         config.prune = self.flags.prune_policy();
-        config.dry_run = true;
         let result = scheduler::run_deploy(
-            ops.clone(),
+            Cluster::dry_run(dry.clone()),
             self.plan.clone(),
             &self.orphans,
             old_manifests,
@@ -203,7 +201,7 @@ impl CheckedPlan {
             observer,
         )
         .await;
-        (result, ops.take_dry_run_answers())
+        (result, dry.take_answers())
     }
 
     /// Run the engine over the checked plan, writing its Activation record
@@ -223,31 +221,31 @@ impl CheckedPlan {
         Result<DeployResult, DeployError>,
         Option<Vec<KeptOrphanSource>>,
     ) {
-        let ops = Arc::new(KubeOps::new(
+        let resources = Arc::new(KubeResources::new(
             target.client,
-            Arc::new(tokio::sync::RwLock::new(target.discovery)),
-            KubeOpsConfig {
-                cluster_name: target.cluster,
-                activation_name: self.activation_name,
-                activation_identity_hash: self.activation_identity_hash,
-                receipt,
-                force_conflicts: self.flags.force_conflicts,
-                dry_run: false,
+            target.discovery,
+            target.cluster,
+            self.activation_identity_hash,
+            self.flags.force_conflicts,
+        ));
+        let record = Arc::new(ActivationRecord::new(
+            resources.clone(),
+            RecordConfig {
+                name: self.activation_name,
                 // Created before the first node, so a run that stops part
                 // way leaves something that says what it was attempting
                 // (kixpkgs#82). The plan applies this same manifest again as
                 // its last node, which is then an unchanged no-op.
-                activation_manifest: self.record,
+                manifest: self.record,
+                receipt,
                 consumed_failed: self.consumed_failed,
                 kept_orphans: self.kept_orphans,
                 mark_failed_on_abort: true,
-                sops: target.sops,
             },
         ));
         config.prune = self.flags.prune_policy();
-        config.dry_run = false;
         let result = scheduler::run_deploy(
-            ops.clone(),
+            Cluster::new(resources, record.clone(), SopsHydrator::new(target.sops)),
             self.plan,
             &self.orphans,
             old_manifests,
@@ -255,7 +253,7 @@ impl CheckedPlan {
             observer,
         )
         .await;
-        (result, ops.recorded_orphans_kept_from())
+        (result, record.orphans_kept_from())
     }
 }
 
