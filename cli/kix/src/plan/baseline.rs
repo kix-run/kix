@@ -33,9 +33,7 @@ use serde_json::Value;
 
 use super::{PlanError, PlanEvent};
 use crate::build_source::Build;
-use crate::cluster::activation::{
-    self, ActiveActivation, DeployingActivation, FailedActivation, KeptOrphanSource,
-};
+use crate::cluster::activation::{self, KeptOrphanSource, Record, Records};
 use crate::cluster::apply::{self, ChangeAction};
 use crate::cluster::fetch;
 use crate::eval::store_graph::StoreGraph;
@@ -50,7 +48,7 @@ use crate::manifest::{keys, lifecycle};
 pub struct Baseline {
     /// The Active record the plan compares against. `None` on a first
     /// deploy.
-    pub(crate) active: Option<ActiveActivation>,
+    pub(crate) active: Option<Record>,
     /// Where `active_manifests` came from.
     pub(crate) source: ActiveSource,
     /// The Active record's closure.
@@ -90,7 +88,7 @@ impl Baseline {
 
     /// The Active record the plan compares against. `None` on a first
     /// deploy.
-    pub fn active(&self) -> Option<&ActiveActivation> {
+    pub fn active(&self) -> Option<&Record> {
         self.active.as_ref()
     }
 
@@ -268,11 +266,11 @@ impl Baseline {
         };
         let active_manifests = manifests_of(&graph);
         let active = lifecycle::record_of(&active_manifests).and_then(|record| {
-            Some(ActiveActivation {
+            Some(Record {
                 name: record.pointer("/metadata/name")?.as_str()?.to_string(),
                 identity_hash: keys::get(record, keys::IDENTITY_HASH).map(str::to_string),
                 built_via: Some(dir.to_string_lossy().into_owned()),
-                orphans_kept_from: Vec::new(),
+                ..Default::default()
             })
         });
         Baseline {
@@ -298,19 +296,14 @@ impl Baseline {
         let discovery = fetch::discover_resources(client)
             .await
             .map_err(|e| PlanError::Discovery(Box::new(e)))?;
-        let ar = activation::find_activation_ar(&discovery)
-            .map_err(PlanError::Domain)?
-            .map(|(ar, _)| ar.clone());
-        let active = match &ar {
-            Some(ar) => activation::find_active(client, ar, cluster)
-                .await
-                .ok()
-                .flatten(),
+        let records = Records::open(client, &discovery).map_err(PlanError::Domain)?;
+        let active = match &records {
+            Some(records) => records.active(cluster).await.ok().flatten(),
             None => None,
         };
 
-        let mut baseline = match active {
-            Some(active) if active.identity_hash.is_some() => {
+        let mut baseline = match (active, &records) {
+            (Some(active), Some(records)) if active.identity_hash.is_some() => {
                 let hash = active.identity_hash.as_deref().unwrap_or_default();
                 report(PlanEvent::Active {
                     name: &active.name,
@@ -331,7 +324,7 @@ impl Baseline {
                             error: found.err().as_deref(),
                         });
                         let active_manifests =
-                            of_live(client, &discovery, cluster, &active, report).await?;
+                            of_live(client, records, &discovery, cluster, &active, report).await?;
                         Baseline {
                             active_manifests,
                             source: ActiveSource::Live,
@@ -358,9 +351,9 @@ impl Baseline {
         // and never became Active, so neither side of the comparison knows
         // about them (kixpkgs#82). Resolved from the local store by hash, so
         // every input to the plan is still a compiler output.
-        if let Some(ar) = &ar {
+        if let Some(records) = &records {
             baseline.failed =
-                load_failed_unless_in_flight(client, ar, Some(build), cluster, report).await;
+                load_failed_unless_in_flight(records, Some(build), cluster, report).await;
         }
         Ok(baseline)
     }
@@ -373,10 +366,9 @@ impl Baseline {
     /// run straight after a deploy that stopped part way, and its baseline
     /// has exactly the same hole as a deploy's.
     pub async fn of_record(
-        client: &Client,
-        ar: &ApiResource,
+        records: &Records,
         cluster: &str,
-        current: &ActiveActivation,
+        current: &Record,
         report: &dyn Fn(PlanEvent<'_>),
     ) -> Baseline {
         let hash = current.identity_hash.as_deref().unwrap_or("");
@@ -390,7 +382,7 @@ impl Baseline {
             }
             None => (ActiveSource::Unavailable, Vec::new()),
         };
-        let failed = load_failed_unless_in_flight(client, ar, None, cluster, report).await;
+        let failed = load_failed_unless_in_flight(records, None, cluster, report).await;
         let kept = load_kept(current, None, cluster, report);
         Baseline {
             active: Some(current.clone()),
@@ -415,7 +407,7 @@ pub struct FailedBaseline {
     /// `status.orphansKeptFrom` when this plan keeps the orphans it found.
     pub sources: Vec<KeptOrphanSource>,
     /// Records whose closure is not in this machine's store.
-    pub unresolved: Vec<FailedActivation>,
+    pub unresolved: Vec<Record>,
 }
 
 impl FailedBaseline {
@@ -442,17 +434,16 @@ pub struct KeptBaseline {
 /// very objects this plan might prune, so its work is left alone rather than
 /// guessing which of the two is real.
 async fn load_failed_unless_in_flight(
-    client: &Client,
-    ar: &ApiResource,
+    records: &Records,
     build: Option<&Build>,
     cluster: &str,
     report: &dyn Fn(PlanEvent<'_>),
 ) -> FailedBaseline {
-    if let Some(record) = deploy_in_flight(client, ar, cluster).await {
+    if let Some(record) = deploy_in_flight(records, cluster).await {
         report(PlanEvent::DeployInFlight(&record));
         return FailedBaseline::default();
     }
-    load_failed(client, ar, build, cluster, report).await
+    load_failed(records, build, cluster, report).await
 }
 
 /// Resolve every `Failed` record for a cluster to its closure.
@@ -462,13 +453,12 @@ async fn load_failed_unless_in_flight(
 /// machine, so this one cannot know what it applied; saying so and leaving the
 /// record in place is more honest than superseding it and forgetting.
 async fn load_failed(
-    client: &Client,
-    ar: &ApiResource,
+    records: &Records,
     build: Option<&Build>,
     cluster: &str,
     report: &dyn Fn(PlanEvent<'_>),
 ) -> FailedBaseline {
-    let records = match activation::find_failed(client, ar, cluster).await {
+    let records = match records.failed(cluster).await {
         Ok(records) => records,
         Err(e) => {
             tracing::debug!("could not list failed activations: {e}");
@@ -516,7 +506,7 @@ async fn load_failed(
 /// Resolve the Active record's `status.orphansKeptFrom` to closures, and say
 /// how many there are so the plan's extra orphans have an explanation.
 pub fn load_kept(
-    active: &ActiveActivation,
+    active: &Record,
     build: Option<&Build>,
     cluster: &str,
     report: &dyn Fn(PlanEvent<'_>),
@@ -573,7 +563,7 @@ fn result_dir(cluster: &str, identity_hash: &str, built_via: Option<&str>) -> Op
 pub fn active_build_dir(
     cluster: &str,
     cached: Option<PathBuf>,
-    active: Option<&ActiveActivation>,
+    active: Option<&Record>,
 ) -> (Option<PathBuf>, Option<String>) {
     let cached_hash = cached
         .as_deref()
@@ -698,12 +688,8 @@ pub fn sync_kept_roots(cluster: &str, recorded: &[KeptOrphanSource]) {
 ///
 /// Operator-driven records are ignored. Those belong to the controller, which
 /// resumes them itself.
-async fn deploy_in_flight(
-    client: &Client,
-    ar: &ApiResource,
-    cluster: &str,
-) -> Option<DeployingActivation> {
-    match activation::find_deploying(client, ar, cluster).await {
+async fn deploy_in_flight(records: &Records, cluster: &str) -> Option<Record> {
+    match records.deploying(cluster).await {
         Ok(found) => found.into_iter().find(|record| !record.operator_driven),
         Err(e) => {
             tracing::debug!("could not list deploying activations: {e}");
@@ -735,9 +721,10 @@ async fn deploy_in_flight(
 /// plausible and is wrong.
 async fn of_live(
     client: &Client,
+    records: &Records,
     discovery: &[(ApiResource, kube::discovery::Scope)],
     cluster: &str,
-    active: &ActiveActivation,
+    active: &Record,
     report: &dyn Fn(PlanEvent<'_>),
 ) -> Result<Vec<Value>, PlanError> {
     let mut hashes: HashSet<String> = active.identity_hash.iter().cloned().collect();
@@ -747,12 +734,11 @@ async fn of_live(
             .iter()
             .map(|s| s.identity_hash.clone()),
     );
-    if let Some((ar, _)) = activation::find_activation_ar(discovery).map_err(PlanError::Domain)? {
-        let failed = activation::find_failed(client, ar, cluster)
-            .await
-            .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
-        hashes.extend(failed.into_iter().filter_map(|f| f.identity_hash));
-    }
+    let failed = records
+        .failed(cluster)
+        .await
+        .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
+    hashes.extend(failed.into_iter().filter_map(|f| f.identity_hash));
     let scope = fetch::SweepScope::Records {
         cluster,
         hashes: &hashes,
@@ -800,19 +786,19 @@ mod tests {
         }
     }
 
-    fn active(name: &str, kept: Vec<KeptOrphanSource>) -> ActiveActivation {
-        ActiveActivation {
+    fn active(name: &str, kept: Vec<KeptOrphanSource>) -> Record {
+        Record {
             name: name.into(),
             identity_hash: Some(format!("{name}-hash")),
-            built_via: None,
             orphans_kept_from: kept,
+            ..Default::default()
         }
     }
 
     /// The baseline of a cluster that runs `closure` under the record
     /// `active`, with `failed` and `kept` folded in.
     fn baseline(
-        active: ActiveActivation,
+        active: Record,
         closure: Vec<Value>,
         failed: FailedBaseline,
         kept: KeptBaseline,
@@ -920,12 +906,12 @@ mod tests {
         dir
     }
 
-    fn active_of(hash: &str, built_via: Option<&std::path::Path>) -> ActiveActivation {
-        ActiveActivation {
+    fn active_of(hash: &str, built_via: Option<&std::path::Path>) -> Record {
+        Record {
             name: format!("rec-{hash}"),
             identity_hash: Some(hash.to_string()),
             built_via: built_via.map(|p| p.to_string_lossy().into_owned()),
-            orphans_kept_from: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -1011,17 +997,18 @@ mod tests {
         ]);
         let client = api.client();
         let discovery = fetch::discover_resources(&client).await.unwrap();
-        let active = ActiveActivation {
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        let active = Record {
             name: "rec-a2".into(),
             identity_hash: Some("a2".into()),
-            built_via: None,
             orphans_kept_from: vec![KeptOrphanSource {
                 activation: "rec-ak".into(),
                 identity_hash: "ak".into(),
                 built_via: None,
             }],
+            ..Default::default()
         };
-        let old = of_live(&client, &discovery, "a", &active, &|_| {})
+        let old = of_live(&client, &records, &discovery, "a", &active, &|_| {})
             .await
             .unwrap();
         let mut names: Vec<&str> = old
@@ -1046,16 +1033,16 @@ mod tests {
         let api = FakeApi::new([record(cluster, "cur", PHASE_ACTIVE), failed, extra]);
         let client = api.client();
         let discovery = fetch::discover_resources(&client).await.unwrap();
-        let (ar, _) = activation::find_activation_ar(&discovery).unwrap().unwrap();
-        let current = ActiveActivation {
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        let current = Record {
             name: "rec-cur".into(),
             identity_hash: Some("cur".into()),
             built_via: Some(built_via),
-            orphans_kept_from: Vec::new(),
+            ..Default::default()
         };
         let events = std::cell::RefCell::new(Vec::new());
         let report = |event: PlanEvent<'_>| events.borrow_mut().push(format!("{event:?}"));
-        let baseline = Baseline::of_record(&client, ar, cluster, &current, &report).await;
+        let baseline = Baseline::of_record(&records, cluster, &current, &report).await;
         (baseline, events.into_inner())
     }
 

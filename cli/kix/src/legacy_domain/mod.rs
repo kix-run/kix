@@ -21,9 +21,10 @@
 //!    `cluster::apply`. Server-side apply drops the build-time keys on its
 //!    own because the `kix` field manager owns them; these two are written
 //!    by patch and would otherwise stay on the object forever.
-//! 4. [`check_cluster`] and [`check_build`], the gate. Every command that
-//!    reads Kix records refuses a cluster that has not been migrated, and
-//!    names the command to run. `Build` checks each build it loads, and
+//! 4. [`check_discovery`] and [`check_build`], the gate. Every command that
+//!    reads Kix records opens them through
+//!    [`crate::cluster::activation::Records::open`], which refuses a cluster
+//!    that has not been migrated and names the command to run. `Build` checks each build it loads, and
 //!    the commands that install a build's CRDs refuse a stale one
 //!    ([`crate::build_source::Build::installable`]).
 //!
@@ -37,6 +38,7 @@
 //! drop `legacyDomains` from `kix/lib/core/annotations.nix`, and shrink the
 //! allowlist in `keys`'s `no_other_file_spells_a_kix_domain` test.
 
+use kube::discovery::{ApiResource, Scope};
 use serde_json::{Map, Value};
 
 use crate::manifest::keys;
@@ -86,7 +88,7 @@ pub fn legacy_spellings(key: &str) -> Vec<String> {
 ///
 /// True when the retired spelling is there and the current one is not. That
 /// is the window between `kix migrate domain` and the first deploy after it:
-/// the records have moved, so the gate in [`check_cluster`] passes, but
+/// the records have moved, so the gate in [`check_discovery`] passes, but
 /// every object on the cluster still carries the annotations the old build
 /// wrote. Nothing reconciles that until a deploy re-applies them.
 ///
@@ -304,10 +306,21 @@ pub enum LegacyDomainError {
 
 /// Does discovery show Kix records under a retired group?
 ///
-/// The gate, called from `activation::find_activation_ar`, so every command
-/// that looks for a record is covered: deploy, rollback, gc, health, status
-/// and the operator.
-pub fn check_cluster(groups_in_discovery: &[&str]) -> Result<(), LegacyDomainError> {
+/// The gate. [`crate::cluster::activation::Records::open`] runs it, so every
+/// command that reads or writes a record is covered. A command that only
+/// reads objects calls it itself where an unmigrated cluster would mislead
+/// it, as `kix diff` and `kix plan` do.
+pub fn check_discovery(discovery: &[(ApiResource, Scope)]) -> Result<(), LegacyDomainError> {
+    let groups: Vec<&str> = discovery
+        .iter()
+        .filter(|(ar, _)| crate::manifest::lifecycle::is_record_kind(&ar.kind))
+        .map(|(ar, _)| ar.group.as_str())
+        .collect();
+    check_cluster(&groups)
+}
+
+/// [`check_discovery`] on the API groups that serve a record kind.
+fn check_cluster(groups_in_discovery: &[&str]) -> Result<(), LegacyDomainError> {
     let legacy = DOMAINS
         .iter()
         .find(|d| groups_in_discovery.contains(&d.to_string().as_str()));

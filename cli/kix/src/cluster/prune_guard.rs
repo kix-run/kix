@@ -61,7 +61,8 @@ pub enum PruneError {
 /// Deletes orphans of one Kix cluster. See the module docs.
 pub struct PruneGuard {
     client: Client,
-    records: Option<ApiResource>,
+    /// The Activation kind, if served.
+    record_resource: Option<ApiResource>,
     cluster: String,
     /// The last records read. Reread when an object names a hash it lacks,
     /// which is how a record created after the last read shows up.
@@ -75,7 +76,7 @@ impl PruneGuard {
     pub fn new(client: Client, discovery: &[(ApiResource, Scope)], cluster: &str) -> Self {
         PruneGuard {
             client,
-            records: activation::find_current_activation_ar(discovery).map(|(ar, _)| ar.clone()),
+            record_resource: activation::served_resource(discovery).cloned(),
             cluster: cluster.to_string(),
             tenancy: Mutex::new(None),
         }
@@ -131,7 +132,8 @@ impl PruneGuard {
         };
         if !fresh {
             let read =
-                tenancy::read_from(&self.client, self.records.as_ref(), &self.cluster).await?;
+                tenancy::read_from(&self.client, self.record_resource.as_ref(), &self.cluster)
+                    .await?;
             *slot = Some(read);
         }
         Ok(slot.clone().unwrap_or_default())

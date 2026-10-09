@@ -75,7 +75,7 @@ pub fn build_attestation(
 
 /// Read the receipt from the cluster's active Activation.
 async fn fetch_receipt(cluster: &str, context: Option<&str>) -> Result<Value> {
-    use kix::cluster::{activation, fetch};
+    use kix::cluster::{activation::Records, fetch};
 
     let client = fetch::make_client(context)
         .await
@@ -83,13 +83,12 @@ async fn fetch_receipt(cluster: &str, context: Option<&str>) -> Result<Value> {
     let discovery = fetch::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
-    let Some((ar, _)) = activation::find_activation_ar(&discovery).map_err(|e| miette!("{e}"))?
-    else {
+    let Some(records) = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))? else {
         return Err(miette!(
             "this cluster has no Activation CRD, so Kix has never deployed to it"
         ));
     };
-    match activation::read_receipt(&client, ar, cluster).await {
+    match records.receipt(cluster).await {
         Ok(Some(receipt)) => Ok(receipt),
         Ok(None) => Err(miette!(
             "no deploy receipt on cluster '{cluster}'. Either nothing is deployed, or it was deployed by a kix that predates receipts. Deploy again to write one."

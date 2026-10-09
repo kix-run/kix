@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::cluster::activation::{DeployingActivation, FailedActivation, KeptOrphanSource};
+use crate::cluster::activation::{KeptOrphanSource, Record};
 use crate::cluster::fetch::FetchError;
 use crate::cluster::graph::GraphError;
 use crate::cluster::readiness::MalformedMarker;
@@ -65,15 +65,15 @@ pub enum PlanEvent<'a> {
     OlderBuildsLeftOut(usize),
     /// Another deploy of the cluster may still be running, so the plan
     /// leaves the leftovers of failed deploys alone.
-    DeployInFlight(&'a DeployingActivation),
+    DeployInFlight(&'a Record),
     /// A failed deploy's build is in the plan.
-    FailedFolded(&'a FailedActivation),
+    FailedFolded(&'a Record),
     /// A failed deploy's build was found but will not load; the plan leaves
     /// out what that deploy applied.
     FailedBuildUnusable { activation: &'a str, error: &'a str },
     /// A failed deploy's build is not on this machine.
     FailedUnresolved {
-        record: &'a FailedActivation,
+        record: &'a Record,
         cluster: &'a str,
     },
     /// The builds an earlier deploy kept orphans from that are in the plan.

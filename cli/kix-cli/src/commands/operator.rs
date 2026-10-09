@@ -362,10 +362,9 @@ mod tests {
         let api = FakeApi::new([record("rec", phase)]);
         let client = api.client();
         let discovery = fetch::discover_resources(&client).await.unwrap();
-        let (ar, _) = kix::cluster::activation::find_activation_ar(&discovery)
-            .unwrap()
-            .unwrap();
-        watch_activation_progress(&client, ar, "rec", "", true).await
+        let records =
+            kix::cluster::activation::Records::open_installed(&client, &discovery).unwrap();
+        watch_activation_progress(&client, records.resource(), "rec", "", true).await
     }
 
     /// A Degraded record is reported apart from an Active one, so

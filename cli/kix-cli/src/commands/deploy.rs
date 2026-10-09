@@ -14,7 +14,7 @@ use std::time::Duration;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
-use kix::cluster::activation;
+use kix::cluster::activation::Records;
 use kix::cluster::apply::{ApplyAction, ChangeAction};
 use kix::cluster::fetch;
 use kix::cluster::migrate::MigrationPair;
@@ -422,13 +422,13 @@ impl RunEnd {
 /// and the prune deletes by name. The plan has already been confirmed, so
 /// this refuses rather than planning again from the cluster's record.
 async fn check_cached_baseline(
-    client: &kube::Client,
-    discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
+    records: Option<&Records>,
     cluster: &str,
     cached_hash: &str,
 ) -> Result<()> {
-    let active = match activation::find_activation_ar(discovery).map_err(|e| miette!("{e}"))? {
-        Some((ar, _)) => activation::find_active(client, ar, cluster)
+    let active = match records {
+        Some(records) => records
+            .active(cluster)
             .await
             .map_err(|e| miette!("failed to find the active activation: {e}"))?,
         None => None,
@@ -469,12 +469,12 @@ fn supersede_consumed(
         let Ok(discovery) = fetch::discover_resources(client).await else {
             return 0usize;
         };
-        let Ok(Some((ar, _))) = kix::cluster::activation::find_activation_ar(&discovery) else {
+        let Ok(Some(records)) = Records::open(client, &discovery) else {
             return 0;
         };
         let mut done = 0;
         for name in consumed {
-            match kix::cluster::activation::supersede_activation(client, ar, name).await {
+            match records.supersede(name).await {
                 Ok(()) => done += 1,
                 Err(e) => tracing::warn!(activation = %name, error = %e, "could not supersede"),
             }
@@ -827,31 +827,24 @@ async fn run_deploy_async(
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    // The gate, again, here. `Baseline::of_cluster` checks it too, but
-    // `--current-activation` reads the previous build from the local cache
-    // and never contacts the cluster before this point. Without this check
+    // The gate, again, here. `Baseline::of_cluster` opens the records too,
+    // but `--current-activation` reads the previous build from the local
+    // cache and never contacts the cluster before this point. Without this
     // that flag skips the gate, and with `--prune` the deploy would compute
     // the retired CRDs as orphans and delete them, which cascades away every
     // Activation record on the cluster.
-    kix::legacy_domain::check_cluster(
-        &discovery
-            .iter()
-            .filter(|(ar, _)| kix::manifest::lifecycle::is_record_kind(&ar.kind))
-            .map(|(ar, _)| ar.group.as_str())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|e| miette!("{e}"))?;
+    let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
     if let Some(hash) = cached_baseline {
-        check_cached_baseline(&client, &discovery, cluster_name, hash).await?;
+        check_cached_baseline(records.as_ref(), cluster_name, hash).await?;
     }
 
     if let (Some(name), Some(hash)) = (
         checked.activation_name(),
         checked.activation_identity_hash(),
-    ) && let Some((ar, _)) =
-        activation::find_activation_ar(&discovery).map_err(|e| miette!("{e}"))?
-        && let Some(found) = activation::identity_hash_of(&client, ar, name)
+    ) && let Some(records) = &records
+        && let Some(found) = records
+            .identity_hash_of(name)
             .await
             .map_err(|e| miette!("{e}"))?
         && found != hash
@@ -1501,17 +1494,15 @@ mod cached_baseline_tests {
         let api = FakeApi::new([record("a", "a2", PHASE_ACTIVE)]);
         let client = api.client();
         let discovery = fetch::discover_resources(&client).await.unwrap();
-        assert!(
-            check_cached_baseline(&client, &discovery, "a", "a2")
-                .await
-                .is_ok()
-        );
-        let err = check_cached_baseline(&client, &discovery, "a", "p9")
+        let records = Records::open(&client, &discovery).unwrap();
+        let records = records.as_ref();
+        assert!(check_cached_baseline(records, "a", "a2").await.is_ok());
+        let err = check_cached_baseline(records, "a", "p9")
             .await
             .unwrap_err()
             .to_string();
         assert!(err.contains("Active build is a2"), "{err}");
-        let err = check_cached_baseline(&client, &discovery, "b", "p9")
+        let err = check_cached_baseline(records, "b", "p9")
             .await
             .unwrap_err()
             .to_string();

@@ -306,21 +306,14 @@ async fn fetch_live_manifests(
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    // The gate. `kix diff` never calls `find_activation_ar`, so it never
-    // reaches the check inside it that every other cluster command goes
-    // through. It still needs one: the live objects below are upgraded
-    // to the current domain before they are compared, which on an
-    // unmigrated cluster renames the live `activations.<retired>` CRD to the
-    // name the build uses and reports it as matching. The answer would be
-    // "in sync" about a resource that does not exist under that name.
-    kix::legacy_domain::check_cluster(
-        &discovery
-            .iter()
-            .filter(|(ar, _)| kix::manifest::lifecycle::is_record_kind(&ar.kind))
-            .map(|(ar, _)| ar.group.as_str())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|e| miette!("{e}"))?;
+    // The gate. `kix diff` never opens `Records`, so it never reaches the
+    // check inside it that every other cluster command goes through. It
+    // still needs one: the live objects below are upgraded to the current
+    // domain before they are compared, which on an unmigrated cluster
+    // renames the live `activations.<retired>` CRD to the name the build
+    // uses and reports it as matching. The answer would be "in sync" about
+    // a resource that does not exist under that name.
+    kix::legacy_domain::check_discovery(&discovery).map_err(|e| miette!("{e}"))?;
 
     if !global.quiet {
         eprintln!(

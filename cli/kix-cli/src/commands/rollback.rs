@@ -12,7 +12,7 @@ use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
 use kix::build_source::Build;
-use kix::cluster::activation;
+use kix::cluster::activation::{Record, Records};
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch;
 use kix::cluster::ops::{ClusterOps, KubeOps, KubeOpsConfig};
@@ -61,14 +61,12 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    let (activation_ar, _) = activation::find_activation_ar(&discovery)
-        .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?
-        .clone();
+    let records = Records::open_installed(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
     // The current Active activation is an optional position marker
     // in the history listing, but we must still print even if none exists.
-    let current = activation::find_active(&client, &activation_ar, cluster)
+    let current = records
+        .active(cluster)
         .await
         .map_err(|e| miette!("failed to find active activation: {e}"))?;
 
@@ -76,13 +74,10 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
     // stopped part way is Superseded once a later plan folded its leftovers
     // in, but it was never running, so rolling back to it would apply a state
     // the cluster has never been in.
-    let superseded: Vec<_> =
-        activation::list_superseded_activations(&client, &activation_ar, cluster)
-            .await
-            .map_err(|e| miette!("failed to list superseded activations: {e}"))?
-            .into_iter()
-            .filter(activation::SupersededActivation::was_ever_current)
-            .collect();
+    let superseded = records
+        .rollback_targets(cluster)
+        .await
+        .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
 
     let format = ctx.output_format(OutputFormat::Text);
     match format {
@@ -129,11 +124,7 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
     Ok(())
 }
 
-fn print_history_text(
-    cluster: &str,
-    current: Option<&kix::cluster::activation::ActiveActivation>,
-    superseded: &[kix::cluster::activation::SupersededActivation],
-) {
+fn print_history_text(cluster: &str, current: Option<&Record>, superseded: &[Record]) {
     println!(
         "{} activation history for '{}'",
         output::bold("Rollback:"),
@@ -176,11 +167,11 @@ fn print_history_text(
             .as_deref()
             .map(|h| format!("{}...", &h[..8.min(h.len())]))
             .unwrap_or_else(|| "no hash".to_string());
-        let ts = if s.deployed_at.is_empty() {
-            output::dim("unknown").into_owned()
-        } else {
-            s.deployed_at.clone()
-        };
+        let ts = s
+            .deployed_at
+            .clone()
+            .filter(|at| !at.is_empty())
+            .unwrap_or_else(|| output::dim("unknown").into_owned());
         let available = s
             .identity_hash
             .as_deref()
@@ -229,13 +220,11 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    let (activation_ar, _) = activation::find_activation_ar(&discovery)
-        .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?
-        .clone();
+    let records = Records::open_installed(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
     // 2. Find current Active activation
-    let current = activation::find_active(&client, &activation_ar, cluster)
+    let current = records
+        .active(cluster)
         .await
         .map_err(|e| miette!("failed to find active activation: {e}"))?
         .ok_or_else(|| {
@@ -263,13 +252,10 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     // stopped part way is Superseded once a later plan folded its leftovers
     // in, but it was never running, so rolling back to it would apply a state
     // the cluster has never been in.
-    let superseded: Vec<_> =
-        activation::list_superseded_activations(&client, &activation_ar, cluster)
-            .await
-            .map_err(|e| miette!("failed to list superseded activations: {e}"))?
-            .into_iter()
-            .filter(activation::SupersededActivation::was_ever_current)
-            .collect();
+    let superseded = records
+        .rollback_targets(cluster)
+        .await
+        .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
 
     if superseded.is_empty() {
         return Err(miette!(
@@ -335,7 +321,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
 
     let planned = plan_rollback(
         &client,
-        &activation_ar,
+        &records,
         cluster,
         &current,
         selected,
@@ -534,13 +520,11 @@ async fn run_operator_async(
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    let (activation_ar, _) = activation::find_activation_ar(&discovery)
-        .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?
-        .clone();
+    let records = Records::open_installed(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
     // 2. Find current Active activation
-    let current = activation::find_active(&client, &activation_ar, cluster)
+    let current = records
+        .active(cluster)
         .await
         .map_err(|e| miette!("failed to find active activation: {e}"))?
         .ok_or_else(|| {
@@ -568,13 +552,10 @@ async fn run_operator_async(
     // stopped part way is Superseded once a later plan folded its leftovers
     // in, but it was never running, so rolling back to it would apply a state
     // the cluster has never been in.
-    let superseded: Vec<_> =
-        activation::list_superseded_activations(&client, &activation_ar, cluster)
-            .await
-            .map_err(|e| miette!("failed to list superseded activations: {e}"))?
-            .into_iter()
-            .filter(activation::SupersededActivation::was_ever_current)
-            .collect();
+    let superseded = records
+        .rollback_targets(cluster)
+        .await
+        .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
 
     if superseded.is_empty() {
         return Err(miette!(
@@ -636,7 +617,7 @@ async fn run_operator_async(
     // operator plans again against the live objects and always prunes.
     let planned = plan_rollback(
         &client,
-        &activation_ar,
+        &records,
         cluster,
         &current,
         selected,
@@ -791,10 +772,10 @@ fn flags(prune: bool) -> PlanFlags {
 /// object the diff leaves out, as `kix deploy` does.
 async fn plan_rollback(
     client: &kube::Client,
-    activation_ar: &kube::api::ApiResource,
+    records: &Records,
     cluster: &str,
-    current: &activation::ActiveActivation,
-    selected: &activation::SupersededActivation,
+    current: &Record,
+    selected: &Record,
     prune: bool,
     quiet: bool,
 ) -> Result<RollbackPlan> {
@@ -833,7 +814,7 @@ async fn plan_rollback(
         .collect();
 
     let report = |event: PlanEvent<'_>| plan::progress::print(event, quiet);
-    let baseline = Baseline::of_record(client, activation_ar, cluster, current, &report).await;
+    let baseline = Baseline::of_record(records, cluster, current, &report).await;
     // The records and the orphans another Kix cluster deploys are looked up
     // under `cluster`, the name the rollback resolved its records by.
     let checked = Planner::new(flags(prune), &report)
@@ -853,21 +834,18 @@ async fn plan_rollback(
 /// interactive rollback selector and `kix rollback --list`. Shows store path
 /// availability, source directory, and the `previousActivation` link so the
 /// operator sees exactly what each history entry points at.
-fn print_superseded_entries(
-    cluster: &str,
-    superseded: &[kix::cluster::activation::SupersededActivation],
-) {
+fn print_superseded_entries(cluster: &str, superseded: &[Record]) {
     for (i, act) in superseded.iter().enumerate() {
         let hash_preview = act
             .identity_hash
             .as_deref()
             .map(|h| format!("{}...", &h[..8.min(h.len())]))
             .unwrap_or_else(|| "no hash".to_string());
-        let ts = if act.deployed_at.is_empty() {
-            "unknown".to_string()
-        } else {
-            act.deployed_at.clone()
-        };
+        let ts = act
+            .deployed_at
+            .clone()
+            .filter(|at| !at.is_empty())
+            .unwrap_or_else(|| "unknown".to_string());
         let available = act
             .identity_hash
             .as_deref()

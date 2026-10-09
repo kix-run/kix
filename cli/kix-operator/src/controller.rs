@@ -31,18 +31,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use kube::{
-    api::{Api, DynamicObject, Patch, PatchParams},
-    client::Client,
-    discovery::ApiResource,
-    runtime::controller::Action,
-};
+use kube::{api::DynamicObject, client::Client, runtime::controller::Action};
 use serde_json::Value;
 use thiserror::Error;
 
 use kix::build_source::Build;
 use kix::cluster::activation::{
-    self, PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_SUPERSEDED,
+    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
+    Record, Records,
 };
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch;
@@ -80,7 +76,7 @@ const ERROR_REQUEUE_INTERVAL: Duration = Duration::from_secs(30);
 /// Shared context for the controller.
 pub struct Context {
     pub client: Client,
-    pub activation_ar: ApiResource,
+    pub records: Records,
 }
 
 /// Errors from the operator reconcile loop.
@@ -137,16 +133,6 @@ fn cluster_name(activation: &DynamicObject) -> Option<String> {
                 .and_then(|v| v.as_str())
         })
         .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
-/// Extract identity hash from annotations.
-fn identity_hash(activation: &DynamicObject) -> Option<String> {
-    activation
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))
         .map(str::to_string)
 }
 
@@ -249,7 +235,8 @@ pub async fn reconcile_activation(
         return handle_delete(&activation, &ctx, name, &own_cluster).await;
     }
 
-    let phase = activation::read_phase(&activation);
+    let record = Record::of(&activation);
+    let phase = record.phase.as_str();
 
     match phase {
         // Superseded activations require no further work.
@@ -268,7 +255,7 @@ pub async fn reconcile_activation(
         // a record we do not own, and put two writers on one closure.
         // `spec.source` is the discriminator: we write it when we adopt a
         // deploy, and the CLI never does. Same rule as the Deploying arm.
-        s if s.is_empty() || s == activation::PHASE_QUEUED => {
+        s if s.is_empty() || s == PHASE_QUEUED => {
             if source_path(&activation).is_none() {
                 tracing::debug!(name, "record has no spec.source; not ours to drive");
                 return Ok(Action::await_change());
@@ -276,7 +263,9 @@ pub async fn reconcile_activation(
             tracing::info!(name, cluster = %cluster, "Processing Queued activation");
 
             // 1. Find all Queued activations for this cluster
-            let queued = activation::find_queued(&ctx.client, &ctx.activation_ar, &cluster)
+            let queued = ctx
+                .records
+                .queued(&cluster)
                 .await
                 .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
 
@@ -289,7 +278,8 @@ pub async fn reconcile_activation(
                     newest = %newest.name,
                     "Newer Queued activation exists, superseding self"
                 );
-                activation::supersede_activation(&ctx.client, &ctx.activation_ar, name)
+                ctx.records
+                    .supersede(name)
                     .await
                     .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
                 return Ok(Action::await_change());
@@ -299,26 +289,30 @@ pub async fn reconcile_activation(
             for q in &queued {
                 if q.name != name {
                     tracing::info!(name, superseding = %q.name, "Superseding older Queued activation");
-                    activation::supersede_activation(&ctx.client, &ctx.activation_ar, &q.name)
+                    ctx.records
+                        .supersede(&q.name)
                         .await
                         .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
                 }
             }
 
             // 4. Find and supersede current Active activation
-            let old_active = activation::find_active(&ctx.client, &ctx.activation_ar, &cluster)
+            let old_active = ctx
+                .records
+                .active(&cluster)
                 .await
                 .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
 
             if let Some(ref old) = old_active {
                 tracing::info!(name, old = %old.name, "Superseding current Active activation");
-                activation::supersede_activation(&ctx.client, &ctx.activation_ar, &old.name)
+                ctx.records
+                    .supersede(&old.name)
                     .await
                     .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
             }
 
             // 5. Ensure finalizer is set, then fall through to reconcile
-            ensure_finalizer(&ctx.client, &ctx.activation_ar, name, &activation).await?;
+            ensure_finalizer(&ctx.records, name, &activation).await?;
 
             // Run reconcile with lifecycle management (will set phase to Active on success)
             return run_reconcile(&activation, &ctx, name, &own_cluster, true).await;
@@ -329,7 +323,9 @@ pub async fn reconcile_activation(
         // current intended state and we want drift correction to keep trying.
         s if s == PHASE_ACTIVE || s == PHASE_DEGRADED => {
             // Yield to a queued Activation so it can perform the transition.
-            let queued = activation::find_queued(&ctx.client, &ctx.activation_ar, &cluster)
+            let queued = ctx
+                .records
+                .queued(&cluster)
                 .await
                 .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
 
@@ -343,7 +339,7 @@ pub async fn reconcile_activation(
             }
 
             // Ensure finalizer
-            ensure_finalizer(&ctx.client, &ctx.activation_ar, name, &activation).await?;
+            ensure_finalizer(&ctx.records, name, &activation).await?;
 
             // Run reconcile without lifecycle management (already Active)
             return run_reconcile(&activation, &ctx, name, &own_cluster, false).await;
@@ -368,7 +364,7 @@ pub async fn reconcile_activation(
                 return Ok(Action::await_change());
             }
             tracing::info!(name, "Resuming Deploying activation");
-            ensure_finalizer(&ctx.client, &ctx.activation_ar, name, &activation).await?;
+            ensure_finalizer(&ctx.records, name, &activation).await?;
             return run_reconcile(&activation, &ctx, name, &own_cluster, true).await;
         }
 
@@ -481,7 +477,7 @@ async fn run_reconcile(
     // 6. Build the streaming plan.
     let (plan, orphan_rids) = build_deploy_plan(&all_actions, &managed_manifests)?;
 
-    let act_identity_hash = identity_hash(activation);
+    let act_identity_hash = Record::of(activation).identity_hash;
 
     // 7. Run the DAG-streaming scheduler.
     //
@@ -599,7 +595,8 @@ async fn handle_delete(
         return Ok(Action::await_change());
     }
 
-    let phase = activation::read_phase(activation);
+    let record = Record::of(activation);
+    let phase = record.phase.as_str();
 
     // Only clean up resources for current activations
     if phase == PHASE_ACTIVE || phase == PHASE_DEPLOYING || phase == PHASE_DEGRADED {
@@ -651,17 +648,12 @@ async fn handle_delete(
     }
 
     // Remove finalizer
-    let api: Api<DynamicObject> = Api::all_with(ctx.client.clone(), &ctx.activation_ar);
-    let patch = serde_json::json!({
-        "metadata": {
-            "finalizers": finalizers
-                .iter()
-                .filter(|f| f.as_str() != FINALIZER)
-                .collect::<Vec<_>>()
-        }
-    });
-    api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
-        .await?;
+    let rest: Vec<String> = finalizers
+        .iter()
+        .filter(|f| f.as_str() != FINALIZER)
+        .cloned()
+        .collect();
+    ctx.records.set_finalizers(name, &rest).await?;
 
     tracing::info!(name, "Finalizer removed, Activation can be deleted");
     Ok(Action::await_change())
@@ -708,8 +700,7 @@ async fn delete_closure(
 
 /// Ensure the finalizer is set on the Activation CR.
 async fn ensure_finalizer(
-    client: &Client,
-    ar: &ApiResource,
+    records: &Records,
     name: &str,
     activation: &DynamicObject,
 ) -> Result<(), OperatorError> {
@@ -719,17 +710,9 @@ async fn ensure_finalizer(
         return Ok(());
     }
 
-    let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
     let mut new_finalizers: Vec<String> = finalizers.to_vec();
     new_finalizers.push(FINALIZER.to_string());
-
-    let patch = serde_json::json!({
-        "metadata": {
-            "finalizers": new_finalizers
-        }
-    });
-    api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
-        .await?;
+    records.set_finalizers(name, &new_finalizers).await?;
 
     tracing::info!(name, "Added finalizer {FINALIZER}");
     Ok(())

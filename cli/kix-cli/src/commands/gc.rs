@@ -354,13 +354,13 @@ async fn clear_kept(
     build_hash: Option<&str>,
     quiet: bool,
 ) {
-    let (Some((client, ar)), Some(active)) = (&records.conn, &records.active) else {
+    let (Some(store), Some(active)) = (&records.store, &records.active) else {
         return;
     };
     if !may_clear_kept(active, examined_all, build_hash) {
         return;
     }
-    match kix::cluster::activation::clear_orphans_kept_from(client, ar, &active.name).await {
+    match store.clear_orphans_kept_from(&active.name).await {
         Ok(()) => {
             baseline::sync_kept_roots(cluster, &[]);
             if !quiet {
@@ -384,11 +384,7 @@ async fn clear_kept(
 /// different build, an object the Active build lacks but this build declares
 /// was not deleted and is still an orphan. And only when `examined_all`: soft
 /// gc resolved every listed build, or hard gc was allowed to list every kind.
-fn may_clear_kept(
-    active: &kix::cluster::activation::ActiveActivation,
-    examined_all: bool,
-    build_hash: Option<&str>,
-) -> bool {
+fn may_clear_kept(active: &Record, examined_all: bool, build_hash: Option<&str>) -> bool {
     !active.orphans_kept_from.is_empty()
         && examined_all
         && build_hash.is_some()
@@ -516,7 +512,7 @@ async fn run_hard_async(
     // The expected set above comes from a build made now, so every hash in
     // it is a post-move hash, while every object here still carries the
     // pre-move one. Every single resource would read as HashNotExpected and
-    // be deleted. `check_cluster` cannot catch this: discovery shows only
+    // be deleted. The domain gate cannot catch this: discovery shows only
     // the current group, because the migration is what moved it.
     let stale = live
         .iter()
@@ -542,7 +538,12 @@ async fn run_hard_async(
     // partial view. Listed here for display; deleted with preconditions by
     // `delete_records`, not by kind lookup.
     let policy = retention_policy(args)?;
-    let records = plan_records_with(&client, &discovery, cluster_name, &policy).await?;
+    // The gate error must not be read as "no Activation CRD". On a cluster
+    // still under the retired group, this gc would compare live objects
+    // stamped with retired identity hashes against a current build, find no
+    // match for most of them, and plan to delete them.
+    let store = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
+    let records = plan_records_with(store, cluster_name, &policy).await?;
     garbage.extend(record_garbage(&records.plan));
 
     // Unstamped resources carry the kix label but no identity hash: kix never
@@ -932,14 +933,11 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    let (activation_ar, _) = kix::cluster::activation::find_activation_ar(&discovery)
-        .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?
-        .clone();
+    let store = Records::open_installed(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
     // Superseded activations under the retention policy
     let policy = retention_policy(args)?;
-    let records = plan_records_with(&client, &discovery, cluster, &policy).await?;
+    let records = plan_records_with(Some(store.clone()), cluster, &policy).await?;
 
     if records.plan.retire.is_empty() {
         if !ctx.global.quiet {
@@ -978,13 +976,7 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
             println!("Deleting Activation '{}'...", output::bold(name));
         }
 
-        match kix::cluster::activation::delete_activation_if_unchanged(
-            &client,
-            &activation_ar,
-            &retired.record,
-        )
-        .await
-        {
+        match store.retire(&retired.record).await {
             Ok(_) => {
                 // Wait for finalizer to complete deletion
                 super::operator::wait_for_deletion(&client, &ar, name, ctx.global.quiet).await?;
@@ -1020,7 +1012,9 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
 // Shared: activation record retention (--keep, --keep-max, --keep-for)
 // ---------------------------------------------------------------------------
 
-use kix::cluster::activation::{RetentionPolicy, Retirement};
+use kix::cluster::activation::{
+    Record, Records, RetentionPolicy, RetireReason, Retirement, retire_plan,
+};
 use kix::manifest::keys;
 
 /// The policy from the flags. `--keep-max` below `--keep` is raised to it
@@ -1080,19 +1074,19 @@ fn parse_retention_duration(s: &str) -> Result<Option<chrono::Duration>> {
     Ok(Some(d))
 }
 
-/// The records to retire, with the connection that listed them so the
-/// deletes reuse it. `conn` is `None` when the cluster has no Activation
-/// CRD, which also means it has no records.
+/// The records to retire, with the store that listed them so the deletes
+/// reuse it. `store` is `None` when the cluster has no Activation CRD, which
+/// also means it has no records.
 struct RecordRetirement {
-    conn: Option<(kube::Client, kube::discovery::ApiResource)>,
+    store: Option<Records>,
     plan: Retirement,
     /// The cluster's Active or Degraded record, for its `orphansKeptFrom`.
-    active: Option<kix::cluster::activation::ActiveActivation>,
+    active: Option<Record>,
 }
 
 impl RecordRetirement {
     fn kept_note(&self) -> String {
-        if self.conn.is_none() {
+        if self.store.is_none() {
             "no Activation records on this cluster".to_string()
         } else {
             format!("{} activation records kept", self.plan.kept.len())
@@ -1113,38 +1107,34 @@ async fn plan_record_retirement(
     let discovery = fetch::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
-    plan_records_with(&client, &discovery, cluster, policy).await
+    let store = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
+    plan_records_with(store, cluster, policy).await
 }
 
-/// List and plan on an existing connection.
+/// List and plan through an opened store.
 async fn plan_records_with(
-    client: &kube::Client,
-    discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
+    store: Option<Records>,
     cluster: &str,
     policy: &RetentionPolicy,
 ) -> Result<RecordRetirement> {
-    // The gate error must not be read as "no Activation CRD". On a cluster
-    // still under the retired group, hard gc would compare live objects
-    // stamped with retired identity hashes against a current build, find no
-    // match for most of them, and plan to delete them.
-    let Some((ar, _)) =
-        kix::cluster::activation::find_activation_ar(discovery).map_err(|e| miette!("{e}"))?
-    else {
+    let Some(store) = store else {
         return Ok(RecordRetirement {
-            conn: None,
+            store: None,
             plan: Default::default(),
             active: None,
         });
     };
-    let superseded = kix::cluster::activation::list_superseded_activations(client, ar, cluster)
+    let superseded = store
+        .superseded(cluster)
         .await
         .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
-    let plan = kix::cluster::activation::retire_plan(superseded, policy);
-    let active = kix::cluster::activation::find_active(client, ar, cluster)
+    let plan = retire_plan(superseded, policy);
+    let active = store
+        .active(cluster)
         .await
         .map_err(|e| miette!("failed to find the active activation: {e}"))?;
     Ok(RecordRetirement {
-        conn: Some((client.clone(), ar.clone())),
+        store: Some(store),
         plan,
         active,
     })
@@ -1173,10 +1163,7 @@ fn record_garbage(plan: &Retirement) -> Vec<GarbageEntry> {
 /// One line describing the policy in words.
 fn describe_policy(policy: &RetentionPolicy) -> String {
     let age = match policy.keep_for {
-        Some(d) => format!(
-            ", and anything newer than {}",
-            kix::cluster::activation::humanize(d)
-        ),
+        Some(d) => format!(", and anything newer than {}", humanize(d)),
         None => String::new(),
     };
     format!(
@@ -1184,6 +1171,29 @@ fn describe_policy(policy: &RetentionPolicy) -> String {
         policy.keep_min,
         policy.keep_max.max(policy.keep_min)
     )
+}
+
+/// Why a record is retired, in words.
+fn describe_reason(reason: &RetireReason) -> String {
+    match reason {
+        RetireReason::BeyondMax(n) => format!("beyond the {n} newest"),
+        RetireReason::OlderThan(d) => format!("older than {}", humanize(*d)),
+        RetireReason::UnknownAge => "no deployed-at".to_string(),
+    }
+}
+
+/// `30d`, `12h`, `45m`, `30s`: the largest unit that divides evenly.
+fn humanize(d: chrono::Duration) -> String {
+    let secs = d.num_seconds();
+    if secs > 0 && secs % 86_400 == 0 {
+        format!("{}d", secs / 86_400)
+    } else if secs > 0 && secs % 3_600 == 0 {
+        format!("{}h", secs / 3_600)
+    } else if secs > 0 && secs % 60 == 0 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{secs}s")
+    }
 }
 
 /// Print which records will go, why, and which stay.
@@ -1201,16 +1211,17 @@ fn print_record_plan(records: &RecordRetirement, policy: &RetentionPolicy) {
         describe_policy(policy),
     );
     for retired in &plan.retire {
-        let when = if retired.record.deployed_at.is_empty() {
-            "no deployed-at".to_string()
-        } else {
-            retired.record.deployed_at.clone()
-        };
+        let when = retired
+            .record
+            .deployed_at
+            .clone()
+            .filter(|at| !at.is_empty())
+            .unwrap_or_else(|| "no deployed-at".to_string());
         println!(
             "  {} Activation/{} {}",
             output::red("-"),
             retired.record.name,
-            output::dim(&format!("({when}; {})", retired.reason))
+            output::dim(&format!("({when}; {})", describe_reason(&retired.reason)))
         );
     }
     println!(
@@ -1231,14 +1242,13 @@ async fn delete_records(
     global: &crate::cli::GlobalArgs,
     records: &RecordRetirement,
 ) -> Result<(usize, usize)> {
-    let Some((client, ar)) = &records.conn else {
+    let Some(store) = &records.store else {
         return Ok((0, 0));
     };
     let mut retired = 0usize;
     let mut failed = 0usize;
     for r in &records.plan.retire {
-        match kix::cluster::activation::delete_activation_if_unchanged(client, ar, &r.record).await
-        {
+        match store.retire(&r.record).await {
             Ok(()) => {
                 if !global.quiet {
                     println!(
@@ -1553,11 +1563,10 @@ mod kept_garbage_tests {
     /// examined everything, and only when there is a list.
     #[test]
     fn kept_list_is_cleared_only_after_a_complete_gc_of_the_active_build() {
-        use kix::cluster::activation::{ActiveActivation, KeptOrphanSource};
-        let active = |kept: bool| ActiveActivation {
+        use kix::cluster::activation::KeptOrphanSource;
+        let active = |kept: bool| Record {
             name: "c-v2".into(),
             identity_hash: Some("h-v2".into()),
-            built_via: None,
             orphans_kept_from: if kept {
                 vec![KeptOrphanSource {
                     activation: "c-v1".into(),
@@ -1567,13 +1576,14 @@ mod kept_garbage_tests {
             } else {
                 vec![]
             },
+            ..Default::default()
         };
         assert!(may_clear_kept(&active(true), true, Some("h-v2")));
         assert!(!may_clear_kept(&active(false), true, Some("h-v2")));
         assert!(!may_clear_kept(&active(true), false, Some("h-v2")));
         assert!(!may_clear_kept(&active(true), true, Some("h-v3")));
         assert!(!may_clear_kept(&active(true), true, None));
-        let unhashed = ActiveActivation {
+        let unhashed = Record {
             identity_hash: None,
             ..active(true)
         };
@@ -1584,19 +1594,13 @@ mod kept_garbage_tests {
 #[cfg(test)]
 mod record_garbage_tests {
     use super::*;
-    use kix::cluster::activation::{RetentionPolicy, SupersededActivation, retire_plan};
 
-    fn rec(name: &str, at: &str) -> SupersededActivation {
-        SupersededActivation {
+    fn rec(name: &str, at: &str) -> Record {
+        Record {
             name: name.into(),
             identity_hash: Some(format!("{name}hash")),
-            deployed_at: at.into(),
-            built_via: None,
-            previous_activation: None,
-            uid: None,
-            resource_version: None,
-            failed_at: None,
-            created_at: None,
+            deployed_at: Some(at.into()),
+            ..Default::default()
         }
     }
 
@@ -1642,6 +1646,26 @@ mod record_garbage_tests {
         assert_eq!(d("off"), None);
         assert!(parse_retention_duration("3w").is_err());
         assert!(parse_retention_duration("soon").is_err());
+    }
+
+    #[test]
+    fn humanize_picks_the_largest_even_unit() {
+        use chrono::Duration;
+        assert_eq!(humanize(Duration::days(30)), "30d");
+        assert_eq!(humanize(Duration::hours(36)), "36h");
+        assert_eq!(humanize(Duration::minutes(90)), "90m");
+        assert_eq!(humanize(Duration::seconds(45)), "45s");
+    }
+
+    #[test]
+    fn retire_reasons_read_as_before() {
+        let reason = |r: RetireReason| describe_reason(&r);
+        assert_eq!(
+            reason(RetireReason::OlderThan(chrono::Duration::days(30))),
+            "older than 30d"
+        );
+        assert_eq!(reason(RetireReason::BeyondMax(3)), "beyond the 3 newest");
+        assert_eq!(reason(RetireReason::UnknownAge), "no deployed-at");
     }
 }
 

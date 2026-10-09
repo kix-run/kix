@@ -6,9 +6,10 @@
 //! builds contain it ([`super::fetch::attribute`]), and tell a prune which
 //! objects another Kix cluster still deploys ([`super::prune_guard`]).
 //!
-//! Not behind the domain gate ([`super::activation::find_activation_ar`]).
+//! Not behind the domain gate ([`super::activation::Records::open`]).
 //! It only reads, and only records under the current API group, so on a
-//! cluster that has not migrated it finds none.
+//! cluster that has not migrated it finds none. A command that deletes on
+//! its strength has opened `Records` first.
 
 use std::collections::{HashMap, HashSet};
 
@@ -160,7 +161,7 @@ pub async fn read(
     discovery: &[(ApiResource, Scope)],
     cluster: &str,
 ) -> Result<Tenancy, ActivationError> {
-    let ar = activation::find_current_activation_ar(discovery).map(|(ar, _)| ar);
+    let ar = activation::served_resource(discovery);
     read_from(client, ar, cluster).await
 }
 

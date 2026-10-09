@@ -50,8 +50,7 @@ pub fn print(event: PlanEvent<'_>, quiet: bool) {
         PlanEvent::DeployInFlight(record) => {
             let since = record
                 .created_at
-                .as_deref()
-                .map(|t| format!(", started {t}"))
+                .map(|t| format!(", started {}", t.to_rfc3339()))
                 .unwrap_or_default();
             eprintln!(
                 "{} activation {}{since} is still marked as deploying, so this plan leaves \
@@ -81,7 +80,7 @@ pub fn print(event: PlanEvent<'_>, quiet: bool) {
                 output::bold(&record.name),
                 short(record.identity_hash.as_deref().unwrap_or_default()),
             );
-            if let Some(reason) = &record.reason {
+            if let Some(reason) = &record.failure_reason {
                 crate::say!("    it stopped because: {reason}");
             }
         }

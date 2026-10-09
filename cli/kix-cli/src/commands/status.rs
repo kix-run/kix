@@ -6,7 +6,7 @@ use miette::{IntoDiagnostic, Result, miette};
 use crate::cli::{OutputFormat, StatusArgs};
 use crate::output::{self, CommandResponse};
 use kix::build_source::Build;
-use kix::cluster::activation;
+use kix::cluster::activation::Records;
 use kix::cluster::fetch;
 use kix::cluster::readiness;
 use kix::eval::store_graph::StoreGraph;
@@ -239,42 +239,18 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
     let discovery = fetch::discover_resources(&client).await.into_diagnostic()?;
 
     // 2. Find the Active Activation CR
-    let (activation_status, built_via) =
-        match activation::find_activation_ar(&discovery).map_err(|e| miette!("{e}"))? {
-            Some((ar, _)) => {
-                match activation::find_active(&client, ar, cluster_name)
-                    .await
-                    .into_diagnostic()?
-                {
-                    Some(act) => {
-                        // Read the full CR for age
-                        let api: kube::api::Api<kube::api::DynamicObject> =
-                            kube::api::Api::all_with(client.clone(), ar);
-                        let full = api.get(&act.name).await.into_diagnostic()?;
-                        let phase = full
-                            .data
-                            .pointer("/status/phase")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Unknown")
-                            .to_string();
-                        let age = compute_age_from_obj(&full);
-                        let hash = act.identity_hash.clone().unwrap_or_default();
-                        let built = act.built_via.clone();
-                        (
-                            Some(ActivationStatus {
-                                name: act.name,
-                                phase,
-                                identity_hash: hash,
-                                age,
-                            }),
-                            built,
-                        )
-                    }
-                    None => (None, None),
-                }
-            }
-            None => (None, None),
-        };
+    let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
+    let active = match &records {
+        Some(records) => records.active(cluster_name).await.into_diagnostic()?,
+        None => None,
+    };
+    let built_via = active.as_ref().and_then(|act| act.built_via.clone());
+    let activation_status = active.map(|act| ActivationStatus {
+        age: compute_age(act.created_at),
+        identity_hash: act.identity_hash.unwrap_or_default(),
+        phase: act.phase,
+        name: act.name,
+    });
 
     // 3. Load store graph for package grouping (if we have a built-via path)
     let store_graph = built_via
@@ -489,8 +465,12 @@ fn make_spinner(global: &crate::cli::GlobalArgs) -> Option<indicatif::ProgressBa
 }
 
 fn compute_age_from_obj(obj: &kube::api::DynamicObject) -> String {
-    let timestamp = obj.metadata.creation_timestamp.as_ref().map(|t| t.0);
-    match timestamp {
+    compute_age(obj.metadata.creation_timestamp.as_ref().map(|t| t.0))
+}
+
+/// How long ago `created` was, or "-" without one.
+fn compute_age(created: Option<chrono::DateTime<chrono::Utc>>) -> String {
+    match created {
         Some(created) => {
             let now = chrono::Utc::now();
             let duration = now.signed_duration_since(created);

@@ -5,7 +5,7 @@
 //!
 //! It deletes CustomResourceDefinitions and rewrites deploy history. Both
 //! deserve a person, a dry run and a prompt. The gate in
-//! [`super::check_cluster`] is what makes it unmissable: until it has run,
+//! [`super::check_discovery`] is what makes it unmissable: until it has run,
 //! every command that reads a Kix record refuses and names it.
 //!
 //! # Order, and why it is fixed
@@ -137,7 +137,7 @@ pub struct Report {
     /// question this only raises.
     pub finalizers_present: bool,
     /// Records whose phase is Active or Degraded. Exactly one is the
-    /// healthy case; `find_active` takes the first the apiserver returns,
+    /// healthy case; `Records::active` takes the most recently deployed,
     /// so more than one means the deploy after this migration may diff
     /// against the wrong build.
     pub current_records: Vec<String>,

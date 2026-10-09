@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use miette::{Result, miette};
 
-use kix::cluster::activation::{self, ActiveActivation};
+use kix::cluster::activation::{Record, Records};
 use kix::cluster::fetch;
 use kix::manifest::types::ResourceId;
 
@@ -141,11 +141,10 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
             .map_err(|e| miette!("{e}"))?;
 
         // 2. Find active Activation CR
-        let activation_ar = activation::find_activation_ar(&discovery)
-            .map_err(|e| miette!("{e}"))?
-            .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?;
+        let records = Records::open_installed(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
-        let active = activation::find_active(&client, &activation_ar.0, &cluster)
+        let active = records
+            .active(&cluster)
             .await
             .map_err(|e| miette!("failed to find activation: {e}"))?
             .ok_or_else(|| miette!("no active deployment record found for cluster '{cluster}'"))?;
@@ -260,7 +259,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
 /// Check every resource's dependencies against the live index.
 /// Checks all resources directly; no root is required.
 fn walk_graph(
-    _activation: &ActiveActivation,
+    _activation: &Record,
     live_by_hash: &HashMap<String, LiveResource>,
     verbose: u8,
 ) -> BTreeMap<String, ResourceHealth> {

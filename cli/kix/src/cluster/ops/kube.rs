@@ -15,7 +15,7 @@ use tokio::sync::RwLock;
 
 use crate::manifest::types::ResourceId;
 
-use super::super::activation::{self, WaveRecord, WaveStatus};
+use super::super::activation::{self, Records, WaveRecord, WaveStatus};
 use super::super::apply::{self, ApplyAction, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
 use super::super::errors::{FailureClass, classify, describe};
@@ -158,17 +158,18 @@ impl KubeOps {
         self.live_activations.read().ok().and_then(|g| g.clone())
     }
 
-    /// The Activation `ApiResource`, or `None` when there is no record CRD.
+    /// The Activation records, or `None` when there is no record CRD.
     ///
-    /// A cluster still on a retired API group returns `None` here and is
-    /// reported by the caller that has somewhere to put the message; the
-    /// engine treats a missing CRD as "no record to write", which is the
-    /// safe direction: the operator reconciles nothing until the migration
-    /// has run.
-    async fn activation_ar(&self) -> Option<ApiResource> {
+    /// Opened from the discovery cache each time, since the record CRD can
+    /// arrive mid-run. A cluster still on a retired API group returns `None`
+    /// here and is reported by the caller that has somewhere to put the
+    /// message; the engine treats a missing CRD as "no record to write",
+    /// which is the safe direction: the operator reconciles nothing until
+    /// the migration has run.
+    async fn records(&self) -> Option<Records> {
         let d = self.discovery.read().await;
-        match activation::find_activation_ar(&d) {
-            Ok(found) => found.map(|(ar, _)| ar.clone()),
+        match Records::open(&self.client, &d) {
+            Ok(records) => records,
             Err(e) => {
                 tracing::error!("{e}");
                 None
@@ -189,7 +190,7 @@ impl KubeOps {
         let Some(name) = self.cfg.activation_name.as_ref() else {
             return true;
         };
-        let Some(ar) = self.activation_ar().await else {
+        let Some(records) = self.records().await else {
             return false;
         };
 
@@ -228,7 +229,7 @@ impl KubeOps {
             }
         }
 
-        if let Err(e) = activation::begin_deploy(&self.client, &ar, name, 1).await {
+        if let Err(e) = records.begin_deploy(name, 1).await {
             // 404 on a cluster whose record CRD is served but whose record
             // does not exist yet: the create above failed, or this is the
             // operator on a record that has since gone.
@@ -329,7 +330,7 @@ impl ClusterOps for KubeOps {
         if self.cfg.dry_run {
             return Ok(());
         }
-        let Some(ar) = self.activation_ar().await else {
+        let Some(records) = self.records().await else {
             // No record CRD served yet. On a cluster's first deploy the CRD is
             // in this very plan, so the record is created at the CRD barrier
             // instead; see `rediscover`.
@@ -341,7 +342,7 @@ impl ClusterOps for KubeOps {
         // Read the live set BEFORE creating the record, so the annotation
         // stamped on the record itself is computed the same way as every
         // other resource's.
-        let live = activation::live_activation_hashes(&self.client, &ar).await;
+        let live = records.live_hashes().await;
         if let Ok(mut slot) = self.live_activations.write() {
             *slot = live;
         }
@@ -357,15 +358,10 @@ impl ClusterOps for KubeOps {
         if self.cfg.dry_run || !self.cfg.mark_failed_on_abort {
             return Ok(());
         }
-        let (Some(ar), Some(name)) = (self.activation_ar().await, &self.cfg.activation_name) else {
+        let (Some(records), Some(name)) = (self.records().await, &self.cfg.activation_name) else {
             return Ok(());
         };
-        match tokio::time::timeout(
-            BEST_EFFORT_TIMEOUT,
-            activation::fail_deploy(&self.client, &ar, name, reason),
-        )
-        .await
-        {
+        match tokio::time::timeout(BEST_EFFORT_TIMEOUT, records.fail_deploy(name, reason)).await {
             Ok(Ok(())) => Ok(()),
             // Nothing to fail. The record never got created, which is the
             // pre-CRD window on a first deploy.
@@ -660,9 +656,9 @@ impl ClusterOps for KubeOps {
         if self
             .record_pending
             .load(std::sync::atomic::Ordering::SeqCst)
-            && let Some(ar) = self.activation_ar().await
+            && let Some(records) = self.records().await
         {
-            let live = activation::live_activation_hashes(&self.client, &ar).await;
+            let live = records.live_hashes().await;
             if let Ok(mut slot) = self.live_activations.write() {
                 *slot = live;
             }
@@ -683,7 +679,7 @@ impl ClusterOps for KubeOps {
         if self.cfg.dry_run {
             return Ok(());
         }
-        let (Some(ar), Some(name)) = (self.activation_ar().await, &self.cfg.activation_name) else {
+        let (Some(records), Some(name)) = (self.records().await, &self.cfg.activation_name) else {
             return Ok(());
         };
         // One synthetic "wave" until the Activation schema moves to per-node
@@ -699,11 +695,7 @@ impl ClusterOps for KubeOps {
             applied,
             failed,
         };
-        match tokio::time::timeout(
-            BEST_EFFORT_TIMEOUT,
-            activation::record_waves(&self.client, &ar, name, &[record]),
-        )
-        .await
+        match tokio::time::timeout(BEST_EFFORT_TIMEOUT, records.record_waves(name, &[record])).await
         {
             Ok(Ok(())) => Ok(()),
             // The Activation CR is itself a node of the plan and lands in the
@@ -792,31 +784,27 @@ impl ClusterOps for KubeOps {
         if self.cfg.dry_run {
             return Ok(None);
         }
-        let (Some(ar), Some(name)) = (self.activation_ar().await, &self.cfg.activation_name) else {
+        let (Some(records), Some(name)) = (self.records().await, &self.cfg.activation_name) else {
             return Ok(None);
         };
         let work = async {
-            let current = activation::find_active(&self.client, &ar, &self.cfg.cluster_name)
-                .await
-                .ok()
-                .flatten();
+            let current = records.active(&self.cfg.cluster_name).await.ok().flatten();
             let kept = self.cfg.kept_orphans.recorded(
                 current.as_ref().map(|c| c.orphans_kept_from.as_slice()),
                 orphans_left,
             );
             let old = current.filter(|old| &old.name != name);
-            activation::finalize_deploy(
-                &self.client,
-                &ar,
-                &self.cfg.cluster_name,
-                name,
-                old.as_ref(),
-                had_failures,
-                self.cfg.receipt.as_ref(),
-                &self.cfg.consumed_failed,
-                &kept,
-            )
-            .await?;
+            records
+                .finalize_deploy(
+                    &self.cfg.cluster_name,
+                    name,
+                    old.as_ref(),
+                    had_failures,
+                    self.cfg.receipt.as_ref(),
+                    &self.cfg.consumed_failed,
+                    &kept,
+                )
+                .await?;
             if let Ok(mut recorded) = self.recorded_kept.lock() {
                 *recorded = Some(kept);
             }

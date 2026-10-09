@@ -235,14 +235,7 @@ pub(crate) fn dry_run(
         let discovery = fetch::discover_resources(&client)
             .await
             .map_err(|e| miette!("{e}"))?;
-        kix::legacy_domain::check_cluster(
-            &discovery
-                .iter()
-                .filter(|(ar, _)| lifecycle::is_record_kind(&ar.kind))
-                .map(|(ar, _)| ar.group.as_str())
-                .collect::<Vec<_>>(),
-        )
-        .map_err(|e| miette!("{e}"))?;
+        kix::legacy_domain::check_discovery(&discovery).map_err(|e| miette!("{e}"))?;
         let served_kinds: HashSet<String> =
             discovery.iter().map(|(ar, _)| ar.kind.clone()).collect();
 

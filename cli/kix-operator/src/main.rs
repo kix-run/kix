@@ -35,24 +35,13 @@ use std::sync::Arc;
 use futures::StreamExt;
 use kube::{
     api::{Api, DynamicObject},
-    discovery::ApiResource,
     runtime::{Controller, WatchStreamExt, reflector::store::Writer, watcher},
 };
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use controller::{Context, error_policy, reconcile_activation};
+use kix::cluster::activation::{OpenError, Records};
 use kix::manifest::keys;
-
-/// Build the ApiResource descriptor for kix Activation CRs.
-fn activation_api_resource() -> ApiResource {
-    ApiResource {
-        group: keys::GROUP.into(),
-        version: "v1alpha1".into(),
-        api_version: keys::API_VERSION.into(),
-        kind: kix::manifest::lifecycle::RECORD_KIND.into(),
-        plural: "activations".into(),
-    }
-}
 
 /// Stream-level generation filter for `DynamicObject`.
 ///
@@ -82,7 +71,7 @@ fn generation_filter(
     })
 }
 
-/// Refuse to start on a cluster whose records sit under a retired API group.
+/// The cluster's Activation records, opened past the domain gate.
 ///
 /// Discovery that fails is a refusal too. It used to be logged and passed
 /// over, which started the operator unchecked on exactly the kind of cluster
@@ -90,7 +79,7 @@ fn generation_filter(
 /// again. Only Kix's own groups, current and retired, are discovered: the
 /// gate needs nothing else, and an unrelated API that is down must not keep
 /// the operator from starting.
-async fn check_domain(client: &kube::Client) -> anyhow::Result<()> {
+async fn open_records(client: &kube::Client) -> anyhow::Result<Records> {
     let groups: Vec<&str> = std::iter::once(keys::GROUP)
         .chain(kix::legacy_domain::DOMAINS.iter().copied())
         .collect();
@@ -101,16 +90,21 @@ async fn check_domain(client: &kube::Client) -> anyhow::Result<()> {
             return Err(e.into());
         }
     };
-    let groups: Vec<&str> = discovery
-        .iter()
-        .filter(|(ar, _)| kix::manifest::lifecycle::is_record_kind(&ar.kind))
-        .map(|(ar, _)| ar.group.as_str())
-        .collect();
-    if let Err(e) = kix::legacy_domain::check_cluster(&groups) {
-        tracing::error!("{e}");
-        return Err(e.into());
+    match Records::open(client, &discovery) {
+        Ok(Some(records)) => Ok(records),
+        Ok(None) => {
+            tracing::error!("Activation CRD not found on cluster");
+            tracing::error!(
+                "Ensure the Activation CRD ({}) is deployed before starting the operator",
+                keys::ACTIVATIONS_CRD
+            );
+            Err(OpenError::NotInstalled.into())
+        }
+        Err(e) => {
+            tracing::error!("{e}");
+            Err(e.into())
+        }
     }
-    Ok(())
 }
 
 #[tokio::main]
@@ -136,16 +130,12 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     tracing::info!("Connected to Kubernetes API server");
 
-    // Set up the Activation API
-    let ar = activation_api_resource();
-    let activations: Api<DynamicObject> = Api::all_with(client.clone(), &ar);
-
     // The domain gate, before anything else touches a record.
     //
-    // The operator watches one API group and hard-codes the current one, so
-    // it cannot tell on its own that a cluster is simply on the retired one:
-    // the list below would fail with "CRD not found", which reads as "your
-    // CRDs are missing" and sends the reader to fix the wrong thing.
+    // The operator watches the current API group only, so it cannot tell on
+    // its own that a cluster is simply on the retired one: it would find no
+    // CRD, which reads as "your CRDs are missing" and sends the reader to
+    // fix the wrong thing.
     //
     // Refusing while both groups are live matters more than the wording. In
     // that state a migration is either running or was interrupted, and Kix's
@@ -153,7 +143,9 @@ async fn main() -> anyhow::Result<()> {
     // copies the migration has created but not yet given a status to, and an
     // Activation with no phase reads as Queued: it would supersede the real
     // Active activation and deploy whatever build that record names.
-    check_domain(&client).await?;
+    let records = open_records(&client).await?;
+    let ar = records.resource().clone();
+    let activations: Api<DynamicObject> = Api::all_with(client.clone(), &ar);
 
     // Verify CRD is registered by attempting a list
     match activations
@@ -173,7 +165,7 @@ async fn main() -> anyhow::Result<()> {
 
     let ctx = Arc::new(Context {
         client: client.clone(),
-        activation_ar: ar.clone(),
+        records,
     });
 
     // Build the watcher stream with generation-based dedup.
@@ -216,8 +208,8 @@ mod tests {
     async fn the_operator_does_not_start_unchecked_when_discovery_fails() {
         let api = FakeApi::new([]);
         api.fail_next("/apis", 1, 500);
-        assert!(check_domain(&api.client()).await.is_err());
-        assert!(check_domain(&api.client()).await.is_ok());
+        assert!(open_records(&api.client()).await.is_err());
+        assert!(open_records(&api.client()).await.is_ok());
     }
 
     /// The gate reads only Kix's own groups, so an unrelated API that is
@@ -226,10 +218,10 @@ mod tests {
     async fn an_unrelated_api_that_is_down_does_not_stop_the_start() {
         let api = FakeApi::new([]);
         api.fail_next("/apis/rbac.authorization.k8s.io/v1", u32::MAX, 503);
-        assert!(check_domain(&api.client()).await.is_ok());
+        assert!(open_records(&api.client()).await.is_ok());
 
         let api = FakeApi::new([]);
         api.fail_next(&format!("/apis/{}/v1alpha1", keys::GROUP), 1, 503);
-        assert!(check_domain(&api.client()).await.is_err());
+        assert!(open_records(&api.client()).await.is_err());
     }
 }
