@@ -10,7 +10,7 @@ use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
 use kix::build_source::InstallableBuild;
-use kix::cluster::fetch;
+use kix::cluster::client;
 use kix::legacy_domain::{KubeMigrationOps, migrate};
 use kix::manifest::keys;
 
@@ -24,7 +24,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let client = ctx
         .runtime
-        .block_on(fetch::make_client(ctx.global.context.as_deref()))
+        .block_on(client::make_client(ctx.global.context.as_deref()))
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let ops = KubeMigrationOps::new(client);
 

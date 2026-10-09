@@ -37,7 +37,7 @@ use thiserror::Error;
 
 use kix::build_source::Build;
 use kix::cluster::activation::{Record, Records};
-use kix::cluster::fetch;
+use kix::cluster::discovery;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::prune_guard::{PruneGuard, Pruned};
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
@@ -543,7 +543,7 @@ async fn delete_closure(
     name: &str,
     ordered: &[ResourceId],
 ) -> Result<(), OperatorError> {
-    let discovery = fetch::discover_resources(client)
+    let discovery = discovery::discover_resources(client)
         .await
         .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
     let guard = PruneGuard::new(client.clone(), records.clone().into(), cluster);
@@ -649,7 +649,7 @@ mod tests {
             name: name.into(),
         };
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
         let records = Records::open_installed(&client, &discovery).unwrap();
         delete_closure(&client, &records, "b", "b", &[rid("b-only"), rid("shared")])
             .await

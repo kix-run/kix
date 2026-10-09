@@ -21,8 +21,11 @@ use thiserror::Error;
 
 use crate::cluster::activation::{Record, Records};
 use crate::cluster::apply::{ChangeAction, detect_changes_live};
-use crate::cluster::fetch::{self, FetchError, SharedOrphan};
+use crate::cluster::discovery;
+use crate::cluster::errors::FetchError;
 use crate::cluster::graph::{GraphError, ResourceGraph};
+use crate::cluster::inventory;
+use crate::cluster::inventory::SharedOrphan;
 use crate::cluster::ops::{Cluster, KubeResources, RecordConfig};
 use crate::cluster::readiness::MalformedMarker;
 use crate::cluster::scheduler::{self, DeployError, DeployPlan, PrunePolicy, SchedulerConfig};
@@ -96,18 +99,18 @@ impl LivePlan {
         desired: &[Value],
     ) -> Result<LivePlan, LivePlanError> {
         let cluster = cluster_of(activation).unwrap_or_default();
-        let discovery = fetch::discover_resources(client)
+        let discovery = discovery::discover_resources(client)
             .await
             .map_err(|e| LivePlanError::Fetch(Box::new(e)))?;
         let records = Records::open(client, &discovery).map_err(LivePlanError::Domain)?;
         // Only this Kix cluster's objects: every other Kix cluster's objects
         // are absent from this build and would otherwise be pruned as
         // orphans.
-        let sweep = fetch::sweep_managed(
+        let sweep = inventory::sweep_managed(
             client,
             &discovery,
             &records,
-            fetch::SweepScope::Cluster(&cluster),
+            inventory::SweepScope::Cluster(&cluster),
         )
         .await
         .map_err(|e| LivePlanError::Fetch(Box::new(e)))?;
@@ -254,7 +257,7 @@ fn live_changes(
             _ => None,
         })
         .collect();
-    let (_, shared) = fetch::split_shared_orphans(orphans, live, tenancy);
+    let (_, shared) = inventory::split_shared_orphans(orphans, live, tenancy);
     let actions = actions
         .into_iter()
         .filter(|a| match a {
@@ -331,9 +334,9 @@ mod tests {
         let desired = [annotated("ConfigMap", "a-web", "h-web", "")];
 
         let tenancy = Tenancy::fixture(&records, "a");
-        let sweep = fetch::scope_sweep(
-            fetch::partition_sweep(objects.clone()),
-            fetch::SweepScope::Cluster("a"),
+        let sweep = inventory::scope_sweep(
+            inventory::partition_sweep(objects.clone()),
+            inventory::SweepScope::Cluster("a"),
             tenancy.clone(),
         );
         let (actions, shared) = live_changes(&desired, &sweep.managed, &tenancy);
@@ -343,9 +346,9 @@ mod tests {
 
         // `b`'s reconcile, with `b`'s build unchanged, prunes nothing of `a`.
         let tenancy = Tenancy::fixture(&records, "b");
-        let sweep = fetch::scope_sweep(
-            fetch::partition_sweep(objects),
-            fetch::SweepScope::Cluster("b"),
+        let sweep = inventory::scope_sweep(
+            inventory::partition_sweep(objects),
+            inventory::SweepScope::Cluster("b"),
             tenancy.clone(),
         );
         let desired = [
@@ -365,9 +368,9 @@ mod tests {
             live("ConfigMap", "a-web", "h-web", "a2"),
             live("ConfigMap", "leftover", "h-left", "retired"),
         ];
-        let sweep = fetch::scope_sweep(
-            fetch::partition_sweep(objects),
-            fetch::SweepScope::Cluster("a"),
+        let sweep = inventory::scope_sweep(
+            inventory::partition_sweep(objects),
+            inventory::SweepScope::Cluster("a"),
             tenancy.clone(),
         );
         let desired = [annotated("ConfigMap", "a-web", "h-web", "")];

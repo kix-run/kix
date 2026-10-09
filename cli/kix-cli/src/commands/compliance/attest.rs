@@ -76,12 +76,12 @@ pub fn build_attestation(
 
 /// Read the receipt from the cluster's active Activation.
 async fn fetch_receipt(cluster: &str, context: Option<&str>) -> Result<Value> {
-    use kix::cluster::{activation::Records, fetch};
+    use kix::cluster::{activation::Records, client, discovery};
 
-    let client = fetch::make_client(context)
+    let client = client::make_client(context)
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-    let discovery = fetch::discover_resources(&client)
+    let discovery = discovery::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
     let Some(records) = Records::open(&client, &discovery)

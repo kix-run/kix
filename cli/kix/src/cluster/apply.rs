@@ -588,7 +588,7 @@ pub(crate) async fn record_activation_on_skipped(
     activation_hash: &str,
     live_activations: Option<&HashSet<String>>,
 ) -> Result<(), ApplyError> {
-    let api = super::fetch::api_for(client, ar, &scope, rid);
+    let api = super::discovery::api_for(client, ar, &scope, rid);
     update_bookkeeping_annotations_checked(
         &api,
         &rid.name,
@@ -625,7 +625,7 @@ pub(crate) async fn apply_resource(
             resource: rid.display_id(),
         });
     }
-    let api: Api<DynamicObject> = super::fetch::api_for(client, ar, &scope, &rid);
+    let api: Api<DynamicObject> = super::discovery::api_for(client, ar, &scope, &rid);
 
     // Default to non-force SSA so ownership conflicts return their field paths
     // and current manager. --force-conflicts opts into taking ownership.
@@ -1975,12 +1975,12 @@ mod tests {
     /// ClusterRole, a ConfigMap with a namespace, or a kind discovery lacks.
     #[tokio::test]
     async fn a_namespaced_kind_without_a_namespace_is_refused() {
-        use crate::cluster::{fake_api::FakeApi, fetch};
+        use crate::cluster::{discovery, fake_api::FakeApi};
         use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
         let api = FakeApi::default();
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
         let before = api.requests().len();
         let cm = serde_json::json!({
             "apiVersion": "v1",

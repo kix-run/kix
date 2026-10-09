@@ -7,7 +7,7 @@
 //!
 //! The layer does not limit requests in flight. A permit held inside an
 //! unpolled request future can block work needed to resume that future. Callers
-//! that create bursts, such as [`super::fetch`], bound their own concurrency.
+//! that create bursts, such as [`super::inventory`], bound their own concurrency.
 //! Exhausted requests return their last response or error unchanged.
 
 use std::{
@@ -27,10 +27,11 @@ use http_body_util::BodyExt;
 use kube::{
     Client, Config,
     client::{Body, ClientBuilder},
+    config::{KubeConfigOptions, Kubeconfig},
 };
 use tower::{BoxError, Layer, Service, ServiceExt, buffer::Buffer};
 
-use super::errors::{FailureClass, classify_status, error_chain_find};
+use super::errors::{FailureClass, FetchError, RequestTimeout, classify_status, error_chain_find};
 
 /// Retry and timeout settings for apiserver requests.
 #[derive(Debug, Clone)]
@@ -76,7 +77,7 @@ pub const REQUEST_TIMEOUT_ENV: &str = "KIX_REQUEST_TIMEOUT";
 /// Env var: TCP connect timeout in whole seconds.
 pub const CONNECT_TIMEOUT_ENV: &str = "KIX_CONNECT_TIMEOUT";
 /// Env var: set to `0` to skip the first-contact probe in
-/// [`super::fetch::make_client`].
+/// [`super::client::make_client`].
 pub const PREFLIGHT_ENV: &str = "KIX_PREFLIGHT";
 
 impl ResiliencePolicy {
@@ -252,19 +253,6 @@ where
         Box::pin(run(inner, req, policy, stats))
     }
 }
-
-/// The error the per-attempt deadline produces. Classified as
-/// [`FailureClass::Timeout`] by [`super::errors`].
-#[derive(Debug)]
-pub struct RequestTimeout(pub Duration);
-
-impl std::fmt::Display for RequestTimeout {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "no response from the apiserver within {:?}", self.0)
-    }
-}
-
-impl std::error::Error for RequestTimeout {}
 
 /// The parts of a request we need to rebuild it for another attempt.
 /// `http::request::Parts` is not `Clone` (extensions), so the fields that
@@ -532,6 +520,129 @@ where
         },
         None => call.await.map_err(Into::into),
     }
+}
+
+/// Create a kube client, optionally targeting a specific context.
+///
+/// The client carries the transport policy from [`super::client`]: retries
+/// with backoff and per-request deadlines. Every command and the operator
+/// build their client here.
+///
+/// Before returning, the client has exchanged one request with the
+/// apiserver, so every caller past this point is talking to an endpoint that
+/// answers. See `probe_apiserver` for why that matters.
+pub async fn make_client(context: Option<&str>) -> Result<Client, FetchError> {
+    let config = match context {
+        Some(ctx) => {
+            let kubeconfig =
+                Kubeconfig::read().map_err(|e| FetchError::ClientError(Box::new(e)))?;
+            let options = KubeConfigOptions {
+                context: Some(ctx.to_string()),
+                ..Default::default()
+            };
+            Config::from_custom_kubeconfig(kubeconfig, &options)
+                .await
+                .map_err(|e| FetchError::ClientError(Box::new(e)))?
+        }
+        None => Config::infer()
+            .await
+            .map_err(|e| FetchError::ClientError(Box::new(e)))?,
+    };
+
+    let policy = ResiliencePolicy::from_env();
+    let endpoint = config.cluster_url.to_string();
+    let deadline = policy.connect_timeout + PROBE_GRACE;
+
+    let client = build_client(config, policy)
+        .await
+        .map_err(|e| FetchError::ClientError(Box::new(e)))?;
+
+    if preflight_enabled() {
+        probe_apiserver(&client, &endpoint, deadline).await?;
+    }
+    Ok(client)
+}
+
+/// How much slack the probe's deadline gets over the transport's
+/// `connect_timeout`.
+///
+/// The two bound different things and must not race. A connect that never
+/// completes is the transport's to report, because it knows the cause
+/// ("tcp connect error", "deadline has elapsed") where the probe knows only
+/// that time passed; the probe adds the endpoint on the way out. What is
+/// left over for the probe's own deadline is the case the transport cannot
+/// see at all: a connect that succeeded, followed by silence.
+const PROBE_GRACE: Duration = Duration::from_secs(5);
+
+/// Confirm the apiserver answers at all, within `deadline`.
+///
+/// `Client::try_from` never touches the network, so without this the first
+/// real request carries the cost of an unreachable endpoint and the "failed
+/// to connect to cluster" message at every call site is dead code: no error
+/// is ever produced for it to print, because nothing has tried to connect
+/// (kixpkgs#36).
+///
+/// Two failure shapes, and only one of them is a connect problem:
+///
+/// - The connect never completes or is refused. The transport's own
+///   `connect_timeout` bounds it, and the probe's job is to add the endpoint
+///   to the error, where kube alone yields an opaque
+///   `ServiceError: client error (Connect)`.
+/// - The connect completes and the endpoint then says nothing. No connect
+///   timeout can ever fire on this one, because the connect succeeded. With
+///   HTTPS the TLS handshake usually turns this into the first shape, but a
+///   load balancer that terminates TLS in front of a wedged apiserver does
+///   not. Only the probe's own deadline bounds it.
+///
+/// Only transport failures count as unreachable. *Any* HTTP response, 401
+/// and 403 and 404 included, proves the endpoint is alive, so the probe
+/// passes and the real call gets to report the real error. That rule is what
+/// keeps the probe from becoming a new failure mode of its own on a cluster
+/// where the account cannot read `/version`.
+async fn probe_apiserver(
+    client: &Client,
+    endpoint: &str,
+    deadline: Duration,
+) -> Result<(), FetchError> {
+    // `Client::apiserver_version()` would do, but it gives us no way to mark
+    // the request, so this is that call with the marker added. The response
+    // is `/version`'s, and the connection it opens is pooled for the real
+    // work that follows.
+    let mut request = match http::Request::get("/version").body(Vec::new()) {
+        Ok(request) => request,
+        Err(e) => return Err(FetchError::ClientError(Box::new(e))),
+    };
+    mark_first_contact(&mut request);
+
+    let probe = client.request::<k8s_openapi::apimachinery::pkg::version::Info>(request);
+    match tokio::time::timeout(deadline, probe).await {
+        Ok(Ok(info)) => {
+            tracing::debug!(endpoint, version = %info.git_version, "apiserver reachable");
+            Ok(())
+        }
+        Ok(Err(e)) if server_responded(&e) => {
+            // Alive, just not willing or able to serve /version to us.
+            tracing::debug!(endpoint, error = %e, "apiserver reachable, /version unreadable");
+            Ok(())
+        }
+        Ok(Err(source)) => Err(FetchError::ConnectFailed {
+            endpoint: endpoint.to_string(),
+            source,
+        }),
+        Err(_elapsed) => Err(FetchError::Unreachable {
+            endpoint: endpoint.to_string(),
+            timeout: deadline,
+        }),
+    }
+}
+
+/// Did an HTTP response come back? Separates "the endpoint is alive but said
+/// no" from "we never reached it".
+fn server_responded(e: &kube::Error) -> bool {
+    matches!(
+        e,
+        kube::Error::Api(_) | kube::Error::SerdeError(_) | kube::Error::FromUtf8(_)
+    )
 }
 
 #[cfg(test)]
@@ -1079,5 +1190,132 @@ mod tests {
         unsafe {
             std::env::remove_var(RETRY_ATTEMPTS_ENV);
         }
+    }
+
+    // These drive a real localhost socket rather than mocking kube, because
+    // the mode that matters is a TCP-level one: accept the connection and
+    // then say nothing. A mock at the kube layer cannot express it.
+
+    /// A localhost stand-in for an apiserver.
+    ///
+    /// `reply: None` accepts the connection and then goes silent, which is
+    /// the failure mode no connect timeout can catch: the handshake
+    /// succeeds, so only a deadline above the connect ever fires.
+    async fn fake_apiserver(reply: Option<&'static [u8]>) -> String {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            // Sockets stay in `held` so the peer sees silence, not a close.
+            let mut held = Vec::new();
+            while let Ok((mut sock, _)) = listener.accept().await {
+                if let Some(bytes) = reply {
+                    let _ = sock.write_all(bytes).await;
+                    let _ = sock.flush().await;
+                }
+                held.push(sock);
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// A client for `endpoint`, built the way `make_client` builds it.
+    async fn client_for(endpoint: &str) -> Client {
+        let config = Config::new(endpoint.parse().unwrap());
+        build_client(config, ResiliencePolicy::default())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn probe_gives_up_on_a_silent_endpoint() {
+        let endpoint = fake_apiserver(None).await;
+        let client = client_for(&endpoint).await;
+
+        let started = tokio::time::Instant::now();
+        let err = probe_apiserver(&client, &endpoint, Duration::from_millis(300))
+            .await
+            .expect_err("a silent endpoint must not pass the probe");
+
+        assert!(
+            matches!(err, FetchError::Unreachable { .. }),
+            "expected Unreachable, got {err:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "probe must fail on its own deadline, not the transport's"
+        );
+        // The message has to name the endpoint: that is the whole point of
+        // failing here rather than deep inside discovery.
+        assert!(err.to_string().contains(&endpoint), "{err}");
+    }
+
+    #[tokio::test]
+    async fn probe_passes_when_the_endpoint_answers_at_all() {
+        // 403 on /version still proves the apiserver is alive and routable;
+        // the real call gets to report the real error.
+        let endpoint = fake_apiserver(Some(
+            b"HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: 61\r\n\r\n\
+              {\"kind\":\"Status\",\"status\":\"Failure\",\"code\":403,\"message\":\"no\"}",
+        ))
+        .await;
+        let client = client_for(&endpoint).await;
+
+        probe_apiserver(&client, &endpoint, Duration::from_secs(5))
+            .await
+            .expect("an endpoint that responds must pass the probe");
+    }
+
+    #[tokio::test]
+    async fn probe_reports_a_refused_connection() {
+        // Bind then drop: nothing is listening on the port any more.
+        let endpoint = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            format!("http://{}", listener.local_addr().unwrap())
+        };
+        let client = client_for(&endpoint).await;
+
+        let err = probe_apiserver(&client, &endpoint, Duration::from_secs(5))
+            .await
+            .expect_err("a closed port must not pass the probe");
+
+        assert!(
+            matches!(err, FetchError::ConnectFailed { .. }),
+            "expected ConnectFailed, got {err:?}"
+        );
+        assert!(err.to_string().contains(&endpoint), "{err}");
+    }
+
+    #[tokio::test]
+    async fn probe_reports_a_refused_connection_without_retrying() {
+        // The same refused port under the full policy is retried for ~18s.
+        // The `FirstContact` marker is what stops that, and it is the whole
+        // reason a probe on the real client is affordable.
+        let endpoint = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            format!("http://{}", listener.local_addr().unwrap())
+        };
+        let client = client_for(&endpoint).await;
+
+        let started = tokio::time::Instant::now();
+        probe_apiserver(&client, &endpoint, Duration::from_secs(30))
+            .await
+            .expect_err("a closed port must not pass the probe");
+
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "first contact must not spend the retry budget: took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn the_probe_deadline_does_not_tie_with_the_transports() {
+        // Two deadlines of the same length would race for the error message.
+        assert!(
+            PROBE_GRACE > Duration::ZERO,
+            "the transport must win the connect race, not tie it"
+        );
     }
 }

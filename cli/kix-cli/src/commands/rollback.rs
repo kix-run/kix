@@ -13,11 +13,11 @@ use miette::{IntoDiagnostic, Result, miette};
 use kix::build_source::SopsSources;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::apply::ChangeAction;
-use kix::cluster::fetch;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::{DeployObserver, DeployResult};
 use kix::cluster::watchdog::StallPolicy;
+use kix::cluster::{client, discovery};
 use kix::plan::baseline::{self, Baseline};
 use kix::plan::document::PlanFlags;
 use kix::plan::{CheckedPlan, PlanEvent, Planner, Target};
@@ -50,11 +50,11 @@ pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<()> {
 /// Works the same whether the cluster is operator-managed or direct-apply
 /// because it only inspects Activation CRs. Supports `--output json|yaml`.
 async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
-    let client = fetch::make_client(ctx.global.context.as_deref())
+    let client = client::make_client(ctx.global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
-    let discovery = fetch::discover_resources(&client)
+    let discovery = discovery::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
 
@@ -204,7 +204,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     // 1. Connect to cluster
     crate::say!("Connecting to cluster...");
 
-    let client = fetch::make_client(ctx.global.context.as_deref())
+    let client = client::make_client(ctx.global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 

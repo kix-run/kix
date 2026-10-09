@@ -202,7 +202,7 @@ pub fn projection_hash(mut projection: Value) -> String {
 /// The part of a live object kix's server-side apply owns: typed metadata
 /// merged back, then projected onto kix's `Apply` fieldset. Steps 1 and 2
 /// of the applied-content hash, and the whole of what `kix diff` and
-/// `kix snapshot save` look at (see `fetch::kix_owned_view`). `None` when
+/// `kix snapshot save` look at (see `owned_view::kix_owned_view`). `None` when
 /// the object has no kix SSA managedFields entry.
 pub fn kix_owned_projection(obj: &DynamicObject) -> Option<Value> {
     let fields = kix_fieldset(obj)?;

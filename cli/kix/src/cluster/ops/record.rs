@@ -336,12 +336,12 @@ impl DeployRecord for ActivationRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::discovery;
     use crate::cluster::fake_api::FakeApi;
-    use crate::cluster::fetch;
 
     async fn record(api: &FakeApi, name: Option<&str>) -> ActivationRecord {
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
         ActivationRecord::new(
             Arc::new(KubeResources::new(
                 client,

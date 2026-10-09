@@ -20,7 +20,8 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 
 use super::activation::{OpenedRecords, RecordsError};
-use super::fetch::{self, SharedOrphan};
+use super::discovery;
+use super::inventory::SharedOrphan;
 use super::tenancy::{self, Tenancy};
 use crate::manifest::types::ResourceId;
 
@@ -91,7 +92,7 @@ impl PruneGuard {
         rid: &ResourceId,
         params: &DeleteParams,
     ) -> Result<Pruned, PruneError> {
-        let api = fetch::api_for(&self.client, ar, scope, rid);
+        let api = discovery::api_for(&self.client, ar, scope, rid);
         let Some(obj) = api.get_opt(&rid.name).await? else {
             return Ok(Pruned::Gone);
         };
@@ -180,7 +181,7 @@ mod tests {
 
     async fn guard(api: &FakeApi, cluster: &str) -> (PruneGuard, Vec<(ApiResource, Scope)>) {
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
         let records = crate::cluster::activation::Records::open(&client, &discovery).unwrap();
         (PruneGuard::new(client, records, cluster), discovery)
     }

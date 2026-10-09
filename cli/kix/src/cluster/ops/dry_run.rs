@@ -11,7 +11,7 @@ use crate::manifest::types::ResourceId;
 
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
-use super::super::fetch::FetchError;
+use super::super::errors::FetchError;
 use super::super::preview::{DryRunAnswer, DryRunOutcome, Journal, PruneAnswer, Refusal};
 use super::super::prune_guard::Pruned;
 use super::super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
@@ -191,14 +191,14 @@ impl SecretHydrator for DryRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::discovery;
     use crate::cluster::fake_api::FakeApi;
-    use crate::cluster::fetch;
     use crate::manifest::types::CLUSTER_SCOPED;
     use serde_json::json;
 
     async fn dry_run(api: &FakeApi) -> DryRun {
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
         DryRun::new(
             client,
             discovery,

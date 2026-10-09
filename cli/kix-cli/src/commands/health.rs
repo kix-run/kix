@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, HashMap};
 use miette::{Result, miette};
 
 use kix::cluster::activation::{OpenedRecords, Record, Records};
-use kix::cluster::fetch;
-use kix::manifest::types::ResourceId;
+use kix::cluster::{client, discovery, inventory};
+use kix::manifest::types::{ResourceId, to_manifest_value};
 
 use crate::cli::HealthArgs;
 use crate::output;
@@ -130,11 +130,11 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
     crate::say!("Connecting to cluster...");
 
     let (activation, resources) = ctx.runtime.block_on(async {
-        let client = fetch::make_client(ctx.global.context.as_deref())
+        let client = client::make_client(ctx.global.context.as_deref())
             .await
             .map_err(|e| miette!("failed to connect: {e}"))?;
 
-        let discovery = fetch::discover_resources(&client)
+        let discovery = discovery::discover_resources(&client)
             .await
             .map_err(|e| miette!("{e}"))?;
 
@@ -148,11 +148,11 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
             .ok_or_else(|| miette!("no active deployment record found for cluster '{cluster}'"))?;
 
         // 3. Fetch this cluster's kix-managed resources
-        let live_objects = fetch::fetch_managed_resources(
+        let live_objects = inventory::fetch_managed_resources(
             &client,
             &discovery,
             &OpenedRecords::from(records.clone()),
-            fetch::SweepScope::Cluster(&cluster),
+            inventory::SweepScope::Cluster(&cluster),
         )
         .await
         .map_err(|e| miette!("failed to fetch resources: {e}"))?;
@@ -171,7 +171,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
 
     for obj in resources {
         // Whole object: metadata lives on the typed field, not in `.data`.
-        let rid = ResourceId::from_value(&fetch::to_manifest_value(&obj));
+        let rid = ResourceId::from_value(&to_manifest_value(&obj));
 
         // Read annotations from typed metadata (more reliable than raw data)
         let annotations = obj.metadata.annotations.as_ref();

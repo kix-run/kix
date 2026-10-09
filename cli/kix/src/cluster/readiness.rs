@@ -21,8 +21,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::cancel::CancelToken;
+use super::discovery;
 use super::errors::{FailureClass, classify};
-use super::fetch;
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 
@@ -50,7 +50,7 @@ async fn probe_crd_discovery(client: &Client, crd: &Value) -> bool {
     loop {
         // One group, not a full walk: a full walk waits out every listed
         // group version that answers 404, which would outlast this budget.
-        if let Ok(walk) = fetch::discover_group(client, group).await
+        if let Ok(walk) = discovery::discover_group(client, group).await
             && walk
                 .resources
                 .iter()
@@ -1192,7 +1192,7 @@ pub async fn wait_for_ready(
         return Ok(ReadinessResult::Ready);
     }
 
-    let api: Api<DynamicObject> = fetch::api_for(client, ar, scope, rid);
+    let api: Api<DynamicObject> = discovery::api_for(client, ar, scope, rid);
 
     let idle_budget = timeout;
     let hard_ceiling = HARD_CEILING;

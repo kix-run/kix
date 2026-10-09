@@ -41,8 +41,8 @@ use crate::manifest::types::ResourceId;
 use super::activation::RecordsError;
 use super::apply::{ApplyError, ApplyResult};
 use super::cancel::CancelToken;
+use super::errors::FetchError;
 use super::errors::describe;
-use super::fetch::FetchError;
 use super::prune_guard::{PruneError, Pruned};
 use super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
 use super::secrets::{HydrationResult, SecretError};
@@ -104,8 +104,8 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
     /// Refresh discovery after CRDs landed. An error stops the run: a stale
     /// discovery view is a partial view (rule from kixpkgs#60).
     /// [`KubeResources`] first waits out listed group versions that answer
-    /// 404 (`fetch::discover_resources`), so an error here means discovery
-    /// did not settle within `fetch::DISCOVERY_SETTLE` or failed outright.
+    /// 404 (`discovery::discover_resources`), so an error here means discovery
+    /// did not settle within `discovery::DISCOVERY_SETTLE` or failed outright.
     async fn rediscover(&self) -> Result<(), FetchError>;
 
     /// Delete an orphan, unless another Kix cluster still deploys it or it

@@ -6,8 +6,8 @@ use crate::cli::StatusArgs;
 use crate::output::{self, CommandResponse};
 use kix::build_source::Build;
 use kix::cluster::activation::Records;
-use kix::cluster::fetch;
 use kix::cluster::readiness;
+use kix::cluster::{client, discovery, inventory};
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 
@@ -232,10 +232,12 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
     let spinner = output::spinner("Fetching cluster status...");
 
     // 1. Connect and discover
-    let client = fetch::make_client(global.context.as_deref())
+    let client = client::make_client(global.context.as_deref())
         .await
         .into_diagnostic()?;
-    let discovery = fetch::discover_resources(&client).await.into_diagnostic()?;
+    let discovery = discovery::discover_resources(&client)
+        .await
+        .into_diagnostic()?;
 
     // 2. Find the Active Activation CR
     let opened = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
@@ -260,11 +262,11 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
         .map(Build::into_graph);
 
     // 4. Fetch this cluster's live resources
-    let sweep = fetch::sweep_managed(
+    let sweep = inventory::sweep_managed(
         &client,
         &discovery,
         &opened,
-        fetch::SweepScope::Cluster(cluster_name),
+        inventory::SweepScope::Cluster(cluster_name),
     )
     .await
     .into_diagnostic()?;
@@ -462,18 +464,20 @@ fn compute_age(created: Option<chrono::DateTime<chrono::Utc>>) -> String {
 async fn run_flat_async(cluster: &str, global: &crate::cli::GlobalArgs) -> Result<()> {
     let spinner = output::spinner("Fetching cluster status...");
 
-    let client = fetch::make_client(global.context.as_deref())
+    let client = client::make_client(global.context.as_deref())
         .await
         .into_diagnostic()?;
-    let discovery = fetch::discover_resources(&client).await.into_diagnostic()?;
+    let discovery = discovery::discover_resources(&client)
+        .await
+        .into_diagnostic()?;
     // Past the domain gate: on a cluster whose records sit under a retired
     // group every object would be listed as this cluster's.
     let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
-    let sweep = fetch::sweep_managed(
+    let sweep = inventory::sweep_managed(
         &client,
         &discovery,
         &records,
-        fetch::SweepScope::Cluster(cluster),
+        inventory::SweepScope::Cluster(cluster),
     )
     .await
     .into_diagnostic()?;

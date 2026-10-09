@@ -84,7 +84,7 @@ async fn open_records(client: &kube::Client) -> anyhow::Result<Records> {
     let groups: Vec<&str> = std::iter::once(keys::GROUP)
         .chain(kix::legacy_domain::DOMAINS.iter().copied())
         .collect();
-    let discovery = kix::cluster::fetch::discover_groups(client, &groups)
+    let discovery = kix::cluster::discovery::discover_groups(client, &groups)
         .await
         .context("could not check the cluster's API groups")?;
     let records = Records::open(client, &discovery)?

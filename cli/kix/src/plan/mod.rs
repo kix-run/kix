@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::cluster::activation::{KeptOrphanSource, Record};
-use crate::cluster::fetch::FetchError;
+use crate::cluster::errors::FetchError;
 use crate::cluster::graph::GraphError;
 use crate::cluster::readiness::MalformedMarker;
 use crate::eval::PackageNode;
@@ -221,7 +221,7 @@ impl PackageDiff {
 
     /// Show the orphans another Kix cluster's current build still contains
     /// as kept rather than removed: the prune keeps them.
-    pub fn keep_shared(&mut self, shared: &[crate::cluster::fetch::SharedOrphan]) {
+    pub fn keep_shared(&mut self, shared: &[crate::cluster::inventory::SharedOrphan]) {
         let ids: std::collections::HashSet<&ResourceId> = shared.iter().map(|s| &s.rid).collect();
         for p in &mut self.removed {
             let more: Vec<ResourceId> = p

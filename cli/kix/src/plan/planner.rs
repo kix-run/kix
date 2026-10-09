@@ -46,13 +46,16 @@ use crate::build_source::InstallableBuild;
 use crate::build_source::SopsSources;
 use crate::cluster::activation::{KeptOrphanSource, KeptOrphans, Records};
 use crate::cluster::apply::ChangeAction;
-use crate::cluster::fetch::{self, FetchError, SharedOrphan};
+use crate::cluster::errors::FetchError;
 use crate::cluster::graph::ResourceGraph;
+use crate::cluster::inventory;
+use crate::cluster::inventory::SharedOrphan;
 use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
 use crate::cluster::ops::{Cluster, DryRun, KubeResources, RecordConfig};
 use crate::cluster::preview::DryRunAnswer;
 use crate::cluster::scheduler::{self, DeployError, DeployPlan, PrunePolicy, SchedulerConfig};
 use crate::cluster::stream::{DeployObserver, DeployResult};
+use crate::cluster::{client, discovery};
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
@@ -93,7 +96,7 @@ pub struct Target {
 impl Target {
     /// Discover what the cluster behind `client` serves.
     pub async fn connect(client: Client, sops: SopsSources) -> Result<Target, FetchError> {
-        let discovery = fetch::discover_resources(&client).await?;
+        let discovery = discovery::discover_resources(&client).await?;
         Ok(Target {
             client,
             discovery,
@@ -400,7 +403,7 @@ impl<'a> Planner<'a> {
             OldSide::LocalCache => None,
             OldSide::Cluster { context } => {
                 (self.report)(PlanEvent::Connecting);
-                let client = fetch::make_client(context.as_deref())
+                let client = client::make_client(context.as_deref())
                     .await
                     .map_err(|e| PlanError::Connect(Box::new(e)))?;
                 Some(client)
@@ -578,11 +581,11 @@ pub async fn keep_shared(
     if orphans.is_empty() {
         return Ok((orphans, Vec::new()));
     }
-    let discovery = fetch::discover_resources(client)
+    let discovery = discovery::discover_resources(client)
         .await
         .map_err(|e| PlanError::Discovery(Box::new(e)))?;
     let records = Records::open(client, &discovery).map_err(PlanError::Domain)?;
-    fetch::split_shared_orphans_live(client, &discovery, &records, orphans, cluster)
+    inventory::split_shared_orphans_live(client, &discovery, &records, orphans, cluster)
         .await
         .map_err(|e| PlanError::SharedOrphans(Box::new(e)))
 }

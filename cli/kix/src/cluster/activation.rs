@@ -1957,7 +1957,7 @@ mod listing_tests {
             ),
         ]);
         let client = api.client();
-        let discovery = crate::cluster::fetch::discover_resources(&client)
+        let discovery = crate::cluster::discovery::discover_resources(&client)
             .await
             .unwrap();
         let records = Records::open_installed(&client, &discovery).unwrap();
@@ -2000,7 +2000,7 @@ mod listing_tests {
             "status": { "phase": PHASE_SUPERSEDED },
         })]);
         let client = api.client();
-        let discovery = crate::cluster::fetch::discover_resources(&client)
+        let discovery = crate::cluster::discovery::discover_resources(&client)
             .await
             .unwrap();
         let records = Records::open_installed(&client, &discovery).unwrap();
@@ -2031,7 +2031,7 @@ mod listing_tests {
             "status": { "phase": PHASE_SUPERSEDED },
         })]);
         let client = api.client();
-        let discovery = crate::cluster::fetch::discover_resources(&client)
+        let discovery = crate::cluster::discovery::discover_resources(&client)
             .await
             .unwrap();
         let records = Records::open_installed(&client, &discovery).unwrap();

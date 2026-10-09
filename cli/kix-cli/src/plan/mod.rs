@@ -12,7 +12,7 @@ pub mod render;
 
 use std::collections::BTreeMap;
 
-use kix::cluster::fetch::SharedOrphan;
+use kix::cluster::inventory::SharedOrphan;
 use kix::manifest::diff::DiffConfig;
 use kix::manifest::diff::display::format_diffs;
 use kix::manifest::types::ResourceId;

@@ -6,7 +6,7 @@ use miette::{IntoDiagnostic, Result, miette};
 
 use kix::cluster::activation::Records;
 use kix::cluster::drift::{self, DriftReport, DriftVerdict, ForeignOwner, UnrecordedScale};
-use kix::cluster::fetch;
+use kix::cluster::{client, discovery};
 
 use crate::cli::{DriftArgs, GlobalArgs, OutputFormat};
 use crate::output;
@@ -20,10 +20,10 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
     }
 
     let reports = runtime.block_on(async {
-        let client = fetch::make_client(global.context.as_deref())
+        let client = client::make_client(global.context.as_deref())
             .await
             .map_err(|e| miette!("failed to connect: {e}"))?;
-        let discovery = fetch::discover_resources(&client)
+        let discovery = discovery::discover_resources(&client)
             .await
             .map_err(|e| miette!("{e}"))?;
         // Past the domain gate: on a cluster whose records sit under a

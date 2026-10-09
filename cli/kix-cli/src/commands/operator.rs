@@ -15,7 +15,7 @@ use kube::client::Client;
 use miette::{Result, miette};
 use serde_json::Value;
 
-use kix::cluster::fetch;
+use kix::cluster::{client, discovery};
 
 use crate::output;
 
@@ -24,7 +24,7 @@ use crate::output;
 pub async fn connect_and_verify(context: Option<&str>) -> Result<(Client, Records)> {
     crate::say!("Connecting to cluster...");
 
-    let client = fetch::make_client(context)
+    let client = client::make_client(context)
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let records = open_records(&client).await?;
@@ -37,7 +37,7 @@ pub async fn connect_and_verify(context: Option<&str>) -> Result<(Client, Record
 /// The cluster's Activation records, past the domain gate and readable by
 /// this client.
 async fn open_records(client: &Client) -> Result<Records> {
-    let discovery = fetch::discover_resources(client)
+    let discovery = discovery::discover_resources(client)
         .await
         .map_err(|e| miette!("{e}"))?;
     let records = Records::open_installed(client, &discovery).map_err(|e| miette!("{e}"))?;

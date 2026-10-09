@@ -19,13 +19,14 @@ use crate::manifest::types::ResourceId;
 use super::super::activation::{OpenedRecords, Records};
 use super::super::apply::{self, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
-use super::super::fetch::{self, FetchError};
+use super::super::discovery;
+use super::super::errors::FetchError;
 use super::super::prune_guard::{PruneGuard, Pruned};
 use super::super::readiness::{self, ImportTarget, ReadinessError, ReadinessResult};
 use super::{DeleteError, NotDiscovered, OnStatus, ReadError, RecreateError, ResourceIo};
 
 /// Shared discovery cache: every kind the cluster serves, refreshed after
-/// CRDs land. Refreshes MERGE (see `fetch::merge_discovery`): the aggregated
+/// CRDs land. Refreshes MERGE (see `discovery::merge_discovery`): the aggregated
 /// discovery document churns after CRD writes and can transiently omit
 /// unrelated groups, so a refresh must never forget a kind already seen, and
 /// one that skipped a group version never replaces a cached kind.
@@ -217,8 +218,8 @@ impl KubeResources {
     /// requests). With a `group`, each refresh fetches that group alone and
     /// falls back to a full walk only when the group fetch fails; without
     /// one, each refresh is a full walk. A full walk here is a single pass
-    /// ([`fetch::discover_resources_once`]), so an unrelated group version
-    /// that answers 404 does not add [`fetch::DISCOVERY_SETTLE`] to each
+    /// ([`discovery::discover_resources_once`]), so an unrelated group version
+    /// that answers 404 does not add [`discovery::DISCOVERY_SETTLE`] to each
     /// attempt. Refreshes merge into the cache.
     async fn refresh_until_found(
         &self,
@@ -239,16 +240,16 @@ impl KubeResources {
                 "kind missing from discovery cache, refreshing"
             );
             let targeted = match group {
-                Some(g) => fetch::discover_group(&self.client, g).await.ok(),
+                Some(g) => discovery::discover_group(&self.client, g).await.ok(),
                 None => None,
             };
             let fresh = match targeted {
                 Some(new) => Some(new),
-                None => fetch::discover_resources_once(&self.client).await.ok(),
+                None => discovery::discover_resources_once(&self.client).await.ok(),
             };
             if let Some(new) = fresh {
                 let mut d = self.discovery.write().await;
-                *d = fetch::merge_discovery(&d, new);
+                *d = discovery::merge_discovery(&d, new);
             }
             if let Some(found) = self.cached_kind(kind).await {
                 return Some(found);
@@ -262,7 +263,7 @@ impl KubeResources {
     }
 
     fn api_for(&self, ar: &ApiResource, scope: &Scope, rid: &ResourceId) -> Api<DynamicObject> {
-        fetch::api_for(&self.client, ar, scope, rid)
+        discovery::api_for(&self.client, ar, scope, rid)
     }
 
     /// Server-side apply `manifest` as the kind `ar`, stamped with the run's
@@ -455,12 +456,12 @@ impl ResourceIo for KubeResources {
 
     async fn rediscover(&self) -> Result<(), FetchError> {
         // A settled walk: every listed group version answered.
-        let new = fetch::DiscoveryPass {
-            resources: fetch::discover_resources(&self.client).await?,
+        let new = discovery::DiscoveryPass {
+            resources: discovery::discover_resources(&self.client).await?,
             missing: Vec::new(),
         };
         let mut d = self.discovery.write().await;
-        *d = fetch::merge_discovery(&d, new);
+        *d = discovery::merge_discovery(&d, new);
         Ok(())
     }
 }
@@ -511,7 +512,7 @@ mod prune_tests {
             role("shared", "a1,b1"),
         ]);
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
         let ops = KubeResources::new(client, discovery, "a".into(), None, false);
         let rid = |name: &str| ResourceId {
             kind: "ClusterRole".into(),
@@ -538,7 +539,7 @@ mod prune_tests {
         })]);
         api.serve_retired_records();
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
         let ops = KubeResources::new(client, discovery, "a".into(), None, false);
         let rid = ResourceId {
             kind: "ClusterRole".into(),

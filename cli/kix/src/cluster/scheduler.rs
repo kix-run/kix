@@ -1819,7 +1819,7 @@ pub async fn failed_rerun_nodes(
         let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
             continue;
         };
-        let api = super::fetch::api_for(client, ar, scope, rid);
+        let api = super::discovery::api_for(client, ar, scope, rid);
         match api.get_opt(&rid.name).await {
             Ok(Some(live))
                 if readiness::classify_workload_terminal(&live.data, &rid.kind).is_some() =>
@@ -3578,7 +3578,7 @@ mod engine_tests {
         // for the next prune; one another Kix cluster still deploys does not.
         let changed = Pruned::Changed(rid("ConfigMap", "old"));
         assert!(orphans_left(PrunePolicy::Delete, &cm, Behaviour::Now(Ok(changed))).await);
-        let shared = Pruned::Kept(crate::cluster::fetch::SharedOrphan {
+        let shared = Pruned::Kept(crate::cluster::inventory::SharedOrphan {
             rid: rid("ConfigMap", "old"),
             clusters: vec!["b".into()],
         });
@@ -3626,7 +3626,7 @@ mod engine_tests {
     async fn a_kept_prune_delete_is_reported_as_kept() {
         let manifests = vec![m("ConfigMap", "keep", &[])];
         let ops = Arc::new(ScriptedOps::new());
-        let shared = Pruned::Kept(crate::cluster::fetch::SharedOrphan {
+        let shared = Pruned::Kept(crate::cluster::inventory::SharedOrphan {
             rid: rid("ConfigMap", "old"),
             clusters: vec!["b".into()],
         });

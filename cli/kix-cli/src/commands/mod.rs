@@ -99,7 +99,7 @@ impl CommandContext {
         }
         let context = self.global.context.clone();
         let has_records = self.runtime.block_on(async {
-            let client = kix::cluster::fetch::make_client(context.as_deref())
+            let client = kix::cluster::client::make_client(context.as_deref())
                 .await
                 .ok()?;
             kix::cluster::activation::records_exist(&client, arg)

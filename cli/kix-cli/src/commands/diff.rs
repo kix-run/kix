@@ -7,13 +7,14 @@ use serde_json::Value;
 use kix::build_source;
 use kix::cluster::activation::{self, Records};
 use kix::cluster::apply::ApplyError;
-use kix::cluster::fetch;
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
+use kix::cluster::owned_view;
+use kix::cluster::{client, discovery, inventory};
 use kix::eval::store_graph::{KixPackageIndex, StoreGraph, store_hash};
 use kix::manifest::keys;
 use kix::manifest::lifecycle::{self, Lifecycle};
 use kix::manifest::serialize::load_manifests_from_dir;
-use kix::manifest::types::ResourceId;
+use kix::manifest::types::{ResourceId, to_manifest_value};
 
 use crate::cli::{Detail as DetailArg, DiffArgs, OutputFormat};
 use crate::output;
@@ -293,13 +294,13 @@ async fn fetch_live_manifests(
     global: &crate::cli::GlobalArgs,
     new_graph: &StoreGraph,
 ) -> Result<LiveSide> {
-    let client = fetch::make_client(global.context.as_deref())
+    let client = client::make_client(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
     crate::esay!("Discovering API resources...");
 
-    let discovery = fetch::discover_resources(&client)
+    let discovery = discovery::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
 
@@ -318,11 +319,11 @@ async fn fetch_live_manifests(
 
     // Only this Kix cluster's objects: another cluster sharing the
     // Kubernetes cluster is not a removal.
-    let sweep = fetch::sweep_managed(
+    let sweep = inventory::sweep_managed(
         &client,
         &discovery,
         &records,
-        fetch::SweepScope::Cluster(&new_graph.cluster_name),
+        inventory::SweepScope::Cluster(&new_graph.cluster_name),
     )
     .await
     .map_err(|e| miette!("failed to fetch resources: {e}"))?;
@@ -348,7 +349,7 @@ async fn fetch_live_manifests(
     namespaceless.sort();
     let tenancy = &sweep.tenancy;
     let (elsewhere, mut compared): (Vec<_>, Vec<_>) = sweep.managed.into_iter().partition(|obj| {
-        !in_build.contains(&ResourceId::from_value(&fetch::to_manifest_value(obj)))
+        !in_build.contains(&ResourceId::from_value(&to_manifest_value(obj)))
             && !tenancy.still_deployed_by_others(obj).is_empty()
     });
     if !elsewhere.is_empty() {
@@ -385,11 +386,11 @@ async fn fetch_live_manifests(
     let managed: HashMap<ResourceId, Value> = compared
         .iter()
         .filter_map(|obj| {
-            let rid = ResourceId::from_value(&fetch::to_manifest_value(obj));
+            let rid = ResourceId::from_value(&to_manifest_value(obj));
             serde_json::to_value(obj).ok().map(|v| (rid, v))
         })
         .collect();
-    let mut manifests = fetch::kix_owned_manifests_against(compared, &built);
+    let mut manifests = owned_view::kix_owned_manifests_against(compared, &built);
 
     let reaped = reaped_since_deploy(new_graph, current.as_ref(), &manifests);
     if !reaped.is_empty() {

@@ -4,7 +4,7 @@ use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
 use kix::cluster::activation::Records;
-use kix::cluster::fetch;
+use kix::cluster::{client, discovery, inventory, owned_view};
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use kube::Client;
 use kube::api::DynamicObject;
@@ -22,10 +22,10 @@ pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
 /// The objects of Kix cluster `cluster`, read past the domain gate: on a
 /// cluster whose records sit under a retired group none of them would be
 /// found, and every object would be read as `cluster`'s.
-async fn sweep_cluster(client: &Client, cluster: &str) -> Result<fetch::ManagedSweep> {
+async fn sweep_cluster(client: &Client, cluster: &str) -> Result<inventory::ManagedSweep> {
     crate::esay!("Discovering API resources...");
 
-    let discovery = fetch::discover_resources(client)
+    let discovery = discovery::discover_resources(client)
         .await
         .map_err(|e| miette!("{e}"))?;
     let records = Records::open(client, &discovery).map_err(|e| miette!("{e}"))?;
@@ -35,11 +35,11 @@ async fn sweep_cluster(client: &Client, cluster: &str) -> Result<fetch::ManagedS
         discovery.len()
     );
 
-    let sweep = fetch::sweep_managed(
+    let sweep = inventory::sweep_managed(
         client,
         &discovery,
         &records,
-        fetch::SweepScope::Cluster(cluster),
+        inventory::SweepScope::Cluster(cluster),
     )
     .await
     .map_err(|e| miette!("failed to fetch resources: {e}"))?;
@@ -66,7 +66,7 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
 
     ctx.runtime.block_on(async {
         let context = global.context.as_deref();
-        let client = fetch::make_client(context)
+        let client = client::make_client(context)
             .await
             .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
@@ -120,9 +120,9 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
 
 /// The kix-owned view of each object (same recipe as `kix diff`), so a
 /// snapshot compares to a build the way the live cluster does. A Secret's
-/// view holds no live value (`fetch::kix_owned_view`).
+/// view holds no live value (`owned_view::kix_owned_view`).
 fn snapshot_resources(objects: Vec<DynamicObject>) -> Vec<(ResourceId, Value)> {
-    fetch::kix_owned_manifests(objects)
+    owned_view::kix_owned_manifests(objects)
         .into_iter()
         .map(|value| (ResourceId::from_value(&value), value))
         .collect()
@@ -239,7 +239,7 @@ mod tests {
         write_resources(dir.path(), &resources).unwrap();
 
         let text = std::fs::read_to_string(dir.path().join("app/creds-secret.yaml")).unwrap();
-        assert!(text.contains(fetch::HIDDEN_SECRET_VALUE), "{text}");
+        assert!(text.contains(owned_view::HIDDEN_SECRET_VALUE), "{text}");
         assert!(!text.contains("aHVudGVyMg=="), "{text}");
     }
 

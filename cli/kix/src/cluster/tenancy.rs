@@ -3,7 +3,7 @@
 //! Every object a deploy touches names the deploying record's identity hash
 //! in `kix.run/activations`. Read with the records' `kix.run/cluster`
 //! labels, those hashes attribute a live object to the Kix clusters whose
-//! builds contain it ([`super::fetch::attribute`]), and tell a prune which
+//! builds contain it ([`super::inventory::attribute`]), and tell a prune which
 //! objects another Kix cluster still deploys ([`super::prune_guard`]).
 //!
 //! It reads the records through [`Records`](super::activation::Records), so the domain gate has run: on
@@ -24,7 +24,7 @@ use crate::manifest::lifecycle::PHASE_SUPERSEDED;
 ///
 /// Every object a deploy touches names the deploying record's identity hash
 /// in `kix.run/activations`, so these sets attribute a live object to the Kix
-/// clusters whose builds contain it. See [`super::fetch::attribute`].
+/// clusters whose builds contain it. See [`super::inventory::attribute`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tenancy {
     /// The Kix cluster this tenancy is read for.
@@ -162,7 +162,7 @@ pub fn named_hashes(obj: &DynamicObject) -> impl Iterator<Item = &str> {
 /// records, and the tenancy is empty.
 ///
 /// Read it after the objects it will attribute, as
-/// [`super::fetch::sweep_managed`] and [`super::prune_guard::PruneGuard`] do.
+/// [`super::inventory::sweep_managed`] and [`super::prune_guard::PruneGuard`] do.
 /// A deploy creates its record before any object names the record's hash, so
 /// every hash on an object read earlier belongs to a record this list
 /// returns, or to one deleted since. Read before the objects, a Kix cluster

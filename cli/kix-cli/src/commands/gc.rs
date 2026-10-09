@@ -11,7 +11,7 @@
 //!   - **Hard (`--hard`):** Builds the cluster now and lists every live
 //!     resource carrying the kix label that belongs to this Kix cluster, by
 //!     the Activation record hashes in its `kix.run/activations`
-//!     (`fetch::SweepScope::Cluster`). A resource whose identity hash is not
+//!     (`inventory::SweepScope::Cluster`). A resource whose identity hash is not
 //!     in that build is garbage; one stamped before the domain move is judged
 //!     by Kubernetes identity instead. Unstamped label carriers are reported
 //!     and deleted only with `--include-unstamped`. When another Kix cluster
@@ -45,13 +45,14 @@ use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
 use kix::build_source::{Build, FlakeBuildError};
-use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
+use kix::cluster::inventory;
 use kix::cluster::prune_guard::{PruneGuard, Pruned};
+use kix::cluster::{client, discovery};
 use kix::eval::store;
 use kix::eval::store_graph::store_hash;
 use kix::manifest::lifecycle;
-use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
+use kix::manifest::types::{CLUSTER_SCOPED, ResourceId, to_manifest_value};
 
 use crate::cli::GcArgs;
 use crate::output;
@@ -223,7 +224,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let (ordered_rids, kept) = split_never_pruned(ordered_rids);
     let client = ctx
         .runtime
-        .block_on(fetch::make_client(global.context.as_deref()))
+        .block_on(client::make_client(global.context.as_deref()))
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
     let (ordered_rids, shared) = ctx
         .runtime
@@ -436,10 +437,10 @@ async fn run_hard_async(
 ) -> Result<()> {
     crate::say!("Fetching live cluster state...");
 
-    let client = fetch::make_client(global.context.as_deref())
+    let client = client::make_client(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-    let discovery = fetch::discover_resources(&client)
+    let discovery = discovery::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
     // The gate error must not be read as "no Activation CRD". On a cluster
@@ -450,11 +451,11 @@ async fn run_hard_async(
     // Only this Kix cluster's objects. Another Kix cluster's objects are
     // absent from this build too, and judging them against it would delete
     // them.
-    let sweep = fetch::sweep_managed(
+    let sweep = inventory::sweep_managed(
         &client,
         &discovery,
         &records,
-        fetch::SweepScope::Cluster(cluster_name),
+        inventory::SweepScope::Cluster(cluster_name),
     )
     .await
     .map_err(|e| miette!("failed to fetch live resources: {e}"))?;
@@ -609,9 +610,9 @@ fn judge_hard(
     expected_hashes: &HashSet<String>,
     expected_ids: &HashSet<String>,
     tenancy: &kix::cluster::tenancy::Tenancy,
-) -> (Vec<GarbageEntry>, Vec<fetch::SharedOrphan>) {
+) -> (Vec<GarbageEntry>, Vec<inventory::SharedOrphan>) {
     let mut garbage: Vec<GarbageEntry> = Vec::new();
-    let mut shared: Vec<fetch::SharedOrphan> = Vec::new();
+    let mut shared: Vec<inventory::SharedOrphan> = Vec::new();
     for obj in live {
         if kix::manifest::lifecycle::lifecycle_of_live(obj)
             == kix::manifest::lifecycle::Lifecycle::Record
@@ -665,8 +666,8 @@ fn judge_hard(
         // A protected kind is kept anyway and listed with the others.
         let others = tenancy.still_deployed_by_others(obj);
         if !others.is_empty() && !lifecycle::never_pruned(&live_kind(obj)) {
-            shared.push(fetch::SharedOrphan {
-                rid: ResourceId::from_value(&fetch::to_manifest_value(obj)),
+            shared.push(inventory::SharedOrphan {
+                rid: ResourceId::from_value(&to_manifest_value(obj)),
                 clusters: others,
             });
             continue;
@@ -800,7 +801,7 @@ fn print_unattributed(objects: &[kube::api::DynamicObject], included: bool) {
     );
     let mut ids: Vec<ResourceId> = objects
         .iter()
-        .map(|o| ResourceId::from_value(&fetch::to_manifest_value(o)))
+        .map(|o| ResourceId::from_value(&to_manifest_value(o)))
         .collect();
     ids.sort();
     for rid in &ids {
@@ -1049,10 +1050,10 @@ async fn plan_record_retirement(
     cluster: &str,
     policy: &RetentionPolicy,
 ) -> Result<RecordRetirement> {
-    let client = fetch::make_client(global.context.as_deref())
+    let client = client::make_client(global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-    let discovery = fetch::discover_resources(&client)
+    let discovery = discovery::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
     let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
@@ -1322,7 +1323,7 @@ async fn delete_resources(
     if resources.is_empty() {
         return Ok(done);
     }
-    let discovery = fetch::discover_resources(client)
+    let discovery = discovery::discover_resources(client)
         .await
         .map_err(|e| miette!("{e}"))?;
     let records = Records::open(client, &discovery).map_err(|e| miette!("{e}"))?;
@@ -1786,14 +1787,15 @@ mod hard_scope_tests {
     #[test]
     fn hard_gc_judges_only_this_clusters_objects() {
         let tenancy = Tenancy::fixture(&[record("a", "a2"), record("b", "b1")], "a");
-        let sweep = fetch::partition_sweep(vec![
+        let sweep = inventory::partition_sweep(vec![
             live("ConfigMap", "a-current", Some("h-cur"), "a2"),
             live("ConfigMap", "a-stale", Some("h-old"), "a2"),
             live("ConfigMap", "b-web", Some("h-b"), "b1"),
             live("ClusterRole", "shared", Some("h-shared"), "a2,b1"),
             live("ConfigMap", "leftover", Some("h-left"), "retired"),
         ]);
-        let sweep = fetch::scope_sweep(sweep, fetch::SweepScope::Cluster("a"), tenancy.clone());
+        let sweep =
+            inventory::scope_sweep(sweep, inventory::SweepScope::Cluster("a"), tenancy.clone());
         assert_eq!(sweep.foreign.get("b"), Some(&1));
         assert_eq!(sweep.unattributed.len(), 1);
 
@@ -1816,11 +1818,12 @@ mod hard_scope_tests {
     #[test]
     fn hard_gc_on_a_single_cluster_is_unchanged() {
         let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
-        let sweep = fetch::partition_sweep(vec![
+        let sweep = inventory::partition_sweep(vec![
             live("ConfigMap", "a-current", Some("h-cur"), "a2"),
             live("ConfigMap", "leftover", Some("h-left"), "retired"),
         ]);
-        let sweep = fetch::scope_sweep(sweep, fetch::SweepScope::Cluster("a"), tenancy.clone());
+        let sweep =
+            inventory::scope_sweep(sweep, inventory::SweepScope::Cluster("a"), tenancy.clone());
         assert!(sweep.unattributed.is_empty());
         let expected: HashSet<String> = ["h-cur".to_string()].into();
         let (garbage, shared) = judge_hard(&sweep.managed, &expected, &HashSet::new(), &tenancy);

@@ -35,7 +35,7 @@ use super::{PlanError, PlanEvent};
 use crate::build_source::Build;
 use crate::cluster::activation::{self, KeptOrphanSource, OpenedRecords, Record, Records};
 use crate::cluster::apply::{self, ChangeAction};
-use crate::cluster::fetch;
+use crate::cluster::{discovery, inventory, owned_view};
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
@@ -309,7 +309,7 @@ impl Baseline {
         report: &dyn Fn(PlanEvent<'_>),
     ) -> Result<Baseline, PlanError> {
         let cluster = build.graph().cluster_name.as_str();
-        let discovery = fetch::discover_resources(client)
+        let discovery = discovery::discover_resources(client)
             .await
             .map_err(|e| PlanError::Discovery(Box::new(e)))?;
         let opened = Records::open(client, &discovery).map_err(PlanError::Domain)?;
@@ -860,17 +860,17 @@ async fn of_live(
             .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
         hashes.extend(failed.into_iter().filter_map(|f| f.identity_hash));
     }
-    let scope = fetch::SweepScope::Records {
+    let scope = inventory::SweepScope::Records {
         cluster,
         hashes: &hashes,
     };
-    let sweep = fetch::sweep_managed(client, discovery, opened, scope)
+    let sweep = inventory::sweep_managed(client, discovery, opened, scope)
         .await
         .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
     if sweep.other_builds > 0 {
         report(PlanEvent::OlderBuildsLeftOut(sweep.other_builds));
     }
-    Ok(fetch::kix_owned_manifests(
+    Ok(owned_view::kix_owned_manifests(
         sweep
             .managed
             .into_iter()
@@ -1145,7 +1145,7 @@ mod tests {
             cm("shared", "a2,b1"),
         ]);
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
         let opened = Records::open(&client, &discovery).unwrap();
         let active = Record {
             name: "rec-a2".into(),
@@ -1181,7 +1181,7 @@ mod tests {
         failed["metadata"]["annotations"][keys::BUILT_VIA] = json!(built_via);
         let api = FakeApi::new([record(cluster, "cur", PHASE_ACTIVE), failed, extra]);
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
         let records = Records::open_installed(&client, &discovery).unwrap();
         let current = Record {
             name: "rec-cur".into(),
@@ -1290,7 +1290,7 @@ mod tests {
         let hash = "eeeeuuuueeeeuuuueeeeuuuueeeeuuuu";
         let api = FakeApi::new([record("absent-test", hash, PHASE_ACTIVE)]);
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
         let records = Records::open_installed(&client, &discovery).unwrap();
         let current = Record {
             name: format!("rec-{hash}"),
@@ -1317,7 +1317,7 @@ mod tests {
     async fn a_current_record_without_a_hash_is_not_looked_up() {
         let api = FakeApi::new([]);
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
         let records = Records::open_installed(&client, &discovery).unwrap();
         let current = Record {
             name: "rec-nohash".into(),

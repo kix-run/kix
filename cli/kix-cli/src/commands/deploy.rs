@@ -16,7 +16,6 @@ use serde_json::Value;
 
 use kix::cluster::activation::{OpenedRecords, Records};
 use kix::cluster::apply::{ApplyAction, ChangeAction};
-use kix::cluster::fetch;
 use kix::cluster::migrate::MigrationPair;
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
@@ -25,6 +24,7 @@ use kix::cluster::stream::{
     Verdict,
 };
 use kix::cluster::watchdog::StallPolicy;
+use kix::cluster::{client, discovery};
 use kix::manifest::types::ResourceId;
 use kix::plan::document::PlanFlags;
 use kix::plan::{CheckedPlan, Target};
@@ -163,7 +163,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         let has_reruns = p.checked.plan().nodes().iter().any(|n| n.rerun.is_some());
         let failed_reruns = match &p.client {
             Some(client) if has_reruns => ctx.runtime.block_on(async {
-                let discovery = fetch::discover_resources(client)
+                let discovery = discovery::discover_resources(client)
                     .await
                     .map_err(|e| miette!("{e}"))?;
                 Ok::<_, miette::Report>(
@@ -506,7 +506,7 @@ fn supersede_consumed(ctx: &CommandContext, client: &kube::Client, consumed: &[S
         return;
     }
     let done = ctx.runtime.block_on(async {
-        let Ok(discovery) = fetch::discover_resources(client).await else {
+        let Ok(discovery) = discovery::discover_resources(client).await else {
             return 0usize;
         };
         let Some(records) = Records::open(client, &discovery)
@@ -836,7 +836,7 @@ async fn run_deploy_async(
     let client = match pre_client {
         Some(c) => c,
         None => {
-            let client = fetch::make_client(global.context.as_deref())
+            let client = client::make_client(global.context.as_deref())
                 .await
                 .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
             let (_, shared) =
@@ -1402,7 +1402,7 @@ mod cached_baseline_tests {
     async fn a_cached_build_must_be_the_contexts_active_build() {
         let api = FakeApi::new([record("a", "a2", PHASE_ACTIVE)]);
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
         let records = Records::open(&client, &discovery).unwrap().into_records();
         let records = records.as_ref();
         assert!(check_cached_baseline(records, "a", "a2").await.is_ok());
@@ -1424,7 +1424,7 @@ mod cached_baseline_tests {
     async fn a_record_name_held_by_another_build_is_refused() {
         let api = FakeApi::new([record("a", "a2", PHASE_ACTIVE)]);
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
         let records = Records::open(&client, &discovery)
             .unwrap()
             .into_records()
@@ -1442,7 +1442,7 @@ mod cached_baseline_tests {
     #[tokio::test]
     async fn an_object_without_its_namespace_is_refused() {
         let api = FakeApi::new([]);
-        let discovery = fetch::discover_resources(&api.client()).await.unwrap();
+        let discovery = discovery::discover_resources(&api.client()).await.unwrap();
         let plan = kix::cluster::scheduler::DeployPlan::applying(&[json!({
             "apiVersion": "v1",
             "kind": "ConfigMap",

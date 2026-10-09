@@ -27,7 +27,7 @@ use crate::manifest::types::ResourceId;
 
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
-use super::super::fetch::FetchError;
+use super::super::errors::FetchError;
 use super::super::prune_guard::Pruned;
 use super::super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
 use super::super::secrets::{HydrationResult, SecretError};
