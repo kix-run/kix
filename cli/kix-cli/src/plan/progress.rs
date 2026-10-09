@@ -15,6 +15,11 @@ pub fn print(event: PlanEvent<'_>, quiet: bool) {
             error,
             "This plan leaves out what that failed deployment applied.",
         ),
+        PlanEvent::ActiveBuildUnusable { activation, error } => unusable_build(
+            activation,
+            error,
+            "This rollback compares with no current build: it applies every object and prunes nothing.",
+        ),
         PlanEvent::KeptBuildUnusable { activation, error } => unusable_build(
             activation,
             error,

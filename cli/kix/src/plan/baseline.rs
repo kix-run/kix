@@ -372,9 +372,18 @@ impl Baseline {
         report: &dyn Fn(PlanEvent<'_>),
     ) -> Baseline {
         let hash = current.identity_hash.as_deref().unwrap_or("");
-        let graph = result_dir(cluster, hash, current.built_via.as_deref())
-            .and_then(|dir| Build::local(&dir, &|_| {}).ok())
-            .map(Build::into_graph);
+        // `built_via` is written by whoever deployed, so the build there is
+        // used only when it is the record's.
+        let graph = match record_graph(None, cluster, hash, current.built_via.as_deref()) {
+            Ok(graph) => graph,
+            Err(error) => {
+                report(PlanEvent::ActiveBuildUnusable {
+                    activation: &current.name,
+                    error: &error,
+                });
+                None
+            }
+        };
         let (source, active_manifests) = match graph {
             Some(graph) => {
                 let manifests = manifests_of(&graph);
@@ -1049,8 +1058,8 @@ mod tests {
     }
 
     /// Nothing stands in for a current build that will not load: the
-    /// rollback compares with an empty build, and its package diff starts
-    /// from one, as the engine applies every object. The Failed record
+    /// rollback reports it, compares with an empty build, and its package
+    /// diff starts from one, as the engine applies every object. The Failed record
     /// whose build will not load is reported and not folded in.
     #[tokio::test]
     async fn a_rollback_whose_current_build_will_not_load_compares_with_nothing() {
@@ -1072,7 +1081,8 @@ mod tests {
         assert_eq!(unresolved, vec!["rec-fl"]);
         assert!(baseline.failed().is_empty());
         assert!(
-            events.iter().any(|e| e.starts_with("FailedBuildUnusable"))
+            events.iter().any(|e| e.starts_with("ActiveBuildUnusable"))
+                && events.iter().any(|e| e.starts_with("FailedBuildUnusable"))
                 && events.iter().any(|e| e.starts_with("FailedUnresolved")),
             "{events:?}"
         );
