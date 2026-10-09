@@ -24,13 +24,17 @@ use tokio_util::sync::CancellationToken;
 
 use crate::manifest::types::ResourceId;
 
+use super::super::activation::RecordsError;
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
 use super::super::fetch::FetchError;
-use super::super::prune_guard::Pruned;
+use super::super::prune_guard::{PruneError, Pruned};
 use super::super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
 use super::super::secrets::{HydrationResult, SecretError};
-use super::{ClusterOps, Finalized, OnStatus};
+use super::{
+    ClusterOps, DeleteError, Finalized, OnStatus, ReadError, RecordWriteError, RecreateError,
+    StampError,
+};
 
 /// A latch many calls can wait on. Opened once by the test.
 #[derive(Clone, Default, Debug)]
@@ -341,6 +345,21 @@ impl ScriptedOps {
     }
 }
 
+/// A kube error carrying a scripted message, for the typed errors whose
+/// message a test scripts.
+fn scripted_error(message: String) -> kube::Error {
+    kube::Error::Discovery(kube::error::DiscoveryError::MissingKind(message))
+}
+
+/// A failed write to the Activation record, with a scripted message.
+fn record_error(message: String) -> RecordWriteError {
+    RecordWriteError::Records(RecordsError {
+        op: "patch",
+        name: None,
+        source: scripted_error(message),
+    })
+}
+
 /// Counts applies in flight for the duration of a borrow.
 struct InFlightApply<'a>(&'a ScriptedOps);
 
@@ -364,9 +383,8 @@ impl ClusterOps for ScriptedOps {
         self.dry_run.load(Ordering::SeqCst)
     }
 
-    async fn begin(&self) -> Result<(), String> {
+    async fn begin(&self) {
         self.record(Call::Begin);
-        Ok(())
     }
 
     async fn hydrate(&self, manifest: Value) -> Result<(Value, Vec<HydrationResult>), SecretError> {
@@ -411,21 +429,30 @@ impl ClusterOps for ScriptedOps {
         }
     }
 
-    async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, String> {
+    async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, ReadError> {
         self.record(Call::GetLive(rid.clone()));
         let script = self.node_script(rid);
-        script.live.run().await
+        script
+            .live
+            .run()
+            .await
+            .map_err(|m| ReadError::Get(scripted_error(m)))
     }
 
-    async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, String> {
+    async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, RecreateError> {
         let rid = ResourceId::from_value(manifest);
         self.record(Call::RecreateStart(rid.clone()));
         let script = self.node_script(&rid);
-        script.recreate.run().await.map(|action| ApplyResult {
-            action,
-            resource_id: rid,
-            preview: None,
-        })
+        script
+            .recreate
+            .run()
+            .await
+            .map(|action| ApplyResult {
+                action,
+                resource_id: rid,
+                preview: None,
+            })
+            .map_err(|m| RecreateError::Delete(scripted_error(m)))
     }
 
     async fn wait_ready(
@@ -489,46 +516,50 @@ impl ClusterOps for ScriptedOps {
         applied: usize,
         failed: usize,
         finalizing: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), RecordWriteError> {
         self.record(Call::Checkpoint {
             applied,
             failed,
             finalizing,
         });
         let b = self.checkpoint.lock().unwrap().clone();
-        b.run().await
+        b.run().await.map_err(record_error)
     }
 
-    async fn record_activation_on_skipped(&self, rid: &ResourceId) -> Result<(), String> {
+    async fn record_activation_on_skipped(&self, rid: &ResourceId) -> Result<(), StampError> {
         self.record(Call::Stamp(rid.clone()));
         let b = self.stamp.lock().unwrap().clone();
-        b.run().await
+        b.run()
+            .await
+            .map_err(|kind| StampError::Apply(ApplyError::UnknownKind { kind }))
     }
 
-    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, String> {
+    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
         self.record(Call::Delete(rid.clone()));
         let b = self.delete.lock().unwrap().clone();
-        b.run().await
+        b.run()
+            .await
+            .map_err(|m| DeleteError::Guard(PruneError::Kube(scripted_error(m))))
     }
 
     async fn finalize(
         &self,
         had_failures: bool,
         orphans_left: bool,
-    ) -> Result<Option<Finalized>, String> {
+    ) -> Result<Option<Finalized>, RecordWriteError> {
         self.record(Call::Finalize {
             had_failures,
             orphans_left,
         });
         let b = self.finalize.lock().unwrap().clone();
-        b.run().await
+        b.run().await.map_err(record_error)
     }
 
-    async fn abort(&self, reason: &str) -> Result<(), String> {
+    async fn abort(&self, reason: &str) -> Result<(), RecordWriteError> {
         self.record(Call::Abort {
             reason: reason.to_string(),
         });
         let b = self.abort.lock().unwrap().clone();
-        b.run().await
+        b.run().await.map_err(record_error)
     }
 }

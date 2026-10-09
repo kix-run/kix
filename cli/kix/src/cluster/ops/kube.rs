@@ -18,13 +18,16 @@ use crate::manifest::types::ResourceId;
 use super::super::activation::{self, OpenedRecords, Records, WaveRecord, WaveStatus};
 use super::super::apply::{self, ApplyAction, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
-use super::super::errors::{FailureClass, classify, describe};
+use super::super::errors::{FailureClass, classify};
 use super::super::fetch::{self, FetchError};
 use super::super::preview::{DryRunAnswer, DryRunOutcome, Journal, Refusal};
 use super::super::prune_guard::{PruneGuard, Pruned};
 use super::super::readiness::{self, ImportTarget, ReadinessError, ReadinessResult};
 use super::super::secrets::{self, HydrationResult, SecretError};
-use super::{ClusterOps, Finalized, OnStatus};
+use super::{
+    ClusterOps, DeleteError, Finalized, NotDiscovered, OnStatus, ReadError, RecordWriteError,
+    RecreateError, StampError,
+};
 use crate::legacy_domain::LegacyDomainError;
 
 /// Shared discovery cache: every kind the cluster serves, refreshed after
@@ -330,9 +333,9 @@ impl ClusterOps for KubeOps {
         self.cfg.dry_run
     }
 
-    async fn begin(&self) -> Result<(), String> {
+    async fn begin(&self) {
         if self.cfg.dry_run {
-            return Ok(());
+            return;
         }
         let Some(records) = self.records().await else {
             // No record CRD served yet. On a cluster's first deploy the CRD is
@@ -340,7 +343,7 @@ impl ClusterOps for KubeOps {
             // instead; see `rediscover`.
             self.record_pending
                 .store(true, std::sync::atomic::Ordering::SeqCst);
-            return Ok(());
+            return;
         };
 
         // Read the live set BEFORE creating the record, so the annotation
@@ -355,10 +358,9 @@ impl ClusterOps for KubeOps {
             self.record_pending
                 .store(true, std::sync::atomic::Ordering::SeqCst);
         }
-        Ok(())
     }
 
-    async fn abort(&self, reason: &str) -> Result<(), String> {
+    async fn abort(&self, reason: &str) -> Result<(), RecordWriteError> {
         if self.cfg.dry_run || !self.cfg.mark_failed_on_abort {
             return Ok(());
         }
@@ -370,11 +372,8 @@ impl ClusterOps for KubeOps {
             // Nothing to fail. The record never got created, which is the
             // pre-CRD window on a first deploy.
             Ok(Err(e)) if classify(&e.source) == FailureClass::NotFound => Ok(()),
-            Ok(Err(e)) => Err(describe(&e)),
-            Err(_) => Err(format!(
-                "no answer within {}s",
-                BEST_EFFORT_TIMEOUT.as_secs()
-            )),
+            Ok(Err(e)) => Err(RecordWriteError::Records(e)),
+            Err(_) => Err(RecordWriteError::NoAnswer(BEST_EFFORT_TIMEOUT)),
         }
     }
 
@@ -475,26 +474,26 @@ impl ClusterOps for KubeOps {
         applied
     }
 
-    async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, String> {
+    async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, ReadError> {
         // Refresh on a miss, as apply does: discovery can lag a CRD apply.
         // A ResourceId carries no group, so each refresh is a full walk.
         let (ar, scope) = self
             .refresh_until_found(&rid.kind, None)
             .await
-            .ok_or_else(|| format!("kind {} not in discovery cache", rid.kind))?;
+            .ok_or_else(|| not_discovered(rid))?;
         let api = self.api_for(&ar, &scope, rid);
         api.get_opt(&rid.name)
             .await
             .map(|o| o.map(|obj| obj.data))
-            .map_err(|e| format!("get failed: {}", describe(&e)))
+            .map_err(ReadError::Get)
     }
 
-    async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, String> {
+    async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, RecreateError> {
         let rid = ResourceId::from_value(manifest);
         let (ar, scope) = self
             .cached_kind(&rid.kind)
             .await
-            .ok_or_else(|| format!("kind {} not in discovery cache", rid.kind))?;
+            .ok_or_else(|| not_discovered(&rid))?;
         let api = self.api_for(&ar, &scope, &rid);
         let dp = kube::api::DeleteParams {
             propagation_policy: Some(delete_propagation_for(&rid.kind)),
@@ -506,7 +505,7 @@ impl ClusterOps for KubeOps {
         let deleted = match api.delete(&rid.name, &dp).await {
             Ok(_) => true,
             Err(kube::Error::Api(ae)) if ae.code == 404 => false,
-            Err(e) => return Err(format!("delete failed: {}", describe(&e))),
+            Err(e) => return Err(RecreateError::Delete(e)),
         };
 
         // Under dry run the delete was checked but nothing went away, so
@@ -553,7 +552,7 @@ impl ClusterOps for KubeOps {
                     resource_id: rid,
                     preview: None,
                 }),
-                Err(e) => Err(format!("dry-run re-apply failed: {e}")),
+                Err(e) => Err(RecreateError::DryRunReapply(e)),
             };
         }
 
@@ -581,10 +580,10 @@ impl ClusterOps for KubeOps {
                 }
             }
             if !gone && matches!(api.get_opt(&rid.name).await, Ok(Some(_))) {
-                return Err(format!(
-                    "{rid} still exists {}s after delete (stuck finalizer?); not re-applied",
-                    RECREATE_DELETE_TIMEOUT.as_secs()
-                ));
+                return Err(RecreateError::StillExists {
+                    rid,
+                    waited: RECREATE_DELETE_TIMEOUT,
+                });
             }
         }
 
@@ -600,7 +599,7 @@ impl ClusterOps for KubeOps {
             self.cfg.force_conflicts,
         )
         .await
-        .map_err(|e| format!("re-apply failed: {e}"))
+        .map_err(RecreateError::Reapply)
     }
 
     async fn wait_ready(
@@ -627,7 +626,7 @@ impl ClusterOps for KubeOps {
             // cache lost it there is nothing to poll; treat as not found.
             None => {
                 return Ok(ReadinessResult::Failed {
-                    message: format!("kind {} not in discovery cache", rid.kind),
+                    message: not_discovered(rid).to_string(),
                     output: Vec::new(),
                 });
             }
@@ -675,7 +674,7 @@ impl ClusterOps for KubeOps {
         applied: usize,
         failed: usize,
         finalizing: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), RecordWriteError> {
         if self.cfg.dry_run {
             return Ok(());
         }
@@ -705,15 +704,12 @@ impl ClusterOps for KubeOps {
                 tracing::debug!("activation not yet on cluster; checkpoint skipped");
                 Ok(())
             }
-            Ok(Err(e)) => Err(describe(&e)),
-            Err(_) => Err(format!(
-                "no answer within {}s",
-                BEST_EFFORT_TIMEOUT.as_secs()
-            )),
+            Ok(Err(e)) => Err(RecordWriteError::Records(e)),
+            Err(_) => Err(RecordWriteError::NoAnswer(BEST_EFFORT_TIMEOUT)),
         }
     }
 
-    async fn record_activation_on_skipped(&self, rid: &ResourceId) -> Result<(), String> {
+    async fn record_activation_on_skipped(&self, rid: &ResourceId) -> Result<(), StampError> {
         let Some(hash) = self.cfg.activation_identity_hash.as_deref() else {
             return Ok(());
         };
@@ -726,25 +722,25 @@ impl ClusterOps for KubeOps {
         let (ar, scope) = self
             .cached_kind(&rid.kind)
             .await
-            .ok_or_else(|| "kind not in discovery cache".to_string())?;
+            .ok_or(StampError::NotDiscovered)?;
         let live = self.live_activations();
         apply::record_activation_on_skipped(&self.client, &ar, scope, rid, hash, live.as_ref())
             .await
-            .map_err(|e| e.to_string())
+            .map_err(StampError::Apply)
     }
 
-    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, String> {
+    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
         let (ar, scope) = self
             .cached_kind(&rid.kind)
             .await
-            .ok_or_else(|| format!("kind {} not in discovery cache", rid.kind))?;
+            .ok_or_else(|| not_discovered(rid))?;
         // The guard reads the other clusters' records, so a cluster the
         // domain gate refuses has no guard and nothing is deleted.
         let guard = self
             .prune_guard
             .get_or_try_init(|| async {
-                let opened = self.opened().await.map_err(|e| e.to_string())?;
-                Ok::<_, String>(PruneGuard::new(
+                let opened = self.opened().await.map_err(DeleteError::Domain)?;
+                Ok::<_, DeleteError>(PruneGuard::new(
                     self.client.clone(),
                     opened,
                     &self.cfg.cluster_name,
@@ -766,7 +762,7 @@ impl ClusterOps for KubeOps {
             Ok(guard) => guard
                 .delete(&ar, &scope, rid, &dp)
                 .await
-                .map_err(|e| e.to_string()),
+                .map_err(DeleteError::Guard),
             Err(e) => Err(e),
         };
         if self.cfg.dry_run {
@@ -775,7 +771,7 @@ impl ClusterOps for KubeOps {
                 Ok(Pruned::Deleted | Pruned::Gone) => PruneAnswer::Deleted,
                 Ok(Pruned::Kept(shared)) => PruneAnswer::KeptShared(shared.describe()),
                 Ok(Pruned::Changed(_)) => PruneAnswer::KeptChanged,
-                Err(e) => PruneAnswer::Refused(e.clone()),
+                Err(e) => PruneAnswer::Refused(e.to_string()),
             };
             self.journal
                 .record(rid.clone(), DryRunOutcome::Pruned(answer));
@@ -787,7 +783,7 @@ impl ClusterOps for KubeOps {
         &self,
         had_failures: bool,
         orphans_left: bool,
-    ) -> Result<Option<Finalized>, String> {
+    ) -> Result<Option<Finalized>, RecordWriteError> {
         if self.cfg.dry_run {
             return Ok(None);
         }
@@ -822,12 +818,15 @@ impl ClusterOps for KubeOps {
         };
         match tokio::time::timeout(BEST_EFFORT_TIMEOUT, work).await {
             Ok(Ok(f)) => Ok(Some(f)),
-            Ok(Err(e)) => Err(describe(&e)),
-            Err(_) => Err(format!(
-                "no answer within {}s",
-                BEST_EFFORT_TIMEOUT.as_secs()
-            )),
+            Ok(Err(e)) => Err(RecordWriteError::Records(e)),
+            Err(_) => Err(RecordWriteError::NoAnswer(BEST_EFFORT_TIMEOUT)),
         }
+    }
+}
+
+fn not_discovered(rid: &ResourceId) -> NotDiscovered {
+    NotDiscovered {
+        kind: rid.kind.clone(),
     }
 }
 
@@ -885,7 +884,7 @@ mod prune_tests {
             namespace: CLUSTER_SCOPED.into(),
             name: name.into(),
         };
-        assert_eq!(ops.delete(&rid("mine")).await, Ok(Pruned::Deleted));
+        assert_eq!(ops.delete(&rid("mine")).await.unwrap(), Pruned::Deleted);
         assert!(matches!(
             ops.delete(&rid("shared")).await,
             Ok(Pruned::Kept(_))
@@ -919,7 +918,7 @@ mod prune_tests {
             namespace: CLUSTER_SCOPED.into(),
             name: "mine".into(),
         };
-        let err = ops.delete(&rid).await.unwrap_err();
+        let err = ops.delete(&rid).await.unwrap_err().to_string();
         assert!(err.contains("kix migrate domain"), "{err}");
         assert_eq!(api.names("ClusterRole"), vec!["mine"]);
     }
@@ -994,7 +993,7 @@ mod discovery_tests {
             namespace: CLUSTER_SCOPED.into(),
             name: "absent".into(),
         };
-        assert_eq!(ops(&api).get_live(&rid).await, Ok(None));
+        assert_eq!(ops(&api).get_live(&rid).await.unwrap(), None);
     }
 
     /// A miss for a kind whose group answers is resolved at once when an
@@ -1013,7 +1012,7 @@ mod discovery_tests {
             name: "absent".into(),
         };
         let start = tokio::time::Instant::now();
-        assert_eq!(ops(&api).get_live(&rid).await, Ok(None));
+        assert_eq!(ops(&api).get_live(&rid).await.unwrap(), None);
         assert_eq!(start.elapsed(), Duration::ZERO);
     }
 }

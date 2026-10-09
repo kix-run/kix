@@ -31,7 +31,7 @@ use crate::manifest::types::{CLUSTER_SCOPED, ResourceId};
 use super::apply::{ApplyAction, ApplyError, ApplyResult, ChangeAction, wants_rerun};
 use super::cancel::CancelToken;
 use super::graph::ResourceGraph;
-use super::ops::ClusterOps;
+use super::ops::{ClusterOps, RecordWriteError};
 use super::prune_guard::Pruned;
 use super::readiness::{self, ImportTarget, ReadinessResult};
 use super::secrets;
@@ -311,7 +311,7 @@ static DISCOVERY_NODE: std::sync::LazyLock<NodeId> =
 enum Done {
     Node(NodeId, NodeOutcome),
     Rediscovery(Result<(), String>),
-    Checkpoint(Result<(), String>),
+    Checkpoint(Result<(), RecordWriteError>),
 }
 
 /// Execute a DAG-streaming deploy.
@@ -341,7 +341,7 @@ enum Done {
 async fn abort_activation(ops: &Arc<dyn ClusterOps>, reason: &str) -> Option<String> {
     match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, ops.abort(reason)).await {
         Ok(Ok(())) => None,
-        Ok(Err(message)) => Some(message),
+        Ok(Err(e)) => Some(e.to_string()),
         Err(_) => Some(format!(
             "no answer within {}s",
             INLINE_BEST_EFFORT_TIMEOUT.as_secs()
@@ -398,16 +398,14 @@ pub async fn run_deploy(
 
     // Nothing is in flight yet, so awaiting this inline parks nobody. It is
     // still bounded: the watchdog only watches nodes.
-    match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, ops.begin()).await {
-        Ok(Ok(())) => {}
-        Ok(Err(message)) => emit(DeployEvent::BestEffortFailed {
-            what: "activation begin".into(),
-            message,
-        }),
-        Err(_) => emit(DeployEvent::BestEffortFailed {
+    if tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, ops.begin())
+        .await
+        .is_err()
+    {
+        emit(DeployEvent::BestEffortFailed {
             what: "activation begin".into(),
             message: format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
-        }),
+        });
     }
 
     // Preauthorized delete set for immutable-conflict recovery.
@@ -630,10 +628,10 @@ pub async fn run_deploy(
             }
             Done::Checkpoint(outcome) => {
                 checkpoints.in_flight = false;
-                if let Err(message) = outcome {
+                if let Err(e) = outcome {
                     emit(DeployEvent::BestEffortFailed {
                         what: "activation checkpoint".into(),
-                        message,
+                        message: e.to_string(),
                     });
                 }
                 checkpoints.start_if_due(&mut tasks, &mut kinds, &ops, config.dry_run);
@@ -845,9 +843,9 @@ pub async fn run_deploy(
         .await
         {
             Ok(Ok(())) => {}
-            Ok(Err(message)) => emit(DeployEvent::BestEffortFailed {
+            Ok(Err(e)) => emit(DeployEvent::BestEffortFailed {
                 what: "activation checkpoint".into(),
-                message,
+                message: e.to_string(),
             }),
             Err(_) => emit(DeployEvent::BestEffortFailed {
                 what: "activation checkpoint".into(),
@@ -948,7 +946,7 @@ pub async fn run_deploy(
                     .await
                     {
                         Ok(Ok(())) => Ok(()),
-                        Ok(Err(e)) => Err((rid, e)),
+                        Ok(Err(e)) => Err((rid, e.to_string())),
                         Err(_) => Err((
                             rid,
                             format!("no answer within {}s", INLINE_BEST_EFFORT_TIMEOUT.as_secs()),
@@ -1008,7 +1006,7 @@ pub async fn run_deploy(
             }
             let deleted =
                 match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, ops.delete(rid)).await {
-                    Ok(outcome) => outcome,
+                    Ok(outcome) => outcome.map_err(|e| e.to_string()),
                     Err(_) => Err(format!(
                         "no answer within {}s",
                         INLINE_BEST_EFFORT_TIMEOUT.as_secs()
@@ -1069,9 +1067,9 @@ pub async fn run_deploy(
             // The record did not become current, so the run has not
             // succeeded and its build must not be cached as the one the
             // cluster runs.
-            Ok(Err(message)) => {
+            Ok(Err(e)) => {
                 return Err(DeployError::FinalizeFailed {
-                    message,
+                    message: e.to_string(),
                     partial: result,
                 });
             }
@@ -1413,7 +1411,10 @@ async fn recreate(
     if let Some(refusal) = recreate_refusal(rid) {
         return Err(refusal);
     }
-    ctx.ops.recreate_in_place(manifest).await
+    ctx.ops
+        .recreate_in_place(manifest)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// The error for a resource Kix will not delete and re-create, `None` when

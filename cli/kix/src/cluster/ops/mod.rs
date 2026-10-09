@@ -19,13 +19,17 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::Value;
+use thiserror::Error;
 
+use crate::legacy_domain::LegacyDomainError;
 use crate::manifest::types::ResourceId;
 
+use super::activation::RecordsError;
 use super::apply::{ApplyError, ApplyResult};
 use super::cancel::CancelToken;
+use super::errors::describe;
 use super::fetch::FetchError;
-use super::prune_guard::Pruned;
+use super::prune_guard::{PruneError, Pruned};
 use super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
 use super::secrets::{HydrationResult, SecretError};
 
@@ -44,14 +48,82 @@ pub struct Finalized {
     pub previous: Option<String>,
 }
 
+/// A kind the discovery cache does not have.
+#[derive(Debug, Error)]
+#[error("kind {kind} not in discovery cache")]
+pub struct NotDiscovered {
+    pub kind: String,
+}
+
+/// A write to the Activation record that failed. The engine reports it as
+/// best-effort and carries on.
+#[derive(Debug, Error)]
+pub enum RecordWriteError {
+    #[error("{}", describe(.0))]
+    Records(RecordsError),
+    /// The write did not answer within the implementation's bound.
+    #[error("no answer within {}s", .0.as_secs())]
+    NoAnswer(Duration),
+}
+
+/// Why [`ClusterOps::get_live`] could not read the live object.
+#[derive(Debug, Error)]
+pub enum ReadError {
+    #[error(transparent)]
+    NotDiscovered(#[from] NotDiscovered),
+    #[error("get failed: {}", describe(.0))]
+    Get(::kube::Error),
+}
+
+/// Why [`ClusterOps::recreate_in_place`] did not recreate the object.
+#[derive(Debug, Error)]
+pub enum RecreateError {
+    #[error(transparent)]
+    NotDiscovered(#[from] NotDiscovered),
+    #[error("delete failed: {}", describe(.0))]
+    Delete(::kube::Error),
+    /// The object outlived the wait for it to go, so it was not re-applied:
+    /// the apply would fail with the same immutable-field 422.
+    #[error("{rid} still exists {}s after delete (stuck finalizer?); not re-applied", .waited.as_secs())]
+    StillExists { rid: ResourceId, waited: Duration },
+    #[error("re-apply failed: {0}")]
+    Reapply(ApplyError),
+    #[error("dry-run re-apply failed: {0}")]
+    DryRunReapply(ApplyError),
+}
+
+/// Why [`ClusterOps::record_activation_on_skipped`] did not stamp a
+/// resource.
+#[derive(Debug, Error)]
+pub enum StampError {
+    #[error("kind not in discovery cache")]
+    NotDiscovered,
+    #[error(transparent)]
+    Apply(ApplyError),
+}
+
+/// Why [`ClusterOps::delete`] did not delete an orphan.
+#[derive(Debug, Error)]
+pub enum DeleteError {
+    #[error(transparent)]
+    NotDiscovered(#[from] NotDiscovered),
+    /// The records sit under a retired group, so no prune guard can tell
+    /// what other Kix clusters deploy.
+    #[error(transparent)]
+    Domain(LegacyDomainError),
+    #[error(transparent)]
+    Guard(PruneError),
+}
+
 /// Progress callback for readiness waits. Called on every poll so the
 /// watchdog sees a long but healthy wait as activity.
 pub type OnStatus<'a> = &'a (dyn Fn(&str) + Send + Sync);
 
 /// Everything the deploy engine does to a cluster.
 ///
-/// Methods that return `Result<_, String>` are best-effort from the engine's
-/// point of view: it reports the failure as a `BestEffortFailed` event and
+/// Failures of the Activation record's writes ([`RecordWriteError`]) and of
+/// [`ClusterOps::record_activation_on_skipped`] are best-effort from the
+/// engine's point of view: it reports them as a `BestEffortFailed` event and
 /// carries on. The others decide verdicts or stop the run.
 #[async_trait]
 pub trait ClusterOps: Send + Sync + 'static {
@@ -70,7 +142,7 @@ pub trait ClusterOps: Send + Sync + 'static {
     /// says what it was attempting (kixpkgs#82). On a cluster's first deploy
     /// the record's own CRD is not served yet, so the implementation may
     /// defer the create to [`ClusterOps::rediscover`].
-    async fn begin(&self) -> Result<(), String>;
+    async fn begin(&self);
 
     /// The run is ending without finalizing: cancelled, stopped on a failed
     /// node, discovery broke, or a task panicked. Marks the Activation
@@ -79,7 +151,7 @@ pub trait ClusterOps: Send + Sync + 'static {
     ///
     /// Best-effort and bounded in time by the implementation. Called at most
     /// once, and only after [`ClusterOps::begin`] has run.
-    async fn abort(&self, reason: &str) -> Result<(), String>;
+    async fn abort(&self, reason: &str) -> Result<(), RecordWriteError>;
 
     /// Decrypt SOPS-backed data in a Secret manifest.
     async fn hydrate(&self, manifest: Value) -> Result<(Value, Vec<HydrationResult>), SecretError>;
@@ -89,14 +161,14 @@ pub trait ClusterOps: Send + Sync + 'static {
 
     /// Read the live object, `Ok(None)` when there is none. A read even
     /// under dry run.
-    async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, String>;
+    async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, ReadError>;
 
     /// Delete the live object, wait for it to go, re-apply. Called after an
     /// immutable-field conflict when the engine has pre-authorized the
     /// delete (the rid is in the orphan set), and for a live resource that
     /// carries `kix.run/rerun` and must run again. A missing object is not
     /// an error; an object still present after the wait is.
-    async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, String>;
+    async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, RecreateError>;
 
     /// Wait for the object (or, for an import marker, the object it
     /// describes) to be ready. `on_status` is called on every poll.
@@ -127,15 +199,15 @@ pub trait ClusterOps: Send + Sync + 'static {
         applied: usize,
         failed: usize,
         finalizing: bool,
-    ) -> Result<(), String>;
+    ) -> Result<(), RecordWriteError>;
 
     /// Stamp the current activation on a resource the run did not apply
     /// because it was unchanged. Best-effort.
-    async fn record_activation_on_skipped(&self, rid: &ResourceId) -> Result<(), String>;
+    async fn record_activation_on_skipped(&self, rid: &ResourceId) -> Result<(), StampError>;
 
     /// Delete an orphan, unless another Kix cluster still deploys it or it
     /// changed since it was read (see [`super::prune_guard`]).
-    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, String>;
+    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, DeleteError>;
 
     /// Finalize the Activation lifecycle: new one Active (or Degraded), old
     /// one Superseded. `Ok(None)` when there is no Activation to finalize
@@ -148,5 +220,5 @@ pub trait ClusterOps: Send + Sync + 'static {
         &self,
         had_failures: bool,
         orphans_left: bool,
-    ) -> Result<Option<Finalized>, String>;
+    ) -> Result<Option<Finalized>, RecordWriteError>;
 }
