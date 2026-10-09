@@ -13,11 +13,11 @@
 # stops.
 #
 # Environment:
-#   KIX_FLAKE  flake reference to install (default github:kix-run/kixpkgs#kix)
+#   KIX_INSTALL_FLAKE  flake reference to install (default github:kix-run/kixpkgs#kix)
 
 set -eu
 
-KIX_FLAKE="${KIX_FLAKE:-github:kix-run/kixpkgs#kix}"
+KIX_INSTALL_FLAKE="${KIX_INSTALL_FLAKE:-github:kix-run/kixpkgs#kix}"
 NIX_FLAGS="--extra-experimental-features nix-command --extra-experimental-features flakes"
 
 say() { printf '%s\n' "$*"; }
@@ -33,15 +33,15 @@ installer at https://determinate.systems/nix), open a new shell, and run
 this installer again."
 fi
 
-say "Installing the Kix CLI from ${KIX_FLAKE}"
+say "Installing the Kix CLI from ${KIX_INSTALL_FLAKE}"
 say "Nix builds it or downloads it from a binary cache; the first run can take a few minutes."
 
 # shellcheck disable=SC2086 # NIX_FLAGS is a list of flags.
-if ! nix $NIX_FLAGS profile install "$KIX_FLAKE"; then
+if ! nix $NIX_FLAGS profile install "$KIX_INSTALL_FLAKE"; then
   fail "nix profile install failed (output above).
 If your profile was created with nix-env, nix profile cannot manage it.
 Run the command yourself after migrating the profile:
-  nix profile install ${KIX_FLAKE}"
+  nix profile install ${KIX_INSTALL_FLAKE}"
 fi
 
 if command -v kix >/dev/null 2>&1; then
