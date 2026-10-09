@@ -25,7 +25,7 @@ use crate::cluster::fetch::{self, FetchError, SharedOrphan};
 use crate::cluster::graph::{GraphError, ResourceGraph};
 use crate::cluster::ops::{Cluster, KubeResources, RecordConfig};
 use crate::cluster::readiness::MalformedMarker;
-use crate::cluster::scheduler::{self, DeployError, DeployPlan, SchedulerConfig};
+use crate::cluster::scheduler::{self, DeployError, DeployPlan, PrunePolicy, SchedulerConfig};
 use crate::cluster::stream::{DeployObserver, DeployResult};
 use crate::cluster::tenancy::Tenancy;
 use crate::legacy_domain::LegacyDomainError;
@@ -254,6 +254,9 @@ impl LivePlan {
             self.plan,
             &self.orphans,
             &self.live,
+            // The operator always prunes: its orphans are live objects of
+            // its own Kix cluster that the build no longer contains.
+            PrunePolicy::Delete,
             &config,
             observer,
         )

@@ -195,12 +195,12 @@ impl CheckedPlan {
 
     /// Run the engine over the plan with every write sent as a dry run, and
     /// return what the apiserver answered for each object. Nothing is
-    /// written to the Activation record. `config.prune` is set to the prune
-    /// policy of the plan's flags.
+    /// written to the Activation record. The prune follows the plan's
+    /// flags.
     pub async fn dry_run(
         &self,
         target: Target,
-        mut config: SchedulerConfig,
+        config: SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
     ) -> (Result<DeployResult, DeployError>, Vec<DryRunAnswer>) {
         let dry = Arc::new(DryRun::new(
@@ -211,12 +211,12 @@ impl CheckedPlan {
             self.flags.force_conflicts,
             target.sops,
         ));
-        config.prune = self.flags.prune_policy();
         let result = scheduler::run_deploy(
             Cluster::dry_run(dry.clone()),
             self.plan.clone(),
             &self.orphans,
             &self.old_manifests,
+            self.flags.prune_policy(),
             &config,
             observer,
         )
@@ -225,8 +225,8 @@ impl CheckedPlan {
     }
 
     /// Run the engine over the checked plan, writing its Activation record
-    /// with `receipt` as the provenance. `config.prune` is set to the prune
-    /// policy the check used, whatever it was.
+    /// with `receipt` as the provenance. The prune follows the flags the
+    /// check used.
     ///
     /// Also returns the `status.orphansKeptFrom` the run's finalize wrote,
     /// or `None` when it did not finalize.
@@ -234,7 +234,7 @@ impl CheckedPlan {
         self,
         target: Target,
         receipt: Option<Value>,
-        mut config: SchedulerConfig,
+        config: SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
     ) -> (
         Result<DeployResult, DeployError>,
@@ -262,12 +262,12 @@ impl CheckedPlan {
             },
             target.sops,
         );
-        config.prune = self.flags.prune_policy();
         let result = scheduler::run_deploy(
             cluster,
             self.plan,
             &self.orphans,
             &self.old_manifests,
+            self.flags.prune_policy(),
             &config,
             observer,
         )

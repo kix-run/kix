@@ -401,7 +401,6 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     let config = SchedulerConfig {
         timeout: readiness::DEFAULT_TIMEOUT,
         on_error: OnErrorPolicy::Stop,
-        prune: checked.flags().prune_policy(),
         cancel: kix::cluster::cancel::CancelToken::new(),
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),

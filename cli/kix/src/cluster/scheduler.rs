@@ -216,7 +216,6 @@ const INLINE_BEST_EFFORT_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct SchedulerConfig {
     pub timeout: Duration,
     pub on_error: OnErrorPolicy,
-    pub prune: PrunePolicy,
     pub cancel: CancelToken,
     /// Max nodes in flight. See [`CONCURRENCY`].
     pub concurrency: usize,
@@ -363,6 +362,7 @@ pub(crate) async fn run_deploy(
     plan: DeployPlan,
     orphan_rids: &[ResourceId],
     old_manifests: &[Value],
+    prune: PrunePolicy,
     config: &SchedulerConfig,
     observer: Arc<dyn DeployObserver>,
 ) -> Result<DeployResult, DeployError> {
@@ -997,11 +997,11 @@ pub(crate) async fn run_deploy(
         .collect();
     // Whether any prunable orphan is still on the cluster after this phase.
     // Finalize records the builds they came from when it is.
-    let mut orphans_left = config.prune != PrunePolicy::Delete
+    let mut orphans_left = prune != PrunePolicy::Delete
         && effective_orphans.iter().any(|rid| !never_pruned(&rid.kind));
-    if !effective_orphans.is_empty() && config.prune != PrunePolicy::Skip {
+    if !effective_orphans.is_empty() && prune != PrunePolicy::Skip {
         let ordered = prune_order(&effective_orphans, old_manifests);
-        let delete = config.prune == PrunePolicy::Delete;
+        let delete = prune == PrunePolicy::Delete;
         let (kept, prunable): (Vec<ResourceId>, Vec<ResourceId>) =
             ordered.iter().cloned().partition(|r| never_pruned(&r.kind));
         emit(DeployEvent::PruneStart {
@@ -1013,7 +1013,7 @@ pub(crate) async fn run_deploy(
 
         for rid in &ordered {
             // Warn-only policy: report and move on.
-            if config.prune == PrunePolicy::WarnOnly {
+            if prune == PrunePolicy::WarnOnly {
                 continue;
             }
             if never_pruned(&rid.kind) {
@@ -1116,6 +1116,7 @@ pub async fn run_scripted(
     plan: DeployPlan,
     orphan_rids: &[ResourceId],
     old_manifests: &[Value],
+    prune: PrunePolicy,
     config: &SchedulerConfig,
     observer: Arc<dyn DeployObserver>,
 ) -> Result<DeployResult, DeployError> {
@@ -1124,6 +1125,7 @@ pub async fn run_scripted(
         plan,
         orphan_rids,
         old_manifests,
+        prune,
         config,
         observer,
     )
@@ -2172,7 +2174,6 @@ mod engine_tests {
         SchedulerConfig {
             timeout: secs(300),
             on_error: OnErrorPolicy::Continue,
-            prune: PrunePolicy::WarnOnly,
             cancel: CancelToken::new(),
             concurrency: CONCURRENCY,
             stall,
@@ -2280,7 +2281,15 @@ mod engine_tests {
     ) -> Result<DeployResult, DeployError> {
         tokio::time::timeout(
             secs(3600),
-            run_scripted(ops.clone(), plan, &[], &[], config, observer),
+            run_scripted(
+                ops.clone(),
+                plan,
+                &[],
+                &[],
+                PrunePolicy::WarnOnly,
+                config,
+                observer,
+            ),
         )
         .await
         .expect("engine parked: nothing runnable for an hour of virtual time")
@@ -2292,12 +2301,21 @@ mod engine_tests {
         plan: DeployPlan,
         orphans: &[ResourceId],
         old_manifests: &[Value],
+        prune: PrunePolicy,
         config: &SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
     ) -> Result<DeployResult, DeployError> {
         tokio::time::timeout(
             secs(3600),
-            run_scripted(ops.clone(), plan, orphans, old_manifests, config, observer),
+            run_scripted(
+                ops.clone(),
+                plan,
+                orphans,
+                old_manifests,
+                prune,
+                config,
+                observer,
+            ),
         )
         .await
         .expect("engine parked: nothing runnable for an hour of virtual time")
@@ -2556,8 +2574,8 @@ mod engine_tests {
                 then: Box::new(Ready::Ready),
             })),
         );
-        let mut cfg = config(quiet_watchdog());
-        cfg.prune = PrunePolicy::Delete;
+        let cfg = config(quiet_watchdog());
+        let prune = PrunePolicy::Delete;
         let token = cfg.cancel.clone();
         tokio::spawn(async move {
             tokio::time::sleep(secs(5)).await;
@@ -2567,9 +2585,17 @@ mod engine_tests {
         let orphans = [rid("ConfigMap", "old")];
         let old = [m("ConfigMap", "old", &[])];
 
-        let err = run_with_orphans(&ops, plan_of(&manifests), &orphans, &old, &cfg, rec.clone())
-            .await
-            .unwrap_err();
+        let err = run_with_orphans(
+            &ops,
+            plan_of(&manifests),
+            &orphans,
+            &old,
+            prune,
+            &cfg,
+            rec.clone(),
+        )
+        .await
+        .unwrap_err();
 
         assert!(matches!(err, DeployError::Cancelled { .. }), "{err}");
         let calls = ops.calls();
@@ -2638,7 +2664,7 @@ mod engine_tests {
         );
         let mut cfg = config(quiet_watchdog());
         cfg.on_error = OnErrorPolicy::Continue;
-        cfg.prune = PrunePolicy::Delete;
+        let prune = PrunePolicy::Delete;
         let rec = Arc::new(Recorder::default());
 
         let result = run_with_orphans(
@@ -2646,6 +2672,7 @@ mod engine_tests {
             plan_of(&manifests),
             &[rid("ConfigMap", "old")],
             &[m("ConfigMap", "old", &[])],
+            prune,
             &cfg,
             rec.clone(),
         )
@@ -2948,14 +2975,15 @@ mod engine_tests {
             rid("Deployment", "sts"),
             NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::ImmutableConflict))),
         );
-        let mut cfg = config(quiet_watchdog());
-        cfg.prune = PrunePolicy::Delete;
+        let cfg = config(quiet_watchdog());
+        let prune = PrunePolicy::Delete;
         let orphans = [rid("Deployment", "sts")];
         let result = run_with_orphans(
             &ops,
             plan_of(&manifests),
             &orphans,
             &manifests,
+            prune,
             &cfg,
             Arc::new(NullObserver),
         )
@@ -2982,14 +3010,15 @@ mod engine_tests {
             crd.clone(),
             NodeScript::default().apply(Behaviour::Now(Err(ApplyFailure::ImmutableConflict))),
         );
-        let mut cfg = config(quiet_watchdog());
-        cfg.prune = PrunePolicy::Delete;
+        let cfg = config(quiet_watchdog());
+        let prune = PrunePolicy::Delete;
         let orphans = [crd.clone()];
         let result = run_with_orphans(
             &ops,
             plan_of(&manifests),
             &orphans,
             &manifests,
+            prune,
             &cfg,
             Arc::new(NullObserver),
         )
@@ -3342,15 +3371,23 @@ mod engine_tests {
         let ops = Arc::new(ScriptedOps::new());
         ops.delete_behaviour(Behaviour::Hang);
         let rec = Arc::new(Recorder::default());
-        let mut cfg = config(quiet_watchdog());
-        cfg.prune = PrunePolicy::Delete;
+        let cfg = config(quiet_watchdog());
+        let prune = PrunePolicy::Delete;
         let orphans = [rid("ConfigMap", "old"), rid("Namespace", "ns")];
         let old = [m("ConfigMap", "old", &[]), m("Namespace", "ns", &[])];
 
         let start = Instant::now();
-        let result = run_with_orphans(&ops, plan_of(&manifests), &orphans, &old, &cfg, rec.clone())
-            .await
-            .unwrap();
+        let result = run_with_orphans(
+            &ops,
+            plan_of(&manifests),
+            &orphans,
+            &old,
+            prune,
+            &cfg,
+            rec.clone(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.pruned, 0);
         assert_eq!(
@@ -3391,14 +3428,22 @@ mod engine_tests {
         let manifests = vec![m("ConfigMap", "keep", &[])];
         let ops = Arc::new(ScriptedOps::new());
         let rec = Arc::new(Recorder::default());
-        let mut cfg = config(quiet_watchdog());
-        cfg.prune = PrunePolicy::WarnOnly;
+        let cfg = config(quiet_watchdog());
+        let prune = PrunePolicy::WarnOnly;
         let orphans = [rid("ConfigMap", "old"), rid("Namespace", "ns")];
         let old = [m("ConfigMap", "old", &[]), m("Namespace", "ns", &[])];
 
-        let result = run_with_orphans(&ops, plan_of(&manifests), &orphans, &old, &cfg, rec.clone())
-            .await
-            .unwrap();
+        let result = run_with_orphans(
+            &ops,
+            plan_of(&manifests),
+            &orphans,
+            &old,
+            prune,
+            &cfg,
+            rec.clone(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result.pruned, 0);
         assert!(!ops.calls().iter().any(|c| matches!(c, Call::Delete(_))));
@@ -3427,13 +3472,14 @@ mod engine_tests {
             let old = [m("ConfigMap", "old", &[]), m("Namespace", "ns", &[])];
             let ops = Arc::new(ScriptedOps::new());
             ops.delete_behaviour(delete);
-            let mut cfg = config(quiet_watchdog());
-            cfg.prune = policy;
+            let cfg = config(quiet_watchdog());
+            let prune = policy;
             let _ = run_with_orphans(
                 &ops,
                 plan_of(&manifests),
                 orphans,
                 &old,
+                prune,
                 &cfg,
                 Arc::new(Recorder::default()),
             )
@@ -3482,8 +3528,8 @@ mod engine_tests {
     async fn an_orphan_the_old_manifests_lack_is_still_pruned() {
         let manifests = vec![m("ConfigMap", "keep", &[])];
         let ops = Arc::new(ScriptedOps::new());
-        let mut cfg = config(quiet_watchdog());
-        cfg.prune = PrunePolicy::Delete;
+        let cfg = config(quiet_watchdog());
+        let prune = PrunePolicy::Delete;
         let orphans = [rid("ConfigMap", "listed"), rid("ConfigMap", "unlisted")];
         let old = [m("ConfigMap", "listed", &[])];
 
@@ -3492,6 +3538,7 @@ mod engine_tests {
             plan_of(&manifests),
             &orphans,
             &old,
+            prune,
             &cfg,
             Arc::new(Recorder::default()),
         )
@@ -3522,14 +3569,22 @@ mod engine_tests {
         });
         ops.delete_behaviour(Behaviour::Now(Ok(shared)));
         let rec = Arc::new(Recorder::default());
-        let mut cfg = config(quiet_watchdog());
-        cfg.prune = PrunePolicy::Delete;
+        let cfg = config(quiet_watchdog());
+        let prune = PrunePolicy::Delete;
         let orphans = [rid("ConfigMap", "old")];
         let old = [m("ConfigMap", "old", &[])];
 
-        let result = run_with_orphans(&ops, plan_of(&manifests), &orphans, &old, &cfg, rec.clone())
-            .await
-            .unwrap();
+        let result = run_with_orphans(
+            &ops,
+            plan_of(&manifests),
+            &orphans,
+            &old,
+            prune,
+            &cfg,
+            rec.clone(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!((result.pruned, result.failed), (0, 0));
         let kept: Vec<(ResourceId, String)> = rec
@@ -3769,7 +3824,15 @@ mod engine_tests {
         let rec = Arc::new(Recorder::default());
         let outcome = rt.block_on(tokio::time::timeout(
             secs(3600),
-            run_scripted(ops.clone(), plan, &[], &[], &cfg, rec.clone()),
+            run_scripted(
+                ops.clone(),
+                plan,
+                &[],
+                &[],
+                PrunePolicy::WarnOnly,
+                &cfg,
+                rec.clone(),
+            ),
         ));
         let outcome = match outcome {
             Ok(o) => o,

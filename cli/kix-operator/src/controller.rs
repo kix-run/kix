@@ -43,7 +43,7 @@ use kix::cluster::activation::{
 use kix::cluster::fetch;
 use kix::cluster::graph::ResourceGraph;
 use kix::cluster::prune_guard::{PruneGuard, Pruned};
-use kix::cluster::scheduler::{self, OnErrorPolicy, PrunePolicy, SchedulerConfig};
+use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::DeployObserver;
 use kix::cluster::watchdog::StallPolicy;
 use kix::manifest::types::ResourceId;
@@ -406,7 +406,6 @@ async fn run_reconcile(
     let config = SchedulerConfig {
         timeout: Duration::from_secs(300),
         on_error: OnErrorPolicy::Stop,
-        prune: PrunePolicy::Delete,
         cancel: kix::cluster::cancel::CancelToken::new(),
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),

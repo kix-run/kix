@@ -880,7 +880,6 @@ async fn run_deploy_async(
     let config = SchedulerConfig {
         timeout,
         on_error,
-        prune: checked.flags().prune_policy(),
         cancel: kix::cluster::cancel::CancelToken::new(),
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
@@ -1511,15 +1510,23 @@ mod run_end_tests {
         DeployPlan::from_graph_and_changes(&graph, &changes).unwrap()
     }
 
-    fn config(on_error: OnErrorPolicy, prune: PrunePolicy) -> SchedulerConfig {
-        SchedulerConfig {
-            timeout: Duration::from_secs(300),
-            on_error,
+    /// A run's engine settings and its prune policy.
+    struct Settings {
+        config: SchedulerConfig,
+        prune: PrunePolicy,
+    }
+
+    fn config(on_error: OnErrorPolicy, prune: PrunePolicy) -> Settings {
+        Settings {
+            config: SchedulerConfig {
+                timeout: Duration::from_secs(300),
+                on_error,
+                cancel: kix::cluster::cancel::CancelToken::new(),
+                concurrency: scheduler::CONCURRENCY,
+                stall: StallPolicy::off(),
+                rerun_failed: true,
+            },
             prune,
-            cancel: kix::cluster::cancel::CancelToken::new(),
-            concurrency: scheduler::CONCURRENCY,
-            stall: StallPolicy::off(),
-            rerun_failed: true,
         }
     }
 
@@ -1538,14 +1545,15 @@ mod run_end_tests {
         manifests: &[Value],
         orphans: &[ResourceId],
         old: &[Value],
-        config: &SchedulerConfig,
+        settings: &Settings,
     ) -> std::result::Result<DeployResult, scheduler::DeployError> {
         scheduler::run_scripted(
             ops.clone(),
             apply_all(manifests),
             orphans,
             old,
-            config,
+            settings.prune,
+            &settings.config,
             Arc::new(NullObserver),
         )
         .await
