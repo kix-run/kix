@@ -26,15 +26,13 @@ pub fn run(args: &PortForwardArgs, ctx: &mut CommandContext) -> Result<()> {
 
     let target = resolve_package_workload(&ctx.global, &args.cluster, &args.package)?;
 
-    if !ctx.global.quiet {
-        eprintln!(
-            "  {} {} in {}; forwarding {}",
-            output::dim("→ kubectl port-forward"),
-            output::bold(&target.kubectl_ref()),
-            output::bold(&target.namespace),
-            output::bold(&args.ports.join(" ")),
-        );
-    }
+    crate::esay!(
+        "  {} {} in {}; forwarding {}",
+        output::dim("→ kubectl port-forward"),
+        output::bold(&target.kubectl_ref()),
+        output::bold(&target.namespace),
+        output::bold(&args.ports.join(" ")),
+    );
 
     let mut cmd = Command::new("kubectl");
     cmd.arg("port-forward");

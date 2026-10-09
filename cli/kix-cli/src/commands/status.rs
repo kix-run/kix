@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io::IsTerminal;
 
 use miette::{IntoDiagnostic, Result, miette};
 
@@ -230,7 +229,7 @@ fn run_operator(args: &StatusArgs, ctx: &mut CommandContext) -> Result<()> {
 }
 
 async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs) -> Result<()> {
-    let spinner = make_spinner(global);
+    let spinner = output::spinner("Fetching cluster status...");
 
     // 1. Connect and discover
     let client = fetch::make_client(global.context.as_deref())
@@ -273,10 +272,8 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
     if let Some(sp) = &spinner {
         sp.finish_and_clear();
     }
-    if !global.quiet {
-        for note in sweep.scope_notes() {
-            eprintln!("{note}");
-        }
+    for note in sweep.scope_notes() {
+        crate::esay!("{note}");
     }
     let live_resources = sweep.managed;
 
@@ -446,22 +443,6 @@ fn resource_status_from_obj(obj: &kube::api::DynamicObject) -> PackageResourceSt
     }
 }
 
-fn make_spinner(global: &crate::cli::GlobalArgs) -> Option<indicatif::ProgressBar> {
-    if std::io::stderr().is_terminal() && !global.quiet {
-        let sp = indicatif::ProgressBar::new_spinner();
-        sp.set_style(
-            indicatif::ProgressStyle::default_spinner()
-                .template("{spinner:.cyan} {msg}")
-                .expect("valid template"),
-        );
-        sp.set_message("Fetching cluster status...");
-        sp.enable_steady_tick(std::time::Duration::from_millis(80));
-        Some(sp)
-    } else {
-        None
-    }
-}
-
 fn compute_age_from_obj(obj: &kube::api::DynamicObject) -> String {
     compute_age(obj.metadata.creation_timestamp.as_ref().map(|t| t.0))
 }
@@ -479,7 +460,7 @@ fn compute_age(created: Option<chrono::DateTime<chrono::Utc>>) -> String {
 }
 
 async fn run_flat_async(cluster: &str, global: &crate::cli::GlobalArgs) -> Result<()> {
-    let spinner = make_spinner(global);
+    let spinner = output::spinner("Fetching cluster status...");
 
     let client = fetch::make_client(global.context.as_deref())
         .await
@@ -501,10 +482,8 @@ async fn run_flat_async(cluster: &str, global: &crate::cli::GlobalArgs) -> Resul
         sp.finish_and_clear();
     }
 
-    if !global.quiet {
-        for note in sweep.scope_notes() {
-            eprintln!("{note}");
-        }
+    for note in sweep.scope_notes() {
+        crate::esay!("{note}");
     }
     let resources = sweep.managed;
     if resources.is_empty() {

@@ -17,16 +17,14 @@ use super::workload::resolve_package_workload;
 pub fn run(args: &LogsArgs, ctx: &mut CommandContext) -> Result<()> {
     let target = resolve_package_workload(&ctx.global, &args.cluster, &args.package)?;
 
-    if !ctx.global.quiet {
-        eprintln!(
-            "  {} {} {} in {} (selector: {})",
-            output::dim("→ kubectl logs for"),
-            output::bold(&target.kind),
-            output::bold(&target.name),
-            output::bold(&target.namespace),
-            output::dim(&target.selector),
-        );
-    }
+    crate::esay!(
+        "  {} {} {} in {} (selector: {})",
+        output::dim("→ kubectl logs for"),
+        output::bold(&target.kind),
+        output::bold(&target.name),
+        output::bold(&target.namespace),
+        output::dim(&target.selector),
+    );
 
     let mut cmd = Command::new("kubectl");
     cmd.arg("logs");

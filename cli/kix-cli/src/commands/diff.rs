@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use miette::{IntoDiagnostic, Result, miette};
@@ -57,7 +56,7 @@ enum OldSide {
 /// kix-owned view. Same renderers as the deploy plan, so what `kix diff`
 /// shows is what `kix deploy` will show.
 pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
-    let spinner = make_spinner(ctx, &format!("Building cluster '{}'...", args.cluster));
+    let spinner = output::spinner(format!("Building cluster '{}'...", args.cluster));
     let status = |msg: &str| set_spinner(&spinner, msg);
     let new_graph = super::build_flake(
         &ctx.global,
@@ -73,7 +72,7 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
         if !path.is_dir() {
             return Err(miette!("from directory does not exist: {from}"));
         }
-        let spinner = make_spinner(ctx, "Loading old side...");
+        let spinner = output::spinner("Loading old side...");
         let loaded = if path.join("kix-packages.json").is_file() {
             let status = |msg: &str| set_spinner(&spinner, msg);
             let old = build_source::Build::local(&path, &status).into_diagnostic()?;
@@ -92,7 +91,7 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
         clear_spinner(&spinner);
         loaded
     } else {
-        let spinner = make_spinner(ctx, "Fetching live cluster state...");
+        let spinner = output::spinner("Fetching live cluster state...");
         let global = ctx.global.clone();
         let live = ctx
             .runtime
@@ -116,7 +115,7 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
         OutputFormat::Json => println!("{}", result.doc.to_json()),
         OutputFormat::Yaml => print!("{}", result.doc.to_yaml().into_diagnostic()?),
         OutputFormat::Markdown => print_markdown_output(&result),
-        OutputFormat::Text => print_text_output(&result, &ctx.global),
+        OutputFormat::Text => print_text_output(&result),
     }
     if let OldSide::Live(live) = &side {
         for rid in &live.namespaceless {
@@ -298,9 +297,7 @@ async fn fetch_live_manifests(
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
-    if !global.quiet {
-        eprintln!("Discovering API resources...");
-    }
+    crate::esay!("Discovering API resources...");
 
     let discovery = fetch::discover_resources(&client)
         .await
@@ -314,12 +311,10 @@ async fn fetch_live_manifests(
     // "in sync" about a resource that does not exist under that name.
     let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
-    if !global.quiet {
-        eprintln!(
-            "Fetching managed resources ({} resource types)...",
-            discovery.len()
-        );
-    }
+    crate::esay!(
+        "Fetching managed resources ({} resource types)...",
+        discovery.len()
+    );
 
     // Only this Kix cluster's objects: another cluster sharing the
     // Kubernetes cluster is not a removal.
@@ -332,16 +327,14 @@ async fn fetch_live_manifests(
     .await
     .map_err(|e| miette!("failed to fetch resources: {e}"))?;
 
-    if !global.quiet {
-        eprintln!(
-            "Fetched {} resources across {} resource types{}",
-            sweep.managed.len(),
-            discovery.len() - sweep.forbidden.len(),
-            crate::output::forbidden_note(&sweep.forbidden),
-        );
-        for note in sweep.scope_notes() {
-            eprintln!("{note}");
-        }
+    crate::esay!(
+        "Fetched {} resources across {} resource types{}",
+        sweep.managed.len(),
+        discovery.len() - sweep.forbidden.len(),
+        crate::output::forbidden_note(&sweep.forbidden),
+    );
+    for note in sweep.scope_notes() {
+        crate::esay!("{note}");
     }
 
     // An object this build drops but another Kix cluster still deploys is
@@ -358,8 +351,8 @@ async fn fetch_live_manifests(
         !in_build.contains(&ResourceId::from_value(&fetch::to_manifest_value(obj)))
             && !tenancy.still_deployed_by_others(obj).is_empty()
     });
-    if !global.quiet && !elsewhere.is_empty() {
-        eprintln!(
+    if !elsewhere.is_empty() {
+        crate::esay!(
             "Not comparing {} objects this build drops that another Kix cluster still deploys.",
             elsewhere.len()
         );
@@ -399,8 +392,8 @@ async fn fetch_live_manifests(
     let mut manifests = fetch::kix_owned_manifests_against(compared, &built);
 
     let reaped = reaped_since_deploy(new_graph, current.as_ref(), &manifests);
-    if !global.quiet && !reaped.is_empty() {
-        eprintln!(
+    if !reaped.is_empty() {
+        crate::esay!(
             "Not comparing {} run-once resources that the deployed build ran and that were deleted after finishing, as their manifests ask.",
             reaped.len()
         );
@@ -483,34 +476,18 @@ fn deployed_hashes(
         .unwrap_or_default()
 }
 
-fn make_spinner(ctx: &CommandContext, msg: &str) -> Option<indicatif::ProgressBar> {
-    if std::io::stderr().is_terminal() && !ctx.global.quiet {
-        let sp = indicatif::ProgressBar::new_spinner();
-        sp.set_style(
-            indicatif::ProgressStyle::default_spinner()
-                .template("{spinner:.cyan} {msg}")
-                .expect("valid template"),
-        );
-        sp.set_message(msg.to_string());
-        sp.enable_steady_tick(std::time::Duration::from_millis(80));
-        Some(sp)
-    } else {
-        None
-    }
-}
-
 fn clear_spinner(spinner: &Option<indicatif::ProgressBar>) {
     if let Some(sp) = spinner {
         sp.finish_and_clear();
     }
 }
 
-fn print_text_output(result: &DiffResult, global: &crate::cli::GlobalArgs) {
+fn print_text_output(result: &DiffResult) {
     let pkg = &result.packages;
 
     let total_pkgs = pkg.added.len() + pkg.removed.len() + pkg.changed.len() + pkg.unchanged;
-    if !global.quiet && total_pkgs > 0 {
-        println!(
+    if total_pkgs > 0 {
+        crate::say!(
             "{} packages: {} unchanged, {} changed, {} added, {} removed",
             total_pkgs,
             pkg.unchanged,

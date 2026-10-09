@@ -67,9 +67,7 @@ pub fn run(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<()> {
 /// Taken from the build rather than written here, so the migration installs
 /// exactly the CRDs the next deploy expects.
 fn kix_crds_from_build(args: &MigrateArgs, ctx: &mut CommandContext) -> Result<Vec<Value>> {
-    if !ctx.global.quiet {
-        println!("Building cluster '{}'...", output::bold(&args.cluster));
-    }
+    crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
     // The build is stamped, so the CRDs this installs carry an identity hash
     // like every other object Kix applies. An unstamped object carrying the
     // managed-by label is what `kix gc --hard --include-unstamped` deletes,

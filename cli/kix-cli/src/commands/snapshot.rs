@@ -22,22 +22,18 @@ pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
 /// The objects of Kix cluster `cluster`, read past the domain gate: on a
 /// cluster whose records sit under a retired group none of them would be
 /// found, and every object would be read as `cluster`'s.
-async fn sweep_cluster(client: &Client, cluster: &str, quiet: bool) -> Result<fetch::ManagedSweep> {
-    if !quiet {
-        eprintln!("Discovering API resources...");
-    }
+async fn sweep_cluster(client: &Client, cluster: &str) -> Result<fetch::ManagedSweep> {
+    crate::esay!("Discovering API resources...");
 
     let discovery = fetch::discover_resources(client)
         .await
         .map_err(|e| miette!("{e}"))?;
     let records = Records::open(client, &discovery).map_err(|e| miette!("{e}"))?;
 
-    if !quiet {
-        eprintln!(
-            "Fetching managed resources ({} resource types)...",
-            discovery.len()
-        );
-    }
+    crate::esay!(
+        "Fetching managed resources ({} resource types)...",
+        discovery.len()
+    );
 
     let sweep = fetch::sweep_managed(
         client,
@@ -74,13 +70,11 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
             .await
             .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
-        let sweep = sweep_cluster(&client, &args.cluster, global.quiet).await?;
+        let sweep = sweep_cluster(&client, &args.cluster).await?;
 
-        if !global.quiet {
-            eprintln!("Fetched {} resources", sweep.managed.len());
-            for note in sweep.scope_notes() {
-                eprintln!("{note}");
-            }
+        crate::esay!("Fetched {} resources", sweep.managed.len());
+        for note in sweep.scope_notes() {
+            crate::esay!("{note}");
         }
         let resources = snapshot_resources(sweep.managed);
 
@@ -118,9 +112,7 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
         let persist_path = tmp_dir.keep();
         std::fs::rename(&persist_path, out_dir).into_diagnostic()?;
 
-        if !global.quiet {
-            eprintln!("Saved {written} resources to {}/", args.dir);
-        }
+        crate::esay!("Saved {written} resources to {}/", args.dir);
 
         Ok(())
     })
@@ -241,7 +233,7 @@ mod tests {
                 "data": { "password": "aHVudGVyMg==" },
             }),
         ]);
-        let sweep = sweep_cluster(&api.client(), "a", true).await.unwrap();
+        let sweep = sweep_cluster(&api.client(), "a").await.unwrap();
         let resources = snapshot_resources(sweep.managed);
         let dir = tempfile::tempdir().unwrap();
         write_resources(dir.path(), &resources).unwrap();
@@ -257,7 +249,7 @@ mod tests {
     async fn a_snapshot_of_an_unmigrated_cluster_is_refused() {
         let api = FakeApi::new([]);
         api.serve_retired_records();
-        let Err(err) = sweep_cluster(&api.client(), "a", true).await else {
+        let Err(err) = sweep_cluster(&api.client(), "a").await else {
             panic!("an unmigrated cluster was swept");
         };
         let err = err.to_string();

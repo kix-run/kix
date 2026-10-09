@@ -15,8 +15,8 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;
 
     let json = output::format() == OutputFormat::Json;
-    if !global.quiet && !json {
-        println!("Connecting to cluster...");
+    if !json {
+        crate::say!("Connecting to cluster...");
     }
 
     let reports = runtime.block_on(async {
@@ -53,7 +53,7 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
             .iter()
             .flat_map(|r| r.clusters.iter().map(String::as_str))
             .collect();
-        print_text(&reports, global.quiet, clusters.len() > 1);
+        print_text(&reports, clusters.len() > 1);
     }
 
     if drifted > 0 {
@@ -62,11 +62,9 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
     Ok(())
 }
 
-fn print_text(reports: &[DriftReport], quiet: bool, name_clusters: bool) {
-    if !quiet {
-        println!("{} kix-managed resources", reports.len());
-        println!();
-    }
+fn print_text(reports: &[DriftReport], name_clusters: bool) {
+    crate::say!("{} kix-managed resources", reports.len());
+    crate::say!();
 
     for report in reports {
         let rid = if name_clusters {

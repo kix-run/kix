@@ -78,6 +78,25 @@ macro_rules! say {
     };
 }
 
+/// A spinner on stderr showing `msg`. `None` under `-q`, or when stderr is
+/// not a terminal.
+pub fn spinner(msg: impl Into<Cow<'static, str>>) -> Option<indicatif::ProgressBar> {
+    use std::io::IsTerminal;
+    if std::io::stderr().is_terminal() && !quiet() {
+        let sp = indicatif::ProgressBar::new_spinner();
+        sp.set_style(
+            indicatif::ProgressStyle::default_spinner()
+                .template("{spinner:.cyan} {msg}")
+                .expect("valid template"),
+        );
+        sp.set_message(msg);
+        sp.enable_steady_tick(std::time::Duration::from_millis(80));
+        Some(sp)
+    } else {
+        None
+    }
+}
+
 /// `eprintln!` for progress lines: `-q` silences them.
 #[macro_export]
 macro_rules! esay {

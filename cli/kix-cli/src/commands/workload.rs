@@ -43,15 +43,8 @@ pub fn resolve_package_workload(
     cluster: &str,
     package: &str,
 ) -> Result<WorkloadTarget> {
-    let quiet = global.quiet;
-    let status = |msg: &str| {
-        if !quiet {
-            eprintln!("  {msg}");
-        }
-    };
-    if !quiet {
-        eprintln!("Building cluster '{cluster}'...");
-    }
+    let status = |msg: &str| crate::esay!("  {msg}");
+    crate::esay!("Building cluster '{cluster}'...");
     let build = super::build_flake(global, cluster, &status, super::ACTIVATION_BUILD_FAILED)?;
     let pkg = find_package(build.graph(), package)?;
     resolve_workload_in_package(build.graph(), pkg)

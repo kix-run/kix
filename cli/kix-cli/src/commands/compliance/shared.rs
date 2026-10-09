@@ -11,13 +11,9 @@ use crate::commands::CommandContext;
 /// Build the cluster and load its stamped graph, so downstream consumers
 /// see the same identity hashes that deploy uses.
 pub fn build_and_load(ctx: &CommandContext, cluster: &str) -> Result<StoreGraph> {
-    if !ctx.global.quiet {
-        eprintln!("Building cluster '{cluster}'...");
-    }
+    crate::esay!("Building cluster '{cluster}'...");
     let status = |msg: &str| {
-        if !ctx.global.quiet {
-            eprintln!("  {msg}");
-        }
+        crate::esay!("  {msg}");
     };
     let build = crate::commands::build_flake(
         &ctx.global,

@@ -31,15 +31,11 @@ use crate::output;
 use super::CommandContext;
 
 pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
-    if !ctx.global.quiet {
-        eprintln!("Building cluster '{}'...", args.cluster);
-    }
+    crate::esay!("Building cluster '{}'...", args.cluster);
     // Stamped, as the deploy and diff pipelines see it. `--for=audit` keeps
     // the annotations; `--for=exit` strips them again below.
     let status = |msg: &str| {
-        if !ctx.global.quiet {
-            eprintln!("  {msg}");
-        }
+        crate::esay!("  {msg}");
     };
     let build = super::build_flake(
         &ctx.global,
@@ -103,25 +99,23 @@ pub fn run(args: &ExportArgs, ctx: &mut CommandContext) -> Result<()> {
         written += 1;
     }
 
-    if !ctx.global.quiet {
-        let mode = match args.for_mode {
-            ExportMode::Exit => "exit (kix-neutral)",
-            ExportMode::Audit => "audit (kix provenance preserved)",
-        };
-        eprintln!();
-        eprintln!(
-            "  {} {} resources to {} ({mode})",
-            output::green("Exported"),
-            written,
-            out_dir.display(),
+    let mode = match args.for_mode {
+        ExportMode::Exit => "exit (kix-neutral)",
+        ExportMode::Audit => "audit (kix provenance preserved)",
+    };
+    crate::esay!();
+    crate::esay!(
+        "  {} {} resources to {} ({mode})",
+        output::green("Exported"),
+        written,
+        out_dir.display(),
+    );
+    if skipped_internal > 0 {
+        crate::esay!(
+            "  {} {} kix-internal CRs (Activation, PackageInstance)",
+            output::dim("Skipped"),
+            skipped_internal,
         );
-        if skipped_internal > 0 {
-            eprintln!(
-                "  {} {} kix-internal CRs (Activation, PackageInstance)",
-                output::dim("Skipped"),
-                skipped_internal,
-            );
-        }
     }
 
     Ok(())

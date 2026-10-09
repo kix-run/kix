@@ -68,13 +68,11 @@ pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
-    if !ctx.global.quiet {
-        eprintln!(
-            "{} resources, {} dependencies",
-            graph.node_count(),
-            graph.edge_count()
-        );
-    }
+    crate::esay!(
+        "{} resources, {} dependencies",
+        graph.node_count(),
+        graph.edge_count()
+    );
 
     Ok(())
 }

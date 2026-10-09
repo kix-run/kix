@@ -127,9 +127,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
     let cluster = ctx.cluster_identity(&args.cluster, super::Lookup::ReadOnly)?;
 
     // 1. Connect to cluster
-    if !ctx.global.quiet {
-        println!("Connecting to cluster...");
-    }
+    crate::say!("Connecting to cluster...");
 
     let (activation, resources) = ctx.runtime.block_on(async {
         let client = fetch::make_client(ctx.global.context.as_deref())
@@ -162,13 +160,11 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
         Ok::<_, miette::Report>((active, live_objects))
     })?;
 
-    if !ctx.global.quiet {
-        println!(
-            "Activation: {} (hash: {})",
-            output::bold(&activation.name),
-            activation.identity_hash.as_deref().unwrap_or("unknown"),
-        );
-    }
+    crate::say!(
+        "Activation: {} (hash: {})",
+        output::bold(&activation.name),
+        activation.identity_hash.as_deref().unwrap_or("unknown"),
+    );
 
     // 4. Parse live resources and build identity-hash index
     let mut live_by_hash: HashMap<String, LiveResource> = HashMap::new();
@@ -238,16 +234,14 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
         .filter(|(h, _)| reachable.contains(h))
         .collect();
 
-    if !ctx.global.quiet {
-        println!("{} kix-managed resources on cluster", live_by_hash.len());
-    }
+    crate::say!("{} kix-managed resources on cluster", live_by_hash.len());
 
     // 6. Walk the dependency graph from activation root
     let health_map = walk_graph(&activation, &live_by_hash, ctx.global.verbose);
 
     // 7. Group by package and display
     let packages = group_by_package(&live_by_hash, &health_map);
-    display_results(&packages, ctx.global.verbose, ctx.global.quiet);
+    display_results(&packages, ctx.global.verbose);
 
     let has_issues = packages.iter().any(|p| !p.is_healthy());
     if has_issues {
@@ -484,10 +478,8 @@ fn group_by_package(
         .collect()
 }
 
-fn display_results(packages: &[PackageHealth], verbose: u8, quiet: bool) {
-    if !quiet {
-        println!();
-    }
+fn display_results(packages: &[PackageHealth], verbose: u8) {
+    crate::say!();
 
     // Package summary table
     println!("{}", output::bold("Packages:"));

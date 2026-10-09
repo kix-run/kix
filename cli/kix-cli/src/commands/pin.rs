@@ -50,11 +50,10 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
         locate::locate(args.pins_file.as_deref(), &global.flake)?
     };
     let pins_file = located.path.as_path();
-    if !global.quiet
-        && output::format() != OutputFormat::Json
+    if output::format() != OutputFormat::Json
         && let Some(note) = located.note()
     {
-        println!("{}", output::dim(&note));
+        crate::say!("{}", output::dim(&note));
     }
 
     let mut file = if args.init {
@@ -111,14 +110,12 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
     } else if args.no_resolve {
         None
     } else {
-        if !global.quiet {
-            println!("Resolving {reference}...");
-        }
+        crate::say!("Resolving {reference}...");
         Some(resolve(&reference)?)
     };
 
-    if digest.is_none() && !global.quiet {
-        eprintln!(
+    if digest.is_none() {
+        crate::esay!(
             "{}",
             output::yellow(
                 "warning: saving this pin without a digest. Kix has not checked whether the tag exists and will not check it during deployment."
@@ -185,35 +182,33 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
         return Ok(());
     }
 
-    if !global.quiet {
-        let verb = match (&existing, changed) {
-            (None, _) => "added",
-            (Some(_), true) => "updated",
-            (Some(_), false) => "kept",
-        };
-        println!(
-            "{} {} in {}",
-            output::green(verb),
-            args.key,
-            pins_file.display()
+    let verb = match (&existing, changed) {
+        (None, _) => "added",
+        (Some(_), true) => "updated",
+        (Some(_), false) => "kept",
+    };
+    crate::say!(
+        "{} {} in {}",
+        output::green(verb),
+        args.key,
+        pins_file.display()
+    );
+    crate::say!("  {}:{}", pin.repository, pin.tag);
+    match &pin.digest {
+        Some(d) => crate::say!("  {d}"),
+        None => crate::say!("  {}", output::yellow("no digest")),
+    }
+    if let Some(prev) = &existing
+        && prev.digest != pin.digest
+        && let Some(prev_digest) = &prev.digest
+    {
+        crate::say!("  was {prev_digest}");
+    }
+    if !changed {
+        crate::say!(
+            "  {}",
+            output::dim("unchanged, so the file was not rewritten")
         );
-        println!("  {}:{}", pin.repository, pin.tag);
-        match &pin.digest {
-            Some(d) => println!("  {d}"),
-            None => println!("  {}", output::yellow("no digest")),
-        }
-        if let Some(prev) = &existing
-            && prev.digest != pin.digest
-            && let Some(prev_digest) = &prev.digest
-        {
-            println!("  was {prev_digest}");
-        }
-        if !changed {
-            println!(
-                "  {}",
-                output::dim("unchanged, so the file was not rewritten")
-            );
-        }
     }
     Ok(())
 }
@@ -328,7 +323,6 @@ fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<()> {
                 .unwrap_or_else(|| pins_file.display().to_string()),
             &results,
             &stale,
-            global,
         );
     }
 
@@ -409,16 +403,9 @@ struct Stale {
     expected: String,
 }
 
-fn print_check_text(
-    path: &str,
-    results: &[(String, Verdict)],
-    stale: &[Stale],
-    global: &GlobalArgs,
-) {
-    if !global.quiet {
-        println!("{path}");
-        println!();
-    }
+fn print_check_text(path: &str, results: &[(String, Verdict)], stale: &[Stale]) {
+    crate::say!("{path}");
+    crate::say!();
     for (key, verdict) in results {
         let mark = match verdict {
             Verdict::Ok(_) => output::green("ok  "),
@@ -450,15 +437,13 @@ fn print_check_text(
         .iter()
         .filter(|(_, v)| matches!(v, Verdict::Warn(_)))
         .count();
-    if !global.quiet {
-        println!();
-        println!(
-            "{} pins checked, {failed} failed, {warned} warned",
-            results.len()
-        );
-        if !stale.is_empty() {
-            println!("{} not current", stale.len());
-        }
+    crate::say!();
+    crate::say!(
+        "{} pins checked, {failed} failed, {warned} warned",
+        results.len()
+    );
+    if !stale.is_empty() {
+        crate::say!("{} not current", stale.len());
     }
 }
 
@@ -468,11 +453,10 @@ fn list(args: &PinListArgs, global: &GlobalArgs) -> Result<()> {
     let located = locate::locate(args.pins_file.as_deref(), &global.flake)?;
     let pins_file = located.path.as_path();
     let file = PinFile::read(pins_file).into_diagnostic()?;
-    if !global.quiet
-        && output::format() != OutputFormat::Json
+    if output::format() != OutputFormat::Json
         && let Some(note) = located.note()
     {
-        println!("{}", output::dim(&note));
+        crate::say!("{}", output::dim(&note));
     }
 
     if output::format() == OutputFormat::Json {
