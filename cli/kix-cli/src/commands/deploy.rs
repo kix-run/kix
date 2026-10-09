@@ -984,16 +984,15 @@ async fn run_deploy_async(
 
     let end = RunEnd::of(&result);
     let counts = match &result {
-        Ok(r) => Some(r),
+        Ok(r) => r,
         Err(e) => e.partial(),
     };
-    match (&json_log, counts) {
-        (Some(json), counts) => json.summary(counts, false, end.succeeded),
-        (None, Some(r)) => {
+    match &json_log {
+        Some(json) => json.summary(counts, false, end.succeeded),
+        None => {
             println!();
-            println!("{}", summary_line(r, false, end.succeeded));
+            println!("{}", summary_line(counts, false, end.succeeded));
         }
-        (None, None) => {}
     }
     // The event stream already reports failed nodes and cancellation.
     if let Err(e) = &result

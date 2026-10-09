@@ -809,7 +809,7 @@ mod tests {
         ];
         let desired = [annotated("ConfigMap", "a-web", "h-web", "")];
 
-        let tenancy = Tenancy::from_records(&records, "a");
+        let tenancy = Tenancy::fixture(&records, "a");
         let sweep = fetch::scope_sweep(
             fetch::partition_sweep(objects.clone()),
             fetch::SweepScope::Cluster("a"),
@@ -821,7 +821,7 @@ mod tests {
         assert_eq!(shared[0].rid.name, "shared");
 
         // `b`'s reconcile, with `b`'s build unchanged, prunes nothing of `a`.
-        let tenancy = Tenancy::from_records(&records, "b");
+        let tenancy = Tenancy::fixture(&records, "b");
         let sweep = fetch::scope_sweep(
             fetch::partition_sweep(objects),
             fetch::SweepScope::Cluster("b"),
@@ -839,7 +839,7 @@ mod tests {
     /// One Kix cluster: every stale object is an orphan, as before scoping.
     #[test]
     fn reconcile_on_a_single_cluster_is_unchanged() {
-        let tenancy = Tenancy::from_records(&[record("a", "a2")], "a");
+        let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
         let objects = vec![
             live("ConfigMap", "a-web", "h-web", "a2"),
             live("ConfigMap", "leftover", "h-left", "retired"),

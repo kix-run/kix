@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use kube::{
-    api::{Api, DynamicObject},
+    api::DynamicObject,
     runtime::{Controller, WatchStreamExt, reflector::store::Writer, watcher},
 };
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -141,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
     let records = open_records(&client).await?;
     tracing::info!("Activation CRD is registered");
     let ar = records.watch_resource().clone();
-    let activations: Api<DynamicObject> = Api::all_with(client.clone(), &ar);
+    let activations = records.watcher(watcher::Config::default());
 
     let ctx = Arc::new(Context {
         client: client.clone(),
@@ -157,7 +157,7 @@ async fn main() -> anyhow::Result<()> {
     let writer = Writer::<DynamicObject>::new(ar.clone());
     let reader = writer.as_reader();
     let stream = generation_filter(
-        watcher(activations, watcher::Config::default())
+        activations
             .default_backoff()
             .reflect(writer)
             .applied_objects(),

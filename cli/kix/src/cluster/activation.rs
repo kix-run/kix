@@ -100,7 +100,7 @@ impl RecordsError {
     }
 
     /// The apiserver's error, when there is one.
-    pub fn kube(&self) -> Option<&kube::Error> {
+    pub(crate) fn kube(&self) -> Option<&kube::Error> {
         match self {
             RecordsError::Kube { source, .. } => Some(source),
             RecordsError::NotRead(_) => None,
@@ -159,13 +159,13 @@ pub struct Record {
     /// The record as the cluster served it, so a delete can be conditional
     /// on the record being the one that was read. `None` for a record built
     /// by hand, which [`Records::retire`] refuses.
-    pub read: Option<ReadAs>,
+    pub(crate) read: Option<ReadAs>,
 }
 
 /// The uid and resourceVersion a record was read at. Only [`Record::of`]
 /// makes one.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReadAs {
+pub(crate) struct ReadAs {
     uid: String,
     resource_version: String,
 }
@@ -233,7 +233,7 @@ impl Record {
     /// re-asserts its target's record and marks it Deploying, so a rollback
     /// that is then interrupted leaves a failure on a record that really was
     /// current once, and that record is still a valid target.
-    pub fn was_ever_current(&self) -> bool {
+    fn was_ever_current(&self) -> bool {
         self.deployed_at
             .as_deref()
             .is_some_and(|at| !at.trim().is_empty())
@@ -247,7 +247,7 @@ impl Record {
     /// record sorts oldest and is retired as `UnknownAge` on the first
     /// `kix gc`, which loses the history of what went wrong just when it is
     /// most wanted.
-    pub fn retention_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    fn retention_time(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         [&self.deployed_at, &self.failed_at]
             .into_iter()
             .find_map(|at| at.as_deref().and_then(parse_time))
@@ -525,10 +525,21 @@ impl Records {
             .ok_or(OpenError::NotInstalled)
     }
 
-    /// The Activation kind as the cluster serves it, for the operator's
-    /// watch of the records.
+    /// The Activation kind as the cluster serves it, which the operator's
+    /// reflector and controller are keyed by.
     pub fn watch_resource(&self) -> &ApiResource {
         &self.resource
+    }
+
+    /// A watch of every record, for the operator.
+    pub fn watcher(
+        &self,
+        config: kube::runtime::watcher::Config,
+    ) -> impl futures::Stream<
+        Item = kube::runtime::watcher::Result<kube::runtime::watcher::Event<DynamicObject>>,
+    > + Send
+    + use<> {
+        kube::runtime::watcher(self.api(), config)
     }
 
     fn api(&self) -> Api<DynamicObject> {

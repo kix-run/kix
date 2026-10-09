@@ -250,9 +250,6 @@ pub enum DeployError {
         partial: DeployResult,
     },
 
-    #[error("could not update the deployment record: {0}")]
-    ActivationError(String),
-
     #[error("deploy cancelled: {reason}")]
     Cancelled {
         reason: String,
@@ -281,15 +278,14 @@ pub enum DeployError {
 }
 
 impl DeployError {
-    /// The counts accumulated before the run stopped, when there are any.
-    pub fn partial(&self) -> Option<&DeployResult> {
+    /// The counts accumulated before the run stopped.
+    pub fn partial(&self) -> &DeployResult {
         match self {
             DeployError::NodesFailed { partial, .. }
             | DeployError::DiscoveryFailed { partial, .. }
             | DeployError::Cancelled { partial, .. }
             | DeployError::Internal { partial, .. }
-            | DeployError::FinalizeFailed { partial, .. } => Some(partial),
-            DeployError::ActivationError(_) => None,
+            | DeployError::FinalizeFailed { partial, .. } => partial,
         }
     }
 }

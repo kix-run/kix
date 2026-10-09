@@ -320,11 +320,9 @@ mod tests {
             applied: 2,
             failed: 1,
         };
-        let mut act = Record {
-            phase: PHASE_DEPLOYING.into(),
-            total_waves: 2,
-            ..Default::default()
-        };
+        let mut act = Record::default();
+        act.phase = PHASE_DEPLOYING.into();
+        act.total_waves = 2;
         let mut progress = Progress::default();
         assert_eq!(
             progress.lines(&act),

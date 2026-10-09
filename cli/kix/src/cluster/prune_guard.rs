@@ -126,15 +126,14 @@ impl PruneGuard {
     /// overstate what other clusters still deploy.
     async fn tenancy_naming(&self, obj: &DynamicObject) -> Result<Tenancy, PruneError> {
         let mut slot = self.tenancy.lock().await;
-        let fresh = match &*slot {
-            Some(t) => tenancy::named_hashes(obj).all(|h| t.knows(h)),
-            None => false,
-        };
-        if !fresh {
-            let read = tenancy::read(&self.records, &self.cluster).await?;
-            *slot = Some(read);
+        if let Some(t) = &*slot
+            && tenancy::named_hashes(obj).all(|h| t.knows(h))
+        {
+            return Ok(t.clone());
         }
-        Ok(slot.clone().unwrap_or_default())
+        let read = tenancy::read(&self.records, &self.cluster).await?;
+        *slot = Some(read.clone());
+        Ok(read)
     }
 }
 

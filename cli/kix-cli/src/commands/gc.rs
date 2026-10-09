@@ -1558,29 +1558,26 @@ mod kept_garbage_tests {
     #[test]
     fn kept_list_is_cleared_only_after_a_complete_gc_of_the_active_build() {
         use kix::cluster::activation::KeptOrphanSource;
-        let active = |kept: bool| Record {
-            name: "c-v2".into(),
-            identity_hash: Some("h-v2".into()),
-            orphans_kept_from: if kept {
-                vec![KeptOrphanSource {
+        let active = |kept: bool| {
+            let mut record = Record::default();
+            record.name = "c-v2".into();
+            record.identity_hash = Some("h-v2".into());
+            if kept {
+                record.orphans_kept_from = vec![KeptOrphanSource {
                     activation: "c-v1".into(),
                     identity_hash: "h-v1".into(),
                     built_via: None,
-                }]
-            } else {
-                vec![]
-            },
-            ..Default::default()
+                }];
+            }
+            record
         };
         assert!(may_clear_kept(&active(true), true, Some("h-v2")));
         assert!(!may_clear_kept(&active(false), true, Some("h-v2")));
         assert!(!may_clear_kept(&active(true), false, Some("h-v2")));
         assert!(!may_clear_kept(&active(true), true, Some("h-v3")));
         assert!(!may_clear_kept(&active(true), true, None));
-        let unhashed = Record {
-            identity_hash: None,
-            ..active(true)
-        };
+        let mut unhashed = active(true);
+        unhashed.identity_hash = None;
         assert!(!may_clear_kept(&unhashed, true, None));
     }
 }
@@ -1590,12 +1587,11 @@ mod record_garbage_tests {
     use super::*;
 
     fn rec(name: &str, at: &str) -> Record {
-        Record {
-            name: name.into(),
-            identity_hash: Some(format!("{name}hash")),
-            deployed_at: Some(at.into()),
-            ..Default::default()
-        }
+        let mut record = Record::default();
+        record.name = name.into();
+        record.identity_hash = Some(format!("{name}hash"));
+        record.deployed_at = Some(at.into());
+        record
     }
 
     /// Hard mode lists exactly the retired records, never a kept one, as
@@ -1821,7 +1817,7 @@ mod hard_scope_tests {
     /// and objects naming no record are left for the flag.
     #[test]
     fn hard_gc_judges_only_this_clusters_objects() {
-        let tenancy = Tenancy::from_records(&[record("a", "a2"), record("b", "b1")], "a");
+        let tenancy = Tenancy::fixture(&[record("a", "a2"), record("b", "b1")], "a");
         let sweep = fetch::partition_sweep(vec![
             live("ConfigMap", "a-current", Some("h-cur"), "a2"),
             live("ConfigMap", "a-stale", Some("h-old"), "a2"),
@@ -1851,7 +1847,7 @@ mod hard_scope_tests {
     /// leftover naming a retired record is garbage without any flag.
     #[test]
     fn hard_gc_on_a_single_cluster_is_unchanged() {
-        let tenancy = Tenancy::from_records(&[record("a", "a2")], "a");
+        let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
         let sweep = fetch::partition_sweep(vec![
             live("ConfigMap", "a-current", Some("h-cur"), "a2"),
             live("ConfigMap", "leftover", Some("h-left"), "retired"),

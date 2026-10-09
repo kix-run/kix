@@ -483,9 +483,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
             print_summary(r, end.succeeded);
         }
         Err(e) => {
-            if let Some(r) = e.partial() {
-                print_summary(r, end.succeeded);
-            }
+            print_summary(e.partial(), end.succeeded);
             // The event stream already reports failed nodes and cancellation.
             if !matches!(
                 e,

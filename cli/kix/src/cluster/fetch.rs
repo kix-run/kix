@@ -735,7 +735,7 @@ pub fn partition_sweep(objects: Vec<DynamicObject>) -> ManagedSweep {
         foreign: BTreeMap::new(),
         unattributed: Vec::new(),
         other_builds: 0,
-        tenancy: Tenancy::default(),
+        tenancy: Tenancy::empty(""),
     }
 }
 

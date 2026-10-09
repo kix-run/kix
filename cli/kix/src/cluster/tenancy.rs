@@ -24,28 +24,42 @@ use crate::manifest::keys;
 /// Every object a deploy touches names the deploying record's identity hash
 /// in `kix.run/activations`, so these sets attribute a live object to the Kix
 /// clusters whose builds contain it. See [`super::fetch::attribute`].
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tenancy {
     /// The Kix cluster this tenancy is read for.
-    pub cluster: String,
+    pub(crate) cluster: String,
     /// Identity hashes of this cluster's records, every phase.
-    pub own: HashSet<String>,
+    pub(crate) own: HashSet<String>,
     /// Identity hash to owning cluster, for every other record. A record
     /// without a `kix.run/cluster` label is listed under `?`.
-    pub others: HashMap<String, String>,
+    pub(crate) others: HashMap<String, String>,
     /// The hashes in `others` whose record is not Superseded: builds another
     /// cluster runs, is deploying, or left part-applied.
-    pub others_current: HashSet<String>,
+    pub(crate) others_current: HashSet<String>,
 }
 
 impl Tenancy {
+    /// The tenancy of a cluster with no records.
+    pub(crate) fn empty(cluster: &str) -> Self {
+        Tenancy {
+            cluster: cluster.to_string(),
+            own: HashSet::new(),
+            others: HashMap::new(),
+            others_current: HashSet::new(),
+        }
+    }
+
+    /// A tenancy of `records` as given, for tests of other crates. Outside
+    /// tests a tenancy is only read through [`read`], past the domain gate.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn fixture(records: &[DynamicObject], cluster: &str) -> Self {
+        Self::from_records(records, cluster)
+    }
+
     /// Partition the records by their `kix.run/cluster` label. An empty
     /// `cluster` owns no record: every record is another cluster's.
-    pub fn from_records(records: &[DynamicObject], cluster: &str) -> Self {
-        let mut tenancy = Tenancy {
-            cluster: cluster.to_string(),
-            ..Default::default()
-        };
+    pub(crate) fn from_records(records: &[DynamicObject], cluster: &str) -> Self {
+        let mut tenancy = Tenancy::empty(cluster);
         for record in records {
             let Some(hash) = record
                 .metadata
@@ -155,10 +169,7 @@ pub fn named_hashes(obj: &DynamicObject) -> impl Iterator<Item = &str> {
 /// record, and those count as this cluster's own.
 pub async fn read(records: &OpenedRecords, cluster: &str) -> Result<Tenancy, RecordsError> {
     let Some(records) = records.records() else {
-        return Ok(Tenancy {
-            cluster: cluster.to_string(),
-            ..Default::default()
-        });
+        return Ok(Tenancy::empty(cluster));
     };
     Ok(Tenancy::from_records(&records.all().await?, cluster))
 }
