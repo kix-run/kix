@@ -4,6 +4,7 @@
 
 use miette::{IntoDiagnostic, Result, miette};
 
+use kix::cluster::activation::Records;
 use kix::cluster::drift::{self, DriftReport, DriftVerdict, ForeignOwner, UnrecordedScale};
 use kix::cluster::fetch;
 
@@ -25,9 +26,13 @@ pub fn run(args: &DriftArgs, global: &GlobalArgs) -> Result<()> {
         let discovery = fetch::discover_resources(&client)
             .await
             .map_err(|e| miette!("{e}"))?;
-        let (reports, tenancy) = drift::check_cluster(&client, &discovery, args.cluster.as_deref())
-            .await
-            .map_err(|e| miette!("drift check failed: {e}"))?;
+        // Past the domain gate: on a cluster whose records sit under a
+        // retired group no object could be attributed to a Kix cluster.
+        let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
+        let (reports, tenancy) =
+            drift::check_cluster(&client, &discovery, &records, args.cluster.as_deref())
+                .await
+                .map_err(|e| miette!("drift check failed: {e}"))?;
         if args.cluster.is_some() {
             tenancy.require_records().map_err(|e| miette!("{e}"))?;
         }

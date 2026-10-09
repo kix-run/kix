@@ -19,7 +19,7 @@ use kube::{
 use thiserror::Error;
 use tokio::sync::Mutex;
 
-use super::activation::{self, RecordsError};
+use super::activation::{OpenedRecords, RecordsError};
 use super::fetch::{self, SharedOrphan};
 use super::tenancy::{self, Tenancy};
 use crate::manifest::types::ResourceId;
@@ -61,8 +61,9 @@ pub enum PruneError {
 /// Deletes orphans of one Kix cluster. See the module docs.
 pub struct PruneGuard {
     client: Client,
-    /// The Activation kind, if served.
-    record_resource: Option<ApiResource>,
+    /// What [`Records::open`] returned. When the cluster serves no
+    /// Activation kind, no other cluster has records.
+    records: OpenedRecords,
     cluster: String,
     /// The last records read. Reread when an object names a hash it lacks,
     /// which is how a record created after the last read shows up.
@@ -70,13 +71,12 @@ pub struct PruneGuard {
 }
 
 impl PruneGuard {
-    /// A guard for `cluster`'s prune. `discovery` locates the Activation
-    /// kind; without it no other cluster can have records, and the guard
-    /// only adds the preconditions.
-    pub fn new(client: Client, discovery: &[(ApiResource, Scope)], cluster: &str) -> Self {
+    /// A guard for `cluster`'s prune. When `records` holds none, no other
+    /// cluster can have records, and the guard only adds the preconditions.
+    pub fn new(client: Client, records: OpenedRecords, cluster: &str) -> Self {
         PruneGuard {
             client,
-            record_resource: activation::served_resource(discovery).cloned(),
+            records,
             cluster: cluster.to_string(),
             tenancy: Mutex::new(None),
         }
@@ -131,9 +131,7 @@ impl PruneGuard {
             None => false,
         };
         if !fresh {
-            let read =
-                tenancy::read_from(&self.client, self.record_resource.as_ref(), &self.cluster)
-                    .await?;
+            let read = tenancy::read(&self.records, &self.cluster).await?;
             *slot = Some(read);
         }
         Ok(slot.clone().unwrap_or_default())
@@ -143,6 +141,7 @@ impl PruneGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::activation;
     use crate::cluster::fake_api::FakeApi;
     use crate::manifest::keys;
     use crate::manifest::types::CLUSTER_SCOPED;
@@ -183,7 +182,8 @@ mod tests {
     async fn guard(api: &FakeApi, cluster: &str) -> (PruneGuard, Vec<(ApiResource, Scope)>) {
         let client = api.client();
         let discovery = fetch::discover_resources(&client).await.unwrap();
-        (PruneGuard::new(client, &discovery, cluster), discovery)
+        let records = crate::cluster::activation::Records::open(&client, &discovery).unwrap();
+        (PruneGuard::new(client, records, cluster), discovery)
     }
 
     async fn delete(g: &PruneGuard, d: &[(ApiResource, Scope)], rid: &ResourceId) -> Pruned {

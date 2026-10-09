@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use miette::{Result, miette};
 
-use kix::cluster::activation::{Record, Records};
+use kix::cluster::activation::{OpenedRecords, Record, Records};
 use kix::cluster::fetch;
 use kix::manifest::types::ResourceId;
 
@@ -153,6 +153,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
         let live_objects = fetch::fetch_managed_resources(
             &client,
             &discovery,
+            &OpenedRecords::from(records.clone()),
             fetch::SweepScope::Cluster(&cluster),
         )
         .await

@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
-use super::activation;
+use super::activation::{self, OpenedRecords};
 use super::client::{ResiliencePolicy, build_client, mark_first_contact, preflight_enabled};
 use super::errors::{FailureClass, classify};
 use super::tenancy::{self, Tenancy};
@@ -652,9 +652,12 @@ pub fn split_by_records(
 pub async fn fetch_managed_resources(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
+    records: &OpenedRecords,
     scope: SweepScope<'_>,
 ) -> Result<Vec<DynamicObject>, FetchError> {
-    Ok(sweep_managed(client, discovery, scope).await?.managed)
+    Ok(sweep_managed(client, discovery, records, scope)
+        .await?
+        .managed)
 }
 
 /// The full sweep: kix-applied objects plus the unstamped label carriers,
@@ -663,10 +666,14 @@ pub async fn fetch_managed_resources(
 /// per-cluster label on ordinary objects.
 ///
 /// The Activation records are listed after the objects, for the reason
-/// [`tenancy::read`] gives.
+/// [`tenancy::read`] gives. `records` is what
+/// [`activation::Records::open`] returned, so
+/// the domain gate has run: on a cluster that has not migrated, no record
+/// would be found and every object would read as this cluster's.
 pub async fn sweep_managed(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
+    records: &OpenedRecords,
     scope: SweepScope<'_>,
 ) -> Result<ManagedSweep, FetchError> {
     let lp = ListParams::default().labels(MANAGED_BY_LABEL);
@@ -677,7 +684,7 @@ pub async fn sweep_managed(
         SweepScope::Cluster(cluster) | SweepScope::Records { cluster, .. } => cluster,
         SweepScope::All => "",
     };
-    let tenancy = tenancy::read(client, discovery, cluster)
+    let tenancy = tenancy::read(records, cluster)
         .await
         .map_err(FetchError::RecordsError)?;
     Ok(scope_sweep(sweep, scope, tenancy))
@@ -894,6 +901,7 @@ fn split_by_lookup<'a>(
 pub async fn split_shared_orphans_live(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
+    records: &OpenedRecords,
     orphans: Vec<ResourceId>,
     cluster: &str,
 ) -> Result<(Vec<ResourceId>, Vec<SharedOrphan>), FetchError> {
@@ -929,7 +937,7 @@ pub async fn split_shared_orphans_live(
             .into_iter()
             .flatten()
             .collect();
-    let tenancy = tenancy::read(client, discovery, cluster)
+    let tenancy = tenancy::read(records, cluster)
         .await
         .map_err(FetchError::RecordsError)?;
     Ok(split_by_lookup(orphans, |rid| live.get(rid), &tenancy))
@@ -2638,8 +2646,9 @@ mod tests {
         let api = FakeApi::new([]);
         let client = api.client();
         let discovery = discover_resources(&client).await.unwrap();
+        let records = activation::Records::open(&client, &discovery).unwrap();
         let before = api.requests().len();
-        sweep_managed(&client, &discovery, SweepScope::Cluster("a"))
+        sweep_managed(&client, &discovery, &records, SweepScope::Cluster("a"))
             .await
             .unwrap();
         let requests = api.requests().split_off(before);

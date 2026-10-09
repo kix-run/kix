@@ -465,12 +465,18 @@ async fn run_hard_async(
     let discovery = fetch::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
+    // The gate error must not be read as "no Activation CRD". On a cluster
+    // still under the retired group, this gc would compare live objects
+    // stamped with retired identity hashes against a current build, find no
+    // match for most of them, and plan to delete them.
+    let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
     // Only this Kix cluster's objects. Another Kix cluster's objects are
     // absent from this build too, and judging them against it would delete
     // them.
     let sweep = fetch::sweep_managed(
         &client,
         &discovery,
+        &records,
         fetch::SweepScope::Cluster(cluster_name),
     )
     .await
@@ -539,12 +545,7 @@ async fn run_hard_async(
     // partial view. Listed here for display; deleted with preconditions by
     // `delete_records`, not by kind lookup.
     let policy = retention_policy(args)?;
-    // The gate error must not be read as "no Activation CRD". On a cluster
-    // still under the retired group, this gc would compare live objects
-    // stamped with retired identity hashes against a current build, find no
-    // match for most of them, and plan to delete them.
-    let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
-    let retirement = plan_records_with(records, cluster_name, &policy).await?;
+    let retirement = plan_records_with(records.into_records(), cluster_name, &policy).await?;
     garbage.extend(record_garbage(&retirement.plan));
 
     // Unstamped resources carry the kix label but no identity hash: kix never
@@ -1103,7 +1104,7 @@ async fn plan_record_retirement(
         .await
         .map_err(|e| miette!("{e}"))?;
     let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
-    plan_records_with(records, cluster, policy).await
+    plan_records_with(records.into_records(), cluster, policy).await
 }
 
 /// List and plan through the opened records.
@@ -1375,7 +1376,8 @@ async fn delete_resources(
     let discovery = fetch::discover_resources(client)
         .await
         .map_err(|e| miette!("{e}"))?;
-    let guard = PruneGuard::new(client.clone(), &discovery, cluster);
+    let records = Records::open(client, &discovery).map_err(|e| miette!("{e}"))?;
+    let guard = PruneGuard::new(client.clone(), records, cluster);
 
     for rid in &resources {
         let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {

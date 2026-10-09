@@ -14,7 +14,7 @@ use std::time::Duration;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
-use kix::cluster::activation::Records;
+use kix::cluster::activation::{OpenedRecords, Records};
 use kix::cluster::apply::{ApplyAction, ChangeAction};
 use kix::cluster::fetch;
 use kix::cluster::migrate::MigrationPair;
@@ -466,7 +466,10 @@ fn supersede_consumed(
         let Ok(discovery) = fetch::discover_resources(client).await else {
             return 0usize;
         };
-        let Ok(Some(records)) = Records::open(client, &discovery) else {
+        let Some(records) = Records::open(client, &discovery)
+            .ok()
+            .and_then(OpenedRecords::into_records)
+        else {
             return 0;
         };
         let mut done = 0;
@@ -830,7 +833,9 @@ async fn run_deploy_async(
     // that flag skips the gate, and with `--prune` the deploy would compute
     // the retired CRDs as orphans and delete them, which cascades away every
     // Activation record on the cluster.
-    let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
+    let records = Records::open(&client, &discovery)
+        .map_err(|e| miette!("{e}"))?
+        .into_records();
 
     if let Some(hash) = cached_baseline {
         check_cached_baseline(records.as_ref(), cluster_name, hash).await?;
@@ -1485,7 +1490,7 @@ mod cached_baseline_tests {
         let api = FakeApi::new([record("a", "a2", PHASE_ACTIVE)]);
         let client = api.client();
         let discovery = fetch::discover_resources(&client).await.unwrap();
-        let records = Records::open(&client, &discovery).unwrap();
+        let records = Records::open(&client, &discovery).unwrap().into_records();
         let records = records.as_ref();
         assert!(check_cached_baseline(records, "a", "a2").await.is_ok());
         let err = check_cached_baseline(records, "a", "p9")

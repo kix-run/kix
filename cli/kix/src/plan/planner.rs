@@ -40,7 +40,7 @@ use super::objects;
 use super::server::Overlay;
 use super::{PackageDiff, PlanError, PlanEvent, diff_graphs};
 use crate::build_source::InstallableBuild;
-use crate::cluster::activation::KeptOrphans;
+use crate::cluster::activation::{KeptOrphans, Records};
 use crate::cluster::apply::ChangeAction;
 use crate::cluster::fetch::{self, SharedOrphan};
 use crate::cluster::graph::ResourceGraph;
@@ -474,7 +474,8 @@ pub async fn keep_shared(
     let discovery = fetch::discover_resources(client)
         .await
         .map_err(|e| PlanError::Discovery(Box::new(e)))?;
-    fetch::split_shared_orphans_live(client, &discovery, orphans, cluster)
+    let records = Records::open(client, &discovery).map_err(PlanError::Domain)?;
+    fetch::split_shared_orphans_live(client, &discovery, &records, orphans, cluster)
         .await
         .map_err(|e| PlanError::SharedOrphans(Box::new(e)))
 }

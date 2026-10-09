@@ -87,7 +87,9 @@ async fn open_records(client: &kube::Client) -> anyhow::Result<Records> {
     let discovery = kix::cluster::fetch::discover_groups(client, &groups)
         .await
         .context("could not check the cluster's API groups")?;
-    let records = Records::open(client, &discovery)?.with_context(|| {
+    let records = Records::open(client, &discovery)?
+        .into_records()
+        .with_context(|| {
         format!(
             "the Activation CRD ({}) is not served on this cluster; deploy it before starting the operator",
             keys::ACTIVATIONS_CRD
@@ -181,13 +183,21 @@ mod tests {
     use kix::cluster::fake_api::FakeApi;
 
     /// Discovery that fails stops the start, since the domain gate could not
-    /// run; discovery that answers lets it through.
+    /// run, and so does a cluster that has not migrated; a migrated one
+    /// lets it through.
     #[tokio::test]
     async fn the_operator_does_not_start_unchecked_when_discovery_fails() {
         let api = FakeApi::new([]);
         api.fail_next("/apis", 1, 500);
         assert!(open_records(&api.client()).await.is_err());
         assert!(open_records(&api.client()).await.is_ok());
+
+        let unmigrated = FakeApi::new([]);
+        unmigrated.serve_retired_records();
+        let Err(err) = open_records(&unmigrated.client()).await else {
+            panic!("an unmigrated cluster's records were opened");
+        };
+        assert!(err.to_string().contains("kix migrate domain"), "{err}");
     }
 
     /// The gate reads only Kix's own groups, so an unrelated API that is

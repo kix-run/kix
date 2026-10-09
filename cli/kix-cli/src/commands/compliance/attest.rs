@@ -83,7 +83,10 @@ async fn fetch_receipt(cluster: &str, context: Option<&str>) -> Result<Value> {
     let discovery = fetch::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
-    let Some(records) = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))? else {
+    let Some(records) = Records::open(&client, &discovery)
+        .map_err(|e| miette!("{e}"))?
+        .into_records()
+    else {
         return Err(miette!(
             "this cluster has no Activation CRD, so Kix has never deployed to it"
         ));

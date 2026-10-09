@@ -15,7 +15,7 @@ use tokio::sync::RwLock;
 
 use crate::manifest::types::ResourceId;
 
-use super::super::activation::{self, Records, WaveRecord, WaveStatus};
+use super::super::activation::{self, OpenedRecords, Records, WaveRecord, WaveStatus};
 use super::super::apply::{self, ApplyAction, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
 use super::super::errors::{FailureClass, classify, describe};
@@ -25,6 +25,7 @@ use super::super::prune_guard::{PruneGuard, Pruned};
 use super::super::readiness::{self, ImportTarget, ReadinessError, ReadinessResult};
 use super::super::secrets::{self, HydrationResult, SecretError};
 use super::{ClusterOps, Finalized, OnStatus};
+use crate::legacy_domain::LegacyDomainError;
 
 /// Shared discovery cache: every kind the cluster serves, refreshed after
 /// CRDs land. Refreshes MERGE (see `fetch::merge_discovery`): the aggregated
@@ -158,18 +159,21 @@ impl KubeOps {
         self.live_activations.read().ok().and_then(|g| g.clone())
     }
 
-    /// The Activation records, or `None` when there is no record CRD.
-    ///
-    /// Opened from the discovery cache each time, since the record CRD can
-    /// arrive mid-run. A cluster still on a retired API group returns `None`
-    /// here and is reported by the caller that has somewhere to put the
-    /// message; the engine treats a missing CRD as "no record to write",
-    /// which is the safe direction: the operator reconciles nothing until
-    /// the migration has run.
-    async fn records(&self) -> Option<Records> {
+    /// The Activation records past the domain gate, opened from the
+    /// discovery cache each time, since the record CRD can arrive mid-run.
+    async fn opened(&self) -> Result<OpenedRecords, LegacyDomainError> {
         let d = self.discovery.read().await;
-        match Records::open(&self.client, &d) {
-            Ok(records) => records,
+        Records::open(&self.client, &d)
+    }
+
+    /// The records for a lifecycle write, or `None` when there are none to
+    /// write to: no record CRD yet, or a cluster whose records sit under a
+    /// retired group, which is logged. Skipping a lifecycle write deletes
+    /// nothing. A prune does not come through here: it refuses on the
+    /// gate's error (see `delete`).
+    async fn records(&self) -> Option<Records> {
+        match self.opened().await {
+            Ok(opened) => opened.into_records(),
             Err(e) => {
                 tracing::error!("{e}");
                 None
@@ -734,11 +738,17 @@ impl ClusterOps for KubeOps {
             .cached_kind(&rid.kind)
             .await
             .ok_or_else(|| format!("kind {} not in discovery cache", rid.kind))?;
+        // The guard reads the other clusters' records, so a cluster the
+        // domain gate refuses has no guard and nothing is deleted.
         let guard = self
             .prune_guard
-            .get_or_init(|| async {
-                let discovery = self.discovery.read().await;
-                PruneGuard::new(self.client.clone(), &discovery, &self.cfg.cluster_name)
+            .get_or_try_init(|| async {
+                let opened = self.opened().await.map_err(|e| e.to_string())?;
+                Ok::<_, String>(PruneGuard::new(
+                    self.client.clone(),
+                    opened,
+                    &self.cfg.cluster_name,
+                ))
             })
             .await;
         let dp = kube::api::DeleteParams {
@@ -752,10 +762,13 @@ impl ClusterOps for KubeOps {
         // later run pruning what an earlier one already removed must not
         // read as a failure, which would land the new record Degraded for no
         // reason.
-        let deleted = guard
-            .delete(&ar, &scope, rid, &dp)
-            .await
-            .map_err(|e| e.to_string());
+        let deleted = match guard {
+            Ok(guard) => guard
+                .delete(&ar, &scope, rid, &dp)
+                .await
+                .map_err(|e| e.to_string()),
+            Err(e) => Err(e),
+        };
         if self.cfg.dry_run {
             use super::super::preview::PruneAnswer;
             let answer = match &deleted {
@@ -878,6 +891,37 @@ mod prune_tests {
             Ok(Pruned::Kept(_))
         ));
         assert_eq!(api.names("ClusterRole"), vec!["shared"]);
+    }
+
+    /// On a cluster whose records sit under a retired group the guard
+    /// cannot tell what other clusters deploy, so the prune refuses rather
+    /// than deleting as if there were no records.
+    #[tokio::test]
+    async fn a_prune_on_an_unmigrated_cluster_deletes_nothing() {
+        let api = FakeApi::new([json!({
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "ClusterRole",
+            "metadata": { "name": "mine", "annotations": { (keys::ACTIVATIONS): "a1" } },
+        })]);
+        api.serve_retired_records();
+        let client = api.client();
+        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let ops = KubeOps::new(
+            client,
+            Arc::new(RwLock::new(discovery)),
+            KubeOpsConfig {
+                cluster_name: "a".into(),
+                ..Default::default()
+            },
+        );
+        let rid = ResourceId {
+            kind: "ClusterRole".into(),
+            namespace: CLUSTER_SCOPED.into(),
+            name: "mine".into(),
+        };
+        let err = ops.delete(&rid).await.unwrap_err();
+        assert!(err.contains("kix migrate domain"), "{err}");
+        assert_eq!(api.names("ClusterRole"), vec!["mine"]);
     }
 }
 

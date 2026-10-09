@@ -6,7 +6,7 @@ use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
 use kix::build_source;
-use kix::cluster::activation;
+use kix::cluster::activation::{self, Records};
 use kix::cluster::apply::ApplyError;
 use kix::cluster::fetch;
 use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
@@ -306,14 +306,13 @@ async fn fetch_live_manifests(
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    // The gate. `kix diff` never opens `Records`, so it never reaches the
-    // check inside it that every other cluster command goes through. It
-    // still needs one: the live objects below are upgraded to the current
-    // domain before they are compared, which on an unmigrated cluster
-    // renames the live `activations.<retired>` CRD to the name the build
-    // uses and reports it as matching. The answer would be "in sync" about
-    // a resource that does not exist under that name.
-    kix::legacy_domain::check_discovery(&discovery).map_err(|e| miette!("{e}"))?;
+    // The gate, which opening the records runs. Beyond the records the sweep
+    // reads, `kix diff` needs it because the live objects below are upgraded
+    // to the current domain before they are compared, which on an
+    // unmigrated cluster renames the live `activations.<retired>` CRD to the
+    // name the build uses and reports it as matching. The answer would be
+    // "in sync" about a resource that does not exist under that name.
+    let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
     if !global.quiet {
         eprintln!(
@@ -327,6 +326,7 @@ async fn fetch_live_manifests(
     let sweep = fetch::sweep_managed(
         &client,
         &discovery,
+        &records,
         fetch::SweepScope::Cluster(&new_graph.cluster_name),
     )
     .await

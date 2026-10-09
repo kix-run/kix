@@ -3,8 +3,10 @@ use std::path::Path;
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
+use kix::cluster::activation::Records;
 use kix::cluster::fetch;
 use kix::manifest::types::{CLUSTER_SCOPED, ResourceId};
+use kube::Client;
 use kube::api::DynamicObject;
 
 use crate::cli::{SnapshotArgs, SnapshotCommand, SnapshotSaveArgs};
@@ -15,6 +17,41 @@ pub fn run(args: &SnapshotArgs, ctx: &mut CommandContext) -> Result<()> {
     match &args.command {
         SnapshotCommand::Save(save_args) => run_save(save_args, ctx),
     }
+}
+
+/// The objects of Kix cluster `cluster`, read past the domain gate: on a
+/// cluster whose records sit under a retired group none of them would be
+/// found, and every object would be read as `cluster`'s.
+async fn sweep_cluster(client: &Client, cluster: &str, quiet: bool) -> Result<fetch::ManagedSweep> {
+    if !quiet {
+        eprintln!("Discovering API resources...");
+    }
+
+    let discovery = fetch::discover_resources(client)
+        .await
+        .map_err(|e| miette!("{e}"))?;
+    let records = Records::open(client, &discovery).map_err(|e| miette!("{e}"))?;
+
+    if !quiet {
+        eprintln!(
+            "Fetching managed resources ({} resource types)...",
+            discovery.len()
+        );
+    }
+
+    let sweep = fetch::sweep_managed(
+        client,
+        &discovery,
+        &records,
+        fetch::SweepScope::Cluster(cluster),
+    )
+    .await
+    .map_err(|e| miette!("failed to fetch resources: {e}"))?;
+    sweep
+        .tenancy
+        .require_records()
+        .map_err(|e| miette!("{e}"))?;
+    Ok(sweep)
 }
 
 fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
@@ -37,32 +74,7 @@ fn run_save(args: &SnapshotSaveArgs, ctx: &mut CommandContext) -> Result<()> {
             .await
             .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
-        if !global.quiet {
-            eprintln!("Discovering API resources...");
-        }
-
-        let discovery = fetch::discover_resources(&client)
-            .await
-            .map_err(|e| miette!("{e}"))?;
-
-        if !global.quiet {
-            eprintln!(
-                "Fetching managed resources ({} resource types)...",
-                discovery.len()
-            );
-        }
-
-        let sweep = fetch::sweep_managed(
-            &client,
-            &discovery,
-            fetch::SweepScope::Cluster(&args.cluster),
-        )
-        .await
-        .map_err(|e| miette!("failed to fetch resources: {e}"))?;
-        sweep
-            .tenancy
-            .require_records()
-            .map_err(|e| miette!("{e}"))?;
+        let sweep = sweep_cluster(&client, &args.cluster, global.quiet).await?;
 
         if !global.quiet {
             eprintln!("Fetched {} resources", sweep.managed.len());
@@ -229,11 +241,7 @@ mod tests {
                 "data": { "password": "aHVudGVyMg==" },
             }),
         ]);
-        let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
-        let sweep = fetch::sweep_managed(&client, &discovery, fetch::SweepScope::Cluster("a"))
-            .await
-            .unwrap();
+        let sweep = sweep_cluster(&api.client(), "a", true).await.unwrap();
         let resources = snapshot_resources(sweep.managed);
         let dir = tempfile::tempdir().unwrap();
         write_resources(dir.path(), &resources).unwrap();
@@ -241,5 +249,18 @@ mod tests {
         let text = std::fs::read_to_string(dir.path().join("app/creds-secret.yaml")).unwrap();
         assert!(text.contains(fetch::HIDDEN_SECRET_VALUE), "{text}");
         assert!(!text.contains("aHVudGVyMg=="), "{text}");
+    }
+
+    /// On a cluster whose records sit under a retired group, a snapshot is
+    /// refused rather than written with every object as this cluster's.
+    #[tokio::test]
+    async fn a_snapshot_of_an_unmigrated_cluster_is_refused() {
+        let api = FakeApi::new([]);
+        api.serve_retired_records();
+        let Err(err) = sweep_cluster(&api.client(), "a", true).await else {
+            panic!("an unmigrated cluster was swept");
+        };
+        let err = err.to_string();
+        assert!(err.contains("kix migrate domain"), "{err}");
     }
 }

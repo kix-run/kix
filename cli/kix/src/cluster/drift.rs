@@ -16,6 +16,7 @@ use kube::{
 };
 use serde_json::Value;
 
+use super::activation::OpenedRecords;
 use super::fetch::{self, FetchError};
 use super::fieldsv1::{self, KIX_FIELD_MANAGER};
 use super::tenancy::Tenancy;
@@ -116,13 +117,14 @@ pub struct DriftReport {
 pub async fn check_cluster(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
+    records: &OpenedRecords,
     cluster: Option<&str>,
 ) -> Result<(Vec<DriftReport>, Tenancy), FetchError> {
     let scope = match cluster {
         Some(cluster) => fetch::SweepScope::Cluster(cluster),
         None => fetch::SweepScope::All,
     };
-    let sweep = fetch::sweep_managed(client, discovery, scope).await?;
+    let sweep = fetch::sweep_managed(client, discovery, records, scope).await?;
     let mut reports: Vec<DriftReport> = sweep
         .managed
         .iter()

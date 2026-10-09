@@ -6,20 +6,16 @@
 //! builds contain it ([`super::fetch::attribute`]), and tell a prune which
 //! objects another Kix cluster still deploys ([`super::prune_guard`]).
 //!
-//! Not behind the domain gate ([`super::activation::Records::open`]).
-//! It only reads, and only records under the current API group, so on a
-//! cluster that has not migrated it finds none. A command that deletes on
-//! its strength has opened `Records` first.
+//! It reads the records through [`Records`], so the domain gate has run: on
+//! a cluster whose records sit under a retired group every record would be
+//! missing, every object would look unattributed, and a view of one Kix
+//! cluster would hold all of them.
 
 use std::collections::{HashMap, HashSet};
 
-use kube::{
-    api::{Api, DynamicObject, ListParams},
-    client::Client,
-    discovery::{ApiResource, Scope},
-};
+use kube::api::DynamicObject;
 
-use super::activation::{self, PHASE_SUPERSEDED, RecordsError};
+use super::activation::{OpenedRecords, PHASE_SUPERSEDED, Record, RecordsError};
 use crate::manifest::keys;
 
 /// Which Activation records on this Kubernetes cluster belong to which Kix
@@ -68,7 +64,7 @@ impl Tenancy {
                 tenancy.own.insert(hash.to_string());
                 continue;
             }
-            if activation::read_phase(record) != PHASE_SUPERSEDED {
+            if Record::of(record).phase != PHASE_SUPERSEDED {
                 tenancy.others_current.insert(hash.to_string());
             }
             tenancy
@@ -146,8 +142,9 @@ pub fn named_hashes(obj: &DynamicObject) -> impl Iterator<Item = &str> {
 }
 
 /// Read the [`Tenancy`] for `cluster` from one list of every Activation
-/// record. Without the Activation kind in discovery there are no records, and
-/// the tenancy is empty.
+/// record, read through what [`super::activation::Records::open`]
+/// returned. A cluster that does not serve the Activation kind has no
+/// records, and the tenancy is empty.
 ///
 /// Read it after the objects it will attribute, as
 /// [`super::fetch::sweep_managed`] and [`super::prune_guard::PruneGuard`] do.
@@ -156,35 +153,14 @@ pub fn named_hashes(obj: &DynamicObject) -> impl Iterator<Item = &str> {
 /// returns, or to one deleted since. Read before the objects, a Kix cluster
 /// whose first deploy lands in between leaves objects that name no known
 /// record, and those count as this cluster's own.
-pub async fn read(
-    client: &Client,
-    discovery: &[(ApiResource, Scope)],
-    cluster: &str,
-) -> Result<Tenancy, RecordsError> {
-    let ar = activation::served_resource(discovery);
-    read_from(client, ar, cluster).await
-}
-
-/// [`read`] with the Activation `ApiResource` already resolved; `None`
-/// when the kind is not served.
-pub async fn read_from(
-    client: &Client,
-    ar: Option<&ApiResource>,
-    cluster: &str,
-) -> Result<Tenancy, RecordsError> {
-    let Some(ar) = ar else {
+pub async fn read(records: &OpenedRecords, cluster: &str) -> Result<Tenancy, RecordsError> {
+    let Some(records) = records.records() else {
         return Ok(Tenancy {
             cluster: cluster.to_string(),
             ..Default::default()
         });
     };
-    let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
-    let records = api
-        .list(&ListParams::default())
-        .await
-        .map_err(RecordsError::list)?
-        .items;
-    Ok(Tenancy::from_records(&records, cluster))
+    Ok(Tenancy::from_records(&records.all().await?, cluster))
 }
 
 #[cfg(test)]

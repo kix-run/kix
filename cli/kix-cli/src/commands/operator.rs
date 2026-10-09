@@ -280,14 +280,22 @@ mod tests {
         watch_activation_progress(&records, "rec", true).await
     }
 
-    /// Operator mode opens the records through discovery, so a discovery
-    /// that fails stops it rather than skipping the domain gate.
+    /// Operator mode opens the records through discovery and the domain
+    /// gate: a discovery that fails, or a cluster that has not migrated,
+    /// stops it.
     #[tokio::test]
     async fn operator_mode_opens_records_only_through_discovery() {
         let api = FakeApi::new([]);
         api.fail_next("/apis", 1, 500);
         assert!(open_records(&api.client()).await.is_err());
         assert!(open_records(&api.client()).await.is_ok());
+
+        let unmigrated = FakeApi::new([]);
+        unmigrated.serve_retired_records();
+        let Err(err) = open_records(&unmigrated.client()).await else {
+            panic!("an unmigrated cluster's records were opened");
+        };
+        assert!(err.to_string().contains("kix migrate domain"), "{err}");
     }
 
     /// A Degraded record is reported apart from an Active one, so

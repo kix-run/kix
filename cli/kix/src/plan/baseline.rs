@@ -33,7 +33,7 @@ use serde_json::Value;
 
 use super::{PlanError, PlanEvent};
 use crate::build_source::Build;
-use crate::cluster::activation::{self, KeptOrphanSource, Record, Records};
+use crate::cluster::activation::{self, KeptOrphanSource, OpenedRecords, Record, Records};
 use crate::cluster::apply::{self, ChangeAction};
 use crate::cluster::fetch;
 use crate::eval::store_graph::StoreGraph;
@@ -296,14 +296,14 @@ impl Baseline {
         let discovery = fetch::discover_resources(client)
             .await
             .map_err(|e| PlanError::Discovery(Box::new(e)))?;
-        let records = Records::open(client, &discovery).map_err(PlanError::Domain)?;
-        let active = match &records {
+        let opened = Records::open(client, &discovery).map_err(PlanError::Domain)?;
+        let active = match opened.records() {
             Some(records) => records.active(cluster).await.ok().flatten(),
             None => None,
         };
 
-        let mut baseline = match (active, &records) {
-            (Some(active), Some(records)) if active.identity_hash.is_some() => {
+        let mut baseline = match active {
+            Some(active) if active.identity_hash.is_some() => {
                 let hash = active.identity_hash.as_deref().unwrap_or_default();
                 report(PlanEvent::Active {
                     name: &active.name,
@@ -324,7 +324,7 @@ impl Baseline {
                             error: found.err().as_deref(),
                         });
                         let active_manifests =
-                            of_live(client, records, &discovery, cluster, &active, report).await?;
+                            of_live(client, &opened, &discovery, cluster, &active, report).await?;
                         Baseline {
                             active_manifests,
                             source: ActiveSource::Live,
@@ -351,7 +351,7 @@ impl Baseline {
         // and never became Active, so neither side of the comparison knows
         // about them (kixpkgs#82). Resolved from the local store by hash, so
         // every input to the plan is still a compiler output.
-        if let Some(records) = &records {
+        if let Some(records) = opened.records() {
             baseline.failed =
                 load_failed_unless_in_flight(records, Some(build), cluster, report).await;
         }
@@ -721,7 +721,7 @@ async fn deploy_in_flight(records: &Records, cluster: &str) -> Option<Record> {
 /// plausible and is wrong.
 async fn of_live(
     client: &Client,
-    records: &Records,
+    opened: &OpenedRecords,
     discovery: &[(ApiResource, kube::discovery::Scope)],
     cluster: &str,
     active: &Record,
@@ -734,16 +734,18 @@ async fn of_live(
             .iter()
             .map(|s| s.identity_hash.clone()),
     );
-    let failed = records
-        .failed(cluster)
-        .await
-        .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
-    hashes.extend(failed.into_iter().filter_map(|f| f.identity_hash));
+    if let Some(records) = opened.records() {
+        let failed = records
+            .failed(cluster)
+            .await
+            .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
+        hashes.extend(failed.into_iter().filter_map(|f| f.identity_hash));
+    }
     let scope = fetch::SweepScope::Records {
         cluster,
         hashes: &hashes,
     };
-    let sweep = fetch::sweep_managed(client, discovery, scope)
+    let sweep = fetch::sweep_managed(client, discovery, opened, scope)
         .await
         .map_err(|e| PlanError::Reconstruct(e.to_string()))?;
     if sweep.other_builds > 0 {
@@ -997,7 +999,7 @@ mod tests {
         ]);
         let client = api.client();
         let discovery = fetch::discover_resources(&client).await.unwrap();
-        let records = Records::open_installed(&client, &discovery).unwrap();
+        let opened = Records::open(&client, &discovery).unwrap();
         let active = Record {
             name: "rec-a2".into(),
             identity_hash: Some("a2".into()),
@@ -1008,7 +1010,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let old = of_live(&client, &records, &discovery, "a", &active, &|_| {})
+        let old = of_live(&client, &opened, &discovery, "a", &active, &|_| {})
             .await
             .unwrap();
         let mut names: Vec<&str> = old

@@ -81,7 +81,7 @@ fn target(name: &Option<String>) -> String {
 
 impl RecordsError {
     /// A failed list of the records.
-    pub(crate) fn list(source: kube::Error) -> Self {
+    fn list(source: kube::Error) -> Self {
         RecordsError::Kube {
             op: "list",
             name: None,
@@ -344,7 +344,7 @@ fn orphans_kept_from(activation: &DynamicObject) -> Vec<KeptOrphanSource> {
 
 /// The Activation `ApiResource` under the current group, if discovery has
 /// it. Not the gate: [`Records::open`] is.
-pub(crate) fn served_resource(discovery: &[(ApiResource, Scope)]) -> Option<&ApiResource> {
+fn served_resource(discovery: &[(ApiResource, Scope)]) -> Option<&ApiResource> {
     discovery
         .iter()
         .find(|(ar, _)| {
@@ -449,7 +449,7 @@ fn is_current_phase(phase: &str) -> bool {
 }
 
 /// Read `status.phase` from an activation, or "" when it has none yet.
-pub(crate) fn read_phase(activation: &DynamicObject) -> &str {
+fn read_phase(activation: &DynamicObject) -> &str {
     activation
         .data
         .pointer("/status/phase")
@@ -469,9 +469,33 @@ pub struct Records {
     resource: ApiResource,
 }
 
+/// What [`Records::open`] found past the domain gate: the records, or that
+/// the cluster does not serve the Activation kind, which also means it has
+/// no records. Only `open` makes one from discovery, so a caller holding
+/// one knows the gate ran, and "no records" cannot be mistaken for a gate
+/// that refused.
+#[derive(Clone)]
+pub struct OpenedRecords(Option<Records>);
+
+impl OpenedRecords {
+    /// The records, or `None` when the cluster serves no Activation kind.
+    pub fn records(&self) -> Option<&Records> {
+        self.0.as_ref()
+    }
+
+    pub fn into_records(self) -> Option<Records> {
+        self.0
+    }
+}
+
+impl From<Records> for OpenedRecords {
+    fn from(records: Records) -> Self {
+        OpenedRecords(Some(records))
+    }
+}
+
 impl Records {
-    /// The records `discovery` shows, or `None` when the cluster does not
-    /// serve the Activation kind, which also means it has no records.
+    /// The records `discovery` shows, past the domain gate.
     ///
     /// The gate. A cluster whose records still sit under a retired group is
     /// refused here, so every command that reads or writes a record is
@@ -480,12 +504,14 @@ impl Records {
     pub fn open(
         client: &Client,
         discovery: &[(ApiResource, Scope)],
-    ) -> Result<Option<Records>, LegacyDomainError> {
+    ) -> Result<OpenedRecords, LegacyDomainError> {
         legacy_domain::check_discovery(discovery)?;
-        Ok(served_resource(discovery).map(|resource| Records {
-            client: client.clone(),
-            resource: resource.clone(),
-        }))
+        Ok(OpenedRecords(served_resource(discovery).map(|resource| {
+            Records {
+                client: client.clone(),
+                resource: resource.clone(),
+            }
+        })))
     }
 
     /// [`Records::open`] for a command that needs the records: a cluster
@@ -494,7 +520,9 @@ impl Records {
         client: &Client,
         discovery: &[(ApiResource, Scope)],
     ) -> Result<Records, OpenError> {
-        Self::open(client, discovery)?.ok_or(OpenError::NotInstalled)
+        Self::open(client, discovery)?
+            .into_records()
+            .ok_or(OpenError::NotInstalled)
     }
 
     /// The Activation kind as the cluster serves it, for the operator's
@@ -678,18 +706,27 @@ impl Records {
     /// Callers must treat `None` as "do not prune" rather than as an empty
     /// set.
     pub async fn live_hashes(&self) -> Option<HashSet<String>> {
-        let list = self
-            .api()
-            .list(&ListParams::default())
+        let all = self
+            .all()
             .await
             .map_err(|e| tracing::warn!("could not list activations, skipping prune: {e}"))
             .ok()?;
         Some(
-            list.items
-                .iter()
+            all.iter()
                 .filter_map(|item| Record::of(item).identity_hash)
                 .collect(),
         )
+    }
+
+    /// Every record on the cluster, of every Kix cluster and phase, as
+    /// objects, for [`super::tenancy::read`].
+    pub(crate) async fn all(&self) -> Result<Vec<DynamicObject>, RecordsError> {
+        Ok(self
+            .api()
+            .list(&ListParams::default())
+            .await
+            .map_err(RecordsError::list)?
+            .items)
     }
 
     async fn patch_status(&self, name: &str, patch: &Value) -> Result<(), RecordsError> {
@@ -1995,7 +2032,10 @@ mod listing_tests {
         let retired = crate::legacy_domain::DOMAINS[0];
 
         let opened = Records::open(&client, &discovery_with(&[keys::GROUP])).unwrap();
-        assert_eq!(opened.unwrap().watch_resource().group, keys::GROUP);
+        assert_eq!(
+            opened.records().unwrap().watch_resource().group,
+            keys::GROUP
+        );
 
         assert!(matches!(
             Records::open(&client, &discovery_with(&[retired])),
@@ -2006,7 +2046,7 @@ mod listing_tests {
             Err(LegacyDomainError::BothGroups { .. })
         ));
 
-        assert!(Records::open(&client, &[]).unwrap().is_none());
+        assert!(Records::open(&client, &[]).unwrap().records().is_none());
         assert!(matches!(
             Records::open_installed(&client, &[]),
             Err(OpenError::NotInstalled)

@@ -37,8 +37,8 @@ use thiserror::Error;
 
 use kix::build_source::Build;
 use kix::cluster::activation::{
-    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
-    Record, Records,
+    OpenedRecords, PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED,
+    PHASE_SUPERSEDED, Record, Records,
 };
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch;
@@ -433,9 +433,14 @@ async fn run_reconcile(
 
     // Only this Kix cluster's objects: every other Kix cluster's objects are
     // absent from this build and would otherwise be pruned as orphans.
-    let sweep = fetch::sweep_managed(&ctx.client, &discovery, fetch::SweepScope::Cluster(cluster))
-        .await
-        .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
+    let sweep = fetch::sweep_managed(
+        &ctx.client,
+        &discovery,
+        &OpenedRecords::from(ctx.records.clone()),
+        fetch::SweepScope::Cluster(cluster),
+    )
+    .await
+    .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
     let tenancy = sweep.tenancy.clone();
     for (owner, count) in &sweep.foreign {
         tracing::debug!(name, owner = %owner, count, "left out objects of another Kix cluster");
@@ -637,7 +642,7 @@ async fn handle_delete(
             .filter(|rid| !kix::manifest::lifecycle::never_pruned(&rid.kind))
             .collect();
 
-            delete_closure(&ctx.client, cluster, name, &ordered).await?;
+            delete_closure(&ctx.client, &ctx.records, cluster, name, &ordered).await?;
         }
     } else {
         tracing::info!(
@@ -669,6 +674,7 @@ async fn handle_delete(
 /// own hash counts as this cluster's.
 async fn delete_closure(
     client: &Client,
+    records: &Records,
     cluster: &str,
     name: &str,
     ordered: &[ResourceId],
@@ -676,7 +682,7 @@ async fn delete_closure(
     let discovery = fetch::discover_resources(client)
         .await
         .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
-    let guard = PruneGuard::new(client.clone(), &discovery, cluster);
+    let guard = PruneGuard::new(client.clone(), records.clone().into(), cluster);
     for rid in ordered {
         let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
             continue;
@@ -896,7 +902,10 @@ mod tests {
             namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
             name: name.into(),
         };
-        delete_closure(&api.client(), "b", "b", &[rid("b-only"), rid("shared")])
+        let client = api.client();
+        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        delete_closure(&client, &records, "b", "b", &[rid("b-only"), rid("shared")])
             .await
             .unwrap();
         assert_eq!(api.names("ClusterRole"), vec!["shared"]);
