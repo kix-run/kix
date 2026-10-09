@@ -17,7 +17,9 @@
 //!     and deleted only with `--include-unstamped`. When another Kix cluster
 //!     has records here, objects naming no record at all are reported and
 //!     judged only with `--include-unattributed`, and an object another
-//!     cluster's current build contains is kept.
+//!     cluster's current build contains is kept. Copies a controller made of
+//!     Kix objects (`inventory::ManagedSweep::copies`) are reported and judged
+//!     only with `--include-copies`.
 //!   - **Operator (`--operator`):** Deletes retired Activation records. They
 //!     are Superseded, so the operator's finalizer deletes no resources.
 //!
@@ -478,20 +480,13 @@ async fn run_hard_async(
         if !sweep.unattributed.is_empty() {
             print_unattributed(&sweep.unattributed, args.include_unattributed);
         }
+        if !sweep.copies.is_empty() {
+            print_copies(&sweep.copies, args.include_copies);
+        }
     }
     let forbidden_none = sweep.forbidden.is_empty();
     let unattributed_judged = sweep.unattributed.is_empty() || args.include_unattributed;
-    let unattributed = if args.include_unattributed {
-        sweep.unattributed
-    } else {
-        Vec::new()
-    };
-    let live: Vec<_> = sweep
-        .managed
-        .into_iter()
-        .chain(sweep.unstamped)
-        .chain(unattributed)
-        .collect();
+    let live = judged_objects(sweep, args.include_unattributed, args.include_copies);
 
     // Refuse on a cluster that has been migrated but not deployed since.
     //
@@ -726,6 +721,34 @@ fn has_key(obj: &kube::api::DynamicObject, key: &str) -> bool {
             .is_some_and(|a| a.contains_key(key))
 }
 
+/// The swept objects hard gc judges against the build: the managed and
+/// unstamped ones, plus the unattributed objects and the copies when their
+/// flags ask for them. Copies are not Kix's, so leaving them out does not
+/// make the examination incomplete for `clear_kept`.
+fn judged_objects(
+    sweep: inventory::ManagedSweep,
+    include_unattributed: bool,
+    include_copies: bool,
+) -> Vec<kube::api::DynamicObject> {
+    let unattributed = if include_unattributed {
+        sweep.unattributed
+    } else {
+        Vec::new()
+    };
+    let copies = if include_copies {
+        sweep.copies
+    } else {
+        Vec::new()
+    };
+    sweep
+        .managed
+        .into_iter()
+        .chain(sweep.unstamped)
+        .chain(unattributed)
+        .chain(copies)
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Hard GC: garbage entry + display
 // ---------------------------------------------------------------------------
@@ -812,6 +835,32 @@ fn print_unattributed(objects: &[kube::api::DynamicObject], included: bool) {
         "--include-unattributed: judged against this build like this cluster's own objects."
     } else {
         "Kept. Review them and pass --include-unattributed to judge them against this build."
+    };
+    println!("  {}", output::dim(note));
+}
+
+/// List the copies a controller made of Kix objects, and say whether this
+/// run judges them.
+fn print_copies(objects: &[kube::api::DynamicObject], included: bool) {
+    println!();
+    println!(
+        "{} {} objects carry Kix's annotations and an owner reference but no Kix \
+         apply record, so a controller copied them from Kix objects:",
+        output::bold("Copies:"),
+        objects.len(),
+    );
+    let mut ids: Vec<ResourceId> = objects
+        .iter()
+        .map(|o| ResourceId::from_value(&to_manifest_value(o)))
+        .collect();
+    ids.sort();
+    for rid in &ids {
+        println!("    {} {rid}", output::dim("?"));
+    }
+    let note = if included {
+        "--include-copies: judged against this build like this cluster's own objects."
+    } else {
+        "Kept. Kix did not apply these. Pass --include-copies to judge them against this build."
     };
     println!("  {}", output::dim(note));
 }
@@ -1812,6 +1861,45 @@ mod hard_scope_tests {
         with_flag.extend(sweep.unattributed);
         let (garbage, _) = judge_hard(&with_flag, &expected, &HashSet::new(), &tenancy);
         assert_eq!(names(&garbage), vec!["a-stale", "leftover"]);
+    }
+
+    /// A copy a controller made of a Kix object (stamped, owned, no Kix
+    /// apply entry) is left out of the judged objects unless
+    /// `--include-copies` is passed.
+    #[test]
+    fn hard_gc_judges_copies_only_with_the_flag() {
+        let tenancy = Tenancy::fixture(&[record("a", "a2")], "a");
+        let mut copy = live("Service", "web-x-guest", Some("h-guest"), "g1");
+        copy.metadata.owner_references = Some(vec![
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference {
+                api_version: "v1".into(),
+                kind: "Service".into(),
+                name: "syncer".into(),
+                uid: "u".into(),
+                ..Default::default()
+            },
+        ]);
+        let sweep = || {
+            inventory::scope_sweep(
+                inventory::partition_sweep(vec![
+                    live("ConfigMap", "a-current", Some("h-cur"), "a2"),
+                    copy.clone(),
+                ]),
+                inventory::SweepScope::Cluster("a"),
+                tenancy.clone(),
+            )
+        };
+        let expected: HashSet<String> = ["h-cur".to_string()].into();
+
+        let scoped = sweep();
+        assert_eq!(scoped.copies.len(), 1);
+        let judged = judged_objects(scoped, false, false);
+        let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        assert!(garbage.is_empty());
+
+        let judged = judged_objects(sweep(), false, true);
+        let (garbage, _) = judge_hard(&judged, &expected, &HashSet::new(), &tenancy);
+        assert_eq!(names(&garbage), vec!["web-x-guest"]);
     }
 
     /// With one Kix cluster the plan is what it was before scoping: a
