@@ -1,32 +1,35 @@
 ---
 title: "Global flags"
-description: "Flags and environment variables every `kix` command accepts: output format, verbosity, colour, kubeconfig context, flake selection, and the eval cache."
+description: "Flags and environment variables every `kix` command accepts: output format, verbosity, colour, kubeconfig context, flake selection, and the eval cache. How a plugin receives them."
 ---
 
 import Command from '/src/components/Command.astro';
 
 These flags are accepted by every `kix` command and may appear before or
 after the subcommand. A command that has no use for a flag ignores it, and its
-`--help` does not list it. `kix --help` lists them all.
+`--help` does not list it. `kix --help` lists them all. Each flag except
+`--no-color` can also be set with the environment variable in the table; the
+flag wins over the variable.
 
 This page is hand-maintained. Check `GlobalArgs` and `SCOPED_GLOBALS` in
 `cli/kix-cli/src/cli.rs`, `cli/kix-cli/src/main.rs` and
-`cli/kix-cli/src/output.rs` when in doubt.
+`cli/kix-cli/src/output.rs` when in doubt, and `cli/kix-cli/src/plugin.rs`
+for plugins.
 
 ## Flags
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `-o`, `--output <FORMAT>` | Varies by command | `text`, `json`, `yaml`, or `markdown`. See [Output formats](/docs/reference/cli/output-formats/) for which commands honour which values. |
-| `-v`, `--verbose` | Off | Log more to stderr. Repeat for more: `-v` logs Kix at info level, `-vv` at debug, `-vvv` everything at debug. Without it, warnings are logged, except those the Kubernetes client writes for an error response it then returns to Kix. |
-| `-q`, `--quiet` | Off | Suppress progress and informational output, and log errors only. Results still print. |
-| `--no-color` | Off | Disable coloured result output. Deploy and gc progress lines currently still use terminal clear-line control sequences. |
-| `--context <CONTEXT>` | Current kubeconfig context | Kubeconfig context for every command that talks to a cluster. `logs` and `pf` pass it to `kubectl`. |
-| `--flake <FLAKE>` | `.` | Flake to evaluate clusters from. A value without `:` is a local path, resolved against the working directory; anything else, such as `github:org/repo`, is passed to Nix as a flake reference. Commands that use the [eval cache](/docs/reference/cli/eval-cache-behavior/) currently fail on a remote reference. |
-| `--no-cache` | Off | Skip the Kix eval cache and evaluate from Nix every time. See [Eval cache behavior](/docs/reference/cli/eval-cache-behavior/). |
-| `--override-input <INPUT> <URL>` | None | Override a flake input's URL for every `nix` command Kix runs, like `nix --override-input`. Repeatable, two values each time. |
-| `-h`, `--help` | | Print help. `-h` prints a summary, `--help` the long form. |
-| `-V`, `--version` | | Print the version. |
+| Flag | Variable | Default | Meaning |
+| --- | --- | --- | --- |
+| `-o`, `--output <FORMAT>` | `KIX_OUTPUT` | Varies by command | `text`, `json`, `yaml`, or `markdown`. See [Output formats](/docs/reference/cli/output-formats/) for which commands honour which values. |
+| `-v`, `--verbose` | `KIX_VERBOSE`, a count | Off | Log more to stderr. Repeat for more: `-v` logs Kix at info level, `-vv` at debug, `-vvv` everything at debug. Without it, warnings are logged, except those the Kubernetes client writes for an error response it then returns to Kix. |
+| `-q`, `--quiet` | `KIX_QUIET` | Off | Suppress progress and informational output, and log errors only. Results still print. |
+| `--no-color` | `NO_COLOR`, below | Off | Disable coloured result output. Deploy and gc progress lines currently still use terminal clear-line control sequences. |
+| `--context <CONTEXT>` | `KIX_CONTEXT` | Current kubeconfig context | Kubeconfig context for every command that talks to a cluster. `logs` and `pf` pass it to `kubectl`. |
+| `--flake <FLAKE>` | `KIX_FLAKE` | `.` | Flake to evaluate clusters from. A value without `:` is a local path, resolved against the working directory; anything else, such as `github:org/repo`, is passed to Nix as a flake reference. Commands that use the [eval cache](/docs/reference/cli/eval-cache-behavior/) currently fail on a remote reference. |
+| `--no-cache` | `KIX_NO_CACHE` | Off | Skip the Kix eval cache and evaluate from Nix every time. See [Eval cache behavior](/docs/reference/cli/eval-cache-behavior/). |
+| `--override-input <INPUT> <URL>` | `KIX_OVERRIDE_INPUT`, names and URLs separated by spaces, read only without the flag | None | Override a flake input's URL for every `nix` command Kix runs, like `nix --override-input`. Repeatable, two values each time. |
+| `-h`, `--help` | | | Print help. `-h` prints a summary, `--help` the long form. |
+| `-V`, `--version` | | | Print the version. |
 
 ## Which commands read which flag
 
@@ -66,12 +69,38 @@ The variables that tune how Kix talks to the Kubernetes API are listed in
 [API server retries and request limits](/docs/reference/cli/api-server-transport/).
 Registry credentials for `kix pin` are listed on [`kix pin`](/docs/reference/cli/pin/).
 
+A variable that turns a flag on or off is off when it is empty or one of
+`false`, `f`, `no`, `n`, `off` or `0`, in any case, and on for any other value.
+
+## Plugins
+
+`kix NAME ARGS...`, where NAME is not a `kix` command, runs the program
+`kix-NAME` with ARGS. Kix looks for it in the absolute directories on `PATH`,
+the way git and cargo find their external commands. A plugin can be any
+executable; NAME may hold letters, digits, `-` and `_`.
+
+- **Global flags go before NAME.** Kix passes them to the plugin as the
+  variables in the table above, and `--no-color` as `NO_COLOR=1`. Everything
+  after NAME goes to the plugin unchanged. `KIX_FLAKE` is passed as given, so
+  a relative path such as `../infra` is relative to the directory `kix` ran
+  in. An `--override-input` value with a space can't be passed, and Kix
+  refuses it.
+- **`KIX_BIN`** is the path of the `kix` that ran the plugin. A plugin that
+  runs `$KIX_BIN` gets the same version, and that `kix` reads the same
+  variables, so it has the user's flags without being given them. Pass a flag
+  to override one.
+- **Kix replaces itself with the plugin**, so its exit status is the plugin's.
+- **A NAME with no plugin** is an error, as before, with a suggestion when it
+  is close to a command. `kix help NAME` does not reach a plugin; run
+  `kix NAME --help`, if the plugin has one.
+
 ## Examples
 
 <Command commands={[
   "kix --flake ../infra list clusters",
   "kix deploy demo --context kind-demo -v",
   "kix build demo --override-input kixpkgs git+file:///home/me/src/kixpkgs",
+  "kix --context prod enterprise status",
 ]} />
 
 :::tip[Use it in a task]

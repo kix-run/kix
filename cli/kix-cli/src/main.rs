@@ -3,6 +3,7 @@ mod client;
 mod commands;
 mod output;
 mod plan;
+mod plugin;
 #[cfg(test)]
 mod schemas;
 pub mod trace_sink;
@@ -99,12 +100,43 @@ fn output_mode(cli: &Cli) -> output::Mode {
     }
 }
 
+/// Reads `KIX_OVERRIDE_INPUT` when `--override-input` is not given.
+///
+/// clap does not read it: splitting the variable on spaces with a value
+/// delimiter would split the flag's own values too, and a `path:` URL may
+/// hold a space.
+fn override_input_from_env(global: &mut cli::GlobalArgs) -> miette::Result<()> {
+    if !global.override_input.is_empty() {
+        return Ok(());
+    }
+    let Some(var) = std::env::var_os("KIX_OVERRIDE_INPUT") else {
+        return Ok(());
+    };
+    let words: Vec<String> = var
+        .to_str()
+        .ok_or_else(|| miette::miette!("KIX_OVERRIDE_INPUT is not UTF-8"))?
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+    if !words.len().is_multiple_of(2) {
+        return Err(miette::miette!(
+            "KIX_OVERRIDE_INPUT must hold pairs of an input name and a URL, separated by spaces"
+        ));
+    }
+    global.override_input = words;
+    Ok(())
+}
+
 fn main() -> miette::Result<()> {
     miette::set_hook(Box::new(|_| {
         Box::new(miette::MietteHandlerOpts::new().build())
     }))?;
 
-    let cli = Cli::from_arg_matches(&cli::command().get_matches()).unwrap_or_else(|e| e.exit());
+    let mut cli = Cli::from_arg_matches(&cli::command().get_matches()).unwrap_or_else(|e| e.exit());
+    override_input_from_env(&mut cli.global)?;
+    if let Command::Plugin(args) = &cli.command {
+        return plugin::run(args, &cli.global);
+    }
     init_tracing(cli.global.verbose, cli.global.quiet);
     output::init_color(&cli.global);
     output::init(output_mode(&cli));
@@ -160,7 +192,9 @@ fn main() -> miette::Result<()> {
         Command::Images(args) => commands::images::run(args, &mut ctx),
         Command::Snapshot(args) => commands::snapshot::run(args, &mut ctx),
         Command::Compliance(args) => commands::compliance::run(args, &mut ctx),
-        Command::Completions(_) | Command::Drift(_) | Command::Pin(_) => unreachable!(),
+        Command::Completions(_) | Command::Drift(_) | Command::Pin(_) | Command::Plugin(_) => {
+            unreachable!()
+        }
     }
 }
 
