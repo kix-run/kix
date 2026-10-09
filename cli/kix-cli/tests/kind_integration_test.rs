@@ -1,6 +1,6 @@
 //! Integration test against a real kind cluster.
 //!
-//! Requires: `kind` and `kubectl` on PATH, Nix FFI available.
+//! Requires: `kind` and `kubectl` on PATH, and `nix`.
 //! Creates a temporary kind cluster, deploys the `kind` cluster definition
 //! (echo-server in its own namespace — no conflicts with kind's built-ins),
 //! verifies deploy, local DAG diff, soft GC, and hard GC.

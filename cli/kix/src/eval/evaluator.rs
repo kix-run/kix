@@ -1,8 +1,7 @@
 //! Core evaluator: trait-based Nix backend abstraction with caching.
 //!
-//! The `NixBackend` trait allows swapping between:
-//! - `MockNixBackend` (in this crate's tests)
-//! - A real FFI backend using `nix-bindings-*` crates (added in Step 9)
+//! The `NixBackend` trait has two implementations: `CliNixBackend`, which
+//! runs the `nix` command, and `MockNixBackend` in this crate's tests.
 
 use std::path::{Path, PathBuf};
 
@@ -88,8 +87,8 @@ pub struct ClusterPackageInfo {
     pub available_packages: std::collections::BTreeMap<String, PackageInfo>,
 }
 
-/// Abstraction over Nix evaluation. Implementations provide either real
-/// FFI evaluation or mock/test data.
+/// Abstraction over Nix evaluation: the `nix` command in production, canned
+/// data in tests.
 pub trait NixBackend: Send {
     /// Evaluate a cluster attribute and return its manifests.
     fn eval_cluster(

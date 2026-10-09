@@ -453,7 +453,6 @@ a record line need regenerating.
 - `build.rs` — `build_cluster_activation()` shells out to `nix build .#cluster-{name}-activation`; crate-private, reached through `Build::of_flake`
 - `stamp.rs` — `stamp_annotations()`, run by `Build` as it is made, by `Build::deployed_build` on the record's build it returns, and by `kix bundle` on the bundle it reads back to compare with the build (a `CarriedBuild` reader and `CarriedBuild::deployed_build` give unstamped graphs, which `Build` then stamps). It writes `kix.run/*` annotations onto StoreGraph manifests in-place; renames the Record to `<cluster>-<hash12>` so each deploy creates a distinct CR
 - `cache.rs` — SQLite cache keyed by BLAKE3 of (flake path + lock + source fingerprint + attr)
-- `ffi.rs` — experimental `FfiNixBackend` using `nix-bindings-*` FFI crates (gated behind `nix-ffi` feature, not currently used)
 - `mock.rs` — `MockNixBackend` for tests without Nix
 
 #### manifest (`kix/src/manifest/`)
@@ -516,7 +515,7 @@ a record line need regenerating.
 
 **Annotations** stamped at build time: `kix.run/identity-hash`, `kix.run/package`, `kix.run/depends-on`, `kix.run/activations`. Everything downstream reads these, never raw store paths.
 
-**Backend abstraction.** `NixBackend` trait — `CliNixBackend` (production, shells out to `nix` CLI) and `MockNixBackend` (tests, no Nix needed). An experimental `FfiNixBackend` using direct C FFI exists behind the `nix-ffi` feature but is not currently used.
+**Backend abstraction.** `NixBackend` trait — `CliNixBackend` (production, shells out to `nix` CLI) and `MockNixBackend` (tests, no Nix needed).
 
 **Operator mode** (`--operator` flag on deploy/rollback/gc). Instead of calling the reconcile engine directly, the CLI creates or patches Activation CRs and watches their status. The operator does the actual wave-by-wave apply. Build + plan display still happens locally (needs Nix). Three flows:
 - `deploy --operator`: build locally → show plan → apply Activation CR with source path → watch status.waves
