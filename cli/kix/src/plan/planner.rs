@@ -666,8 +666,8 @@ mod tests {
         assert_eq!(kept, vec!["shared", "shared-cm"]);
     }
 
-    /// The `kix-enterprise-test` bundle, planned as a first deploy without
-    /// connecting.
+    /// The `kix-enterprise-test` build, carried, planned as a first deploy
+    /// without connecting.
     fn planned() -> Planned {
         struct Carried;
         impl crate::build_source::CarriedBuild for Carried {
@@ -681,11 +681,8 @@ mod tests {
                 Ok(None)
             }
         }
-        let bytes: &[u8] =
-            include_bytes!("../../tests/fixtures/bundles/kix-enterprise-test.kixbundle");
-        let graph = crate::eval::bundle::Bundle::read(std::io::Cursor::new(bytes))
-            .unwrap()
-            .1;
+        let bytes: &[u8] = include_bytes!("../../tests/fixtures/kix-enterprise-test.json");
+        let graph = crate::plan::fixtures::kix_enterprise_test();
         let build =
             crate::build_source::Build::carried(bytes.to_vec(), "kix-enterprise-test", |_| {
                 Ok((Carried, graph))

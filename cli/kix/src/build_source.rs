@@ -7,7 +7,7 @@
 //! - [`Build::local`] loads and validates a result directory in this
 //!   machine's Nix store; [`Build::of_flake`] builds one first.
 //! - [`Build::carried`] reads a build made elsewhere, through a
-//!   [`CarriedBuild`] such as a bundle. It hashes the bytes it hands the
+//!   [`CarriedBuild`] such as a bundle (`kix-bundle`). It hashes the bytes it hands the
 //!   reader itself, and refuses a build that is not valid or not of the
 //!   named cluster.
 //!
@@ -29,8 +29,8 @@
 //! Which kind of build it is, never the source, decides whether it is in
 //! the local store and the digest the deploy receipt names.
 //!
-//! A [`CarriedBuild`] can be implemented outside this crate, as the bundle
-//! source in `kix-cli` is.
+//! A [`CarriedBuild`] is implemented outside this crate, as `kix-bundle`'s
+//! is.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
@@ -357,13 +357,10 @@ fn carried_sops<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eval::bundle::Bundle;
     use crate::eval::store_path::{Method, path_for};
 
     fn fixture() -> StoreGraph {
-        let bytes: &[u8] =
-            include_bytes!("../tests/fixtures/bundles/kix-enterprise-test.kixbundle");
-        Bundle::read(std::io::Cursor::new(bytes)).unwrap().1
+        crate::plan::fixtures::kix_enterprise_test()
     }
 
     /// A source that gives `.0` as its build of any record.
@@ -389,8 +386,8 @@ mod tests {
         deployed: &StoreGraph,
     ) -> Result<Build, String> {
         let (graph, deployed) = (graph.clone(), deployed.clone());
-        // Ignores the bytes so a test can hand the core a graph a bundle
-        // would not hold.
+        // Ignores the bytes so a test can hand the core a graph no carried
+        // build would hold.
         Build::carried(b"bytes".to_vec(), cluster, |_| Ok((Gives(deployed), graph)))
     }
 

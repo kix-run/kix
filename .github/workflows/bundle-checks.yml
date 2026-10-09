@@ -4,7 +4,7 @@ name: Bundle checks
 # "Bundle acceptance checks"):
 #
 # - each libFuzzer target in cli/fuzz for two minutes, seeded from the
-#   honest bundles in cli/kix/tests/fixtures/bundles, under the README's
+#   honest bundles in cli/kix-bundle/tests/fixtures, under the README's
 #   4 GiB RSS cap;
 # - `every_test_cluster_bundles`, which builds and bundles every test
 #   cluster.
@@ -60,7 +60,7 @@ jobs:
             nixpkgs#cargo-fuzz nixpkgs#zstd nixpkgs#python3 --command bash -c '
             set -euo pipefail
             cd cli/fuzz
-            ./seed.py ../kix/tests/fixtures/bundles/*.kixbundle seeds
+            ./seed.py ../kix-bundle/tests/fixtures/*.kixbundle seeds
             export RUSTC_BOOTSTRAP=1
             cargo fuzz build -s none -O
             for target in $(cargo fuzz list); do

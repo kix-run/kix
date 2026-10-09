@@ -5,7 +5,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::io::Cursor;
 use std::sync::atomic::{AtomicIsize, Ordering};
 
-use kix::eval::bundle::PathsChecked;
+use kix_bundle::PathsChecked;
 
 /// Separates the frames of a `*_frames` target's input.
 pub const FRAME_SEPARATOR: &[u8] = b"\n\0kix-frame\0\n";
@@ -138,7 +138,7 @@ pub fn check_paths(bundle: &[u8]) {
         );
         return;
     };
-    let record = frame.min(kix::eval::bundle::MAX_RECORD_BYTES);
+    let record = frame.min(kix_bundle::MAX_RECORD_BYTES);
     let bound = HOLD_FACTOR * (header + frame) + RECORD_FACTOR * record + HOLD_SLACK;
     if std::env::var_os("KIX_FUZZ_REPORT").is_some() {
         eprintln!(

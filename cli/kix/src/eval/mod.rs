@@ -16,12 +16,11 @@
 //! - `mock::MockNixBackend` returns canned data, for this crate's tests
 //!   without a Nix installation.
 
-pub mod bundle;
 pub(crate) mod cache;
 pub mod cli_backend;
 pub mod error;
 pub(crate) mod evaluator;
-pub(crate) mod manifest_json;
+pub mod manifest_json;
 #[cfg(test)]
 mod mock;
 pub mod nix;

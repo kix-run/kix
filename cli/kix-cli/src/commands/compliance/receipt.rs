@@ -570,10 +570,10 @@ mod tests {
     /// A build carried in a bundle whose maker recorded `made`, with the
     /// bundle's bytes and the kix revision it names.
     fn carried_build(made: Value) -> (Build, Vec<u8>, String) {
-        use kix::eval::bundle::Bundle;
+        use kix_bundle::Bundle;
 
         let fixture: &[u8] =
-            include_bytes!("../../../../kix/tests/fixtures/bundles/kix-enterprise-test.kixbundle");
+            include_bytes!("../../../../kix-bundle/tests/fixtures/kix-enterprise-test.kixbundle");
         let mut contents = Bundle::read(std::io::Cursor::new(fixture))
             .unwrap()
             .0
@@ -582,7 +582,7 @@ mod tests {
         contents.receipt = Some(serde_json::from_value(made).unwrap());
         let file = tempfile::NamedTempFile::new().unwrap();
         contents.write(file.as_file()).unwrap();
-        let build = crate::commands::bundle::read(file.path(), &[], "kix-enterprise-test").unwrap();
+        let build = kix_bundle::read_build(file.path(), &[], "kix-enterprise-test").unwrap();
         (build, std::fs::read(file.path()).unwrap(), contents.kix_rev)
     }
 

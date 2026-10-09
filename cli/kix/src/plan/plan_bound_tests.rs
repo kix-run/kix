@@ -1,5 +1,5 @@
 //! A deploy refuses an object its plan does not show. Each build here is
-//! the `kix-enterprise-test` bundle changed after `Bundle::read`, past
+//! the `kix-enterprise-test` build changed after it was read, past
 //! `StoreGraph::validate`, so the objects check alone stands between it
 //! and the cluster. The steps are the ones [`super::Planner`] takes.
 
@@ -7,90 +7,19 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use super::baseline::{ActiveSource, Baseline};
-use super::document::{Objects, PlanFlags, PruneModeFlag, WriteChange};
+use super::PlanError;
+use super::document::{Objects, WriteChange};
+use super::fixtures::{deployed, flags, plan, stamp};
 use super::objects::Unshown;
-use super::{PlanError, Planner};
-use crate::eval::bundle::Bundle;
-use crate::eval::stamp::stamp_annotations;
 use crate::eval::store_graph::{PackageNode, ResourceNode};
 use crate::eval::store_graph::{StoreGraph, store_hash};
 use crate::manifest::types::{self, ResourceId};
 use crate::manifest::{keys, lifecycle};
 
-const FIXTURE: &[u8] = include_bytes!("../../tests/fixtures/bundles/kix-enterprise-test.kixbundle");
-
 const NS: &str = "kix-enterprise-test-data";
 
 pub(crate) fn build() -> StoreGraph {
-    Bundle::read(std::io::Cursor::new(FIXTURE)).unwrap().1
-}
-
-/// The planning flags `extra` sets, as `kix deploy` parses them.
-pub(crate) fn flags(extra: &[&str]) -> PlanFlags {
-    let mut flags = PlanFlags {
-        prune: false,
-        prune_mode: None,
-        reconcile: false,
-        force_conflicts: false,
-        accept_migrations: false,
-    };
-    let mut args = extra.iter();
-    while let Some(arg) = args.next() {
-        match *arg {
-            "--prune" => flags.prune = true,
-            "--reconcile" => flags.reconcile = true,
-            "--force-conflicts" => flags.force_conflicts = true,
-            "--accept-migrations" => flags.accept_migrations = true,
-            "--prune-mode" => {
-                flags.prune_mode = match args.next().copied() {
-                    Some("default") => Some(PruneModeFlag::Default),
-                    Some("no") => Some(PruneModeFlag::No),
-                    other => panic!("--prune-mode {other:?}"),
-                }
-            }
-            other => panic!("not a planning flag: {other}"),
-        }
-    }
-    flags
-}
-
-/// The baseline of a cluster that runs `old`, or nothing.
-pub(crate) fn deployed(old: Option<&StoreGraph>) -> Baseline {
-    match old {
-        Some(old) => {
-            let (graph, manifests) = stamped(old);
-            Baseline {
-                source: ActiveSource::Build(Box::new(graph)),
-                active_manifests: manifests,
-                ..Baseline::empty()
-            }
-        }
-        None => Baseline::empty(),
-    }
-}
-
-/// [`Planner::plan`] for a deploy of `new` over `baseline` with `flags`,
-/// before the plan reads the cluster.
-pub(crate) fn plan(
-    baseline: &Baseline,
-    new: &StoreGraph,
-    flags: PlanFlags,
-) -> Result<super::CheckedPlan, PlanError> {
-    let (new_graph, _) = stamped(new);
-    let planner = Planner::new(flags, &|_| {});
-    futures::executor::block_on(planner.plan(&new_graph, &new.cluster_name, baseline, None))
-}
-
-pub(crate) fn stamped(graph: &StoreGraph) -> (StoreGraph, Vec<Value>) {
-    let mut graph = graph.clone();
-    stamp_annotations(&mut graph);
-    let manifests = graph
-        .resources
-        .values()
-        .map(|r| r.manifest.clone())
-        .collect();
-    (graph, manifests)
+    super::fixtures::kix_enterprise_test()
 }
 
 /// What the planner checks for a deploy of `new` to a cluster that runs
@@ -261,7 +190,7 @@ fn two_files_of_one_object_are_refused() {
 fn a_delete_the_plan_does_not_show_is_refused() {
     let new = build();
     let baseline = deployed(Some(&new));
-    let (new_graph, _) = stamped(&new);
+    let (new_graph, _) = stamp(&new);
     let checked = plan(&baseline, &new, flags(&[])).unwrap();
     let (plan, pkg_diff) = (checked.plan(), checked.pkg_diff());
     let stray = ResourceId {
@@ -493,7 +422,7 @@ fn saved_rules(
     extra: &[&str],
 ) -> Vec<super::saved::Rule> {
     let doc = |graph: &StoreGraph| {
-        let (stamped_graph, _) = stamped(graph);
+        let (stamped_graph, _) = stamp(graph);
         let empty = super::diff_graphs(&stamped_graph, &stamped_graph);
         let mut doc = super::document::Plan::new(
             super::document::KixBuild::current(env!("CARGO_PKG_VERSION")),

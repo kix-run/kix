@@ -16,8 +16,6 @@ pub mod live;
 pub mod objects;
 pub mod origin;
 #[cfg(test)]
-mod plan_bound_properties;
-#[cfg(test)]
 mod plan_bound_tests;
 mod planner;
 pub mod saved;

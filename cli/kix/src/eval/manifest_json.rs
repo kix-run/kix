@@ -31,7 +31,7 @@ pub struct NotJson {
 /// manifests and indexes. Refuses a key given twice and a key with
 /// serde_json's reserved prefix; serde_json refuses nesting past 128. An
 /// integer outside `i64` and `u64` reads as the nearest `f64`.
-pub(crate) fn parse_manifest(path: &str, bytes: &[u8]) -> Result<serde_json::Value, NotJson> {
+pub fn parse_manifest(path: &str, bytes: &[u8]) -> Result<serde_json::Value, NotJson> {
     let mut de = serde_json::Deserializer::from_slice(bytes);
     Strict
         .deserialize(&mut de)
@@ -43,7 +43,7 @@ pub(crate) fn parse_manifest(path: &str, bytes: &[u8]) -> Result<serde_json::Val
 }
 
 /// `kix-packages.json` at `path`, parsed with [`parse_manifest`].
-pub(crate) fn parse_index(path: &str, bytes: &[u8]) -> Result<KixPackageIndex, NotJson> {
+pub fn parse_index(path: &str, bytes: &[u8]) -> Result<KixPackageIndex, NotJson> {
     serde_json::from_value(parse_manifest(path, bytes)?).map_err(|e| NotJson {
         path: path.to_string(),
         message: e.to_string(),
