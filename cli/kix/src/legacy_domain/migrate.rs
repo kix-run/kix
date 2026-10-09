@@ -145,7 +145,7 @@ pub struct Report {
 
 impl Report {
     /// Nothing to do: no retired group on this cluster.
-    pub fn nothing_to_do() -> Self {
+    pub(crate) fn nothing_to_do() -> Self {
         Self::default()
     }
 

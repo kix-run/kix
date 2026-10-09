@@ -52,8 +52,8 @@
 //! # One parser
 //!
 //! Every manifest and the index are parsed with
-//! [`manifest_json::parse_manifest`](super::manifest_json::parse_manifest),
-//! the parser a result directory's are read with.
+//! `manifest_json::parse_manifest`, the parser a result directory's are read
+//! with.
 //!
 //! # Two readers
 //!
@@ -67,8 +67,8 @@
 //!
 //! [`Bundle::read`] is for the agent and the CLI. It does the same, then
 //! parses every manifest and the index and gives the build's [`StoreGraph`],
-//! built by [`StoreGraph::assemble`] and checked by
-//! [`StoreGraph::validate`], as a result directory's is. It keeps every
+//! built by `StoreGraph::assemble` and checked by
+//! `StoreGraph::validate`, as a result directory's is. It keeps every
 //! manifest parsed, so the process's memory limit bounds it.
 //!
 //! [`OpenBundle::open`] reads only the seek table and the header, for a
@@ -87,9 +87,9 @@
 //!
 //! After [`Bundle::read`], also:
 //!
-//! - every manifest and the index parse with [`parse_manifest`], and every
+//! - every manifest and the index parse with `parse_manifest`, and every
 //!   path the index lists is a manifest in the bundle;
-//! - [`StoreGraph::validate`] holds: one Activation record, at the record's
+//! - `StoreGraph::validate` holds: one Activation record, at the record's
 //!   path, labelled with the index's cluster; each object (kind, namespace,
 //!   name) once; one package per namespace and instance, each with its
 //!   PackageInstance; only import markers listed by more than one package;
@@ -102,12 +102,12 @@
 //! | Cap or refusal | Protects |
 //! |---|---|
 //! | [`MAX_STORED_BYTES`], 64 MiB | server: bytes read and hashed per upload |
-//! | [`MAX_HEADER_BYTES`], 32 MiB | server: memory for the header |
-//! | [`MAX_FILES`], 200,000 | server: memory per file and per seek-table entry, counted before the header is kept |
-//! | [`MAX_REFERENCES`], 1,600,000 | server: time to hash the references of every path, and memory for them |
-//! | [`MAX_RECEIPT_BYTES`], 256 KiB | server: memory to parse the receipt |
-//! | [`MAX_FRAME_BYTES`], 32 MiB | server: memory for one frame, so also the largest file |
-//! | [`MAX_CONTENT_BYTES`], 1 GiB | server: time to decompress and hash the files |
+//! | `MAX_HEADER_BYTES`, 32 MiB | server: memory for the header |
+//! | `MAX_FILES`, 200,000 | server: memory per file and per seek-table entry, counted before the header is kept |
+//! | `MAX_REFERENCES`, 1,600,000 | server: time to hash the references of every path, and memory for them |
+//! | `MAX_RECEIPT_BYTES`, 256 KiB | server: memory to parse the receipt |
+//! | `MAX_FRAME_BYTES`, 32 MiB | server: memory for one frame, so also the largest file |
+//! | `MAX_CONTENT_BYTES`, 1 GiB | server: time to decompress and hash the files |
 //! | [`MAX_RECORD_BYTES`], 256 KiB | server: memory to parse the record |
 //! | `cluster::secrets` 8 MiB of SOPS text, aliases expanded | agent: a plan parses SOPS files before anyone approves it |
 //! | `WrongFormat`, `Format1` | another format is never read as this one; `--deployed-bundle` sets format 1 aside |
@@ -146,29 +146,29 @@ use crate::manifest::{keys, lifecycle};
 use crate::text::printable;
 
 /// The `format` field of every bundle header.
-pub const FORMAT: &str = "kix-bundle";
+pub(crate) const FORMAT: &str = "kix-bundle";
 /// The version this kix writes and reads. A reader refuses any other.
-pub const VERSION: u32 = 3;
+pub(crate) const VERSION: u32 = 3;
 /// The file extension `kix bundle` suggests.
 pub const EXTENSION: &str = "kixbundle";
 /// The store name of the package index.
-pub const INDEX_NAME: &str = "kix-packages.json";
+pub(crate) const INDEX_NAME: &str = "kix-packages.json";
 
 /// The largest bundle file kix reads.
 pub const MAX_STORED_BYTES: u64 = 64 * 1024 * 1024;
 /// The largest header, decompressed. A header takes about 100 bytes a file.
-pub const MAX_HEADER_BYTES: u64 = 32 * 1024 * 1024;
+pub(crate) const MAX_HEADER_BYTES: u64 = 32 * 1024 * 1024;
 /// The most files a bundle may hold.
-pub const MAX_FILES: usize = 200_000;
+pub(crate) const MAX_FILES: usize = 200_000;
 /// The most references the header may give over all its files. A build
 /// gives about 3.5 a file.
-pub const MAX_REFERENCES: usize = 8 * MAX_FILES;
+pub(crate) const MAX_REFERENCES: usize = 8 * MAX_FILES;
 /// The largest data frame, decompressed, and so the largest file. The
 /// largest file is `kix-packages.json`, at about 130 bytes for each file it
 /// lists: about 26 MB at [`MAX_FILES`].
-pub const MAX_FRAME_BYTES: u64 = 32 * 1024 * 1024;
+pub(crate) const MAX_FRAME_BYTES: u64 = 32 * 1024 * 1024;
 /// The most bytes the files may add up to, as the header lists them.
-pub const MAX_CONTENT_BYTES: u64 = 1024 * 1024 * 1024;
+pub(crate) const MAX_CONTENT_BYTES: u64 = 1024 * 1024 * 1024;
 /// The largest Activation record. A record lists the build's package
 /// instances, about 2 KB for each Lithus cluster, and parses to about a
 /// hundred times its size at worst.
@@ -176,7 +176,7 @@ pub const MAX_RECORD_BYTES: u64 = 256 * 1024;
 /// The largest receipt in the header, as JSON. A receipt names the build's
 /// source and inputs, a few KB, and parses to about sixteen times its size
 /// at worst.
-pub const MAX_RECEIPT_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_RECEIPT_BYTES: usize = 256 * 1024;
 
 /// The writer starts a new frame before a file that would take a frame past
 /// this size. Larger frames compress better, since files of one kind repeat
@@ -193,9 +193,9 @@ const FOOTER_BYTES: usize = 9;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Header {
-    /// Always [`FORMAT`].
+    /// Always `FORMAT`.
     pub format: String,
-    /// Always [`VERSION`].
+    /// Always `VERSION`.
     pub version: u32,
     /// The kix revision that wrote the bundle, for the record.
     pub kix_rev: String,
@@ -336,7 +336,7 @@ pub enum BundleError {
     Unreachable(String),
     #[error("{} is not a JSON manifest: {}", printable(.path), printable(.message))]
     NotJson { path: String, message: String },
-    /// [`StoreGraph::assemble`] or [`StoreGraph::validate`] refused the
+    /// `StoreGraph::assemble` or `StoreGraph::validate` refused the
     /// build. Their messages are escaped already.
     #[error("{0}")]
     Build(String),
@@ -394,7 +394,7 @@ impl Contents {
     /// Write the bundle. The same contents give the same bytes from the
     /// same kix and libzstd: the order is fixed, and zstd runs on one
     /// thread at its default level. Fails on a file over
-    /// [`MAX_FRAME_BYTES`], naming it.
+    /// `MAX_FRAME_BYTES`, naming it.
     pub fn write(&self, mut out: impl Write) -> io::Result<()> {
         let header = self.header()?;
         if let Some(f) = header.files.iter().find(|f| f.size > MAX_FRAME_BYTES) {

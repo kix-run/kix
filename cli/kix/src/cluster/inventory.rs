@@ -19,7 +19,7 @@ use kube::{
 use tokio::task::JoinSet;
 
 /// The managed-by label value that kix sets on all resources.
-pub const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by=kix";
+pub(crate) const MANAGED_BY_LABEL: &str = "app.kubernetes.io/managed-by=kix";
 
 /// Fully qualified resource name for logging (e.g. "pods" or "deployments.apps").
 fn resource_fqn(ar: &ApiResource) -> String {
@@ -129,7 +129,7 @@ pub enum Attribution {
 }
 
 /// Attribute a swept object to Kix clusters through the record hashes it
-/// names (see [`tenancy::named_hashes`]).
+/// names (see `tenancy::named_hashes`).
 pub fn attribute(obj: &DynamicObject, tenancy: &Tenancy) -> Attribution {
     let mut ours = false;
     let mut others: Vec<String> = Vec::new();
@@ -211,7 +211,7 @@ pub fn scope_sweep(sweep: ManagedSweep, scope: SweepScope<'_>, tenancy: Tenancy)
 /// Split objects into the ones naming one of `hashes` in
 /// `kix.run/activations` (the closures of exactly those records) and the
 /// rest.
-pub fn split_by_records(
+pub(crate) fn split_by_records(
     objects: Vec<DynamicObject>,
     hashes: &HashSet<String>,
 ) -> (Vec<DynamicObject>, Vec<DynamicObject>) {
@@ -319,7 +319,7 @@ pub fn partition_sweep(objects: Vec<DynamicObject>) -> ManagedSweep {
 }
 
 /// Did kix's apply step stamp this object?
-pub fn is_stamped(obj: &DynamicObject) -> bool {
+pub(crate) fn is_stamped(obj: &DynamicObject) -> bool {
     obj.metadata
         .annotations
         .as_ref()
@@ -327,7 +327,7 @@ pub fn is_stamped(obj: &DynamicObject) -> bool {
 }
 
 /// Does a controller own this object?
-pub fn is_owned(obj: &DynamicObject) -> bool {
+pub(crate) fn is_owned(obj: &DynamicObject) -> bool {
     obj.metadata
         .owner_references
         .as_ref()
@@ -344,58 +344,6 @@ fn object_kind(obj: &DynamicObject) -> &str {
 
 fn namespace_of(obj: &DynamicObject) -> String {
     obj.metadata.namespace.clone().unwrap_or_default()
-}
-
-/// Fetch specific resources by kind/name/namespace.
-///
-/// Runs a GET per resource rather than LIST+filter, since we know
-/// exactly what we're looking for.
-pub async fn fetch_matching_resources(
-    client: &Client,
-    discovery: &[(ApiResource, Scope)],
-    manifests: &[ResourceId],
-) -> Result<Vec<DynamicObject>, FetchError> {
-    // Build a lookup: lowercase kind -> (ApiResource, Scope)
-    let ar_by_kind: std::collections::HashMap<String, &(ApiResource, Scope)> = discovery
-        .iter()
-        .map(|pair| (pair.0.kind.to_lowercase(), pair))
-        .collect();
-
-    let mut set = JoinSet::new();
-
-    for rid in manifests {
-        let kind_lower = rid.kind.to_lowercase();
-        let Some(&(ar, scope)) = ar_by_kind.get(&kind_lower) else {
-            tracing::warn!(kind = %rid.kind, "Kubernetes does not recognize this resource kind; skipping it");
-            continue;
-        };
-
-        let api = api_for(client, ar, scope, rid);
-
-        let name = rid.name.clone();
-        let resource_id = rid.display_id();
-        set.spawn(async move {
-            match api.get(&name).await {
-                Ok(obj) => Some(obj),
-                Err(e) => {
-                    tracing::debug!(resource = %resource_id, error = %e, "resource not found on cluster");
-                    None
-                }
-            }
-        });
-    }
-
-    let mut results = Vec::new();
-    while let Some(join_result) = set.join_next().await {
-        match join_result {
-            Ok(Some(obj)) => results.push(obj),
-            Ok(None) => {} // not found, already logged
-            Err(e) => {
-                tracing::warn!(error = %e, "a resource-fetching task stopped unexpectedly; results may be incomplete")
-            }
-        }
-    }
-    Ok(results)
 }
 
 /// An orphan candidate that another Kix cluster's current build still
@@ -427,7 +375,7 @@ impl SharedOrphan {
 /// cluster still deploys, judged from live objects already in hand. Kinds
 /// that [`never_pruned`] protects stay with the prunable ones: the prune
 /// already keeps and reports them.
-pub fn split_shared_orphans(
+pub(crate) fn split_shared_orphans(
     orphans: Vec<ResourceId>,
     live: &[DynamicObject],
     tenancy: &Tenancy,
@@ -477,7 +425,7 @@ fn split_by_lookup<'a>(
 /// A candidate that is gone or whose kind is not served is prunable (the
 /// delete is then a no-op). Any other GET failure is an error: a prune that
 /// cannot read an object cannot tell whether another cluster still uses it.
-pub async fn split_shared_orphans_live(
+pub(crate) async fn split_shared_orphans_live(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
     records: &OpenedRecords,
@@ -523,7 +471,7 @@ pub async fn split_shared_orphans_live(
 }
 
 /// What one parallel LIST pass produced.
-pub struct Listed {
+pub(crate) struct Listed {
     pub objects: Vec<DynamicObject>,
     /// Resource types that answered 403.
     pub forbidden: Vec<String>,
@@ -541,9 +489,9 @@ enum ListOutcome {
 /// polls, rather than in the transport layer, where a permit held inside a
 /// future its owner had parked deadlocked `kix deploy` (see
 /// `cluster::client`). Override with `KIX_SWEEP_CONCURRENCY`.
-pub const DEFAULT_SWEEP_CONCURRENCY: usize = 16;
+pub(crate) const DEFAULT_SWEEP_CONCURRENCY: usize = 16;
 /// Env var for [`DEFAULT_SWEEP_CONCURRENCY`].
-pub const SWEEP_CONCURRENCY_ENV: &str = "KIX_SWEEP_CONCURRENCY";
+pub(crate) const SWEEP_CONCURRENCY_ENV: &str = "KIX_SWEEP_CONCURRENCY";
 
 fn sweep_concurrency() -> usize {
     super::client::env_number(SWEEP_CONCURRENCY_ENV)

@@ -83,7 +83,7 @@ pub(crate) mod allocated {
 
     /// The most bytes this thread held while `f` ran, beyond what it held
     /// when `f` started.
-    pub fn peak_during<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    pub(crate) fn peak_during<T>(f: impl FnOnce() -> T) -> (T, usize) {
         let start = NOW.with(Cell::get);
         PEAK.with(|peak| peak.set(start));
         let out = f();

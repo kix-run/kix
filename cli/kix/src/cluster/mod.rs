@@ -24,10 +24,8 @@ pub mod scheduler;
 /// callers.
 #[cfg(any(test, feature = "test-util"))]
 pub use ops::scripted;
-pub mod secrets;
+pub(crate) mod secrets;
 pub mod stream;
 pub mod tenancy;
 pub mod topology;
 pub mod watchdog;
-
-pub use graph::ResourceGraph;

@@ -22,14 +22,14 @@ use base64::Engine as _;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Credentials {
+pub(crate) struct Credentials {
     pub username: String,
     pub password: String,
 }
 
 /// Where the credential came from, so an error can say what to fix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CredentialSource {
+pub(crate) enum CredentialSource {
     Environment,
     Helper,
     ConfigFile,
@@ -37,7 +37,7 @@ pub enum CredentialSource {
 }
 
 impl CredentialSource {
-    pub fn describe(self) -> &'static str {
+    pub(crate) fn describe(self) -> &'static str {
         match self {
             Self::Environment => "KIX_REGISTRY_USERNAME and KIX_REGISTRY_PASSWORD",
             Self::Helper => "a Docker credential helper",
@@ -77,7 +77,7 @@ struct HelperOutput {
 
 /// Look up credentials for a registry. `key` is the registry's credential key
 /// (`Reference::credential_key`), which differs from the host for Docker Hub.
-pub fn lookup(key: &str) -> (Option<Credentials>, CredentialSource) {
+pub(crate) fn lookup(key: &str) -> (Option<Credentials>, CredentialSource) {
     if let (Ok(username), Ok(password)) = (
         std::env::var("KIX_REGISTRY_USERNAME"),
         std::env::var("KIX_REGISTRY_PASSWORD"),

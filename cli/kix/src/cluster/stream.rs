@@ -111,10 +111,6 @@ impl Verdict {
                 | Verdict::DriftDetected { .. }
         )
     }
-
-    pub fn is_success(&self) -> bool {
-        matches!(self, Verdict::Ready | Verdict::DriftDetected { .. })
-    }
 }
 
 /// A node in the deploy plan, keyed for events.

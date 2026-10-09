@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 /// The most characters of one piece of outside text that [`printable`]
 /// shows.
-pub const MAX_SHOWN_CHARS: usize = 512;
+pub(crate) const MAX_SHOWN_CHARS: usize = 512;
 
 /// `s` with every character that does not show as itself replaced by its
 /// code point, flagged: `cluster-admin⟨U+200B⟩`. Those are control
@@ -13,13 +13,13 @@ pub const MAX_SHOWN_CHARS: usize = 512;
 /// invisible, reorder text (bidirectional controls), or break a line. For
 /// text kix did not write, such as a name from a build made elsewhere, so
 /// two names that differ always look different. Only the first
-/// [`MAX_SHOWN_CHARS`] characters show, and the rest is counted.
+/// `MAX_SHOWN_CHARS` characters show, and the rest is counted.
 pub fn printable(s: &str) -> String {
     printable_up_to(s, MAX_SHOWN_CHARS)
 }
 
 /// [`printable`] showing up to `max_chars` characters.
-pub fn printable_up_to(s: &str, max_chars: usize) -> String {
+pub(crate) fn printable_up_to(s: &str, max_chars: usize) -> String {
     let (shown, rest) = match s.char_indices().nth(max_chars) {
         Some((i, _)) => s.split_at(i),
         None => (s, ""),
@@ -41,12 +41,13 @@ pub fn printable_up_to(s: &str, max_chars: usize) -> String {
 /// Whether [`printable`] shows `c` as its code point: a control character
 /// (General_Category Cc), a format character (Cf, which holds every
 /// Bidi_Control character), or a line or paragraph separator (Zl, Zp).
-pub fn is_hidden(c: char) -> bool {
+pub(crate) fn is_hidden(c: char) -> bool {
     c.is_control() || is_format(c) || matches!(c, '\u{2028}' | '\u{2029}')
 }
 
 /// Unicode's Bidi_Control characters.
-pub fn is_bidi_control(c: char) -> bool {
+#[cfg(test)]
+fn is_bidi_control(c: char) -> bool {
     matches!(
         c,
         '\u{61c}' | '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'

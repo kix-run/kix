@@ -89,7 +89,7 @@ impl DefaultValue {
 /// An empty object is not included. `emptyDir: {}` and many custom
 /// resource fields mean something different from an absent field, and the
 /// server keeps such an object, so the live side has it too.
-pub fn equivalent_to_unset(path: &str, value: &Value) -> bool {
+pub(crate) fn equivalent_to_unset(path: &str, value: &Value) -> bool {
     match value {
         Value::Null => true,
         Value::Array(items) if items.is_empty() => true,
@@ -138,13 +138,13 @@ const QUANTITY_FIELDS: &[&str] = &["sizeLimit"];
 
 /// Whether the member `key` of the object named `parent` holds a resource
 /// quantity.
-pub fn is_quantity_field(parent: &str, key: &str) -> bool {
+pub(crate) fn is_quantity_field(parent: &str, key: &str) -> bool {
     QUANTITY_MAPS.contains(&parent) || QUANTITY_FIELDS.contains(&key)
 }
 
 /// Whether two values are the same resource quantity, such as `1` and `"1"`,
 /// or `"500m"` and `0.5`. False when either does not parse.
-pub fn same_quantity(a: &Value, b: &Value) -> bool {
+pub(crate) fn same_quantity(a: &Value, b: &Value) -> bool {
     match (quantity_nanos(a), quantity_nanos(b)) {
         (Some(x), Some(y)) => x == y,
         _ => false,

@@ -83,11 +83,6 @@ pub fn manifests_to_yaml(manifests: &[serde_json::Value]) -> Result<String, serd
     Ok(output)
 }
 
-/// Pretty-print manifests as a JSON array.
-pub fn manifests_to_json(manifests: &[serde_json::Value]) -> String {
-    serde_json::to_string_pretty(manifests).unwrap_or_else(|_| "[]".to_string())
-}
-
 /// Load YAML files from a directory, returning parsed manifests with their ResourceIds.
 ///
 /// Handles both flat (`{ns}--{name}-{kind}.yaml`) and nested (`{ns}/{name}-{kind}.yaml`) layouts.
@@ -214,15 +209,6 @@ mod tests {
         );
         assert!(yaml.contains("kind: Service"));
         assert!(yaml.contains("kind: Deployment"));
-    }
-
-    #[test]
-    fn manifests_to_json_output() {
-        let manifests = vec![json!({"kind": "Service"}), json!({"kind": "Deployment"})];
-        let output = manifests_to_json(&manifests);
-        let parsed: Vec<serde_json::Value> = serde_json::from_str(&output).unwrap();
-        assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[0]["kind"], "Service");
     }
 
     #[test]

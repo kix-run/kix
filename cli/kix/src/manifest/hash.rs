@@ -15,7 +15,7 @@ use crate::manifest::keys;
 /// Strips server-injected metadata, status, kix-internal annotations,
 /// kubectl bookkeeping annotations, and null values. Sorts all object
 /// keys for canonical serialization.
-pub fn normalize_for_content_hash(manifest: &Value) -> Value {
+pub(crate) fn normalize_for_content_hash(manifest: &Value) -> Value {
     let mut v = manifest.clone();
     strip_server_metadata(&mut v);
     strip_status(&mut v);
@@ -26,7 +26,7 @@ pub fn normalize_for_content_hash(manifest: &Value) -> Value {
 }
 
 /// Blake3 hash of the canonical JSON of a normalized manifest.
-pub fn content_hash(manifest: &Value) -> String {
+pub(crate) fn content_hash(manifest: &Value) -> String {
     let normalized = normalize_for_content_hash(manifest);
     let canonical = serde_json::to_string(&normalized).unwrap_or_default();
     blake3::hash(canonical.as_bytes()).to_hex().to_string()
@@ -111,7 +111,7 @@ fn strip_null_values(v: &mut Value) {
 }
 
 /// Recursively sort all object keys by converting to BTreeMap.
-pub fn sort_keys(v: &Value) -> Value {
+pub(crate) fn sort_keys(v: &Value) -> Value {
     match v {
         Value::Object(map) => {
             let sorted: BTreeMap<String, Value> =
@@ -124,7 +124,7 @@ pub fn sort_keys(v: &Value) -> Value {
 }
 
 /// Blake3 hash of a normalized Value (already sorted/stripped).
-pub fn hash_value(v: &Value) -> String {
+pub(crate) fn hash_value(v: &Value) -> String {
     let canonical = serde_json::to_string(v).unwrap_or_default();
     blake3::hash(canonical.as_bytes()).to_hex().to_string()
 }

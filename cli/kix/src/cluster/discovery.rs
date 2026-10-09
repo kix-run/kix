@@ -17,7 +17,7 @@ use kube::{
 /// just after new CRDs were Established has got a plain-text
 /// `404 page not found` for a listed group version, and a rerun of the
 /// same deploy got past that point.
-pub const DISCOVERY_SETTLE: Duration = Duration::from_secs(30);
+pub(crate) const DISCOVERY_SETTLE: Duration = Duration::from_secs(30);
 const DISCOVERY_BACKOFF_START: Duration = Duration::from_millis(250);
 const DISCOVERY_BACKOFF_MAX: Duration = Duration::from_secs(2);
 
@@ -28,7 +28,7 @@ const DISCOVERY_BACKOFF_MAX: Duration = Duration::from_secs(2);
 ///
 /// A listed group version that answers 404 makes the whole walk run again,
 /// with backoff, until every listed group version answers or
-/// [`DISCOVERY_SETTLE`] has passed ([`FetchError::DiscoveryUnsettled`]).
+/// `DISCOVERY_SETTLE` has passed ([`FetchError::DiscoveryUnsettled`]).
 /// The walk is repeated from `/apis` because a group that is going away
 /// stops being listed, and one that is arriving starts being served. Any
 /// other failure is returned at once: the transport has already retried it.
@@ -79,7 +79,7 @@ async fn settled_discovery(
 /// One discovery walk, for a caller that retries on its own: a listed group
 /// version that answers 404 is left out, named in `missing` and logged at
 /// debug, with no wait. Any other failure is returned.
-pub async fn discover_resources_once(client: &Client) -> Result<DiscoveryPass, FetchError> {
+pub(crate) async fn discover_resources_once(client: &Client) -> Result<DiscoveryPass, FetchError> {
     let pass = discovery_pass(client, None).await?;
     if !pass.missing.is_empty() {
         tracing::debug!(missing = ?pass.missing, "group versions answered 404");
@@ -91,7 +91,7 @@ pub async fn discover_resources_once(client: &Client) -> Result<DiscoveryPass, F
 /// version that answered 404; their resources are absent from `resources`,
 /// and a kind served there may appear at another version of its group.
 #[derive(Debug, Default)]
-pub struct DiscoveryPass {
+pub(crate) struct DiscoveryPass {
     pub resources: Vec<(ApiResource, Scope)>,
     pub missing: Vec<String>,
 }
@@ -186,7 +186,10 @@ async fn walk_group(
 /// answers 404 is left out rather than failing the group, and named in
 /// `missing`, so the caller gets whatever the group serves now and can ask
 /// again.
-pub async fn discover_group(client: &Client, group: &str) -> Result<DiscoveryPass, FetchError> {
+pub(crate) async fn discover_group(
+    client: &Client,
+    group: &str,
+) -> Result<DiscoveryPass, FetchError> {
     let mut pass = DiscoveryPass::default();
     if group.is_empty() {
         walk_core(client, &mut pass).await?;
@@ -222,7 +225,7 @@ pub async fn discover_group(client: &Client, group: &str) -> Result<DiscoveryPas
 /// next version that answered. The cached entry then wins, and the walk
 /// only adds (group, kind) keys the cache lacks, so a momentary 404 does not
 /// move a kind to an older version's URL.
-pub fn merge_discovery(
+pub(crate) fn merge_discovery(
     existing: &[(ApiResource, Scope)],
     fresh: DiscoveryPass,
 ) -> Vec<(ApiResource, Scope)> {
@@ -242,7 +245,7 @@ pub fn merge_discovery(
 /// `apply::apply_resource` refuses to create such an
 /// object, but Kix CLIs before that check applied it there, and a prune of
 /// an old build reads and deletes it there.
-pub fn api_for(
+pub(crate) fn api_for(
     client: &Client,
     ar: &ApiResource,
     scope: &Scope,

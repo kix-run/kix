@@ -106,7 +106,7 @@ impl Tenancy {
     }
 
     /// Whether `hash` is the identity hash of a record this tenancy read.
-    pub fn knows(&self, hash: &str) -> bool {
+    pub(crate) fn knows(&self, hash: &str) -> bool {
         self.own.contains(hash) || self.others.contains_key(hash)
     }
 
@@ -144,7 +144,7 @@ impl Tenancy {
 /// `kix.run/activations`, plus its own `kix.run/identity-hash`, which for an
 /// Activation record is the key [`Tenancy`] is indexed by. A record in its
 /// first wave is not yet stamped with its own hash in `kix.run/activations`.
-pub fn named_hashes(obj: &DynamicObject) -> impl Iterator<Item = &str> {
+pub(crate) fn named_hashes(obj: &DynamicObject) -> impl Iterator<Item = &str> {
     let annotations = obj.metadata.annotations.as_ref();
     let activations = annotations
         .and_then(|a| keys::get_meta(a, keys::ACTIVATIONS))

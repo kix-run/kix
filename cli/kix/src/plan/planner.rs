@@ -299,7 +299,7 @@ pub struct Planned {
 }
 
 impl Planned {
-    /// [`crate::build_source::Build::sops_sources`] of the new build.
+    /// `crate::build_source::Build::sops_sources` of the new build.
     pub fn sops_sources(&mut self, placeholders: bool) -> Result<SopsSources, String> {
         self.build.sops_sources(placeholders)
     }
@@ -359,7 +359,7 @@ impl Planned {
     }
 
     /// Replace the package diff's entries with what the apiserver answered
-    /// in a dry run ([`Overlay`]), and return the drift the deploy reverts.
+    /// in a dry run (`Overlay`), and return the drift the deploy reverts.
     /// `None` when the deployed build's manifests are not known (the old
     /// side was rebuilt from the live objects), so a commit's change and
     /// drift look the same; a first deploy has no deployed build and every

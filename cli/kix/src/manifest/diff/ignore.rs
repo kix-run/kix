@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 /// Supports:
 /// - Exact paths: `$.spec.template.metadata.annotations`
 /// - Suffix wildcards: `*.annotations` matches any path ending in `.annotations`
-pub fn path_ignored(path: &str, ignore_paths: &BTreeSet<String>) -> bool {
+pub(crate) fn path_ignored(path: &str, ignore_paths: &BTreeSet<String>) -> bool {
     if ignore_paths.is_empty() {
         return false;
     }

@@ -62,8 +62,9 @@ pub enum PruneError {
 /// Deletes orphans of one Kix cluster. See the module docs.
 pub struct PruneGuard {
     client: Client,
-    /// What [`Records::open`] returned. When the cluster serves no
-    /// Activation kind, no other cluster has records.
+    /// What [`Records::open`](super::activation::Records::open) returned.
+    /// When the cluster serves no Activation kind, no other cluster has
+    /// records.
     records: OpenedRecords,
     cluster: String,
     /// The last records read. Reread when an object names a hash it lacks,

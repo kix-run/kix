@@ -59,7 +59,7 @@ pub fn comparable(obj: &Value) -> Value {
 
 /// What applying the build changes on the live object: `live` compared with
 /// the dry-run `result`, with every secret value hidden.
-pub fn field_changes(live: &Value, result: &Value) -> Vec<Difference> {
+pub(crate) fn field_changes(live: &Value, result: &Value) -> Vec<Difference> {
     let config = DiffConfig::new("live", "planned");
     let mut diffs = structural_diff(&comparable(live), &comparable(result), "$", &config);
     let is_secret = types::is_secret(live) || types::is_secret(result);
@@ -76,7 +76,7 @@ pub fn field_changes(live: &Value, result: &Value) -> Vec<Difference> {
 }
 
 /// What the server answers change about the package diff.
-pub struct Overlay<'a> {
+pub(crate) struct Overlay<'a> {
     pub new_graph: &'a StoreGraph,
     /// The deployed build's manifests, when the deployed build is known.
     /// Without them no field change is labelled and drift is not reported.
@@ -87,7 +87,11 @@ impl Overlay<'_> {
     /// Replace each answered object's entry in `diff` with the server's
     /// answer, label every field change when the deployed build is known,
     /// and return the drift the deploy reverts.
-    pub fn apply(&self, diff: &mut PackageDiff, answers: &[DryRunAnswer]) -> Vec<DriftChange> {
+    pub(crate) fn apply(
+        &self,
+        diff: &mut PackageDiff,
+        answers: &[DryRunAnswer],
+    ) -> Vec<DriftChange> {
         let membership = membership(self.new_graph);
         let new_by_rid: HashMap<ResourceId, &Value> = self
             .new_graph

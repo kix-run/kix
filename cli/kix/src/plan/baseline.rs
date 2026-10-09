@@ -658,7 +658,7 @@ fn short(hash: &str) -> &str {
 }
 
 /// The build an Activation record names, stamped: from the new `build`
-/// ([`Build::deployed_build`]) by its identity hash, else from `built_via`
+/// (`Build::deployed_build`) by its identity hash, else from `built_via`
 /// or the local activation cache. `Ok(None)` when this machine has none of
 /// them.
 ///

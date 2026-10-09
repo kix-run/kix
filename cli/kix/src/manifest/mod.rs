@@ -7,6 +7,3 @@ pub mod lifecycle;
 pub mod serialize;
 pub mod types;
 pub mod workload;
-
-pub use types::CLUSTER_SCOPED;
-pub use types::ResourceId;

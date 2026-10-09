@@ -24,13 +24,13 @@ use thiserror::Error;
 /// its progress deadline is "failed" too) that would be an outage, not a
 /// retry. The Nix side refuses the annotation on other kinds as well
 /// (cross-resource check 16).
-pub fn wants_rerun(manifest: &Value) -> bool {
+pub(crate) fn wants_rerun(manifest: &Value) -> bool {
     manifest.get("kind").and_then(Value::as_str) == Some("Job")
         && manifest
             .pointer("/metadata/annotations")
             .and_then(|a| a.get(keys::RERUN))
             .and_then(Value::as_str)
-            == Some("on-change")
+            == Some(keys::RERUN_ON_CHANGE)
 }
 
 /// Field manager name for server-side apply.
@@ -117,7 +117,7 @@ pub enum ApplyError {
 /// manifest names no namespace? The apiserver would store such an object in
 /// the requester's namespace, where no later comparison with the build finds
 /// it, so `apply_resource` refuses it.
-pub fn is_namespaceless(scope: &Scope, rid: &ResourceId) -> bool {
+pub(crate) fn is_namespaceless(scope: &Scope, rid: &ResourceId) -> bool {
     matches!(scope, Scope::Namespaced) && rid.namespace == CLUSTER_SCOPED
 }
 
@@ -141,11 +141,9 @@ pub fn namespaceless<'a>(
 
 /// Result of applying a single resource.
 #[derive(Debug, Clone)]
-pub struct ApplyResult {
+pub(crate) struct ApplyResult {
     /// What action was taken.
     pub action: ApplyAction,
-    /// The resource that was acted upon.
-    pub resource_id: ResourceId,
     /// What the apiserver answered to a dry-run apply. `None` for a real
     /// apply, and for a dry run that never reached the apiserver.
     pub preview: Option<Box<ApplyPreview>>,
@@ -208,7 +206,10 @@ fn manifest_identity_hash(manifest: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<ChangeAction> {
+pub(crate) fn detect_changes(
+    new_manifests: &[Value],
+    old_manifests: &[Value],
+) -> Vec<ChangeAction> {
     // Index old manifests by K8s identity (kind/ns/name) → identity-hash.
     // The previous deploy's record stays in this index so an unchanged
     // build (same record name, same hash) still comes out as Skip and the
@@ -298,7 +299,7 @@ pub fn detect_changes(new_manifests: &[Value], old_manifests: &[Value]) -> Vec<C
 ///
 /// Every input is a compiler output. This function does not read live cluster
 /// state when deciding how to combine closures.
-pub fn fold_failed_closures(
+pub(crate) fn fold_failed_closures(
     actions: Vec<ChangeAction>,
     new_manifests: &[Value],
     failed_closures: &[Vec<Value>],
@@ -393,7 +394,7 @@ pub fn fold_failed_closures(
 /// with them. What they add is the objects the new build no longer declares,
 /// under the same rules [`detect_changes`] uses: stamped, prunable, and not
 /// a record.
-pub fn fold_kept_closures(
+pub(crate) fn fold_kept_closures(
     mut actions: Vec<ChangeAction>,
     new_manifests: &[Value],
     kept_closures: &[Vec<Value>],
@@ -434,7 +435,7 @@ pub fn fold_kept_closures(
 /// A deploy that keeps its orphans records each build this is true for, so
 /// the list on the record names only builds that still have something to
 /// delete.
-pub fn leaves_orphans(closure: &[Value], new_manifests: &[Value]) -> bool {
+pub(crate) fn leaves_orphans(closure: &[Value], new_manifests: &[Value]) -> bool {
     let id_of = |m: &Value| {
         let rid = ResourceId::from_value(m);
         format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
@@ -454,7 +455,7 @@ pub fn leaves_orphans(closure: &[Value], new_manifests: &[Value]) -> bool {
 /// `run_deploy` needs this so `prune_order` can topologically sort orphans
 /// that exist in no current closure, and the plan display needs it so those
 /// orphans have a manifest to describe.
-pub fn baseline_manifests(active: &[Value], failed: &[Vec<Value>]) -> Vec<Value> {
+pub(crate) fn baseline_manifests(active: &[Value], failed: &[Vec<Value>]) -> Vec<Value> {
     let id_of = |m: &Value| {
         let rid = ResourceId::from_value(m);
         format!("{}/{}/{}", rid.kind, rid.namespace, rid.name)
@@ -484,7 +485,7 @@ pub fn baseline_manifests(active: &[Value], failed: &[Vec<Value>]) -> Vec<Value>
 ///
 /// This replaces `detect_changes` for the operator, where the cluster
 /// is the source of truth for "old state" rather than a local manifest set.
-pub fn detect_changes_live(
+pub(crate) fn detect_changes_live(
     desired_manifests: &[Value],
     live_resources: &[DynamicObject],
 ) -> Vec<ChangeAction> {
@@ -725,11 +726,7 @@ pub(crate) async fn apply_resource(
             result: serde_json::to_value(&echo).unwrap_or(Value::Null),
         })
     });
-    Ok(ApplyResult {
-        action,
-        resource_id: rid,
-        preview,
-    })
+    Ok(ApplyResult { action, preview })
 }
 
 /// Send the SSA patch and classify a failure: 409 conflicts become

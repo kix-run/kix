@@ -11,13 +11,13 @@
 //! This module is the whole of it. The rest of the codebase reaches it
 //! through four one-line hooks:
 //!
-//! 1. [`fallback`], from `keys::get` and `keys::get_meta`. A live object
+//! 1. `fallback`, from `keys::get` and `keys::get_meta`. A live object
 //!    stamped by an older Kix still parses.
 //! 2. [`upgrade_manifest`], from stamping a loaded build and from the live
 //!    reconstruction in `kix deploy`. A build loaded from an old activation,
 //!    or a set of live objects projected back to manifests, is brought to
 //!    the current domain before the planner ever sees it.
-//! 3. [`bookkeeping_null_outs`], from the two merge patches in
+//! 3. `bookkeeping_null_outs`, from the two merge patches in
 //!    `cluster::apply`. Server-side apply drops the build-time keys on its
 //!    own because the `kix` field manager owns them; these two are written
 //!    by patch and would otherwise stay on the object forever.
@@ -44,7 +44,7 @@ use serde_json::{Map, Value};
 
 use crate::manifest::keys;
 
-pub mod kube_ops;
+pub(crate) mod kube_ops;
 pub mod migrate;
 
 pub use kube_ops::KubeMigrationOps;
@@ -63,7 +63,7 @@ fn under(key: &str, domain: &str) -> bool {
 }
 
 /// Is this a Kix key under a retired domain?
-pub fn is_legacy_key(key: &str) -> bool {
+pub(crate) fn is_legacy_key(key: &str) -> bool {
     is_key_under_any(key, DOMAINS)
 }
 
@@ -77,7 +77,7 @@ fn is_key_under_any(key: &str, domains: &[&str]) -> bool {
 ///
 /// `key` is a current-domain constant. Returns nothing for a key that is
 /// not Kix's own.
-pub fn legacy_spellings(key: &str) -> Vec<String> {
+pub(crate) fn legacy_spellings(key: &str) -> Vec<String> {
     let Some(name) = key.strip_prefix(keys::PREFIX) else {
         return Vec::new();
     };
@@ -123,7 +123,9 @@ where
 ///
 /// The skipped path must never call this. There the resource was not
 /// re-applied and its retired keys are the only ones it has.
-pub fn retired_keys(annotations: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+pub(crate) fn retired_keys(
+    annotations: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
     annotations
         .keys()
         .filter(|k| is_legacy_key(k))
@@ -135,7 +137,7 @@ pub fn retired_keys(annotations: &std::collections::BTreeMap<String, String>) ->
 ///
 /// The hook in `keys::get` and `keys::get_meta`. `lookup` reads one key out
 /// of whatever map the caller holds.
-pub fn fallback<'a, F>(key: &str, lookup: F) -> Option<&'a str>
+pub(crate) fn fallback<'a, F>(key: &str, lookup: F) -> Option<&'a str>
 where
     F: Fn(&str) -> Option<&'a str>,
 {
@@ -275,7 +277,7 @@ fn upgrade_map(map: &mut Map<String, Value>, domains: &[&str]) {
 /// applied and `applied-hash` is not rewritten, that would blind
 /// drift detection on the resource for good, because an unchanged resource is
 /// never applied again.
-pub fn bookkeeping_null_outs(writing: &[&str]) -> Vec<String> {
+pub(crate) fn bookkeeping_null_outs(writing: &[&str]) -> Vec<String> {
     writing.iter().flat_map(|k| legacy_spellings(k)).collect()
 }
 

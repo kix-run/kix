@@ -13,8 +13,8 @@ use super::objects::Unshown;
 use super::{PlanError, Planner};
 use crate::eval::bundle::Bundle;
 use crate::eval::stamp::stamp_annotations;
+use crate::eval::store_graph::{PackageNode, ResourceNode};
 use crate::eval::store_graph::{StoreGraph, store_hash};
-use crate::eval::{PackageNode, ResourceNode};
 use crate::manifest::types::{self, ResourceId};
 use crate::manifest::{keys, lifecycle};
 
@@ -22,12 +22,12 @@ const FIXTURE: &[u8] = include_bytes!("../../tests/fixtures/bundles/kix-enterpri
 
 const NS: &str = "kix-enterprise-test-data";
 
-pub fn build() -> StoreGraph {
+pub(crate) fn build() -> StoreGraph {
     Bundle::read(std::io::Cursor::new(FIXTURE)).unwrap().1
 }
 
 /// The planning flags `extra` sets, as `kix deploy` parses them.
-pub fn flags(extra: &[&str]) -> PlanFlags {
+pub(crate) fn flags(extra: &[&str]) -> PlanFlags {
     let mut flags = PlanFlags {
         prune: false,
         prune_mode: None,
@@ -56,7 +56,7 @@ pub fn flags(extra: &[&str]) -> PlanFlags {
 }
 
 /// The baseline of a cluster that runs `old`, or nothing.
-pub fn deployed(old: Option<&StoreGraph>) -> Baseline {
+pub(crate) fn deployed(old: Option<&StoreGraph>) -> Baseline {
     match old {
         Some(old) => {
             let (graph, manifests) = stamped(old);
@@ -72,7 +72,7 @@ pub fn deployed(old: Option<&StoreGraph>) -> Baseline {
 
 /// [`Planner::plan`] for a deploy of `new` over `baseline` with `flags`,
 /// before the plan reads the cluster.
-pub fn plan(
+pub(crate) fn plan(
     baseline: &Baseline,
     new: &StoreGraph,
     flags: PlanFlags,
@@ -82,7 +82,7 @@ pub fn plan(
     futures::executor::block_on(planner.plan(&new_graph, &new.cluster_name, baseline, None))
 }
 
-pub fn stamped(graph: &StoreGraph) -> (StoreGraph, Vec<Value>) {
+pub(crate) fn stamped(graph: &StoreGraph) -> (StoreGraph, Vec<Value>) {
     let mut graph = graph.clone();
     stamp_annotations(&mut graph);
     let manifests = graph
@@ -119,7 +119,7 @@ fn add(graph: &mut StoreGraph, path: &Path, manifest: Value) {
     );
 }
 
-pub fn package_instance(name: &str, instance: Option<&str>) -> Value {
+pub(crate) fn package_instance(name: &str, instance: Option<&str>) -> Value {
     let mut spec = json!({"namespaceName": NS});
     if let Some(instance) = instance {
         spec["instanceName"] = json!(instance);
@@ -144,7 +144,12 @@ fn cluster_role_binding(name: &str) -> Value {
 
 /// Add a package that the graph names `instance` in [`NS`], made from
 /// `pi` and holding one ClusterRoleBinding, before every other package.
-pub fn add_package(graph: &mut StoreGraph, seed: &str, pi: Value, instance: &str) -> ResourceId {
+pub(crate) fn add_package(
+    graph: &mut StoreGraph,
+    seed: &str,
+    pi: Value,
+    instance: &str,
+) -> ResourceId {
     let pi_path = path(&format!("{seed}p"), "PackageInstance-pi");
     let crb = cluster_role_binding(&format!("{seed}-admin"));
     let crb_path = path(&format!("{seed}c"), "ClusterRoleBinding-admin");

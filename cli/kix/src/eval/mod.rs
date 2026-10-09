@@ -6,7 +6,7 @@
 //!
 //! # Backend selection
 //!
-//! The `NixBackend` trait in [`evaluator`] abstracts over Nix evaluation.
+//! The `NixBackend` trait in `evaluator` abstracts over Nix evaluation.
 //! Three implementations exist:
 //!
 //! - [`cli_backend::CliNixBackend`] shells out to `nix` CLI commands.
@@ -22,25 +22,24 @@
 
 pub(crate) mod build;
 pub mod bundle;
-pub mod cache;
+pub(crate) mod cache;
 pub mod cli_backend;
 pub mod error;
-pub mod evaluator;
-pub mod manifest_json;
+pub(crate) mod evaluator;
+pub(crate) mod manifest_json;
 #[cfg(test)]
 mod mock;
 pub mod stamp;
 pub mod store;
 pub mod store_graph;
 pub mod store_path;
-pub mod value;
 
 pub use cli_backend::{CliNixBackend, cluster_name_command, eval_cluster_name};
-pub use error::KixEvalError;
+pub(crate) use error::KixEvalError;
 pub use evaluator::{
     ClusterOutput, ClusterPackageInfo, InstanceInfo, KixEvaluator, NixBackend, PackageInfo,
 };
-pub use store_graph::{CrossDep, KixPackageIndex, PackageNode, ResourceNode, StoreGraph};
+pub(crate) use store_graph::PackageNode;
 
 /// Nix FFI backend available only when built with Nix C libraries.
 /// Experimental: not currently used by the CLI.

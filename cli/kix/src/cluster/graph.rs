@@ -34,10 +34,6 @@ pub struct ResourceNode {
 #[derive(Debug)]
 pub struct ResourceGraph {
     pub graph: DiGraph<ResourceNode, ()>,
-    /// Map from ResourceId to node index for fast lookup.
-    id_to_node: HashMap<ResourceId, NodeIndex>,
-    /// Map from identity hash to node index (used during construction for edge resolution).
-    _hash_to_node: HashMap<String, NodeIndex>,
 }
 
 impl ResourceGraph {
@@ -114,16 +110,7 @@ impl ResourceGraph {
             "dependency graph built"
         );
 
-        Ok(ResourceGraph {
-            graph,
-            id_to_node,
-            _hash_to_node: hash_to_node,
-        })
-    }
-
-    /// Get all nodes (resources) in the graph.
-    pub fn nodes(&self) -> impl Iterator<Item = &ResourceNode> {
-        self.graph.node_weights()
+        Ok(ResourceGraph { graph })
     }
 
     /// Get the number of resources in the graph.
@@ -194,40 +181,6 @@ impl ResourceGraph {
             }
         }
         ordered
-    }
-
-    /// Get the direct dependencies of a resource.
-    pub fn dependencies(&self, id: &ResourceId) -> Vec<&ResourceNode> {
-        if let Some(&idx) = self.id_to_node.get(id) {
-            self.graph
-                .neighbors_directed(idx, petgraph::Direction::Outgoing)
-                .map(|dep_idx| &self.graph[dep_idx])
-                .collect()
-        } else {
-            vec![]
-        }
-    }
-
-    /// Get the resources that depend on a given resource.
-    pub fn dependents(&self, id: &ResourceId) -> Vec<&ResourceNode> {
-        if let Some(&idx) = self.id_to_node.get(id) {
-            self.graph
-                .neighbors_directed(idx, petgraph::Direction::Incoming)
-                .map(|dep_idx| &self.graph[dep_idx])
-                .collect()
-        } else {
-            vec![]
-        }
-    }
-
-    /// Get a topological ordering of all nodes (dependencies before dependents).
-    pub fn topological_order(&self) -> Vec<&ResourceNode> {
-        petgraph::algo::toposort(&self.graph, None)
-            .expect("cycle check already passed")
-            .into_iter()
-            .rev() // toposort returns reverse order for our edge direction
-            .map(|idx| &self.graph[idx])
-            .collect()
     }
 
     /// Render the graph as a DOT string for Graphviz.
@@ -401,6 +354,16 @@ mod tests {
     use crate::manifest::types::CLUSTER_SCOPED;
     use serde_json::json;
 
+    /// The nodes `id` has an edge to: what it depends on.
+    fn dependencies<'a>(graph: &'a ResourceGraph, id: &ResourceId) -> Vec<&'a ResourceNode> {
+        let dag = &graph.graph;
+        dag.node_indices()
+            .filter(|&idx| dag[idx].id == *id)
+            .flat_map(|idx| dag.neighbors_directed(idx, petgraph::Direction::Outgoing))
+            .map(|dep| &dag[dep])
+            .collect()
+    }
+
     fn manifest(kind: &str, name: &str, ns: &str, id_hash: &str, deps: &str) -> serde_json::Value {
         let mut annotations = serde_json::Map::new();
         annotations.insert(keys::IDENTITY_HASH.into(), json!(id_hash));
@@ -440,7 +403,7 @@ mod tests {
             namespace: "default".into(),
             name: "my-app".into(),
         };
-        let deps = graph.dependencies(&deploy_id);
+        let deps = dependencies(&graph, &deploy_id);
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].id.name, "my-sa");
     }
@@ -509,7 +472,7 @@ mod tests {
             namespace: "ns-b".into(),
             name: "consumer".into(),
         };
-        let deps = graph.dependencies(&consumer_id);
+        let deps = dependencies(&graph, &consumer_id);
         let dep_names: Vec<&str> = deps.iter().map(|n| n.id.name.as_str()).collect();
 
         assert!(
@@ -545,7 +508,7 @@ mod tests {
             namespace: "ns-a".into(),
             name: "dep".into(),
         };
-        let deps = graph.dependencies(&dep_id);
+        let deps = dependencies(&graph, &dep_id);
 
         // Deployment depends only on ConfigMap; no PI edge is added.
         assert_eq!(deps.len(), 1);
@@ -577,7 +540,7 @@ mod tests {
             namespace: "ns-b".into(),
             name: "consumer".into(),
         };
-        let deps = graph.dependencies(&consumer_id);
+        let deps = dependencies(&graph, &consumer_id);
         let pi_a_count = deps.iter().filter(|n| n.id.name == "pkg-a").count();
         assert_eq!(pi_a_count, 1, "PI edge should not be duplicated");
     }
@@ -600,28 +563,9 @@ mod tests {
             namespace: CLUSTER_SCOPED.into(),
             name: "root".into(),
         };
-        let deps = graph.dependencies(&act_id);
+        let deps = dependencies(&graph, &act_id);
         // Only the direct edge to controller remains.
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].id.name, "controller");
-    }
-
-    #[test]
-    fn topological_order() {
-        let ns = manifest("Namespace", "default", CLUSTER_SCOPED, "hash_ns", "");
-        let sa = manifest("ServiceAccount", "my-sa", "default", "hash_sa", "hash_ns");
-        let deploy = manifest("Deployment", "my-app", "default", "hash_deploy", "hash_sa");
-
-        let graph = ResourceGraph::from_manifests(&[ns, sa, deploy]).unwrap();
-        let order = graph.topological_order();
-        assert_eq!(order.len(), 3);
-
-        let names: Vec<&str> = order.iter().map(|n| n.id.name.as_str()).collect();
-        // Namespace must come before SA, SA before Deployment
-        let ns_pos = names.iter().position(|&n| n == "default").unwrap();
-        let sa_pos = names.iter().position(|&n| n == "my-sa").unwrap();
-        let deploy_pos = names.iter().position(|&n| n == "my-app").unwrap();
-        assert!(ns_pos < sa_pos);
-        assert!(sa_pos < deploy_pos);
     }
 }

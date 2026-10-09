@@ -31,7 +31,7 @@ impl Default for CliNixBackend {
 }
 
 impl CliNixBackend {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             input_overrides: Vec::new(),
         }

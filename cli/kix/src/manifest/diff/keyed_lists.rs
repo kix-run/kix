@@ -7,13 +7,13 @@ use indexmap::IndexMap;
 use serde_json::Value;
 
 /// A pair of keyed list indices (A-side, B-side) for matched comparison.
-pub type KeyedListPair<'a> = (IndexMap<String, &'a Value>, IndexMap<String, &'a Value>);
+pub(crate) type KeyedListPair<'a> = (IndexMap<String, &'a Value>, IndexMap<String, &'a Value>);
 
 /// Extract a match key from a list item based on the parent field name.
 ///
 /// Returns `None` if the parent field is not a known keyed list type,
 /// or if the item is not an object.
-pub fn extract_key(parent_field: &str, item: &Value) -> Option<String> {
+pub(crate) fn extract_key(parent_field: &str, item: &Value) -> Option<String> {
     let obj = item.as_object()?;
     match parent_field {
         "containers" | "initContainers" => obj
@@ -73,7 +73,7 @@ pub fn extract_key(parent_field: &str, item: &Value) -> Option<String> {
 }
 
 /// Returns true if this parent field name supports keyed-list matching.
-pub fn is_keyed_field(parent_field: &str) -> bool {
+pub(crate) fn is_keyed_field(parent_field: &str) -> bool {
     matches!(
         parent_field,
         "containers"
@@ -98,7 +98,7 @@ pub fn is_keyed_field(parent_field: &str) -> bool {
 /// For ports: if any item in either list lacks a `name`, ALL items use
 /// the `containerPort:protocol` fallback key. This prevents mismatches
 /// when one side has a named port and the other doesn't.
-pub fn try_key_lists<'a>(
+pub(crate) fn try_key_lists<'a>(
     parent_field: &str,
     a: &'a [Value],
     b: &'a [Value],
@@ -193,7 +193,7 @@ fn extract_key_inner(field: &str, item: &Value) -> Option<String> {
 ///
 /// e.g. `$.spec.containers[nginx].ports` -> `ports`
 /// e.g. `$.spec.volumes` -> `volumes`
-pub fn path_leaf(path: &str) -> &str {
+pub(crate) fn path_leaf(path: &str) -> &str {
     let part = match path.rsplit_once('.') {
         Some((_, leaf)) => leaf,
         None => path,

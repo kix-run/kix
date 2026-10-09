@@ -4,11 +4,10 @@
 //! and path-based ignore patterns.
 
 pub mod display;
-pub mod engine;
-pub mod equivalence;
-pub mod ignore;
-pub mod keyed_lists;
-pub mod rename;
+pub(crate) mod engine;
+pub(crate) mod equivalence;
+pub(crate) mod ignore;
+pub(crate) mod keyed_lists;
 
 use std::collections::BTreeSet;
 
@@ -41,7 +40,7 @@ pub struct Difference {
 }
 
 impl Difference {
-    pub fn missing_in_b(path: String, a_value: Value) -> Self {
+    pub(crate) fn missing_in_b(path: String, a_value: Value) -> Self {
         Self {
             path,
             kind: DiffKind::MissingInB,
@@ -50,7 +49,7 @@ impl Difference {
         }
     }
 
-    pub fn extra_in_b(path: String, b_value: Value) -> Self {
+    pub(crate) fn extra_in_b(path: String, b_value: Value) -> Self {
         Self {
             path,
             kind: DiffKind::ExtraInB,
@@ -59,7 +58,7 @@ impl Difference {
         }
     }
 
-    pub fn value_mismatch(path: String, a_value: Value, b_value: Value) -> Self {
+    pub(crate) fn value_mismatch(path: String, a_value: Value, b_value: Value) -> Self {
         Self {
             path,
             kind: DiffKind::ValueMismatch,
@@ -68,7 +67,7 @@ impl Difference {
         }
     }
 
-    pub fn type_mismatch(path: String, a_value: Value, b_value: Value) -> Self {
+    pub(crate) fn type_mismatch(path: String, a_value: Value, b_value: Value) -> Self {
         Self {
             path,
             kind: DiffKind::TypeMismatch,
@@ -117,7 +116,7 @@ impl DiffConfig {
     }
 
     /// This config, comparing lists in order: see [`DiffConfig::ordered`].
-    pub fn in_order(self) -> Self {
+    pub(crate) fn in_order(self) -> Self {
         Self {
             ordered: true,
             ..self

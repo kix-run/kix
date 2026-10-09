@@ -161,7 +161,7 @@ pub fn store_hash(path: &Path) -> String {
 }
 
 /// Human-readable part of a store path (after the hash-).
-pub fn store_name(path: &Path) -> String {
+pub(crate) fn store_name(path: &Path) -> String {
     path.file_name()
         .and_then(|n| n.to_str())
         .filter(|n| n.len() > 33 && n.as_bytes()[32] == b'-')
@@ -293,7 +293,7 @@ impl StoreGraph {
     /// the references, and fails when it fails: a build is not deployed
     /// without a file it names.
     /// A package that lists a path twice holds it once.
-    pub fn assemble(
+    pub(crate) fn assemble(
         index: KixPackageIndex,
         activation_path: PathBuf,
         result_dir: PathBuf,
@@ -452,7 +452,7 @@ impl StoreGraph {
     /// - a resource two packages list that is not an import marker. Plan
     ///   shows each other resource under the one package that lists it, or
     ///   as cluster-level.
-    pub fn validate(&self) -> Result<(), KixEvalError> {
+    pub(crate) fn validate(&self) -> Result<(), KixEvalError> {
         let fail = |message: String| Err(KixEvalError::StoreGraphError { message });
         let mut paths: Vec<&PathBuf> = self.resources.keys().collect();
         paths.sort();
@@ -757,36 +757,6 @@ impl StoreGraph {
         }
 
         graph
-    }
-
-    /// Look up which package owns a resource.
-    pub fn package_for_resource(&self, res_path: &Path) -> Option<&PackageNode> {
-        self.resource_owner
-            .get(res_path)
-            .and_then(|pi| self.packages.get(pi))
-    }
-
-    /// Get cross-package store references for a specific resource.
-    /// Uses the bulk-loaded ref_cache without spawning subprocesses.
-    pub fn cross_pkg_refs(&self, res_path: &Path) -> Vec<PathBuf> {
-        let owner = match self.resource_owner.get(res_path) {
-            Some(o) => o,
-            None => return vec![],
-        };
-
-        let empty = vec![];
-        let refs = self.ref_cache.get(res_path).unwrap_or(&empty);
-
-        refs.iter()
-            .filter(|r| {
-                is_k8s_path(r)
-                    && self
-                        .resource_owner
-                        .get(r.as_path())
-                        .is_some_and(|o| o != owner)
-            })
-            .cloned()
-            .collect()
     }
 }
 

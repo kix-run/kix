@@ -78,7 +78,7 @@ impl KixEvalError {
         }
     }
 
-    pub fn not_found(name: impl Into<String>) -> Self {
+    pub(crate) fn not_found(name: impl Into<String>) -> Self {
         Self::ClusterNotFound { name: name.into() }
     }
 }

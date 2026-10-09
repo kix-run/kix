@@ -11,20 +11,20 @@ use super::error::KixEvalError;
 use super::evaluator::{ClusterOutput, ClusterPackageInfo, NixBackend, PackageInfo};
 
 /// Mock backend that returns pre-configured cluster data.
-pub struct MockNixBackend {
+pub(crate) struct MockNixBackend {
     clusters: HashMap<String, Vec<Value>>,
 }
 
 impl MockNixBackend {
     /// Create an empty mock backend.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             clusters: HashMap::new(),
         }
     }
 
     /// Register a cluster with its manifest data.
-    pub fn add_cluster(&mut self, name: &str, manifests: Vec<Value>) {
+    pub(crate) fn add_cluster(&mut self, name: &str, manifests: Vec<Value>) {
         self.clusters.insert(name.to_string(), manifests);
     }
 }

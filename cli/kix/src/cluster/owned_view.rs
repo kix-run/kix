@@ -11,7 +11,7 @@ use kube::api::DynamicObject;
 ///
 /// Removes: uid, resourceVersion, creationTimestamp, generation,
 /// selfLink, managedFields, status, last-applied-configuration annotation.
-pub fn normalize_for_diff(obj: &mut DynamicObject) {
+pub(crate) fn normalize_for_diff(obj: &mut DynamicObject) {
     // Top-level metadata fields
     obj.metadata.uid = None;
     obj.metadata.resource_version = None;
@@ -66,7 +66,7 @@ pub fn normalize_for_diff(obj: &mut DynamicObject) {
 /// through `stringData` are absent, since the server stores them only in
 /// `data` and kix's fieldset lists `stringData`.
 /// [`kix_owned_manifests_against`] compares both against a build.
-pub fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
+pub(crate) fn kix_owned_view(obj: &DynamicObject) -> serde_json::Value {
     let mut view = unredacted_view(obj);
     redact_secret(&mut view, obj, None);
     view

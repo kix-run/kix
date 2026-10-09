@@ -14,7 +14,7 @@ use super::activation;
 
 /// What kind of failure an apiserver call produced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FailureClass {
+pub(crate) enum FailureClass {
     /// HTTP 429. The server refused the request before doing any work. Safe to
     /// retry for every method, after the interval it asked for.
     RateLimited,
@@ -43,22 +43,8 @@ pub enum FailureClass {
     Other,
 }
 
-impl FailureClass {
-    /// Whether retry policy may repeat the same request.
-    pub fn is_transient(self) -> bool {
-        matches!(
-            self,
-            FailureClass::RateLimited
-                | FailureClass::Unavailable
-                | FailureClass::ServerError
-                | FailureClass::Transport
-                | FailureClass::Timeout
-        )
-    }
-}
-
 /// Classify an HTTP status code from the apiserver.
-pub fn classify_status(code: u16) -> FailureClass {
+pub(crate) fn classify_status(code: u16) -> FailureClass {
     match code {
         429 => FailureClass::RateLimited,
         502..=504 => FailureClass::Unavailable,
@@ -74,7 +60,7 @@ pub fn classify_status(code: u16) -> FailureClass {
 }
 
 /// Classify a `kube::Error`.
-pub fn classify(err: &kube::Error) -> FailureClass {
+pub(crate) fn classify(err: &kube::Error) -> FailureClass {
     match err {
         kube::Error::Api(resp) => classify_status(resp.code),
         kube::Error::HyperError(_) => FailureClass::Transport,
@@ -87,7 +73,7 @@ pub fn classify(err: &kube::Error) -> FailureClass {
 ///
 /// The transport layer's own timeout error is recognised by type. Anything
 /// else at this level is a connection-level failure.
-pub fn classify_service_error(err: &(dyn StdError + 'static)) -> FailureClass {
+pub(crate) fn classify_service_error(err: &(dyn StdError + 'static)) -> FailureClass {
     if error_chain_contains::<RequestTimeout>(err) {
         FailureClass::Timeout
     } else {
@@ -115,7 +101,7 @@ pub fn describe(err: &(dyn StdError + 'static)) -> String {
 }
 
 /// Walk an error's `source()` chain looking for a concrete type.
-pub fn error_chain_contains<T: StdError + 'static>(err: &(dyn StdError + 'static)) -> bool {
+pub(crate) fn error_chain_contains<T: StdError + 'static>(err: &(dyn StdError + 'static)) -> bool {
     let mut current: Option<&(dyn StdError + 'static)> = Some(err);
     while let Some(e) = current {
         if e.is::<T>() {
@@ -127,7 +113,7 @@ pub fn error_chain_contains<T: StdError + 'static>(err: &(dyn StdError + 'static
 }
 
 /// Walk an error's `source()` chain and return the first value of a type.
-pub fn error_chain_find<'a, T: StdError + 'static>(
+pub(crate) fn error_chain_find<'a, T: StdError + 'static>(
     err: &'a (dyn StdError + 'static),
 ) -> Option<&'a T> {
     let mut current: Option<&(dyn StdError + 'static)> = Some(err);
@@ -143,7 +129,7 @@ pub fn error_chain_find<'a, T: StdError + 'static>(
 /// The error the per-attempt deadline produces. Classified as
 /// [`FailureClass::Timeout`] by [`classify`].
 #[derive(Debug)]
-pub struct RequestTimeout(pub Duration);
+pub(crate) struct RequestTimeout(pub Duration);
 
 impl std::fmt::Display for RequestTimeout {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -188,7 +174,7 @@ pub enum FetchError {
     DiscoveryError(#[source] kube::Error),
 
     /// `/apis` kept listing group versions that answered 404 for
-    /// [`DISCOVERY_SETTLE`](super::discovery::DISCOVERY_SETTLE). `missing` holds their paths.
+    /// `discovery::DISCOVERY_SETTLE`. `missing` holds their paths.
     #[error(
         "could not discover the resource types supported by the Kubernetes API: \
          the API server lists {} but answered 404 for {} for {}s. \
@@ -246,30 +232,6 @@ mod tests {
         ];
         for (code, want) in cases {
             assert_eq!(classify_status(code), want, "status {code}");
-        }
-    }
-
-    #[test]
-    fn transient_means_retryable() {
-        for class in [
-            FailureClass::RateLimited,
-            FailureClass::Unavailable,
-            FailureClass::ServerError,
-            FailureClass::Transport,
-            FailureClass::Timeout,
-        ] {
-            assert!(class.is_transient(), "{class:?}");
-        }
-        for class in [
-            FailureClass::Unauthorized,
-            FailureClass::Forbidden,
-            FailureClass::NotFound,
-            FailureClass::Conflict,
-            FailureClass::Invalid,
-            FailureClass::ClientError,
-            FailureClass::Other,
-        ] {
-            assert!(!class.is_transient(), "{class:?}");
         }
     }
 

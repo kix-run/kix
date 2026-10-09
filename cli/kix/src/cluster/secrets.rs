@@ -19,7 +19,7 @@ use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 
 #[derive(Error, Debug)]
-pub enum SecretError {
+pub(crate) enum SecretError {
     #[error("SOPS decryption failed for {path}: {message}")]
     DecryptionFailed { path: String, message: String },
 
@@ -52,13 +52,13 @@ pub enum SecretError {
 
 /// Result of hydrating a single secret.
 #[derive(Debug)]
-pub struct HydrationResult {
+pub(crate) struct HydrationResult {
     pub rid: ResourceId,
     pub keys_injected: usize,
 }
 
 /// Check if a manifest is a Secret that needs SOPS hydration.
-pub fn needs_hydration(manifest: &Value) -> bool {
+pub(crate) fn needs_hydration(manifest: &Value) -> bool {
     let kind = manifest
         .pointer("/kind")
         .and_then(Value::as_str)
@@ -73,7 +73,8 @@ pub fn needs_hydration(manifest: &Value) -> bool {
         .is_some_and(|s| !s.is_empty())
 }
 
-/// Hydrate all secrets in a list of manifests (mutates in place).
+/// Hydrate all secrets in a list of manifests (mutates in place), reading
+/// SOPS sources from `sources`.
 ///
 /// For each Secret with a `kix.run/sops-source` annotation:
 /// 1. Locate the SOPS file (store path or repo-relative path)
@@ -82,11 +83,6 @@ pub fn needs_hydration(manifest: &Value) -> bool {
 /// 4. Inject decrypted key-value pairs into `stringData`
 ///
 /// Returns the list of hydrated secrets, or the first error encountered.
-pub fn hydrate_secrets(manifests: &mut [Value]) -> Result<Vec<HydrationResult>, SecretError> {
-    hydrate_secrets_from(manifests, &SopsSources::Local)
-}
-
-/// [`hydrate_secrets`], reading SOPS sources from `sources`.
 ///
 /// From the files a build carries, a source must be one of them, the file must
 /// be encrypted to age recipients only (so decrypting never reaches a cloud
@@ -94,7 +90,7 @@ pub fn hydrate_secrets(manifests: &mut [Value]) -> Result<Vec<HydrationResult>, 
 /// declare a content hash. With placeholders, nothing is decrypted: each
 /// declared key (`kix.run/secret-keys`) gets a value valid for the Secret's
 /// type.
-pub fn hydrate_secrets_from(
+pub(crate) fn hydrate_secrets_from(
     manifests: &mut [Value],
     sources: &SopsSources,
 ) -> Result<Vec<HydrationResult>, SecretError> {
@@ -584,7 +580,7 @@ fn parse_secret_data(
 ///
 /// Uses canonical form: sorted keys, each line is `key=value\n`.
 /// Returns `sha256-<base64>` format (matching Nix SRI hashes).
-pub fn compute_content_hash(data: &BTreeMap<String, String>) -> String {
+pub(crate) fn compute_content_hash(data: &BTreeMap<String, String>) -> String {
     let mut hasher = Sha256::new();
     for (key, value) in data {
         hasher.update(key.as_bytes());

@@ -10,7 +10,7 @@ pub const CLUSTER_SCOPED: &str = "_cluster";
 /// `Secret`. Kix hides a Secret's values by this rule, which is also the one
 /// Kix Enterprise's agent and server use. An object of another API group
 /// with kind `Secret` is a custom resource, and its values show.
-pub fn is_secret(manifest: &serde_json::Value) -> bool {
+pub(crate) fn is_secret(manifest: &serde_json::Value) -> bool {
     manifest.get("apiVersion").and_then(|v| v.as_str()) == Some("v1")
         && manifest.get("kind").and_then(|v| v.as_str()) == Some("Secret")
 }
@@ -50,7 +50,7 @@ impl ResourceId {
     /// Parse from flat filename format: `{ns}--{name}-{kind}.yaml`
     ///
     /// The kind is the last `-`-separated segment before `.yaml`, lowercased in the filename.
-    pub fn from_filename(filename: &str) -> Option<Self> {
+    pub(crate) fn from_filename(filename: &str) -> Option<Self> {
         let stem = filename.strip_suffix(".yaml")?;
         let (namespace, rest) = stem.split_once("--")?;
         let (name, kind) = rest.rsplit_once('-')?;
@@ -65,7 +65,7 @@ impl ResourceId {
     }
 
     /// Parse from nested path format: namespace directory + `{name}-{kind}.yaml` filename.
-    pub fn from_nested_path(ns_dir: &str, filename: &str) -> Option<Self> {
+    pub(crate) fn from_nested_path(ns_dir: &str, filename: &str) -> Option<Self> {
         let stem = filename.strip_suffix(".yaml")?;
         let (name, kind) = stem.rsplit_once('-')?;
         if ns_dir.is_empty() || name.is_empty() || kind.is_empty() {

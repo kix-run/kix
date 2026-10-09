@@ -781,7 +781,7 @@ impl FieldChange {
     /// the build and the cluster hold them: a password written as a literal
     /// container `env` value, or into a ConfigMap, is not recognised as
     /// secret.
-    pub fn of(is_secret: bool, d: &Difference) -> Self {
+    pub(crate) fn of(is_secret: bool, d: &Difference) -> Self {
         let change = match d.kind {
             DiffKind::MissingInB => ChangeKind::Removed,
             DiffKind::ExtraInB => ChangeKind::Added,

@@ -71,14 +71,14 @@ impl Default for ResiliencePolicy {
 }
 
 /// Env var: total attempts per request (`1` disables retries).
-pub const RETRY_ATTEMPTS_ENV: &str = "KIX_RETRY_ATTEMPTS";
+pub(crate) const RETRY_ATTEMPTS_ENV: &str = "KIX_RETRY_ATTEMPTS";
 /// Env var: per-attempt deadline in whole seconds (`0` = none).
-pub const REQUEST_TIMEOUT_ENV: &str = "KIX_REQUEST_TIMEOUT";
+pub(crate) const REQUEST_TIMEOUT_ENV: &str = "KIX_REQUEST_TIMEOUT";
 /// Env var: TCP connect timeout in whole seconds.
-pub const CONNECT_TIMEOUT_ENV: &str = "KIX_CONNECT_TIMEOUT";
+pub(crate) const CONNECT_TIMEOUT_ENV: &str = "KIX_CONNECT_TIMEOUT";
 /// Env var: set to `0` to skip the first-contact probe in
 /// [`super::client::make_client`].
-pub const PREFLIGHT_ENV: &str = "KIX_PREFLIGHT";
+pub(crate) const PREFLIGHT_ENV: &str = "KIX_PREFLIGHT";
 
 impl ResiliencePolicy {
     /// The defaults with environment overrides applied. Unparseable values
@@ -106,20 +106,20 @@ impl ResiliencePolicy {
 /// transport connect timeout still applies so connection failures retain
 /// their specific cause. It uses the shared client to preserve its connection.
 #[derive(Clone, Copy, Debug)]
-pub struct FirstContact;
+pub(crate) struct FirstContact;
 
 /// Mark a request as first contact. See [`FirstContact`].
-pub fn mark_first_contact<T>(req: &mut Request<T>) {
+pub(crate) fn mark_first_contact<T>(req: &mut Request<T>) {
     req.extensions_mut().insert(FirstContact);
 }
 
 /// Whether to run the first-contact probe. `KIX_PREFLIGHT=0` disables it.
-pub fn preflight_enabled() -> bool {
+pub(crate) fn preflight_enabled() -> bool {
     env_number(PREFLIGHT_ENV).is_none_or(|n| n > 0)
 }
 
 /// Read a whole-number environment variable, warning on garbage.
-pub fn env_number(name: &str) -> Option<u64> {
+pub(crate) fn env_number(name: &str) -> Option<u64> {
     let raw = std::env::var(name).ok()?;
     match raw.trim().parse::<u64>() {
         Ok(n) => Some(n),
@@ -143,9 +143,9 @@ pub async fn build_client(
     Ok(builder.with_layer(&ResilienceLayer::new(policy)).build())
 }
 
-/// Request counters maintained by the layer.
+/// Request counters maintained by the layer, read by its tests.
 #[derive(Debug, Default)]
-pub struct Stats {
+pub(crate) struct Stats {
     /// Requests that entered the layer.
     pub requests: AtomicU64,
     /// Attempts sent to the inner service (>= requests).
@@ -156,17 +156,10 @@ pub struct Stats {
     pub exhausted: AtomicU64,
 }
 
-impl Stats {
-    /// Attempts beyond the first, summed over all requests.
-    pub fn retries(&self) -> u64 {
-        self.attempts.load(Ordering::Relaxed) - self.requests.load(Ordering::Relaxed)
-    }
-}
-
 /// The tower layer. Wraps the inner service in a `Buffer` (so the retry
 /// future can own a handle to it) and then in [`Resilience`].
 #[derive(Clone)]
-pub struct ResilienceLayer {
+pub(crate) struct ResilienceLayer {
     policy: Arc<ResiliencePolicy>,
     stats: Arc<Stats>,
 }
@@ -177,10 +170,6 @@ impl ResilienceLayer {
             policy: Arc::new(policy),
             stats: Arc::new(Stats::default()),
         }
-    }
-
-    pub fn stats(&self) -> Arc<Stats> {
-        self.stats.clone()
     }
 }
 
@@ -203,7 +192,7 @@ where
 
 /// The service. Generic so tests can wrap a fake without the `Buffer`.
 #[derive(Clone)]
-pub struct Resilience<S> {
+pub(crate) struct Resilience<S> {
     inner: S,
     policy: Arc<ResiliencePolicy>,
     stats: Arc<Stats>,
@@ -211,6 +200,7 @@ pub struct Resilience<S> {
 
 impl<S> Resilience<S> {
     /// Wrap `inner` with fresh counters.
+    #[cfg(test)]
     pub fn new(inner: S, policy: ResiliencePolicy) -> Self {
         Self::with_shared(inner, Arc::new(policy), Arc::new(Stats::default()))
     }
@@ -223,7 +213,8 @@ impl<S> Resilience<S> {
         }
     }
 
-    pub fn stats(&self) -> Arc<Stats> {
+    #[cfg(test)]
+    pub(crate) fn stats(&self) -> Arc<Stats> {
         self.stats.clone()
     }
 }
@@ -293,7 +284,7 @@ impl RequestShape {
 }
 
 /// Is this a watch request? Kube encodes it as `watch=true` in the query.
-pub fn is_watch_uri(uri: &Uri) -> bool {
+pub(crate) fn is_watch_uri(uri: &Uri) -> bool {
     uri.query().is_some_and(|q| {
         q.split('&')
             .any(|pair| pair == "watch=true" || pair == "watch=1")
@@ -304,7 +295,7 @@ pub fn is_watch_uri(uri: &Uri) -> bool {
 ///
 /// Everything kix sends is idempotent except POST. Server-side apply is a
 /// PATCH, and a repeated apply of the same manifest is a no-op.
-pub fn is_idempotent(method: &Method) -> bool {
+pub(crate) fn is_idempotent(method: &Method) -> bool {
     matches!(
         *method,
         Method::GET | Method::HEAD | Method::OPTIONS | Method::DELETE | Method::PUT | Method::PATCH
@@ -384,7 +375,7 @@ pub fn backoff(policy: &ResiliencePolicy, attempt: usize) -> Duration {
 
 /// Parse a `Retry-After` header given in whole seconds. HTTP-date forms are
 /// ignored; the apiserver never sends them.
-pub fn retry_after(headers: &HeaderMap) -> Option<Duration> {
+pub(crate) fn retry_after(headers: &HeaderMap) -> Option<Duration> {
     headers
         .get(RETRY_AFTER)?
         .to_str()
@@ -397,14 +388,14 @@ pub fn retry_after(headers: &HeaderMap) -> Option<Duration> {
 
 /// Did the request fail before the connection opened? Such a request never
 /// reached the server, so even a POST is safe to send again.
-pub fn is_connect_error(err: &(dyn std::error::Error + 'static)) -> bool {
+pub(crate) fn is_connect_error(err: &(dyn std::error::Error + 'static)) -> bool {
     error_chain_find::<hyper_util::client::legacy::Error>(err).is_some_and(|e| e.is_connect())
 }
 
 /// Did the connect phase time out (as opposed to being refused or reset)?
 /// kube's connector reports this as an `io::Error` of kind `TimedOut`
 /// beneath the hyper connect error.
-pub fn is_connect_timeout(err: &(dyn std::error::Error + 'static)) -> bool {
+pub(crate) fn is_connect_timeout(err: &(dyn std::error::Error + 'static)) -> bool {
     is_connect_error(err)
         && error_chain_find::<std::io::Error>(err)
             .is_some_and(|e| e.kind() == std::io::ErrorKind::TimedOut)

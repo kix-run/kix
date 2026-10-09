@@ -14,7 +14,7 @@
 use sha2::{Digest, Sha256};
 
 /// The store directory every path in a build lives under.
-pub const STORE_DIR: &str = "/nix/store";
+pub(crate) const STORE_DIR: &str = "/nix/store";
 
 /// Nix's base32 alphabet: no `e`, `o`, `u` or `t`.
 const BASE32: &[u8; 32] = b"0123456789abcdfghijklmnpqrsvwxyz";
@@ -31,7 +31,7 @@ pub enum Method {
 }
 
 /// The longest store name Nix accepts (`StorePath::MaxPathLen`).
-pub const MAX_NAME_BYTES: usize = 211;
+pub(crate) const MAX_NAME_BYTES: usize = 211;
 
 /// The store path a file gets under `method`, given its bytes, the store
 /// paths it references, and its name (the part after `<hash>-`).

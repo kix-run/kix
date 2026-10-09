@@ -145,7 +145,7 @@ pub struct PackageDiff {
     /// `resource_diffs`, in order.
     pub labels: HashMap<ResourceId, Vec<Vec<origin::ChangeLabel>>>,
     /// The objects the lists above show a deploy writing and deleting, as
-    /// [`diff_graphs`] made them. [`objects::of`] holds a deploy to them.
+    /// [`diff_graphs`] made them. `objects::of` holds a deploy to them.
     pub shown: Shown,
 }
 
@@ -244,7 +244,7 @@ impl PackageDiff {
 
     /// Changed packages plus the cluster-level pseudo-package, for renderers
     /// that walk resource-level detail.
-    pub fn changed_with_cluster_level(&self) -> impl Iterator<Item = &PackageChangeDiff> {
+    pub(crate) fn changed_with_cluster_level(&self) -> impl Iterator<Item = &PackageChangeDiff> {
         self.changed.iter().chain(self.cluster_level.iter())
     }
 
@@ -745,7 +745,7 @@ pub fn diff_garbage(old: &StoreGraph, new: &StoreGraph) -> PackageDiff {
 
 /// The side of a diff a manifest comes from.
 #[derive(Clone, Copy)]
-pub enum Side {
+pub(crate) enum Side {
     Old,
     New,
 }
@@ -795,7 +795,7 @@ impl<'a> ManifestIndex<'a> {
 
     /// The resources of the package `key` (`namespace/name`) on one side,
     /// its PackageInstance included.
-    pub fn package_resources(&self, key: &str, side: Side) -> Vec<ResourceId> {
+    pub(crate) fn package_resources(&self, key: &str, side: Side) -> Vec<ResourceId> {
         let graph = match side {
             Side::Old => self.old_graph,
             Side::New => self.new_graph,
@@ -810,7 +810,7 @@ impl<'a> ManifestIndex<'a> {
 
     /// The old and new manifest of each of `ids`, each side present when
     /// that side holds the resource.
-    pub fn render<'i>(
+    pub(crate) fn render<'i>(
         &self,
         ids: impl IntoIterator<Item = &'i ResourceId>,
     ) -> BTreeMap<String, document::ManifestSides> {
@@ -860,7 +860,7 @@ fn shown_manifest(is_secret: bool, manifest: &Value, old: Option<&Value>) -> Val
 /// `value`, found at `path`, with every secret value in it hidden (see
 /// `hide_secrets`), or a size note when it is larger than `max_bytes`.
 /// `old` is the old side's value at the same path, given for a new value.
-pub fn shown_value(
+pub(crate) fn shown_value(
     is_secret: bool,
     path: &str,
     value: &Value,

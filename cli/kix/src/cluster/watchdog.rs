@@ -1,8 +1,8 @@
 //! Detect deploy runs that stop reporting progress.
 //!
-//! Node tasks record phases in [`Progress`], and every deploy event or
-//! readiness heartbeat resets its idle timer. [`assess`] decides whether a
-//! timer tick should warn or abort. [`run`] emits stall events and cancels the
+//! Node tasks record phases in `Progress`, and every deploy event or
+//! readiness heartbeat resets its idle timer. `assess` decides whether a
+//! timer tick should warn or abort. `run` emits stall events and cancels the
 //! run through [`CancelToken`]; it does not access the cluster.
 
 use std::collections::HashMap;
@@ -17,7 +17,7 @@ use super::stream::{DeployEvent, DeployObserver, InFlight, NodeId, Phase};
 
 /// Environment variable for the abort bound, in seconds. `0` disables the
 /// abort (the warnings still print).
-pub const STALL_TIMEOUT_ENV: &str = "KIX_STALL_TIMEOUT";
+pub(crate) const STALL_TIMEOUT_ENV: &str = "KIX_STALL_TIMEOUT";
 
 /// Idle thresholds for warnings and cancellation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +60,7 @@ impl StallPolicy {
 /// Shared progress record between the engine, its node tasks and the
 /// watchdog.
 #[derive(Debug)]
-pub struct Progress {
+pub(crate) struct Progress {
     started: Instant,
     /// Millis since `started` of the last activity of any kind.
     last_activity_ms: AtomicU64,
@@ -74,7 +74,7 @@ impl Default for Progress {
 }
 
 impl Progress {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             started: Instant::now(),
             last_activity_ms: AtomicU64::new(0),
@@ -83,13 +83,13 @@ impl Progress {
     }
 
     /// Reset the idle clock after any deploy or readiness activity.
-    pub fn touch(&self) {
+    pub(crate) fn touch(&self) {
         let ms = self.started.elapsed().as_millis() as u64;
         self.last_activity_ms.fetch_max(ms, Ordering::Relaxed);
     }
 
     /// A node entered a phase.
-    pub fn set_phase(&self, node: &NodeId, phase: Phase) {
+    pub(crate) fn set_phase(&self, node: &NodeId, phase: Phase) {
         if let Ok(mut m) = self.in_flight.lock() {
             m.insert(node.clone(), (phase, Instant::now()));
         }
@@ -97,7 +97,7 @@ impl Progress {
     }
 
     /// A node reached a terminal verdict.
-    pub fn clear(&self, node: &NodeId) {
+    pub(crate) fn clear(&self, node: &NodeId) {
         if let Ok(mut m) = self.in_flight.lock() {
             m.remove(node);
         }
@@ -105,13 +105,13 @@ impl Progress {
     }
 
     /// How long since the last activity.
-    pub fn idle(&self) -> Duration {
+    pub(crate) fn idle(&self) -> Duration {
         let last = Duration::from_millis(self.last_activity_ms.load(Ordering::Relaxed));
         self.started.elapsed().saturating_sub(last)
     }
 
     /// Snapshot of the nodes in flight, longest-waiting first.
-    pub fn in_flight(&self) -> Vec<InFlight> {
+    pub(crate) fn in_flight(&self) -> Vec<InFlight> {
         let now = Instant::now();
         let mut out: Vec<InFlight> = self
             .in_flight
@@ -130,14 +130,15 @@ impl Progress {
         out
     }
 
-    pub fn in_flight_count(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn in_flight_count(&self) -> usize {
         self.in_flight.lock().map(|m| m.len()).unwrap_or(0)
     }
 }
 
 /// Action selected for one watchdog tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Assessment {
+pub(crate) enum Assessment {
     /// Activity is within the warning threshold, or no nodes are in flight.
     Quiet,
     /// Emit a stall warning.
@@ -149,7 +150,7 @@ pub enum Assessment {
 /// Select an action from idle time and in-flight work. `last_warned` records
 /// the idle duration of the previous warning so warnings repeat no more often
 /// than `warn_after`.
-pub fn assess(
+pub(crate) fn assess(
     policy: &StallPolicy,
     idle: Duration,
     in_flight: usize,
@@ -207,7 +208,7 @@ fn node_label(id: &NodeId) -> String {
 /// Check progress every `min(warn_after, abort_after, 5s)`, with a 100ms
 /// minimum interval. Emit `Stalled` events and cancel after the abort threshold.
 /// Return when cancellation fires; the engine aborts this task when the run ends.
-pub async fn run(
+pub(crate) async fn run(
     policy: StallPolicy,
     progress: Arc<Progress>,
     cancel: CancelToken,

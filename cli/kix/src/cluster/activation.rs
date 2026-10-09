@@ -231,7 +231,7 @@ pub struct KeptOrphanSource {
 
 /// What a finalizing run writes to `status.orphansKeptFrom`.
 #[derive(Debug, Clone, Default)]
-pub struct KeptOrphans {
+pub(crate) struct KeptOrphans {
     /// Builds this run's plan found orphans in. Recorded only when the run
     /// leaves an orphan on the cluster: a run that deleted them all has
     /// nothing left to describe.
@@ -668,7 +668,7 @@ impl Records {
     /// Returns `None` when the set cannot be established (list failed).
     /// Callers must treat `None` as "do not prune" rather than as an empty
     /// set.
-    pub async fn live_hashes(&self) -> Option<HashSet<String>> {
+    pub(crate) async fn live_hashes(&self) -> Option<HashSet<String>> {
         let all = self
             .all()
             .await
@@ -1081,15 +1081,14 @@ fn sort_newest_first(records: &mut [Record]) {
     });
 }
 
-/// Defaults for [`RetentionPolicy`]: always keep the 10 newest records,
-/// never more than 50, and retire anything older than 30 days beyond the
-/// floor. Helm 3 and Argo CD keep 10 by default; the cap and the age rule
+/// Defaults for [`RetentionPolicy`]: always keep the 10 newest records and
+/// never more than 50. `kix gc --keep-for` adds the age rule, 30 days by
+/// default. Helm 3 and Argo CD keep 10 by default; the cap and the age rule
 /// exist because each record still on the cluster keeps one hash alive in
 /// `kix.run/activations` on every managed resource, and that annotation is
 /// capped at 256 KiB.
 pub const DEFAULT_KEEP_MIN: usize = 10;
 pub const DEFAULT_KEEP_MAX: usize = 50;
-pub const DEFAULT_KEEP_FOR_DAYS: i64 = 30;
 
 /// How many Superseded records to keep, by count and by age.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1103,17 +1102,6 @@ pub struct RetentionPolicy {
     pub keep_for: Option<chrono::Duration>,
     /// The clock the age rule uses. Injected so plans are testable.
     pub now: chrono::DateTime<chrono::Utc>,
-}
-
-impl RetentionPolicy {
-    pub fn defaults(now: chrono::DateTime<chrono::Utc>) -> Self {
-        Self {
-            keep_min: DEFAULT_KEEP_MIN,
-            keep_max: DEFAULT_KEEP_MAX,
-            keep_for: Some(chrono::Duration::days(DEFAULT_KEEP_FOR_DAYS)),
-            now,
-        }
-    }
 }
 
 /// Why a record is retired.
@@ -1601,10 +1589,8 @@ mod retire_plan_tests {
     }
 
     #[test]
-    fn defaults_keep_ten_cap_fifty_and_thirty_days() {
-        let p = RetentionPolicy::defaults(now());
-        assert_eq!((p.keep_min, p.keep_max), (10, 50));
-        assert_eq!(p.keep_for, Some(Duration::days(30)));
+    fn defaults_keep_ten_and_cap_fifty() {
+        assert_eq!((DEFAULT_KEEP_MIN, DEFAULT_KEEP_MAX), (10, 50));
     }
 
     #[test]
@@ -1698,14 +1684,14 @@ mod retire_plan_tests {
     fn failed_deploys_do_not_push_the_last_rollback_target_out() {
         let mut input = vec![aged("good", 40)];
         input.extend((1..=10).map(|i| failed(&format!("f{i:02}"), i)));
-        let plan = retire_plan(input, &RetentionPolicy::defaults(now()));
+        let plan = retire_plan(input, &policy(DEFAULT_KEEP_MIN, DEFAULT_KEEP_MAX, Some(30)));
         assert!(plan.retire.is_empty(), "{:?}", retired(&plan.retire));
         assert!(names(&plan.kept).contains(&"good"));
 
         // Past the age rule a failed record is retired, whatever the floor.
         let plan = retire_plan(
             vec![aged("good", 40), failed("old-failure", 35)],
-            &RetentionPolicy::defaults(now()),
+            &policy(DEFAULT_KEEP_MIN, DEFAULT_KEEP_MAX, Some(30)),
         );
         assert_eq!(names(&plan.kept), vec!["good"]);
         assert_eq!(

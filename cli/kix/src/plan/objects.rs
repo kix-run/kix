@@ -2,7 +2,7 @@
 //! shows.
 //!
 //! A deploy runs the engine plan, a flat list of the build's objects, while
-//! people review the package-grouped [`super::PackageDiff`]. [`of`] joins
+//! people review the package-grouped [`super::PackageDiff`]. `of` joins
 //! the two before anything is sent, so `kix plan` and `kix deploy` refuse a
 //! build whose package view leaves out an object the deploy would write or
 //! delete:
@@ -62,7 +62,7 @@ use super::{CLUSTER_LEVEL_KEY, Shown};
 /// orphans the prune deletes; `listed_deletes` are the orphans the plan's
 /// `prune` section lists, none when it did not read the cluster. `old` are
 /// the manifests of the builds the cluster ran (see the module docs).
-pub fn of<'a>(
+pub(crate) fn of<'a>(
     shown: &Shown,
     graph: &StoreGraph,
     plan: &DeployPlan,

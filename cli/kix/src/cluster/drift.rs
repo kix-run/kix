@@ -250,7 +250,7 @@ fn serves_scale(obj: &DynamicObject) -> bool {
 /// (subresource `scale`, owning `spec.replicas`, no time). Kubernetes records
 /// one only when the write sets a non-zero value and some manager owned
 /// `spec.replicas` before it; [`UnrecordedScale`] covers the other writes.
-pub fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
+pub(crate) fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
     let Some(entries) = obj.metadata.managed_fields.as_deref() else {
         return Vec::new();
     };

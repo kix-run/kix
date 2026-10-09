@@ -133,7 +133,6 @@ impl ResourceIo for DryRun {
             Ok(result) => Ok(result),
             Err(ApplyError::ImmutableConflict { .. }) => Ok(ApplyResult {
                 action: ApplyAction::Created,
-                resource_id: rid,
                 preview: None,
             }),
             Err(e) => Err(RecreateError::DryRunReapply(e)),

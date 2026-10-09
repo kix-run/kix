@@ -24,14 +24,13 @@
 //! or careless reader, not a hostile one.
 //!
 //! What a carried build gives later is checked as it is asked for: its
-//! SOPS files against their store paths ([`Build::sops_sources`]), and an
-//! earlier build against the record that names it ([`Build::deployed_build`]).
+//! SOPS files against their store paths (`Build::sops_sources`), and an
+//! earlier build against the record that names it (`Build::deployed_build`).
 //! Which kind of build it is, never the source, decides whether it is in
 //! the local store and the digest the deploy receipt names.
 //!
-//! A [`CarriedBuild`] can be implemented outside this crate: it reads its
-//! files and assembles them with [`StoreGraph::assemble`], as a result
-//! directory is read.
+//! A [`CarriedBuild`] can be implemented outside this crate, as the bundle
+//! source in `kix-cli` is.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
@@ -243,7 +242,7 @@ impl Build {
     /// it carries (`carried_sops`). With `placeholders`, nothing is
     /// decrypted: each Secret gets placeholder values, so a plan made before
     /// anyone approved it reads no secret.
-    pub fn sops_sources(&mut self, placeholders: bool) -> Result<SopsSources, String> {
+    pub(crate) fn sops_sources(&mut self, placeholders: bool) -> Result<SopsSources, String> {
         let Origin::Carried { source, .. } = &mut self.origin else {
             return Ok(SopsSources::Local);
         };
@@ -254,7 +253,7 @@ impl Build {
     /// The build of the Activation record with `identity_hash` that this
     /// build carries, stamped, and refused unless its record has that
     /// identity hash and it is valid. `Ok(None)` for a local build.
-    pub fn deployed_build(&self, identity_hash: &str) -> Result<Option<StoreGraph>, String> {
+    pub(crate) fn deployed_build(&self, identity_hash: &str) -> Result<Option<StoreGraph>, String> {
         let Origin::Carried { source, .. } = &self.origin else {
             return Ok(None);
         };

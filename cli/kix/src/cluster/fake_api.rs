@@ -57,7 +57,7 @@ const RETIRED_RECORDS: (&str, &str, &str, &str, bool) = (
 
 /// The group [`KINDS`] serves at two versions. Its preferred version is
 /// `v1`, the first listed.
-pub const TWO_VERSION_GROUP: &str = "example.kix.test";
+pub(crate) const TWO_VERSION_GROUP: &str = "example.kix.test";
 
 type Hook = Box<dyn FnOnce(&mut Value) + Send>;
 
@@ -98,7 +98,7 @@ impl FakeApi {
     }
 
     /// Add an object, assigning it a uid and a resourceVersion.
-    pub fn insert(&self, mut obj: Value) {
+    pub(crate) fn insert(&self, mut obj: Value) {
         let mut st = self.state.lock().unwrap();
         let rv = st.bump();
         let meta = obj["metadata"].as_object_mut().expect("metadata");

@@ -409,7 +409,6 @@ impl ResourceIo for ScriptedOps {
         match out {
             Ok(action) => Ok(ApplyResult {
                 action,
-                resource_id: rid,
                 preview: None,
             }),
             Err(ApplyFailure::Other(msg)) => Err(ApplyError::UnknownKind { kind: msg }),
@@ -438,7 +437,6 @@ impl ResourceIo for ScriptedOps {
             .await
             .map(|action| ApplyResult {
                 action,
-                resource_id: rid,
                 preview: None,
             })
             .map_err(RecreateError::Scripted)
