@@ -23,7 +23,7 @@ use crate::cluster::activation::{Record, Records};
 use crate::cluster::apply::{ChangeAction, detect_changes_live};
 use crate::cluster::fetch::{self, FetchError, SharedOrphan};
 use crate::cluster::graph::{GraphError, ResourceGraph};
-use crate::cluster::ops::{ActivationRecord, Cluster, KubeResources, RecordConfig, SopsHydrator};
+use crate::cluster::ops::{Cluster, KubeResources, RecordConfig};
 use crate::cluster::readiness::MalformedMarker;
 use crate::cluster::scheduler::{self, DeployError, DeployPlan, SchedulerConfig};
 use crate::cluster::stream::{DeployObserver, DeployResult};
@@ -218,18 +218,17 @@ impl LivePlan {
         config: SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
     ) -> Result<DeployResult, DeployError> {
-        let resources = Arc::new(KubeResources::new(
-            self.client,
-            self.discovery,
-            self.cluster,
-            self.record.identity_hash,
-            // The operator runs unattended; surface conflicts in Activation
-            // status rather than silently clobbering fields owned by other
-            // controllers.
-            false,
-        ));
-        let record = Arc::new(ActivationRecord::new(
-            resources.clone(),
+        let (cluster, _) = Cluster::new(
+            KubeResources::new(
+                self.client,
+                self.discovery,
+                self.cluster,
+                self.record.identity_hash,
+                // The operator runs unattended; surface conflicts in
+                // Activation status rather than silently clobbering fields
+                // owned by other controllers.
+                false,
+            ),
             RecordConfig {
                 name: manage_lifecycle.then_some(self.record.name),
                 // The operator created the record itself and owns
@@ -248,8 +247,8 @@ impl LivePlan {
                 kept_orphans: Default::default(),
                 mark_failed_on_abort: false,
             },
-        ));
-        let cluster = Cluster::new(resources, record, SopsHydrator::new(Default::default()));
+            Default::default(),
+        );
         scheduler::run_deploy(
             cluster,
             self.plan,

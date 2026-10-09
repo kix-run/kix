@@ -3,6 +3,8 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use kube::Client;
+use kube::discovery::{ApiResource, Scope};
 use serde_json::Value;
 
 use crate::manifest::types::ResourceId;
@@ -13,15 +15,17 @@ use super::super::fetch::FetchError;
 use super::super::preview::{DryRunAnswer, DryRunOutcome, Journal, PruneAnswer, Refusal};
 use super::super::prune_guard::Pruned;
 use super::super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
-use super::super::secrets::{HydrationResult, SecretError};
+use super::super::secrets::{HydrationResult, SecretError, SopsSources};
 use super::{
     DeleteError, KubeResources, OnStatus, ReadError, RecreateError, ResourceIo, SecretHydrator,
     SopsHydrator,
 };
 
 /// [`KubeResources`] and [`SopsHydrator`] with every write sent as
-/// `dryRun=All`. Nothing persists, so nothing is written to the Activation
-/// record either: a run made with [`super::Cluster::dry_run`] has none.
+/// `dryRun=All`: the resources are made here, as dry-run ones, so no path
+/// through them persists a write. Nothing persists, so nothing is written to
+/// the Activation record either: a run made with [`super::Cluster::dry_run`]
+/// has none.
 ///
 /// Keeps what the apiserver answered for each object in a [`Journal`]: the
 /// object an apply would produce, a recreate, a prune answer, or the typed
@@ -33,10 +37,23 @@ pub(crate) struct DryRun {
 }
 
 impl DryRun {
-    pub(crate) fn new(resources: KubeResources, secrets: SopsHydrator) -> Self {
+    pub(crate) fn new(
+        client: Client,
+        discovery: Vec<(ApiResource, Scope)>,
+        cluster: String,
+        identity_hash: Option<String>,
+        force_conflicts: bool,
+        sops: SopsSources,
+    ) -> Self {
         DryRun {
-            resources,
-            secrets,
+            resources: KubeResources::dry_run(
+                client,
+                discovery,
+                cluster,
+                identity_hash,
+                force_conflicts,
+            ),
+            secrets: SopsHydrator::new(sops),
             journal: Journal::default(),
         }
     }
@@ -62,7 +79,7 @@ impl ResourceIo for DryRun {
                 .record(rid, DryRunOutcome::Refused(Refusal::of_apply(&e)));
             return Err(e);
         };
-        let applied = self.resources.apply_as(&ar, scope, manifest, true).await;
+        let applied = self.resources.apply_as(&ar, scope, manifest).await;
         match &applied {
             Ok(ApplyResult {
                 preview: Some(preview),
@@ -84,7 +101,7 @@ impl ResourceIo for DryRun {
 
     async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, RecreateError> {
         let rid = ResourceId::from_value(manifest);
-        let (ar, scope, api, _) = self.resources.delete_for_recreate(&rid, true).await?;
+        let (ar, scope, api, _) = self.resources.delete_for_recreate(&rid).await?;
 
         // The delete was checked but nothing went away, so the dry-run apply
         // of the changed manifest hits the immutable-field 422 the real path
@@ -98,7 +115,7 @@ impl ResourceIo for DryRun {
             .ok()
             .flatten()
             .and_then(|o| serde_json::to_value(o).ok());
-        let applied = self.resources.apply_as(&ar, scope, manifest, true).await;
+        let applied = self.resources.apply_as(&ar, scope, manifest).await;
         let outcome = match &applied {
             Ok(result) => DryRunOutcome::Recreated {
                 live: existing,
@@ -140,8 +157,8 @@ impl ResourceIo for DryRun {
         Ok(())
     }
 
-    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
-        let deleted = self.resources.prune(rid, true).await;
+    async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
+        let deleted = self.resources.prune(rid).await;
         let answer = match &deleted {
             Ok(Pruned::Deleted | Pruned::Gone) => PruneAnswer::Deleted,
             Ok(Pruned::Kept(shared)) => PruneAnswer::KeptShared(shared.describe()),
@@ -182,8 +199,12 @@ mod tests {
         let client = api.client();
         let discovery = fetch::discover_resources(&client).await.unwrap();
         DryRun::new(
-            KubeResources::new(client, discovery, "a".into(), None, false),
-            SopsHydrator::new(Default::default()),
+            client,
+            discovery,
+            "a".into(),
+            None,
+            false,
+            Default::default(),
         )
     }
 
@@ -223,11 +244,11 @@ mod tests {
             name: "old".into(),
         };
 
-        let err = dry.delete(&rid("Widget")).await.unwrap_err();
+        let err = dry.prune(&rid("Widget")).await.unwrap_err();
         assert!(matches!(err, DeleteError::NotDiscovered(_)), "{err}");
         assert!(dry.take_answers().is_empty());
 
-        dry.delete(&rid("ClusterRole")).await.unwrap();
+        dry.prune(&rid("ClusterRole")).await.unwrap();
         let answers = dry.take_answers();
         assert_eq!(answers.len(), 1);
         assert!(matches!(

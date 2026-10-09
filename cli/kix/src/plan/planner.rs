@@ -48,9 +48,7 @@ use crate::cluster::apply::ChangeAction;
 use crate::cluster::fetch::{self, FetchError, SharedOrphan};
 use crate::cluster::graph::ResourceGraph;
 use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
-use crate::cluster::ops::{
-    ActivationRecord, Cluster, DryRun, KubeResources, RecordConfig, SopsHydrator,
-};
+use crate::cluster::ops::{Cluster, DryRun, KubeResources, RecordConfig};
 use crate::cluster::preview::DryRunAnswer;
 use crate::cluster::scheduler::{self, DeployError, DeployPlan, PrunePolicy, SchedulerConfig};
 use crate::cluster::secrets::SopsSources;
@@ -206,14 +204,12 @@ impl CheckedPlan {
         observer: Arc<dyn DeployObserver>,
     ) -> (Result<DeployResult, DeployError>, Vec<DryRunAnswer>) {
         let dry = Arc::new(DryRun::new(
-            KubeResources::new(
-                target.client,
-                target.discovery,
-                self.cluster.clone(),
-                self.activation_identity_hash.clone(),
-                self.flags.force_conflicts,
-            ),
-            SopsHydrator::new(target.sops),
+            target.client,
+            target.discovery,
+            self.cluster.clone(),
+            self.activation_identity_hash.clone(),
+            self.flags.force_conflicts,
+            target.sops,
         ));
         config.prune = self.flags.prune_policy();
         let result = scheduler::run_deploy(
@@ -244,15 +240,14 @@ impl CheckedPlan {
         Result<DeployResult, DeployError>,
         Option<Vec<KeptOrphanSource>>,
     ) {
-        let resources = Arc::new(KubeResources::new(
-            target.client,
-            target.discovery,
-            self.cluster,
-            self.activation_identity_hash,
-            self.flags.force_conflicts,
-        ));
-        let record = Arc::new(ActivationRecord::new(
-            resources.clone(),
+        let (cluster, record) = Cluster::new(
+            KubeResources::new(
+                target.client,
+                target.discovery,
+                self.cluster,
+                self.activation_identity_hash,
+                self.flags.force_conflicts,
+            ),
             RecordConfig {
                 name: self.activation_name,
                 // Created before the first node, so a run that stops part
@@ -265,10 +260,11 @@ impl CheckedPlan {
                 kept_orphans: self.kept_orphans,
                 mark_failed_on_abort: true,
             },
-        ));
+            target.sops,
+        );
         config.prune = self.flags.prune_policy();
         let result = scheduler::run_deploy(
-            Cluster::new(resources, record.clone(), SopsHydrator::new(target.sops)),
+            cluster,
             self.plan,
             &self.orphans,
             &self.old_manifests,

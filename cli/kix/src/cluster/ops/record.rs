@@ -71,7 +71,7 @@ pub(crate) struct ActivationRecord {
 }
 
 impl ActivationRecord {
-    pub(crate) fn new(resources: Arc<KubeResources>, config: RecordConfig) -> Self {
+    pub(super) fn new(resources: Arc<KubeResources>, config: RecordConfig) -> Self {
         ActivationRecord {
             resources,
             config,
@@ -139,11 +139,7 @@ impl ActivationRecord {
                 return false;
             };
 
-            if let Err(e) = self
-                .resources
-                .apply_as(&manifest_ar, scope, manifest, false)
-                .await
-            {
+            if let Err(e) = self.resources.apply_as(&manifest_ar, scope, manifest).await {
                 // Not fatal. Without the record the run behaves exactly as it
                 // did before this existed, and the deploy itself is what
                 // matters. Marking the phase below will 404 and be swallowed.

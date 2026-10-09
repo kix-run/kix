@@ -45,7 +45,7 @@ use super::errors::describe;
 use super::fetch::FetchError;
 use super::prune_guard::{PruneError, Pruned};
 use super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
-use super::secrets::{HydrationResult, SecretError};
+use super::secrets::{HydrationResult, SecretError, SopsSources};
 
 mod dry_run;
 mod record;
@@ -109,7 +109,7 @@ pub(crate) trait ResourceIo: Send + Sync + 'static {
 
     /// Delete an orphan, unless another Kix cluster still deploys it or it
     /// changed since it was read (see [`super::prune_guard`]).
-    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, DeleteError>;
+    async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError>;
 }
 
 /// The run's Activation record, as the engine writes it.
@@ -185,17 +185,22 @@ pub(crate) struct Cluster {
 }
 
 impl Cluster {
-    /// A run that writes: the objects, and the record that tracks them.
+    /// A run that writes: the objects, and the record that tracks them,
+    /// written through those same objects. Also returns the record, for
+    /// what its finalize wrote.
     pub(crate) fn new(
-        resources: Arc<KubeResources>,
-        record: Arc<ActivationRecord>,
-        secrets: SopsHydrator,
-    ) -> Self {
-        Cluster {
+        resources: KubeResources,
+        record: RecordConfig,
+        sops: SopsSources,
+    ) -> (Self, Arc<ActivationRecord>) {
+        let resources = Arc::new(resources);
+        let record = Arc::new(ActivationRecord::new(resources.clone(), record));
+        let cluster = Cluster {
             resources,
-            secrets: Arc::new(secrets),
-            record: Some(record),
-        }
+            secrets: Arc::new(SopsHydrator::new(sops)),
+            record: Some(record.clone()),
+        };
+        (cluster, record)
     }
 
     /// A dry run: every write goes with `dryRun=All`, and there is no record.
@@ -297,7 +302,7 @@ pub(crate) enum StampError {
     Apply(ApplyError),
 }
 
-/// Why [`ResourceIo::delete`] did not delete an orphan.
+/// Why [`ResourceIo::prune`] did not delete an orphan.
 #[derive(Debug, Error)]
 pub(crate) enum DeleteError {
     #[error(transparent)]
@@ -307,5 +312,5 @@ pub(crate) enum DeleteError {
     #[error(transparent)]
     Domain(LegacyDomainError),
     #[error(transparent)]
-    Guard(PruneError),
+    Prune(PruneError),
 }

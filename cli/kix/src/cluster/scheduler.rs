@@ -1021,15 +1021,18 @@ pub(crate) async fn run_deploy(
                 // explicit operation. See `never_pruned`.
                 continue;
             }
-            let deleted =
-                match tokio::time::timeout(INLINE_BEST_EFFORT_TIMEOUT, resources.delete(rid)).await
-                {
-                    Ok(outcome) => outcome.map_err(|e| e.to_string()),
-                    Err(_) => Err(format!(
-                        "no answer within {}s",
-                        INLINE_BEST_EFFORT_TIMEOUT.as_secs()
-                    )),
-                };
+            let deleted = match tokio::time::timeout(
+                INLINE_BEST_EFFORT_TIMEOUT,
+                resources.prune(rid),
+            )
+            .await
+            {
+                Ok(outcome) => outcome.map_err(|e| e.to_string()),
+                Err(_) => Err(format!(
+                    "no answer within {}s",
+                    INLINE_BEST_EFFORT_TIMEOUT.as_secs()
+                )),
+            };
             match deleted {
                 Ok(outcome @ (Pruned::Kept(_) | Pruned::Changed(_))) => {
                     // A changed object is still this cluster's orphan, so the

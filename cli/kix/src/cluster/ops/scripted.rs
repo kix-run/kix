@@ -512,12 +512,12 @@ impl ResourceIo for ScriptedOps {
         })
     }
 
-    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
+    async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
         self.record(Call::Delete(rid.clone()));
         let b = self.delete.lock().unwrap().clone();
         b.run()
             .await
-            .map_err(|m| DeleteError::Guard(PruneError::Kube(scripted_error(m))))
+            .map_err(|m| DeleteError::Prune(PruneError::Kube(scripted_error(m))))
     }
 }
 

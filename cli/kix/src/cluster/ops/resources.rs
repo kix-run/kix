@@ -55,10 +55,22 @@ fn delete_propagation_for(kind: &str) -> kube::api::PropagationPolicy {
     }
 }
 
-/// The objects of one run on a real cluster. Every write persists;
-/// [`super::DryRun`] wraps this to send them as dry runs instead.
+/// How a [`KubeResources`] sends its writes. Fixed when it is made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Writes {
+    Persist,
+    /// Every SSA and DELETE with `dryRun=All`. Only [`super::DryRun`] makes
+    /// one, so a dry run's writes cannot persist, whichever of its methods
+    /// they go through.
+    DryRun,
+}
+
+/// The objects of one run on a real cluster. Made by
+/// [`KubeResources::new`], every write persists; inside [`super::DryRun`],
+/// every write is a dry run.
 pub(crate) struct KubeResources {
     client: Client,
+    writes: Writes,
     discovery: DiscoveryCache,
     /// The Kix cluster whose orphans a prune deletes.
     cluster: String,
@@ -83,8 +95,45 @@ impl KubeResources {
         identity_hash: Option<String>,
         force_conflicts: bool,
     ) -> Self {
+        Self::with_writes(
+            Writes::Persist,
+            client,
+            discovery,
+            cluster,
+            identity_hash,
+            force_conflicts,
+        )
+    }
+
+    /// Resources whose every write is a dry run, for [`super::DryRun`].
+    pub(super) fn dry_run(
+        client: Client,
+        discovery: Vec<(ApiResource, Scope)>,
+        cluster: String,
+        identity_hash: Option<String>,
+        force_conflicts: bool,
+    ) -> Self {
+        Self::with_writes(
+            Writes::DryRun,
+            client,
+            discovery,
+            cluster,
+            identity_hash,
+            force_conflicts,
+        )
+    }
+
+    fn with_writes(
+        writes: Writes,
+        client: Client,
+        discovery: Vec<(ApiResource, Scope)>,
+        cluster: String,
+        identity_hash: Option<String>,
+        force_conflicts: bool,
+    ) -> Self {
         Self {
             client,
+            writes,
             discovery: Arc::new(RwLock::new(discovery)),
             cluster,
             identity_hash,
@@ -96,6 +145,11 @@ impl KubeResources {
 
     pub(super) fn client(&self) -> &Client {
         &self.client
+    }
+
+    /// Whether writes go with `dryRun=All`.
+    fn dry(&self) -> bool {
+        self.writes == Writes::DryRun
     }
 
     pub(super) fn cluster(&self) -> &str {
@@ -212,13 +266,12 @@ impl KubeResources {
     }
 
     /// Server-side apply `manifest` as the kind `ar`, stamped with the run's
-    /// Activation, as a dry run when `dry_run`.
+    /// Activation.
     pub(super) async fn apply_as(
         &self,
         ar: &ApiResource,
         scope: Scope,
         manifest: &Value,
-        dry_run: bool,
     ) -> Result<ApplyResult, ApplyError> {
         let live = self.live_activations();
         apply::apply_resource(
@@ -226,7 +279,7 @@ impl KubeResources {
             ar,
             scope,
             manifest,
-            dry_run,
+            self.dry(),
             self.identity_hash.as_deref(),
             live.as_ref(),
             self.force_conflicts,
@@ -234,15 +287,13 @@ impl KubeResources {
         .await
     }
 
-    /// The first step of a recreate: delete the live object, as a dry run
-    /// when `dry_run`. Returns the kind, the API, and whether there was an
-    /// object to delete. An object that is already gone (TTL-reaped,
-    /// deleted externally, or deleted by a concurrent run) is what the
-    /// recreate wanted anyway.
+    /// The first step of a recreate: delete the live object. Returns the
+    /// kind, the API, and whether there was an object to delete. An object
+    /// that is already gone (TTL-reaped, deleted externally, or deleted by a
+    /// concurrent run) is what the recreate wanted anyway.
     pub(super) async fn delete_for_recreate(
         &self,
         rid: &ResourceId,
-        dry_run: bool,
     ) -> Result<(ApiResource, Scope, Api<DynamicObject>, bool), RecreateError> {
         let (ar, scope) = self
             .cached_kind(&rid.kind)
@@ -251,7 +302,7 @@ impl KubeResources {
         let api = self.api_for(&ar, &scope, rid);
         let dp = DeleteParams {
             propagation_policy: Some(delete_propagation_for(&rid.kind)),
-            dry_run,
+            dry_run: self.dry(),
             ..Default::default()
         };
         let deleted = match api.delete(&rid.name, &dp).await {
@@ -261,14 +312,11 @@ impl KubeResources {
         };
         Ok((ar, scope, api, deleted))
     }
+}
 
-    /// Delete an orphan through the prune guard, as a dry run when
-    /// `dry_run`.
-    pub(super) async fn prune(
-        &self,
-        rid: &ResourceId,
-        dry_run: bool,
-    ) -> Result<Pruned, DeleteError> {
+#[async_trait]
+impl ResourceIo for KubeResources {
+    async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
         let (ar, scope) = self
             .cached_kind(&rid.kind)
             .await
@@ -284,7 +332,7 @@ impl KubeResources {
             .await?;
         let dp = DeleteParams {
             propagation_policy: Some(kube::api::PropagationPolicy::Background),
-            dry_run,
+            dry_run: self.dry(),
             ..Default::default()
         };
         // An object that is already gone (`Pruned::Gone`) is what the prune
@@ -296,12 +344,9 @@ impl KubeResources {
         guard
             .delete(&ar, &scope, rid, &dp)
             .await
-            .map_err(DeleteError::Guard)
+            .map_err(DeleteError::Prune)
     }
-}
 
-#[async_trait]
-impl ResourceIo for KubeResources {
     async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError> {
         let (ar, scope) = self.resolve_kind(manifest).await?;
         // What the manifest expects something else to have created
@@ -319,7 +364,7 @@ impl ResourceIo for KubeResources {
                 detail,
             });
         }
-        self.apply_as(&ar, scope, manifest, false).await
+        self.apply_as(&ar, scope, manifest).await
     }
 
     async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, ReadError> {
@@ -338,7 +383,7 @@ impl ResourceIo for KubeResources {
 
     async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, RecreateError> {
         let rid = ResourceId::from_value(manifest);
-        let (ar, scope, api, deleted) = self.delete_for_recreate(&rid, false).await?;
+        let (ar, scope, api, deleted) = self.delete_for_recreate(&rid).await?;
 
         // Poll for deletion. Transient API errors are treated as "probably
         // gone" since the delete itself succeeded; any real problem
@@ -371,7 +416,7 @@ impl ResourceIo for KubeResources {
             }
         }
 
-        self.apply_as(&ar, scope, manifest, false)
+        self.apply_as(&ar, scope, manifest)
             .await
             .map_err(RecreateError::Reapply)
     }
@@ -417,10 +462,6 @@ impl ResourceIo for KubeResources {
         let mut d = self.discovery.write().await;
         *d = fetch::merge_discovery(&d, new);
         Ok(())
-    }
-
-    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
-        self.prune(rid, false).await
     }
 }
 
@@ -477,9 +518,9 @@ mod prune_tests {
             namespace: CLUSTER_SCOPED.into(),
             name: name.into(),
         };
-        assert_eq!(ops.delete(&rid("mine")).await.unwrap(), Pruned::Deleted);
+        assert_eq!(ops.prune(&rid("mine")).await.unwrap(), Pruned::Deleted);
         assert!(matches!(
-            ops.delete(&rid("shared")).await,
+            ops.prune(&rid("shared")).await,
             Ok(Pruned::Kept(_))
         ));
         assert_eq!(api.names("ClusterRole"), vec!["shared"]);
@@ -504,7 +545,7 @@ mod prune_tests {
             namespace: CLUSTER_SCOPED.into(),
             name: "mine".into(),
         };
-        let err = ops.delete(&rid).await.unwrap_err().to_string();
+        let err = ops.prune(&rid).await.unwrap_err().to_string();
         assert!(err.contains("kix migrate domain"), "{err}");
         assert_eq!(api.names("ClusterRole"), vec!["mine"]);
     }
