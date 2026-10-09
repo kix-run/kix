@@ -3,23 +3,23 @@
 //! Every apiserver call and every other piece of I/O the deploy engine
 //! performs goes through three seams:
 //!
-//! - [`ResourceIo`]: the objects of the plan. Apply, read, recreate, wait
+//! - `ResourceIo`: the objects of the plan. Apply, read, recreate, wait
 //!   for readiness, refresh discovery, prune.
-//! - [`DeployRecord`]: the engine's view of the run's Activation record.
+//! - `DeployRecord`: the engine's view of the run's Activation record.
 //!   Begin, checkpoint, stamp unchanged objects, abort, finalize. Built on
-//!   [`super::activation::Records`].
-//! - [`SecretHydrator`]: decrypt SOPS-backed Secret data before an apply.
+//!   `activation::Records`.
+//! - `SecretHydrator`: decrypt SOPS-backed Secret data before an apply.
 //!
-//! A run reaches them through one [`Cluster`]. Its implementations:
+//! A run reaches them through one `Cluster`. Its implementations:
 //!
-//! - [`KubeResources`], [`ActivationRecord`] and [`SopsHydrator`] work
+//! - `KubeResources`, `ActivationRecord` and `SopsHydrator` work
 //!   against a real cluster. `resources.rs` is the only file in the engine
 //!   that knows `kube::Api`.
-//! - [`DryRun`] wraps [`KubeResources`] and [`SopsHydrator`] and sends every
+//! - `DryRun` wraps `KubeResources` and `SopsHydrator` and sends every
 //!   write with `dryRun=All`, journaling what the apiserver answered. A dry
 //!   run has no record. Whether a run is dry is decided here, by which
-//!   [`Cluster`] constructor made it, and nowhere else.
-//! - [`scripted::ScriptedOps`] is the fake the engine's tests run against.
+//!   `Cluster` constructor made it, and nowhere else.
+//! - `scripted::ScriptedOps` is the fake the engine's tests run against.
 //!   Its calls do not complete on their own: a test scripts each one to
 //!   complete now, after a virtual delay, when the test releases a gate, or
 //!   never. That is what makes a parked future visible to a test.

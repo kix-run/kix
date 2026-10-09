@@ -13,12 +13,12 @@
 //! remain spawned because an unpolled future makes no progress and fires no
 //! deadline.
 //!
-//! Every cluster call goes through the seams of one [`Cluster`]: its
+//! Every cluster call goes through the seams of one `ops::Cluster`: its
 //! resources, its deploy record and its secret hydrator. So the loop runs
 //! under test against `ops::scripted::ScriptedOps` with no cluster. Whether
-//! a run is dry is the [`Cluster`]'s to say.
+//! a run is dry is the `Cluster`'s to say.
 //!
-//! [`run_deploy`] is private to the library. Callers reach it through a plan
+//! `run_deploy` is private to the library. Callers reach it through a plan
 //! the library made; see its docs.
 //!
 //! The planner currently produces Apply, Skip, and Recreate transitions.
@@ -69,7 +69,7 @@ pub struct PlanNodeEntry {
     pub rerun: Option<Value>,
 }
 
-/// The planner's output. Handed to [`run_deploy`] which consumes it.
+/// The planner's output, which the engine (`run_deploy`) consumes.
 ///
 /// `edges` is `(dependent, predecessor)`; the dependent waits on the
 /// predecessor. Both endpoints must also appear in `nodes`.
