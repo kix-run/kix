@@ -572,7 +572,7 @@ Long-lived K8s controller watching Activation CRs.
 - **Stamping:** Annotation injection (identity-hash, depends-on, package metadata).
 
 ### cluster module
-- **Activation:** find_active, list_superseded_activations, retire_plan (`gc --keep`), Activation CR lifecycle management.
+- **Activation:** `Records` (the one handle on the Activation records: active, superseded, rollback targets, lifecycle writes), retire_plan (`gc --keep`), Activation CR lifecycle management.
 - **Apply:** `detect_changes` → ChangeAction (Apply, Skip, Orphan). ApplyAction (Created, Configured, Unchanged, Skipped).
 - **Fetch:** API resource discovery, fetch all kix-managed resources, normalize for diff (strip server-side fields).
 - **Graph:** ResourceGraph with tree/dot/json output.

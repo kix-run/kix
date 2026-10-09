@@ -53,17 +53,59 @@ pub const PHASE_DEGRADED: &str = "Degraded";
 /// supersedes it once that plan finalizes.
 pub const PHASE_FAILED: &str = "Failed";
 
+/// A read or write of the records that failed.
 #[derive(Error, Debug)]
-pub enum ActivationError {
-    #[error("failed to list activations: {0}")]
-    ListFailed(#[source] kube::Error),
-
-    #[error("failed to patch activation '{name}': {source}")]
-    PatchFailed {
-        name: String,
+pub enum RecordsError {
+    /// The apiserver failed `op` on the record `name`, or on the list of
+    /// records when `name` is `None`.
+    #[error("failed to {op} {}: {source}", target(.name))]
+    Kube {
+        op: &'static str,
+        name: Option<String>,
         #[source]
         source: kube::Error,
     },
+
+    /// [`Records::retire`] was given a record that was not read from the
+    /// cluster, so there is nothing to make the delete conditional on.
+    #[error("refusing to delete activation '{0}': it was not read from the cluster")]
+    NotRead(String),
+}
+
+fn target(name: &Option<String>) -> String {
+    match name {
+        Some(name) => format!("activation '{name}'"),
+        None => "activations".to_string(),
+    }
+}
+
+impl RecordsError {
+    /// A failed list of the records.
+    pub(crate) fn list(source: kube::Error) -> Self {
+        RecordsError::Kube {
+            op: "list",
+            name: None,
+            source,
+        }
+    }
+
+    /// A failed `op` on the record `name`.
+    fn on(op: &'static str, name: &str) -> impl FnOnce(kube::Error) -> Self {
+        let name = name.to_string();
+        move |source| RecordsError::Kube {
+            op,
+            name: Some(name),
+            source,
+        }
+    }
+
+    /// The apiserver's error, when there is one.
+    pub fn kube(&self) -> Option<&kube::Error> {
+        match self {
+            RecordsError::Kube { source, .. } => Some(source),
+            RecordsError::NotRead(_) => None,
+        }
+    }
 }
 
 /// Why [`Records::open_installed`] has no records to open.
@@ -108,10 +150,24 @@ pub struct Record {
     pub operator_driven: bool,
     /// `status.orphansKeptFrom`: builds whose orphans are still on the cluster.
     pub orphans_kept_from: Vec<KeptOrphanSource>,
-    /// Server-assigned identity, so a delete can be conditional on the
-    /// record being the one that was read.
-    pub uid: Option<String>,
-    pub resource_version: Option<String>,
+    /// `status.waves` and `status.totalWaves`: deploy progress, for a
+    /// command that waits on the operator.
+    pub waves: Vec<WaveRecord>,
+    pub total_waves: usize,
+    /// Whether the record is being deleted (`metadata.deletionTimestamp`).
+    pub deleting: bool,
+    /// The record as the cluster served it, so a delete can be conditional
+    /// on the record being the one that was read. `None` for a record built
+    /// by hand, which [`Records::retire`] refuses.
+    pub read: Option<ReadAs>,
+}
+
+/// The uid and resourceVersion a record was read at. Only [`Record::of`]
+/// makes one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadAs {
+    uid: String,
+    resource_version: String,
 }
 
 impl Record {
@@ -141,8 +197,27 @@ impl Record {
             created_at: obj.metadata.creation_timestamp.as_ref().map(|t| t.0),
             operator_driven: obj.data.pointer("/spec/source").is_some(),
             orphans_kept_from: orphans_kept_from(obj),
-            uid: obj.metadata.uid.clone(),
-            resource_version: obj.metadata.resource_version.clone(),
+            waves: obj
+                .data
+                .pointer("/status/waves")
+                .and_then(Value::as_array)
+                .map(|waves| waves.iter().map(WaveRecord::of).collect())
+                .unwrap_or_default(),
+            total_waves: obj
+                .data
+                .pointer("/status/totalWaves")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize,
+            deleting: obj.metadata.deletion_timestamp.is_some(),
+            read: obj
+                .metadata
+                .uid
+                .clone()
+                .zip(obj.metadata.resource_version.clone())
+                .map(|(uid, resource_version)| ReadAs {
+                    uid,
+                    resource_version,
+                }),
         }
     }
 
@@ -285,7 +360,7 @@ pub(crate) fn served_resource(discovery: &[(ApiResource, Scope)]) -> Option<&Api
 /// Outside [`Records`] and its gate: it only decides how a command-line
 /// argument is read, and a cluster that has not migrated has no records
 /// under the current group to find.
-pub async fn records_exist(client: &Client, cluster: &str) -> Result<bool, ActivationError> {
+pub async fn records_exist(client: &Client, cluster: &str) -> Result<bool, RecordsError> {
     let version = keys::API_VERSION
         .rsplit_once('/')
         .map_or(keys::API_VERSION, |(_, v)| v);
@@ -304,7 +379,7 @@ pub async fn records_exist(client: &Client, cluster: &str) -> Result<bool, Activ
     match api.list(&lp).await {
         Ok(list) => Ok(!list.items.is_empty()),
         Err(kube::Error::Api(e)) if e.code == 404 => Ok(false),
-        Err(e) => Err(ActivationError::ListFailed(e)),
+        Err(e) => Err(RecordsError::list(e)),
     }
 }
 
@@ -422,8 +497,9 @@ impl Records {
         Self::open(client, discovery)?.ok_or(OpenError::NotInstalled)
     }
 
-    /// The Activation kind as the cluster serves it, for a watch.
-    pub fn resource(&self) -> &ApiResource {
+    /// The Activation kind as the cluster serves it, for the operator's
+    /// watch of the records.
+    pub fn watch_resource(&self) -> &ApiResource {
         &self.resource
     }
 
@@ -432,18 +508,18 @@ impl Records {
     }
 
     /// Every record `cluster` owns, whatever its phase.
-    async fn list_of(&self, cluster: &str) -> Result<Vec<DynamicObject>, ActivationError> {
+    async fn list_of(&self, cluster: &str) -> Result<Vec<DynamicObject>, RecordsError> {
         let lp = ListParams::default().labels(&cluster_selector(cluster));
         Ok(self
             .api()
             .list(&lp)
             .await
-            .map_err(ActivationError::ListFailed)?
+            .map_err(RecordsError::list)?
             .items)
     }
 
     /// `cluster`'s records in `phase`.
-    async fn in_phase(&self, cluster: &str, phase: &str) -> Result<Vec<Record>, ActivationError> {
+    async fn in_phase(&self, cluster: &str, phase: &str) -> Result<Vec<Record>, RecordsError> {
         Ok(self
             .list_of(cluster)
             .await?
@@ -466,7 +542,7 @@ impl Records {
     /// stopped part way, so it is not what the cluster is running, and diffing
     /// against it would read every object only the Active closure has as an
     /// orphan. `Deploying` is not matched either: it is in flight.
-    pub async fn active(&self, cluster: &str) -> Result<Option<Record>, ActivationError> {
+    pub async fn active(&self, cluster: &str) -> Result<Option<Record>, RecordsError> {
         let items = self.list_of(cluster).await?;
         Ok(current_of(&items, cluster).map(Record::of))
     }
@@ -475,7 +551,7 @@ impl Records {
     ///
     /// Oldest first because that is the order a deploy consumed them in, so a
     /// stack of them folds into the baseline the same way it accumulated.
-    pub async fn failed(&self, cluster: &str) -> Result<Vec<Record>, ActivationError> {
+    pub async fn failed(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
         let mut records = self.in_phase(cluster, PHASE_FAILED).await?;
         records.sort_by(|a, b| {
             a.failed_at
@@ -487,7 +563,7 @@ impl Records {
 
     /// Every Deploying record for a cluster, oldest first: deploys still in
     /// flight, or that were when they last wrote.
-    pub async fn deploying(&self, cluster: &str) -> Result<Vec<Record>, ActivationError> {
+    pub async fn deploying(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
         let mut records = self.in_phase(cluster, PHASE_DEPLOYING).await?;
         records.sort_by(|a, b| {
             a.created_at
@@ -504,7 +580,7 @@ impl Records {
     /// filter a CLI record, which is phase-less for the round trip between being
     /// created and being marked Deploying, reads as a queued deploy and the
     /// operator supersedes either it or itself over the difference.
-    pub async fn queued(&self, cluster: &str) -> Result<Vec<Record>, ActivationError> {
+    pub async fn queued(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
         // An empty phase is a new record without status yet, which reads as
         // Queued. Only the operator's own, as above: a CLI record looks
         // exactly like this for a round trip, and permanently if the process
@@ -528,7 +604,7 @@ impl Records {
     /// permanent record for every failed deploy, each keeping a hash alive in
     /// the `kix.run/activations` annotation of everything it stamped. A caller
     /// choosing a rollback target wants [`Records::rollback_targets`].
-    pub async fn superseded(&self, cluster: &str) -> Result<Vec<Record>, ActivationError> {
+    pub async fn superseded(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
         let mut records = self.in_phase(cluster, PHASE_SUPERSEDED).await?;
         sort_newest_first(&mut records);
         Ok(records)
@@ -539,7 +615,7 @@ impl Records {
     /// stopped part way is Superseded once a later plan folded its leftovers
     /// in, but it was never running, so rolling back to it would apply a state
     /// the cluster has never been in.
-    pub async fn rollback_targets(&self, cluster: &str) -> Result<Vec<Record>, ActivationError> {
+    pub async fn rollback_targets(&self, cluster: &str) -> Result<Vec<Record>, RecordsError> {
         let mut records = self.superseded(cluster).await?;
         records.retain(Record::was_ever_current);
         Ok(records)
@@ -554,7 +630,7 @@ impl Records {
     /// without a rebuild.
     ///
     /// `Ok(None)` when there is no current record, or it predates receipts.
-    pub async fn receipt(&self, cluster: &str) -> Result<Option<Value>, ActivationError> {
+    pub async fn receipt(&self, cluster: &str) -> Result<Option<Value>, RecordsError> {
         let items = self.list_of(cluster).await?;
         Ok(current_of(&items, cluster).and_then(|current| {
             current
@@ -570,12 +646,12 @@ impl Records {
     /// A record's name carries only the first 12 characters of the build's
     /// hash, so two builds can share a name. Applying one over the other would
     /// rewrite the history of what was deployed.
-    pub async fn identity_hash_of(&self, name: &str) -> Result<Option<String>, ActivationError> {
+    pub async fn identity_hash_of(&self, name: &str) -> Result<Option<String>, RecordsError> {
         let item = self
             .api()
             .get_opt(name)
             .await
-            .map_err(ActivationError::ListFailed)?;
+            .map_err(RecordsError::on("get", name))?;
         // The exact key, without the retired spelling `Record::of` falls
         // back to: a record this check passes is one this build will
         // overwrite, so it must carry the current identity stamp.
@@ -616,19 +692,16 @@ impl Records {
         )
     }
 
-    async fn patch_status(&self, name: &str, patch: &Value) -> Result<(), ActivationError> {
+    async fn patch_status(&self, name: &str, patch: &Value) -> Result<(), RecordsError> {
         self.api()
             .patch_status(name, &PatchParams::default(), &Patch::Merge(patch))
             .await
-            .map_err(|e| ActivationError::PatchFailed {
-                name: name.to_string(),
-                source: e,
-            })?;
+            .map_err(RecordsError::on("patch", name))?;
         Ok(())
     }
 
     /// Mark a record Superseded (status.phase only).
-    pub async fn supersede(&self, name: &str) -> Result<(), ActivationError> {
+    pub async fn supersede(&self, name: &str) -> Result<(), RecordsError> {
         self.patch_status(name, &json!({ "status": { "phase": PHASE_SUPERSEDED } }))
             .await?;
         tracing::info!(activation = %name, "marked as Superseded");
@@ -640,27 +713,31 @@ impl Records {
     /// a rollback making it Active again, bumps resourceVersion and the
     /// apiserver refuses with 409, so nothing that changed underneath the
     /// plan is deleted.
-    pub async fn retire(&self, record: &Record) -> Result<(), ActivationError> {
+    ///
+    /// A record not read from the cluster is refused: a delete without
+    /// preconditions could take a record that changed after the plan was
+    /// made.
+    pub async fn retire(&self, record: &Record) -> Result<(), RecordsError> {
+        let Some(read) = &record.read else {
+            return Err(RecordsError::NotRead(record.name.clone()));
+        };
         let dp = DeleteParams {
             preconditions: Some(Preconditions {
-                uid: record.uid.clone(),
-                resource_version: record.resource_version.clone(),
+                uid: Some(read.uid.clone()),
+                resource_version: Some(read.resource_version.clone()),
             }),
             ..Default::default()
         };
         self.api()
             .delete(&record.name, &dp)
             .await
-            .map_err(|e| ActivationError::PatchFailed {
-                name: record.name.clone(),
-                source: e,
-            })?;
+            .map_err(RecordsError::on("delete", &record.name))?;
         Ok(())
     }
 
     /// Remove `status.orphansKeptFrom` from a record, once something has
     /// deleted the orphans it describes.
-    pub async fn clear_orphans_kept_from(&self, name: &str) -> Result<(), ActivationError> {
+    pub async fn clear_orphans_kept_from(&self, name: &str) -> Result<(), RecordsError> {
         self.patch_status(
             name,
             &json!({ "status": { keys::ORPHANS_KEPT_FROM_FIELD: Value::Null } }),
@@ -669,16 +746,22 @@ impl Records {
     }
 
     /// List one record, to check that this client may read them.
-    pub async fn reachable(&self) -> Result<(), kube::Error> {
-        self.api().list(&ListParams::default().limit(1)).await?;
+    pub async fn reachable(&self) -> Result<(), RecordsError> {
+        self.api()
+            .list(&ListParams::default().limit(1))
+            .await
+            .map_err(RecordsError::list)?;
         Ok(())
     }
 
-    /// The record named `name` as the cluster holds it, for a caller that
-    /// polls fields [`Record`] does not carry: wave progress, a deletion in
-    /// progress.
-    pub async fn object(&self, name: &str) -> Result<DynamicObject, kube::Error> {
-        self.api().get(name).await
+    /// The record named `name`, or `None` when there is no such record.
+    pub async fn get(&self, name: &str) -> Result<Option<Record>, RecordsError> {
+        let item = self
+            .api()
+            .get_opt(name)
+            .await
+            .map_err(RecordsError::on("get", name))?;
+        Ok(item.as_ref().map(Record::of))
     }
 
     /// Create or update a record for the operator to deploy: the build at
@@ -692,7 +775,7 @@ impl Records {
         cluster: &str,
         source_path: &str,
         identity_hash: Option<&str>,
-    ) -> Result<(), kube::Error> {
+    ) -> Result<(), RecordsError> {
         let mut annotations = serde_json::Map::new();
         if let Some(hash) = identity_hash {
             annotations.insert(
@@ -730,19 +813,17 @@ impl Records {
                 &PatchParams::apply("kix-cli").force(),
                 &Patch::Apply(&patch),
             )
-            .await?;
+            .await
+            .map_err(RecordsError::on("apply", name))?;
         Ok(())
     }
 
     /// Write a deploy receipt to a record's status. A merge patch on the
     /// status subresource leaves everything else alone, so it does not
     /// matter whether the operator has already started on the record.
-    pub async fn write_receipt(&self, name: &str, receipt: &Value) -> Result<(), kube::Error> {
-        let status = json!({ "status": { keys::RECEIPT_FIELD: receipt } });
-        self.api()
-            .patch_status(name, &PatchParams::default(), &Patch::Merge(&status))
-            .await?;
-        Ok(())
+    pub async fn write_receipt(&self, name: &str, receipt: &Value) -> Result<(), RecordsError> {
+        self.patch_status(name, &json!({ "status": { keys::RECEIPT_FIELD: receipt } }))
+            .await
     }
 
     /// Set a record's `metadata.finalizers`, for the operator's own.
@@ -750,11 +831,12 @@ impl Records {
         &self,
         name: &str,
         finalizers: &[String],
-    ) -> Result<(), kube::Error> {
+    ) -> Result<(), RecordsError> {
         let patch = json!({ "metadata": { "finalizers": finalizers } });
         self.api()
             .patch(name, &PatchParams::default(), &Patch::Merge(&patch))
-            .await?;
+            .await
+            .map_err(RecordsError::on("patch", name))?;
         Ok(())
     }
 
@@ -776,7 +858,7 @@ impl Records {
         receipt: Option<&Value>,
         consumed_failed: &[String],
         orphans_kept_from: &[KeptOrphanSource],
-    ) -> Result<(), ActivationError> {
+    ) -> Result<(), RecordsError> {
         let now = chrono::Utc::now().to_rfc3339();
 
         // Supersede the old activation.
@@ -784,17 +866,17 @@ impl Records {
             self.supersede(&old.name).await?;
         }
 
-        // Supersede Failed records folded into this plan. Their
-        //     leftovers have now been re-applied or pruned, so they describe
-        //     nothing outstanding and belong in history with everything else.
+        // Supersede Failed records folded into this plan. Their leftovers have
+        // now been re-applied or pruned, so they describe nothing outstanding
+        // and belong in history with everything else.
         //
-        //     Skipping the record being finalized matters: retrying the same
-        //     closure that failed reuses its name, and superseding it here would
-        //     immediately undo the Active phase set below.
+        // Skipping the record being finalized matters: retrying the same
+        // closure that failed reuses its name, and superseding it here would
+        // immediately undo the Active phase set below.
         //
-        //     Best-effort. A record that will not supersede is cosmetic, and
-        //     failing the deploy over it after every resource has landed would
-        //     be a worse trade.
+        // Best-effort. A record that will not supersede is cosmetic, and
+        // failing the deploy over it after every resource has landed would be
+        // a worse trade.
         for name in consumed_failed {
             if name == new_activation_name {
                 continue;
@@ -808,8 +890,8 @@ impl Records {
             }
         }
 
-        // 2. Update new activation with lifecycle annotations (merge patch to preserve
-        //    kix.run/identity-hash and other annotations set during wave apply)
+        // Lifecycle annotations on the new record, by merge patch, so the
+        // identity hash and the other annotations the apply set stay.
         let mut annotations = serde_json::Map::new();
         annotations.insert(keys::DEPLOYED_AT.to_string(), Value::String(now));
         if let Some(old) = old_activation
@@ -836,10 +918,7 @@ impl Records {
                 &Patch::Merge(&spec_patch),
             )
             .await
-            .map_err(|e| ActivationError::PatchFailed {
-                name: new_activation_name.to_string(),
-                source: e,
-            })?;
+            .map_err(RecordsError::on("patch", new_activation_name))?;
 
         // Set the final phase and predecessor link.
         let new_phase = if had_failures {
@@ -874,15 +953,12 @@ impl Records {
     }
 
     /// Read one record's `status.phase`, or "" when it has none yet.
-    async fn phase_of(&self, name: &str) -> Result<String, ActivationError> {
+    async fn phase_of(&self, name: &str) -> Result<String, RecordsError> {
         let item = self
             .api()
             .get(name)
             .await
-            .map_err(|e| ActivationError::PatchFailed {
-                name: name.to_string(),
-                source: e,
-            })?;
+            .map_err(RecordsError::on("get", name))?;
         Ok(read_phase(&item).to_string())
     }
 
@@ -896,7 +972,7 @@ impl Records {
         &self,
         activation_name: &str,
         total_waves: usize,
-    ) -> Result<(), ActivationError> {
+    ) -> Result<(), RecordsError> {
         let current = self.phase_of(activation_name).await?;
 
         let mut status = serde_json::Map::new();
@@ -923,7 +999,7 @@ impl Records {
         &self,
         activation_name: &str,
         reason: &str,
-    ) -> Result<(), ActivationError> {
+    ) -> Result<(), RecordsError> {
         let current = self.phase_of(activation_name).await?;
         let Some(phase) = phase_on_abort(&current) else {
             tracing::debug!(
@@ -958,7 +1034,7 @@ impl Records {
         &self,
         activation_name: &str,
         waves: &[WaveRecord],
-    ) -> Result<(), ActivationError> {
+    ) -> Result<(), RecordsError> {
         let wave_json: Vec<Value> = waves
             .iter()
             .map(|w| {
@@ -1159,11 +1235,19 @@ pub enum WaveStatus {
 }
 
 impl WaveStatus {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             WaveStatus::Pending => "Pending",
             WaveStatus::Complete => "Complete",
             WaveStatus::Failed => "Failed",
+        }
+    }
+
+    fn from_str(s: &str) -> Self {
+        match s {
+            "Complete" => WaveStatus::Complete,
+            "Failed" => WaveStatus::Failed,
+            _ => WaveStatus::Pending,
         }
     }
 }
@@ -1207,13 +1291,31 @@ fn phase_on_abort(current: &str) -> Option<&'static str> {
 }
 
 /// Data for recording a single wave's result.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WaveRecord {
     pub wave_index: usize,
     pub status: WaveStatus,
     pub resource_count: usize,
     pub applied: usize,
     pub failed: usize,
+}
+
+impl WaveRecord {
+    /// One entry of `status.waves`, as [`Records::record_waves`] writes it.
+    /// A missing number reads as 0 and a missing status as Pending.
+    fn of(wave: &Value) -> WaveRecord {
+        let number = |key: &str| wave.get(key).and_then(Value::as_u64).unwrap_or(0) as usize;
+        WaveRecord {
+            wave_index: number("wave"),
+            status: wave
+                .get("status")
+                .and_then(Value::as_str)
+                .map_or(WaveStatus::Pending, WaveStatus::from_str),
+            resource_count: number("resources"),
+            applied: number("applied"),
+            failed: number("failed"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1816,6 +1918,56 @@ mod listing_tests {
         assert_eq!(names, vec!["c-interrupted", "c-ran"]);
     }
 
+    /// A record built by hand carries no uid or resourceVersion, so it
+    /// cannot be retired: the delete would have nothing to be conditional on.
+    #[tokio::test]
+    async fn a_record_not_read_from_the_cluster_is_not_retired() {
+        let api = crate::cluster::fake_api::FakeApi::new([]);
+        let client = api.client();
+        let discovery = crate::cluster::fetch::discover_resources(&client)
+            .await
+            .unwrap();
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        let made_up = Record {
+            name: "c-made-up".into(),
+            ..Default::default()
+        };
+        assert!(matches!(
+            records.retire(&made_up).await,
+            Err(RecordsError::NotRead(name)) if name == "c-made-up"
+        ));
+        assert!(api.requests().iter().all(|r| !r.starts_with("DELETE")));
+    }
+
+    /// A record that changed after it was read is not deleted, and the
+    /// error says which operation on which record failed.
+    #[tokio::test]
+    async fn a_failed_retire_names_the_delete_and_the_record() {
+        let api = crate::cluster::fake_api::FakeApi::new([json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": crate::manifest::lifecycle::RECORD_KIND,
+            "metadata": { "name": "c-old" },
+            "status": { "phase": PHASE_SUPERSEDED },
+        })]);
+        let client = api.client();
+        let discovery = crate::cluster::fetch::discover_resources(&client)
+            .await
+            .unwrap();
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        let read = records.get("c-old").await.unwrap().unwrap();
+        api.after_get("c-old", |o| o["status"]["phase"] = json!(PHASE_ACTIVE));
+        records.get("c-old").await.unwrap();
+        let err = records.retire(&read).await.unwrap_err().to_string();
+        assert!(
+            err.starts_with("failed to delete activation 'c-old': "),
+            "{err}"
+        );
+        assert_eq!(
+            api.names(crate::manifest::lifecycle::RECORD_KIND),
+            vec!["c-old"]
+        );
+    }
+
     fn discovery_with(groups: &[&str]) -> Vec<(ApiResource, Scope)> {
         groups
             .iter()
@@ -1843,7 +1995,7 @@ mod listing_tests {
         let retired = crate::legacy_domain::DOMAINS[0];
 
         let opened = Records::open(&client, &discovery_with(&[keys::GROUP])).unwrap();
-        assert_eq!(opened.unwrap().resource().group, keys::GROUP);
+        assert_eq!(opened.unwrap().watch_resource().group, keys::GROUP);
 
         assert!(matches!(
             Records::open(&client, &discovery_with(&[retired])),

@@ -19,7 +19,7 @@ use kube::{
 use thiserror::Error;
 use tokio::sync::Mutex;
 
-use super::activation::{self, ActivationError};
+use super::activation::{self, RecordsError};
 use super::fetch::{self, SharedOrphan};
 use super::tenancy::{self, Tenancy};
 use crate::manifest::types::ResourceId;
@@ -55,7 +55,7 @@ pub enum PruneError {
     #[error("{}", super::errors::describe(.0))]
     Kube(#[from] kube::Error),
     #[error("cannot tell whether another Kix cluster still deploys it: {0}")]
-    Records(#[from] ActivationError),
+    Records(#[from] RecordsError),
 }
 
 /// Deletes orphans of one Kix cluster. See the module docs.

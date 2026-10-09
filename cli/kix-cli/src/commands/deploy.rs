@@ -427,10 +427,7 @@ async fn check_cached_baseline(
     cached_hash: &str,
 ) -> Result<()> {
     let active = match records {
-        Some(records) => records
-            .active(cluster)
-            .await
-            .map_err(|e| miette!("failed to find the active activation: {e}"))?,
+        Some(records) => records.active(cluster).await.map_err(|e| miette!("{e}"))?,
         None => None,
     };
     let active_hash = active.as_ref().and_then(|a| a.identity_hash.as_deref());
@@ -1227,13 +1224,9 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             );
         }
 
-        let reconciled = super::operator::watch_activation_progress(
-            &records,
-            &activation_name,
-            &source_path,
-            global.quiet,
-        )
-        .await?;
+        let reconciled =
+            super::operator::watch_activation_progress(&records, &activation_name, global.quiet)
+                .await?;
 
         let (ending, phase) = match reconciled {
             Reconciled::Active => (output::green("complete"), output::green("Active")),

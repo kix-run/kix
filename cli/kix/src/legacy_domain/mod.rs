@@ -24,8 +24,9 @@
 //! 4. [`check_discovery`] and [`check_build`], the gate. Every command that
 //!    reads Kix records opens them through
 //!    [`crate::cluster::activation::Records::open`], which refuses a cluster
-//!    that has not been migrated and names the command to run. `Build` checks each build it loads, and
-//!    the commands that install a build's CRDs refuse a stale one
+//!    that has not been migrated and names the command to run. `Build`
+//!    checks each build it loads, and the commands that install a build's
+//!    CRDs refuse a stale one
 //!    ([`crate::build_source::Build::installable`]).
 //!
 //! Plus the migration itself, [`migrate::run`], behind `kix migrate domain`.

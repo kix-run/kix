@@ -39,8 +39,9 @@ use kube::{
 };
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
+use anyhow::Context as _;
 use controller::{Context, error_policy, reconcile_activation};
-use kix::cluster::activation::{OpenError, Records};
+use kix::cluster::activation::Records;
 use kix::manifest::keys;
 
 /// Stream-level generation filter for `DynamicObject`.
@@ -83,28 +84,20 @@ async fn open_records(client: &kube::Client) -> anyhow::Result<Records> {
     let groups: Vec<&str> = std::iter::once(keys::GROUP)
         .chain(kix::legacy_domain::DOMAINS.iter().copied())
         .collect();
-    let discovery = match kix::cluster::fetch::discover_groups(client, &groups).await {
-        Ok(discovery) => discovery,
-        Err(e) => {
-            tracing::error!("could not check the cluster's API groups: {e}");
-            return Err(e.into());
-        }
-    };
-    match Records::open(client, &discovery) {
-        Ok(Some(records)) => Ok(records),
-        Ok(None) => {
-            tracing::error!("Activation CRD not found on cluster");
-            tracing::error!(
-                "Ensure the Activation CRD ({}) is deployed before starting the operator",
-                keys::ACTIVATIONS_CRD
-            );
-            Err(OpenError::NotInstalled.into())
-        }
-        Err(e) => {
-            tracing::error!("{e}");
-            Err(e.into())
-        }
-    }
+    let discovery = kix::cluster::fetch::discover_groups(client, &groups)
+        .await
+        .context("could not check the cluster's API groups")?;
+    let records = Records::open(client, &discovery)?.with_context(|| {
+        format!(
+            "the Activation CRD ({}) is not served on this cluster; deploy it before starting the operator",
+            keys::ACTIVATIONS_CRD
+        )
+    })?;
+    records
+        .reachable()
+        .await
+        .context("the operator cannot list Activation records")?;
+    Ok(records)
 }
 
 #[tokio::main]
@@ -144,24 +137,9 @@ async fn main() -> anyhow::Result<()> {
     // Activation with no phase reads as Queued: it would supersede the real
     // Active activation and deploy whatever build that record names.
     let records = open_records(&client).await?;
-    let ar = records.resource().clone();
+    tracing::info!("Activation CRD is registered");
+    let ar = records.watch_resource().clone();
     let activations: Api<DynamicObject> = Api::all_with(client.clone(), &ar);
-
-    // Verify CRD is registered by attempting a list
-    match activations
-        .list(&kube::api::ListParams::default().limit(1))
-        .await
-    {
-        Ok(_) => tracing::info!("Activation CRD is registered"),
-        Err(e) => {
-            tracing::error!("Activation CRD not found on cluster: {e}");
-            tracing::error!(
-                "Ensure the Activation CRD ({}) is deployed before starting the operator",
-                keys::ACTIVATIONS_CRD
-            );
-            return Err(e.into());
-        }
-    }
 
     let ctx = Arc::new(Context {
         client: client.clone(),

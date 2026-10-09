@@ -7,7 +7,10 @@
 
 use std::time::Duration;
 
-use kix::cluster::activation::Records;
+use kix::cluster::activation::{
+    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_SUPERSEDED, Record, Records,
+    WaveStatus,
+};
 use kube::client::Client;
 use miette::{Result, miette};
 use serde_json::Value;
@@ -66,7 +69,7 @@ pub async fn apply_activation(
     records
         .submit(activation_name, cluster_name, source_path, identity_hash)
         .await
-        .map_err(|e| miette!("failed to apply Activation CR: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
 
     // The operator has no source tree, so it cannot compute provenance. The
     // CLI that submitted this activation does, so it writes the receipt here.
@@ -89,6 +92,47 @@ pub enum Reconciled {
     Degraded,
 }
 
+/// What the watch has printed of a record's progress, so each poll prints
+/// only what is new.
+#[derive(Default)]
+struct Progress {
+    seen_deploying: bool,
+    waves_done: usize,
+}
+
+impl Progress {
+    /// The lines this read of the record adds: "Operator is reconciling"
+    /// the first time it is Deploying, then each wave that has finished
+    /// since the last read.
+    fn lines(&mut self, act: &Record) -> Vec<String> {
+        let mut lines = Vec::new();
+        if !self.seen_deploying && act.phase == PHASE_DEPLOYING {
+            self.seen_deploying = true;
+            lines.push(format!(
+                "  {} Operator is reconciling ({} waves)...",
+                output::dim("•"),
+                act.total_waves,
+            ));
+        }
+        for (i, wave) in act.waves.iter().enumerate().skip(self.waves_done) {
+            let (mark, status) = match wave.status {
+                WaveStatus::Complete => (output::green("✓"), output::green("Complete")),
+                WaveStatus::Failed => (output::red("✗"), output::red("Failed")),
+                WaveStatus::Pending => continue,
+            };
+            lines.push(format!(
+                "  {mark} Wave {}: {status} ({}/{} applied, {} failed)",
+                i + 1,
+                wave.applied,
+                wave.resource_count,
+                wave.failed,
+            ));
+            self.waves_done = i + 1;
+        }
+        lines
+    }
+}
+
 /// Watch an Activation CR's status until it reaches Active phase or fails.
 ///
 /// Polls the Activation status periodically, printing wave progress as it happens.
@@ -97,15 +141,13 @@ pub enum Reconciled {
 pub async fn watch_activation_progress(
     records: &Records,
     activation_name: &str,
-    _expected_source: &str,
     quiet: bool,
 ) -> Result<Reconciled> {
     let poll_interval = Duration::from_secs(2);
     let timeout = Duration::from_secs(600);
     let start = std::time::Instant::now();
 
-    let mut last_wave_count = 0usize;
-    let mut seen_deploying = false;
+    let mut progress = Progress::default();
 
     loop {
         if start.elapsed() > timeout {
@@ -116,80 +158,22 @@ pub async fn watch_activation_progress(
         }
 
         let act = records
-            .object(activation_name)
+            .get(activation_name)
             .await
-            .map_err(|e| miette!("failed to get Activation '{}': {e}", activation_name))?;
-
-        let phase = act
-            .data
-            .pointer("/status/phase")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        let waves = act.data.pointer("/status/waves").and_then(|v| v.as_array());
-
-        let total_waves = act
-            .data
-            .pointer("/status/totalWaves")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
-
-        // Print new wave completions
-        if let Some(waves) = waves {
-            if !seen_deploying && phase == "Deploying" {
-                seen_deploying = true;
-                if !quiet {
-                    println!(
-                        "  {} Operator is reconciling ({} waves)...",
-                        output::dim("•"),
-                        total_waves,
-                    );
-                }
-            }
-
-            #[allow(clippy::mut_range_bound)]
-            for i in last_wave_count..waves.len() {
-                if let Some(wave) = waves.get(i) {
-                    let status = wave
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("Pending");
-                    let applied = wave.get("applied").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let failed = wave.get("failed").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let resources = wave.get("resources").and_then(|v| v.as_u64()).unwrap_or(0);
-
-                    if status == "Complete" || status == "Failed" {
-                        if !quiet {
-                            let status_str = if status == "Complete" {
-                                output::green(status)
-                            } else {
-                                output::red(status)
-                            };
-                            println!(
-                                "  {} Wave {}: {} ({}/{} applied, {} failed)",
-                                if status == "Complete" {
-                                    output::green("✓")
-                                } else {
-                                    output::red("✗")
-                                },
-                                i + 1,
-                                status_str,
-                                applied,
-                                resources,
-                                failed,
-                            );
-                        }
-                        last_wave_count = i + 1;
-                    }
-                }
+            .map_err(|e| miette!("{e}"))?
+            .ok_or_else(|| miette!("Activation '{activation_name}' no longer exists"))?;
+        let phase = act.phase.as_str();
+        for line in progress.lines(&act) {
+            if !quiet {
+                println!("{line}");
             }
         }
 
         // Completion: phase is Active or Degraded (deploy finished, possibly
         // with failures; Activation status contains the failed-resource list.)
-        if phase == "Active" || phase == "Degraded" {
+        if phase == PHASE_ACTIVE || phase == PHASE_DEGRADED {
             if !quiet {
-                let phase_colored = if phase == "Active" {
+                let phase_colored = if phase == PHASE_ACTIVE {
                     output::green(phase)
                 } else {
                     output::yellow(phase)
@@ -201,7 +185,7 @@ pub async fn watch_activation_progress(
                     phase_colored,
                 );
             }
-            return Ok(if phase == "Active" {
+            return Ok(if phase == PHASE_ACTIVE {
                 Reconciled::Active
             } else {
                 Reconciled::Degraded
@@ -209,23 +193,17 @@ pub async fn watch_activation_progress(
         }
 
         // Check for Superseded (another activation took over)
-        if phase == "Superseded" {
+        if phase == PHASE_SUPERSEDED {
             return Err(miette!(
                 "Activation '{}' was superseded by a newer activation",
                 activation_name
             ));
         }
 
-        if phase == "Failed" {
-            let message = act
-                .data
-                .pointer("/status/message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown error");
+        if phase == PHASE_FAILED {
             return Err(miette!(
-                "Operator reconciliation failed for '{}': {}",
+                "Operator reconciliation failed for '{}': unknown error",
                 activation_name,
-                message
             ));
         }
 
@@ -251,17 +229,13 @@ pub async fn wait_for_deletion(
             ));
         }
 
-        match records.object(activation_name).await {
-            Ok(act) => {
-                // Check if deletion is in progress
-                if act.metadata.deletion_timestamp.is_some() && !quiet {
+        match records.get(activation_name).await {
+            Ok(Some(act)) => {
+                if act.deleting && !quiet {
                     eprint!("\r  {} Finalizer cleanup in progress...", output::dim("•"),);
                 }
             }
-            Err(ref e)
-                if kix::cluster::errors::classify(e)
-                    == kix::cluster::errors::FailureClass::NotFound =>
-            {
+            Ok(None) => {
                 if !quiet {
                     eprintln!();
                     println!(
@@ -273,10 +247,7 @@ pub async fn wait_for_deletion(
                 return Ok(());
             }
             Err(e) => {
-                return Err(miette!(
-                    "failed to check Activation '{}': {e}",
-                    activation_name
-                ));
+                return Err(miette!("{e}"));
             }
         }
 
@@ -305,7 +276,7 @@ mod tests {
         let api = FakeApi::new([record("rec", phase)]);
         let client = api.client();
         let records = open_records(&client).await.unwrap();
-        watch_activation_progress(&records, "rec", "", true).await
+        watch_activation_progress(&records, "rec", true).await
     }
 
     /// Operator mode opens the records through discovery, so a discovery
@@ -325,5 +296,54 @@ mod tests {
         assert_eq!(watch("Active").await.unwrap(), Reconciled::Active);
         assert_eq!(watch("Degraded").await.unwrap(), Reconciled::Degraded);
         assert!(watch("Failed").await.is_err());
+    }
+
+    /// The first read of a Deploying record says the operator is
+    /// reconciling, once; each finished wave is printed once, in order, and
+    /// a pending one is not.
+    #[test]
+    fn the_watch_prints_each_step_once() {
+        use kix::cluster::activation::{WaveRecord, WaveStatus};
+        let wave = |status| WaveRecord {
+            wave_index: 0,
+            status,
+            resource_count: 3,
+            applied: 2,
+            failed: 1,
+        };
+        let mut act = Record {
+            phase: PHASE_DEPLOYING.into(),
+            total_waves: 2,
+            ..Default::default()
+        };
+        let mut progress = Progress::default();
+        assert_eq!(
+            progress.lines(&act),
+            vec!["  • Operator is reconciling (2 waves)...".to_string()]
+        );
+        act.waves = vec![wave(WaveStatus::Complete), wave(WaveStatus::Pending)];
+        assert_eq!(
+            progress.lines(&act),
+            vec!["  ✓ Wave 1: Complete (2/3 applied, 1 failed)".to_string()]
+        );
+        act.waves[1] = wave(WaveStatus::Failed);
+        assert_eq!(
+            progress.lines(&act),
+            vec!["  ✗ Wave 2: Failed (2/3 applied, 1 failed)".to_string()]
+        );
+        assert!(progress.lines(&act).is_empty());
+    }
+
+    /// A record that is gone while the watch waits on it is an error that
+    /// names it.
+    #[tokio::test]
+    async fn a_record_that_vanishes_is_named() {
+        let api = FakeApi::new([]);
+        let records = open_records(&api.client()).await.unwrap();
+        let err = watch_activation_progress(&records, "rec", true)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "Activation 'rec' no longer exists");
     }
 }

@@ -93,6 +93,6 @@ async fn fetch_receipt(cluster: &str, context: Option<&str>) -> Result<Value> {
         Ok(None) => Err(miette!(
             "no deploy receipt on cluster '{cluster}'. Either nothing is deployed, or it was deployed by a kix that predates receipts. Deploy again to write one."
         )),
-        Err(e) => Err(miette!("failed to read the activation: {e}")),
+        Err(e) => Err(miette!("{e}")),
     }
 }

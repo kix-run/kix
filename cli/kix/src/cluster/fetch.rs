@@ -88,7 +88,7 @@ pub enum FetchError {
     },
 
     #[error("{0}")]
-    RecordsError(#[source] activation::ActivationError),
+    RecordsError(#[source] activation::RecordsError),
 }
 
 /// The managed-by label value that kix sets on all resources.

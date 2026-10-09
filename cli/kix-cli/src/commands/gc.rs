@@ -87,7 +87,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     //    connection is reused for the deletes.
     let policy = retention_policy(args)?;
     let global = ctx.global.clone();
-    let records = ctx
+    let retirement = ctx
         .runtime
         .block_on(plan_record_retirement(&global, &cluster, &policy))?;
 
@@ -97,14 +97,14 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     let (old_path, warning) = baseline::active_build_dir(
         &cluster,
         store::load_activation_path(&cluster),
-        records.active.as_ref(),
+        retirement.active.as_ref(),
     );
     if let Some(warning) = warning {
         eprintln!("{} {warning}", output::yellow("warning:"));
     }
     let Some(old_result_dir) = old_path else {
         if !ctx.global.quiet {
-            let what = if records.active.is_some() {
+            let what = if retirement.active.is_some() {
                 "The Active build of"
             } else {
                 "No Active record, so no previous build, for"
@@ -177,7 +177,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // Orphans a warn-only deploy kept. The cached build is usually the one
     // that deploy made, so the diff above cannot see them.
-    let kept_baseline = match &records.active {
+    let kept_baseline = match &retirement.active {
         Some(active) => {
             let quiet = ctx.global.quiet;
             baseline::load_kept(active, None, &cluster, &|e| plan::progress::print(e, quiet))
@@ -199,10 +199,11 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     )
     .and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(str::to_string));
 
-    if garbage_manifests.is_empty() && kept_garbage.is_empty() && records.plan.retire.is_empty() {
+    if garbage_manifests.is_empty() && kept_garbage.is_empty() && retirement.plan.retire.is_empty()
+    {
         ctx.runtime.block_on(clear_kept(
             &cluster,
-            &records,
+            &retirement,
             kept_baseline.unresolved.is_empty(),
             new_activation_hash.as_deref(),
             ctx.global.quiet,
@@ -212,7 +213,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
                 "{} ({} resources unchanged, {})",
                 output::green("No garbage found."),
                 new_hashes.len(),
-                records.kept_note(),
+                retirement.kept_note(),
             );
         }
         return Ok(());
@@ -274,11 +275,11 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
     if !ctx.global.quiet {
-        print_record_plan(&records, &policy);
+        print_record_plan(&retirement, &policy);
         print_never_pruned(&kept);
         plan::print_shared(&shared);
     }
-    if ordered_rids.is_empty() && records.plan.retire.is_empty() {
+    if ordered_rids.is_empty() && retirement.plan.retire.is_empty() {
         return Ok(());
     }
 
@@ -286,7 +287,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     //    one summary.
     if !confirm(
         args,
-        &deletion_prompt(ordered_rids.len(), records.plan.retire.len()),
+        &deletion_prompt(ordered_rids.len(), retirement.plan.retire.len()),
     )? {
         return Ok(());
     }
@@ -296,11 +297,11 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         &new_graph.cluster_name,
         &ordered_rids,
     ))?;
-    let (retired, records_failed) = ctx.runtime.block_on(delete_records(&global, &records))?;
+    let (retired, records_failed) = ctx.runtime.block_on(delete_records(&global, &retirement))?;
     if done.failed == 0 && done.changed == 0 {
         ctx.runtime.block_on(clear_kept(
             &cluster,
-            &records,
+            &retirement,
             kept_baseline.unresolved.is_empty(),
             new_activation_hash.as_deref(),
             ctx.global.quiet,
@@ -310,7 +311,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
         &global,
         done.deleted,
         done.failed + records_failed,
-        Some((retired, records.plan.kept.len())),
+        Some((retired, retirement.plan.kept.len())),
     )
 }
 
@@ -349,18 +350,18 @@ fn kept_garbage(
 /// deleting those is a no-op.
 async fn clear_kept(
     cluster: &str,
-    records: &RecordRetirement,
+    retirement: &RecordRetirement,
     examined_all: bool,
     build_hash: Option<&str>,
     quiet: bool,
 ) {
-    let (Some(store), Some(active)) = (&records.store, &records.active) else {
+    let (Some(records), Some(active)) = (&retirement.records, &retirement.active) else {
         return;
     };
     if !may_clear_kept(active, examined_all, build_hash) {
         return;
     }
-    match store.clear_orphans_kept_from(&active.name).await {
+    match records.clear_orphans_kept_from(&active.name).await {
         Ok(()) => {
             baseline::sync_kept_roots(cluster, &[]);
             if !quiet {
@@ -542,9 +543,9 @@ async fn run_hard_async(
     // still under the retired group, this gc would compare live objects
     // stamped with retired identity hashes against a current build, find no
     // match for most of them, and plan to delete them.
-    let store = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
-    let records = plan_records_with(store, cluster_name, &policy).await?;
-    garbage.extend(record_garbage(&records.plan));
+    let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
+    let retirement = plan_records_with(records, cluster_name, &policy).await?;
+    garbage.extend(record_garbage(&retirement.plan));
 
     // Unstamped resources carry the kix label but no identity hash: kix never
     // applied them (a controller child that inherited the label, a render
@@ -576,7 +577,7 @@ async fn run_hard_async(
     if garbage.is_empty() {
         clear_kept(
             cluster_name,
-            &records,
+            &retirement,
             examined_all,
             build_hash,
             global.quiet,
@@ -586,7 +587,7 @@ async fn run_hard_async(
             println!(
                 "{} ({})",
                 output::green("No garbage found."),
-                records.kept_note()
+                retirement.kept_note()
             );
         }
         return Ok(());
@@ -604,7 +605,7 @@ async fn run_hard_async(
     if !global.quiet {
         let kept: Vec<ResourceId> = kept.into_iter().map(|g| g.id).collect();
         print_never_pruned(&kept);
-        print_record_plan(&records, &policy);
+        print_record_plan(&retirement, &policy);
     }
     if resource_entries.is_empty() && record_entries.is_empty() {
         return Ok(());
@@ -619,11 +620,11 @@ async fn run_hard_async(
 
     let rids: Vec<ResourceId> = resource_entries.iter().map(|g| g.id.clone()).collect();
     let done = delete_resources(&client, cluster_name, &rids).await?;
-    let (retired, records_failed) = delete_records(global, &records).await?;
+    let (retired, records_failed) = delete_records(global, &retirement).await?;
     if done.failed == 0 && done.changed == 0 {
         clear_kept(
             cluster_name,
-            &records,
+            &retirement,
             examined_all,
             build_hash,
             global.quiet,
@@ -634,7 +635,7 @@ async fn run_hard_async(
         global,
         done.deleted,
         done.failed + records_failed,
-        Some((retired, records.plan.kept.len())),
+        Some((retired, retirement.plan.kept.len())),
     )
 }
 
@@ -925,26 +926,26 @@ fn print_garbage_plan(garbage: &[GarbageEntry]) {
 // ---------------------------------------------------------------------------
 
 async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Result<()> {
-    let (_, store) =
+    let (_, records) =
         super::operator::connect_and_verify(ctx.global.context.as_deref(), ctx.global.quiet)
             .await?;
 
     // Superseded activations under the retention policy
     let policy = retention_policy(args)?;
-    let records = plan_records_with(Some(store.clone()), cluster, &policy).await?;
+    let retirement = plan_records_with(Some(records.clone()), cluster, &policy).await?;
 
-    if records.plan.retire.is_empty() {
+    if retirement.plan.retire.is_empty() {
         if !ctx.global.quiet {
             println!(
                 "{} No activation records to retire ({}).",
                 output::green("✓"),
-                records.kept_note(),
+                retirement.kept_note(),
             );
         }
         return Ok(());
     }
 
-    print_record_plan(&records, &policy);
+    print_record_plan(&retirement, &policy);
     if !ctx.global.quiet {
         println!(
             "  {}",
@@ -955,7 +956,7 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
         );
     }
 
-    if !confirm(args, &deletion_prompt(0, records.plan.retire.len()))? {
+    if !confirm(args, &deletion_prompt(0, retirement.plan.retire.len()))? {
         return Ok(());
     }
 
@@ -964,16 +965,16 @@ async fn run_operator(args: &GcArgs, cluster: &str, ctx: &CommandContext) -> Res
     let mut deleted = 0usize;
     let mut failed = 0usize;
 
-    for retired in &records.plan.retire {
+    for retired in &retirement.plan.retire {
         let name = &retired.record.name;
         if !ctx.global.quiet {
             println!("Deleting Activation '{}'...", output::bold(name));
         }
 
-        match store.retire(&retired.record).await {
+        match records.retire(&retired.record).await {
             Ok(_) => {
                 // Wait for finalizer to complete deletion
-                super::operator::wait_for_deletion(&store, name, ctx.global.quiet).await?;
+                super::operator::wait_for_deletion(&records, name, ctx.global.quiet).await?;
                 deleted += 1;
             }
             Err(e) => {
@@ -1068,11 +1069,11 @@ fn parse_retention_duration(s: &str) -> Result<Option<chrono::Duration>> {
     Ok(Some(d))
 }
 
-/// The records to retire, with the store that listed them so the deletes
-/// reuse it. `store` is `None` when the cluster has no Activation CRD, which
+/// The records to retire, with the handle that listed them so the deletes
+/// reuse it. `records` is `None` when the cluster has no Activation CRD, which
 /// also means it has no records.
 struct RecordRetirement {
-    store: Option<Records>,
+    records: Option<Records>,
     plan: Retirement,
     /// The cluster's Active or Degraded record, for its `orphansKeptFrom`.
     active: Option<Record>,
@@ -1080,7 +1081,7 @@ struct RecordRetirement {
 
 impl RecordRetirement {
     fn kept_note(&self) -> String {
-        if self.store.is_none() {
+        if self.records.is_none() {
             "no Activation records on this cluster".to_string()
         } else {
             format!("{} activation records kept", self.plan.kept.len())
@@ -1101,34 +1102,31 @@ async fn plan_record_retirement(
     let discovery = fetch::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
-    let store = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
-    plan_records_with(store, cluster, policy).await
+    let records = Records::open(&client, &discovery).map_err(|e| miette!("{e}"))?;
+    plan_records_with(records, cluster, policy).await
 }
 
-/// List and plan through an opened store.
+/// List and plan through the opened records.
 async fn plan_records_with(
-    store: Option<Records>,
+    records: Option<Records>,
     cluster: &str,
     policy: &RetentionPolicy,
 ) -> Result<RecordRetirement> {
-    let Some(store) = store else {
+    let Some(records) = records else {
         return Ok(RecordRetirement {
-            store: None,
+            records: None,
             plan: Default::default(),
             active: None,
         });
     };
-    let superseded = store
+    let superseded = records
         .superseded(cluster)
         .await
-        .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
     let plan = retire_plan(superseded, policy);
-    let active = store
-        .active(cluster)
-        .await
-        .map_err(|e| miette!("failed to find the active activation: {e}"))?;
+    let active = records.active(cluster).await.map_err(|e| miette!("{e}"))?;
     Ok(RecordRetirement {
-        store: Some(store),
+        records: Some(records),
         plan,
         active,
     })
@@ -1172,7 +1170,7 @@ fn describe_reason(reason: &RetireReason) -> String {
     match reason {
         RetireReason::BeyondMax(n) => format!("beyond the {n} newest"),
         RetireReason::OlderThan(d) => format!("older than {}", humanize(*d)),
-        RetireReason::UnknownAge => "no deployed-at".to_string(),
+        RetireReason::UnknownAge => "age unknown".to_string(),
     }
 }
 
@@ -1191,10 +1189,10 @@ fn humanize(d: chrono::Duration) -> String {
 }
 
 /// Print which records will go, why, and which stay.
-fn print_record_plan(records: &RecordRetirement, policy: &RetentionPolicy) {
-    let plan = &records.plan;
+fn print_record_plan(retirement: &RecordRetirement, policy: &RetentionPolicy) {
+    let plan = &retirement.plan;
     if plan.retire.is_empty() {
-        println!("  {}", output::dim(&records.kept_note()));
+        println!("  {}", output::dim(&retirement.kept_note()));
         return;
     }
     println!();
@@ -1234,15 +1232,15 @@ fn print_record_plan(records: &RecordRetirement, policy: &RetentionPolicy) {
 /// exit code.
 async fn delete_records(
     global: &crate::cli::GlobalArgs,
-    records: &RecordRetirement,
+    retirement: &RecordRetirement,
 ) -> Result<(usize, usize)> {
-    let Some(store) = &records.store else {
+    let Some(records) = &retirement.records else {
         return Ok((0, 0));
     };
     let mut retired = 0usize;
     let mut failed = 0usize;
-    for r in &records.plan.retire {
-        match store.retire(&r.record).await {
+    for r in &retirement.plan.retire {
+        match records.retire(&r.record).await {
             Ok(()) => {
                 if !global.quiet {
                     println!(
@@ -1652,14 +1650,14 @@ mod record_garbage_tests {
     }
 
     #[test]
-    fn retire_reasons_read_as_before() {
+    fn retire_reasons_in_words() {
         let reason = |r: RetireReason| describe_reason(&r);
         assert_eq!(
             reason(RetireReason::OlderThan(chrono::Duration::days(30))),
             "older than 30d"
         );
         assert_eq!(reason(RetireReason::BeyondMax(3)), "beyond the 3 newest");
-        assert_eq!(reason(RetireReason::UnknownAge), "no deployed-at");
+        assert_eq!(reason(RetireReason::UnknownAge), "age unknown");
     }
 }
 

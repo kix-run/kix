@@ -653,7 +653,10 @@ async fn handle_delete(
         .filter(|f| f.as_str() != FINALIZER)
         .cloned()
         .collect();
-    ctx.records.set_finalizers(name, &rest).await?;
+    ctx.records
+        .set_finalizers(name, &rest)
+        .await
+        .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
 
     tracing::info!(name, "Finalizer removed, Activation can be deleted");
     Ok(Action::await_change())
@@ -712,7 +715,10 @@ async fn ensure_finalizer(
 
     let mut new_finalizers: Vec<String> = finalizers.to_vec();
     new_finalizers.push(FINALIZER.to_string());
-    records.set_finalizers(name, &new_finalizers).await?;
+    records
+        .set_finalizers(name, &new_finalizers)
+        .await
+        .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
 
     tracing::info!(name, "Added finalizer {FINALIZER}");
     Ok(())

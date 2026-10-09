@@ -65,10 +65,7 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
 
     // The current Active activation is an optional position marker
     // in the history listing, but we must still print even if none exists.
-    let current = records
-        .active(cluster)
-        .await
-        .map_err(|e| miette!("failed to find active activation: {e}"))?;
+    let current = records.active(cluster).await.map_err(|e| miette!("{e}"))?;
 
     // Only records that really were the cluster's state. A deploy that
     // stopped part way is Superseded once a later plan folded its leftovers
@@ -77,7 +74,7 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
     let superseded = records
         .rollback_targets(cluster)
         .await
-        .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
 
     let format = ctx.output_format(OutputFormat::Text);
     match format {
@@ -226,7 +223,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     let current = records
         .active(cluster)
         .await
-        .map_err(|e| miette!("failed to find active activation: {e}"))?
+        .map_err(|e| miette!("{e}"))?
         .ok_or_else(|| {
             miette!(
                 "no active deployment record found for cluster '{}'",
@@ -255,7 +252,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     let superseded = records
         .rollback_targets(cluster)
         .await
-        .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
 
     if superseded.is_empty() {
         return Err(miette!(
@@ -520,7 +517,7 @@ async fn run_operator_async(
     let current = records
         .active(cluster)
         .await
-        .map_err(|e| miette!("failed to find active activation: {e}"))?
+        .map_err(|e| miette!("{e}"))?
         .ok_or_else(|| {
             miette!(
                 "no active deployment record found for cluster '{}'",
@@ -549,7 +546,7 @@ async fn run_operator_async(
     let superseded = records
         .rollback_targets(cluster)
         .await
-        .map_err(|e| miette!("failed to list superseded activations: {e}"))?;
+        .map_err(|e| miette!("{e}"))?;
 
     if superseded.is_empty() {
         return Err(miette!(
@@ -682,13 +679,9 @@ async fn run_operator_async(
         );
     }
 
-    let reconciled = super::operator::watch_activation_progress(
-        &records,
-        &current.name,
-        &target_source_path,
-        ctx.global.quiet,
-    )
-    .await?;
+    let reconciled =
+        super::operator::watch_activation_progress(&records, &current.name, ctx.global.quiet)
+            .await?;
 
     println!();
     match reconciled {

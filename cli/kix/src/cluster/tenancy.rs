@@ -19,7 +19,7 @@ use kube::{
     discovery::{ApiResource, Scope},
 };
 
-use super::activation::{self, ActivationError, PHASE_SUPERSEDED};
+use super::activation::{self, PHASE_SUPERSEDED, RecordsError};
 use crate::manifest::keys;
 
 /// Which Activation records on this Kubernetes cluster belong to which Kix
@@ -160,7 +160,7 @@ pub async fn read(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
     cluster: &str,
-) -> Result<Tenancy, ActivationError> {
+) -> Result<Tenancy, RecordsError> {
     let ar = activation::served_resource(discovery);
     read_from(client, ar, cluster).await
 }
@@ -171,7 +171,7 @@ pub async fn read_from(
     client: &Client,
     ar: Option<&ApiResource>,
     cluster: &str,
-) -> Result<Tenancy, ActivationError> {
+) -> Result<Tenancy, RecordsError> {
     let Some(ar) = ar else {
         return Ok(Tenancy {
             cluster: cluster.to_string(),
@@ -182,7 +182,7 @@ pub async fn read_from(
     let records = api
         .list(&ListParams::default())
         .await
-        .map_err(ActivationError::ListFailed)?
+        .map_err(RecordsError::list)?
         .items;
     Ok(Tenancy::from_records(&records, cluster))
 }

@@ -146,7 +146,7 @@ pub fn run(args: &HealthArgs, ctx: &mut CommandContext) -> Result<()> {
         let active = records
             .active(&cluster)
             .await
-            .map_err(|e| miette!("failed to find activation: {e}"))?
+            .map_err(|e| miette!("{e}"))?
             .ok_or_else(|| miette!("no active deployment record found for cluster '{cluster}'"))?;
 
         // 3. Fetch this cluster's kix-managed resources

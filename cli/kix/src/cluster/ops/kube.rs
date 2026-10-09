@@ -365,11 +365,7 @@ impl ClusterOps for KubeOps {
             Ok(Ok(())) => Ok(()),
             // Nothing to fail. The record never got created, which is the
             // pre-CRD window on a first deploy.
-            Ok(Err(activation::ActivationError::PatchFailed { source, .. }))
-                if classify(&source) == FailureClass::NotFound =>
-            {
-                Ok(())
-            }
+            Ok(Err(e)) if e.kube().map(classify) == Some(FailureClass::NotFound) => Ok(()),
             Ok(Err(e)) => Err(describe(&e)),
             Err(_) => Err(format!(
                 "no answer within {}s",
@@ -701,9 +697,7 @@ impl ClusterOps for KubeOps {
             // The Activation CR is itself a node of the plan and lands in the
             // last wave, so on a cluster's first deploy every checkpoint
             // before it is a 404. That is expected, not a failure.
-            Ok(Err(activation::ActivationError::PatchFailed { source, .. }))
-                if classify(&source) == FailureClass::NotFound =>
-            {
+            Ok(Err(e)) if e.kube().map(classify) == Some(FailureClass::NotFound) => {
                 tracing::debug!("activation not yet on cluster; checkpoint skipped");
                 Ok(())
             }
@@ -808,7 +802,7 @@ impl ClusterOps for KubeOps {
             if let Ok(mut recorded) = self.recorded_kept.lock() {
                 *recorded = Some(kept);
             }
-            Ok::<_, activation::ActivationError>(Finalized {
+            Ok::<_, activation::RecordsError>(Finalized {
                 activation: name.clone(),
                 previous: old.map(|a| a.name),
             })
