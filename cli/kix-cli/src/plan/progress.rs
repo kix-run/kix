@@ -15,10 +15,13 @@ pub fn print(event: PlanEvent<'_>, quiet: bool) {
             error,
             "This plan leaves out what that failed deployment applied.",
         ),
-        PlanEvent::ActiveBuildUnusable { activation, error } => unusable_build(
-            activation,
-            error,
-            "This rollback compares with no current build: it applies every object and prunes nothing.",
+        PlanEvent::ActiveBuildUnusable { activation, error } => {
+            unusable_build(activation, error, NO_CURRENT_BUILD)
+        }
+        PlanEvent::ActiveUnresolved { record } => eprintln!(
+            "{} cannot read the build of the current deployment {} on this machine. {NO_CURRENT_BUILD}",
+            output::yellow("warning:"),
+            output::bold(&record.name),
         ),
         PlanEvent::KeptBuildUnusable { activation, error } => unusable_build(
             activation,
@@ -131,6 +134,11 @@ pub fn print(event: PlanEvent<'_>, quiet: bool) {
 
 /// Say that the build of `activation` was found but will not load, and what
 /// the plan does without it.
+/// What a rollback does without its current build.
+const NO_CURRENT_BUILD: &str = "This rollback compares with no current build: it applies every \
+    object of the target and deletes only what failed and kept deploys left. The target's \
+    record keeps naming the current build, so a later prune that can read it removes its objects.";
+
 fn unusable_build(activation: &str, error: &str, without_it: &str) {
     eprintln!(
         "{} cannot use the build of activation {}: {error}. {without_it}",

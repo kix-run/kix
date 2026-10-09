@@ -203,6 +203,12 @@ impl Baseline {
     /// prune would delete, and every kept source this machine could not
     /// resolve. See [`activation::KeptOrphans`] for which of them finalize
     /// writes.
+    ///
+    /// A rollback whose current build this machine cannot read
+    /// ([`ActiveSource::Unavailable`]) cannot tell what that build leaves
+    /// behind, so the current record is listed as unexamined: the new
+    /// record keeps naming it, and a later prune that can read it removes
+    /// its objects.
     pub(crate) fn orphans_kept_from(&self, new_manifests: &[Value]) -> activation::KeptOrphans {
         let active_source = self.active.as_ref().and_then(|a| {
             Some(KeptOrphanSource {
@@ -211,6 +217,10 @@ impl Baseline {
                 built_via: a.built_via.clone(),
             })
         });
+        let (active_source, unexamined_active) = match self.source {
+            ActiveSource::Unavailable => (None, active_source),
+            _ => (active_source, None),
+        };
         let compared = active_source
             .map(|source| (source, self.active_manifests.as_slice()))
             .into_iter()
@@ -241,7 +251,13 @@ impl Baseline {
         }
         activation::KeptOrphans {
             found,
-            unexamined: self.kept.unresolved.clone(),
+            unexamined: self
+                .kept
+                .unresolved
+                .iter()
+                .cloned()
+                .chain(unexamined_active)
+                .collect(),
             carry_current: false,
         }
     }
@@ -371,18 +387,31 @@ impl Baseline {
         current: &Record,
         report: &dyn Fn(PlanEvent<'_>),
     ) -> Baseline {
-        let hash = current.identity_hash.as_deref().unwrap_or("");
         // `built_via` is written by whoever deployed, so the build there is
-        // used only when it is the record's.
-        let graph = match record_graph(None, cluster, hash, current.built_via.as_deref()) {
-            Ok(graph) => graph,
-            Err(error) => {
+        // used only when it is the record's. A record without an identity
+        // hash names no build to look for.
+        let graph = match current.identity_hash.as_deref() {
+            None => {
                 report(PlanEvent::ActiveBuildUnusable {
                     activation: &current.name,
-                    error: &error,
+                    error: "the record has no identity hash",
                 });
                 None
             }
+            Some(hash) => match record_graph(None, cluster, hash, current.built_via.as_deref()) {
+                Ok(Some(graph)) => Some(graph),
+                Ok(None) => {
+                    report(PlanEvent::ActiveUnresolved { record: current });
+                    None
+                }
+                Err(error) => {
+                    report(PlanEvent::ActiveBuildUnusable {
+                        activation: &current.name,
+                        error: &error,
+                    });
+                    None
+                }
+            },
         };
         let (source, active_manifests) = match graph {
             Some(graph) => {
@@ -1059,7 +1088,9 @@ mod tests {
 
     /// Nothing stands in for a current build that will not load: the
     /// rollback reports it, compares with an empty build, and its package
-    /// diff starts from one, as the engine applies every object. The Failed record
+    /// diff starts from one, as the engine applies every object. The current
+    /// record is listed as unexamined, so its objects stay reachable by a
+    /// later prune. The Failed record
     /// whose build will not load is reported and not folded in.
     #[tokio::test]
     async fn a_rollback_whose_current_build_will_not_load_compares_with_nothing() {
@@ -1080,6 +1111,14 @@ mod tests {
             .collect();
         assert_eq!(unresolved, vec!["rec-fl"]);
         assert!(baseline.failed().is_empty());
+        let kept = baseline.orphans_kept_from(&[]);
+        let unexamined: Vec<&str> = kept
+            .unexamined
+            .iter()
+            .map(|s| s.identity_hash.as_str())
+            .collect();
+        assert_eq!(unexamined, vec!["cur"], "{kept:?}");
+        assert!(kept.found.is_empty(), "{kept:?}");
         assert!(
             events.iter().any(|e| e.starts_with("ActiveBuildUnusable"))
                 && events.iter().any(|e| e.starts_with("FailedBuildUnusable"))
@@ -1088,6 +1127,61 @@ mod tests {
         );
         let new = StoreGraph::synthesize(&[m("ConfigMap", "web", "h1")], &StoreGraph::empty("c"));
         assert!(baseline.diff_side(&new).resources.is_empty());
+    }
+
+    /// A current build that is not on this machine is reported, and the
+    /// current record is listed as unexamined.
+    #[tokio::test]
+    async fn a_rollback_whose_current_build_is_absent_keeps_naming_it() {
+        // `e` and `u` are outside Nix's base32 alphabet, so this hash names
+        // no store path on this machine.
+        let hash = "eeeeuuuueeeeuuuueeeeuuuueeeeuuuu";
+        let api = FakeApi::new([record("absent-test", hash, PHASE_ACTIVE)]);
+        let client = api.client();
+        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        let current = Record {
+            name: format!("rec-{hash}"),
+            identity_hash: Some(hash.into()),
+            ..Default::default()
+        };
+        let events = std::cell::RefCell::new(Vec::new());
+        let report = |event: PlanEvent<'_>| events.borrow_mut().push(format!("{event:?}"));
+        let baseline = Baseline::of_record(&records, "absent-test", &current, &report).await;
+        assert!(matches!(baseline.source, ActiveSource::Unavailable));
+        let events = events.into_inner();
+        assert!(
+            events.iter().any(|e| e.starts_with("ActiveUnresolved")),
+            "{events:?}"
+        );
+        let kept = baseline.orphans_kept_from(&[]);
+        assert_eq!(kept.unexamined.len(), 1, "{kept:?}");
+        assert_eq!(kept.unexamined[0].identity_hash, hash);
+    }
+
+    /// A current record without an identity hash names no build: nothing
+    /// is looked up, and the report says why.
+    #[tokio::test]
+    async fn a_current_record_without_a_hash_is_not_looked_up() {
+        let api = FakeApi::new([]);
+        let client = api.client();
+        let discovery = fetch::discover_resources(&client).await.unwrap();
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        let current = Record {
+            name: "rec-nohash".into(),
+            ..Default::default()
+        };
+        let events = std::cell::RefCell::new(Vec::new());
+        let report = |event: PlanEvent<'_>| events.borrow_mut().push(format!("{event:?}"));
+        let baseline = Baseline::of_record(&records, "c", &current, &report).await;
+        assert!(matches!(baseline.source, ActiveSource::Unavailable));
+        let events = events.into_inner();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.starts_with("ActiveBuildUnusable") && e.contains("no identity hash")),
+            "{events:?}"
+        );
     }
 
     /// Another deploy still in flight: the rollback leaves the failed

@@ -71,8 +71,12 @@ pub enum PlanEvent<'a> {
     /// A failed deploy's build is in the plan.
     FailedFolded(&'a Record),
     /// A rollback's current build was found but will not load, or is not
-    /// the record's; the rollback compares with no current build.
+    /// the record's, or the record names none; the rollback compares with no
+    /// current build.
     ActiveBuildUnusable { activation: &'a str, error: &'a str },
+    /// A rollback's current build is not on this machine; the rollback
+    /// compares with no current build.
+    ActiveUnresolved { record: &'a Record },
     /// A failed deploy's build was found but will not load; the plan leaves
     /// out what that deploy applied.
     FailedBuildUnusable { activation: &'a str, error: &'a str },
