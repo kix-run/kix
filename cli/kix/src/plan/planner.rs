@@ -21,17 +21,20 @@
 //! `--record-annotation` values on the record ([`Planned::annotate_record`]),
 //! the apiserver's answers in the package diff ([`Planned::overlay`]), and
 //! orphans dropped from the prune ([`CheckedPlan::keep_shared`]).
-//! [`CheckedPlan::run`] gives it to the engine with the prune policy the
-//! check used.
+//! [`CheckedPlan::dry_run`] runs the engine over it with every write sent as
+//! a dry run, and [`CheckedPlan::run`] runs it for real, with the prune
+//! policy, conflict handling and Activation record the check used.
 //!
-//! The engine, `cluster::scheduler::run_deploy`, is public and takes any
-//! `DeployPlan`: the operator calls it directly with a plan made from the
-//! live objects, which no check holds to a package diff (see
+//! The engine, `cluster::scheduler::run_deploy`, is private to the library.
+//! The only other way to it is the operator's [`super::live::LivePlan`],
+//! which plans from a sweep of the live objects it makes itself. No check
+//! holds that plan to a package diff (see
 //! `housekeeping/2026-10-08-operator-plans-from-live-objects-not-the-planner.md`).
 
 use std::sync::Arc;
 
 use kube::client::Client;
+use kube::discovery::{ApiResource, Scope};
 use serde_json::Value;
 
 use super::baseline::Baseline;
@@ -40,12 +43,12 @@ use super::objects;
 use super::server::Overlay;
 use super::{PackageDiff, PlanError, PlanEvent, diff_graphs};
 use crate::build_source::InstallableBuild;
-use crate::cluster::activation::{KeptOrphans, Records};
+use crate::cluster::activation::{KeptOrphanSource, KeptOrphans, Records};
 use crate::cluster::apply::ChangeAction;
 use crate::cluster::fetch::{self, SharedOrphan};
 use crate::cluster::graph::ResourceGraph;
 use crate::cluster::migrate::{MigrationPair, detect_migration_pairs};
-use crate::cluster::ops::ClusterOps;
+use crate::cluster::ops::{KubeOps, KubeOpsConfig};
 use crate::cluster::preview::DryRunAnswer;
 use crate::cluster::scheduler::{self, DeployError, DeployPlan, PrunePolicy, SchedulerConfig};
 use crate::cluster::secrets::SopsSources;
@@ -77,6 +80,19 @@ struct Changes {
     kept_orphans: KeptOrphans,
 }
 
+/// Where a plan runs: the cluster, and what the run needs from this machine.
+pub struct Target {
+    pub client: Client,
+    /// Discovery as the caller read it. The run refreshes it after CRDs land.
+    pub discovery: Vec<(ApiResource, Scope)>,
+    /// The Kix cluster whose records the run writes and whose orphans it
+    /// prunes.
+    pub cluster: String,
+    /// Where SOPS sources come from: this machine, or the files a build
+    /// carries.
+    pub sops: SopsSources,
+}
+
 /// The engine plan, the package diff people review, and the objects the
 /// one writes and deletes as the other shows them. Made only by
 /// [`Planner::plan`] and [`Planner::run`], after the check.
@@ -93,6 +109,12 @@ pub struct CheckedPlan {
     objects: Objects,
     activation_name: Option<String>,
     activation_identity_hash: Option<String>,
+    /// The Activation record's manifest, which the run creates before the
+    /// first node. The plan applies the same manifest as its last node.
+    record: Option<Value>,
+    /// Failed records whose leftovers the plan folded in. Superseded when
+    /// the run finalizes.
+    consumed_failed: Vec<String>,
 }
 
 impl CheckedPlan {
@@ -113,12 +135,6 @@ impl CheckedPlan {
 
     pub fn shared_orphans(&self) -> &[SharedOrphan] {
         &self.shared_orphans
-    }
-
-    /// What the record the run finalizes lists under
-    /// `status.orphansKeptFrom` if the run leaves orphans on the cluster.
-    pub fn kept_orphans(&self) -> &KeptOrphans {
-        &self.kept_orphans
     }
 
     /// The package-grouped comparison of the old side with the new build.
@@ -152,25 +168,94 @@ impl CheckedPlan {
         self.shared_orphans.extend(shared.iter().cloned());
     }
 
-    /// Run the engine over the checked plan. `config.prune` is set to the
-    /// prune policy the check used, whatever it was.
-    pub async fn run(
-        self,
-        ops: Arc<dyn ClusterOps>,
+    /// Run the engine over the plan with every write sent as a dry run, and
+    /// return what the apiserver answered for each object. Nothing is
+    /// written to the Activation record. `config.prune` is set to the prune
+    /// policy of the plan's flags.
+    pub async fn dry_run(
+        &self,
+        target: Target,
         old_manifests: &[Value],
         mut config: SchedulerConfig,
         observer: Arc<dyn DeployObserver>,
-    ) -> Result<DeployResult, DeployError> {
+    ) -> (Result<DeployResult, DeployError>, Vec<DryRunAnswer>) {
+        let ops = Arc::new(KubeOps::new(
+            target.client,
+            Arc::new(tokio::sync::RwLock::new(target.discovery)),
+            KubeOpsConfig {
+                cluster_name: target.cluster,
+                activation_name: self.activation_name.clone(),
+                activation_identity_hash: self.activation_identity_hash.clone(),
+                force_conflicts: self.flags.force_conflicts,
+                dry_run: true,
+                sops: target.sops,
+                ..Default::default()
+            },
+        ));
         config.prune = self.flags.prune_policy();
-        scheduler::run_deploy(
-            ops,
+        config.dry_run = true;
+        let result = scheduler::run_deploy(
+            ops.clone(),
+            self.plan.clone(),
+            &self.orphans,
+            old_manifests,
+            &config,
+            observer,
+        )
+        .await;
+        (result, ops.take_dry_run_answers())
+    }
+
+    /// Run the engine over the checked plan, writing its Activation record
+    /// with `receipt` as the provenance. `config.prune` is set to the prune
+    /// policy the check used, whatever it was.
+    ///
+    /// Also returns the `status.orphansKeptFrom` the run's finalize wrote,
+    /// or `None` when it did not finalize.
+    pub async fn run(
+        self,
+        target: Target,
+        receipt: Option<Value>,
+        old_manifests: &[Value],
+        mut config: SchedulerConfig,
+        observer: Arc<dyn DeployObserver>,
+    ) -> (
+        Result<DeployResult, DeployError>,
+        Option<Vec<KeptOrphanSource>>,
+    ) {
+        let ops = Arc::new(KubeOps::new(
+            target.client,
+            Arc::new(tokio::sync::RwLock::new(target.discovery)),
+            KubeOpsConfig {
+                cluster_name: target.cluster,
+                activation_name: self.activation_name,
+                activation_identity_hash: self.activation_identity_hash,
+                receipt,
+                force_conflicts: self.flags.force_conflicts,
+                dry_run: false,
+                // Created before the first node, so a run that stops part
+                // way leaves something that says what it was attempting
+                // (kixpkgs#82). The plan applies this same manifest again as
+                // its last node, which is then an unchanged no-op.
+                activation_manifest: self.record,
+                consumed_failed: self.consumed_failed,
+                kept_orphans: self.kept_orphans,
+                mark_failed_on_abort: true,
+                sops: target.sops,
+            },
+        ));
+        config.prune = self.flags.prune_policy();
+        config.dry_run = false;
+        let result = scheduler::run_deploy(
+            ops.clone(),
             self.plan,
             &self.orphans,
             old_manifests,
             &config,
             observer,
         )
-        .await
+        .await;
+        (result, ops.recorded_orphans_kept_from())
     }
 }
 
@@ -204,7 +289,7 @@ impl Planned {
     }
 
     /// Write `--record-annotation` pairs onto the Activation record, both
-    /// where the engine creates it before the first wave and where the plan
+    /// where the engine creates it before the first node and where the plan
     /// applies it last, so the two stay the same manifest. The record's
     /// lifecycle writes are outside the objects check.
     ///
@@ -244,6 +329,7 @@ impl Planned {
             }
         };
         self.new_manifests.iter_mut().for_each(annotate);
+        self.checked.record.iter_mut().for_each(annotate);
         for node in self.checked.plan.nodes.iter_mut() {
             if let ChangeAction::Apply(manifest) = &mut node.action {
                 annotate(manifest);
@@ -427,6 +513,8 @@ impl<'a> Planner<'a> {
             objects,
             activation_name,
             activation_identity_hash,
+            record: record.cloned(),
+            consumed_failed: baseline.failed().consumed.clone(),
         })
     }
 }
@@ -606,8 +694,8 @@ mod tests {
         }
     }
 
-    /// The record annotations a node of the plan and the build's manifests
-    /// carry for `key`.
+    /// The record annotations the build's manifests, the record the run
+    /// creates first and the plan's node carry for `key`.
     fn record_annotation(p: &Planned, key: &str) -> Vec<Option<String>> {
         let applied = p.checked.plan.nodes.iter().filter_map(|n| match &n.action {
             ChangeAction::Apply(m) if lifecycle::is_record(m) => Some(m),
@@ -615,6 +703,7 @@ mod tests {
         });
         lifecycle::record_of(&p.new_manifests)
             .into_iter()
+            .chain(&p.checked.record)
             .chain(applied)
             .map(|m| {
                 m.pointer("/metadata/annotations")
@@ -627,8 +716,8 @@ mod tests {
 
     /// `--record-annotation` cannot set a key Kix reads off the record,
     /// under its domain, a subdomain of it, or a retired domain; the plan
-    /// keeps the record it was checked with. Another key lands on both
-    /// copies of the record.
+    /// keeps the record it was checked with. Another key lands on every
+    /// copy of the record.
     #[test]
     fn a_record_annotation_under_kix_domain_is_refused() {
         let mut p = planned();
@@ -650,6 +739,6 @@ mod tests {
         p.annotate_record(&[("example.com/ticket".into(), "T-1".into())])
             .unwrap();
         let ticket = record_annotation(&p, "example.com/ticket");
-        assert_eq!(ticket, vec![Some("T-1".to_string()); 2]);
+        assert_eq!(ticket, vec![Some("T-1".to_string()); 3]);
     }
 }

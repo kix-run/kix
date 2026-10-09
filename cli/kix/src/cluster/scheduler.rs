@@ -16,6 +16,9 @@
 //! Every cluster call goes through [`ClusterOps`], so the loop runs under
 //! test against `ops::scripted::ScriptedOps` with no cluster.
 //!
+//! [`run_deploy`] is private to the library. Callers reach it through a plan
+//! the library made; see its docs.
+//!
 //! The planner currently produces Apply, Skip, and Recreate transitions.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -314,22 +317,6 @@ enum Done {
     Checkpoint(Result<(), RecordWriteError>),
 }
 
-/// Execute a DAG-streaming deploy.
-///
-/// The scheduler maintains a ready-queue; a node becomes ready the moment all
-/// its predecessors have emitted `Verdict::Ready`. Concurrency is bounded by
-/// [`SchedulerConfig::concurrency`]. On a node failure the failure policy
-/// either halts the whole deploy ([`OnErrorPolicy::Stop`]) or halts only
-/// transitive dependents while sibling subtrees continue
-/// ([`OnErrorPolicy::Continue`]).
-///
-/// Dependents of a CRD wait for one discovery refresh after the CRD is Ready
-/// through the CRD barrier. Several CRDs finishing together share
-/// one refresh. A refresh that fails stops the run.
-///
-/// After every non-orphan node has reached a terminal verdict, orphans are
-/// pruned (in reverse-topological order of the old graph) and the Activation
-/// CR is finalized.
 /// Mark the Activation record Failed because the run is ending without
 /// finalizing. Returns the message to report when it did not work.
 ///
@@ -349,7 +336,27 @@ async fn abort_activation(ops: &Arc<dyn ClusterOps>, reason: &str) -> Option<Str
     }
 }
 
-pub async fn run_deploy(
+/// Execute a DAG-streaming deploy.
+///
+/// The scheduler maintains a ready-queue; a node becomes ready the moment all
+/// its predecessors have emitted `Verdict::Ready`. Concurrency is bounded by
+/// [`SchedulerConfig::concurrency`]. On a node failure the failure policy
+/// either halts the whole deploy ([`OnErrorPolicy::Stop`]) or halts only
+/// transitive dependents while sibling subtrees continue
+/// ([`OnErrorPolicy::Continue`]).
+///
+/// Dependents of a CRD wait for one discovery refresh after the CRD is Ready
+/// through the CRD barrier. Several CRDs finishing together share
+/// one refresh. A refresh that fails stops the run.
+///
+/// After every non-orphan node has reached a terminal verdict, orphans are
+/// pruned (in reverse-topological order of the old graph) and the Activation
+/// CR is finalized.
+///
+/// Private to the library, so the plan it runs is one the library made: a
+/// checked plan (`plan::Apply::run`, `plan::CheckedPlan::dry_run`) or the
+/// operator's plan from the live objects (`plan::live::LivePlan::run`).
+pub(crate) async fn run_deploy(
     ops: Arc<dyn ClusterOps>,
     plan: DeployPlan,
     orphan_rids: &[ResourceId],
@@ -1083,6 +1090,20 @@ pub async fn run_deploy(
     }
 
     Ok(result)
+}
+
+/// [`run_deploy`] over any plan, against the scripted fake. For tests of
+/// what callers make of a run's result; no cluster is involved.
+#[cfg(any(test, feature = "test-util"))]
+pub async fn run_scripted(
+    ops: Arc<super::ops::scripted::ScriptedOps>,
+    plan: DeployPlan,
+    orphan_rids: &[ResourceId],
+    old_manifests: &[Value],
+    config: &SchedulerConfig,
+    observer: Arc<dyn DeployObserver>,
+) -> Result<DeployResult, DeployError> {
+    run_deploy(ops, plan, orphan_rids, old_manifests, config, observer).await
 }
 
 /// Aborts the wrapped task when dropped, on every return path.

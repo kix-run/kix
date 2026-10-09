@@ -16,7 +16,6 @@ use serde_json::Value;
 
 use kix::build_source::InstallableBuild;
 use kix::cluster::fetch;
-use kix::cluster::ops::{ClusterOps, KubeOps, KubeOpsConfig};
 use kix::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer, Refusal};
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, PrunePolicy, SchedulerConfig};
@@ -33,7 +32,7 @@ use kix::plan::document::{
     UncheckedObject, UncheckedReason,
 };
 use kix::plan::server::comparable;
-use kix::plan::{ManifestIndex, OldSide, PlanEvent, Planned, Planner};
+use kix::plan::{ManifestIndex, OldSide, PlanEvent, Planned, Planner, Target};
 
 use crate::cli::{Detail as DetailArg, OutputFormat, PlanArgs, PruneMode};
 use crate::output;
@@ -217,8 +216,9 @@ pub(crate) struct DryRunReport {
 ///
 /// The engine runs with `--on-error continue`, and under dry run it still
 /// tries the dependents of a refused node, so one refused write does not hide
-/// the answers for the rest. Nothing is persisted: `KubeOps` sends every write with
-/// `dryRun=All` and skips the Activation record's lifecycle writes.
+/// the answers for the rest. Nothing is persisted: every write goes with
+/// `dryRun=All` and the Activation record's lifecycle writes are skipped
+/// ([`kix::plan::CheckedPlan::dry_run`]).
 ///
 /// `placeholders` goes to [`kix::build_source::Build::sops_sources`]: true
 /// for `kix plan`, which decrypts nothing.
@@ -239,19 +239,6 @@ pub(crate) fn dry_run(
         let served_kinds: HashSet<String> =
             discovery.iter().map(|(ar, _)| ar.kind.clone()).collect();
 
-        let ops = Arc::new(KubeOps::new(
-            client,
-            Arc::new(tokio::sync::RwLock::new(discovery)),
-            KubeOpsConfig {
-                cluster_name: p.build.graph().cluster_name.clone(),
-                activation_name: p.checked.activation_name().map(str::to_string),
-                activation_identity_hash: p.checked.activation_identity_hash().map(str::to_string),
-                force_conflicts: p.checked.flags().force_conflicts,
-                dry_run: true,
-                sops,
-                ..Default::default()
-            },
-        ));
         let config = SchedulerConfig {
             timeout: readiness::DEFAULT_TIMEOUT,
             on_error: OnErrorPolicy::Continue,
@@ -262,7 +249,8 @@ pub(crate) fn dry_run(
             stall: StallPolicy::from_env(),
             rerun_failed: true,
         };
-        config.cancel.cancel_on_interrupt();
+        let cancel = config.cancel.clone();
+        cancel.cancel_on_interrupt();
 
         let writes = p
             .checked
@@ -272,20 +260,20 @@ pub(crate) fn dry_run(
             .filter(|n| !matches!(n.kind, TransitionKind::Skip))
             .count();
         let observer = Arc::new(DryRunObserver::new(writes, quiet));
-        let dyn_ops: Arc<dyn ClusterOps> = ops.clone();
-        let result = scheduler::run_deploy(
-            dyn_ops,
-            p.checked.plan().clone(),
-            p.checked.orphans(),
-            &p.baseline.manifests(),
-            &config,
-            observer.clone(),
-        )
-        .await;
+        let target = Target {
+            client,
+            discovery,
+            cluster: p.build.graph().cluster_name.clone(),
+            sops,
+        };
+        let (result, answers) = p
+            .checked
+            .dry_run(target, &p.baseline.manifests(), config, observer.clone())
+            .await;
         // Cancelling the token ends its interrupt watcher, so Ctrl-C at the
         // deploy's confirmation exits the process.
-        let interrupted = config.cancel.is_cancelled();
-        config.cancel.cancel();
+        let interrupted = cancel.is_cancelled();
+        cancel.cancel();
         observer.finish();
         if interrupted {
             return Err(miette!("plan interrupted"));
@@ -296,7 +284,6 @@ pub(crate) fn dry_run(
             return Err(miette!("the dry run stopped: {e}"));
         }
 
-        let answers = ops.take_dry_run_answers();
         let answered: HashSet<&ResourceId> = answers.iter().map(|a| &a.rid).collect();
         let seen = observer.take();
         let failed = seen

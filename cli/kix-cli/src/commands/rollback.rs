@@ -9,13 +9,11 @@ use std::io::Write;
 use std::sync::Arc;
 
 use miette::{IntoDiagnostic, Result, miette};
-use serde_json::Value;
 
 use kix::build_source::Build;
 use kix::cluster::activation::{Record, Records};
 use kix::cluster::apply::ChangeAction;
 use kix::cluster::fetch;
-use kix::cluster::ops::{ClusterOps, KubeOps, KubeOpsConfig};
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::{DeployObserver, DeployResult};
@@ -23,7 +21,7 @@ use kix::cluster::watchdog::StallPolicy;
 use kix::eval::store_graph::StoreGraph;
 use kix::plan::baseline::Baseline;
 use kix::plan::document::PlanFlags;
-use kix::plan::{CheckedPlan, PlanEvent, Planner};
+use kix::plan::{CheckedPlan, PlanEvent, Planner, Target};
 
 use crate::cli::{OutputFormat, RollbackArgs};
 use crate::output;
@@ -335,11 +333,9 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
     let RollbackPlan {
         target_result_dir,
         target_graph,
-        target_manifests,
-        baseline,
         checked,
+        ..
     } = planned;
-    let record = kix::manifest::lifecycle::record_of(&target_manifests);
 
     let total_apply = checked
         .plan()
@@ -426,43 +422,28 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         })
     };
 
-    let cluster_name = target_graph.cluster_name.clone();
-    let discovery = Arc::new(tokio::sync::RwLock::new(discovery));
     // Ctrl-C and SIGTERM now have to reach the engine: the record exists from
     // the start of the run, so a process that just dies leaves it Deploying.
     config.cancel.cancel_on_interrupt();
 
-    let kube_ops = Arc::new(KubeOps::new(
-        client.clone(),
+    // A rollback's target record already exists on the cluster as a
+    // Superseded one, so the run re-asserts it and marks it Deploying for the
+    // duration, the same as a deploy.
+    let target = Target {
+        client: client.clone(),
         discovery,
-        KubeOpsConfig {
-            cluster_name,
-            activation_name: checked.activation_name().map(str::to_string),
-            activation_identity_hash: checked.activation_identity_hash().map(str::to_string),
-            // A rollback re-applies a build from an earlier deploy, and that
-            // deploy wrote its own receipt. Writing a fresh one here would
-            // record the machine running the rollback as the provenance of a
-            // build it did not make.
-            receipt: None,
-            // A rollback's target record already exists on the cluster as a
-            // Superseded one, so this re-asserts it and marks it Deploying
-            // for the duration, the same as a deploy.
-            activation_manifest: record.cloned(),
-            consumed_failed: baseline.failed().consumed.clone(),
-            kept_orphans: checked.kept_orphans().clone(),
-            mark_failed_on_abort: true,
-            sops: Default::default(),
-            force_conflicts: checked.flags().force_conflicts,
-            dry_run: false,
-        },
-    ));
-    let ops: Arc<dyn ClusterOps> = kube_ops.clone();
-
-    let result = checked
-        .run(ops, &baseline_manifests, config, observer)
+        cluster: target_graph.cluster_name.clone(),
+        sops: Default::default(),
+    };
+    // A rollback re-applies a build from an earlier deploy, and that deploy
+    // wrote its own receipt. Writing a fresh one here would record the
+    // machine running the rollback as the provenance of a build it did not
+    // make.
+    let (result, kept) = checked
+        .run(target, None, &baseline_manifests, config, observer)
         .await;
 
-    if let Some(recorded) = kube_ops.recorded_orphans_kept_from() {
+    if let Some(recorded) = kept {
         kix::plan::baseline::sync_kept_roots(cluster, &recorded);
     }
 
@@ -707,7 +688,6 @@ async fn run_operator_async(
 struct RollbackPlan {
     target_result_dir: std::path::PathBuf,
     target_graph: StoreGraph,
-    target_manifests: Vec<Value>,
     baseline: Baseline,
     checked: CheckedPlan,
 }
@@ -790,12 +770,6 @@ async fn plan_rollback(
         .map_err(|e| miette!("failed to load target activation: {e}"))?
         .into_graph();
 
-    let target_manifests: Vec<Value> = target_graph
-        .resources
-        .values()
-        .map(|r| r.manifest.clone())
-        .collect();
-
     let report = |event: PlanEvent<'_>| plan::progress::print(event, quiet);
     let baseline = Baseline::of_record(records, cluster, current, &report).await;
     // The records and the orphans another Kix cluster deploys are looked up
@@ -807,7 +781,6 @@ async fn plan_rollback(
     Ok(RollbackPlan {
         target_result_dir,
         target_graph,
-        target_manifests,
         baseline,
         checked,
     })

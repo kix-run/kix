@@ -18,7 +18,6 @@ use kix::cluster::activation::{OpenedRecords, Records};
 use kix::cluster::apply::{ApplyAction, ChangeAction};
 use kix::cluster::fetch;
 use kix::cluster::migrate::MigrationPair;
-use kix::cluster::ops::{ClusterOps, KubeOps, KubeOpsConfig};
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::{
@@ -26,9 +25,8 @@ use kix::cluster::stream::{
     Verdict,
 };
 use kix::cluster::watchdog::StallPolicy;
-use kix::manifest::lifecycle;
 use kix::manifest::types::ResourceId;
-use kix::plan::CheckedPlan;
+use kix::plan::{CheckedPlan, Target};
 use kix::plan::document::PlanFlags;
 
 use crate::cli::{DeployArgs, Detail, OnError, PlanArgs};
@@ -258,7 +256,6 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
     }
 
-    let activation_manifest = lifecycle::record_of(p.new_manifests()).cloned();
     let global = ctx.global.clone();
     let end = ctx.runtime.block_on(run_deploy_async(
         args,
@@ -268,8 +265,6 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         &cluster,
         Some(&receipt),
         p.client,
-        activation_manifest.as_ref(),
-        &p.baseline.failed().consumed,
         if args.plan.current_activation {
             active_hash.as_deref()
         } else {
@@ -796,8 +791,6 @@ async fn run_deploy_async(
     cluster_name: &str,
     receipt: Option<&Value>,
     pre_client: Option<kube::Client>,
-    activation_manifest: Option<&Value>,
-    consumed_failed: &[String],
     cached_baseline: Option<&str>,
     sops: kix::cluster::secrets::SopsSources,
 ) -> Result<RunEnd> {
@@ -880,7 +873,6 @@ async fn run_deploy_async(
         ));
     }
 
-    let discovery = Arc::new(tokio::sync::RwLock::new(discovery));
 
     let on_error = match args.on_error {
         OnError::Stop => OnErrorPolicy::Stop,
@@ -900,29 +892,6 @@ async fn run_deploy_async(
     // Ctrl-C and SIGTERM now have to reach the engine: the record exists from
     // the start of the run, so a process that just dies leaves it Deploying.
     config.cancel.cancel_on_interrupt();
-
-    let kube_ops = Arc::new(KubeOps::new(
-        client.clone(),
-        discovery,
-        KubeOpsConfig {
-            cluster_name: cluster_name.to_string(),
-            activation_name: checked.activation_name().map(str::to_string),
-            activation_identity_hash: checked.activation_identity_hash().map(str::to_string),
-            receipt: receipt.cloned(),
-            force_conflicts: checked.flags().force_conflicts,
-            dry_run: false,
-            // Create the record before the first wave, so a run that stops
-            // part way leaves something that says what it was attempting
-            // (kixpkgs#82). The plan applies this same manifest again as its
-            // last node, which is then an unchanged no-op.
-            activation_manifest: activation_manifest.cloned(),
-            consumed_failed: consumed_failed.to_vec(),
-            kept_orphans: checked.kept_orphans().clone(),
-            mark_failed_on_abort: true,
-            sops,
-        },
-    ));
-    let ops: Arc<dyn ClusterOps> = kube_ops.clone();
 
     // Select the TUI, NDJSON, plain line, or colored observer from CLI flags
     // and terminal capabilities.
@@ -972,13 +941,21 @@ async fn run_deploy_async(
         }),
     };
 
-    let result = checked.run(ops, old_manifests, config, observer).await;
+    let target = Target {
+        client,
+        discovery,
+        cluster: cluster_name.to_string(),
+        sops,
+    };
+    let (result, kept) = checked
+        .run(target, receipt.cloned(), old_manifests, config, observer)
+        .await;
 
     // Tear down the TUI before the summary prints so it lands in normal
     // scrollback below the history lines.
     drop(tui_driver);
 
-    if let Some(recorded) = kube_ops.recorded_orphans_kept_from() {
+    if let Some(recorded) = kept {
         kix::plan::baseline::sync_kept_roots(cluster_name, &recorded);
     }
 
@@ -1463,6 +1440,7 @@ mod cached_baseline_tests {
     use kix::cluster::activation::PHASE_ACTIVE;
     use kix::cluster::fake_api::FakeApi;
     use kix::manifest::keys;
+    use kix::manifest::lifecycle;
     use serde_json::json;
 
     fn record(cluster: &str, hash: &str, phase: &str) -> Value {
@@ -1574,9 +1552,8 @@ mod run_end_tests {
         old: &[Value],
         config: &SchedulerConfig,
     ) -> std::result::Result<DeployResult, scheduler::DeployError> {
-        let ops: Arc<dyn ClusterOps> = ops.clone();
-        scheduler::run_deploy(
-            ops,
+        scheduler::run_scripted(
+            ops.clone(),
             apply_all(manifests),
             orphans,
             old,

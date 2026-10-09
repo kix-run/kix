@@ -5,12 +5,14 @@
 //! package into a [`PackageDiff`]; [`document::Plan`] is the typed document
 //! `kix plan` and `kix diff` emit; [`objects`] holds a deploy to the objects
 //! the diff shows; [`saved`] compares a plan made now with a reviewed one.
+//! [`live`] is the operator's plan, made from the live objects.
 //! Turning any of these into text is the caller's job.
 
 pub mod baseline;
 pub mod document;
 #[cfg(any(test, feature = "test-util"))]
 pub mod fixtures;
+pub mod live;
 pub mod objects;
 pub mod origin;
 #[cfg(test)]
@@ -21,7 +23,7 @@ mod planner;
 pub mod saved;
 pub mod server;
 
-pub use planner::{CheckedPlan, OldSide, Planned, Planner, keep_shared};
+pub use planner::{CheckedPlan, OldSide, Planned, Planner, Target, keep_shared};
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
