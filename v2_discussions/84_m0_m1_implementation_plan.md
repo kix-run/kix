@@ -42,7 +42,7 @@ Thin wrappers over existing machinery. One concrete PR per bullet.
 
 - **State today:** `commands/rollback.rs` works via `find_most_recent_superseded` from `cluster/activation.rs`. Missing: history listing and change summary.
 - **Work:**
-  - `kix rollback --list` prints `list_superseded_activations()` with timestamp, source path, identity-hash, previous-activation link.
+  - `kix rollback --list` prints `Records::rollback_targets()` with timestamp, source path, identity-hash, previous-activation link.
   - On confirmation, render package-grouped diff via `plan::print_package_plan` against the current Active CR so the operator sees exactly what flips before approving.
 - **No engine work.** Pure CLI plumbing + output formatting.
 
