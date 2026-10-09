@@ -53,23 +53,15 @@ pub const PHASE_DEGRADED: &str = "Degraded";
 /// supersedes it once that plan finalizes.
 pub const PHASE_FAILED: &str = "Failed";
 
-/// A read or write of the records that failed.
+/// The apiserver failed `op` on the record `name`, or on the list of
+/// records when `name` is `None`.
 #[derive(Error, Debug)]
-pub enum RecordsError {
-    /// The apiserver failed `op` on the record `name`, or on the list of
-    /// records when `name` is `None`.
-    #[error("failed to {op} {}: {source}", target(.name))]
-    Kube {
-        op: &'static str,
-        name: Option<String>,
-        #[source]
-        source: kube::Error,
-    },
-
-    /// [`Records::retire`] was given a record that was not read from the
-    /// cluster, so there is nothing to make the delete conditional on.
-    #[error("refusing to delete activation '{0}': it was not read from the cluster")]
-    NotRead(String),
+#[error("failed to {op} {}: {source}", target(.name))]
+pub struct RecordsError {
+    pub op: &'static str,
+    pub name: Option<String>,
+    #[source]
+    pub source: kube::Error,
 }
 
 fn target(name: &Option<String>) -> String {
@@ -82,7 +74,7 @@ fn target(name: &Option<String>) -> String {
 impl RecordsError {
     /// A failed list of the records.
     fn list(source: kube::Error) -> Self {
-        RecordsError::Kube {
+        RecordsError {
             op: "list",
             name: None,
             source,
@@ -92,18 +84,10 @@ impl RecordsError {
     /// A failed `op` on the record `name`.
     fn on(op: &'static str, name: &str) -> impl FnOnce(kube::Error) -> Self {
         let name = name.to_string();
-        move |source| RecordsError::Kube {
+        move |source| RecordsError {
             op,
             name: Some(name),
             source,
-        }
-    }
-
-    /// The apiserver's error, when there is one.
-    pub(crate) fn kube(&self) -> Option<&kube::Error> {
-        match self {
-            RecordsError::Kube { source, .. } => Some(source),
-            RecordsError::NotRead(_) => None,
         }
     }
 }
@@ -156,18 +140,11 @@ pub struct Record {
     pub total_waves: usize,
     /// Whether the record is being deleted (`metadata.deletionTimestamp`).
     pub deleting: bool,
-    /// The record as the cluster served it, so a delete can be conditional
-    /// on the record being the one that was read. `None` for a record built
-    /// by hand, which [`Records::retire`] refuses.
-    pub(crate) read: Option<ReadAs>,
-}
-
-/// The uid and resourceVersion a record was read at. Only [`Record::of`]
-/// makes one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ReadAs {
-    uid: String,
-    resource_version: String,
+    /// `metadata.uid` and `metadata.resourceVersion` as the cluster served
+    /// the record, which [`Records::retire`] makes its delete conditional
+    /// on. Empty for a record built by hand.
+    pub uid: String,
+    pub resource_version: String,
 }
 
 impl Record {
@@ -209,15 +186,8 @@ impl Record {
                 .and_then(Value::as_u64)
                 .unwrap_or(0) as usize,
             deleting: obj.metadata.deletion_timestamp.is_some(),
-            read: obj
-                .metadata
-                .uid
-                .clone()
-                .zip(obj.metadata.resource_version.clone())
-                .map(|(uid, resource_version)| ReadAs {
-                    uid,
-                    resource_version,
-                }),
+            uid: obj.metadata.uid.clone().unwrap_or_default(),
+            resource_version: obj.metadata.resource_version.clone().unwrap_or_default(),
         }
     }
 
@@ -762,17 +732,13 @@ impl Records {
     /// apiserver refuses with 409, so nothing that changed underneath the
     /// plan is deleted.
     ///
-    /// A record not read from the cluster is refused: a delete without
-    /// preconditions could take a record that changed after the plan was
-    /// made.
+    /// The preconditions are sent even when empty, as for a record built by
+    /// hand: the apiserver compares an empty uid like any other, and refuses.
     pub async fn retire(&self, record: &Record) -> Result<(), RecordsError> {
-        let Some(read) = &record.read else {
-            return Err(RecordsError::NotRead(record.name.clone()));
-        };
         let dp = DeleteParams {
             preconditions: Some(Preconditions {
-                uid: Some(read.uid.clone()),
-                resource_version: Some(read.resource_version.clone()),
+                uid: Some(record.uid.clone()),
+                resource_version: Some(record.resource_version.clone()),
             }),
             ..Default::default()
         };
@@ -2040,11 +2006,17 @@ mod listing_tests {
         assert_eq!(names, vec!["c-interrupted", "c-ran"]);
     }
 
-    /// A record built by hand carries no uid or resourceVersion, so it
-    /// cannot be retired: the delete would have nothing to be conditional on.
+    /// A record built by hand carries an empty uid and resourceVersion,
+    /// which the delete still sends as preconditions, so the record of that
+    /// name on the cluster is not deleted.
     #[tokio::test]
     async fn a_record_not_read_from_the_cluster_is_not_retired() {
-        let api = crate::cluster::fake_api::FakeApi::new([]);
+        let api = crate::cluster::fake_api::FakeApi::new([json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": crate::manifest::lifecycle::RECORD_KIND,
+            "metadata": { "name": "c-made-up" },
+            "status": { "phase": PHASE_SUPERSEDED },
+        })]);
         let client = api.client();
         let discovery = crate::cluster::fetch::discover_resources(&client)
             .await
@@ -2054,11 +2026,16 @@ mod listing_tests {
             name: "c-made-up".into(),
             ..Default::default()
         };
-        assert!(matches!(
-            records.retire(&made_up).await,
-            Err(RecordsError::NotRead(name)) if name == "c-made-up"
-        ));
-        assert!(api.requests().iter().all(|r| !r.starts_with("DELETE")));
+        let err = records.retire(&made_up).await.unwrap_err();
+        assert!(
+            crate::cluster::errors::classify(&err.source)
+                == crate::cluster::errors::FailureClass::Conflict,
+            "{err}"
+        );
+        assert_eq!(
+            api.names(crate::manifest::lifecycle::RECORD_KIND),
+            vec!["c-made-up"]
+        );
     }
 
     /// A record that changed after it was read is not deleted, and the

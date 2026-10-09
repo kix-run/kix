@@ -1568,9 +1568,11 @@ mod kept_garbage_tests {
     fn kept_list_is_cleared_only_after_a_complete_gc_of_the_active_build() {
         use kix::cluster::activation::KeptOrphanSource;
         let active = |kept: bool| {
-            let mut record = Record::default();
-            record.name = "c-v2".into();
-            record.identity_hash = Some("h-v2".into());
+            let mut record = Record {
+                name: "c-v2".into(),
+                identity_hash: Some("h-v2".into()),
+                ..Default::default()
+            };
             if kept {
                 record.orphans_kept_from = vec![KeptOrphanSource {
                     activation: "c-v1".into(),
@@ -1596,11 +1598,12 @@ mod record_garbage_tests {
     use super::*;
 
     fn rec(name: &str, at: &str) -> Record {
-        let mut record = Record::default();
-        record.name = name.into();
-        record.identity_hash = Some(format!("{name}hash"));
-        record.deployed_at = Some(at.into());
-        record
+        Record {
+            name: name.into(),
+            identity_hash: Some(format!("{name}hash")),
+            deployed_at: Some(at.into()),
+            ..Default::default()
+        }
     }
 
     /// Hard mode lists exactly the retired records, never a kept one, as
@@ -1675,8 +1678,10 @@ mod record_garbage_tests {
             judged_by(&rec("c-1", "2026-09-01T00:00:00Z")),
             "2026-09-01T00:00:00Z"
         );
-        let mut failed = Record::default();
-        failed.failed_at = Some("2026-09-02T00:00:00Z".into());
+        let failed = Record {
+            failed_at: Some("2026-09-02T00:00:00Z".into()),
+            ..Default::default()
+        };
         assert_eq!(judged_by(&failed), "failed 2026-09-02T00:00:00Z");
         assert_eq!(judged_by(&Record::default()), "no timestamp");
     }
