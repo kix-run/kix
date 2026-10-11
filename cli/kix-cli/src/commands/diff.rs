@@ -52,24 +52,38 @@ enum OldSide {
 }
 
 /// Every mode is one comparison of two store graphs. The new side is
-/// always a build. The old side is a build result when `--from` names one,
-/// and otherwise a graph synthesized from stamped manifests: a manifest
-/// directory (`--from` a snapshot or export), or the live cluster's
-/// kix-owned view. Same renderers as the deploy plan, so what `kix diff`
-/// shows is what `kix deploy` will show.
+/// always a build, from the flake or from `--bundle`. The old side is a
+/// build when `--from` names a build result or `--from-bundle` a bundle,
+/// no build when `--bundle` is given alone, and otherwise a graph
+/// synthesized from stamped manifests: a manifest directory (`--from` a
+/// snapshot or export), or the live cluster's kix-owned view. Same
+/// renderers as the deploy plan, so what `kix diff` shows is what
+/// `kix deploy` will show.
 pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
-    let spinner = output::spinner(format!("Building cluster '{}'...", args.cluster));
-    let status = |msg: &str| set_spinner(&spinner, msg);
-    let new_graph = super::build_flake(
-        &ctx.global,
-        &args.cluster,
-        &status,
-        super::ACTIVATION_BUILD_FAILED,
-    )?
-    .into_graph();
-    clear_spinner(&spinner);
+    let new_graph = match &args.bundle {
+        Some(path) => kix_bundle::read_build(path, &[], &args.cluster)
+            .map_err(|e| miette!("{e}"))?
+            .into_graph(),
+        None => {
+            let spinner = output::spinner(format!("Building cluster '{}'...", args.cluster));
+            let status = |msg: &str| set_spinner(&spinner, msg);
+            let build = super::build_flake(
+                &ctx.global,
+                &args.cluster,
+                &status,
+                super::ACTIVATION_BUILD_FAILED,
+            )?;
+            clear_spinner(&spinner);
+            build.into_graph()
+        }
+    };
 
-    let (old_graph, side) = if let Some(from) = &args.from {
+    let (old_graph, side) = if let Some(path) = &args.from_bundle {
+        let old = kix_bundle::read_build(path, &[], &args.cluster).map_err(|e| miette!("{e}"))?;
+        (old.into_graph(), OldSide::Build)
+    } else if args.bundle.is_some() && args.from.is_none() {
+        (StoreGraph::empty(&args.cluster), OldSide::Build)
+    } else if let Some(from) = &args.from {
         let path = PathBuf::from(from);
         if !path.is_dir() {
             return Err(miette!("from directory does not exist: {from}"));

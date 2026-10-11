@@ -3,10 +3,12 @@ title: "`diff`"
 description: "Compare a cluster build with the live cluster, a previous build, or a saved manifest directory, package by package."
 ---
 
-`kix diff` evaluates and builds a cluster, then compares the result with an
-old side: the live cluster by default, or a directory passed with `--from`.
-It only reads, so it needs `get` and `list` on the cluster, or no cluster at
-all with `--from`. It never changes the cluster.
+`kix diff` evaluates and builds a cluster, or reads the build from a bundle
+with `--bundle`, then compares the result with an old side: the live cluster
+by default, a directory passed with `--from`, or a bundle passed with
+`--from-bundle`. It only reads, so it needs `get` and `list` on the cluster,
+or no cluster at all with `--from`, `--from-bundle`, or `--bundle`. It never
+changes the cluster.
 
 A read cannot see what shows only on the write path: admission webhooks and
 policies, field ownership conflicts, and what the deploy itself refuses. To
@@ -20,7 +22,8 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 ## Synopsis
 
 ```text
-kix diff <CLUSTER> [--from <DIR>] [-o text|json|yaml|markdown]
+kix diff <CLUSTER> [--bundle <FILE>] [--from <DIR> | --from-bundle <FILE>]
+         [-o text|json|yaml|markdown]
          [--detail plain|fields|manifests]
          [--flake <FLAKE>] [--context <CONTEXT>]
 ```
@@ -28,7 +31,9 @@ kix diff <CLUSTER> [--from <DIR>] [-o text|json|yaml|markdown]
 | Argument or flag | Meaning |
 | --- | --- |
 | `<CLUSTER>` | Cluster name to evaluate and build from the flake. This is the new side of the comparison. |
+| `--bundle <FILE>` | Read the new side from a bundle written by `kix bundle` instead of building from the flake. Without `--from` or `--from-bundle`, the old side is an empty build. |
 | `--from <DIR>` | Use a directory as the old side instead of the live cluster. See [Old side](#old-side). |
+| `--from-bundle <FILE>` | Use a bundle as the old side. Needs `--bundle`. |
 | `-o`, `--output` | `text` (default), `json`, `yaml` (the JSON document as YAML), or `markdown` for pull request comments. |
 | `--detail <LEVEL>` | How much `json` and `yaml` say about each change: `plain` (default) names each changed resource and counts its changed fields, `fields` also lists each field change, and `manifests` also includes the old and new manifest of each changed, added, or removed resource. Text and Markdown are the same at every level. |
 | `--flake <FLAKE>` | Flake to evaluate. Defaults to the current directory. |
@@ -41,6 +46,12 @@ kix diff <CLUSTER> [--from <DIR>] [-o text|json|yaml|markdown]
 | Live cluster | Omit `--from` | Yes |
 | Previous build | `--from <DIR>` where `<DIR>` contains `kix-packages.json`, such as the result of `nix build .#cluster-<name>-activation` | No |
 | Saved manifests | `--from <DIR>` where `<DIR>` holds YAML written by `kix snapshot save` or `kix export --for audit` | No |
+| Bundled build | `--from-bundle <FILE>`, with `--bundle` for the new side | No |
+| Nothing | `--bundle <FILE>` alone: every package is added | No |
+
+Each bundle is checked against its content as it is read, and must be a build
+of `<CLUSTER>`, as for `kix plan --bundle`. A bundled old side is a build, so
+the report is the one `--from <build>` gives.
 
 For the live cluster, Kix reads only the fields it applied to each managed
 resource. Kubernetes records which tool set each field through server-side
@@ -140,7 +151,7 @@ describes the top-level keys, the checked-section shape, and the
 
 | Key | Value from `kix diff` |
 | --- | --- |
-| `made_by` | `live_read` against the cluster or a snapshot; `builds` with `--from <build>` |
+| `made_by` | `live_read` against the cluster or a snapshot; `builds` with `--from <build>`, `--from-bundle`, or `--bundle` alone |
 | `build` | The new build, as for `kix plan` |
 | `deployed` | The old side's Activation record: the cluster's current record, the `--from` build's record, or the record in a `--from` snapshot. `null` when there is none |
 | `flags` | `null`: a diff plans no deploy |
