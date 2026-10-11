@@ -88,9 +88,10 @@ pub struct Plan {
 /// A Kix binary, so a plan can be checked against the Kix that deploys it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct KixBuild {
-    /// [`crate::VERSION`]: the crate version, plus the CI run number in a
-    /// release build. A local `cargo build` reports the bare crate version,
-    /// which does not change with every commit.
+    /// The Kix version: the crate version, plus the CI run number as build
+    /// metadata in a release build (`0.1.0+250`). A local `cargo build`
+    /// reports the bare crate version, which does not change with every
+    /// commit.
     pub version: String,
     /// The Nix store path the running binary is in, `null` for a binary
     /// outside the store (a `cargo build`). Two binaries with the same store
