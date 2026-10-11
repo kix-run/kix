@@ -190,7 +190,7 @@ fn build_sarif(findings: &[Value]) -> Value {
             "tool": {
                 "driver": {
                     "name": "kix",
-                    "version": env!("CARGO_PKG_VERSION"),
+                    "version": kix::VERSION,
                     "informationUri": keys::WEBSITE,
                     "rules": rules,
                 }
@@ -269,7 +269,7 @@ fn build_oscal(graph: &StoreGraph, findings: &[Value], framework: ComplianceFram
                     framework_label(framework),
                 ),
                 "last-modified": shared::now_rfc3339(),
-                "version": env!("CARGO_PKG_VERSION"),
+                "version": kix::VERSION,
                 "oscal-version": "1.1.2",
             },
             "import-ap": { "href": "./component-definition.json" },

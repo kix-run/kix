@@ -425,7 +425,7 @@ fn saved_rules(
         let (stamped_graph, _) = stamp(graph);
         let empty = super::diff_graphs(&stamped_graph, &stamped_graph);
         let mut doc = super::document::Plan::new(
-            super::document::KixBuild::current(env!("CARGO_PKG_VERSION")),
+            super::document::KixBuild::current(crate::VERSION),
             super::document::MadeBy::DryRun,
             &graph.cluster_name,
             super::document::Build::of(&stamped_graph),

@@ -554,7 +554,7 @@
           ]
         },
         "version": {
-          "description": "The crate version. It does not change with every commit.",
+          "description": "The Kix version: the crate version, plus the CI run number as build\nmetadata in a release build (`0.1.0+250`). A local `cargo build`\nreports the bare crate version, which does not change with every\ncommit.",
           "type": "string"
         }
       },

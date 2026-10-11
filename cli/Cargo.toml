@@ -8,7 +8,7 @@ name = "kix"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "LicenseRef-Proprietary"
 repository = "https://github.com/kixpkgs/kixpkgs"
 
 [workspace.dependencies]

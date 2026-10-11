@@ -506,7 +506,7 @@ mod tests {
             &crate::eval::store_graph::StoreGraph::empty("c"),
         );
         let mut p = Plan::new(
-            KixBuild::current(env!("CARGO_PKG_VERSION")),
+            KixBuild::current(crate::VERSION),
             MadeBy::DryRun,
             "c",
             Build {

@@ -8,7 +8,7 @@ use clap_complete::Shell;
 #[derive(Parser)]
 #[command(
     name = "kix",
-    version,
+    version = kix::VERSION,
     about = "Kubernetes manifest generator",
     after_help = "Plugins: `kix NAME ARGS...` runs `kix-NAME ARGS...` from PATH."
 )]
