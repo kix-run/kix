@@ -687,7 +687,7 @@ mod tests {
 
     /// A store name may be 211 characters, and a file name only 255 bytes.
     #[test]
-    fn a_bundle_source_with_the_longest_store_name_is_written() {
+    fn a_carried_source_with_the_longest_store_name_is_written() {
         let name = format!("{}.sops.yaml", "a".repeat(201));
         let path = format!("/nix/store/0h5dy43cxa771fiz9dsx14c0vf32sn67-{name}");
         let sources = HashMap::from([(path, b"x: 1\n".to_vec())]);
@@ -777,7 +777,7 @@ mod tests {
     const SOURCE: &str = "/nix/store/yxyad967bhmxvm5120mrjnrrr7ak087w-db.sops.yaml";
     const AGE_ONLY: &str = "password: ENC[AES256_GCM,data:abc]\nsops:\n  kms: []\n  age:\n    - recipient: age1abc\n      enc: x\n  lastmodified: '2026-10-06T00:00:00Z'\n  mac: ENC[x]\n  version: 3.9.0\n";
 
-    fn bundle_secret(source: &str, content_hash: Option<&str>) -> Value {
+    fn carried_secret(source: &str, content_hash: Option<&str>) -> Value {
         let mut annotations = serde_json::json!({
             (keys::SOPS_SOURCE): source,
             (keys::SECRET_KEYS): "password, .dockerconfigjson",
@@ -793,7 +793,7 @@ mod tests {
         })
     }
 
-    fn from_bundle(text: &str, placeholders: bool) -> SopsSources {
+    fn from_carried(text: &str, placeholders: bool) -> SopsSources {
         SopsSources::carried(
             HashMap::from([(SOURCE.to_string(), text.as_bytes().to_vec())]),
             placeholders,
@@ -802,10 +802,10 @@ mod tests {
     }
 
     #[test]
-    fn a_plan_from_a_bundle_gets_placeholders_typed_for_the_secret() {
-        let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+    fn a_plan_from_a_carried_build_gets_placeholders_typed_for_the_secret() {
+        let mut manifests = [carried_secret(SOURCE, Some("sha256-x"))];
         let text = format!(".dockerconfigjson: ENC[AES256_GCM,data:def]\n{AGE_ONLY}");
-        let results = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap();
+        let results = hydrate_secrets_from(&mut manifests, &from_carried(&text, true)).unwrap();
         assert_eq!(results[0].keys_injected, 2);
         assert_eq!(manifests[0]["stringData"]["password"], "kix-placeholder");
         assert_eq!(
@@ -814,13 +814,13 @@ mod tests {
         );
     }
 
-    /// The annotation is the bundle's word; the SOPS file is what a deploy
+    /// The annotation is the carried build's word; the SOPS file is what a deploy
     /// writes.
     #[test]
     fn placeholder_keys_come_from_the_sops_file_not_the_annotation() {
-        let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
+        let mut manifests = [carried_secret(SOURCE, Some("sha256-x"))];
         manifests[0]["metadata"]["annotations"][keys::SECRET_KEYS] = "only-this".into();
-        hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap();
+        hydrate_secrets_from(&mut manifests, &from_carried(AGE_ONLY, true)).unwrap();
         assert_eq!(
             manifests[0]["stringData"],
             json!({"password": "kix-placeholder"})
@@ -828,24 +828,24 @@ mod tests {
     }
 
     #[test]
-    fn a_source_the_bundle_does_not_carry_is_refused() {
+    fn a_source_the_build_does_not_carry_is_refused() {
         let other = "/nix/store/0h5dy43cxa771fiz9dsx14c0vf32sn67-db.sops.yaml";
-        let mut manifests = [bundle_secret(other, Some("sha256-x"))];
-        let err = hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap_err();
+        let mut manifests = [carried_secret(other, Some("sha256-x"))];
+        let err = hydrate_secrets_from(&mut manifests, &from_carried(AGE_ONLY, true)).unwrap_err();
         assert!(matches!(err, SecretError::NotCarried { .. }), "{err}");
     }
 
     #[test]
-    fn a_secret_from_a_bundle_must_declare_a_content_hash() {
-        let mut manifests = [bundle_secret(SOURCE, None)];
-        let err = hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap_err();
+    fn a_secret_from_a_carried_build_must_declare_a_content_hash() {
+        let mut manifests = [carried_secret(SOURCE, None)];
+        let err = hydrate_secrets_from(&mut manifests, &from_carried(AGE_ONLY, true)).unwrap_err();
         assert!(matches!(err, SecretError::NotCarried { .. }), "{err}");
     }
 
     /// sops reads a file in the format its extension names unless told
-    /// otherwise, and a bundle chooses the name.
+    /// otherwise, and a carried build chooses the name.
     #[test]
-    fn a_bundle_sops_file_is_decrypted_in_the_format_kix_checked() {
+    fn a_carried_sops_file_is_decrypted_in_the_format_kix_checked() {
         let json = r#"{"password":"ENC[x]","sops":{"age":[{"recipient":"age1abc","enc":"x"}],"mac":"ENC[x]","version":"3.9.0"}}"#;
         let dir = tempfile::tempdir().unwrap();
         for (text, name, format) in [(AGE_ONLY, "s.ini", "yaml"), (json, "s.yaml", "json")] {
@@ -878,8 +878,8 @@ mod tests {
                 .to_string(),
         ];
         for text in refused {
-            let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
-            let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+            let mut manifests = [carried_secret(SOURCE, Some("sha256-x"))];
+            let err = hydrate_secrets_from(&mut manifests, &from_carried(&text, true)).unwrap_err();
             assert!(
                 matches!(err, SecretError::NotAgeOnly { .. }),
                 "{text}: {err}"
@@ -903,13 +903,13 @@ mod tests {
     #[test]
     fn a_yaml_sops_file_with_a_repeated_key_is_refused() {
         let text = format!("sops:\n  kms:\n    - arn: arn:aws:kms:x\n{AGE_ONLY}");
-        let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
-        let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+        let mut manifests = [carried_secret(SOURCE, Some("sha256-x"))];
+        let err = hydrate_secrets_from(&mut manifests, &from_carried(&text, true)).unwrap_err();
         assert!(matches!(err, SecretError::NotAgeOnly { .. }), "{err}");
     }
 
     #[test]
-    fn a_bundle_sops_file_must_name_age_recipients_only() {
+    fn a_carried_sops_file_must_name_age_recipients_only() {
         let refused = [
             AGE_ONLY.replace("kms: []", "kms:\n    - arn: arn:aws:kms:x"),
             AGE_ONLY.replace("kms: []", "key_groups:\n    - pgp: [x]"),
@@ -918,8 +918,8 @@ mod tests {
             "password: x\n".to_string(),
         ];
         for text in refused {
-            let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
-            let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+            let mut manifests = [carried_secret(SOURCE, Some("sha256-x"))];
+            let err = hydrate_secrets_from(&mut manifests, &from_carried(&text, true)).unwrap_err();
             assert!(
                 matches!(err, SecretError::NotAgeOnly { .. }),
                 "{text}: {err}"
@@ -927,19 +927,19 @@ mod tests {
         }
     }
 
-    /// A plan parses a bundle's SOPS file before anyone approves it. The
+    /// A plan parses a carried build's SOPS file before anyone approves it. The
     /// JSON and YAML parsers' own nesting limits refuse deep nesting before
     /// the check recurses far.
     #[test]
-    fn a_deeply_nested_bundle_sops_file_is_refused() {
+    fn a_deeply_nested_carried_sops_file_is_refused() {
         let deep = format!("{}0{}", "[".repeat(1000), "]".repeat(1000));
         let json = format!(
             r#"{{"x":{deep},"password":"ENC[x]","sops":{{"age":[{{"recipient":"age1abc","enc":"x"}}],"mac":"ENC[x]","version":"3.9.0"}}}}"#
         );
         let yaml = format!("x: {deep}\n{AGE_ONLY}");
         for text in [json, yaml] {
-            let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
-            let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+            let mut manifests = [carried_secret(SOURCE, Some("sha256-x"))];
+            let err = hydrate_secrets_from(&mut manifests, &from_carried(&text, true)).unwrap_err();
             assert!(matches!(&err, SecretError::NotAgeOnly { .. }), "{err}");
         }
     }
@@ -952,8 +952,8 @@ mod tests {
         let anchor = format!("a: &a [{}]\n", vec!["0"; 5000].join(","));
         let aliases = format!("b: [{}]\n", vec!["*a"; 2000].join(","));
         let text = format!("{anchor}{aliases}{AGE_ONLY}");
-        let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
-        let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+        let mut manifests = [carried_secret(SOURCE, Some("sha256-x"))];
+        let err = hydrate_secrets_from(&mut manifests, &from_carried(&text, true)).unwrap_err();
         assert!(
             matches!(&err, SecretError::NotAgeOnly { message, .. } if message.contains("8 MiB")),
             "{err}"
@@ -968,8 +968,8 @@ mod tests {
         let anchor = format!("a: &a {}\n", "x".repeat(1 << 20));
         let aliases = format!("b: [{}]\n", ["*a"; 10].join(","));
         let text = format!("{anchor}{aliases}{AGE_ONLY}");
-        let mut manifests = [bundle_secret(SOURCE, Some("sha256-x"))];
-        let err = hydrate_secrets_from(&mut manifests, &from_bundle(&text, true)).unwrap_err();
+        let mut manifests = [carried_secret(SOURCE, Some("sha256-x"))];
+        let err = hydrate_secrets_from(&mut manifests, &from_carried(&text, true)).unwrap_err();
         assert!(
             matches!(&err, SecretError::NotAgeOnly { message, .. } if message.contains("8 MiB")),
             "{err}"
@@ -982,13 +982,13 @@ mod tests {
     fn a_source_many_secrets_name_is_checked_once() {
         let mut manifests: Vec<Value> = (0..1000)
             .map(|i| {
-                let mut secret = bundle_secret(SOURCE, Some("sha256-x"));
+                let mut secret = carried_secret(SOURCE, Some("sha256-x"));
                 secret["metadata"]["name"] = json!(format!("db{i}"));
                 secret
             })
             .collect();
         AGE_CHECKS.with(|n| n.set(0));
-        let results = hydrate_secrets_from(&mut manifests, &from_bundle(AGE_ONLY, true)).unwrap();
+        let results = hydrate_secrets_from(&mut manifests, &from_carried(AGE_ONLY, true)).unwrap();
         assert_eq!(results.len(), 1000);
         assert_eq!(AGE_CHECKS.with(|n| n.get()), 1);
     }

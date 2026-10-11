@@ -151,7 +151,8 @@ fn new_build(args: &PlanArgs, ctx: &CommandContext) -> Result<InstallableBuild> 
     let build = match &args.bundle {
         Some(path) => {
             crate::say!("Reading bundle {}...", path.display());
-            super::bundle::read(path, &args.deployed_bundles, &args.cluster)?
+            kix_bundle::read_build(path, &args.deployed_bundles, &args.cluster)
+                .map_err(|e| miette::miette!("{e}"))?
         }
         None => {
             let status = |msg: &str| {

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kix-cli", "kix", "kix-operator"]
+members = ["kix-cli", "kix", "kix-bundle", "kix-operator"]
 
 [workspace.metadata.crane]
 name = "kix"
@@ -101,6 +101,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Internal crates
 kix-lib = { path = "kix" }
+kix-bundle = { path = "kix-bundle" }
 
 # Test dependencies (used as dev-dependencies in member crates)
 # Listed here so members can inherit them with .workspace = true

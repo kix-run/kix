@@ -257,7 +257,7 @@ pub(crate) fn closure_graph(
 
 /// Every path in the closure of `path`, with its references, from
 /// `nix path-info --json --recursive`.
-pub(crate) fn path_info(path: &Path) -> Result<Vec<(String, Vec<String>)>, KixEvalError> {
+pub fn path_info(path: &Path) -> Result<Vec<(String, Vec<String>)>, KixEvalError> {
     let out = output(
         Command::new("nix")
             .args([

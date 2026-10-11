@@ -29,7 +29,7 @@ struct StampEntry {
 /// Modifies manifests in place.
 ///
 /// Commands get a graph stamped by [`crate::build_source::Build`]. This is
-/// public for `kix bundle`, which stamps the bundle it reads back to compare
+/// public for `kix-bundle`, which stamps the bundle it reads back to compare
 /// it with the build, and for tests that change a graph before stamping.
 pub fn stamp_annotations(graph: &mut StoreGraph) {
     // A build loaded from an activation that predates a domain move carries

@@ -1098,10 +1098,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kix-bundle"
+version = "0.1.0"
+dependencies = [
+ "kix-lib",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "zstd",
+]
+
+[[package]]
 name = "kix-fuzz"
 version = "0.0.0"
 dependencies = [
- "kix-lib",
+ "kix-bundle",
  "libfuzzer-sys",
  "zstd",
 ]
@@ -1144,7 +1158,6 @@ dependencies = [
  "tower",
  "tracing",
  "walkdir",
- "zstd",
 ]
 
 [[package]]

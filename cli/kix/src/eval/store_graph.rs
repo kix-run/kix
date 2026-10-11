@@ -91,7 +91,7 @@ pub fn store_hash(path: &Path) -> String {
 }
 
 /// Human-readable part of a store path (after the hash-).
-pub(crate) fn store_name(path: &Path) -> String {
+pub fn store_name(path: &Path) -> String {
     path.file_name()
         .and_then(|n| n.to_str())
         .filter(|n| n.len() > 33 && n.as_bytes()[32] == b'-')
@@ -223,7 +223,7 @@ impl StoreGraph {
     /// the references, and fails when it fails: a build is not deployed
     /// without a file it names.
     /// A package that lists a path twice holds it once.
-    pub(crate) fn assemble(
+    pub fn assemble(
         index: KixPackageIndex,
         activation_path: PathBuf,
         result_dir: PathBuf,
@@ -382,7 +382,7 @@ impl StoreGraph {
     /// - a resource two packages list that is not an import marker. Plan
     ///   shows each other resource under the one package that lists it, or
     ///   as cluster-level.
-    pub(crate) fn validate(&self) -> Result<(), KixEvalError> {
+    pub fn validate(&self) -> Result<(), KixEvalError> {
         let fail = |message: String| Err(KixEvalError::StoreGraphError { message });
         let mut paths: Vec<&PathBuf> = self.resources.keys().collect();
         paths.sort();

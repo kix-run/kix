@@ -1514,6 +1514,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "kix-bundle"
+version = "0.1.0"
+dependencies = [
+ "kix-lib",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "zstd",
+ "zstd-safe",
+]
+
+[[package]]
 name = "kix-cli"
 version = "0.1.0"
 dependencies = [
@@ -1527,6 +1543,7 @@ dependencies = [
  "indicatif",
  "insta",
  "k8s-openapi",
+ "kix-bundle",
  "kix-lib",
  "kube",
  "miette",
@@ -1544,7 +1561,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "zstd",
 ]
 
 [[package]]
@@ -1587,8 +1603,6 @@ dependencies = [
  "tower",
  "tracing",
  "walkdir",
- "zstd",
- "zstd-safe",
 ]
 
 [[package]]

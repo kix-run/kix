@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 kix-lib.workspace = true
+kix-bundle.workspace = true
 serde.workspace = true
 kube.workspace = true
 clap.workspace = true
@@ -44,5 +45,3 @@ assert_cmd.workspace = true
 insta.workspace = true
 predicates.workspace = true
 proptest.workspace = true
-# Tests write a bundle's header frame.
-zstd.workspace = true

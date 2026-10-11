@@ -5,5 +5,5 @@
 use std::io::Cursor;
 
 libfuzzer_sys::fuzz_target!(|data: &[u8]| {
-    let _ = kix::eval::bundle::Bundle::read(Cursor::new(data));
+    let _ = kix_bundle::Bundle::read(Cursor::new(data));
 });

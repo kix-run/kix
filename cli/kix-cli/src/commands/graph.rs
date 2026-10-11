@@ -27,7 +27,8 @@ impl CommandResponse for GraphResponse {
 pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
     let manifests = match &args.bundle {
         Some(path) => {
-            let build = super::bundle::read(path, &[], &args.cluster)?;
+            let build = kix_bundle::read_build(path, &[], &args.cluster)
+                .map_err(|e| miette::miette!("{e}"))?;
             let mut manifests: Vec<serde_json::Value> = build
                 .graph()
                 .resources

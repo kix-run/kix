@@ -10,7 +10,7 @@
 //! honest build's objects with no build to compare) with one set of flags.
 //!
 //! What is checked when kix accepts the bundle, computed apart from
-//! [`super::objects::of`]:
+//! `kix::plan::objects::of`:
 //! - The writes of the engine plan, each matched to the one build file
 //!   whose manifest it applies, equal the plan document's `objects.writes`,
 //!   and the deletes equal its `objects.deletes`.
@@ -22,7 +22,7 @@
 //!
 //! `PROPTEST_CASES` sets the number of cases (256 by default, about ten
 //! seconds in a debug build). A long run:
-//! `PROPTEST_CASES=20000 cargo test -p kix-lib --release --lib plan_bound_properties`.
+//! `PROPTEST_CASES=20000 cargo test -p kix-bundle --release --test plan_bound`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Cursor;
@@ -33,18 +33,19 @@ use proptest::prelude::*;
 use proptest::test_runner::{Config, TestCaseError, TestRunner};
 use serde_json::{Value, json};
 
-use super::baseline::{ActiveSource, Baseline};
-use super::document::{Packages, WriteChange};
-use super::plan_bound_tests::{flags, plan, stamped};
-use super::planner::deletes_of;
-use super::{CLUSTER_LEVEL_KEY, ManifestIndex, PlanError};
-use crate::cluster::apply::ChangeAction;
-use crate::eval::bundle::{Bundle, BundleError, BundleFile, Contents, INDEX_NAME, Provenance};
-use crate::eval::store_graph::{KixPackageIndex, StoreGraph, store_hash};
-use crate::eval::store_path::{self, Method};
-use crate::manifest::diff::equivalence::equivalent_to_unset;
-use crate::manifest::types::{self, ResourceId};
-use crate::manifest::{keys, lifecycle};
+use kix::cluster::apply::ChangeAction;
+use kix::eval::store_graph::{KixPackageIndex, StoreGraph, store_hash};
+use kix::eval::store_path::{self, Method};
+use kix::manifest::types::ResourceId;
+use kix::manifest::{keys, lifecycle};
+use kix::plan::baseline::Baseline;
+use kix::plan::document::{Packages, WriteChange};
+use kix::plan::fixtures::{
+    self, deletes_of, deployed, deployed_objects, equivalent_to_unset, flags, old_side, plan,
+    shown_manifest, stamp,
+};
+use kix::plan::{CLUSTER_LEVEL_KEY, ManifestIndex, PlanError};
+use kix_bundle::{Bundle, BundleError, BundleFile, Contents, INDEX_NAME, Provenance};
 
 /// Honest bundles: the kix-enterprise-test build on stage1, and kixpkgs'
 /// `bundle-alias` and `immich` test clusters, the second with import
@@ -52,16 +53,13 @@ use crate::manifest::{keys, lifecycle};
 const SEEDS: &[(&str, &[u8])] = &[
     (
         "kix-enterprise-test",
-        include_bytes!("../../tests/fixtures/bundles/kix-enterprise-test.kixbundle"),
+        include_bytes!("fixtures/kix-enterprise-test.kixbundle"),
     ),
     (
         "bundle-alias",
-        include_bytes!("../../tests/fixtures/bundles/bundle-alias.kixbundle"),
+        include_bytes!("fixtures/bundle-alias.kixbundle"),
     ),
-    (
-        "immich",
-        include_bytes!("../../tests/fixtures/bundles/immich.kixbundle"),
-    ),
+    ("immich", include_bytes!("fixtures/immich.kixbundle")),
 ];
 
 /// A build as a list of files, which a change edits in place and
@@ -146,7 +144,7 @@ impl Draft {
     fn path(&self, i: usize) -> String {
         format!(
             "{}/{}-{}",
-            store_path::STORE_DIR,
+            fixtures::STORE_DIR,
             self.files[i].hash,
             self.files[i].name
         )
@@ -370,7 +368,7 @@ fn values() -> Vec<Option<Value>> {
         "zero\u{200b}width",
         "line\nbreak",
         lifecycle::RECORD_KIND,
-        lifecycle::PACKAGE_INSTANCE_KIND,
+        fixtures::PACKAGE_INSTANCE_KIND,
         "ConfigMap",
         "Namespace",
         "Secret",
@@ -387,7 +385,7 @@ fn values() -> Vec<Option<Value>> {
     .map(|s| Some(json!(s)))
     .collect();
     v.extend(
-        crate::legacy_domain::legacy_spellings(keys::API_VERSION)
+        fixtures::legacy_spellings(keys::API_VERSION)
             .into_iter()
             .map(|s| Some(json!(s))),
     );
@@ -414,8 +412,8 @@ fn annotations() -> Vec<String> {
         keys::PACKAGE,
         keys::PACKAGE_NAMESPACE,
         keys::MODE,
-        keys::SOPS_SOURCE,
-        keys::RERUN,
+        fixtures::SOPS_SOURCE,
+        fixtures::RERUN,
         "checksum/config",
         "other",
     ]
@@ -423,7 +421,7 @@ fn annotations() -> Vec<String> {
     .to_vec();
     a.push(format!("{}.x", keys::IDENTITY_HASH));
     a.push(format!("{}.extra", keys::DEPENDS_ON));
-    a.extend(crate::legacy_domain::legacy_spellings(keys::IDENTITY_HASH));
+    a.extend(fixtures::legacy_spellings(keys::IDENTITY_HASH));
     a
 }
 
@@ -433,10 +431,10 @@ const OBJECTS: &[(&str, &str, bool)] = &[
     ("Secret", "v1", true),
     ("ClusterRoleBinding", "rbac.authorization.k8s.io/v1", false),
     ("Namespace", "v1", false),
-    (lifecycle::PACKAGE_INSTANCE_KIND, keys::API_VERSION, true),
+    (fixtures::PACKAGE_INSTANCE_KIND, keys::API_VERSION, true),
     (lifecycle::RECORD_KIND, keys::API_VERSION, false),
     ("CustomResourceDefinition", "apiextensions.k8s.io/v1", false),
-    (lifecycle::PACKAGE_INSTANCE_KIND, "example.com/v1", true),
+    (fixtures::PACKAGE_INSTANCE_KIND, "example.com/v1", true),
     (lifecycle::RECORD_KIND, "example.com/v1", false),
 ];
 
@@ -868,7 +866,7 @@ fn apply(draft: &mut Draft, change: &Change) {
             if namespaced {
                 manifest["metadata"]["namespace"] = json!(namespace);
             }
-            if kind == lifecycle::PACKAGE_INSTANCE_KIND {
+            if kind == fixtures::PACKAGE_INSTANCE_KIND {
                 manifest["spec"] = json!({"instanceName": name, "namespaceName": namespace});
             }
             if kind == lifecycle::RECORD_KIND {
@@ -1187,7 +1185,7 @@ fn without_propagation(manifest: &Value) -> Value {
             keys::BUILT_VIA,
         ] {
             annotations.remove(key);
-            for legacy in crate::legacy_domain::legacy_spellings(key) {
+            for legacy in fixtures::legacy_spellings(key) {
                 annotations.remove(&legacy);
             }
         }
@@ -1195,7 +1193,7 @@ fn without_propagation(manifest: &Value) -> Value {
     m
 }
 
-/// Plan a deploy of `new` over `old` with `flags`, as [`super::Planner`]
+/// Plan a deploy of `new` over `old` with `flags`, as `kix::plan::Planner`
 /// does before it reads the cluster, and check what it would write and
 /// delete against the plan. `Err` is a violation of the property.
 fn plan_and_check(
@@ -1205,20 +1203,12 @@ fn plan_and_check(
     extra: &[&str],
 ) -> Result<Outcome, String> {
     let flags = flags(extra);
-    let (new_graph, _) = stamped(new);
-    let (honest_graph, honest_manifests) = stamped(honest);
-    let baseline = match old {
-        OldSide::Nothing => Baseline::empty(),
-        OldSide::Deployed => Baseline {
-            source: ActiveSource::Build(Box::new(honest_graph)),
-            active_manifests: honest_manifests,
-            ..Baseline::empty()
-        },
-        OldSide::ObjectsOnly => Baseline {
-            source: ActiveSource::Live,
-            active_manifests: honest_manifests,
-            ..Baseline::empty()
-        },
+    let (new_graph, _) = stamp(new);
+    let (_, honest_manifests) = stamp(honest);
+    let baseline: Baseline = match old {
+        OldSide::Nothing => deployed(None),
+        OldSide::Deployed => deployed(Some(honest)),
+        OldSide::ObjectsOnly => deployed_objects(honest_manifests),
     };
     let checked = match plan(&baseline, new, flags) {
         Ok(checked) => checked,
@@ -1228,13 +1218,12 @@ fn plan_and_check(
     };
     let (plan, pkg_diff, objects) = (checked.plan(), checked.pkg_diff(), checked.objects());
     let deletes = deletes_of(flags.prune_policy(), checked.orphans());
-    let old_graph = baseline.diff_side(&new_graph);
-    let active_manifests = &baseline.active_manifests;
+    let (old_graph, active_manifests) = old_side(&baseline, &new_graph);
 
     // What the deploy writes, each matched to the build file whose
     // manifest it applies.
     let mut written: BTreeMap<(String, String, String, String), &Value> = BTreeMap::new();
-    for node in &plan.nodes {
+    for node in plan.nodes() {
         let (id, files): (ResourceId, Vec<(&PathBuf, &Value)>) = match (&node.action, &node.rerun) {
             (ChangeAction::Apply(m), _) => (
                 ResourceId::from_value(m),
@@ -1308,7 +1297,7 @@ fn plan_and_check(
 
     // Each listed write and delete, as the plan document shows it.
     let index = ManifestIndex::new(&old_graph, &new_graph);
-    let doc = Packages::of(pkg_diff, super::document::Detail::Manifests(&index));
+    let doc = Packages::of(pkg_diff, kix::plan::document::Detail::Manifests(&index));
     let old_of = |id: &ResourceId| {
         old_graph
             .resources
@@ -1326,15 +1315,8 @@ fn plan_and_check(
         let (package, change) =
             listed[&(kind.clone(), namespace.clone(), name.clone(), hash.clone())];
         let old = old_of(&id);
-        let is_secret = types::is_secret(manifest) || old.is_some_and(types::is_secret);
-        let expected = super::shown_value(
-            is_secret,
-            "$",
-            manifest,
-            old,
-            super::MAX_SHOWN_MANIFEST_BYTES,
-        );
-        let shows = |sides: Option<&BTreeMap<String, super::document::ManifestSides>>| {
+        let expected = shown_manifest(manifest, old);
+        let shows = |sides: Option<&BTreeMap<String, kix::plan::document::ManifestSides>>| {
             sides
                 .and_then(|s| s.get(&shown_id))
                 .and_then(|s| s.new.as_ref())

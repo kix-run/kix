@@ -6,5 +6,5 @@ use std::io::Cursor;
 
 libfuzzer_sys::fuzz_target!(|data: &[u8]| {
     let bundle = kix_fuzz::bundle_of_frames(data);
-    let _ = kix::eval::bundle::Bundle::read(Cursor::new(bundle.as_slice()));
+    let _ = kix_bundle::Bundle::read(Cursor::new(bundle.as_slice()));
 });

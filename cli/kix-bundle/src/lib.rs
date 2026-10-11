@@ -137,13 +137,19 @@ use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use zstd::zstd_safe;
 
-use super::error::KixEvalError;
-use super::manifest_json::{NotJson, parse_index, parse_manifest};
-use super::store_graph::{StoreGraph, store_name};
-use super::store_path;
-pub use crate::build_source::Provenance;
-use crate::manifest::{keys, lifecycle};
-use crate::text::printable;
+mod file;
+
+pub use file::{Written, read_build, write_build};
+pub use kix::build_source::Provenance;
+use kix::eval::error::KixEvalError;
+/// Re-exported for the Kix Enterprise server, which parses a bundle's
+/// manifests one at a time as this crate does.
+pub use kix::eval::manifest_json::parse_manifest;
+use kix::eval::manifest_json::{NotJson, parse_index};
+use kix::eval::store_graph::{StoreGraph, store_name};
+use kix::eval::store_path;
+use kix::manifest::{keys, lifecycle};
+use kix::text::printable;
 
 /// The `format` field of every bundle header.
 pub(crate) const FORMAT: &str = "kix-bundle";
@@ -152,7 +158,7 @@ pub(crate) const VERSION: u32 = 3;
 /// The file extension `kix bundle` suggests.
 pub const EXTENSION: &str = "kixbundle";
 /// The store name of the package index.
-pub(crate) const INDEX_NAME: &str = "kix-packages.json";
+pub const INDEX_NAME: &str = "kix-packages.json";
 
 /// The largest bundle file kix reads.
 pub const MAX_STORED_BYTES: u64 = 64 * 1024 * 1024;
@@ -1203,7 +1209,7 @@ pub fn from_result_dir(
         ))
     })?;
     let mut files = BTreeMap::new();
-    for (path, references) in super::nix::path_info(&activation)? {
+    for (path, references) in kix::eval::nix::path_info(&activation)? {
         let bytes = std::fs::read(&path).map_err(|e| err(format!("failed to read {path}: {e}")))?;
         files.insert(path, BundleFile { bytes, references });
     }
@@ -1214,6 +1220,69 @@ pub fn from_result_dir(
     })
 }
 
+/// Counts the bytes each test thread has allocated, so a test can bound
+/// what a call keeps in memory.
+#[cfg(test)]
+mod allocated {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        static NOW: Cell<isize> = const { Cell::new(0) };
+        static PEAK: Cell<isize> = const { Cell::new(0) };
+    }
+
+    struct Counting;
+
+    fn add(bytes: isize) {
+        let _ = NOW.try_with(|now| {
+            now.set(now.get() + bytes);
+            let _ = PEAK.try_with(|peak| peak.set(peak.get().max(now.get())));
+        });
+    }
+
+    // SAFETY: each method passes its arguments to `System` unchanged.
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let p = unsafe { System.alloc(layout) };
+            if !p.is_null() {
+                add(layout.size() as isize);
+            }
+            p
+        }
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            let p = unsafe { System.alloc_zeroed(layout) };
+            if !p.is_null() {
+                add(layout.size() as isize);
+            }
+            p
+        }
+        unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(p, layout) };
+            add(-(layout.size() as isize));
+        }
+        unsafe fn realloc(&self, p: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let q = unsafe { System.realloc(p, layout, new_size) };
+            if !q.is_null() {
+                add(new_size as isize - layout.size() as isize);
+            }
+            q
+        }
+    }
+
+    #[global_allocator]
+    static COUNTING: Counting = Counting;
+
+    /// The most bytes this thread held while `f` ran, beyond what it held
+    /// when `f` started.
+    pub(super) fn peak_during<T>(f: impl FnOnce() -> T) -> (T, usize) {
+        let start = NOW.with(Cell::get);
+        PEAK.with(|peak| peak.set(start));
+        let out = f();
+        (out, (PEAK.with(Cell::get) - start).max(0) as usize)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -1221,10 +1290,9 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::eval::store_path::Method;
+    use kix::eval::store_path::Method;
 
-    const FIXTURE: &[u8] =
-        include_bytes!("../../tests/fixtures/bundles/kix-enterprise-test.kixbundle");
+    const FIXTURE: &[u8] = include_bytes!("../tests/fixtures/kix-enterprise-test.kixbundle");
     const STATUS_PAGE: &str = "-k8s-PackageInstance-kix-enterprise-test-web-status-page";
     const STATUS_CONFIG: &str = "-k8s-ConfigMap-kix-enterprise-test-web-status-page";
 
@@ -1243,6 +1311,16 @@ mod tests {
             .unwrap()
             .contents()
             .unwrap()
+    }
+
+    /// kix-lib's tests read the same build from JSON, which they can read
+    /// without this crate. It must stay the build this bundle holds.
+    #[test]
+    fn the_libs_fixture_is_this_bundles_build() {
+        let mut graph = read(FIXTURE).unwrap();
+        let fixture = kix::plan::fixtures::kix_enterprise_test();
+        graph.result_dir = fixture.result_dir.clone();
+        assert!(graph == fixture && graph.packages.keys().eq(fixture.packages.keys()));
     }
 
     fn written(contents: &Contents) -> Vec<u8> {
@@ -1401,7 +1479,7 @@ mod tests {
     fn marker(name: &str) -> Value {
         json!({
             "apiVersion": keys::API_VERSION,
-            "kind": lifecycle::PACKAGE_INSTANCE_KIND,
+            "kind": kix::plan::fixtures::PACKAGE_INSTANCE_KIND,
             "metadata": {
                 "name": name,
                 "namespace": "kix-enterprise-test-web",
@@ -1491,8 +1569,8 @@ mod tests {
     #[test]
     fn every_fixture_reads() {
         for bytes in [
-            &include_bytes!("../../tests/fixtures/bundles/immich.kixbundle")[..],
-            &include_bytes!("../../tests/fixtures/bundles/bundle-alias.kixbundle")[..],
+            &include_bytes!("../tests/fixtures/immich.kixbundle")[..],
+            &include_bytes!("../tests/fixtures/bundle-alias.kixbundle")[..],
         ] {
             checked(bytes).unwrap();
             read(bytes).unwrap();
@@ -2161,7 +2239,7 @@ mod tests {
     #[test]
     fn checking_paths_holds_one_frame_and_parses_no_manifest() {
         let one = configmap_of_objects("o", 1 << 20);
-        let (_, parsed) = crate::allocated::peak_during(|| parse_manifest("o", one.as_bytes()));
+        let (_, parsed) = allocated::peak_during(|| parse_manifest("o", one.as_bytes()));
         let mut contents = real();
         for i in 0..6 {
             let text = configmap_of_objects(&format!("o{i}"), 1 << 20);
@@ -2170,7 +2248,7 @@ mod tests {
         }
         let bytes = written(&contents);
         let largest_frame = frames_of(&bytes).iter().map(Vec::len).max().unwrap();
-        let (result, peak) = crate::allocated::peak_during(|| checked(&bytes).map(drop));
+        let (result, peak) = allocated::peak_during(|| checked(&bytes).map(drop));
         result.unwrap();
         assert!(
             peak < 3 * largest_frame,
@@ -2208,7 +2286,7 @@ mod tests {
         set_file(&mut contents, &record, file.bytes, file.references);
         assert_eq!(contents.files.len(), MAX_FILES);
         let bytes = written(&contents);
-        let (result, peak) = crate::allocated::peak_during(|| checked(&bytes).map(drop));
+        let (result, peak) = allocated::peak_during(|| checked(&bytes).map(drop));
         result.unwrap();
         assert!(peak < 200 << 20, "checking paths held {} MiB", peak >> 20);
     }
@@ -2234,7 +2312,7 @@ mod tests {
         for text in cases {
             frames[0] = text.into_bytes();
             let bytes = join(&frames);
-            let (result, peak) = crate::allocated::peak_during(|| checked(&bytes).map(drop));
+            let (result, peak) = allocated::peak_during(|| checked(&bytes).map(drop));
             assert!(
                 peak < 200 << 20,
                 "reading the header held {} MiB",
