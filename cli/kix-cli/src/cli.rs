@@ -606,6 +606,21 @@ pub struct DiffArgs {
     #[arg(long, value_name = "DIR")]
     pub from: Option<String>,
 
+    /// Read the new side from this bundle (`kix bundle`) instead of
+    /// building. Without `--from` or `--from-bundle`, the old side is no
+    /// build at all, so every resource is added and the cluster is not read
+    #[arg(long, value_name = "FILE")]
+    pub bundle: Option<std::path::PathBuf>,
+
+    /// Compare against the build in this bundle instead of the live cluster
+    #[arg(
+        long,
+        value_name = "FILE",
+        requires = "bundle",
+        conflicts_with = "from"
+    )]
+    pub from_bundle: Option<std::path::PathBuf>,
+
     /// How much of each change `--output json` and `--output yaml` include.
     /// Text and Markdown output are the same at every level.
     #[arg(long, value_enum, default_value_t = Detail::Plain)]

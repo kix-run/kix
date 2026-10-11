@@ -94,3 +94,96 @@ fn diff_from_self_is_identical() {
         .success()
         .stdout(predicate::str::contains("No differences"));
 }
+
+fn fixture_bundle(name: &str) -> std::path::PathBuf {
+    repo_root().join(format!("cli/kix-bundle/tests/fixtures/{name}.kixbundle"))
+}
+
+/// `kix diff --bundle --from-bundle` compares two bundled builds with no
+/// flake and no cluster, and writes the plan document of two builds.
+#[test]
+fn diff_of_a_bundle_against_itself_is_identical() {
+    let bundle = fixture_bundle("kix-enterprise-test");
+    let out = kix()
+        .env("KUBECONFIG", "/dev/null")
+        .args([
+            "-o",
+            "json",
+            "diff",
+            "kix-enterprise-test",
+            "--detail",
+            "fields",
+        ])
+        .arg("--bundle")
+        .arg(&bundle)
+        .arg("--from-bundle")
+        .arg(&bundle)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["made_by"], "builds");
+    assert_eq!(doc["cluster"], "kix-enterprise-test");
+    assert_eq!(doc["packages"]["added"], serde_json::json!([]));
+}
+
+/// `--bundle` alone compares against no build: every package is added.
+#[test]
+fn diff_of_a_bundle_alone_adds_everything() {
+    let out = kix()
+        .env("KUBECONFIG", "/dev/null")
+        .args(["-o", "json", "diff", "kix-enterprise-test", "--bundle"])
+        .arg(fixture_bundle("kix-enterprise-test"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(doc["made_by"], "builds");
+    assert!(!doc["packages"]["added"].as_array().unwrap().is_empty());
+    assert_eq!(doc["deployed"], serde_json::Value::Null);
+}
+
+/// The old bundle must be a build of the named cluster, as the new one must.
+#[test]
+fn diff_refuses_a_from_bundle_of_another_cluster() {
+    kix()
+        .env("KUBECONFIG", "/dev/null")
+        .args(["diff", "kix-enterprise-test", "--bundle"])
+        .arg(fixture_bundle("kix-enterprise-test"))
+        .arg("--from-bundle")
+        .arg(fixture_bundle("immich"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not 'kix-enterprise-test'"));
+}
+
+/// An old bundle whose content does not match its store paths is refused.
+#[test]
+fn diff_refuses_a_from_bundle_that_does_not_verify() {
+    let bundle = fixture_bundle("kix-enterprise-test");
+    let tmp = tempfile::tempdir().unwrap();
+    let broken = tmp.path().join("broken.kixbundle");
+    let mut bytes = fs::read(&bundle).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 1;
+    fs::write(&broken, bytes).unwrap();
+    kix()
+        .env("KUBECONFIG", "/dev/null")
+        .args(["diff", "kix-enterprise-test", "--bundle"])
+        .arg(&bundle)
+        .arg("--from-bundle")
+        .arg(&broken)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot use the bundle"));
+}
