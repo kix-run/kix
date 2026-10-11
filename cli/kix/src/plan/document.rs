@@ -88,7 +88,9 @@ pub struct Plan {
 /// A Kix binary, so a plan can be checked against the Kix that deploys it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct KixBuild {
-    /// The crate version. It does not change with every commit.
+    /// [`crate::VERSION`]: the crate version, plus the CI run number in a
+    /// release build. A local `cargo build` reports the bare crate version,
+    /// which does not change with every commit.
     pub version: String,
     /// The Nix store path the running binary is in, `null` for a binary
     /// outside the store (a `cargo build`). Two binaries with the same store
@@ -97,8 +99,8 @@ pub struct KixBuild {
 }
 
 impl KixBuild {
-    /// The running binary, whose crate version is `version`: the binary's
-    /// own `CARGO_PKG_VERSION`, not this library's.
+    /// The running binary, whose version is `version` (callers pass
+    /// [`crate::VERSION`]).
     pub fn current(version: &str) -> Self {
         let store_path = std::env::current_exe()
             .and_then(std::fs::canonicalize)
@@ -846,7 +848,7 @@ mod tests {
             &crate::eval::store_graph::StoreGraph::empty("c"),
         );
         let mut plan = Plan::new(
-            KixBuild::current(env!("CARGO_PKG_VERSION")),
+            KixBuild::current(crate::VERSION),
             MadeBy::DryRun,
             "c",
             Build::of(&crate::eval::store_graph::StoreGraph::empty("c")),

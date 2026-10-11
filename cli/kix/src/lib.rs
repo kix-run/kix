@@ -27,3 +27,13 @@ pub mod pins;
 pub mod plan;
 pub mod registry;
 pub mod text;
+
+/// The Kix version. A release build sets `KIX_VERSION` at compile time to
+/// the crate version with the CI run number as semver build metadata
+/// (`0.1.0+250`), so two released binaries with the same crate version
+/// still report different versions. Any other build reports the crate
+/// version.
+pub const VERSION: &str = match option_env!("KIX_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};

@@ -492,7 +492,7 @@ pub fn render_never_pruned(kept: &[ResourceId]) -> String {
 /// This binary, as a plan document names the Kix that made it: its own
 /// crate version, not the library's.
 pub fn kix_build() -> kix::plan::document::KixBuild {
-    kix::plan::document::KixBuild::current(env!("CARGO_PKG_VERSION"))
+    kix::plan::document::KixBuild::current(kix::VERSION)
 }
 
 /// What deletes the orphans a warn-only run keeps. Both work because the

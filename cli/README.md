@@ -41,6 +41,18 @@ nothing of bundles: a bundle reaches it as a `CarriedBuild`.
 - `.github/workflows/bundle-checks.yml` runs each fuzz target for two
   minutes and `every_test_cluster_bundles`, on changes to `cli/` and weekly.
 
+### Releases
+
+The `release` job in `.github/workflows/cli-tests.yml` publishes `kix` to
+the public [kix-run/kix-releases](https://github.com/kix-run/kix-releases)
+after the tests pass on a push to main. It builds static musl binaries for
+x86_64 and aarch64 Linux with `cargo zigbuild`. The version is the workspace
+version with the workflow run number as semver build metadata (`0.1.0+250`),
+passed to the build as `KIX_VERSION`. `kix::VERSION` reads it at compile
+time and falls back to the crate version, and everything that reports a Kix
+version (`kix --version`, a plan's `kix.version`, compliance receipts) uses
+`kix::VERSION`.
+
 ## Deploy pipeline
 
 ```

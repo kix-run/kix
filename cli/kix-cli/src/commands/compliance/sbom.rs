@@ -211,7 +211,7 @@ pub fn build_sbom(graph: &StoreGraph, flake_ref: &str) -> Value {
                 "components": [{
                     "type": "application",
                     "name": "kix",
-                    "version": env!("CARGO_PKG_VERSION"),
+                    "version": kix::VERSION,
                     "vendor": keys::DOMAIN,
                 }]
             },
