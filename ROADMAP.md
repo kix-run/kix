@@ -337,7 +337,7 @@
 - [ ] kix CLI working without installed nix
 - [ ] **Nightly eval-time bench** — scheduled CI job evaluates a representative cluster (e.g. ludo) and fails on > X% regression. Protects the "eval times" risk and catches content-addressing blowups early. Not ludo-specific; applies to any flagship cluster. From `v2_discussions/90_ludo_north_star_ideation.md`.
 - [ ] LSP or code smell checks for kix package definitions
-- [ ] Rust bridge to nix binary (https://github.com/nixops4/nix-bindings-rust)
+- [ ] Rust bridge to nix binary (https://github.com/nixops4/nix-bindings-rust). An experimental backend, behind a `nix-ffi` feature nothing enabled, was removed in 2026-10 because it no longer built.
 - [ ] Allow bringing a values.yaml for helm migration
 - [ ] Dry-run / planning mode — "do the builds without the servers"; evaluate what a cluster would look like before hardware exists, as a planning and risk assessment tool ("what would break?")
 

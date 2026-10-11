@@ -7,7 +7,7 @@
 //! # Backend selection
 //!
 //! The `NixBackend` trait in `evaluator` abstracts over Nix evaluation.
-//! Three implementations exist:
+//! Two implementations exist:
 //!
 //! - [`cli_backend::CliNixBackend`] shells out to `nix` CLI commands.
 //!   Default backend for production use. Benefits from Nix's built-in
@@ -15,12 +15,7 @@
 //!
 //! - `mock::MockNixBackend` returns canned data, for this crate's tests
 //!   without a Nix installation.
-//!
-//! - `FfiNixBackend`, gated behind `#[cfg(feature = "nix-ffi")]`, provides
-//!   direct FFI evaluation via `nix-bindings-*` crates. It is experimental and
-//!   not currently used by the CLI.
 
-pub(crate) mod build;
 pub mod bundle;
 pub(crate) mod cache;
 pub mod cli_backend;
@@ -29,6 +24,7 @@ pub(crate) mod evaluator;
 pub(crate) mod manifest_json;
 #[cfg(test)]
 mod mock;
+pub mod nix;
 pub mod stamp;
 pub mod store;
 pub mod store_graph;
@@ -40,8 +36,3 @@ pub use evaluator::{
     ClusterOutput, ClusterPackageInfo, InstanceInfo, KixEvaluator, NixBackend, PackageInfo,
 };
 pub(crate) use store_graph::PackageNode;
-
-/// Nix FFI backend available only when built with Nix C libraries.
-/// Experimental: not currently used by the CLI.
-#[cfg(feature = "nix-ffi")]
-pub mod ffi;

@@ -72,21 +72,7 @@ chrono.workspace = true
 # Logging
 tracing.workspace = true
 
-# Nix FFI bindings (optional, enabled via nix-ffi feature)
-nix-bindings-expr = { workspace = true, optional = true }
-nix-bindings-store = { workspace = true, optional = true }
-nix-bindings-flake = { workspace = true, optional = true }
-nix-bindings-util = { workspace = true, optional = true }
-nix-bindings-fetchers = { workspace = true, optional = true }
-
 [features]
-nix-ffi = [
-  "dep:nix-bindings-expr",
-  "dep:nix-bindings-store",
-  "dep:nix-bindings-flake",
-  "dep:nix-bindings-util",
-  "dep:nix-bindings-fetchers",
-]
 test-util = []
 
 [dev-dependencies]

@@ -565,7 +565,6 @@ Long-lived K8s controller watching Activation CRs.
 - `StoreGraph` — Package/resource DAG from Nix store.
 - SQLite-based eval caching.
 - Mock backend for testing.
-- `ffi` feature flag for direct Nix FFI backend.
 
 ### manifest module
 - **Structural diff engine:** path-based differences, keyed-list array diffing, rename/move detection (fuzzy similarity), configurable ignore rules, field labels.

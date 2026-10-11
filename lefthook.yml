@@ -67,14 +67,14 @@ pre-commit:
     - merge
     - rebase
   commands:
-    # rustfmt does no compilation, so it needs neither devenv nor the Nix
-    # FFI libs — running it on the host keeps this well under a second.
+    # rustfmt does no compilation, so it does not need devenv — running it
+    # on the host keeps this well under a second.
     format-rust:
       glob: "cli/**/*.rs"
       run: bash -c 'cd cli && cargo fmt --check'
 
-    # Clippy compiles, so it does need devenv shell: the FFI crates find
-    # the Nix C libraries (nix-expr-c, etc.) via PKG_CONFIG_PATH.
+    # Clippy compiles, so it runs in the devenv shell, which has the Rust
+    # toolchain and pkg-config.
     #
     # This is affordable only because of two things, and it goes back to
     # being unusable if either regresses:

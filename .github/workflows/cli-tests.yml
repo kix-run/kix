@@ -8,8 +8,7 @@ name: CLI tests
 # The tests cannot run inside a Nix build: the crane package sets
 # `doCheck = false` because the integration tests need a writable Nix store
 # for the eval cache and the build sandbox has none. So this runs them from
-# the flake's devShell instead, which carries the Rust toolchain and the
-# Nix C libraries the nix-bindings-*-sys crates link against.
+# the flake's devShell instead, which carries the Rust toolchain.
 #
 # Spindle (runners.example.com) brokers this onto an ephemeral GCE VM whose
 # image ships Nix; see .github/workflows/spindle-smoke.yml for the runner

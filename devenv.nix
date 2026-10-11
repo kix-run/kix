@@ -7,21 +7,6 @@
 }:
 
 let
-  # Nix C libraries for FFI bindings (nix-bindings-rust).
-  # These come from nixpkgs' own `pkgs.nix.libs.*` — no cachix fork or
-  # separate nix flake input needed. The .dev outputs provide pkg-config
-  # .pc files and C headers that the nix-bindings-*-sys crates find via
-  # pkg-config at build time. Adding them to `packages` makes them
-  # available in PKG_CONFIG_PATH automatically.
-  nixLibs = [
-    pkgs.nix.libs.nix-expr-c
-    pkgs.nix.libs.nix-store-c
-    pkgs.nix.libs.nix-util-c
-    pkgs.nix.libs.nix-flake-c
-    pkgs.nix.libs.nix-fetchers-c
-    pkgs.nix.libs.nix-main-c
-  ];
-
   # A stable, readable name for this checkout: the directory name plus a
   # short digest of its absolute path, so two worktrees of kixpkgs never
   # collide and neither name is a mystery when you look in ~/.cache.
@@ -49,7 +34,6 @@ in
     pkgs.age
     pkgs.nodejs_22
   ]
-  ++ nixLibs
   ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
     pkgs.wf-recorder
   ];
@@ -80,25 +64,6 @@ in
   # Set in enterShell rather than `env` so that `$XDG_CACHE_HOME` and `$HOME`
   # are expanded by the shell: devenv evaluates hermetically by default, so
   # Nix cannot read them at eval time.
-
-  # Bindgen needs libclang to generate FFI bindings from the Nix C headers.
-  # BINDGEN_EXTRA_CLANG_ARGS is required because the headers use C++20 features.
-  env.LIBCLANG_PATH = lib.makeLibraryPath [ pkgs.llvmPackages.clang-unwrapped ];
-  env.BINDGEN_EXTRA_CLANG_ARGS = builtins.concatStringsSep " " (
-    [
-      "-x"
-      "c++"
-      "-std=c++2a"
-    ]
-    ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-      "-isystem"
-      "${pkgs.stdenv.cc.cc}/include/c++/${lib.getVersion pkgs.stdenv.cc.cc}"
-      "-isystem"
-      "${pkgs.stdenv.cc.cc}/include/c++/${lib.getVersion pkgs.stdenv.cc.cc}/x86_64-unknown-linux-gnu"
-      "-isystem"
-      "${pkgs.glibc.dev}/include"
-    ]
-  );
 
   # DAG visualization scripts for the fixpoint cluster.
   # These evaluate the fixpoint cluster's resource graph at eval time.

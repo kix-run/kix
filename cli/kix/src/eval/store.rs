@@ -45,27 +45,10 @@ pub fn save_activation_path(cluster: &str, result_dir: &Path) -> std::io::Result
     // bookkeeping.
     let root_link = dir.join(format!("{cluster}.root"));
     let _ = std::fs::remove_file(&root_link);
-    if let Err(e) = add_gc_root(&root_link, result_dir) {
+    if let Err(e) = super::nix::add_gc_root(&root_link, result_dir) {
         tracing::warn!(cluster, ?result_dir, error = %e, "could not protect this deployment build from Nix garbage collection; it may become unavailable for rollback");
     }
     Ok(())
-}
-
-/// Register `link` as a Nix GC root for `target` with `nix-store --add-root`.
-fn add_gc_root(link: &Path, target: &Path) -> Result<(), String> {
-    match std::process::Command::new("nix-store")
-        .arg("--add-root")
-        .arg(link)
-        .arg("--realise")
-        .arg(target)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-    {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(format!("nix-store --add-root exited with {status}")),
-        Err(e) => Err(format!("could not run nix-store --add-root: {e}")),
-    }
 }
 
 /// Keep one Nix GC root, `{cluster}.kept-{identity_hash}`, for every build an
@@ -78,7 +61,9 @@ fn add_gc_root(link: &Path, target: &Path) -> Result<(), String> {
 /// collectable and every later plan reports it as unreadable. Best-effort:
 /// failures are logged, never returned.
 pub(crate) fn sync_kept_roots(cluster: &str, listed: &[(String, Option<PathBuf>)]) {
-    sync_kept_roots_in(&activations_dir(), cluster, listed, add_gc_root);
+    sync_kept_roots_in(&activations_dir(), cluster, listed, |link, target| {
+        super::nix::add_gc_root(link, target).map_err(|e| e.to_string())
+    });
 }
 
 fn sync_kept_roots_in(

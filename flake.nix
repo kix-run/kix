@@ -149,10 +149,6 @@
       # them and CI needs somewhere outside a build to run them from. This
       # is that place, and it is also the one entry point that does not
       # need devenv installed.
-      #
-      # The Nix C libraries are what the nix-bindings-*-sys crates find
-      # through pkg-config; mkShell puts their .dev outputs on
-      # PKG_CONFIG_PATH. devenv.nix lists the same set for the same reason.
       devShells = lib.genAttrs systems (
         system:
         let
@@ -168,12 +164,6 @@
               pkgs.lefthook
               pkgs.pkg-config
               pkgs.openssl
-              pkgs.nix.libs.nix-expr-c
-              pkgs.nix.libs.nix-store-c
-              pkgs.nix.libs.nix-util-c
-              pkgs.nix.libs.nix-flake-c
-              pkgs.nix.libs.nix-fetchers-c
-              pkgs.nix.libs.nix-main-c
             ]
             ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.dbus ];
 

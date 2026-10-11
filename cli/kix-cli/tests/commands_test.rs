@@ -1,5 +1,5 @@
 //! Consolidated CLI smoke tests — one test per command to verify basic functionality.
-//! These invoke the real binary with `assert_cmd`, so they require Nix FFI.
+//! These invoke the real binary with `assert_cmd`, so they require `nix`.
 
 use assert_cmd::Command;
 use predicates::prelude::*;

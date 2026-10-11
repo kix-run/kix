@@ -14,7 +14,9 @@ use cli::{Cli, Command, OutputFormat};
 /// Validate cluster name format.
 ///
 /// SECURITY: This is the primary defense against Nix expression injection.
-/// The cluster name is interpolated into Nix eval strings in kix-eval's FFI layer.
+/// The cluster name is spliced into the flake reference `nix build` gets
+/// (`kix::eval::nix`) and into the `--apply` expression of `nix eval`
+/// (`cluster_name_command`).
 /// Only alphanumeric characters, hyphens, and underscores are safe.
 fn validate_cluster_name(name: &str) -> miette::Result<()> {
     if name.is_empty()
