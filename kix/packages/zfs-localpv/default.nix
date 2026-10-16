@@ -336,7 +336,7 @@ in
         description = "Flags appended to the node plugin's. `--endpoint`, `--plugin`, `--nodename`, and `--name` are refused.";
       };
       env = kix.options.env // {
-        description = "Extra environment variables of the node plugin. A value is a string, a `fieldRef` source, or a `secretKeyRef` naming a Secret managed outside Kix with `kix.untrackedRef`. The package sets ALLOWED_TOPOLOGIES to \"All\", so every node label is a topology key; set it to a comma-separated list of label keys to narrow that. The package owns OPENEBS_NAMESPACE, OPENEBS_NODE_NAME, OPENEBS_CSI_ENDPOINT, and OPENEBS_NODE_DRIVER.";
+        description = "Extra environment variables of the node plugin. A value is a string, a `fieldRef` source, or a `secretKeyRef` naming a Secret managed outside Kix with `kix.untrackedRef`. The package sets ALLOWED_TOPOLOGIES to \"kubernetes.io/hostname\"; the driver always adds openebs.io/nodeid and openebs.io/nodename, and volumes pin to openebs.io/nodeid. Set it to a comma-separated list of node label keys when a StorageClass's allowedTopologies names other keys, or to \"All\" to register every node label. The package owns OPENEBS_NAMESPACE, OPENEBS_NODE_NAME, OPENEBS_CSI_ENDPOINT, and OPENEBS_NODE_DRIVER.";
       };
       kubeletDir = lib.mkOption {
         type = absolutePath;
@@ -811,7 +811,12 @@ in
                   env = kix.mkEnvVars (
                     kix.mergeEnv {
                       inherit who;
-                      defaults.ALLOWED_TOPOLOGIES = "All";
+                      # "All", the upstream default, registers every node label as a
+                      # topology key. When one of those labels later goes away (KubeVirt
+                      # renames its tsc-frequency label after re-measuring the clock),
+                      # csi-provisioner publishes no CSIStorageCapacity for the node and
+                      # the scheduler rejects every new claim there.
+                      defaults.ALLOWED_TOPOLOGIES = "kubernetes.io/hostname";
                       owned = ownedEnv "node.env" (
                         namespaceVar
                         // {
