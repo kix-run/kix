@@ -21,6 +21,8 @@ creds = scope.mkSecret {
 };
 ```
 
+`mkSecret` stamps where each key's value comes from (`kix.run/secret-sources`, `username=plain,password=sops`): `inline` (in the expression), `sops`, `controller` (a controller writes it), or `plain`. `plainKeys = [ "username" ]` marks an inline value that is not a credential; a basic-auth username is plain by type. The `security.secretSource` rule compares the stamp with `cluster.secrets.accept` (HANDBOOK §21.11), so a Secret that mixes a host and a password needs `plainKeys` for the host, or the host moves to `out`.
+
 ## `scope.mkSecretRef` — externally-managed secret
 
 References a secret that exists outside kix (Vault, ESO, cert-manager, operator-provisioned). Emits a `PackageInstance` import marker with `kix.run/mode=import` that the deploy CLI polls before running the wave that depends on it — if the Secret is missing or the declared keys aren't populated, the wave fails fast.
@@ -120,6 +122,12 @@ env = kix.mkEnvVars {
 An operator that syncs a Secret from an external store has a builder that does this for you: `external-secrets` (`out.mkExternalSecret`, HANDBOOK §21.9) and `infisical-operator` (`out.mkInfisicalStaticSecret`, §21.8) return `out.secretRef { keys; }`, a `mkSecretRef` ordered after the custom resource. Prefer them to a hand-made `mkSecretRef` with `requires`.
 
 That is also how a `kix.healthCheck` probe gets a credential: its `env` callback returns an attrset that goes through `mkEnvVars`, so `CLICKHOUSE_PASSWORD = self.credentials.out.keyRef "password";` gives the probe Job the value, the dependency edge and the key check. Never render a password into the probe's ConfigMap or its `out`.
+
+## The site chooses the source
+
+A package never takes a credential as a string option or a SOPS path option. It takes a secret dependency, and the cluster file picks the instance behind the alias: `packages.secret` with `stringData` (value in the build), `packages.secret` with `source` (SOPS, decrypted at deploy), or `packages.secret-ref` (a Secret an operator, cert-manager, or a person creates). All three share the alias and the `out` API. A cluster that forbids a source sets `cluster.secrets.accept` and the build fails with the instance, Secret, and keys named.
+
+Configuration a program reads from a Secret (Alertmanager) is rendered from options, so its key is `inline`. Such a package offers a non-Secret route where the custom resource has one (`configRawYaml`), an optional secret dependency in place of the rendered Secret, and classifies the rendered Secret `configuration` (`meta.classification`) while refusing inline credential keys, so a cluster can list `configuration` in `cluster.secrets.accept`.
 
 ## Standalone packages for DI
 

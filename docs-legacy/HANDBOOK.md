@@ -1698,6 +1698,8 @@ creds = scope.mkSecret {
 
 A declared key needs a value: in `stringData`, in `extra.data` or `extra.stringData`, or in the SOPS `source`. Without `source`, the build refuses a key with no value, since the Secret would be created without it. A `kubernetes.io/service-account-token` Secret is exempt (Kubernetes fills it). Use `scope.mkSecretRef` when something outside Kix creates the Secret.
 
+The builder stamps where each key's value comes from as `kix.run/secret-sources` (`username=plain,password=sops`): `inline` for a value written in the expression, `sops` for a key the SOPS file fills, `controller` for a key a controller writes (`*=controller` when `keys = [ ]`), and `plain` for an inline value that is not a credential. `plainKeys = [ "username" ]` marks a plain key; a `kubernetes.io/basic-auth` username and the `tls.crt` and `ca.crt` of a `kubernetes.io/tls` Secret are plain by type. A plain key with no value in the manifest is refused. §21.11 says what reads the stamp.
+
 ### 21.2 `scope.mkSecretRef` — external
 
 References a Secret managed outside kix (Vault, ESO, cert-manager, operator-provisioned). Emits a `PackageInstance` import marker with `kix.run/mode=import` that the deploy CLI polls before applying dependents — if the Secret is missing or declared keys aren't populated, the wave fails fast.
@@ -1868,6 +1870,20 @@ The store carries the OpenBao Service's address, so the external-secrets store d
 Metrics. With a `prometheus` dependency and `metrics.enabled` (the default), each pod opens a second listener on TCP 8202 that serves only `/v1/sys/metrics`, over plain HTTP and without a token, so standbys and sealed pods report too. The output names mount paths, auth methods, and policies. Under network policy only the Prometheus scrape and the other OpenBao pods reach the port; on a cluster without an enforcer any pod can read it. Set `metrics.enabled = false` to close the listener, which also drops the ServiceMonitor and the alert rules.
 
 Known limits. If self-initialization fails on pod 0's first start, OpenBao has already initialized the volume and revoked the root token, and it refuses to unseal on every later start; delete the claim `data-<instance>-0` and the pod and let it start again (self-initialization runs only on an empty volume). The static key cannot be rotated: a changed `unsealKey` value restarts the pods, and they cannot unseal the existing data until the old value is restored.
+
+### 21.11 Where a Secret's value comes from is the site's choice
+
+A package declares the shape of a Secret (its keys and type) and takes every credential a site supplies as a secret dependency, so the cluster file decides the source: a `packages.secret` instance with `stringData` (the value is in the build) or a SOPS `source` (the deploy decrypts it), or a `packages.secret-ref` instance for a Secret a secrets operator, cert-manager, or a person creates. The three share the alias the package names and the same `out`, so the package's code does not change with the source. A package does not take a credential as a string or path option (`token`/`tokenSource` was the last such pair; cloudflared takes `tunnelToken` now).
+
+A cluster says which sources it accepts:
+
+```nix
+cluster.secrets.accept = [ "sops" "external" "controller" ];
+```
+
+Null (the default) accepts everything. When set, the `security.secretSource` scorecard rule reports each key of a rendered Secret whose source is not listed, reading the `kix.run/secret-sources` stamp (§21.1), and each `scope.mkSecretRef` marker when `external` is not listed. A `plain` key is never reported. The finding names the instance, the Secret, the keys, and the accepted sources; at `scorecard.maxSeverity = "error"` it fails the build. A Secret without the stamp (a chart's) counts as inline for every key in its data.
+
+Software that reads plain configuration from a Secret (Alertmanager's `alertmanager.yaml`) is the case the sources above do not fit: the Secret is rendered from options, so its keys are `inline`, and whether it holds a credential depends on what the site wrote. Such a package offers three routes, the first two where the software allows them: the configuration in a non-Secret field of its custom resource (victoria-metrics-alert's `alertmanager.configRawYaml`), an optional secret dependency in place of the rendered Secret (`alertmanagerConfig`, key `alertmanager.yaml`, on alertmanager and victoria-metrics-alert), and the rendered Secret classified as configuration (`meta.classification = "configuration"`, which renders as `kix.run/classification`) with the credential keys the package knows refused (alertmanager's `inline-secrets.nix`). The rule reports an inline key of such a Secret as `configuration`, and a cluster that lists `configuration` in `cluster.secrets.accept` takes the package's word that the Secret holds no credential.
 
 ## 22. CRDs
 

@@ -112,6 +112,7 @@ reconciler, and no runbook should need to.
 | Custom resource applied before its CRD, or of a kind nothing declares | cross-resource check 21 (depends-on closure, served versions); `kix deploy` checks a CRD ref's versions against the live CRD |
 | Pod reads a Secret or ConfigMap key that is not there | `out.keyRef` at build time; cross-resource check 22 for names written directly |
 | Managed Secret created without its keys | `scope.mkSecret` refuses a key with no value and no SOPS source |
+| Secret value from a source the cluster does not accept (a plain-text value in a cluster that keeps secrets in an operator) | `cluster.secrets.accept` and the `security.secretSource` scorecard rule, reading the per-key `kix.run/secret-sources` stamp |
 | Two default StorageClasses, IngressClasses, or global-default PriorityClasses | cross-resource check 23 |
 | Instance value discards part of an option default | The option contract (`kix/lib/eval/options.nix`): an untyped or `attrsOf` option with a non-empty attrset default, a submodule default that disagrees with its fields, or a declaration the check cannot read fails `every-package-evaluates` (§12.13); outside kixpkgs, `kix.checkPackageOptions` or `mkFlake { packages.<name> = ...; }` |
 | Instance value replaces a config path, env var, or flag the package owns | `kix.mergeGuarded`, `kix.mergeEnv`, and `kix.guardArgs` refuse it with one message per hit |
