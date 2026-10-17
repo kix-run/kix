@@ -176,7 +176,7 @@ fn run_soft(args: &GcArgs, ctx: &mut CommandContext) -> Result<()> {
     // Orphans a warn-only deploy kept. The cached build is usually the one
     // that deploy made, so the diff above cannot see them.
     let kept_baseline = match &retirement.active {
-        Some(active) => baseline::load_kept(active, None, &cluster, &plan::progress::print),
+        Some(active) => baseline::load_kept(active, None, &cluster, &plan::progress::print, None),
         None => baseline::KeptBaseline::default(),
     };
     let kept_garbage = kept_garbage(

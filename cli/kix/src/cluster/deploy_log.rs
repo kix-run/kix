@@ -112,6 +112,16 @@ pub enum Event {
         aborting: bool,
         in_flight: Vec<Busy>,
     },
+    /// `node` has been in `phase` for `since_ms` without a verdict. Repeated
+    /// on a schedule while the wait lasts. `status` is the node's last
+    /// readiness message and `budget_ms` the readiness timeout.
+    Waiting {
+        node: String,
+        phase: Phase,
+        since_ms: u64,
+        status: Option<String>,
+        budget_ms: Option<u64>,
+    },
     /// A write that the next deploy redoes failed.
     BestEffortFailed { what: String, message: String },
     /// The counts the text summary line shows.
@@ -317,6 +327,19 @@ impl Event {
                         since_ms: f.since.as_millis() as u64,
                     })
                     .collect(),
+            },
+            DeployEvent::Waiting {
+                node,
+                phase,
+                since,
+                status,
+                budget,
+            } => Event::Waiting {
+                node: node.to_string(),
+                phase: *phase,
+                since_ms: since.as_millis() as u64,
+                status: status.clone(),
+                budget_ms: budget.map(|b| b.as_millis() as u64),
             },
             DeployEvent::BestEffortFailed { what, message } => Event::BestEffortFailed {
                 what: what.clone(),

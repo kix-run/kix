@@ -106,44 +106,69 @@ pub fn print(event: PlanEvent<'_>) {
                 crate::say!("    it stopped because: {reason}");
             }
         }
-        PlanEvent::FailedUnresolved { record, cluster } => {
+        PlanEvent::FailedUnresolved { records, cluster } => {
+            let names = some_names(records.iter().map(|r| r.name.as_str()));
             crate::esay!(
-                "{} cannot read the build for failed deployment {} on this machine. It may have left resources on the cluster.",
+                "{} cannot read the {} of {} on this machine: {names}. {} may have left resources on the cluster.",
                 output::yellow("warning:"),
-                output::bold(&record.name),
+                plural(records.len(), "build", "builds"),
+                plural(records.len(), "failed deployment", "failed deployments"),
+                plural(records.len(), "It", "They"),
             );
             crate::esay!(
-                "  Kix cannot determine which resources it applied, so this plan will not clean them up. Deploy from \
-                 the machine that built it, or review and remove unused resources with `kix gc --hard {cluster}` and \
-                 then mark the failed record as superseded (hard GC does not update it):"
+                "  Kix cannot tell which resources {} applied, so this plan leaves them. Deploy from a machine \
+                 that has the {}, or review and remove unused resources with `kix gc --hard {cluster}` and then \
+                 mark each failed record as superseded (hard GC does not update it):",
+                plural(records.len(), "it", "they"),
+                plural(records.len(), "build", "builds"),
             );
             crate::esay!(
-                "    kubectl patch {}/{} --subresource=status --type=merge \
+                "    kubectl patch {}/<name> --subresource=status --type=merge \
                  -p '{{\"status\":{{\"phase\":\"Superseded\"}}}}'",
                 keys::ACTIVATIONS_CRD,
-                record.name,
             );
         }
         PlanEvent::KeptFolded(sources) => {
-            let names: Vec<&str> = sources.iter().map(|s| s.activation.as_str()).collect();
             crate::say!(
                 "  {} including orphans kept by earlier deploys, from {}",
                 output::yellow("!"),
-                names.join(", "),
+                some_names(sources.iter().map(|s| s.activation.as_str())),
             );
         }
-        PlanEvent::KeptUnresolved { source, cluster } => {
+        PlanEvent::KeptUnresolved { sources, cluster } => {
+            let names = some_names(sources.iter().map(|s| s.activation.as_str()));
             crate::esay!(
-                "{} cannot read the build of activation {} on this machine. An earlier deploy kept orphans from it.",
+                "{} cannot read the {} of {} on this machine: {names}. Earlier deploys kept orphans from {}.",
                 output::yellow("warning:"),
-                output::bold(&source.activation),
+                plural(sources.len(), "build", "builds"),
+                plural(sources.len(), "activation", "activations"),
+                plural(sources.len(), "it", "them"),
             );
             crate::esay!(
-                "  This plan cannot list or delete them. Deploy from the machine that built it, or \
-                 remove them with `kix gc --hard {cluster}`."
+                "  This plan cannot list or delete those orphans. Deploy from a machine that has the {}, or \
+                 remove them with `kix gc --hard {cluster}`.",
+                plural(sources.len(), "build", "builds"),
             );
         }
     }
+}
+
+/// Up to three of `names`, then how many more: a list of forty activations
+/// is a count, not a line.
+fn some_names<'a>(names: impl ExactSizeIterator<Item = &'a str>) -> String {
+    const SHOWN: usize = 3;
+    let total = names.len();
+    let shown: Vec<&str> = names.take(SHOWN).collect();
+    let rest = total.saturating_sub(shown.len());
+    if rest == 0 {
+        shown.join(", ")
+    } else {
+        format!("{}, and {rest} more", shown.join(", "))
+    }
+}
+
+fn plural<'a>(count: usize, one: &'a str, many: &'a str) -> &'a str {
+    if count == 1 { one } else { many }
 }
 
 /// What a rollback does without its current build.

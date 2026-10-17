@@ -4,6 +4,11 @@
 //! readiness heartbeat resets its idle timer. `assess` decides whether a
 //! timer tick should warn or abort. `run` emits stall events and cancels the
 //! run through [`CancelToken`]; it does not access the cluster.
+//!
+//! A node that polls for readiness is activity to the idle timer, so a long
+//! wait on one object never reads as a stall. `run` reports such a wait
+//! separately: a `Waiting` event per node once it has been in its phase for
+//! [`WAIT_REPORT_AFTER`], repeated on [`wait_due`]'s schedule while it lasts.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -57,6 +62,43 @@ impl StallPolicy {
     }
 }
 
+/// A node has to be in one phase this long before `run` reports the wait.
+pub(crate) const WAIT_REPORT_AFTER: Duration = Duration::from_secs(10);
+
+/// The ages at which a wait is reported after the first report, then every
+/// [`WAIT_REPORT_EVERY`].
+const WAIT_REPORT_AT: [Duration; 3] = [
+    Duration::from_secs(30),
+    Duration::from_secs(60),
+    Duration::from_secs(120),
+];
+const WAIT_REPORT_EVERY: Duration = Duration::from_secs(60);
+
+/// Whether a node that has waited `since` is due a report, given the age
+/// `reported` at which it was last reported.
+pub(crate) fn wait_due(since: Duration, reported: Option<Duration>) -> bool {
+    let next = match reported {
+        None => WAIT_REPORT_AFTER,
+        Some(last) => WAIT_REPORT_AT
+            .iter()
+            .copied()
+            .find(|at| *at > last)
+            .unwrap_or_else(|| last.saturating_add(WAIT_REPORT_EVERY)),
+    };
+    since >= next
+}
+
+/// One node in flight.
+#[derive(Debug)]
+struct Flight {
+    phase: Phase,
+    since: Instant,
+    /// The last readiness message the node reported.
+    status: Option<String>,
+    /// The node's age when its wait was last reported.
+    reported: Option<Duration>,
+}
+
 /// Shared progress record between the engine, its node tasks and the
 /// watchdog.
 #[derive(Debug)]
@@ -64,7 +106,10 @@ pub(crate) struct Progress {
     started: Instant,
     /// Millis since `started` of the last activity of any kind.
     last_activity_ms: AtomicU64,
-    in_flight: Mutex<HashMap<NodeId, (Phase, Instant)>>,
+    in_flight: Mutex<HashMap<NodeId, Flight>>,
+    /// The readiness timeout in millis, for `Waiting` events to name the
+    /// budget a wait runs against. Zero until the engine sets it.
+    readiness_budget_ms: AtomicU64,
 }
 
 impl Default for Progress {
@@ -79,6 +124,20 @@ impl Progress {
             started: Instant::now(),
             last_activity_ms: AtomicU64::new(0),
             in_flight: Mutex::new(HashMap::new()),
+            readiness_budget_ms: AtomicU64::new(0),
+        }
+    }
+
+    /// The readiness timeout nodes wait against, named in `Waiting` events.
+    pub(crate) fn set_readiness_budget(&self, budget: Duration) {
+        self.readiness_budget_ms
+            .store(budget.as_millis() as u64, Ordering::Relaxed);
+    }
+
+    fn readiness_budget(&self) -> Option<Duration> {
+        match self.readiness_budget_ms.load(Ordering::Relaxed) {
+            0 => None,
+            ms => Some(Duration::from_millis(ms)),
         }
     }
 
@@ -91,9 +150,59 @@ impl Progress {
     /// A node entered a phase.
     pub(crate) fn set_phase(&self, node: &NodeId, phase: Phase) {
         if let Ok(mut m) = self.in_flight.lock() {
-            m.insert(node.clone(), (phase, Instant::now()));
+            m.insert(
+                node.clone(),
+                Flight {
+                    phase,
+                    since: Instant::now(),
+                    status: None,
+                    reported: None,
+                },
+            );
         }
         self.touch();
+    }
+
+    /// A node in flight reported a readiness message. Not activity: the
+    /// scheduler's event for the same message already is.
+    pub(crate) fn set_status(&self, node: &NodeId, status: &str) {
+        if let Ok(mut m) = self.in_flight.lock()
+            && let Some(flight) = m.get_mut(node)
+        {
+            flight.status = Some(status.to_string());
+        }
+    }
+
+    /// The `Waiting` event for every node in flight whose wait is due a
+    /// report ([`wait_due`]), and mark each as reported at its current age.
+    pub(crate) fn due_waits(&self) -> Vec<DeployEvent> {
+        let now = Instant::now();
+        let budget = self.readiness_budget();
+        let mut out: Vec<DeployEvent> = Vec::new();
+        if let Ok(mut m) = self.in_flight.lock() {
+            for (node, flight) in m.iter_mut() {
+                let since = now.saturating_duration_since(flight.since);
+                if !wait_due(since, flight.reported) {
+                    continue;
+                }
+                flight.reported = Some(since);
+                out.push(DeployEvent::Waiting {
+                    node: node.clone(),
+                    phase: flight.phase,
+                    since,
+                    status: flight.status.clone(),
+                    budget: (flight.phase == Phase::Readiness)
+                        .then_some(budget)
+                        .flatten(),
+                });
+            }
+        }
+        // Longest wait first, so the output order is stable.
+        out.sort_by_key(|event| match event {
+            DeployEvent::Waiting { since, .. } => std::cmp::Reverse(*since),
+            _ => std::cmp::Reverse(Duration::ZERO),
+        });
+        out
     }
 
     /// A node reached a terminal verdict.
@@ -118,10 +227,10 @@ impl Progress {
             .lock()
             .map(|m| {
                 m.iter()
-                    .map(|(node, (phase, since))| InFlight {
+                    .map(|(node, flight)| InFlight {
                         node: node.clone(),
-                        phase: *phase,
-                        since: now.saturating_duration_since(*since),
+                        phase: flight.phase,
+                        since: now.saturating_duration_since(flight.since),
                     })
                     .collect()
             })
@@ -198,6 +307,32 @@ pub fn describe(idle: Duration, in_flight: &[InFlight]) -> String {
     )
 }
 
+/// One line for a `Waiting` event: the node, how long it has waited and
+/// against what budget, and the last readiness message or, without one,
+/// the phase.
+pub fn describe_wait(
+    node: &NodeId,
+    phase: Phase,
+    since: Duration,
+    status: Option<&str>,
+    budget: Option<Duration>,
+) -> String {
+    let doing = match (status, phase) {
+        (Some(status), _) => status.to_string(),
+        (None, Phase::Readiness) => "waiting for readiness".to_string(),
+        (None, Phase::Apply) => "apply request outstanding".to_string(),
+        (None, Phase::Hydrate) => "decrypting secrets".to_string(),
+        (None, Phase::Discovery) => "refreshing API discovery".to_string(),
+    };
+    let age = match budget {
+        Some(budget) if phase == Phase::Readiness => {
+            format!("{}s of {}s", since.as_secs(), budget.as_secs())
+        }
+        _ => format!("{}s", since.as_secs()),
+    };
+    format!("{} waiting: {doing} ({age})", node_label(node))
+}
+
 fn node_label(id: &NodeId) -> String {
     match id {
         NodeId::Resource(rid) => rid.display_id(),
@@ -231,6 +366,9 @@ pub(crate) async fn run(
         tokio::select! {
             _ = cancel.cancelled() => return,
             _ = ticker.tick() => {}
+        }
+        for event in progress.due_waits() {
+            observer.on_event(&event);
         }
         let idle = progress.idle();
         let in_flight = progress.in_flight();
@@ -279,6 +417,84 @@ mod tests {
             warn_after: secs(30),
             abort_after: Some(secs(600)),
         }
+    }
+
+    /// A wait is reported at 10s, then at 30, 60 and 120, then every 60.
+    #[test]
+    fn waits_are_reported_on_a_widening_schedule() {
+        assert!(!wait_due(secs(9), None));
+        assert!(wait_due(secs(10), None));
+        assert!(!wait_due(secs(29), Some(secs(10))));
+        assert!(wait_due(secs(30), Some(secs(10))));
+        assert!(wait_due(secs(61), Some(secs(31))));
+        assert!(!wait_due(secs(119), Some(secs(61))));
+        assert!(wait_due(secs(120), Some(secs(61))));
+        assert!(!wait_due(secs(179), Some(secs(120))));
+        assert!(wait_due(secs(180), Some(secs(120))));
+        assert!(wait_due(secs(241), Some(secs(181))));
+    }
+
+    /// `due_waits` reports a node once per due age, carries its last
+    /// readiness message, and names the budget only for a readiness wait.
+    #[tokio::test(start_paused = true)]
+    async fn due_waits_report_each_node_once_per_step() {
+        let progress = Progress::new();
+        progress.set_readiness_budget(secs(180));
+        let node = NodeId::Resource(ResourceId {
+            kind: "Service".into(),
+            namespace: "app".into(),
+            name: "web".into(),
+        });
+        progress.set_phase(&node, Phase::Readiness);
+        progress.set_status(&node, "not found yet");
+        assert!(progress.due_waits().is_empty());
+        tokio::time::advance(secs(10)).await;
+        let events = progress.due_waits();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            DeployEvent::Waiting {
+                phase,
+                since,
+                status,
+                budget,
+                ..
+            } => {
+                assert_eq!(*phase, Phase::Readiness);
+                assert_eq!(since.as_secs(), 10);
+                assert_eq!(status.as_deref(), Some("not found yet"));
+                assert_eq!(*budget, Some(secs(180)));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(progress.due_waits().is_empty(), "reported once per step");
+        tokio::time::advance(secs(20)).await;
+        assert_eq!(progress.due_waits().len(), 1);
+        progress.clear(&node);
+        tokio::time::advance(secs(60)).await;
+        assert!(progress.due_waits().is_empty());
+    }
+
+    #[test]
+    fn describe_wait_names_the_status_and_the_budget() {
+        let node = NodeId::Resource(ResourceId {
+            kind: "Service".into(),
+            namespace: "app".into(),
+            name: "web".into(),
+        });
+        assert_eq!(
+            describe_wait(
+                &node,
+                Phase::Readiness,
+                secs(30),
+                Some("import target Service/web not found yet"),
+                Some(secs(180)),
+            ),
+            "Service/web@app waiting: import target Service/web not found yet (30s of 180s)"
+        );
+        assert_eq!(
+            describe_wait(&node, Phase::Apply, secs(12), None, Some(secs(180))),
+            "Service/web@app waiting: apply request outstanding (12s)"
+        );
     }
 
     #[test]
