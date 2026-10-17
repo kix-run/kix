@@ -654,12 +654,15 @@ in
 
           replicateScript =
             if replicated then
-              scope.mkResource {
-                apiVersion = "v1";
-                kind = "ConfigMap";
-                name = "${name}-replicate";
-                data."replicate.py" = replicatePy;
-              }
+              lib.warn
+                "${who}: deps.clickhouseDatabase is on a ClickHouse server with ${ch.replicas} replicas. Plausible Community Edition documents a single ClickHouse server; Kix migrates on the first replica and converts Plausible's tables to replicated ones in the `replicate` init container, which Plausible does not support. It is tested with Plausible v${release}; test it again before taking another release, and take a release only while every replica is up."
+                scope.mkResource
+                {
+                  apiVersion = "v1";
+                  kind = "ConfigMap";
+                  name = "${name}-replicate";
+                  data."replicate.py" = replicatePy;
+                }
             else
               null;
 
