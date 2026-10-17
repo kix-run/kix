@@ -9,6 +9,9 @@ This skill is for two readers: a package author checking their own work before
 opening a pull request, and an agent reviewing a contributed package. The top
 section says what a good package is. The checklist says how to find the ways a
 package usually falls short. Cite principles as `P<n>` (`PRINCIPLES.md`).
+An author starting a package uses the `package-authoring` skill first
+(`.claude/skills/package-authoring/SKILL.md`): the decision order, upstream
+research, and verification steps live there, not here.
 
 Every helper named here exists in `kix/lib` (`vocab/compose.nix`,
 `vocab/default.nix`, `scope/builders.nix`, `meta.nix`). When a name does not
