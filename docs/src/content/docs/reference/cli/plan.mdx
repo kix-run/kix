@@ -122,7 +122,7 @@ header's JSON Schema is `cli/kix-cli/schema/kixplan.schema.json`.
 | `format`, `version` | `"kixplan"` and `1`. A Kix refuses any other version. |
 | `plan` | The `Plan` document, below. |
 | `graph` | `{ nodes, edges }`: each node `{ id, kind, name, namespace, identityHash, isImport }`, each edge `{ from, to }` where `from` depends on `to`. |
-| `shown` | By resource identifier, each changed, added, or removed object's `{ old, new, rollout }`. `old` and `new` are the SHA-256 of the manifest's file, `null` when that side has none. `rollout` is `restart` when the deploy replaces the object's Pods (a Deployment, StatefulSet, or DaemonSet whose pod template changes), `on_delete` when its new manifest sets `spec.updateStrategy.type: OnDelete`, and `null` otherwise. |
+| `shown` | By resource identifier, each changed, added, or removed object's `{ package, old, new, rollout }`. `package` is the key `plan.packages` lists the object under (`namespace/instance`, or `_cluster` for a resource outside every package); an object that moves between packages names the one it moves to. `old` and `new` are the SHA-256 of the manifest's file, `null` when that side has none. `rollout` is `restart` when the deploy replaces the object's Pods (a Deployment, StatefulSet, or DaemonSet whose pod template changes), `on_delete` when its new manifest sets `spec.updateStrategy.type: OnDelete`, and `null` otherwise. |
 | `files` | Each manifest file as `[sha256, size]`, sorted by SHA-256. Objects with equal manifests share a file. |
 
 A reader recomputes each file's SHA-256 and refuses a file whose bytes do not

@@ -2169,8 +2169,8 @@ A plan file (`cli/kix/src/plan/file.rs`, header schema
 `cli/kix-cli/schema/kixplan.schema.json`) is a seekable zstd file, the
 bundle's container (`cli/kix-container`). Frame 0 is the header: the plan
 document at `--detail fields`, the new build's graph as `kix graph --format
-json` prints it, and `shown`, for each changed, added, or removed object the
-SHA-256 of its old and new manifest files and its Pod `rollout` (`restart`,
+json` prints it, and `shown`, for each changed, added, or removed object its
+package key, the SHA-256 of its old and new manifest files, and its Pod `rollout` (`restart`,
 `on_delete`, or `null`). The later frames hold the manifests, secrets hidden,
 each named by its SHA-256 and checked against it on every read. `zstd -dc
 F.kixplan | jq -s '.[0]'` prints the header.

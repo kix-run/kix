@@ -1244,6 +1244,10 @@
             "null"
           ]
         },
+        "package": {
+          "description": "The key of the package `plan.packages` lists the object under, as\nthat list names it: `namespace/instance` for an added, removed, or\nchanged package, `_cluster` for `cluster_level`. An object that moved\nbetween packages carries the package it moves to.",
+          "type": "string"
+        },
         "rollout": {
           "anyOf": [
             {
@@ -1256,6 +1260,9 @@
           "description": "`null` when the deploy does not replace its Pods."
         }
       },
+      "required": [
+        "package"
+      ],
       "type": "object"
     },
     "Summary": {

@@ -702,20 +702,35 @@ impl Packages {
 
 impl Packages {
     /// Take every package's `manifests` out, leaving the packages as at
-    /// `--detail fields`, and give them by object id. An object two
-    /// packages list (it moved between them) has the same sides in each.
-    pub fn take_manifests(&mut self) -> BTreeMap<String, ManifestSides> {
-        let entries = self
-            .added
-            .iter_mut()
-            .chain(self.removed.iter_mut())
-            .filter_map(|p| p.manifests.take());
-        let changed = self
-            .changed
-            .iter_mut()
-            .chain(self.cluster_level.as_mut())
-            .filter_map(|c| c.manifests.take());
-        entries.chain(changed).flatten().collect()
+    /// `--detail fields`, and give them by object id with the key of the
+    /// package that lists them (`_cluster` for `cluster_level`). An object
+    /// two packages list moved between them and has the same sides in each;
+    /// it carries the package it moves to, not the one that removes it.
+    pub fn take_manifests(&mut self) -> BTreeMap<String, (String, ManifestSides)> {
+        let mut out: BTreeMap<String, (String, ManifestSides)> = BTreeMap::new();
+        let mut put = |key: &str,
+                       manifests: Option<BTreeMap<String, ManifestSides>>,
+                       removes: &dyn Fn(&str) -> bool| {
+            for (id, sides) in manifests.into_iter().flatten() {
+                if removes(&id) && out.contains_key(&id) {
+                    continue;
+                }
+                out.insert(id, (key.to_string(), sides));
+            }
+        };
+        for p in &mut self.removed {
+            put(&p.key, p.manifests.take(), &|_| true);
+        }
+        for p in &mut self.added {
+            put(&p.key, p.manifests.take(), &|_| false);
+        }
+        for c in self.changed.iter_mut().chain(self.cluster_level.as_mut()) {
+            let removed = c.removed_resources.clone();
+            put(&c.key, c.manifests.take(), &|id| {
+                removed.iter().any(|r| r == id)
+            });
+        }
+        out
     }
 
     /// Drop each modified resource's field changes, leaving the packages

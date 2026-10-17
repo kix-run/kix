@@ -201,8 +201,10 @@ over that plan through `ops::DryRun`, so every SSA and DELETE goes with
 specification). A `.kixplan` is a `kix-container` file: frame 0 the
 `Header` (`format` `kixplan`, `version` 1, `plan` at `--detail fields`,
 `graph`, a `GraphListing` from `file::graph_of`, which is `kix graph
---format json`'s shape, `shown`, by object id the SHA-256 of its old and new
-manifest file and its `Rollout`, and `files` as `[sha256, size]` sorted),
+--format json`'s shape, `shown`, by object id the package key that lists it
+(`Packages::take_manifests`; `_cluster` for `cluster_level`, the package it
+moves to for a moved object), the SHA-256 of its old and new manifest file,
+and its `Rollout`, and `files` as `[sha256, size]` sorted),
 then the manifests as compact JSON, each the `--detail manifests` side as
 shown (secrets hidden, whole up to 3 MiB, the apiserver's request limit), named by its SHA-256. `write(plan,
 graph, out)` takes the manifests out of the plan (`take_manifests`) and

@@ -18,8 +18,9 @@
 //!   json` prints it.
 //! - `shown` has an entry for each object `--detail manifests` shows
 //!   (modified, added, and removed; kept left out), keyed by its id. It
-//!   names the object's old and new manifest files, and says what a
-//!   deploy does to its Pods ([`Rollout`]).
+//!   names the package that lists the object, the object's old and new
+//!   manifest files, and says what a deploy does to its Pods
+//!   ([`Rollout`]).
 //! - `files` lists each file as `[sha256, size]`, sorted by SHA-256, each
 //!   once. Each file is one manifest as compact JSON, with secret values
 //!   hidden and over [`super::MAX_SHOWN_MANIFEST_BYTES`] replaced by a size
@@ -130,6 +131,11 @@ pub struct Header {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ShownObject {
+    /// The key of the package `plan.packages` lists the object under, as
+    /// that list names it: `namespace/instance` for an added, removed, or
+    /// changed package, `_cluster` for `cluster_level`. An object that moved
+    /// between packages carries the package it moves to.
+    pub package: String,
     /// The SHA-256 of the file of its old manifest: the deployed or live
     /// object. `null` when the object does not exist on the old side.
     pub old: Option<String>,
@@ -241,9 +247,10 @@ pub fn write(mut plan: Plan, graph: GraphListing, out: impl Write) -> io::Result
         Ok(Some(sha256))
     };
     let mut shown = BTreeMap::new();
-    for (id, sides) in sides {
+    for (id, (package, sides)) in sides {
         let rollout = rollout(&id, changes.get(id.as_str()).copied(), sides.new.as_ref());
         let object = ShownObject {
+            package,
             old: file_of(sides.old)?,
             new: file_of(sides.new)?,
             rollout,
@@ -789,6 +796,39 @@ mod tests {
                 .is_some_and(|n| n.ends_with(" bytes, not shown)")),
             "{note}"
         );
+    }
+
+    /// Every shown object names the package `plan.packages` lists it
+    /// under: a removed package's objects its key, as an added or changed
+    /// package's do, and a cluster-level object `_cluster`.
+    #[test]
+    fn each_shown_object_names_its_package() {
+        let packages = |old: &[Value], new: &[Value]| -> BTreeMap<String, String> {
+            let file = PlanFile::open(Cursor::new(written(old, new))).unwrap();
+            let header = file.into_header();
+            header
+                .shown
+                .into_iter()
+                .map(|(id, s)| (id, s.package))
+                .collect()
+        };
+        let (old, new) = sides();
+        let changed = packages(&old, &new);
+        assert_eq!(changed[DEPLOYMENT], "app/web");
+        assert_eq!(changed[SECRET], "app/web");
+
+        // Without the web package, every object of it is removed under its key.
+        let mut other = baseline()[..2].to_vec();
+        other.push(cluster_level("Namespace", "other", &h("ns2"), json!({})));
+        let removed = packages(&old, &other);
+        let (plan, _) = plan_at(&old, &other, false);
+        assert_eq!(plan.packages.removed[0].key, "app/web");
+        for id in ["ConfigMap/web@app", DEPLOYMENT, SECRET] {
+            assert_eq!(removed[id], "app/web", "{id}");
+        }
+        assert_eq!(removed["Namespace/other"], "_cluster");
+        let added = packages(&other, &old);
+        assert_eq!(added[DEPLOYMENT], "app/web");
     }
 
     #[test]
