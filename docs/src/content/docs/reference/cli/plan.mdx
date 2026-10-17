@@ -108,7 +108,8 @@ and Kix Enterprise read. It holds:
   as its own file named by its SHA-256. For an object the dry run checked,
   the old manifest is the live object and the new one the dry-run result.
   Secret values are hidden as in [field changes](#field-change-labels), and
-  a manifest over 256 KiB is replaced by a size note.
+  each manifest is whole up to 3 MiB, the apiserver's limit on a request,
+  so only a build manifest the cluster would refuse is replaced by a size note.
 
 The file is a seekable zstd file, the container a bundle uses. Any zstd tool
 reads it: `zstd -dc plan.kixplan` gives the header, JSON, followed by each
@@ -127,7 +128,7 @@ header's JSON Schema is `cli/kix-cli/schema/kixplan.schema.json`.
 A reader recomputes each file's SHA-256 and refuses a file whose bytes do not
 match its name. It refuses a plan file over 64 MiB, a header over 8 MiB or
 of more than a million JSON values, more than 100,000 files, and a file over
-256 KiB, each before reading what the cap guards.
+3 MiB, each before reading what the cap guards.
 
 ### The `Plan` document
 

@@ -53,7 +53,7 @@
 //! | [`MAX_HEADER_BYTES`], 8 MiB | memory for the header as read |
 //! | [`MAX_HEADER_VALUES`], 1,000,000 | memory for the header as parsed, counted before it is kept |
 //! | [`MAX_FILES`], 100,000 | memory per file and per seek-table entry |
-//! | [`MAX_FILE_BYTES`], 256 KiB | memory to parse one manifest |
+//! | [`MAX_FILE_BYTES`], 3 MiB | memory to parse one manifest |
 //! | [`MAX_FRAME_BYTES`], 4 MiB | memory for one frame |
 //! | [`MAX_CONTENT_BYTES`], 512 MiB | time to decompress and hash the files |
 
@@ -91,10 +91,11 @@ pub const MAX_HEADER_VALUES: usize = 1_000_000;
 /// The most files a plan file may hold.
 pub const MAX_FILES: usize = 100_000;
 /// The largest file. A shown manifest is at most
-/// [`super::MAX_SHOWN_MANIFEST_BYTES`] as compact JSON.
+/// [`super::MAX_SHOWN_MANIFEST_BYTES`], 3 MiB, as compact JSON.
 pub const MAX_FILE_BYTES: u64 = super::MAX_SHOWN_MANIFEST_BYTES as u64;
 /// The largest data frame, decompressed. The writer fills a frame to 1 MiB
-/// and a file is at most [`MAX_FILE_BYTES`].
+/// and puts a larger file in a frame of its own, so a frame is at most
+/// [`MAX_FILE_BYTES`].
 pub const MAX_FRAME_BYTES: u64 = 4 * 1024 * 1024;
 /// The most bytes the files may add up to.
 pub const MAX_CONTENT_BYTES: u64 = 512 * 1024 * 1024;
@@ -744,6 +745,50 @@ mod tests {
         twice.push(copy);
         let file = PlanFile::open(Cursor::new(written(&old, &twice))).unwrap();
         assert_eq!(file.header().files.len(), files.len() + 1);
+    }
+
+    /// A manifest larger than the 1 MiB frame fill, as a large CRD is, is
+    /// kept whole in a frame of its own. One over the apiserver's 3 MiB
+    /// request limit, which no cluster can store, is replaced by a size
+    /// note, so the plan of such a build can still be saved and read.
+    #[test]
+    fn a_large_manifest_is_kept_whole_up_to_the_apiservers_limit() {
+        let (old, mut new) = sides();
+        let config = |text: String| {
+            stamped(
+                "ConfigMap",
+                "app",
+                "web",
+                ("app", "web"),
+                &h("cm2"),
+                json!({"k": text}),
+            )
+        };
+        new[3] = config("x".repeat(2 << 20));
+        let bytes = written(&old, &new);
+        let (mut file, _) = PlanFile::verify(Cursor::new(bytes.as_slice())).unwrap();
+        let shown = file.new_manifest("ConfigMap/web@app").unwrap().unwrap();
+        assert_eq!(shown, new[3]);
+        let table = kix_container::read_table(&mut Cursor::new(&bytes), &LIMITS).unwrap();
+        assert!(
+            table.frames.len() >= 3,
+            "the large file has a frame of its own"
+        );
+        assert!(
+            table
+                .frames
+                .iter()
+                .all(|f| f.size as u64 <= MAX_FRAME_BYTES)
+        );
+
+        new[3] = config("x".repeat(MAX_FILE_BYTES as usize));
+        let mut file = PlanFile::open(Cursor::new(written(&old, &new))).unwrap();
+        let note = file.new_manifest("ConfigMap/web@app").unwrap().unwrap();
+        assert!(
+            note.as_str()
+                .is_some_and(|n| n.ends_with(" bytes, not shown)")),
+            "{note}"
+        );
     }
 
     #[test]

@@ -841,9 +841,11 @@ pub const SECRET_NOT_SHOWN: &str = "(secret, not shown)";
 /// still shows the line as changed.
 pub const SECRET_CHANGED_NOT_SHOWN: &str = "(secret, changed, not shown)";
 
-/// A manifest larger than this, serialized, is left out of the JSON diff
-/// at `--detail manifests`.
-pub const MAX_SHOWN_MANIFEST_BYTES: usize = 256 * 1024;
+/// A manifest larger than this, serialized, is replaced by a size note at
+/// `--detail manifests` and in a plan file. It is the apiserver's limit on a
+/// request body, so any object a cluster can store is shown whole; only a
+/// build manifest the apiserver would refuse gets the note.
+pub const MAX_SHOWN_MANIFEST_BYTES: usize = 3 * 1024 * 1024;
 
 /// A value larger than this, serialized, is left out of the JSON diff, so
 /// a changed CRD schema or a large ConfigMap file does not swell a plan

@@ -158,7 +158,7 @@ pub fn check_paths(bundle: &[u8]) {
 /// The most [`read_plan_file`] may hold. `PlanFile::verify` holds the
 /// header as read (at most 8 MiB) and parsed (at most
 /// `MAX_HEADER_VALUES` values), and one frame (at most 4 MiB) compressed
-/// and decompressed; reading a manifest holds one file of at most 256 KiB,
+/// and decompressed; reading a manifest holds one file of at most 3 MiB,
 /// parsed.
 pub const PLAN_HOLD_BYTES: u64 = 256 * 1024 * 1024;
 

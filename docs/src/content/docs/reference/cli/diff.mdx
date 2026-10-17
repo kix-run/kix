@@ -180,7 +180,7 @@ Stateful migrations are under the top-level `migrations` section, each
 
 A Secret value, or a hash of one, reads `(secret, not shown)`, or
 `(secret, changed, not shown)` on the new side when the value changes. A
-field value larger than 16 KiB, or a manifest larger than 256 KiB, reads
+field value larger than 16 KiB, or a manifest larger than 3 MiB (the apiserver's limit on a request), reads
 `(N bytes, not shown)`.
 
 Resource identifiers have the form `Kind/name@namespace`. Package keys have
