@@ -144,7 +144,15 @@ is a finding from the upstream source, not a default.
    arguments) and start from replicated:
    `kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 3; }`.
    Quorum systems use odd counts (rabbitmq-cluster); leader-elected
-   controllers follow W6.
+   controllers follow W6. Those counts are an example, not a requirement:
+   set each level from what the replicas do. Copies that each serve on
+   their own (stateless pods, ClickHouse replicas) survive the loss of one
+   pod, node, or zone with two, if the two are spread across that failure
+   domain; a third copy at `zone` adds capacity after the loss, not
+   survival. A quorum (Keeper, etcd, RabbitMQ) needs a majority, so three,
+   in three zones at `zone`. At `zone`, check that the replicas really are
+   spread across zones (item 6 for operator-placed pods); the count does
+   not spread them.
 2. Check in source: shared in-memory state and whether a dependency (Postgres,
    Valkey) replaces it; leader election or an HA flag; migrations that are not
    concurrent-safe (then Recreate, keycloak:83-88); session affinity (a

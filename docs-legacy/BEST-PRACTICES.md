@@ -222,7 +222,10 @@ every replica-shaped default (`kix.availability.pick availability { none =
 the cluster's failure-domain keys plus a PodDisruptionBudget from the
 replica count (`cluster.availability`, v2_discussions/145). The package
 cannot know what a failure zone is on the cluster it lands on, and a literal
-`topologyKey` or a literal `3` is a guess. Pods an operator places from a custom resource get the same rule
+`topologyKey` or a literal `3` is a guess. The counts in that `pick` are
+an example. Two copies spread across a failure domain survive the loss of
+one pod, node, or zone, so a third at `zone` is for capacity; a quorum
+(Keeper, etcd) needs three, one per zone at `zone`. Pods an operator places from a custom resource get the same rule
 through `kix.availability.spreadConstraints` in the resource's pod spec. The
 level and the per-instance override belong to the cluster operator
 (`instances.<ns>.<inst>.availability`).
