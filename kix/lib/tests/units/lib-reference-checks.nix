@@ -5,7 +5,7 @@
 # cross-resource checks 18-23 in eval/validate.nix,
 # the instance-of edge for chart custom resources, kix.expose's HTTPRoute
 # CRD ref, mkSecret's refusal of keys without a value, and cloudflared's
-# token check, which must run before mkSecret.
+# check of its tunnelToken dependency's keys.
 
 {
   lib,
@@ -1752,18 +1752,13 @@ in
       source = ./lib-reference-checks.nix;
     };
 
-  # cloudflared refuses a missing token itself, before scope.mkSecret sees
-  # the valueless key. The stub mkSecret never throws, so the failure is
-  # the package's own check.
-  lib-reference-checks-cloudflared-token-refused-before-secret =
+  # cloudflared reads the token from its tunnelToken dependency and refuses
+  # one that does not declare the key `token`, naming the dependency.
+  lib-reference-checks-cloudflared-token-dependency =
     let
       stubScope = {
         instanceName = "tunnel";
         namespaceName = "edge";
-        mkSecret = args: {
-          inherit args;
-          out.mkEnv = _: [ ];
-        };
         mkDeployment = d: d;
         selectorLabels = { };
       };
@@ -1773,25 +1768,33 @@ in
         kix = kixlib;
         availability = "none";
       };
-      tokenOf =
-        config:
+      secret = keys: {
+        out = {
+          name = "tunnel-token";
+          inherit keys;
+          mkEnv = mapping: lib.mapAttrsToList (n: _: { name = n; }) mapping;
+        };
+      };
+      deploymentOf =
+        tunnelToken:
         (pkg.build {
           self = { };
           scope = stubScope;
           kix = kixlib;
-          inherit config;
-        }).tunnelToken;
-      builds = config: (builtins.tryEval (builtins.deepSeq (tokenOf config) true)).success;
+          config = {
+            image = {
+              repository = "cloudflare/cloudflared";
+              tag = "t";
+              digest = null;
+              pullPolicy = "IfNotPresent";
+            };
+            replicas = 1;
+            resources = { };
+          };
+          inherit tunnelToken;
+        }).deployment;
+      builds = tunnelToken: (builtins.tryEval (builtins.deepSeq (deploymentOf tunnelToken) true)).success;
     in
-    (
-      !(builds {
-        token = null;
-        tokenSource = null;
-      })
-      && builds {
-        token = "t";
-        tokenSource = null;
-      }
-    )
-    || throw "cloudflared: the token check did not run before scope.mkSecret";
+    (builds (secret [ "token" ]) && !(builds (secret [ "nope" ])))
+    || throw "cloudflared: the tunnelToken key check did not behave as expected";
 }

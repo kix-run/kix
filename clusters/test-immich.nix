@@ -76,31 +76,46 @@ kix.buildCluster {
         };
       };
 
-      # Firezone VPN, with its own postgres cluster.
+      # Firezone VPN, with its own postgres cluster. Test values only: a
+      # real cluster gives each secret a SOPS `source` or a `secret-ref`.
       instances.firezone = {
-        firezone-db = {
+        firezone-pg = {
           package = packages.stackgres-cluster;
           aliases = [ "postgres" ];
+        };
+        firezone-db = {
+          package = packages.stackgres-database;
+          config.password = "firezone-dev-password";
         };
 
         firezone = {
           package = packages.firezone;
           config = {
             domain = "vpn.example.com";
-            admin = {
-              email = "admin@example.com";
-              password = "changeme";
-            };
-            wireguard.privateKey = "PLACEHOLDER_GENERATE_WITH_wg_genkey";
-            secrets = {
-              guardianSecretKey = "PLACEHOLDER_CHANGE_ME_guardian";
-              secretKeyBase = "PLACEHOLDER_CHANGE_ME_secret_key_base";
-              databaseEncryptionKey = "PLACEHOLDER_CHANGE_ME_db_enc_key";
-              liveViewSigningSalt = "PLACEHOLDER_CHANGE_ME_lv_salt";
-              cookieSigningSalt = "PLACEHOLDER_CHANGE_ME_cookie_salt";
-              cookieEncryptionSalt = "PLACEHOLDER_CHANGE_ME_cookie_enc_salt";
-            };
+            admin.email = "admin@example.com";
           };
+        };
+        firezone-secrets = {
+          package = packages.secret;
+          aliases = [ "applicationSecrets" ];
+          config.stringData = {
+            GUARDIAN_SECRET_KEY = "PLACEHOLDER_CHANGE_ME_guardian";
+            SECRET_KEY_BASE = "PLACEHOLDER_CHANGE_ME_secret_key_base";
+            DATABASE_ENCRYPTION_KEY = "PLACEHOLDER_CHANGE_ME_db_enc_key";
+            LIVE_VIEW_SIGNING_SALT = "PLACEHOLDER_CHANGE_ME_lv_salt";
+            COOKIE_SIGNING_SALT = "PLACEHOLDER_CHANGE_ME_cookie_salt";
+            COOKIE_ENCRYPTION_SALT = "PLACEHOLDER_CHANGE_ME_cookie_enc_salt";
+          };
+        };
+        firezone-admin = {
+          package = packages.secret;
+          aliases = [ "adminPassword" ];
+          config.stringData.password = "changeme";
+        };
+        firezone-wireguard = {
+          package = packages.secret;
+          aliases = [ "wireguardKey" ];
+          config.stringData.private_key = "PLACEHOLDER_GENERATE_WITH_wg_genkey";
         };
       };
     }

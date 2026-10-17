@@ -796,11 +796,13 @@ in
     )
     || throw "package levels: ${builtins.toJSON vs}";
 
-  # firezone writes an empty string for each salt an instance leaves unset,
-  # so every value in its env Secret is a string.
-  lib-options-typing-firezone-unset-salts =
+  # firezone reads its credentials from secret dependencies: a salt is
+  # mapped only when the applicationSecrets secret declares it, the database
+  # login comes from the database dependency's credentials, and a secret
+  # missing a required key fails the build.
+  lib-options-typing-firezone-secret-dependencies =
     let
-      postgres = {
+      database = {
         meta.version = "test";
         options.extensions = lib.mkOption {
           type = t.listOf t.anything;
@@ -809,53 +811,93 @@ in
         build =
           { self, scope, ... }:
           {
-            cm = scope.mkResource {
-              apiVersion = "v1";
-              kind = "ConfigMap";
-              name = "postgres";
+            creds = scope.mkSecret {
+              name = "db-creds";
+              stringData = {
+                username = "firezone";
+                password = "pw";
+              };
             };
             root = {
-              resource = self.cm;
+              resource = self.creds;
               out = {
-                fqdn = "postgres.vpn.svc";
+                host = "postgres.vpn.svc";
                 port = "5432";
+                database = "firezone";
+                username = "firezone";
+                credentials = self.creds;
               };
             };
           };
       };
-      ms = manifests (mkCluster [
-        {
-          instances.vpn = {
-            postgres.package = postgres;
-            firezone = {
-              package = pkg "firezone";
-              config = {
-                domain = "vpn.example.com";
-                admin = {
-                  email = "admin@example.com";
-                  password = "password";
-                };
-                wireguard.privateKey = "key";
-                secrets = {
-                  guardianSecretKey = "guardian";
-                  secretKeyBase = "base";
-                  databaseEncryptionKey = "encryption";
+      ms =
+        appKeys:
+        manifests (mkCluster [
+          {
+            instances.vpn = {
+              db = {
+                package = database;
+                aliases = [ "database" ];
+              };
+              firezone = {
+                package = pkg "firezone";
+                config = {
+                  domain = "vpn.example.com";
+                  admin.email = "admin@example.com";
                 };
               };
+              app-secrets = {
+                package = pkg "secret";
+                aliases = [ "applicationSecrets" ];
+                config.stringData = lib.genAttrs appKeys (k: k);
+              };
+              admin-password = {
+                package = pkg "secret";
+                aliases = [ "adminPassword" ];
+                config.stringData.password = "p";
+              };
+              wireguard-key = {
+                package = pkg "secret";
+                aliases = [ "wireguardKey" ];
+                config.stringData.private_key = "k";
+              };
             };
-          };
-        }
-      ]);
-      stringData =
-        (lib.findFirst (m: m.kind == "Secret" && m.metadata.name == "firezone-env") { } ms).stringData
-          or null;
+          }
+        ]);
+      required = [
+        "GUARDIAN_SECRET_KEY"
+        "SECRET_KEY_BASE"
+        "DATABASE_ENCRYPTION_KEY"
+      ];
+      envOf =
+        appKeys:
+        let
+          deployment = lib.findFirst (m: m.kind == "Deployment" && m.metadata.name == "firezone") null (
+            ms appKeys
+          );
+        in
+        builtins.listToAttrs (
+          map (e: {
+            inherit (e) name;
+            value = e.valueFrom.secretKeyRef or null;
+          }) (builtins.head deployment.spec.template.spec.containers).env
+        );
+      plain = envOf required;
+      salted = envOf (required ++ [ "COOKIE_SIGNING_SALT" ]);
     in
     (
-      stringData != null
-      && builtins.all builtins.isString (builtins.attrValues stringData)
-      && stringData.COOKIE_SIGNING_SALT == ""
+      !(plain ? COOKIE_SIGNING_SALT)
+      && salted.COOKIE_SIGNING_SALT.key == "COOKIE_SIGNING_SALT"
+      && plain.GUARDIAN_SECRET_KEY.name == "app-secrets"
+      && plain.DATABASE_PASSWORD.name == "db-creds"
+      && plain.DATABASE_USER.key == "username"
+      && plain.DEFAULT_ADMIN_PASSWORD.name == "admin-password"
+      && evalFails' (ms [
+        "GUARDIAN_SECRET_KEY"
+        "SECRET_KEY_BASE"
+      ])
     )
-    || throw "firezone env Secret: ${builtins.toJSON stringData}";
+    || throw "firezone secret dependencies: ${builtins.toJSON plain}";
 
   # every-package-evaluates refuses a package that breaks the contract:
   # `names` asserts checkOptionContracts over the catalogue.
@@ -1026,6 +1068,59 @@ in
       })
     )
     || throw "vm-alert settings: ${builtins.toJSON settings}";
+
+  # vm-alert's Alertmanager configuration has three routes: `settings`
+  # renders a Secret classified as configuration; `configRawYaml` writes the
+  # configuration into the CR and renders no Secret; two routes at once and
+  # an inline credential are refused.
+  lib-options-typing-vm-alert-config-routes =
+    let
+      kixKeys = (import ../../core/annotations.nix).keys;
+      alert =
+        config:
+        vmCluster {
+          vm-alert = {
+            package = pkg "victoria-metrics-alert";
+            inherit config;
+          };
+        };
+      minimal = {
+        route.receiver = "x";
+        receivers = [ { name = "x"; } ];
+      };
+      configSecret =
+        ms:
+        lib.findFirst (
+          m: m.kind == "Secret" && lib.hasSuffix "-alertmanager-config" m.metadata.name
+        ) null ms;
+      vmam = ms: lib.findFirst (m: m.kind == "VMAlertmanager") null ms;
+      rendered = alert { alertmanager.settings = minimal; };
+      raw = alert { alertmanager.configRawYaml = minimal; };
+    in
+    (
+      (configSecret rendered).metadata.annotations.${kixKeys.classification} == "configuration"
+      && (vmam rendered).spec ? configSecret
+      && configSecret raw == null
+      && !((vmam raw).spec ? configSecret)
+      && (builtins.fromJSON (vmam raw).spec.configRawYaml).route.receiver == "x"
+      && evalFails' (alert {
+        alertmanager = {
+          settings = minimal;
+          configRawYaml = minimal;
+        };
+      })
+      && evalFails' (alert {
+        alertmanager.configRawYaml = minimal // {
+          receivers = [
+            {
+              name = "x";
+              slack_configs = [ { api_url = "https://hooks.slack.com/services/x"; } ];
+            }
+          ];
+        };
+      })
+    )
+    || throw "vm-alert config routes: ${builtins.toJSON (vmam raw).spec}";
 
   # A selector an instance sets replaces the package's default selector as
   # a whole. The stub DaemonSet gives the selector a pod to match.

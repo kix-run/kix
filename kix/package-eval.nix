@@ -146,7 +146,11 @@ let
       };
     };
     clickhouse-operator.instances = { inherit credentials; };
-    cloudflared.config.token = "eval-only";
+    cloudflared.instances.tunnel-token = {
+      package = packages.secret;
+      aliases = [ "tunnelToken" ];
+      config.stringData.token = "eval-only";
+    };
     # A Prometheus provider, so the PodMonitor is built.
     cnpg-cluster.instances.prometheus-operator.package = packages.prometheus-operator;
     # cnpg-cluster is off the shelf, so the database's cluster is declared.
@@ -199,18 +203,36 @@ let
       instances.prometheus-operator.package = packages.prometheus-operator;
     };
     filebrowser.instances = { inherit storage; };
-    firezone.config = {
-      domain = "firezone.example.com";
-      admin = {
-        email = "admin@example.com";
-        password = "password";
+    firezone = {
+      config = {
+        domain = "firezone.example.com";
+        admin.email = "admin@example.com";
       };
-      wireguard.privateKey = "key";
-      # The three salts are optional; clusters/test-immich.nix sets them.
-      secrets = {
-        guardianSecretKey = "guardian";
-        secretKeyBase = "base";
-        databaseEncryptionKey = "encryption";
+      instances = {
+        database = {
+          package = packages.stackgres-database;
+          config.password = "password";
+        };
+        # The three salts are optional; clusters/test-immich.nix sets them.
+        application-secrets = {
+          package = packages.secret;
+          aliases = [ "applicationSecrets" ];
+          config.stringData = {
+            GUARDIAN_SECRET_KEY = "guardian";
+            SECRET_KEY_BASE = "base";
+            DATABASE_ENCRYPTION_KEY = "encryption";
+          };
+        };
+        admin-password = {
+          package = packages.secret;
+          aliases = [ "adminPassword" ];
+          config.stringData.password = "password";
+        };
+        wireguard-key = {
+          package = packages.secret;
+          aliases = [ "wireguardKey" ];
+          config.stringData.private_key = "key";
+        };
       };
     };
     # The administrator's login, and a Prometheus provider, so the
