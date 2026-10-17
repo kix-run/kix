@@ -851,6 +851,15 @@ in
             else
               throw "mkSecret \"${name}\" in ${namespaceName}/${instanceName}: either 'keys' or 'stringData' must be provided";
 
+          # Every key with a value must be declared, or the stamp and the
+          # security.secretSource rule would miss it.
+          undeclared = builtins.filter (k: !(builtins.elem k declaredKeys)) valuedKeys;
+          _declaredCheck =
+            if undeclared == [ ] then
+              null
+            else
+              throw "mkSecret \"${name}\" in ${namespaceName}/${instanceName}: key(s) ${builtins.concatStringsSep ", " undeclared} have a value in stringData or extra.data but are not in 'keys'. List every key the Secret holds, or omit 'keys' to derive them from the values.";
+
           # Without a SOPS source nothing fills a key at deploy, so a key with
           # no value here would be missing from the live Secret. Kubernetes
           # fills a service-account-token Secret itself.
@@ -877,6 +886,7 @@ in
               "*=controller"
             else
               builtins.concatStringsSep "," (map (k: "${k}=${sourceOf k}") effectiveKeys);
+          _sourceChecks = builtins.seq _plainCheck _declaredCheck;
 
           realizedSource =
             if source == null then
@@ -901,7 +911,7 @@ in
               annotations
               // {
                 ${kixKeys.secretKeys} = builtins.concatStringsSep "," effectiveKeys;
-                ${kixKeys.secretSources} = builtins.seq _plainCheck secretSources;
+                ${kixKeys.secretSources} = builtins.seq _sourceChecks secretSources;
               }
               // lib.optionalAttrs (source != null) {
                 ${kixKeys.sopsSource} = toString realizedSource;

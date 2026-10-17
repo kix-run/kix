@@ -194,9 +194,9 @@ One purpose-named dep per credential, bound once through
 `kix.checkSecretKeys` (S3, S4; `SECRETS.md`). Never a string or path option
 for a credential: the dependency is what lets the site choose between a
 value in the build, a SOPS file, and a Secret an operator writes, and what
-`cluster.secrets.accept` checks (S1, S15; HANDBOOK §21.11). Configuration
+`cluster.secrets.accept` checks (S1, S16; HANDBOOK §21.11). Configuration
 the program reads from a Secret gets a non-Secret route or a dependency
-beside the rendered Secret, which is classified `configuration` (S14;
+beside the rendered Secret, which is classified `configuration` (S15;
 alertmanager, victoria-metrics-alert). Discrete variables take
 `keyRef` values; a URL-shaped credential takes `credentials.out.mkEnv` for the
 parts and `$(VAR)` expansion in an owned variable. That leaves the password

@@ -42,6 +42,25 @@ let
       };
   };
 
+  # A package that builds a Secret with scope.mkResource, so the stamp and
+  # the data are whatever `args` says.
+  rawSecretPackage = args: {
+    meta.version = "test";
+    build =
+      { self, scope, ... }:
+      {
+        secret = scope.mkResource (
+          {
+            apiVersion = "v1";
+            kind = "Secret";
+            name = "raw";
+          }
+          // args
+        );
+        root = self.secret;
+      };
+  };
+
   # A cluster of one instance of `package`, with the security rules on and
   # `accept` as cluster.secrets.accept (null leaves it unset).
   clusterOf =
@@ -112,6 +131,32 @@ in
   secret-sources-stamp-controller =
     stampOf { keys = [ ]; } == "*=controller" || throw "controller stamp: ${stampOf { keys = [ ]; }}";
 
+  # A value under extra.data is stamped like one under stringData.
+  secret-sources-stamp-extra-data =
+    stampOf { extra.data.cert = "YQ=="; } == "cert=inline"
+    || throw "extra.data stamp: ${stampOf { extra.data.cert = "YQ=="; }}";
+
+  # A key with a value that `keys` leaves out is refused, so no value
+  # escapes the stamp; `keys = [ ]` beside a value is the same refusal.
+  secret-sources-refuses-undeclared-value =
+    evalFails (
+      clusterOf (secretPackage {
+        keys = [ "a" ];
+        plainKeys = [ "a" ];
+        stringData = {
+          a = "x";
+          password = "p";
+        };
+      }) null
+    )
+    && evalFails (
+      clusterOf (secretPackage {
+        keys = [ ];
+        stringData.password = "p";
+      }) null
+    )
+    || throw "a valued key outside keys was accepted";
+
   # With cluster.secrets.accept unset, the rule reports nothing.
   secret-sources-rule-silent-when-unset =
     findingsOf (secretPackage { stringData.password = "p"; }) null == [ ]
@@ -173,6 +218,33 @@ in
       && accepted == [ ]
     )
     || throw "configuration finding: ${builtins.toJSON refused}";
+
+  # A stamp on a Secret scope.mkSecret did not build cannot hide a value:
+  # a key present in stringData is inline whatever the stamp says.
+  secret-sources-rule-ignores-stamp-on-valued-key =
+    let
+      spoofed = rawSecretPackage {
+        annotations.${kixKeys.secretSources} = "password=sops";
+        extra.stringData.password = "p";
+      };
+      messages = messagesOf spoofed [ "sops" ];
+    in
+    (
+      builtins.length messages == 1
+      && lib.hasInfix "key(s) password is written into the build (inline)" (builtins.head messages)
+    )
+    || throw "spoofed stamp: ${builtins.toJSON messages}";
+
+  # A chart Secret with `data: null` is scored, not a type error.
+  secret-sources-rule-null-data =
+    let
+      messages = messagesOf (rawSecretPackage {
+        extra.data = null;
+        extra.stringData.password = "p";
+      }) [ "sops" ];
+    in
+    (builtins.length messages == 1 && lib.hasInfix "key(s) password" (builtins.head messages))
+    || throw "null data: ${builtins.toJSON messages}";
 
   # A Secret something else creates is external: reported only when the
   # cluster leaves external out.

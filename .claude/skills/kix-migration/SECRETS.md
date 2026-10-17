@@ -125,7 +125,7 @@ That is also how a `kix.healthCheck` probe gets a credential: its `env` callback
 
 ## The site chooses the source
 
-A package never takes a credential as a string option or a SOPS path option. It takes a secret dependency, and the cluster file picks the instance behind the alias: `packages.secret` with `stringData` (value in the build), `packages.secret` with `source` (SOPS, decrypted at deploy), or `packages.secret-ref` (a Secret an operator, cert-manager, or a person creates). All three share the alias and the `out` API. A cluster that forbids a source sets `cluster.secrets.accept` and the build fails with the instance, Secret, and keys named.
+A package never takes a credential as a string option or a SOPS path option. It takes a secret dependency, and the cluster file picks the instance behind the alias: `packages.secret` with `stringData` (value in the build), `packages.secret` with `source` (SOPS, decrypted at deploy), or `packages.secret-ref` (a Secret an operator, cert-manager, or a person creates). All three share the alias and the `out` API. A cluster that forbids a source sets `cluster.secrets.accept`; the `security.secretSource` rule then reports the instance, Secret, and keys, and fails the build when `scorecard.maxSeverity = "error"` (the default cap is warning).
 
 Configuration a program reads from a Secret (Alertmanager) is rendered from options, so its key is `inline`. Such a package offers a non-Secret route where the custom resource has one (`configRawYaml`), an optional secret dependency in place of the rendered Secret, and classifies the rendered Secret `configuration` (`meta.classification`) while refusing inline credential keys, so a cluster can list `configuration` in `cluster.secrets.accept`.
 

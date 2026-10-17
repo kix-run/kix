@@ -256,7 +256,7 @@ Declarative native Prometheus stack. Options under `monitoring`:
 - `enabled`, `namespace` (default: "monitoring-system")
 - `operator.enabled`
 - `prometheus`: enabled, retention, retentionSize, scrapeInterval, storage.size (the class comes from the instance's `storageClasses` dependency)
-- `alertmanager`: enabled, settings (alertmanager.yaml, rendered into a Secret classified `configuration`; its receivers decide the Alertmanager pods' world egress ports, and an inline credential is refused in favour of its `_file` form), or an optional `alertmanagerConfig` secret dependency (key `alertmanager.yaml`) in place of the rendered Secret
+- `alertmanager`: enabled, settings (alertmanager.yaml, rendered into a Secret classified `configuration`; its receivers decide the Alertmanager pods' world egress ports, and an inline credential is refused in favour of its `_file` form), or, in place of the rendered Secret, an `alertmanagerConfig` secret dependency (key `alertmanager.yaml`) that dependency resolution finds from an instance so aliased in the monitoring namespace; the module itself passes only `settings`
 - `nodeExporter.enabled`, `kubeStateMetrics.enabled`
 - `defaultRules.enabled` (rule groups and monitors are toggled on the `default-rules` instance's config)
 - `grafana`: enabled, persistence (enabled, size, storageClassName), datasources. Grafana needs a `grafanaAdmin` secret (keys `admin-user`, `admin-password`) in the namespace; its route and `root_url` come from `kix.expose`, and it has a route only when the `grafana` instance sets `ingress.host` (its unauthenticated `/metrics` is on the same route)

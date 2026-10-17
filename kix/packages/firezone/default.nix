@@ -323,21 +323,16 @@ in
         # secret must roll the pod. A Kix-built Secret has an identity hash
         # for the pod template; a `secret-ref` Secret has none, and the
         # reloader restarts the pod instead.
-        secretDeps = builtins.filter (d: d != null) [
-          appSecrets
-          admin
-          wgKey
-          saml
-          dbCreds
-        ];
-        kixBuilt = builtins.filter (d: d.out ? identityHash) secretDeps;
-        untracked = builtins.filter (d: !(d.out ? identityHash)) secretDeps;
-        checksums = builtins.listToAttrs (
-          lib.imap0 (i: d: {
-            name = "checksum/secret-${toString i}";
-            value = d.out.identityHash;
-          }) kixBuilt
-        );
+        secretDeps = lib.filterAttrs (_: d: d != null) {
+          application-secrets = appSecrets;
+          admin-password = admin;
+          wireguard-key = wgKey;
+          saml-certificate = saml;
+          database-credentials = dbCreds;
+        };
+        kixBuilt = lib.filterAttrs (_: d: d.out ? identityHash) secretDeps;
+        untracked = builtins.attrValues (lib.filterAttrs (_: d: !(d.out ? identityHash)) secretDeps);
+        checksums = lib.mapAttrs' (n: d: lib.nameValuePair "checksum/${n}" d.out.identityHash) kixBuilt;
         withReload =
           args:
           if reloader == null || untracked == [ ] then args else reloader.out.withReloadOn untracked args;

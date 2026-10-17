@@ -1122,6 +1122,50 @@ in
     )
     || throw "vm-alert config routes: ${builtins.toJSON (vmam raw).spec}";
 
+  # An `alertmanagerConfig` secret dependency replaces the rendered
+  # configuration Secret on both alertmanager packages: the custom resource
+  # names the dependency's Secret and no Secret is classified
+  # configuration.
+  lib-options-typing-alertmanager-config-dependency =
+    let
+      kixKeys = (import ../../core/annotations.nix).keys;
+      configDep = {
+        package = pkg "secret";
+        aliases = [ "alertmanagerConfig" ];
+        config.stringData."alertmanager.yaml" = "{}";
+      };
+      vm = vmCluster {
+        vm-alert.package = pkg "victoria-metrics-alert";
+        am-config = configDep;
+      };
+      am = manifests (mkCluster [
+        {
+          instances.monitoring = {
+            prometheus-operator.package = pkg "prometheus-operator";
+            alertmanager.package = pkg "alertmanager";
+            am-config = configDep;
+          };
+        }
+      ]);
+      depSecret =
+        ms: lib.findFirst (m: m.kind == "Secret" && (m.stringData or { }) ? "alertmanager.yaml") null ms;
+      classified =
+        ms:
+        builtins.filter (
+          m: m.kind == "Secret" && (m.metadata.annotations or { }) ? ${kixKeys.classification}
+        ) ms;
+      usesDep =
+        kind: ms:
+        let
+          cr = lib.findFirst (m: m.kind == kind) null ms;
+        in
+        cr.spec.configSecret == (depSecret ms).metadata.name && classified ms == [ ];
+    in
+    (usesDep "VMAlertmanager" vm && usesDep "Alertmanager" am)
+    || throw "alertmanagerConfig dependency: ${
+      builtins.toJSON (map (m: m.metadata.name) (classified vm ++ classified am))
+    }";
+
   # A selector an instance sets replaces the package's default selector as
   # a whole. The stub DaemonSet gives the selector a pod to match.
   lib-options-typing-default-rules-selector-replaces =

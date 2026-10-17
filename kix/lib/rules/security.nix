@@ -67,15 +67,21 @@ let
     && (resource.metadata.annotations or { }).${kixKeys.mode} or null == "import"
     && (resource.metadata.annotations or { }).${kixKeys.importKind} or null == "Secret";
 
+  # A chart may render `data: null` for an empty block.
+  attrsOr = v: if builtins.isAttrs v then v else { };
+
   # Where each key of a rendered Secret comes from, as { key = source; }.
-  # scope.mkSecret stamps `kix.run/secret-sources`; a Secret without the
-  # stamp (a chart's) is inline for every key in its data. An inline key of
-  # a Secret classified `configuration` counts as `configuration`.
+  # A key with a value in `data` or `stringData` is inline (or plain when
+  # the `kix.run/secret-sources` stamp says so), whatever else the stamp
+  # claims, so a stamp on a resource scope.mkSecret did not build cannot
+  # hide a value. The stamp supplies the source of every other key. An
+  # inline key of a Secret classified `configuration` counts as
+  # `configuration`.
   secretKeySources =
     resource:
     let
       annotations = resource.metadata.annotations or { };
-      stamp = annotations.${kixKeys.secretSources} or null;
+      stamp = annotations.${kixKeys.secretSources} or "";
       classification = annotations.${kixKeys.classification} or null;
       fromStamp = builtins.listToAttrs (
         map (
@@ -89,9 +95,13 @@ let
           }
         ) (builtins.filter (pair: pair != "") (lib.splitString "," stamp))
       );
-      dataKeys = builtins.attrNames ((resource.data or { }) // (resource.stringData or { }));
-      fromData = lib.genAttrs dataKeys (_: "inline");
-      sources = if stamp != null then fromStamp else fromData;
+      dataKeys = builtins.attrNames (
+        attrsOr (resource.data or null) // attrsOr (resource.stringData or null)
+      );
+      fromData = lib.genAttrs dataKeys (
+        k: if fromStamp.${k} or null == "plain" then "plain" else "inline"
+      );
+      sources = lib.filterAttrs (k: _: !(builtins.elem k dataKeys)) fromStamp // fromData;
     in
     lib.mapAttrs (
       _: source:

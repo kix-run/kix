@@ -178,15 +178,19 @@ cluster.secrets.accept = [ "external" "sops" "controller" ];
 A scorecard rule in the security group (`kix/lib/rules/security.nix`) walks
 every rendered Secret and reference, reads `kix.run/secret-sources`, and
 reports each key whose provenance the cluster does not accept. The finding
-names the package, the instance, the Secret, the key, and the option or
-dependency that fed it:
+carries the instance and namespace, and its message names the Secret, the
+keys, and the accepted sources:
 
 ```
-victoria-metrics-alert monitoring/alerts: Secret alerts-alertmanager-config
-key alertmanager.yaml is inline (from alertmanager.settings), and this
-cluster accepts external, sops, controller. Supply the configuration as
-the alertmanagerConfig dependency, or set alertmanager.configRawYaml.
+Secret 'alerts-alertmanager-config': key(s) alertmanager.yaml is
+configuration the package rendered, classified as holding no credential
+(configuration), and this cluster accepts external, sops, controller.
+Supply the value from a source this cluster accepts (...), or add the
+source to cluster.secrets.accept.
 ```
+
+The option or dependency that fed the key is not named; the package header
+says where its configuration comes from.
 
 Severity follows the scorecard's existing machinery. The rule applies only
 when the cluster sets `cluster.secrets.accept`; unset, it reports nothing,

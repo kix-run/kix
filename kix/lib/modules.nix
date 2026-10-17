@@ -65,10 +65,10 @@ in
         (`scope.mkSecretRef`, a `secret-ref` instance). `controller`: Kix
         creates the Secret empty and a controller fills it.
         `configuration`: a package renders software configuration into a
-        Secret and classifies it so; the package refuses the credential
-        keys it knows about, and listing this takes its word. A key the
-        package marks plain (a username, a host) is accepted under every
-        setting.
+        Secret and classifies it so. The library does not verify the
+        classification or that the package refuses credential keys, so
+        listing this takes the package's word. A key the package marks
+        plain (a username, a host) is accepted under every setting.
       '';
     };
 
