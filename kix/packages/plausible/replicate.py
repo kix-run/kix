@@ -3,7 +3,8 @@
 Plausible's migrations create plain MergeTree tables on a fresh install and
 switch to ReplicatedMergeTree with ON CLUSTER only once the tables they
 check are already replicated (Plausible.IngestRepo.clustered_table?). The
-migrations run against one replica, CLICKHOUSE_URL, and this script then:
+migrations run against one replica, the first that answers, and this script
+then works on that same replica:
 
   1. replaces each table of the database that is not replicated with a
      Replicated* table of the same definition on that replica, moving its
@@ -18,7 +19,10 @@ uses Recreate) and nothing writes to a table while it is swapped. Every
 step is safe to repeat, and a run finds nothing to do once every table is
 on every replica. Environment:
 
-  CLICKHOUSE_URL       http://host:port/database, one replica
+  CLICKHOUSE_HOST_FILE a file holding the replica's address, which the
+                       migrate container writes after choosing it
+  CLICKHOUSE_PORT      its HTTP port
+  CLICKHOUSE_DATABASE  the database
   CLICKHOUSE_USER      the user, which Plausible's dictionaries log in as
   CLICKHOUSE_PASSWORD  its password
   REPLICAS             how many replicas the server has
@@ -30,8 +34,10 @@ import sys
 import urllib.parse
 import urllib.request
 
-URL = urllib.parse.urlsplit(os.environ["CLICKHOUSE_URL"])
-DATABASE = URL.path.strip("/")
+with open(os.environ["CLICKHOUSE_HOST_FILE"]) as f:
+    HOST = f.read().strip()
+PORT = os.environ["CLICKHOUSE_PORT"]
+DATABASE = os.environ["CLICKHOUSE_DATABASE"]
 USER = os.environ["CLICKHOUSE_USER"]
 PASSWORD = os.environ["CLICKHOUSE_PASSWORD"]
 REPLICAS = int(os.environ["REPLICAS"])
@@ -46,7 +52,7 @@ def query(sql, fmt=None, **settings):
     body = sql + (f" FORMAT {fmt}" if fmt else "")
     params = urllib.parse.urlencode({"database": DATABASE, **settings})
     request = urllib.request.Request(
-        f"http://{URL.hostname}:{URL.port or 8123}/?{params}",
+        f"http://{HOST}:{PORT}/?{params}",
         data=body.encode(),
         headers={"X-ClickHouse-User": USER, "X-ClickHouse-Key": PASSWORD},
     )
@@ -109,6 +115,7 @@ def convert(table, engine, create):
 
 
 def main():
+    print(f"replicate: working on {HOST}")
     tables = rows(
         f"SELECT name, engine, create_table_query FROM system.tables "
         f"WHERE database = {literal(DATABASE)} AND NOT is_temporary ORDER BY name"

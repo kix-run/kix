@@ -407,10 +407,12 @@ in
     )
     || throw "plausible privileges: a narrow clickhouseDatabase was accepted";
 
-  # On two replicas the migrations run on the first replica's address, the
-  # replicate init container follows them with its script from a ConfigMap,
-  # and the server keeps the load-balanced host. On one replica (the real
-  # facade on the bare server) neither the container nor the ConfigMap
+  # On two replicas the migrate container tries each replica's address in
+  # order and writes the one it uses to a shared in-memory volume, the
+  # replicate init container reads it there and runs its script from a
+  # ConfigMap, and the server keeps the load-balanced host. On one replica
+  # (the real facade on the bare server) migrate runs `db migrate` against
+  # that host and neither the container, the volume, nor the ConfigMap
   # renders.
   plausible-replicated-clickhouse =
     let
@@ -418,8 +420,10 @@ in
       one = clusterWith { };
       inits = cluster: (podSpecOf cluster).initContainers;
       initNamed = cluster: n: builtins.head (builtins.filter (c: c.name == n) (inits cluster));
-      migrateUrl = (envOf (initNamed two "migrate")).CLICKHOUSE_DATABASE_URL;
+      migrate = initNamed two "migrate";
       replicate = initNamed two "replicate";
+      mountsOf = c: map (m: m.name) c.volumeMounts;
+      volumesOf = cluster: map (v: v.name) ((podSpecOf cluster).volumes or [ ]);
       configMaps = cluster: map (c: c.metadata.name) (ofKind "ConfigMap" (manifests cluster));
     in
     (
@@ -427,21 +431,36 @@ in
         "migrate"
         "replicate"
       ]
-      && lib.hasInfix "@ch-0.events.svc:8123/" migrateUrl
+      && builtins.elemAt migrate.command 0 == "/bin/sh"
+      && lib.hasInfix "exec /entrypoint.sh db migrate" (builtins.elemAt migrate.command 2)
+      && lib.hasInfix "> /run/plausible-replica/host" (builtins.elemAt migrate.command 2)
+      && (envOf migrate).CLICKHOUSE_REPLICA_HOSTS == "ch-0.events.svc ch-1.events.svc"
+      && !(migrate ? args)
       && lib.hasInfix "@ch.web.svc:8123/" (mainEnvOf two).CLICKHOUSE_DATABASE_URL
-      && (envOf replicate).CLICKHOUSE_URL == "http://ch-0.events.svc:8123/plausible_events"
+      && (envOf replicate).CLICKHOUSE_HOST_FILE == "/run/plausible-replica/host"
+      && (envOf replicate).CLICKHOUSE_DATABASE == "plausible_events"
       && (envOf replicate) ? CLICKHOUSE_PASSWORD
       && (envOf replicate).REPLICAS == "2"
+      && builtins.elem "replica" (mountsOf migrate)
+      && builtins.elem "replica" (mountsOf replicate)
+      && builtins.elem "replica" (volumesOf two)
       && builtins.elem "plausible-replicate" (configMaps two)
       && builtins.any (v: (v.configMap.name or null) == "plausible-replicate") (podSpecOf two).volumes
       && (annotationsOf two) ? "checksum/replicate"
       && map (c: c.name) (inits one) == [ "migrate" ]
+      &&
+        (initNamed one "migrate").args == [
+          "db"
+          "migrate"
+        ]
+      && !((initNamed one "migrate") ? command)
+      && !(builtins.elem "replica" (volumesOf one))
       && !(builtins.elem "plausible-replicate" (configMaps one))
       && !((annotationsOf one) ? "checksum/replicate")
     )
     || throw "plausible replicated: inits ${
       builtins.toJSON (map (c: c.name) (inits two))
-    }, migrate ${migrateUrl}";
+    }, migrate ${builtins.toJSON migrate}";
 
   # A stand-in that publishes no replica count, or more replicas than
   # replicaHosts, is refused with a message naming the cause.

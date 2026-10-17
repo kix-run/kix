@@ -67,7 +67,8 @@
 # schema and can take a few minutes.
 #
 # On a ClickHouse server with more than one replica, the migrations run on
-# the first replica (`out.replicaHosts`), and a second init container,
+# the first replica in `out.replicaHosts` that answers, replica 0 while it
+# is up, and a second init container, on the same replica,
 # `replicate` (replicate.py beside this file), follows them. Plausible
 # creates plain MergeTree tables on a fresh install and switches to
 # replicated tables with ON CLUSTER only once its tables already are
@@ -132,9 +133,10 @@
 #   lost, and visitors active across the restart start new sessions, since
 #   Plausible's session transfer is off in Community Edition
 #   (ENABLE_SESSION_TRANSFER defaults to the `prod` build only).
-#   On a replicated ClickHouse, Plausible starts only while the first
-#   replica answers, since the migrations and the replicate step run
-#   there. Plausible's own ON CLUSTER migrations wait for every replica, so
+#   On a replicated ClickHouse, if a replica fails between an upgrade's
+#   migrations and the replicate step, a table that upgrade created plain
+#   is only on that replica until it returns and Plausible starts again.
+#   Plausible's own ON CLUSTER migrations wait for every replica, so
 #   upgrade Plausible only while all replicas are up. Community
 #   Edition documents a single ClickHouse server; the replicated path is
 #   the one Plausible's hosted service uses, verified here on kind.
@@ -235,7 +237,7 @@ in
             (replicas != null && replicas != "1" && builtins.length replicaHosts != lib.toInt replicas)
             {
               assertion = false;
-              message = "deps.clickhouseDatabase reports ${replicas} replicas and ${toString (builtins.length replicaHosts)} replicaHosts. On several replicas Plausible migrates on the first replica and then replicates its tables from there, so it needs one address per replica in out.replicaHosts.";
+              message = "deps.clickhouseDatabase reports ${replicas} replicas and ${toString (builtins.length replicaHosts)} replicaHosts. On several replicas Plausible migrates on one replica and then replicates its tables from there, so it needs one address per replica in out.replicaHosts.";
             }
         ++ lib.optional (!(builtins.elem "ALL" privileges)) {
           assertion = false;
@@ -378,12 +380,31 @@ in
           "http://$(PLAUSIBLE_CH_USERNAME):$(PLAUSIBLE_CH_PASSWORD)@${host}:${ch.ports.http}/${ch.database}";
         clickhouseUrl = clickhouseUrlOn ch.host;
 
-        # On several replicas, the migrations run on the first replica, so
-        # every plain table they create is on that one, and replicate.py
-        # then makes the tables replicated and creates them on the others.
-        # The server uses the load-balanced Service.
+        # On several replicas, the migrations run on one replica, the first
+        # in `replicaHosts` that answers, so every plain table they create is
+        # on that one. The migrate container writes its address to
+        # `replicaHostFile`, and replicate.py then makes the tables
+        # replicated and creates them on the others from the same replica.
+        # Trying them in order keeps every start on replica 0 while it is
+        # up. The server uses the load-balanced Service.
         replicated = ch.replicas != "1";
-        migrationHost = if replicated then builtins.head ch.replicaHosts else ch.host;
+        replicaDir = "/run/plausible-replica";
+        replicaHostFile = "${replicaDir}/host";
+        # PLAUSIBLE_CH_USERNAME and PLAUSIBLE_CH_PASSWORD come from
+        # credentialEnv. The image's entrypoint is /entrypoint.sh.
+        chooseAndMigrate = ''
+          for host in $CLICKHOUSE_REPLICA_HOSTS; do
+            if wget -q -T 5 -O /dev/null "http://$host:${ch.ports.http}/ping"; then
+              echo "migrate: migrating on $host"
+              echo "$host" > ${replicaHostFile}
+              export CLICKHOUSE_DATABASE_URL="http://$PLAUSIBLE_CH_USERNAME:$PLAUSIBLE_CH_PASSWORD@$host:${ch.ports.http}/${ch.database}"
+              exec /entrypoint.sh db migrate
+            fi
+            echo "migrate: ClickHouse replica $host does not answer"
+          done
+          echo "migrate: no ClickHouse replica answers"
+          exit 1
+        '';
         replicatePy = builtins.readFile ./replicate.py;
         replicateRuntime = kix.healthCheck.runtimes.python;
 
@@ -493,17 +514,6 @@ in
           })
         ];
 
-        migrateEnv = map (
-          e:
-          if e.name == "CLICKHOUSE_DATABASE_URL" then
-            {
-              inherit (e) name;
-              value = clickhouseUrlOn migrationHost;
-            }
-          else
-            e
-        ) env;
-
         replicateContainer = {
           name = "replicate";
           image = kix.image.ref replicateRuntime.image;
@@ -519,7 +529,9 @@ in
             ++ kix.mkEnvVars (
               replicateRuntime.env
               // {
-                CLICKHOUSE_URL = "http://${migrationHost}:${ch.ports.http}/${ch.database}";
+                CLICKHOUSE_HOST_FILE = replicaHostFile;
+                CLICKHOUSE_PORT = ch.ports.http;
+                CLICKHOUSE_DATABASE = ch.database;
                 REPLICAS = ch.replicas;
               }
             );
@@ -542,6 +554,11 @@ in
             {
               name = "replicate";
               mountPath = "/replicate";
+              readOnly = true;
+            }
+            {
+              name = "replica";
+              mountPath = replicaDir;
               readOnly = true;
             }
           ];
@@ -595,24 +612,52 @@ in
                   # DATABASE to a role without CREATEDB even when the database
                   # exists.
                   # kix.withMounts keeps volumes already in the spec.
-                  volumes = lib.optional replicated {
-                    name = "replicate";
-                    configMap.name = self.replicateScript.out.name;
-                  };
+                  volumes = lib.optionals replicated [
+                    {
+                      name = "replicate";
+                      configMap.name = self.replicateScript.out.name;
+                    }
+                    {
+                      name = "replica";
+                      emptyDir = {
+                        medium = "Memory";
+                        sizeLimit = "1Mi";
+                      };
+                    }
+                  ];
                   initContainers = [
                     (
                       container
                       // {
                         name = "migrate";
-                        env = migrateEnv;
-                        args = [
-                          "db"
-                          "migrate"
-                        ];
                         # kix.withMounts fills only `containers`; the
                         # migrations read the same configuration and paths.
                         volumeMounts = map (m: { inherit (m) name mountPath; }) mounts;
                       }
+                      // (
+                        if replicated then
+                          {
+                            command = [
+                              "/bin/sh"
+                              "-c"
+                              chooseAndMigrate
+                            ];
+                            env = env ++ kix.mkEnvVars { CLICKHOUSE_REPLICA_HOSTS = lib.concatStringsSep " " ch.replicaHosts; };
+                            volumeMounts = map (m: { inherit (m) name mountPath; }) mounts ++ [
+                              {
+                                name = "replica";
+                                mountPath = replicaDir;
+                              }
+                            ];
+                          }
+                        else
+                          {
+                            args = [
+                              "db"
+                              "migrate"
+                            ];
+                          }
+                      )
                     )
                   ]
                   ++ lib.optional replicated replicateContainer;
@@ -655,7 +700,7 @@ in
           replicateScript =
             if replicated then
               lib.warn
-                "${who}: deps.clickhouseDatabase is on a ClickHouse server with ${ch.replicas} replicas. Plausible Community Edition documents a single ClickHouse server; Kix migrates on the first replica and converts Plausible's tables to replicated ones in the `replicate` init container, which Plausible does not support. It was tested with Plausible v${release}. Before upgrading Plausible, test the new version on a replicated ClickHouse, and upgrade only while every replica is up."
+                "${who}: deps.clickhouseDatabase is on a ClickHouse server with ${ch.replicas} replicas. Plausible Community Edition documents a single ClickHouse server; Kix migrates on one replica and converts Plausible's tables to replicated ones in the `replicate` init container, which Plausible does not support. It was tested with Plausible v${release}. Before upgrading Plausible, test the new version on a replicated ClickHouse, and upgrade only while every replica is up."
                 scope.mkResource
                 {
                   apiVersion = "v1";

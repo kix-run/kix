@@ -2,10 +2,11 @@
 # replicated ClickHouse (clickhouse-cluster, two replicas, a Keeper quorum)
 # and a CloudNativePG database, under Cilium default-deny.
 #
-# Plausible migrates on the first replica, and its `replicate` init
-# container then makes its tables replicated and creates them on the other
-# replica. The check below sends pageviews and counts them on each replica.
-# All passwords are test values only.
+# Plausible migrates on the first replica that answers, and its
+# `replicate` init container then makes its tables replicated and creates
+# them on the other replica. To check, send pageviews and count the rows of
+# plausible_events.events_v2 on each replica. All passwords are test values
+# only.
 #
 # Bring up (three workers, no default CNI; Cilium comes from this cluster):
 #   kind create cluster --name kix-plausible-ha --config - <<EOF
