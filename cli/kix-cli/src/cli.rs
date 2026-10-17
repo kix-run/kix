@@ -742,7 +742,7 @@ pub struct DeployArgs {
     pub dry_run: bool,
 
     /// Deploy only if the plan made now still matches this reviewed one, a
-    /// `.kixplan` file from `kix plan --save` or `kix diff --save`. The deploy uses the
+    /// `.kixplan` file from `kix plan --save`. The deploy uses the
     /// plan's planning flags and exits 4, applying nothing, when the cluster,
     /// either build, the flags, or the refusals, reverted drift, and prune
     /// deletes it would make differ from what was reviewed

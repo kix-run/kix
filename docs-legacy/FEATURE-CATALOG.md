@@ -432,7 +432,7 @@ Two steps: eval correctness, then the scorecard report. No schema or deprecated-
 Wave-based deployment with confirmation.
 - `-y, --yes` — Skip confirmation.
 - `--dry-run` — Run `kix plan` with the same flags; nothing is applied.
-- `--plan <FILE>` — Deploy only if the plan made now matches a reviewed `kix plan --save` or `kix diff --save` plan file: same cluster, same new and deployed identity hashes, the plan's planning flags, and no new refusal, reverted drift, or prune delete. Exits 4 and applies nothing otherwise; with `--dry-run`, only checks. A different Kix binary is a note, not a refusal (`plan/saved.rs`).
+- `--plan <FILE>` — Deploy only if the plan made now matches a reviewed `kix plan --save` plan file (a `kix diff --save` file lists no objects and is refused): same cluster, same new and deployed identity hashes, the plan's planning flags, and no new refusal, reverted drift, or prune delete. Exits 4 and applies nothing otherwise; with `--dry-run`, only checks. A different Kix binary is a note, not a refusal (`plan/saved.rs`).
 - Before it asks, the deploy runs the plan as a server-side dry run and prints it. Under `--on-error stop` (the default) a plan with a refused write stops the deploy before anything is applied.
 - `--reconcile` — Re-apply all resources (heal drift).
 - `--prune`: Delete orphaned resources. Without it the plan still lists every orphan by name and says they are kept, and the new Activation lists the builds they came from under `status.orphansKeptFrom`, so a later `kix deploy --prune` or soft `kix gc` still deletes them. The previous deploy record (Activation) is never an orphan.
