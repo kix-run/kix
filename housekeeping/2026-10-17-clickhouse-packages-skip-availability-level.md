@@ -1,0 +1,3 @@
+# 2026-10-17 · `kix/packages/clickhouse`, `clickhouse-cluster` · Neither ClickHouse server package reads the cluster's availability level.
+
+`clickhouse-cluster` takes its replica count from a `replicas` option that defaults to 2 at every level, so a cluster at `zone` gets two replicas and a cluster at `none` still gets two. `clickhouse` runs one replica by design but declares no `meta.availability.max`, so the availability plugin cannot report the ceiling, and a consumer at `zone` (plausible) cannot tell from `meta` that its event store is a single pod. The package-authoring skill's step 3 asks for a level mapping on every provider.

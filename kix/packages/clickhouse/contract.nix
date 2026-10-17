@@ -53,6 +53,13 @@ let
       shape = "the server release as YY.M";
       test = isVersion;
     };
+    # A consumer whose upstream creates plain MergeTree tables can run only
+    # where the shard has one replica: on more, each connection may land on
+    # a replica that lacks the table.
+    replicas = {
+      shape = "the shard's replica count as a string of digits";
+      test = v: isString v && builtins.match "[1-9][0-9]*" v != null;
+    };
   };
 
   problems =

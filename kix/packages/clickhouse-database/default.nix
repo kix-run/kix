@@ -77,10 +77,13 @@
 #   out.username        user name
 #   out.privileges      what the user was granted, so a consumer can refuse
 #                       a database it could not use
+#   out.grants          what the user was granted outside its database
 #   out.credentials     the Secret; keys username, password, database, host,
 #                       httpPort, nativePort
 #   out.version         the server release as YY.M, forwarded from the
 #                       contract, for a consumer with a requirement of its own
+#   out.replicas        the shard's replica count, forwarded from the
+#                       contract
 #
 # root = credentials Secret.
 
@@ -158,6 +161,25 @@ in
       '';
     };
 
+    grants = lib.mkOption {
+      # Keys go into the GRANT statement unquoted, so they are limited to
+      # `*` or a plain identifier on each side of the dot.
+      type = lib.types.attrsOf (lib.types.listOf (lib.types.strMatching "[A-Z][A-Z ]*"));
+      default = { };
+      example = {
+        "*.*" = [ "CREATE FUNCTION" ];
+        "system.replicas" = [ "SELECT" ];
+      };
+      description = ''
+        ClickHouse privileges granted to the user on objects outside its
+        database, keyed by `<database>.<table>` with `*` for any
+        (`GRANT <these> ON <key>`): SQL user-defined functions belong to no
+        database (`*.*`), and reading a system table needs its own grant.
+        A consumer that needs one injects it through its dependency's
+        config.
+      '';
+    };
+
     schema = lib.mkOption {
       type = lib.types.attrsOf lib.types.lines;
       default = { };
@@ -225,8 +247,20 @@ in
         else
           null;
 
+      badGrantKeys = builtins.filter (
+        k: builtins.match "(\\*|[A-Za-z_][A-Za-z0-9_]*)\\.(\\*|[A-Za-z_][A-Za-z0-9_]*)" k == null
+      ) (builtins.attrNames config.grants);
+      _grantsCheck =
+        if badGrantKeys != [ ] then
+          throw "clickhouse-database ${scope.namespaceName}/${name}: grants keys must be `<database>.<table>`, each side `*` or a plain identifier, and these are not: ${lib.concatStringsSep ", " badGrantKeys}."
+        else
+          null;
+
       server = clickhouse.out;
       backendScope = scope.forService clickhouse;
+      # Instances in different namespaces may share a name and a server, so
+      # what this package puts in the server's namespace carries its own.
+      serverSideName = "${name}-${scope.namespaceName}";
       hasSchema = config.schema != { };
 
       bootstrapHash = builtins.substring 0 10 (
@@ -236,6 +270,7 @@ in
               database
               user
               privileges
+              grants
               schema
               ;
             image = kix.image.ref config.image;
@@ -264,7 +299,15 @@ in
         CREATE USER IF NOT EXISTS `${config.user}` ON CLUSTER '{cluster}' IDENTIFIED WITH sha256_password BY {password:String};
         ALTER USER `${config.user}` ON CLUSTER '{cluster}' IDENTIFIED WITH sha256_password BY {password:String};
         GRANT ON CLUSTER '{cluster}' ${lib.concatStringsSep ", " config.privileges} ON `${config.database}`.* TO `${config.user}`;
-      '';
+      ''
+      + lib.concatStrings (
+        lib.mapAttrsToList (
+          object: privileges:
+          lib.optionalString (privileges != [ ]) ''
+            GRANT ON CLUSTER '{cluster}' ${lib.concatStringsSep ", " privileges} ON ${object} TO `${config.user}`;
+          ''
+        ) config.grants
+      );
 
       bootstrapScript = ''
         set -eu
@@ -292,159 +335,164 @@ in
         echo "clickhouse-database bootstrap complete for ${config.user}@${config.database}"
       '';
     in
-    builtins.seq _passwordCheck {
-      credentials = scope.mkSecret {
-        name = "${name}-credentials";
-        keys = [
-          "username"
-          "password"
-          "database"
-          "host"
-          "httpPort"
-          "nativePort"
-        ];
-        stringData = {
-          username = config.user;
-          database = config.database;
-          host = server.host;
-          httpPort = server.ports.http;
-          nativePort = server.ports.native;
-        }
-        // lib.optionalAttrs (config.password != null) { inherit (config) password; };
-        source = config.passwordSource;
-        hash = config.passwordHash;
-        inherit labels;
-        meta = secretMeta;
-      };
-
-      bootstrapPassword = backendScope.mkSecret {
-        name = "${name}-bootstrap-password";
-        keys = [ "password" ];
-        stringData = lib.optionalAttrs (config.password != null) { inherit (config) password; };
-        source = config.passwordSource;
-        hash = config.passwordHash;
-        inherit labels;
-        meta = secretMeta;
-      };
-
-      bootstrapFiles = backendScope.mkResource {
-        apiVersion = "v1";
-        kind = "ConfigMap";
-        name = "${name}-bootstrap";
-        inherit labels;
-        data = {
-          "bootstrap.sh" = bootstrapScript;
-          "bootstrap.sql" = bootstrapSql;
-        };
-      };
-
-      schemaFiles =
-        if hasSchema then
-          backendScope.mkResource {
-            apiVersion = "v1";
-            kind = "ConfigMap";
-            name = "${name}-schema";
-            inherit labels;
-            data = config.schema;
+    builtins.deepSeq
+      [
+        _passwordCheck
+        _grantsCheck
+      ]
+      {
+        credentials = scope.mkSecret {
+          name = "${name}-credentials";
+          keys = [
+            "username"
+            "password"
+            "database"
+            "host"
+            "httpPort"
+            "nativePort"
+          ];
+          stringData = {
+            username = config.user;
+            database = config.database;
+            host = server.host;
+            httpPort = server.ports.http;
+            nativePort = server.ports.native;
           }
-        else
-          null;
-
-      bootstrapMount = kix.mount.configMap self.bootstrapFiles {
-        mountPath = "/bootstrap";
-        readOnly = true;
-      };
-      schemaMount = kix.mount.configMap self.schemaFiles {
-        mountPath = "/schema";
-        readOnly = true;
-      };
-      # clickhouse-client keeps its history and scratch files under $HOME.
-      homeMount = kix.mount.emptyDir {
-        name = "home";
-        mountPath = "/home/clickhouse";
-        sizeLimit = "16Mi";
-      };
-
-      bootstrapJob =
-        {
-          name = "${name}-bootstrap-${bootstrapHash}";
+          // lib.optionalAttrs (config.password != null) { inherit (config) password; };
+          source = config.passwordSource;
+          hash = config.passwordHash;
           inherit labels;
-          spec = {
-            backoffLimit = 10;
-            ttlSecondsAfterFinished = 86400;
-            template = {
-              metadata.labels = labels;
-              spec = {
-                restartPolicy = "OnFailure";
-                automountServiceAccountToken = false;
-                securityContext = {
-                  runAsNonRoot = true;
-                  runAsUser = 101;
-                  runAsGroup = 101;
-                  seccompProfile.type = "RuntimeDefault";
+          meta = secretMeta;
+        };
+
+        bootstrapPassword = backendScope.mkSecret {
+          name = "${serverSideName}-bootstrap-password";
+          keys = [ "password" ];
+          stringData = lib.optionalAttrs (config.password != null) { inherit (config) password; };
+          source = config.passwordSource;
+          hash = config.passwordHash;
+          inherit labels;
+          meta = secretMeta;
+        };
+
+        bootstrapFiles = backendScope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "${serverSideName}-bootstrap";
+          inherit labels;
+          data = {
+            "bootstrap.sh" = bootstrapScript;
+            "bootstrap.sql" = bootstrapSql;
+          };
+        };
+
+        schemaFiles =
+          if hasSchema then
+            backendScope.mkResource {
+              apiVersion = "v1";
+              kind = "ConfigMap";
+              name = "${serverSideName}-schema";
+              inherit labels;
+              data = config.schema;
+            }
+          else
+            null;
+
+        bootstrapMount = kix.mount.configMap self.bootstrapFiles {
+          mountPath = "/bootstrap";
+          readOnly = true;
+        };
+        schemaMount = kix.mount.configMap self.schemaFiles {
+          mountPath = "/schema";
+          readOnly = true;
+        };
+        # clickhouse-client keeps its history and scratch files under $HOME.
+        homeMount = kix.mount.emptyDir {
+          name = "home";
+          mountPath = "/home/clickhouse";
+          sizeLimit = "16Mi";
+        };
+
+        bootstrapJob =
+          {
+            name = "${serverSideName}-bootstrap-${bootstrapHash}";
+            inherit labels;
+            spec = {
+              backoffLimit = 10;
+              ttlSecondsAfterFinished = 86400;
+              template = {
+                metadata.labels = labels;
+                spec = {
+                  restartPolicy = "OnFailure";
+                  automountServiceAccountToken = false;
+                  securityContext = {
+                    runAsNonRoot = true;
+                    runAsUser = 101;
+                    runAsGroup = 101;
+                    seccompProfile.type = "RuntimeDefault";
+                  };
+                  containers = [
+                    {
+                      name = "bootstrap";
+                      image = kix.image.ref config.image;
+                      imagePullPolicy = config.image.pullPolicy;
+                      command = [
+                        "/bin/sh"
+                        "/bootstrap/bootstrap.sh"
+                      ];
+                      env = kix.mkEnvVars {
+                        HOME = "/home/clickhouse";
+                        CH_HOST = server.host;
+                        CH_PORT = server.ports.native;
+                        CH_ADMIN_USER = server.username;
+                        CH_ADMIN_PASSWORD = server.authSecret.out.keyRef server.authPasswordKey;
+                        NEW_PASSWORD = self.bootstrapPassword.out.keyRef "password";
+                      };
+                      resources = {
+                        requests = {
+                          cpu = "50m";
+                          memory = "128Mi";
+                        };
+                        limits = {
+                          cpu = "500m";
+                          memory = "256Mi";
+                        };
+                      };
+                      securityContext = {
+                        runAsNonRoot = true;
+                        allowPrivilegeEscalation = false;
+                        readOnlyRootFilesystem = true;
+                        capabilities.drop = [ "ALL" ];
+                      };
+                    }
+                  ];
                 };
-                containers = [
-                  {
-                    name = "bootstrap";
-                    image = kix.image.ref config.image;
-                    imagePullPolicy = config.image.pullPolicy;
-                    command = [
-                      "/bin/sh"
-                      "/bootstrap/bootstrap.sh"
-                    ];
-                    env = kix.mkEnvVars {
-                      HOME = "/home/clickhouse";
-                      CH_HOST = server.host;
-                      CH_PORT = server.ports.native;
-                      CH_ADMIN_USER = server.username;
-                      CH_ADMIN_PASSWORD = server.authSecret.out.keyRef server.authPasswordKey;
-                      NEW_PASSWORD = self.bootstrapPassword.out.keyRef "password";
-                    };
-                    resources = {
-                      requests = {
-                        cpu = "50m";
-                        memory = "128Mi";
-                      };
-                      limits = {
-                        cpu = "500m";
-                        memory = "256Mi";
-                      };
-                    };
-                    securityContext = {
-                      runAsNonRoot = true;
-                      allowPrivilegeEscalation = false;
-                      readOnlyRootFilesystem = true;
-                      capabilities.drop = [ "ALL" ];
-                    };
-                  }
-                ];
               };
             };
+          }
+          |> kix.withMounts [
+            self.bootstrapMount
+            self.schemaMount
+            self.homeMount
+          ]
+          |> backendScope.mkJob;
+
+        # The server's outputs with the bootstrap Job riding on every address,
+        # so whoever reads `out.host` waits for the database to exist.
+        ch = scope.forwardEdges clickhouse [ self.bootstrapJob ];
+
+        root = {
+          resource = self.credentials;
+          # The database is ready when its bootstrap has run, not when its
+          # Secret exists.
+          requires = [ self.bootstrapJob ];
+          out = {
+            inherit (self.ch) httpUrl nativeEndpoint host;
+            inherit (server) ports version replicas;
+            inherit (config) database privileges grants;
+            username = config.user;
+            credentials = self.credentials;
           };
-        }
-        |> kix.withMounts [
-          self.bootstrapMount
-          self.schemaMount
-          self.homeMount
-        ]
-        |> backendScope.mkJob;
-
-      # The server's outputs with the bootstrap Job riding on every address,
-      # so whoever reads `out.host` waits for the database to exist.
-      ch = scope.forwardEdges clickhouse [ self.bootstrapJob ];
-
-      root = {
-        resource = self.credentials;
-        # The database is ready when its bootstrap has run, not when its
-        # Secret exists.
-        requires = [ self.bootstrapJob ];
-        out = {
-          inherit (self.ch) httpUrl nativeEndpoint host;
-          inherit (server) ports version;
-          inherit (config) database privileges;
-          username = config.user;
-          credentials = self.credentials;
         };
       };
-    };
 }

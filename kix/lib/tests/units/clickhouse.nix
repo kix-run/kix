@@ -1,7 +1,8 @@
 # Tests for kix/packages/clickhouse-keeper, clickhouse-cluster, and
-# clickhouse: the refusals of an even Keeper quorum and of a cluster with no
-# memory limit, the health check's addresses for each replica, and the
-# alert rules of both server packages and what each rule is gated on.
+# clickhouse: the contract's replicas field, the refusals of an even Keeper
+# quorum and of a cluster with no memory limit, the health check's
+# addresses for each replica, and the alert rules of both server packages
+# and what each rule is gated on.
 # The operator runs in `clickhouse-system`, Keeper and the servers in `db`,
 # the prometheus stub in `monitoring`.
 # tryEval drops a throw's message, so each refusal is checked with
@@ -250,4 +251,25 @@ in
         } == null
     )
     || throw "clickhouse-cluster alerts: one ${builtins.toJSON (builtins.attrNames one)}, two ${builtins.toJSON (builtins.attrNames two)}";
+
+  # The contract requires `replicas` as a string of digits from 1: missing,
+  # an integer, and "0" each give one problem; "2" gives none.
+  clickhouse-contract-replicas =
+    let
+      contract = import ../../../packages/clickhouse/contract.nix { inherit lib; };
+      replicasProblems = out: builtins.filter (p: lib.hasPrefix "replicas " p) (contract.problems out);
+    in
+    (
+      builtins.length (replicasProblems { }) == 1
+      &&
+        builtins.length (replicasProblems {
+          replicas = 1;
+        }) == 1
+      &&
+        builtins.length (replicasProblems {
+          replicas = "0";
+        }) == 1
+      && replicasProblems { replicas = "2"; } == [ ]
+    )
+    || throw "clickhouse contract replicas: ${builtins.toJSON (replicasProblems { })}";
 }

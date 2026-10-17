@@ -1,0 +1,3 @@
+# 2026-10-17 · `kix/lib/vocab/compose.nix` · Egress that depends on config, for a workload Kix builds, goes through `kix.operandPolicy`, which labels it as an operator's.
+
+`meta.network.intents` is static, so a package that opens egress to a port it reads from config (plausible's mail relay on `SMTP_HOST_PORT`, cnpg-cluster's backup store port) builds a policy with `kix.operandPolicy` over its own Deployment's selector. The result carries `kix.run/policy-type: operator-managed-workload` although no operator manages the pods, and the package-review checklist (N2, N3) names the build-time form only for operator pods, so an author does not find it from the checklist.

@@ -68,7 +68,7 @@
 # servers under other names (chi_clickhouse_*); no rule reads those.
 #
 # Exposes the clickhouse contract (../clickhouse/contract.nix, which checks
-# it), plus out.replicas.
+# it). `out.replicas` is the `replicas` option.
 #
 # root = the ServiceRef.
 
