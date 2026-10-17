@@ -122,10 +122,13 @@ the package owns `CONFIG_DIR`. The ClickHouse migrations run `CREATE OR
 REPLACE FUNCTION` and read four system tables, which ClickHouse 26.3 guards
 with grants: a provider gap, fixed by a `grants` option on
 clickhouse-database that the consumer injects. They also create plain
-`MergeTree` tables on a fresh install, which no provider can fix: the
-consumer refuses a server with more than one replica, which needed a
-`replicas` field in the clickhouse contract. Not every upstream fact
-becomes a provider fix; some become a refusal backed by a contract field.
+`MergeTree` tables on a fresh install, and switch to replicated tables only
+once the tables already are, which no provider can fix. The consumer runs
+the migrations on one replica (the contract's `replicaHosts`) and a second
+init container converts the tables and creates them on the other replicas
+(`plausible/replicate.py`). Not every upstream fact becomes a provider fix,
+and a single-server assumption in an upstream's schema is a step for the
+package to add before it is a reason for a ceiling.
 The image's Erlang distribution listens on every interface with a cookie
 shared by every copy of the image, so the package sets
 `RELEASE_DISTRIBUTION=none`. The compose file's `nofile` limit is why it
@@ -196,7 +199,7 @@ the defaults fails there.
   (keycloak's `KC_DB_URL_PROPERTIES`, plausible's `sslmode=require`).
 - A facade with no contract file (clickhouse-database) is held through
   `deps.<x>.assertions` on the `out` fields the consumer needs
-  (clickhouse-logs:103-114, plausible:185-221).
+  (clickhouse-logs:103-114, plausible:210-245).
 - Config the consumer injects (`deps.<x>.config`) is ignored by a
   `kix.mkImport` stand-in, so the consumer also asserts on the `out` field
   that reports the injected value (plausible checks `out.grants`).
@@ -329,16 +332,17 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Ceilings: package-wide, per builder | tempo:416-418; valkey:545, harbor:1543-1545 |
 | `kix.expose`, `exposure.urlOrNull` | metabase:168-171, 360 |
 | Metrics toggle that does not restart the workload | metabase:148-153; keycloak header 30-36 |
-| `kix.monitor` with alerts | openbao:1241-1262; clickhouse:597-623 and `alerts.nix` |
+| `kix.monitor` with alerts | openbao:1241-1262; clickhouse:602-628 and `alerts.nix` |
 | `kix.alerts` over a PodMonitor | cnpg-cluster:841-850 |
 | `kix.healthCheck` with a script file | victoria-metrics-agent:324-343 |
 | Checksum annotations, `enableServiceLinks = false` | metabase:253-267 |
 | Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-40; stackgres-database |
-| Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:263 (`serverSideName`) |
-| Privileges injected into a facade, with the upstream file for each, and asserted on `out` | plausible:151-167, 185-221 |
-| Migrations in an init container sharing the server's env and mounts (`kix.withMounts` fills `containers` only) | plausible:496-514; vaultwarden:178-200 |
-| Literal credentials refused in `env` | plausible:306-326 |
-| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:551-581; cnpg-cluster:727-745 |
+| Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:265 (`serverSideName`) |
+| Privileges injected into a facade, with the upstream file for each, and asserted on `out` | plausible:180-192, 210-245 |
+| Migrations in an init container sharing the server's env and mounts (`kix.withMounts` fills `containers` only) | plausible:598-614; vaultwarden:178-200 |
+| Literal credentials refused in `env` | plausible:334-354 |
+| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:664-692; cnpg-cluster:727-745 |
+| A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:503-544, 651-660; `plausible/replicate.py` |
 | One alias, two implementations, a contract file | `clickhouse/contract.nix`; clickhouse, clickhouse-cluster |
 
 A script of more than a few lines is a sibling file read with

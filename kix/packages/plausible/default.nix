@@ -16,12 +16,14 @@
 #                                  Plausible's first migration creates. When
 #                                  its `out.tls` is true, DATABASE_URL carries
 #                                  `sslmode=require`.
-#   clickhouseDatabase (required)  a clickhouse-database instance on a
-#                                  ClickHouse server with one replica (the
-#                                  `clickhouse` package). The package asks it
-#                                  for CREATE and DROP FUNCTION on `*.*` and
-#                                  SELECT on four system tables, which the
-#                                  migrations need, and refuses a user without ALL on its
+#   clickhouseDatabase (required)  a clickhouse-database instance, on the
+#                                  `clickhouse` package or on
+#                                  `clickhouse-cluster` with any number of
+#                                  replicas. The package asks it for CREATE
+#                                  and DROP FUNCTION and CLUSTER on `*.*` and
+#                                  SELECT on six system tables, which the
+#                                  migrations and the replicate step need,
+#                                  and refuses a user without ALL on its
 #                                  database.
 #   secretKeyBase (required)       a secret with key `key`, at least 32
 #                                  bytes, that signs sessions and derives
@@ -63,6 +65,20 @@
 # An init container runs Plausible's migrations, on PostgreSQL and on
 # ClickHouse, before the server starts. The first start creates the whole
 # schema and can take a few minutes.
+#
+# On a ClickHouse server with more than one replica, the migrations run on
+# the first replica (`out.replicaHosts`), and a second init container,
+# `replicate` (replicate.py beside this file), follows them. Plausible
+# creates plain MergeTree tables on a fresh install and switches to
+# replicated tables with ON CLUSTER only once its tables already are
+# (Plausible.IngestRepo.clustered_table?). The step replaces each plain
+# table of the database with a Replicated* table of the same definition,
+# moving its parts across, and then creates the tables, dictionaries, and
+# SQL functions on the other replicas, which fetch the data. It runs on
+# every start, does nothing once every table is on every replica, and
+# leaves a replica that is down to run its statements from ClickHouse's DDL
+# queue when it returns. Later migrations, Plausible's own, take the ON
+# CLUSTER path. The server itself uses the load-balanced Service.
 #
 # A changed password or key restarts the pod. A `secret-ref` has no content
 # hash, so a Secret written outside Kix does not restart it.
@@ -116,10 +132,12 @@
 #   lost, and visitors active across the restart start new sessions, since
 #   Plausible's session transfer is off in Community Edition
 #   (ENABLE_SESSION_TRANSFER defaults to the `prod` build only).
-#   Plausible creates plain MergeTree tables on a fresh install
-#   (priv/ingest_repo/migrations), which only a one-replica ClickHouse
-#   shard serves to every connection, so the package refuses a
-#   clickhouseDatabase whose server reports more than one replica.
+#   On a replicated ClickHouse, Plausible starts only while the first
+#   replica answers, since the migrations and the replicate step run
+#   there. Plausible's own ON CLUSTER migrations wait for every replica, so
+#   take a Plausible release only while all replicas are up. Community
+#   Edition documents a single ClickHouse server; the replicated path is
+#   the one Plausible's hosted service uses, verified here on kind.
 #   Both database passwords go into URLs unescaped (DATABASE_URL,
 #   CLICKHOUSE_DATABASE_URL), so they must not contain URL delimiters such
 #   as `@`, `/`, `:`, or `%`.
@@ -154,16 +172,23 @@ let
   # grant to read a system table: Plausible.IngestRepo.replica_count reads
   # system.replicas, the VersionedSessions data migration reads
   # system.parts and system.tables, LocationsSync reads system.tables, and
-  # migration 20240502115822 reads system.columns.
+  # migration 20240502115822 reads system.columns. On more than one
+  # replica, Plausible's migrations run DDL with ON CLUSTER (CLUSTER), and
+  # replicate.py reads system.functions and system.clusters. The grants
+  # are asked of every server, because an injection cannot read the
+  # replica count it would depend on.
   requiredGrants = {
     "*.*" = [
       "CREATE FUNCTION"
       "DROP FUNCTION"
+      "CLUSTER"
     ];
     "system.replicas" = [ "SELECT" ];
     "system.parts" = [ "SELECT" ];
     "system.tables" = [ "SELECT" ];
     "system.columns" = [ "SELECT" ];
+    "system.functions" = [ "SELECT" ];
+    "system.clusters" = [ "SELECT" ];
   };
 in
 {
@@ -199,15 +224,19 @@ in
             ) requiredGrants
           );
           replicas = out.replicas or null;
+          replicaHosts = out.replicaHosts or [ ];
         in
-        lib.optional (replicas != "1") {
+        lib.optional (replicas == null) {
           assertion = false;
-          message =
-            if replicas == null then
-              "deps.clickhouseDatabase publishes no `replicas`, and Plausible's ClickHouse migrations need a server with one replica. Wire a clickhouse-database instance, or add `replicas = \"1\"` to the stand-in's out when the server has one replica."
-            else
-              "deps.clickhouseDatabase is on a ClickHouse server with ${replicas} replicas. Plausible creates plain MergeTree tables, which exist only on the replica that created them, so it needs a server with one replica, such as the `clickhouse` package.";
+          message = "deps.clickhouseDatabase publishes no `replicas`, and Plausible's ClickHouse migrations run differently on one replica and on several. Wire a clickhouse-database instance, or add `replicas` (and `replicaHosts` above one) to the stand-in's out.";
         }
+        ++
+          lib.optional
+            (replicas != null && replicas != "1" && builtins.length replicaHosts != lib.toInt replicas)
+            {
+              assertion = false;
+              message = "deps.clickhouseDatabase reports ${replicas} replicas and ${toString (builtins.length replicaHosts)} replicaHosts. On several replicas Plausible migrates on the first replica and then replicates its tables from there, so it needs one address per replica in out.replicaHosts.";
+            }
         ++ lib.optional (!(builtins.elem "ALL" privileges)) {
           assertion = false;
           message = "deps.clickhouseDatabase grants ${
@@ -344,7 +373,19 @@ in
         databaseUrl =
           "postgresql://$(PLAUSIBLE_PG_USERNAME):$(PLAUSIBLE_PG_PASSWORD)@${pg.host}:${toString pg.port}/${pg.database}"
           + lib.optionalString ((pg.tls or null) == true) "?sslmode=require";
-        clickhouseUrl = "http://$(PLAUSIBLE_CH_USERNAME):$(PLAUSIBLE_CH_PASSWORD)@${ch.host}:${ch.ports.http}/${ch.database}";
+        clickhouseUrlOn =
+          host:
+          "http://$(PLAUSIBLE_CH_USERNAME):$(PLAUSIBLE_CH_PASSWORD)@${host}:${ch.ports.http}/${ch.database}";
+        clickhouseUrl = clickhouseUrlOn ch.host;
+
+        # On several replicas, the migrations run on the first replica, so
+        # every plain table they create is on that one, and replicate.py
+        # then makes the tables replicated and creates them on the others.
+        # The server uses the load-balanced Service.
+        replicated = ch.replicas != "1";
+        migrationHost = if replicated then builtins.head ch.replicaHosts else ch.host;
+        replicatePy = builtins.readFile ./replicate.py;
+        replicateRuntime = kix.healthCheck.runtimes.python;
 
         env =
           credentialEnv
@@ -452,6 +493,60 @@ in
           })
         ];
 
+        migrateEnv = map (
+          e:
+          if e.name == "CLICKHOUSE_DATABASE_URL" then
+            {
+              inherit (e) name;
+              value = clickhouseUrlOn migrationHost;
+            }
+          else
+            e
+        ) env;
+
+        replicateContainer = {
+          name = "replicate";
+          image = kix.image.ref replicateRuntime.image;
+          command = replicateRuntime.interpreter ++ [
+            "-I"
+            "/replicate/replicate.py"
+          ];
+          env =
+            ch.credentials.out.mkEnv {
+              CLICKHOUSE_USER = "username";
+              CLICKHOUSE_PASSWORD = "password";
+            }
+            ++ kix.mkEnvVars (
+              replicateRuntime.env
+              // {
+                CLICKHOUSE_URL = "http://${migrationHost}:${ch.ports.http}/${ch.database}";
+                REPLICAS = ch.replicas;
+              }
+            );
+          resources = {
+            requests = {
+              cpu = "10m";
+              memory = "32Mi";
+            };
+            limits.memory = "128Mi";
+          };
+          securityContext = {
+            runAsNonRoot = true;
+            runAsUser = 65534;
+            runAsGroup = 65534;
+            allowPrivilegeEscalation = false;
+            readOnlyRootFilesystem = true;
+            capabilities.drop = [ "ALL" ];
+          };
+          volumeMounts = [
+            {
+              name = "replicate";
+              mountPath = "/replicate";
+              readOnly = true;
+            }
+          ];
+        };
+
         httpProbe = path: {
           httpGet = {
             inherit path;
@@ -484,6 +579,8 @@ in
                   "checksum/clickhouse" = ch.credentials.out.identityHash or null;
                   "checksum/secret-key-base" = skb.out.identityHash or null;
                   "checksum/smtp" = if smtp != null then smtp.out.identityHash or null else null;
+                  "checksum/replicate" =
+                    if replicated then builtins.substring 0 16 (builtins.hashString "sha256" replicatePy) else null;
                 };
                 template.spec = {
                   automountServiceAccountToken = false;
@@ -497,11 +594,17 @@ in
                   # create the databases, and PostgreSQL refuses CREATE
                   # DATABASE to a role without CREATEDB even when the database
                   # exists.
+                  # kix.withMounts keeps volumes already in the spec.
+                  volumes = lib.optional replicated {
+                    name = "replicate";
+                    configMap.name = self.replicateScript.out.name;
+                  };
                   initContainers = [
                     (
                       container
                       // {
                         name = "migrate";
+                        env = migrateEnv;
                         args = [
                           "db"
                           "migrate"
@@ -511,7 +614,8 @@ in
                         volumeMounts = map (m: { inherit (m) name mountPath; }) mounts;
                       }
                     )
-                  ];
+                  ]
+                  ++ lib.optional replicated replicateContainer;
                   containers = [
                     (
                       container
@@ -547,6 +651,17 @@ in
             }
             |> kix.withMounts mounts
             |> scope.mkDeployment;
+
+          replicateScript =
+            if replicated then
+              scope.mkResource {
+                apiVersion = "v1";
+                kind = "ConfigMap";
+                name = "${name}-replicate";
+                data."replicate.py" = replicatePy;
+              }
+            else
+              null;
 
           # The relay's address is the site's, so the rule allows any address
           # on its port. kix.operandPolicy renders nothing without an enforcer.

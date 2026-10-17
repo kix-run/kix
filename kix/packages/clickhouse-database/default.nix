@@ -84,6 +84,8 @@
 #                       contract, for a consumer with a requirement of its own
 #   out.replicas        the shard's replica count, forwarded from the
 #                       contract
+#   out.replicaHosts    one address per replica, forwarded from the
+#                       contract with the bootstrap Job's edge
 #
 # root = credentials Secret.
 
@@ -489,6 +491,7 @@ in
           out = {
             inherit (self.ch) httpUrl nativeEndpoint host;
             inherit (server) ports version replicas;
+            replicaHosts = map (scope.augmentEdge [ self.bootstrapJob ]) server.replicaHosts;
             inherit (config) database privileges grants;
             username = config.user;
             credentials = self.credentials;

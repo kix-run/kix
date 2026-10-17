@@ -1,5 +1,5 @@
 # Tests for kix/packages/clickhouse-keeper, clickhouse-cluster, and
-# clickhouse: the contract's replicas field, the refusals of an even Keeper
+# clickhouse: the contract's replicas and replicaHosts fields, the refusals of an even Keeper
 # quorum and of a cluster with no memory limit, the health check's
 # addresses for each replica, and the alert rules of both server packages
 # and what each rule is gated on.
@@ -272,4 +272,31 @@ in
       && replicasProblems { replicas = "2"; } == [ ]
     )
     || throw "clickhouse contract replicas: ${builtins.toJSON (replicasProblems { })}";
+
+  # The contract requires `replicaHosts` as a non-empty list of strings:
+  # missing, empty, and a non-string entry each give one problem.
+  clickhouse-contract-replica-hosts =
+    let
+      contract = import ../../../packages/clickhouse/contract.nix { inherit lib; };
+      hostProblems = out: builtins.filter (p: lib.hasPrefix "replicaHosts " p) (contract.problems out);
+    in
+    (
+      builtins.length (hostProblems { }) == 1
+      &&
+        builtins.length (hostProblems {
+          replicaHosts = [ ];
+        }) == 1
+      &&
+        builtins.length (hostProblems {
+          replicaHosts = [ 1 ];
+        }) == 1
+      &&
+        hostProblems {
+          replicaHosts = [
+            "a"
+            "b"
+          ];
+        } == [ ]
+    )
+    || throw "clickhouse contract replicaHosts: ${builtins.toJSON (hostProblems { })}";
 }

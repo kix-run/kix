@@ -1,7 +1,8 @@
 # Tests for kix/packages/plausible: the variables the package owns, the
 # routed or explicit BASE_URL, the privileges it asks of its
-# clickhouse-database and the ClickHouse servers it refuses, the citext
-# request and sslmode, the secretKeyBase key check, the smtpPassword
+# clickhouse-database and the ClickHouse stand-ins it refuses, the citext
+# request and sslmode, the migrations and replicate init container on a
+# replicated server, the secretKeyBase key check, the smtpPassword
 # pairing with SMTP_USER_NAME, literal credentials in env, the mail relay
 # egress, the checksum annotations, and two instances in two namespaces.
 # Also clickhouse-database's check on its grants keys.
@@ -148,12 +149,24 @@ let
       "*.*" = [
         "CREATE FUNCTION"
         "DROP FUNCTION"
+        "CLUSTER"
       ];
       "system.replicas" = [ "SELECT" ];
       "system.parts" = [ "SELECT" ];
       "system.tables" = [ "SELECT" ];
       "system.columns" = [ "SELECT" ];
+      "system.functions" = [ "SELECT" ];
+      "system.clusters" = [ "SELECT" ];
     };
+  };
+
+  # The facade's out on a server with two replicas.
+  twoReplicaFacadeOut = goodFacadeOut // {
+    replicas = "2";
+    replicaHosts = [
+      "ch-0.events.svc"
+      "ch-1.events.svc"
+    ];
   };
 
   # The ClickHouse server in `events`, with its claim and credentials.
@@ -365,7 +378,7 @@ in
     in
     (
       cm.data.extensions == "citext"
-      && lib.hasInfix "GRANT ON CLUSTER '{cluster}' CREATE FUNCTION, DROP FUNCTION ON *.* TO `plausible_events`;" sql
+      && lib.hasInfix "GRANT ON CLUSTER '{cluster}' CREATE FUNCTION, DROP FUNCTION, CLUSTER ON *.* TO `plausible_events`;" sql
       && lib.hasInfix "GRANT ON CLUSTER '{cluster}' SELECT ON system.replicas TO `plausible_events`;" sql
     )
     || throw "plausible privileges: extensions ${builtins.toJSON cm.data}, sql ${sql}";
@@ -394,26 +407,63 @@ in
     )
     || throw "plausible privileges: a narrow clickhouseDatabase was accepted";
 
-  # A server with more than one replica, or a stand-in that publishes no
-  # replica count, is refused with a message naming the cause.
-  plausible-refuses-replicated-clickhouse =
+  # On two replicas the migrations run on the first replica's address, the
+  # replicate init container follows them with its script from a ConfigMap,
+  # and the server keeps the load-balanced host. On one replica (the real
+  # facade on the bare server) neither the container nor the ConfigMap
+  # renders.
+  plausible-replicated-clickhouse =
     let
-      two = facadeMessages (goodFacadeOut // { replicas = "2"; });
+      two = clusterWith { facade = twoReplicaFacadeOut; };
+      one = clusterWith { };
+      inits = cluster: (podSpecOf cluster).initContainers;
+      initNamed = cluster: n: builtins.head (builtins.filter (c: c.name == n) (inits cluster));
+      migrateUrl = (envOf (initNamed two "migrate")).CLICKHOUSE_DATABASE_URL;
+      replicate = initNamed two "replicate";
+      configMaps = cluster: map (c: c.metadata.name) (ofKind "ConfigMap" (manifests cluster));
+    in
+    (
+      map (c: c.name) (inits two) == [
+        "migrate"
+        "replicate"
+      ]
+      && lib.hasInfix "@ch-0.events.svc:8123/" migrateUrl
+      && lib.hasInfix "@ch.web.svc:8123/" (mainEnvOf two).CLICKHOUSE_DATABASE_URL
+      && (envOf replicate).CLICKHOUSE_URL == "http://ch-0.events.svc:8123/plausible_events"
+      && (envOf replicate) ? CLICKHOUSE_PASSWORD
+      && (envOf replicate).REPLICAS == "2"
+      && builtins.elem "plausible-replicate" (configMaps two)
+      && builtins.any (v: (v.configMap.name or null) == "plausible-replicate") (podSpecOf two).volumes
+      && (annotationsOf two) ? "checksum/replicate"
+      && map (c: c.name) (inits one) == [ "migrate" ]
+      && !(builtins.elem "plausible-replicate" (configMaps one))
+      && !((annotationsOf one) ? "checksum/replicate")
+    )
+    || throw "plausible replicated: inits ${
+      builtins.toJSON (map (c: c.name) (inits two))
+    }, migrate ${migrateUrl}";
+
+  # A stand-in that publishes no replica count, or more replicas than
+  # replicaHosts, is refused with a message naming the cause.
+  plausible-replicas-need-hosts =
+    let
+      short = facadeMessages (twoReplicaFacadeOut // { replicaHosts = [ "ch-0.events.svc" ]; });
       missing = facadeMessages (removeAttrs goodFacadeOut [ "replicas" ]);
     in
     (
       evalFails (clusterWith {
-        facade = goodFacadeOut // {
-          replicas = "2";
+        facade = twoReplicaFacadeOut // {
+          replicaHosts = [ "ch-0.events.svc" ];
         };
       })
       && facadeMessages goodFacadeOut == [ ]
-      && builtins.length two == 1
-      && lib.hasInfix "2 replicas" (builtins.head two)
+      && facadeMessages twoReplicaFacadeOut == [ ]
+      && builtins.length short == 1
+      && lib.hasInfix "2 replicas and 1 replicaHosts" (builtins.head short)
       && builtins.length missing == 1
       && lib.hasInfix "publishes no `replicas`" (builtins.head missing)
     )
-    || throw "plausible replicas: two ${builtins.toJSON two}, missing ${builtins.toJSON missing}";
+    || throw "plausible replicas: short ${builtins.toJSON short}, missing ${builtins.toJSON missing}";
 
   # clickhouse-database refuses a grants key that is not `<db>.<table>`
   # with `*` or a plain identifier on each side, since keys enter the SQL

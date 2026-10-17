@@ -70,6 +70,7 @@
         virtualization = ./test-virtualization.nix;
         metabase = ./test-metabase.nix;
         plausible = ./test-plausible.nix;
+        plausible-replicated = ./test-plausible-replicated.nix;
         metrics-server = ./test-metrics-server.nix;
         spegel = ./test-spegel.nix;
         volsync = ./test-volsync.nix;

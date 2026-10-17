@@ -1,0 +1,104 @@
+# clusters/test-plausible-replicated.nix: Plausible Community Edition on a
+# replicated ClickHouse (clickhouse-cluster, two replicas, a Keeper quorum)
+# and a CloudNativePG database, under Cilium default-deny.
+#
+# Plausible migrates on the first replica, and its `replicate` init
+# container then makes its tables replicated and creates them on the other
+# replica. The check below sends pageviews and counts them on each replica.
+# All passwords are test values only.
+#
+# Bring up (three workers, no default CNI; Cilium comes from this cluster):
+#   kind create cluster --name kix-plausible-ha --config - <<EOF
+#   kind: Cluster
+#   apiVersion: kind.x-k8s.io/v1alpha4
+#   networking: { disableDefaultCNI: true, podSubnet: "10.244.0.0/16" }
+#   nodes: [ { role: control-plane }, { role: worker }, { role: worker }, { role: worker } ]
+#   EOF
+# Build:   nix build ./clusters#cluster-plausible-replicated --extra-experimental-features pipe-operators
+# Deploy:  nix run .#kix -- deploy plausible-replicated --flake ./clusters --context kind-kix-plausible-ha -y --timeout 30m
+
+{ kix, packages }:
+
+kix.buildCluster {
+  name = "test-plausible-replicated";
+  modules = [
+    kix.flavors.kind
+    (
+      { ref, ... }:
+      {
+        availablePackages = packages;
+        networkPolicy.enable = true;
+        cluster.capabilities.multiNode = true;
+
+        # kind runs with the default CNI disabled, so the managed cilium
+        # instance fills the cni role.
+        cluster.roles.cni = {
+          binding = "absent";
+          provider = null;
+        };
+        instances.kube-system.cilium.package = packages.cilium;
+
+        instances.ingress-system.ingress-nginx.package = packages.ingress-nginx;
+        instances.cnpg-system.cnpg-operator.package = packages.cnpg-operator;
+
+        instances.clickhouse-system = {
+          clickhouse-operator.package = packages.clickhouse-operator;
+          clickhouse-operator-credentials = {
+            package = packages.secret;
+            aliases = [ "credentials" ];
+            config.stringData = {
+              username = "clickhouse_operator";
+              password = "operator-dev-password";
+            };
+          };
+        };
+
+        instances.events = {
+          keeper = {
+            package = packages.clickhouse-keeper;
+            config.storage.size = "1Gi";
+          };
+          clickhouse = {
+            package = packages.clickhouse-cluster;
+            config = {
+              replicas = 2;
+              storage.size = "2Gi";
+              resources.requests.cpu = "250m";
+            };
+          };
+          clickhouse-credentials = {
+            package = packages.secret;
+            aliases = [ "credentials" ];
+            config.stringData.password = "clickhouse-dev-password";
+          };
+        };
+
+        instances.analytics = {
+          plausible = {
+            package = packages.plausible;
+            config.ingress.host = "plausible.localtest.me";
+          };
+          plausible-pg = {
+            package = packages.cnpg-cluster;
+            aliases = [ "postgres" ];
+            config.storage.size = "1Gi";
+          };
+          plausible-db = {
+            package = packages.cnpg-database;
+            config.password = "plausible-db-dev-password";
+          };
+          plausible-events = {
+            package = packages.clickhouse-database;
+            deps.clickhouse = ref.events.clickhouse;
+            config.password = "plausible-events-dev-password";
+          };
+          plausible-secret-key-base = {
+            package = packages.secret;
+            aliases = [ "secretKeyBase" ];
+            config.stringData.key = "test-only-0123456789abcdef0123456789abcdef0123456789abcdef";
+          };
+        };
+      }
+    )
+  ];
+}
