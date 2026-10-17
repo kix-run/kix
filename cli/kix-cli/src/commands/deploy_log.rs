@@ -151,6 +151,22 @@ impl DeployObserver for LineObserver {
                     eprintln!("stalled> {line}");
                 }
             }
+            DeployEvent::Waiting {
+                node,
+                phase,
+                since,
+                status,
+                budget,
+            } => {
+                let line = kix::cluster::watchdog::describe_wait(
+                    node,
+                    *phase,
+                    *since,
+                    status.as_deref(),
+                    *budget,
+                );
+                println!("waiting> {line}");
+            }
             DeployEvent::BestEffortFailed { what, message } => {
                 eprintln!("warn> {what} failed: {message}");
             }
@@ -516,6 +532,13 @@ mod tests {
                 ],
                 aborting: true,
             },
+            DeployEvent::Waiting {
+                node: web(),
+                phase: Phase::Readiness,
+                since: Duration::from_secs(30),
+                status: Some("import target Service/web not found yet".into()),
+                budget: Some(Duration::from_secs(180)),
+            },
             DeployEvent::BestEffortFailed {
                 what: "checkpoint".into(),
                 message: "conflict".into(),
@@ -542,6 +565,13 @@ mod tests {
             .chain([Line::summary(&counts, true, false, 7)])
             .map(|line| json_line(&line))
             .collect();
+        // The fixture is written along with the schemas:
+        // `KIX_WRITE_SCHEMAS=1 cargo test -p kix-cli`.
+        if std::env::var_os("KIX_WRITE_SCHEMAS").is_some() {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/deploy-log.ndjson");
+            std::fs::write(path, lines.join("\n") + "\n").unwrap();
+        }
         assert_eq!(lines, GOLDEN.lines().collect::<Vec<_>>());
     }
 

@@ -168,6 +168,9 @@ fn to_k8s_event(event: &DeployEvent) -> Option<KEvent> {
             action: "Stalled".into(),
             secondary: None,
         }),
+        // A wait within the readiness budget is not an event on the record;
+        // the stall and timeout events cover a wait that goes wrong.
+        DeployEvent::Waiting { .. } => None,
         DeployEvent::BestEffortFailed { what, message } => Some(KEvent {
             type_: EventType::Warning,
             reason: "BestEffortFailed".into(),

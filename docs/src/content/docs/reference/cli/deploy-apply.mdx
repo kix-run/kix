@@ -120,7 +120,11 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--plan <FILE>] [--prune | --prune-mode de
 
 `Ctrl-C` cancels the run and marks the record `Failed`. A run that makes no
 progress for 600 seconds is cancelled; set `KIX_STALL_TIMEOUT` to a number of
-seconds to change that, or `0` to disable it. Retries and request timeouts
+seconds to change that, or `0` to disable it. A resource that is still being
+checked for readiness counts as progress. For such a wait, the plain output
+prints a `waiting:` line after 10 seconds, then at 30, 60, and 120 seconds,
+then every minute, naming the resource, its last readiness message, and the
+readiness timeout it runs against. Retries and request timeouts
 are covered in [API server retries and request limits](/docs/reference/cli/api-server-transport/).
 
 Set `KIX_NO_INTERACTIVE` to any value to treat the terminal as

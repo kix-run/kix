@@ -23,11 +23,21 @@
 //! (`v2_discussions/81_deploy_as_lifecycle_engine.md`, "Closure A to closure
 //! B"). Listing the records is a read of our own bookkeeping, not of the
 //! objects being reasoned about.
+//!
+//! When the Active build is read from the cluster, so are the failed and
+//! kept builds: the sweep already lists every object that names them, and
+//! for a prune that is all a build is consulted for. A machine that built
+//! none of a cluster's deploys (every build came from CI) can then still
+//! consume its Failed records and shorten its kept list, instead of carrying
+//! both forward and warning about each entry on every deploy.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use std::collections::HashMap;
+
+use kube::api::DynamicObject;
 use kube::{client::Client, discovery::ApiResource};
 use serde_json::Value;
 
@@ -35,7 +45,7 @@ use super::{PlanError, PlanEvent};
 use crate::build_source::Build;
 use crate::cluster::activation::{self, KeptOrphanSource, OpenedRecords, Record, Records};
 use crate::cluster::apply::{self, ChangeAction};
-use crate::cluster::{discovery, inventory, owned_view};
+use crate::cluster::{discovery, inventory, owned_view, tenancy};
 use crate::eval::store_graph::StoreGraph;
 use crate::manifest::types::ResourceId;
 use crate::manifest::{keys, lifecycle};
@@ -318,6 +328,7 @@ impl Baseline {
             None => None,
         };
 
+        let mut live: Option<LiveClosures> = None;
         let mut baseline = match active {
             Some(active) if active.identity_hash.is_some() => {
                 let hash = active.identity_hash.as_deref().unwrap_or_default();
@@ -339,8 +350,9 @@ impl Baseline {
                         report(PlanEvent::ReadingLive {
                             error: found.err().as_deref(),
                         });
-                        let active_manifests =
+                        let (active_manifests, closures) =
                             of_live(client, &opened, &discovery, cluster, &active, report).await?;
+                        live = Some(closures);
                         Baseline {
                             active_manifests,
                             source: ActiveSource::Live,
@@ -360,16 +372,17 @@ impl Baseline {
         // closure no longer declares those objects, so without these the
         // plan cannot see them.
         if let Some(active) = &baseline.active {
-            baseline.kept = load_kept(active, Some(build), cluster, report);
+            baseline.kept = load_kept(active, Some(build), cluster, report, live.as_ref());
         }
 
         // Closures from deploys that stopped part way. They applied objects
         // and never became Active, so neither side of the comparison knows
-        // about them (kixpkgs#82). Resolved from the local store by hash, so
-        // every input to the plan is still a compiler output.
+        // about them (kixpkgs#82). Resolved from the local store by hash, or
+        // from the sweep when the Active build was.
         if let Some(records) = opened.records() {
             baseline.failed =
-                load_failed_unless_in_flight(records, Some(build), cluster, report).await;
+                load_failed_unless_in_flight(records, Some(build), cluster, report, live.as_ref())
+                    .await;
         }
         Ok(baseline)
     }
@@ -420,8 +433,8 @@ impl Baseline {
             }
             None => (ActiveSource::Unavailable, Vec::new()),
         };
-        let failed = load_failed_unless_in_flight(records, None, cluster, report).await;
-        let kept = load_kept(current, None, cluster, report);
+        let failed = load_failed_unless_in_flight(records, None, cluster, report, None).await;
+        let kept = load_kept(current, None, cluster, report, None);
         Baseline {
             active: Some(current.clone()),
             source,
@@ -476,15 +489,17 @@ async fn load_failed_unless_in_flight(
     build: Option<&Build>,
     cluster: &str,
     report: &dyn Fn(PlanEvent<'_>),
+    live: Option<&LiveClosures>,
 ) -> FailedBaseline {
     if let Some(record) = deploy_in_flight(records, cluster).await {
         report(PlanEvent::DeployInFlight(&record));
         return FailedBaseline::default();
     }
-    load_failed(records, build, cluster, report).await
+    load_failed(records, build, cluster, report, live).await
 }
 
-/// Resolve every `Failed` record for a cluster to its closure.
+/// Resolve every `Failed` record for a cluster to its closure: from the
+/// local store, or from `live` when the plan read the cluster.
 ///
 /// A record that cannot be resolved is reported without being consumed. It
 /// usually means the failed deploy ran on a different
@@ -495,6 +510,7 @@ async fn load_failed(
     build: Option<&Build>,
     cluster: &str,
     report: &dyn Fn(PlanEvent<'_>),
+    live: Option<&LiveClosures>,
 ) -> FailedBaseline {
     let records = match records.failed(cluster).await {
         Ok(records) => records,
@@ -510,13 +526,15 @@ async fn load_failed(
             out.unresolved.push(record);
             continue;
         };
-        let closure = match resolve_closure(build, cluster, &hash, record.built_via.as_deref()) {
-            Ok(Some(closure)) => closure,
-            Ok(None) => {
+        let from_store = resolve_closure(build, cluster, &hash, record.built_via.as_deref());
+        let closure = match (from_store, live) {
+            (Ok(Some(closure)), _) => closure,
+            (Ok(None) | Err(_), Some(live)) => live.closure_of(&hash),
+            (Ok(None), None) => {
                 out.unresolved.push(record);
                 continue;
             }
-            Err(e) => {
+            (Err(e), None) => {
                 report(PlanEvent::FailedBuildUnusable {
                     activation: &record.name,
                     error: &e,
@@ -535,49 +553,98 @@ async fn load_failed(
         });
     }
 
-    for record in &out.unresolved {
-        report(PlanEvent::FailedUnresolved { record, cluster });
+    if !out.unresolved.is_empty() {
+        report(PlanEvent::FailedUnresolved {
+            records: &out.unresolved,
+            cluster,
+        });
     }
     out
 }
 
-/// Resolve the Active record's `status.orphansKeptFrom` to closures, and say
+/// Resolve the Active record's `status.orphansKeptFrom` to closures, from
+/// the local store or from `live` when the plan read the cluster, and say
 /// how many there are so the plan's extra orphans have an explanation.
 pub fn load_kept(
     active: &Record,
     build: Option<&Build>,
     cluster: &str,
     report: &dyn Fn(PlanEvent<'_>),
+    live: Option<&LiveClosures>,
 ) -> KeptBaseline {
     let mut out = KeptBaseline::default();
     for source in &active.orphans_kept_from {
-        match resolve_closure(
+        let from_store = resolve_closure(
             build,
             cluster,
             &source.identity_hash,
             source.built_via.as_deref(),
-        ) {
-            Ok(Some(closure)) => {
-                out.closures.push(closure);
-                out.sources.push(source.clone());
+        );
+        let closure = match (from_store, live) {
+            (Ok(Some(closure)), _) => closure,
+            (Ok(None) | Err(_), Some(live)) => live.closure_of(&source.identity_hash),
+            (Ok(None), None) => {
+                out.unresolved.push(source.clone());
+                continue;
             }
-            Ok(None) => out.unresolved.push(source.clone()),
-            Err(e) => {
+            (Err(e), None) => {
                 report(PlanEvent::KeptBuildUnusable {
                     activation: &source.activation,
                     error: &e,
                 });
                 out.unresolved.push(source.clone());
+                continue;
             }
-        }
+        };
+        out.closures.push(closure);
+        out.sources.push(source.clone());
     }
     if !out.sources.is_empty() {
         report(PlanEvent::KeptFolded(&out.sources));
     }
-    for source in &out.unresolved {
-        report(PlanEvent::KeptUnresolved { source, cluster });
+    if !out.unresolved.is_empty() {
+        report(PlanEvent::KeptUnresolved {
+            sources: &out.unresolved,
+            cluster,
+        });
     }
     out
+}
+
+/// What a live reconstruction found of each build other than the Active
+/// one: the swept objects that name the build in `kix.run/activations` and
+/// do not name the Active build, as kix-owned manifests. An object the
+/// Active build also names is in the Active closure already; what is left
+/// is what that build alone keeps on the cluster, which is what a prune
+/// asks a failed or kept build about.
+#[derive(Debug, Default)]
+pub struct LiveClosures {
+    by_hash: HashMap<String, Vec<Value>>,
+}
+
+impl LiveClosures {
+    fn of(objects: &[DynamicObject], manifests: &[Value], active_hash: Option<&str>) -> Self {
+        let mut by_hash: HashMap<String, Vec<Value>> = HashMap::new();
+        for (obj, manifest) in objects.iter().zip(manifests) {
+            let named: Vec<&str> = tenancy::named_hashes(obj).collect();
+            if named.iter().any(|h| Some(*h) == active_hash) {
+                continue;
+            }
+            for hash in named {
+                by_hash
+                    .entry(hash.to_string())
+                    .or_default()
+                    .push(manifest.clone());
+            }
+        }
+        LiveClosures { by_hash }
+    }
+
+    /// The objects only `identity_hash` keeps on the cluster. Empty when
+    /// nothing names it any more, which resolves the build to nothing left.
+    pub fn closure_of(&self, identity_hash: &str) -> Vec<Value> {
+        self.by_hash.get(identity_hash).cloned().unwrap_or_default()
+    }
 }
 
 /// The result dir of the build of `identity_hash` on this machine, found and
@@ -838,6 +905,9 @@ async fn deploy_in_flight(records: &Records, cluster: &str) -> Option<Record> {
 /// against an empty old set would show every resource as "added" and,
 /// with `--prune`, would compute no orphans at all: a plan that looks
 /// plausible and is wrong.
+///
+/// Returns the manifests, and the same objects grouped by the other builds
+/// they name ([`LiveClosures`]) for `load_kept` and `load_failed`.
 async fn of_live(
     client: &Client,
     opened: &OpenedRecords,
@@ -845,7 +915,7 @@ async fn of_live(
     cluster: &str,
     active: &Record,
     report: &dyn Fn(PlanEvent<'_>),
-) -> Result<Vec<Value>, PlanError> {
+) -> Result<(Vec<Value>, LiveClosures), PlanError> {
     let mut hashes: HashSet<String> = active.identity_hash.iter().cloned().collect();
     hashes.extend(
         active
@@ -870,12 +940,14 @@ async fn of_live(
     if sweep.other_builds > 0 {
         report(PlanEvent::OlderBuildsLeftOut(sweep.other_builds));
     }
-    Ok(owned_view::kix_owned_manifests(
-        sweep
-            .managed
-            .into_iter()
-            .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable()),
-    ))
+    let objects: Vec<DynamicObject> = sweep
+        .managed
+        .into_iter()
+        .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable())
+        .collect();
+    let manifests = owned_view::kix_owned_manifests(objects.iter().cloned());
+    let closures = LiveClosures::of(&objects, &manifests, active.identity_hash.as_deref());
+    Ok((manifests, closures))
 }
 
 #[cfg(test)]
@@ -1157,7 +1229,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let old = of_live(&client, &opened, &discovery, "a", &active, &|_| {})
+        let (old, closures) = of_live(&client, &opened, &discovery, "a", &active, &|_| {})
             .await
             .unwrap();
         let mut names: Vec<&str> = old
@@ -1166,6 +1238,68 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, vec!["current", "failed-left", "kept-left", "shared"]);
+
+        // The same sweep, by the other builds it names: what the failed
+        // and the kept build each left, and nothing the Active build has.
+        assert_eq!(names_of(&closures.closure_of("af")), vec!["failed-left"]);
+        assert_eq!(names_of(&closures.closure_of("ak")), vec!["kept-left"]);
+        assert!(closures.closure_of("a2").is_empty());
+        assert!(closures.closure_of("b1").is_empty());
+    }
+
+    fn names_of(manifests: &[Value]) -> Vec<&str> {
+        let mut names: Vec<&str> = manifests
+            .iter()
+            .filter_map(|m| m.pointer("/metadata/name")?.as_str())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// With the sweep standing in for the store, a kept build this machine
+    /// has not got resolves to what it left on the cluster, and one nothing
+    /// names any more resolves to nothing left. Neither is unresolved, so
+    /// neither is carried forward or warned about.
+    #[test]
+    fn kept_builds_resolve_from_the_sweep_when_the_store_has_none() {
+        let mut left = m("ConfigMap", "kept-left", "h-left");
+        left["metadata"]["annotations"][keys::ACTIVATIONS] = json!("ak-hash");
+        let objects: Vec<DynamicObject> = vec![serde_json::from_value(left.clone()).unwrap()];
+        let live = LiveClosures::of(&objects, &[left], Some("a2"));
+        let active = Record {
+            name: "rec-a2".into(),
+            identity_hash: Some("a2".into()),
+            orphans_kept_from: vec![source("ak"), source("gone")],
+            ..Default::default()
+        };
+        let events = std::cell::RefCell::new(Vec::new());
+        let report = |event: PlanEvent<'_>| events.borrow_mut().push(format!("{event:?}"));
+        let kept = load_kept(&active, None, "a", &report, Some(&live));
+        assert!(kept.unresolved.is_empty(), "{kept:?}");
+        assert_eq!(names(&kept.sources), vec!["ak", "gone"]);
+        assert_eq!(names_of(&kept.closures[0]), vec!["kept-left"]);
+        assert!(kept.closures[1].is_empty());
+        let events = events.into_inner();
+        assert!(
+            events.iter().any(|e| e.starts_with("KeptFolded"))
+                && !events.iter().any(|e| e.starts_with("KeptUnresolved")),
+            "{events:?}"
+        );
+
+        // Without the sweep the same sources are unresolved, reported once.
+        let events = std::cell::RefCell::new(Vec::new());
+        let report = |event: PlanEvent<'_>| events.borrow_mut().push(format!("{event:?}"));
+        let kept = load_kept(&active, None, "a", &report, None);
+        assert_eq!(names(&kept.unresolved), vec!["ak", "gone"]);
+        let events = events.into_inner();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.starts_with("KeptUnresolved"))
+                .count(),
+            1,
+            "{events:?}"
+        );
     }
 
     /// A rollback whose current build will not load, with a Failed record

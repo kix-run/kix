@@ -476,7 +476,9 @@ where
                     Ok(resp) => resp.status().to_string(),
                     Err(err) => err.to_string(),
                 };
-                tracing::warn!(
+                // A retry is routine; only a request that outlasts its
+                // retries is worth a warning, and the `Done` arm prints it.
+                tracing::debug!(
                     method = %shape.method,
                     path = shape.uri.path(),
                     attempt,

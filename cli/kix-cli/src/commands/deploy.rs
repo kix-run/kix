@@ -647,6 +647,22 @@ impl DeployObserver for StreamCliObserver {
                     eprintln!("{} {line}", output::yellow("stalled:"));
                 }
             }
+            DeployEvent::Waiting {
+                node,
+                phase,
+                since,
+                status,
+                budget,
+            } => {
+                let line = kix::cluster::watchdog::describe_wait(
+                    node,
+                    *phase,
+                    *since,
+                    status.as_deref(),
+                    *budget,
+                );
+                crate::say!("  {} {}", output::dim("…"), output::dim(&line));
+            }
             DeployEvent::BestEffortFailed { what, message } => {
                 eprintln!("{} {what} failed: {message}", output::yellow("warn:"),);
             }

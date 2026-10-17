@@ -260,6 +260,18 @@ pub enum DeployEvent {
         in_flight: Vec<InFlight>,
         aborting: bool,
     },
+    /// A node has been in `phase` for `since` without a verdict. The
+    /// progress watchdog emits this on a time schedule (`cluster::watchdog`),
+    /// so a plain log says what a long wait is for while it lasts and not
+    /// only when it ends. `status` is the last readiness message the node
+    /// reported, and `budget` the readiness timeout the wait runs against.
+    Waiting {
+        node: NodeId,
+        phase: Phase,
+        since: Duration,
+        status: Option<String>,
+        budget: Option<Duration>,
+    },
     /// A best-effort write failed. These are writes that cannot corrupt
     /// applied state and that the next deploy redoes (checkpoint, stamping
     /// unchanged resources, finalizing the Activation). They used to be
