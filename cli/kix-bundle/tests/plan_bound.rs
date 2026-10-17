@@ -1,6 +1,6 @@
 //! A property of every bundle made by changing an honest one: kix refuses
 //! it (the reader, the graph, the planning steps or the objects check), or
-//! a deploy of it writes and deletes exactly the objects the plan document
+//! a deploy of it writes and deletes exactly the objects the plan file
 //! lists, each one shown under the package the plan names.
 //!
 //! Each case changes one of the seed bundles in one to four ways and
@@ -15,8 +15,8 @@
 //!   whose manifest it applies, equal the plan document's `objects.writes`,
 //!   and the deletes equal its `objects.deletes`.
 //! - Each write the plan does not call a re-apply appears in the package
-//!   section the plan names, and its manifest is the one `--detail
-//!   manifests` shows. A dep-affected write differs from the deployed
+//!   section the plan names, and its manifest is the new manifest the plan
+//!   file (`kix plan --save`) holds for it. A dep-affected write differs from the deployed
 //!   object only in the four propagated annotations.
 //! - Each delete is listed as removed.
 //!
@@ -34,12 +34,14 @@ use proptest::test_runner::{Config, TestCaseError, TestRunner};
 use serde_json::{Value, json};
 
 use kix::cluster::apply::ChangeAction;
+use kix::cluster::graph::GraphListing;
 use kix::eval::store_graph::{KixPackageIndex, StoreGraph, store_hash};
 use kix::eval::store_path::{self, Method};
 use kix::manifest::types::ResourceId;
 use kix::manifest::{keys, lifecycle};
 use kix::plan::baseline::Baseline;
-use kix::plan::document::{Packages, WriteChange};
+use kix::plan::document::{Build, Detail, KixBuild, MadeBy, NotCheckedReason, Plan, WriteChange};
+use kix::plan::file::{self, PlanFile};
 use kix::plan::fixtures::{
     self, deletes_of, deployed, deployed_objects, equivalent_to_unset, flags, old_side, plan,
     shown_manifest, stamp,
@@ -1295,9 +1297,30 @@ fn plan_and_check(
         ));
     }
 
-    // Each listed write and delete, as the plan document shows it.
+    // Each listed write and delete, as the plan file shows it.
     let index = ManifestIndex::new(&old_graph, &new_graph);
-    let doc = Packages::of(pkg_diff, kix::plan::document::Detail::Manifests(&index));
+    let document = Plan::new(
+        KixBuild {
+            version: "test".into(),
+            store_path: None,
+        },
+        MadeBy::Builds,
+        &new_graph.cluster_name,
+        Build::of(&new_graph),
+        pkg_diff,
+        Detail::Manifests(&index),
+        &[],
+        NotCheckedReason::BuildsOnly,
+    );
+    let empty = GraphListing {
+        nodes: vec![],
+        edges: vec![],
+    };
+    let mut bytes = Vec::new();
+    file::write(document, empty, &mut bytes).map_err(|e| format!("writing the plan: {e}"))?;
+    let (mut plan_file, _) =
+        PlanFile::verify(Cursor::new(bytes)).map_err(|e| format!("reading the plan: {e}"))?;
+    let doc = plan_file.header().plan.packages.clone();
     let old_of = |id: &ResourceId| {
         old_graph
             .resources
@@ -1316,12 +1339,10 @@ fn plan_and_check(
             listed[&(kind.clone(), namespace.clone(), name.clone(), hash.clone())];
         let old = old_of(&id);
         let expected = shown_manifest(manifest, old);
-        let shows = |sides: Option<&BTreeMap<String, kix::plan::document::ManifestSides>>| {
-            sides
-                .and_then(|s| s.get(&shown_id))
-                .and_then(|s| s.new.as_ref())
-                == Some(&expected)
-        };
+        let shown_new = plan_file
+            .new_manifest(&shown_id)
+            .map_err(|e| format!("reading {shown_id}: {e}"))?;
+        let shows = || shown_new.as_ref() == Some(&expected);
         let ok = match change {
             WriteChange::Reapplied => active_manifests.iter().any(|m| {
                 ResourceId::from_value(m) == id
@@ -1331,11 +1352,9 @@ fn plan_and_check(
                 package == CLUSTER_LEVEL_KEY
                     && doc.activation.as_ref().and_then(|a| a.new.as_deref()) == Some(name.as_str())
             }
-            WriteChange::Added if doc.added.iter().any(|p| p.key == package) => doc
-                .added
-                .iter()
-                .filter(|p| p.key == package)
-                .any(|p| shows(p.manifests.as_ref())),
+            WriteChange::Added if doc.added.iter().any(|p| p.key == package) => {
+                doc.added.iter().any(|p| p.key == package && shows())
+            }
             WriteChange::Added | WriteChange::Modified | WriteChange::DepAffected => {
                 let changed = doc
                     .changed
@@ -1344,11 +1363,10 @@ fn plan_and_check(
                     .find(|c| c.key == package);
                 match (changed, change) {
                     (Some(c), WriteChange::Added) => {
-                        c.added_resources.contains(&shown_id) && shows(c.manifests.as_ref())
+                        c.added_resources.contains(&shown_id) && shows()
                     }
                     (Some(c), WriteChange::Modified) => {
-                        c.modified_resources.iter().any(|r| r.resource == shown_id)
-                            && shows(c.manifests.as_ref())
+                        c.modified_resources.iter().any(|r| r.resource == shown_id) && shows()
                     }
                     (Some(c), WriteChange::DepAffected) => {
                         c.dep_affected_resources.contains(&shown_id)
@@ -1363,7 +1381,7 @@ fn plan_and_check(
         if !ok {
             return Err(format!(
                 "the deploy writes {shown_id} (store hash {hash}), listed as {change:?} under {package}, \
-                 and the plan document does not show it so. Deployed: {}. Written: {}",
+                 and the plan file does not show it so. Deployed: {}. Written: {}",
                 old.map_or("none".to_string(), |o| without_propagation(o).to_string()),
                 without_propagation(manifest),
             ));
@@ -1371,11 +1389,12 @@ fn plan_and_check(
     }
     for id in &deleted {
         let shown_id = id.display_id();
-        let removed_package = doc.removed.iter().any(|p| {
-            p.manifests
-                .as_ref()
-                .is_some_and(|m| m.contains_key(&shown_id))
-        });
+        let removed_package = !doc.removed.is_empty()
+            && plan_file
+                .header()
+                .shown
+                .get(&shown_id)
+                .is_some_and(|s| s.old.is_some() && s.new.is_none());
         let removed_resource = doc
             .changed
             .iter()
@@ -1383,7 +1402,7 @@ fn plan_and_check(
             .any(|c| c.removed_resources.contains(&shown_id));
         if !removed_package && !removed_resource {
             return Err(format!(
-                "the deploy deletes {shown_id}, which the plan document does not list as removed"
+                "the deploy deletes {shown_id}, which the plan file does not list as removed"
             ));
         }
     }

@@ -30,7 +30,7 @@ use kix::manifest::types::ResourceId;
 use kix::plan::document::PlanFlags;
 use kix::plan::{CheckedPlan, Target};
 
-use crate::cli::{DeployArgs, Detail, OnError, PlanArgs};
+use crate::cli::{DeployArgs, OnError, PlanArgs};
 use crate::output;
 use crate::plan;
 
@@ -47,7 +47,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     if args.dry_run {
         return match &saved {
             Some(s) => check_saved_plan(s, &args.plan, ctx),
-            None => super::plan::run(&args.plan, Detail::Plain, ctx),
+            None => super::plan::run(&args.plan, None, ctx),
         };
     }
     if args.operator {
@@ -109,7 +109,7 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         }
         _ => None,
     };
-    let doc = document(&mut p, report.as_ref(), Detail::Plain);
+    let doc = document(&mut p, report.as_ref(), false);
 
     if !output::quiet() {
         print_text(&p, &doc, ctx.global.verbose > 0);
@@ -295,7 +295,7 @@ const EXIT_STALE: i32 = 4;
 /// deploy uses.
 struct SavedPlan {
     path: String,
-    /// [`kix::plan::saved::digest`] of the file as read.
+    /// `sha256:<hex>` of the file as read.
     sha256: String,
     reviewed: kix::plan::document::Plan,
     flags: PlanFlags,
@@ -305,10 +305,11 @@ struct SavedPlan {
 /// when the plan cannot be used or the flags `given` on the command line
 /// contradict its flags.
 fn load_saved_plan(path: &std::path::Path, given: &PlanFlags) -> Result<SavedPlan> {
-    let bytes =
-        std::fs::read(path).map_err(|e| miette!("cannot read the plan {}: {e}", path.display()))?;
-    let reviewed: kix::plan::document::Plan = serde_json::from_slice(&bytes)
-        .map_err(|e| miette!("{} is not a Kix plan document: {e}", path.display()))?;
+    let file = std::fs::File::open(path)
+        .map_err(|e| miette!("cannot read the plan {}: {e}", path.display()))?;
+    let (file, sha256) = kix::plan::file::PlanFile::verify(std::io::BufReader::new(file))
+        .map_err(|e| miette!("cannot read the plan {}: {e}", path.display()))?;
+    let reviewed = file.into_header().plan;
     if let Some(why) = kix::plan::saved::unusable(&reviewed) {
         return Err(miette!("cannot deploy from {}: {why}", path.display()));
     }
@@ -316,7 +317,7 @@ fn load_saved_plan(path: &std::path::Path, given: &PlanFlags) -> Result<SavedPla
         .map_err(|e| miette!("cannot deploy from {}: {e}", path.display()))?;
     Ok(SavedPlan {
         path: path.display().to_string(),
-        sha256: kix::plan::saved::digest(&bytes),
+        sha256: format!("sha256:{sha256}"),
         reviewed,
         flags,
     })
@@ -334,7 +335,7 @@ fn check_saved_plan(saved: &SavedPlan, args: &PlanArgs, ctx: &mut CommandContext
         Some(client) => Some(dry_run(&mut p, false, client, ctx)?),
         None => None,
     };
-    let doc = document(&mut p, report.as_ref(), Detail::Plain);
+    let doc = document(&mut p, report.as_ref(), false);
     let mut comparison = kix::plan::saved::compare(&saved.reviewed, &doc);
     comparison.plan_sha256 = Some(saved.sha256.clone());
     match format {

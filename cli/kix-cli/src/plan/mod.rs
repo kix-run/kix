@@ -11,17 +11,48 @@ pub mod progress;
 pub mod render;
 
 use std::collections::BTreeMap;
+use std::io::{BufReader, BufWriter};
+use std::path::Path;
+
+use miette::miette;
 
 use kix::cluster::inventory::SharedOrphan;
+use kix::eval::store_graph::StoreGraph;
 use kix::manifest::diff::DiffConfig;
 use kix::manifest::diff::display::format_diffs;
 use kix::manifest::types::ResourceId;
+use kix::plan::document::Plan;
+use kix::plan::file;
 use kix::plan::{
     CLUSTER_LEVEL_KEY, PackageChangeDiff, PackageDiff, PackageInfo, split_never_pruned,
     without_secrets,
 };
 
 use crate::output;
+
+/// Write `doc`, a plan made at `--detail manifests`, and the dependency
+/// graph of `build` to `path` as a plan file, and give its SHA-256. The
+/// file is written beside `path`, read back with `PlanFile::verify`, and
+/// only then renamed to `path`, so a file that would be refused is never
+/// left there.
+pub(crate) fn save(doc: Plan, build: &StoreGraph, path: &Path) -> miette::Result<String> {
+    let graph = file::graph_of(build).map_err(|e| miette!("{e}"))?;
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
+    let mut temp = tempfile::NamedTempFile::new_in(dir)
+        .map_err(|e| miette!("cannot write in {}: {e}", dir.display()))?;
+    file::write(doc, graph, BufWriter::new(temp.as_file_mut()))
+        .map_err(|e| miette!("cannot write the plan {}: {e}", path.display()))?;
+    let written = std::fs::File::open(temp.path())
+        .map_err(|e| miette!("cannot read back the plan {}: {e}", path.display()))?;
+    let (_, sha256) = file::PlanFile::verify(BufReader::new(written))
+        .map_err(|e| miette!("the plan did not make a valid plan file: {e}"))?;
+    temp.persist(path)
+        .map_err(|e| miette!("cannot write the plan {}: {e}", path.display()))?;
+    Ok(sha256)
+}
 
 // These are the canonical PackageDiff Markdown producers. The deploy modal,
 // `kix diff`, rollback change summary, and the CI PR-comment GitHub Action

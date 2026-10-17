@@ -119,13 +119,30 @@ pub fn run(args: &DiffArgs, ctx: &mut CommandContext) -> Result<()> {
         )
     };
 
+    // A plan file holds the manifests, so `--save` makes the document at
+    // `--detail manifests` and the printed one is cut down to `--detail`.
     let index = ManifestIndex::new(&old_graph, &new_graph);
-    let detail = match args.detail {
-        DetailArg::Plain => Detail::Plain,
-        DetailArg::Fields => Detail::Fields,
-        DetailArg::Manifests => Detail::Manifests(&index),
+    let detail = match (args.detail, &args.save) {
+        (_, Some(_)) | (DetailArg::Manifests, None) => Detail::Manifests(&index),
+        (DetailArg::Fields, None) => Detail::Fields,
+        (DetailArg::Plain, None) => Detail::Plain,
     };
-    let result = diff_graphs(&old_graph, &new_graph, &side, detail);
+    let mut result = diff_graphs(&old_graph, &new_graph, &side, detail);
+    if let Some(path) = &args.save {
+        let sha256 = plan::save(result.doc.clone(), &new_graph, path)?;
+        crate::esay!(
+            "Saved the comparison to {} (sha256:{sha256})",
+            path.display()
+        );
+        match args.detail {
+            DetailArg::Manifests => {}
+            DetailArg::Fields => drop(result.doc.packages.take_manifests()),
+            DetailArg::Plain => {
+                drop(result.doc.packages.take_manifests());
+                result.doc.packages.drop_field_changes();
+            }
+        }
+    }
 
     match output::format() {
         OutputFormat::Json => println!("{}", result.doc.to_json()),

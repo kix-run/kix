@@ -81,6 +81,13 @@ const KIND_CLUSTER: &str = "kix-integration";
 
 /// `package bucket resource` for every object a plan document's packages
 /// section lists as added, removed, or modified.
+/// The plan in the plan file at `path`, as JSON.
+fn saved_plan(path: &Path) -> serde_json::Value {
+    let file = std::fs::File::open(path).expect("the plan file");
+    let (file, _) = kix::plan::file::PlanFile::verify(file).expect("a valid plan file");
+    serde_json::to_value(&file.header().plan).unwrap()
+}
+
 fn package_objects(doc: &serde_json::Value) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
     let packages = &doc["packages"];
@@ -141,8 +148,10 @@ fn deploy_and_gc() {
     // =========================================================================
     eprintln!("\n=== Phase 0: Plan a first deploy ===");
 
+    let plan0_file =
+        std::env::temp_dir().join(format!("kix-first-plan-{}.kixplan", std::process::id()));
     let plan0 = kix(KIND_CLUSTER)
-        .args(["plan", KIX_CLUSTER, "-o", "json"])
+        .args(["plan", KIX_CLUSTER, "--save", plan0_file.to_str().unwrap()])
         .output()
         .expect("plan should run");
     assert_eq!(
@@ -150,8 +159,8 @@ fn deploy_and_gc() {
         Some(2),
         "a first deploy changes something"
     );
-    let doc0: serde_json::Value =
-        serde_json::from_slice(&plan0.stdout).expect("plan prints one JSON document");
+    let doc0 = saved_plan(&plan0_file);
+    let _ = std::fs::remove_file(&plan0_file);
     assert_eq!(doc0["made_by"], "dry_run");
     assert_eq!(doc0["admission"]["items"], serde_json::json!([]));
     assert!(
@@ -235,12 +244,17 @@ fn deploy_and_gc() {
     // =========================================================================
     eprintln!("\n=== Phase 2b: kix plan and kix diff agree ===");
 
+    let dir = std::env::temp_dir().join(format!("kix-saved-plan-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let unforced = dir.join("unforced.kixplan");
+    let forced = dir.join("forced.kixplan");
+    let diffed = dir.join("diff.kixplan");
     let plan = kix(KIND_CLUSTER)
-        .args(["plan", "kind-v2", "-o", "json"])
+        .args(["plan", "kind-v2", "--save", unforced.to_str().unwrap()])
         .output()
         .expect("plan should run");
     let diff = kix(KIND_CLUSTER)
-        .args(["diff", "kind-v2", "-o", "json"])
+        .args(["diff", "kind-v2", "--save", diffed.to_str().unwrap()])
         .output()
         .expect("diff should run");
     assert_eq!(
@@ -255,8 +269,8 @@ fn deploy_and_gc() {
         "{}",
         String::from_utf8_lossy(&diff.stderr)
     );
-    let plan_doc: serde_json::Value = serde_json::from_slice(&plan.stdout).unwrap();
-    let diff_doc: serde_json::Value = serde_json::from_slice(&diff.stdout).unwrap();
+    let plan_doc = saved_plan(&unforced);
+    let diff_doc = saved_plan(&diffed);
     assert_eq!(plan_doc["made_by"], "dry_run");
     assert_eq!(diff_doc["made_by"], "live_read");
     assert_eq!(diff_doc["conflicts"]["status"], "not_checked");
@@ -284,13 +298,6 @@ fn deploy_and_gc() {
     // =========================================================================
     eprintln!("\n=== Phase 2c: kix deploy --plan ===");
 
-    let dir = std::env::temp_dir().join(format!("kix-saved-plan-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let unforced = dir.join("unforced.json");
-    let forced = dir.join("forced.json");
-    let diffed = dir.join("diff.json");
-    std::fs::write(&unforced, &plan.stdout).expect("write the saved plan");
-    std::fs::write(&diffed, &diff.stdout).expect("write the saved diff");
     let check = |saved: &Path, extra: &[&str]| {
         let mut args = vec![
             "deploy",
@@ -394,11 +401,16 @@ fn deploy_and_gc() {
     );
 
     let forced_plan = kix(KIND_CLUSTER)
-        .args(["plan", "kind-v2", "--force-conflicts", "-o", "json"])
+        .args([
+            "plan",
+            "kind-v2",
+            "--force-conflicts",
+            "--save",
+            forced.to_str().unwrap(),
+        ])
         .output()
         .expect("plan should run");
     assert_eq!(forced_plan.status.code(), Some(2));
-    std::fs::write(&forced, &forced_plan.stdout).unwrap();
     let deployed = kix(KIND_CLUSTER)
         .args([
             "deploy",

@@ -1593,6 +1593,7 @@ dependencies = [
  "indexmap",
  "insta",
  "k8s-openapi",
+ "kix-container",
  "kube",
  "owo-colors",
  "petgraph",
@@ -1615,6 +1616,7 @@ dependencies = [
  "tower",
  "tracing",
  "walkdir",
+ "zstd",
 ]
 
 [[package]]

@@ -10,6 +10,7 @@
 
 pub mod baseline;
 pub mod document;
+pub mod file;
 #[cfg(any(test, feature = "test-util"))]
 pub mod fixtures;
 pub mod live;

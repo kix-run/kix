@@ -625,10 +625,14 @@ pub struct DiffArgs {
     /// Text and Markdown output are the same at every level.
     #[arg(long, value_enum, default_value_t = Detail::Plain)]
     pub detail: Detail,
+
+    /// Also write the comparison to this file, a `.kixplan` as `kix plan
+    /// --save` writes, whatever `--detail` and `--output` say
+    #[arg(long, value_name = "FILE")]
+    pub save: Option<std::path::PathBuf>,
 }
 
-/// What the JSON and YAML of `kix diff` and `kix plan` say about each
-/// changed resource.
+/// What the JSON and YAML of `kix diff` say about each changed resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Detail {
     /// Which resources change, and how many fields of each.
@@ -655,10 +659,12 @@ pub struct PlanCommandArgs {
     #[command(flatten)]
     pub plan: PlanArgs,
 
-    /// How much of each change `--output json` and `--output yaml` include.
-    /// Text and Markdown output are the same at every level.
-    #[arg(long, value_enum, default_value_t = Detail::Plain)]
-    pub detail: Detail,
+    /// Also write the plan to this file, a `.kixplan` that `kix deploy
+    /// --plan` takes and Kix Enterprise reads: the plan with each changed
+    /// field, the build's dependency graph, and the old and new manifest of
+    /// each changed, added, or removed object, secret values hidden
+    #[arg(long, value_name = "FILE")]
+    pub save: Option<std::path::PathBuf>,
 }
 
 /// What a deploy plans from: the cluster and the flags that change which
@@ -736,7 +742,7 @@ pub struct DeployArgs {
     pub dry_run: bool,
 
     /// Deploy only if the plan made now still matches this reviewed one, a
-    /// `kix plan -o json` or `kix diff -o json` document. The deploy uses the
+    /// `.kixplan` file from `kix plan --save` or `kix diff --save`. The deploy uses the
     /// plan's planning flags and exits 4, applying nothing, when the cluster,
     /// either build, the flags, or the refusals, reverted drift, and prune
     /// deletes it would make differ from what was reviewed

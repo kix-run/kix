@@ -700,6 +700,35 @@ impl Packages {
     }
 }
 
+impl Packages {
+    /// Take every package's `manifests` out, leaving the packages as at
+    /// `--detail fields`, and give them by object id. An object two
+    /// packages list (it moved between them) has the same sides in each.
+    pub fn take_manifests(&mut self) -> BTreeMap<String, ManifestSides> {
+        let entries = self
+            .added
+            .iter_mut()
+            .chain(self.removed.iter_mut())
+            .filter_map(|p| p.manifests.take());
+        let changed = self
+            .changed
+            .iter_mut()
+            .chain(self.cluster_level.as_mut())
+            .filter_map(|c| c.manifests.take());
+        entries.chain(changed).flatten().collect()
+    }
+
+    /// Drop each modified resource's field changes, leaving the packages
+    /// as at `--detail plain`.
+    pub fn drop_field_changes(&mut self) {
+        for c in self.changed.iter_mut().chain(self.cluster_level.as_mut()) {
+            for m in &mut c.modified_resources {
+                m.changes = None;
+            }
+        }
+    }
+}
+
 impl PackageEntry {
     /// `side` is the side the package exists on: new for an added package,
     /// old for a removed one.
