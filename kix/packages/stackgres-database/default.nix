@@ -244,6 +244,9 @@ in
 
       # The cluster's namespace, for the Job and the Secrets it reads.
       backendScope = scope.forService postgres;
+      # Instances in different namespaces may share a name and a cluster, so
+      # what this package puts in the cluster's namespace carries its own.
+      serverSideName = "${name}-${scope.namespaceName}";
 
       # A Job's pod template is immutable, so a changed input (the
       # password, the extensions, `owner`) gets a Job with a new name.
@@ -293,7 +296,7 @@ in
       # The role's password in the cluster's namespace, from the same
       # source as `credentials`, so the Job reads it by secretKeyRef.
       bootstrapPassword = backendScope.mkSecret {
-        name = "${name}-bootstrap-password";
+        name = "${serverSideName}-bootstrap-password";
         keys = [ "password" ];
         stringData = lib.optionalAttrs (config.password != null) {
           password = config.password;
@@ -379,7 +382,7 @@ in
       '';
 
       bootstrapJob = backendScope.mkJob {
-        name = "${name}-bootstrap-${bootstrapHash}";
+        name = "${serverSideName}-bootstrap-${bootstrapHash}";
         labels = labels;
         spec = {
           backoffLimit = 20;
