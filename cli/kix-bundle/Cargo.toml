@@ -9,10 +9,10 @@ description = "kix bundles: a cluster build as one file, planned and deployed wi
 name = "kix_bundle"
 
 [dependencies]
+kix-container.workspace = true
 kix-lib.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
@@ -20,6 +20,7 @@ tracing.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
+sha2.workspace = true
 kix-lib = { workspace = true, features = ["test-util"] }
 proptest.workspace = true
 # The tests read bundles with zstd's own seekable-format reader too.

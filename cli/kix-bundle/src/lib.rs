@@ -23,6 +23,9 @@
 //! `zstd -d` gives the header followed by the files. The same contents give
 //! the same bytes from the same kix and libzstd.
 //!
+//! The container (frames, seek table, caps, hashing) is `kix-container`'s,
+//! which `kix plan --save` files share.
+//!
 //! # What the references say
 //!
 //! The header names no record, index or cluster. They are derived from the
@@ -132,10 +135,9 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 
+use kix_container::{Container, ContainerError, Limits};
 use serde::de::{IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
-use sha2::{Digest, Sha256};
-use zstd::zstd_safe;
 
 mod file;
 
@@ -184,16 +186,14 @@ pub const MAX_RECORD_BYTES: u64 = 256 * 1024;
 /// at worst.
 pub(crate) const MAX_RECEIPT_BYTES: usize = 256 * 1024;
 
-/// The writer starts a new frame before a file that would take a frame past
-/// this size. Larger frames compress better, since files of one kind repeat
-/// each other.
-const FRAME_FILL_BYTES: usize = 1024 * 1024;
+const LIMITS: Limits = Limits {
+    stored: MAX_STORED_BYTES,
+    header: MAX_HEADER_BYTES,
+    frame: MAX_FRAME_BYTES,
+    files: MAX_FILES,
+    content: MAX_CONTENT_BYTES,
+};
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
-const SEEK_TABLE_MAGIC: u32 = 0x184D_2A5E;
-const SEEKABLE_MAGIC: u32 = 0x8F92_EAB1;
-/// The seek table's footer: the frame count (u32), the descriptor (u8),
-/// and [`SEEKABLE_MAGIC`].
-const FOOTER_BYTES: usize = 9;
 
 /// Frame 0 of a bundle.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -348,6 +348,20 @@ pub enum BundleError {
     Build(String),
 }
 
+impl From<ContainerError> for BundleError {
+    fn from(e: ContainerError) -> Self {
+        match e {
+            ContainerError::Unreadable(m) => BundleError::Unreadable(m),
+            ContainerError::NotSeekable => malformed(ContainerError::NotSeekable.to_string()),
+            ContainerError::WrongFormat { format, version } => {
+                BundleError::WrongFormat { format, version }
+            }
+            ContainerError::TooLarge(m) => BundleError::TooLarge(m),
+            ContainerError::Malformed(m) => BundleError::Malformed(m),
+        }
+    }
+}
+
 impl From<NotJson> for BundleError {
     fn from(NotJson { path, message }: NotJson) -> Self {
         BundleError::NotJson { path, message }
@@ -401,7 +415,7 @@ impl Contents {
     /// same kix and libzstd: the order is fixed, and zstd runs on one
     /// thread at its default level. Fails on a file over
     /// `MAX_FRAME_BYTES`, naming it.
-    pub fn write(&self, mut out: impl Write) -> io::Result<()> {
+    pub fn write(&self, out: impl Write) -> io::Result<()> {
         let header = self.header()?;
         if let Some(f) = header.files.iter().find(|f| f.size > MAX_FRAME_BYTES) {
             return Err(io::Error::new(
@@ -412,50 +426,13 @@ impl Contents {
                 ),
             ));
         }
-        let mut compressor = zstd::bulk::Compressor::new(zstd::DEFAULT_COMPRESSION_LEVEL)?;
-        compressor.include_checksum(false)?;
-        compressor.include_contentsize(true)?;
-        compressor.include_dictid(false)?;
-        let mut table: Vec<(u32, u32)> = Vec::new();
-        let mut put = |data: &[u8], out: &mut dyn Write| -> io::Result<()> {
-            let stored = compressor.compress(data)?;
-            let size =
-                |n: usize| u32::try_from(n).map_err(|_| io::Error::other("a frame is over 4 GiB"));
-            table.push((size(stored.len())?, size(data.len())?));
-            out.write_all(&stored)
-        };
-        put(&serde_json::to_vec(&header)?, &mut out)?;
-        let mut frame: Vec<u8> = Vec::new();
-        for entry in &header.files {
-            let bytes = &self.files[&entry.path].bytes;
-            if !frame.is_empty() && frame.len() + bytes.len() > FRAME_FILL_BYTES {
-                put(&frame, &mut out)?;
-                frame.clear();
-            }
-            frame.extend_from_slice(bytes);
-        }
-        if !frame.is_empty() {
-            put(&frame, &mut out)?;
-        }
-        out.write_all(&seek_table(&table))?;
-        out.flush()
+        let files: Vec<&[u8]> = header
+            .files
+            .iter()
+            .map(|f| self.files[&f.path].bytes.as_slice())
+            .collect();
+        kix_container::write(&serde_json::to_vec(&header)?, &files, out)
     }
-}
-
-/// The seek table of frames of these `(compressed, decompressed)` sizes, as
-/// a skippable frame, with no checksums.
-fn seek_table(frames: &[(u32, u32)]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(8 + 8 * frames.len() + FOOTER_BYTES);
-    out.extend(SEEK_TABLE_MAGIC.to_le_bytes());
-    out.extend(((8 * frames.len() + FOOTER_BYTES) as u32).to_le_bytes());
-    for (stored, size) in frames {
-        out.extend(stored.to_le_bytes());
-        out.extend(size.to_le_bytes());
-    }
-    out.extend((frames.len() as u32).to_le_bytes());
-    out.push(0);
-    out.extend(SEEKABLE_MAGIC.to_le_bytes());
-    out
 }
 
 /// A bundle whose seek table and header have been read and checked, and
@@ -463,32 +440,9 @@ fn seek_table(frames: &[(u32, u32)]) -> Vec<u8> {
 /// store path.
 #[derive(Debug)]
 pub struct OpenBundle<R> {
-    input: R,
+    container: Container<R>,
     header: Header,
     roles: Roles,
-    /// The data frames: frame 1 of the file first.
-    frames: Vec<Frame>,
-    /// Where each file of [`Header::files`] lies.
-    places: Vec<Place>,
-    /// The data frame decompressed last, by its index in `frames`.
-    cached: (usize, Vec<u8>),
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Frame {
-    /// Its first byte's offset in the file.
-    offset: u64,
-    /// Its length in the file.
-    stored: usize,
-    /// Its length decompressed.
-    size: usize,
-}
-
-/// Data frame `frame` holds a file's bytes from byte `offset`.
-#[derive(Debug, Clone, Copy)]
-struct Place {
-    frame: usize,
-    offset: usize,
 }
 
 /// Each file's [`Role`], by index in [`Header::files`], and the indices of
@@ -503,11 +457,13 @@ struct Roles {
 impl<R: Read + Seek> OpenBundle<R> {
     /// Read the seek table and the header, and derive each file's role.
     /// Reads no file.
-    pub fn open(mut input: R) -> Result<Self, BundleError> {
-        let table = read_table(&mut input)?;
-        input.seek(SeekFrom::Start(0)).map_err(unreadable)?;
-        let (header, places, roles) = read_start(&mut input, &table.frames)?;
-        Ok(Self::new(input, header, roles, table.frames, places))
+    pub fn open(input: R) -> Result<Self, BundleError> {
+        let (container, header, roles) = open_container(input)?;
+        Ok(OpenBundle {
+            container,
+            header,
+            roles,
+        })
     }
 
     /// The bytes of the file at `path`, checked against its store path.
@@ -553,37 +509,13 @@ impl<R: Read + Seek> OpenBundle<R> {
     }
 
     fn file_at(&mut self, i: usize) -> Result<Vec<u8>, BundleError> {
-        let size = self.header.files[i].size as usize;
-        let Place { frame, offset } = self.places[i];
-        if size > 0 && self.cached.0 != frame {
-            let f = self.frames[frame];
-            self.input
-                .seek(SeekFrom::Start(f.offset))
-                .map_err(unreadable)?;
-            self.cached = (frame, read_frame(&mut self.input, frame + 1, &f)?);
-        }
-        let bytes = if size == 0 {
-            Vec::new()
-        } else {
-            self.cached.1[offset..offset + size].to_vec()
-        };
+        let bytes = self.container.file(i)?;
         check_path(&self.header, i, &bytes)?;
         Ok(bytes)
     }
 }
 
 impl<R> OpenBundle<R> {
-    fn new(input: R, header: Header, roles: Roles, frames: Vec<Frame>, places: Vec<Place>) -> Self {
-        Self {
-            input,
-            header,
-            roles,
-            frames: frames[1..].to_vec(),
-            places,
-            cached: (usize::MAX, Vec::new()),
-        }
-    }
-
     pub fn header(&self) -> &Header {
         &self.header
     }
@@ -717,136 +649,49 @@ impl<R> DerefMut for Bundle<R> {
 /// file's store path as its frame arrives, parse the record, and pass each
 /// file to `each` with its role.
 fn read_checked<R: Read + Seek>(
-    mut input: R,
+    input: R,
     mut each: impl FnMut(&str, Role, &[u8]) -> Result<(), BundleError>,
 ) -> Result<PathsChecked<R>, BundleError> {
-    let table = read_table(&mut input)?;
-    input.seek(SeekFrom::Start(0)).map_err(unreadable)?;
-    let mut stream = Hashing {
-        inner: &mut input,
-        hasher: Sha256::new(),
-    };
-    let (header, places, roles) = read_start(&mut stream, &table.frames)?;
+    let (container, header, roles) = open_container(input)?;
     let mut cluster = String::new();
-    let mut frame: (usize, Vec<u8>) = (usize::MAX, Vec::new());
-    for (i, file) in header.files.iter().enumerate() {
-        let Place { frame: k, offset } = places[i];
-        let size = file.size as usize;
-        // `place_files` puts every frame's bytes in some file, so each
-        // frame is read once and in order.
-        if size > 0 && frame.0 != k {
-            frame = (k, read_frame(&mut stream, k + 1, &table.frames[k + 1])?);
-        }
-        let bytes = if size == 0 {
-            &[][..]
-        } else {
-            &frame.1[offset..offset + size]
-        };
+    let (container, sha256) = container.read_all(|i, bytes| {
+        let path = &header.files[i].path;
         check_path(&header, i, bytes)?;
         if roles.of[i] == Role::Record {
-            cluster = record_cluster(&file.path, bytes)?;
+            cluster = record_cluster(path, bytes)?;
         }
-        each(&file.path, roles.of[i], bytes)?;
-    }
-    let mut rest = Vec::new();
-    (&mut stream)
-        .take(table.bytes.len() as u64 + 1)
-        .read_to_end(&mut rest)
-        .map_err(unreadable)?;
-    if rest != table.bytes {
-        return Err(BundleError::Unreadable(
-            "the file changed while it was read".to_string(),
-        ));
-    }
-    let sha256 = hex(&stream.hasher.finalize());
+        each(path, roles.of[i], bytes)
+    })?;
     Ok(PathsChecked {
-        open: OpenBundle::new(input, header, roles, table.frames, places),
+        open: OpenBundle {
+            container,
+            header,
+            roles,
+        },
         cluster,
         sha256,
     })
 }
 
-/// The seek table: every frame, frame 0 first, and the table's own bytes.
-struct SeekTable {
-    frames: Vec<Frame>,
-    bytes: Vec<u8>,
-}
-
-/// Read the seek table at the end of `input`, and check that its frames
-/// cover every byte before it and are within the caps.
-fn read_table(input: &mut (impl Read + Seek)) -> Result<SeekTable, BundleError> {
-    let len = input.seek(SeekFrom::End(0)).map_err(unreadable)?;
-    if len > MAX_STORED_BYTES {
-        return Err(too_large(format!(
-            "the file is over {MAX_STORED_BYTES} bytes"
-        )));
-    }
-    let mut footer = [0u8; FOOTER_BYTES];
-    if len >= FOOTER_BYTES as u64 {
-        input
-            .seek(SeekFrom::End(-(FOOTER_BYTES as i64)))
-            .map_err(unreadable)?;
-        input.read_exact(&mut footer).map_err(unreadable)?;
-    }
-    if u32_at(&footer, 5) != SEEKABLE_MAGIC {
-        return Err(if is_format_1(input) {
+/// Read the seek table and the header, place each file in a data frame,
+/// and derive the roles. Reads no file.
+fn open_container<R: Read + Seek>(
+    mut input: R,
+) -> Result<(Container<R>, Header, Roles), BundleError> {
+    if !kix_container::has_seek_table(&mut input, &LIMITS)? {
+        return Err(if is_format_1(&mut input) {
             BundleError::Format1
         } else {
-            malformed("it does not end with a zstd seek table")
+            ContainerError::NotSeekable.into()
         });
     }
-    let count = u32_at(&footer, 0) as usize;
-    if footer[4] != 0 || count == 0 || count > MAX_FILES + 1 {
-        return Err(malformed(format!(
-            "its seek table lists {count} frames with descriptor {:#04x}",
-            footer[4]
-        )));
-    }
-    let table_len = 8 + 8 * count + FOOTER_BYTES;
-    let Some(start) = len.checked_sub(table_len as u64) else {
-        return Err(malformed("its seek table is longer than the file"));
-    };
-    input.seek(SeekFrom::Start(start)).map_err(unreadable)?;
-    let mut bytes = vec![0u8; table_len];
-    input.read_exact(&mut bytes).map_err(unreadable)?;
-    if u32_at(&bytes, 0) != SEEK_TABLE_MAGIC || u32_at(&bytes, 4) as usize != table_len - 8 {
-        return Err(malformed("its seek table's frame header is wrong"));
-    }
-    let mut frames = Vec::with_capacity(count);
-    let mut offset = 0u64;
-    for i in 0..count {
-        let stored = u32_at(&bytes, 8 + 8 * i) as usize;
-        let size = u32_at(&bytes, 12 + 8 * i) as usize;
-        let cap = if i == 0 {
-            MAX_HEADER_BYTES
-        } else {
-            MAX_FRAME_BYTES
-        };
-        if size as u64 > cap {
-            return Err(too_large(format!("frame {i} is over {cap} bytes")));
-        }
-        if size == 0 || stored > zstd_safe::compress_bound(size) {
-            return Err(malformed(format!(
-                "its seek table gives frame {i} {stored} bytes for {size}"
-            )));
-        }
-        frames.push(Frame {
-            offset,
-            stored,
-            size,
-        });
-        offset += stored as u64;
-    }
-    if offset != start {
-        return Err(malformed(format!(
-            "its frames take {offset} bytes, but its seek table starts at byte {start}"
-        )));
-    }
-    Ok(SeekTable { frames, bytes })
-}
-
-fn u32_at(bytes: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+    let (mut container, bytes) = Container::open(input, FORMAT, VERSION, &LIMITS)?;
+    let header = parse_header(&bytes)?;
+    drop(bytes);
+    let sizes: Vec<u64> = header.files.iter().map(|f| f.size).collect();
+    container.place(&sizes)?;
+    let roles = roles_of(&header.files)?;
+    Ok((container, header, roles))
 }
 
 /// Whether `input` is a format 1 bundle: a tar file, compressed with zstd
@@ -872,49 +717,9 @@ fn is_format_1(input: &mut (impl Read + Seek)) -> bool {
     start.is_ok_and(|s| &s == FIRST_NAME)
 }
 
-/// Read frame 0 from `input`'s position, parse the header, place each file
-/// in a data frame, and derive the roles.
-fn read_start(
-    input: &mut impl Read,
-    frames: &[Frame],
-) -> Result<(Header, Vec<Place>, Roles), BundleError> {
-    let header = parse_header(&read_frame(input, 0, &frames[0])?)?;
-    let places = place_files(&header, &frames[1..])?;
-    let roles = roles_of(&header.files)?;
-    Ok((header, places, roles))
-}
-
-/// Read frame `number` of the file from `input`'s position and decompress
-/// it to the size the seek table gives.
-fn read_frame(input: &mut impl Read, number: usize, frame: &Frame) -> Result<Vec<u8>, BundleError> {
-    let mut stored = vec![0u8; frame.stored];
-    input.read_exact(&mut stored).map_err(unreadable)?;
-    let bytes = zstd::bulk::Decompressor::new()
-        .and_then(|mut d| d.decompress(&stored, frame.size))
-        .map_err(|e| malformed(format!("frame {number} does not decompress: {e}")))?;
-    if bytes.len() != frame.size {
-        return Err(malformed(format!(
-            "frame {number} decompresses to {} bytes, not {}",
-            bytes.len(),
-            frame.size
-        )));
-    }
-    Ok(bytes)
-}
-
-/// Parse frame 0. The format and version are read first, so a bundle of
-/// another version is refused as such whatever else its header holds.
+/// Parse frame 0, whose format and version `Container::open` checked.
 fn parse_header(bytes: &[u8]) -> Result<Header, BundleError> {
-    #[derive(Deserialize)]
-    struct Version {
-        format: String,
-        version: u32,
-    }
     let unreadable = |e: serde_json::Error| BundleError::Unreadable(format!("the header: {e}"));
-    let Version { format, version } = serde_json::from_slice(bytes).map_err(unreadable)?;
-    if format != FORMAT || version != VERSION {
-        return Err(BundleError::WrongFormat { format, version });
-    }
     // Counted before the header is kept: a header that is mostly empty
     // files, references, or receipt parses to many times its size.
     let counts: Counts = serde_json::from_slice(bytes).map_err(unreadable)?;
@@ -1021,40 +826,6 @@ impl<'de> Deserialize<'de> for Count {
         }
         d.deserialize_seq(Items)
     }
-}
-
-/// Place each file in the data frame that holds it. The frames must hold
-/// exactly the bytes the header lists, each file in one frame. An empty
-/// file goes in the frame the file before it ends in.
-fn place_files(header: &Header, frames: &[Frame]) -> Result<Vec<Place>, BundleError> {
-    let in_frames: u64 = frames.iter().map(|f| f.size as u64).sum();
-    let listed: u64 = header.files.iter().map(|f| f.size).sum();
-    if in_frames != listed {
-        return Err(malformed(format!(
-            "its frames hold {in_frames} bytes, but its header lists {listed}"
-        )));
-    }
-    let mut places = Vec::with_capacity(header.files.len());
-    let (mut frame, mut filled) = (0, 0);
-    for file in &header.files {
-        let size = file.size as usize;
-        if size > 0 && filled == frames[frame].size {
-            frame += 1;
-            filled = 0;
-        }
-        if size > 0 && filled + size > frames[frame].size {
-            return Err(malformed(format!(
-                "{} runs past the end of its frame",
-                file.path
-            )));
-        }
-        places.push(Place {
-            frame,
-            offset: filled,
-        });
-        filled += size;
-    }
-    Ok(places)
 }
 
 /// Derive each file's role from the references: see the module doc.
@@ -1164,34 +935,12 @@ fn ref_cache_of(header: &Header) -> HashMap<PathBuf, Vec<PathBuf>> {
     ref_cache
 }
 
-fn unreadable(e: impl std::fmt::Display) -> BundleError {
-    BundleError::Unreadable(e.to_string())
-}
-
 fn malformed(message: impl Into<String>) -> BundleError {
     BundleError::Malformed(message.into())
 }
 
 fn too_large(message: impl Into<String>) -> BundleError {
     BundleError::TooLarge(message.into())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// A reader that hashes every byte read through it.
-struct Hashing<R> {
-    inner: R,
-    hasher: Sha256,
-}
-
-impl<R: Read> Read for Hashing<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = self.inner.read(buf)?;
-        self.hasher.update(&buf[..n]);
-        Ok(n)
-    }
 }
 
 /// The contents of the build in `result_dir`, reading references from the
@@ -1287,7 +1036,10 @@ mod allocated {
 mod tests {
     use std::io::Cursor;
 
+    use kix_container::{hex, read_table, seek_table};
     use serde_json::{Value, json};
+    use sha2::{Digest, Sha256};
+    use zstd::zstd_safe;
 
     use super::*;
     use kix::eval::store_path::Method;
@@ -1491,7 +1243,7 @@ mod tests {
 
     /// Each frame of `bundle`, decompressed, frame 0 first.
     fn frames_of(bundle: &[u8]) -> Vec<Vec<u8>> {
-        let table = read_table(&mut Cursor::new(bundle)).unwrap();
+        let table = read_table(&mut Cursor::new(bundle), &LIMITS).unwrap();
         table
             .frames
             .iter()
@@ -1585,6 +1337,27 @@ mod tests {
         let mut open = OpenBundle::open(Cursor::new(bytes.as_slice())).unwrap();
         assert_eq!(open.contents().unwrap().files, contents.files);
         assert_eq!(open.header(), &contents.header().unwrap());
+    }
+
+    /// Every fixture is what this kix writes from its contents, byte for
+    /// byte. A change to the writer that moves one byte changes every
+    /// bundle's SHA-256, which Kix Enterprise statements name bundles by.
+    #[test]
+    fn every_fixture_is_written_again_byte_for_byte() {
+        for bytes in [
+            FIXTURE,
+            &include_bytes!("../tests/fixtures/immich.kixbundle")[..],
+            &include_bytes!("../tests/fixtures/bundle-alias.kixbundle")[..],
+        ] {
+            let contents = OpenBundle::open(Cursor::new(bytes))
+                .unwrap()
+                .contents()
+                .unwrap();
+            assert!(
+                written(&contents) == bytes,
+                "a fixture was written again differently"
+            );
+        }
     }
 
     /// Any zstd tool decompresses a bundle to its header and its files, and
