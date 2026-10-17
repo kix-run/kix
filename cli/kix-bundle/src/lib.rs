@@ -1342,12 +1342,18 @@ mod tests {
     /// Every fixture is what this kix writes from its contents, byte for
     /// byte. A change to the writer that moves one byte changes every
     /// bundle's SHA-256, which Kix Enterprise statements name bundles by.
+    /// `cnpg.kixbundle`, about 2 MB of files, was written by the kix before
+    /// the container moved to `kix-container`, and holds several data
+    /// frames, so the 1 MiB frame split is checked too.
     #[test]
     fn every_fixture_is_written_again_byte_for_byte() {
+        let cnpg = &include_bytes!("../tests/fixtures/cnpg.kixbundle")[..];
+        assert!(frames_of(cnpg).len() > 3, "cnpg has several data frames");
         for bytes in [
             FIXTURE,
             &include_bytes!("../tests/fixtures/immich.kixbundle")[..],
             &include_bytes!("../tests/fixtures/bundle-alias.kixbundle")[..],
+            cnpg,
         ] {
             let contents = OpenBundle::open(Cursor::new(bytes))
                 .unwrap()

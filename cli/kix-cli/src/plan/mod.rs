@@ -45,6 +45,18 @@ pub(crate) fn save(doc: Plan, build: &StoreGraph, path: &Path) -> miette::Result
         .map_err(|e| miette!("cannot write in {}: {e}", dir.display()))?;
     file::write(doc, graph, BufWriter::new(temp.as_file_mut()))
         .map_err(|e| miette!("cannot write the plan {}: {e}", path.display()))?;
+    let stored = temp
+        .as_file()
+        .metadata()
+        .map_err(|e| miette!("cannot read back the plan {}: {e}", path.display()))?
+        .len();
+    if stored > file::MAX_STORED_BYTES {
+        return Err(miette!(
+            "the plan file would be {stored} bytes, over MAX_STORED_BYTES ({}); {} was not written",
+            file::MAX_STORED_BYTES,
+            path.display()
+        ));
+    }
     let written = std::fs::File::open(temp.path())
         .map_err(|e| miette!("cannot read back the plan {}: {e}", path.display()))?;
     let (_, sha256) = file::PlanFile::verify(BufReader::new(written))

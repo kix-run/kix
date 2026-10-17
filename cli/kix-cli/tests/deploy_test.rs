@@ -232,3 +232,21 @@ fn the_json_deploy_log_has_stdout_to_itself() {
     );
     assert!(stderr.contains("failed to connect to cluster"), "{stderr}");
 }
+
+/// `kix deploy --dry-run` without `--plan` prints no JSON, and says so in
+/// its own name.
+#[test]
+fn deploy_dry_run_refuses_json_in_its_own_name() {
+    kix()
+        .args([
+            "deploy",
+            "example",
+            "--dry-run",
+            "--current-activation",
+            "-o",
+            "json",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("kix deploy --dry-run prints text"));
+}

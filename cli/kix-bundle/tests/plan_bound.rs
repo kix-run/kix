@@ -15,10 +15,13 @@
 //!   whose manifest it applies, equal the plan document's `objects.writes`,
 //!   and the deletes equal its `objects.deletes`.
 //! - Each write the plan does not call a re-apply appears in the package
-//!   section the plan names, and its manifest is the new manifest the plan
-//!   file (`kix plan --save`) holds for it. A dep-affected write differs from the deployed
+//!   section the plan names, the plan file (`kix plan --save`) shows it
+//!   under that package, and its manifest is the new manifest the file
+//!   holds for it. A dep-affected write differs from the deployed
 //!   object only in the four propagated annotations.
-//! - Each delete is listed as removed.
+//! - Each delete is listed as removed: in a changed package's
+//!   `removed_resources`, or shown with no new side under a removed
+//!   package's key.
 //!
 //! `PROPTEST_CASES` sets the number of cases (256 by default, about ten
 //! seconds in a debug build). A long run:
@@ -1342,7 +1345,12 @@ fn plan_and_check(
         let shown_new = plan_file
             .new_manifest(&shown_id)
             .map_err(|e| format!("reading {shown_id}: {e}"))?;
-        let shows = || shown_new.as_ref() == Some(&expected);
+        let shown_under = plan_file
+            .header()
+            .shown
+            .get(&shown_id)
+            .map(|s| s.package.as_str());
+        let shows = || shown_new.as_ref() == Some(&expected) && shown_under == Some(package);
         let ok = match change {
             WriteChange::Reapplied => active_manifests.iter().any(|m| {
                 ResourceId::from_value(m) == id
@@ -1389,12 +1397,9 @@ fn plan_and_check(
     }
     for id in &deleted {
         let shown_id = id.display_id();
-        let removed_package = !doc.removed.is_empty()
-            && plan_file
-                .header()
-                .shown
-                .get(&shown_id)
-                .is_some_and(|s| s.old.is_some() && s.new.is_none());
+        let removed_package = plan_file.header().shown.get(&shown_id).is_some_and(|s| {
+            s.old.is_some() && s.new.is_none() && doc.removed.iter().any(|p| p.key == s.package)
+        });
         let removed_resource = doc
             .changed
             .iter()

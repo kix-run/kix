@@ -57,6 +57,14 @@ pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Re
         ));
     }
     let Some(mut p) = prepare(args, flags_of(args), ctx)? else {
+        // A plan file needs a plan, and a caller that asked for one must
+        // not find exit 0 and no file.
+        if let Some(path) = save {
+            return Err(miette!(
+                "the build has no resources, so there is no plan to save; {} was not written",
+                path.display()
+            ));
+        }
         return Ok(());
     };
     // A plan decrypts no SOPS file the build carries: those Secrets get
@@ -124,8 +132,8 @@ fn old_side(args: &PlanArgs, ctx: &CommandContext) -> OldSide {
 
 /// Build, then plan the deploy with [`Planner`] and `flags`, which are the
 /// command line's or a saved plan's. `None` when the build has nothing to
-/// deploy. Progress lines go through [`crate::say!`], so `kix deploy
-/// --dry-run -o json` keeps them off stdout.
+/// deploy. Progress lines go through [`crate::say!`], so `-o markdown`, and
+/// `kix deploy --plan F --dry-run -o json`, keep them off stdout.
 pub(crate) fn prepare(
     args: &PlanArgs,
     flags: PlanFlags,
