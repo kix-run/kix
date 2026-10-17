@@ -612,6 +612,7 @@ in
                 ruleDefaults = scorecardConfig.ruleDefaults or { };
                 ruleOverrides = scorecardConfig.ruleOverrides or { };
                 maxSeverity = scorecardConfig.maxSeverity or "error";
+                acceptedSecretSources = ((clusterConfig.cluster or { }).secrets or { }).accept or null;
               }
             ) (builtins.filter (r: r ? kind) (map (r: r.rawManifest or { }) shippedResources))
           else

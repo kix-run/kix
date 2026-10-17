@@ -52,12 +52,17 @@ in-cluster DNS and is unrelated to the public domain served by the tunnel.
 
 ## Add the connector
 
-Create the `cloudflared` instance in its own namespace:
+Create the `cloudflared` instance in its own namespace, beside the Secret
+that holds its token:
 
 <Snippet {...cloudflaredInstance} />
 
-`tokenSource` must point to a SOPS file whose top-level `token` key contains
-the tunnel token. The example pins the connector image to a specific
+`cloudflared` reads the token from a `tunnelToken` dependency: a Secret with
+the key `token`. The example supplies it as a `packages.secret` instance
+whose `source` is a SOPS file with a top-level `token` key, decrypted at
+deploy; the alias `tunnelToken` connects the two. A `packages.secret-ref`
+instance under the same alias names a Secret a secrets operator writes
+instead. The example pins the connector image to a specific
 [cloudflared release](https://github.com/cloudflare/cloudflared/releases);
 review and update that version as part of normal dependency maintenance.
 

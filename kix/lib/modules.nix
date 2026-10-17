@@ -37,6 +37,41 @@ in
       '';
     };
 
+    cluster.secrets.accept = lib.mkOption {
+      type = lib.types.nullOr (
+        lib.types.listOf (
+          lib.types.enum [
+            "inline"
+            "sops"
+            "external"
+            "controller"
+            "configuration"
+          ]
+        )
+      );
+      default = null;
+      example = [
+        "sops"
+        "external"
+        "controller"
+      ];
+      description = ''
+        Where a Secret's values may come from. Null accepts every source.
+        When set, the `security.secretSource` scorecard rule reports every
+        key of a Secret whose source is not listed. `inline`: the value is
+        written in the Nix expression, so it is in the Nix store and in
+        every build. `sops`: the deploy decrypts it from a SOPS file.
+        `external`: something outside Kix creates the Secret
+        (`scope.mkSecretRef`, a `secret-ref` instance). `controller`: Kix
+        creates the Secret empty and a controller fills it.
+        `configuration`: a package renders software configuration into a
+        Secret and classifies it so. The library does not verify the
+        classification or that the package refuses credential keys, so
+        listing this takes the package's word. A key the package marks
+        plain (a username, a host) is accepted under every setting.
+      '';
+    };
+
     instances = lib.mkOption {
       type = lib.types.attrsOf (
         lib.types.attrsOf (

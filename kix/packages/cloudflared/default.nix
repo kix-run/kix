@@ -7,15 +7,26 @@
 # the tunnel token. Public hostnames and their target Services are set in
 # the Cloudflare dashboard or API, not here.
 #
-# Config: the tunnel token, as `tokenSource` (a SOPS-encrypted file with a
-# `token` key) or `token` (the token itself, which then sits in the cluster
-# file and the Nix store).
+# Dependencies:
+#   tunnelToken (required)  a secret with the key `token`, the tunnel token
+#                           from the Cloudflare dashboard. A `packages.secret`
+#                           instance (a SOPS `source`, or `stringData` for a
+#                           test cluster) or a `packages.secret-ref` instance
+#                           for a Secret a secrets operator writes.
+#   reloader (optional)     restarts the connector when a `secret-ref` token
+#                           changes. A Kix-built token rolls the pods through
+#                           a checksum annotation without it.
 #
 # Minimal instance:
 #
-#   instances.edge.tunnel = {
-#     package = packages.cloudflared;
-#     config.tokenSource = ./secrets/tunnel-token.sops.yaml;
+#   instances.edge = {
+#     tunnel.package = packages.cloudflared;
+#     tunnel-token = {
+#       package = packages.secret;
+#       aliases = [ "tunnelToken" ];
+#       config.keys = [ "token" ];
+#       config.source = ./secrets/tunnel-token.sops.yaml;
+#     };
 #   };
 #
 # `out`: the Deployment's `name`. The default alias `tunnel` lets other
@@ -52,16 +63,6 @@ in
       repository = "cloudflare/cloudflared";
       tag = "2026.9.3";
     };
-    token = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "Tunnel token (inline; dev). Prefer tokenSource in production.";
-    };
-    tokenSource = lib.mkOption {
-      type = lib.types.nullOr lib.types.path;
-      default = null;
-      description = "Path to a SOPS-encrypted file providing the `token` key.";
-    };
     replicas = lib.mkOption {
       type = lib.types.int;
       # Stateless outbound connectors: a second one holds the tunnel open
@@ -95,30 +96,36 @@ in
       config,
       scope,
       kix,
+      tunnelToken,
+      reloader ? null,
       ...
     }:
-    {
-      # Tunnel token Secret: inline stringData, or hydrated from a SOPS source.
-      # The check runs before scope.mkSecret, which would otherwise refuse the
-      # valueless key with a message about the package instead of the option.
-      tunnelToken =
-        lib.throwIf (config.token == null && config.tokenSource == null)
-          "${who}: the tunnel token is not set, so the connector cannot authenticate to Cloudflare. Set tokenSource to a SOPS file with a `token` key, or token to the token itself."
-          (
-            scope.mkSecret {
-              name = "${name}-token";
-              keys = [ "token" ];
-              stringData = lib.optionalAttrs (config.token != null) { token = config.token; };
-              source = config.tokenSource;
-            }
-          );
+    let
+      token = kix.checkSecretKeys {
+        inherit who;
+        arg = "tunnelToken";
+        dep = tunnelToken;
+        keys = [ "token" ];
+      };
 
+      # The container reads the token into its environment once, so a
+      # changed token must roll the pods. A Kix-built Secret has an identity
+      # hash to put on the pod template; a `secret-ref` Secret has none, and
+      # the reloader restarts the pods instead.
+      kixBuilt = token.out ? identityHash;
+      withReload =
+        args: if kixBuilt || reloader == null then args else reloader.out.withReloadOn [ token ] args;
+    in
+    {
       deployment =
         {
           inherit name;
           spec = {
             replicas = config.replicas;
             selector.matchLabels = scope.selectorLabels;
+            template.metadata.annotations = lib.optionalAttrs kixBuilt {
+              "checksum/tunnel-token" = token.out.identityHash;
+            };
             template.spec = {
               # Matches cloudflared's `--grace-period` default of 30s, the
               # time it waits for in-flight requests after SIGTERM.
@@ -141,7 +148,7 @@ in
                     "run"
                   ];
                   ports = [ (kix.port "metrics" 2000) ];
-                  env = self.tunnelToken.out.mkEnv { TUNNEL_TOKEN = "token"; };
+                  env = token.out.mkEnv { TUNNEL_TOKEN = "token"; };
                   resources = config.resources;
                   securityContext = {
                     allowPrivilegeEscalation = false;
@@ -170,6 +177,7 @@ in
             };
           };
         }
+        |> withReload
         |> scope.mkDeployment;
 
       root = self.deployment;

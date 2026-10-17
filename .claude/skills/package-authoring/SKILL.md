@@ -118,7 +118,7 @@ is a finding from the upstream source, not a default.
    Service setting, not a ceiling); cron or queue singletons (a ceiling on that
    workload only, or upstream's "run the scheduler in one pod" flag); one RWO
    volume as the state (immich:144-146); one owner of an OS resource
-   (firezone:30-32).
+   (firezone:83-85).
 3. If it replicates with configuration, configure it (keycloak's jdbc-ping,
    header 74-81).
 4. A ceiling needs evidence from upstream source, in the comment beside it
@@ -191,7 +191,13 @@ the defaults fails there.
 ### 6. Secrets
 
 One purpose-named dep per credential, bound once through
-`kix.checkSecretKeys` (S3, S4; `SECRETS.md`). Discrete variables take
+`kix.checkSecretKeys` (S3, S4; `SECRETS.md`). Never a string or path option
+for a credential: the dependency is what lets the site choose between a
+value in the build, a SOPS file, and a Secret an operator writes, and what
+`cluster.secrets.accept` checks (S1, S16; HANDBOOK §21.11). Configuration
+the program reads from a Secret gets a non-Secret route or a dependency
+beside the rendered Secret, which is classified `configuration` (S15;
+alertmanager, victoria-metrics-alert). Discrete variables take
 `keyRef` values; a URL-shaped credential takes `credentials.out.mkEnv` for the
 parts and `$(VAR)` expansion in an owned variable. That leaves the password
 unescaped inside the URL, so it is a `Limits:` line (vaultwarden:36-38).

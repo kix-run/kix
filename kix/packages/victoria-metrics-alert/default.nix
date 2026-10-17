@@ -23,6 +23,25 @@
 #   vmCluster (required)    out.serviceUrl (datasource + remoteRead),
 #                           out.insertBaseUrl (remoteWrite; vmalert
 #                           appends /api/v1/write itself)
+#   alertmanagerConfig (optional)
+#                           a secret with the key `alertmanager.yaml`, the
+#                           Alertmanager configuration, in place of
+#                           `alertmanager.settings`. The CR's `configSecret`
+#                           names it and the package renders no
+#                           configuration Secret.
+#
+# Where the Alertmanager configuration comes from, one of three:
+#   alertmanager.settings        rendered into a Secret the package
+#                                classifies as `configuration`
+#                                (`kix.run/classification`), since the
+#                                operator mounts the configuration from a
+#                                Secret. Credential keys written inline are
+#                                refused (alertmanager's inline-secrets.nix).
+#   alertmanager.configRawYaml   the same configuration written into the
+#                                CR's `configRawYaml`, so no Secret is
+#                                rendered. Same refusal of inline credentials.
+#   alertmanagerConfig           the dependency above.
+# Unset, the package renders its default configuration as `settings` would.
 #
 # Alerts (a VMRule `<instance>-alerts`, which vmalert evaluates and a
 # prometheus-operator Prometheus does not load). They render only when the
@@ -65,6 +84,7 @@ let
     ;
 
   defaultAlertmanagerSettings = import ../alertmanager/default-settings.nix;
+  refuseInlineSecrets = import ../alertmanager/inline-secrets.nix { inherit lib who; };
 in
 {
   meta = {
@@ -167,7 +187,12 @@ in
         type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
         default = null;
         defaultText = lib.literalMD "null: the package's configuration, which routes every alert to the receiver `null`";
-        description = "The Alertmanager configuration file, alertmanager.yaml (`global`, `route`, `receivers`, `inhibit_rules`, `templates`). A value replaces the package's configuration as a whole rather than merging into it, because the package's routing tree names its own `null` receiver. Null uses the package's configuration, which routes every alert to the receiver `null`.";
+        description = "The Alertmanager configuration file, alertmanager.yaml (`global`, `route`, `receivers`, `inhibit_rules`, `templates`), rendered into a Secret the CR's `configSecret` names. A value replaces the package's configuration as a whole rather than merging into it, because the package's routing tree names its own `null` receiver. Null uses the package's configuration, which routes every alert to the receiver `null`. A credential written inline (`auth_password`, `routing_key`, `api_key`, a Slack `api_url`, and the like) is refused: take it from a file (`api_url_file`, `password_file`, `credentials_file`) mounted through `secrets`. Mutually exclusive with `configRawYaml` and the `alertmanagerConfig` dependency.";
+      };
+      configRawYaml = lib.mkOption {
+        type = lib.types.nullOr (lib.types.attrsOf lib.types.anything);
+        default = null;
+        description = "The Alertmanager configuration file, written into the CR's `configRawYaml` so that the package renders no configuration Secret. Same content and the same refusal of inline credentials as `settings`. Mutually exclusive with `settings` and the `alertmanagerConfig` dependency.";
       };
       secrets = lib.mkOption {
         type = lib.types.listOf lib.types.str;
@@ -191,7 +216,7 @@ in
       extraSpec = lib.mkOption {
         type = lib.types.attrsOf lib.types.anything;
         default = { };
-        description = "Extra fields deep-merged into the VMAlertmanager CR spec. The package refuses `configSecret`, which holds `alertmanager.settings`, and `image`, `replicaCount`, `retention`, `storage`, `secrets`, `configMaps`, and `resources`, which have options of their own.";
+        description = "Extra fields deep-merged into the VMAlertmanager CR spec. The package refuses `configSecret` and `configRawYaml`, which the configuration options and the `alertmanagerConfig` dependency decide, and `image`, `replicaCount`, `retention`, `storage`, `secrets`, `configMaps`, and `resources`, which have options of their own.";
       };
     };
     # The operator scrapes vmalert and Alertmanager whatever this says;
@@ -215,9 +240,42 @@ in
         clusterConfig,
         vmOperator,
         vmCluster,
+        alertmanagerConfig ? null,
         ...
       }:
       let
+        am = config.alertmanager;
+        configRoutes =
+          lib.optional (am.settings != null) "alertmanager.settings"
+          ++ lib.optional (am.configRawYaml != null) "alertmanager.configRawYaml"
+          ++ lib.optional (alertmanagerConfig != null) "the alertmanagerConfig dependency";
+        configDep =
+          if builtins.length configRoutes > 1 then
+            throw "${who}: ${lib.concatStringsSep " and " configRoutes} are set, and each supplies the whole Alertmanager configuration. Keep one."
+          else
+            kix.checkSecretKeys {
+              inherit who;
+              arg = "alertmanagerConfig";
+              dep = alertmanagerConfig;
+              keys = [ "alertmanager.yaml" ];
+            };
+        # The configuration Kix renders, as JSON (valid YAML), or null when
+        # the dependency supplies it.
+        renderedConfig =
+          if configDep != null then
+            null
+          else
+            builtins.toJSON (
+              refuseInlineSecrets (
+                if am.configRawYaml != null then
+                  am.configRawYaml
+                else if am.settings != null then
+                  am.settings
+                else
+                  defaultAlertmanagerSettings
+              )
+            );
+        configInCr = am.configRawYaml != null;
         # Operand pods are rendered by the operator, so kix's derived spread
         # never sees them: the CR carries the rule, but the failure-domain
         # keys come from the cluster (v2_discussions/143 §2), never a literal.
@@ -237,14 +295,18 @@ in
         alertmanagerBaseSpec = {
           replicaCount = config.alertmanager.replicaCount;
           image = crImageVersionTag "alertmanager.image" config.alertmanager.image;
-          # out.name carries the store-path edge to the config Secret.
-          configSecret = self.alertmanagerConfig.out.name;
           retention = config.alertmanager.retention;
           podDisruptionBudget = {
             maxUnavailable = 1;
           };
           affinity = antiAffinity "vmalertmanager";
           resources = config.alertmanager.resources;
+        }
+        // lib.optionalAttrs configInCr { configRawYaml = renderedConfig; }
+        // lib.optionalAttrs (configDep != null) { configSecret = configDep.out.name; }
+        # out.name carries the store-path edge to the config Secret.
+        // lib.optionalAttrs (!configInCr && configDep == null) {
+          configSecret = self.configSecret.out.name;
         }
         // lib.optionalAttrs (config.alertmanager.storage != null) {
           storage.volumeClaimTemplate.spec = config.alertmanager.storage;
@@ -287,16 +349,19 @@ in
       in
       {
         # VMAlertmanager expects the config under key `alertmanager.yaml`
-        # (mounted at /etc/alertmanager/config). JSON is valid YAML.
-        alertmanagerConfig = scope.mkSecret {
-          name = "${name}-alertmanager-config";
-          stringData."alertmanager.yaml" = builtins.toJSON (
-            if config.alertmanager.settings == null then
-              defaultAlertmanagerSettings
-            else
-              config.alertmanager.settings
-          );
-        };
+        # (mounted at /etc/alertmanager/config). Null when the configuration
+        # goes into the CR or comes from the dependency.
+        configSecret =
+          if configInCr || configDep != null then
+            null
+          else
+            scope.mkSecret {
+              name = "${name}-alertmanager-config";
+              stringData."alertmanager.yaml" = renderedConfig;
+              # Configuration the operator mounts from a Secret; the
+              # credential keys the package knows are refused above.
+              meta.classification = "configuration";
+            };
 
         vmAlertmanager = vmOperator.out.mkVMAlertmanager scope {
           inherit name;
@@ -305,6 +370,7 @@ in
             what = "alertmanager.extraSpec";
             locked = map lib.toList [
               "configSecret"
+              "configRawYaml"
               "image"
               "replicaCount"
               "retention"

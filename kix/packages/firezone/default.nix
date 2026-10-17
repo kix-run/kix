@@ -1,14 +1,66 @@
 # Firezone: self-hosted WireGuard VPN server with web UI.
 #
-# Based on BeanVPN/firezone-helm-chart but with proper secret management
-# (no hardcoded keys; all secrets must be provided via config).
+# Based on BeanVPN/firezone-helm-chart. Every credential is a secret
+# dependency, so the package renders no Secret of its own and the site
+# chooses where each value comes from (a SOPS file, a secrets operator, or
+# `stringData` in a test cluster).
 #
 # Dependencies:
-#   postgres              required, database backend
+#   database (required)            a postgres-database contract (a
+#                                  stackgres-database or cnpg-database
+#                                  instance): host, port, database name, and
+#                                  credentials with `username` and
+#                                  `password`. The package asks the database
+#                                  for the pgcrypto, btree_gist, and citext
+#                                  extensions.
+#   applicationSecrets (required)  a secret with the keys
+#                                  GUARDIAN_SECRET_KEY, SECRET_KEY_BASE, and
+#                                  DATABASE_ENCRYPTION_KEY, and optionally
+#                                  LIVE_VIEW_SIGNING_SALT, COOKIE_SIGNING_SALT,
+#                                  and COOKIE_ENCRYPTION_SALT. Each key is
+#                                  the Firezone environment variable of the
+#                                  same name; a salt the secret does not
+#                                  declare is left unset.
+#   adminPassword (required)       a secret with the key `password`, the
+#                                  default administrator's password
+#                                  (DEFAULT_ADMIN_PASSWORD); `admin.email`
+#                                  is the login.
+#   wireguardKey (required)        a secret with the key `private_key`, the
+#                                  server's WireGuard private key
+#                                  (`wg genkey`), mounted as a file.
+#   samlCertificate (optional)     a secret with the keys `saml.crt` and
+#                                  `saml.key` (PEM). Without it the image
+#                                  generates a self-signed pair.
+#   reloader (optional)            restarts the pod when a `secret-ref`
+#                                  dependency changes. A Kix-built secret
+#                                  rolls the pod through a checksum
+#                                  annotation without it.
+#
+# Minimal instance, with a stackgres-cluster `postgres` elsewhere
+# (`clusters/test-immich.nix` evaluates this shape with `stringData`):
+#
+#   instances.vpn = {
+#     firezone = {
+#       package = packages.firezone;
+#       config = {
+#         domain = "vpn.example.com";
+#         admin.email = "admin@example.com";
+#       };
+#     };
+#     firezone-db = { package = packages.stackgres-database; config.passwordSource = ./secrets/firezone-db.yaml; config.passwordHash = "..."; };
+#     firezone-secrets = {
+#       package = packages.secret;
+#       aliases = [ "applicationSecrets" ];
+#       config.keys = [ "GUARDIAN_SECRET_KEY" "SECRET_KEY_BASE" "DATABASE_ENCRYPTION_KEY" ];
+#       config.source = ./secrets/firezone-app.yaml;
+#     };
+#     firezone-admin = { package = packages.secret; aliases = [ "adminPassword" ]; config.keys = [ "password" ]; config.source = ./secrets/firezone-admin.yaml; };
+#     firezone-wireguard = { package = packages.secret; aliases = [ "wireguardKey" ]; config.keys = [ "private_key" ]; config.source = ./secrets/firezone-wg.yaml; };
+#   };
 #
 # Exposure: uses kix.expose (port 13000) for optional ingress/TLS.
 #
-# Resources: Secret (env), Secret (files), ConfigMap (env), Deployment, Service.
+# Resources: ConfigMap (env), Deployment, Service.
 #
 # root = Service (port 13000 http + 51820 wireguard/UDP).
 
@@ -21,6 +73,7 @@
 
 let
   name = scope.instanceName;
+  who = "firezone ${scope.namespaceName}/${name}";
 in
 {
   meta = {
@@ -40,12 +93,13 @@ in
 
   # Firezone's migrations run CREATE EXTENSION for these three, and
   # StackGres installs an extension on the postgres image only when the
-  # SGCluster lists it.
-  deps.postgres.config.extensions = [
+  # SGCluster lists it; the database facade forwards them to its cluster.
+  deps.database.config.extensions = [
     { name = "pgcrypto"; }
     { name = "btree_gist"; }
     { name = "citext"; }
   ];
+  deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions who dep;
 
   options = {
     image = kix.options.image {
@@ -82,11 +136,6 @@ in
             default = 51820;
             description = "UDP port of the WireGuard interface, also advertised to clients.";
           };
-          privateKey = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "WireGuard private key of the server (`wg genkey`). Written into the `<instance>-files` Secret.";
-          };
           ipv4Network = lib.mkOption {
             type = lib.types.str;
             default = "100.64.0.0/10";
@@ -110,21 +159,15 @@ in
         };
       };
       default = { };
-      description = "WireGuard interface settings. `privateKey` must be set.";
+      description = "WireGuard interface settings. The private key is the `wireguardKey` dependency.";
     };
 
     admin = lib.mkOption {
       type = lib.types.submodule {
         options = {
           email = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "Email address of the default admin.";
-          };
-          password = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "Password of the default admin.";
+            type = lib.types.str;
+            description = "Email address of the default admin (DEFAULT_ADMIN_EMAIL). The password is the `adminPassword` dependency.";
           };
           resetOnBoot = lib.mkOption {
             type = lib.types.bool;
@@ -133,103 +176,7 @@ in
           };
         };
       };
-      default = { };
-      description = "The default admin account. `email` and `password` must be set.";
-    };
-
-    secrets = lib.mkOption {
-      type = lib.types.submodule {
-        options = {
-          guardianSecretKey = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "`GUARDIAN_SECRET_KEY`.";
-          };
-          secretKeyBase = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "`SECRET_KEY_BASE`.";
-          };
-          liveViewSigningSalt = lib.mkOption {
-            type = lib.types.str;
-            default = "";
-            description = "`LIVE_VIEW_SIGNING_SALT`, empty when unset.";
-          };
-          cookieSigningSalt = lib.mkOption {
-            type = lib.types.str;
-            default = "";
-            description = "`COOKIE_SIGNING_SALT`, empty when unset.";
-          };
-          cookieEncryptionSalt = lib.mkOption {
-            type = lib.types.str;
-            default = "";
-            description = "`COOKIE_ENCRYPTION_SALT`, empty when unset.";
-          };
-          databaseEncryptionKey = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "`DATABASE_ENCRYPTION_KEY`.";
-          };
-        };
-      };
-      default = { };
-      description = "Application secrets. `guardianSecretKey`, `secretKeyBase`, and `databaseEncryptionKey` must be set.";
-    };
-
-    database = lib.mkOption {
-      type = lib.types.submodule {
-        options = {
-          name = lib.mkOption {
-            type = lib.types.str;
-            default = "firezone";
-            description = "Database name (`DATABASE_NAME`).";
-          };
-          user = lib.mkOption {
-            type = lib.types.str;
-            default = "firezone";
-            description = "Database user (`DATABASE_USER`).";
-          };
-          passwordSecretRef = lib.mkOption {
-            type = lib.types.nullOr (
-              lib.types.submodule {
-                options = {
-                  name = lib.mkOption {
-                    type = lib.types.str;
-                    description = "Name of an existing Secret.";
-                  };
-                  key = lib.mkOption {
-                    type = lib.types.str;
-                    description = "Key in that Secret that holds the password.";
-                  };
-                };
-              }
-            );
-            default = null;
-            description = "Existing Secret key that `DATABASE_PASSWORD` is read from. Null sets no `DATABASE_PASSWORD`.";
-          };
-        };
-      };
-      default = { };
-      description = "Database settings.";
-    };
-
-    saml = lib.mkOption {
-      type = lib.types.submodule {
-        options = {
-          cert = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "SAML certificate (PEM).";
-          };
-          key = lib.mkOption {
-            type = lib.types.nullOr lib.types.str;
-            default = null;
-            description = "SAML private key (PEM).";
-          };
-        };
-      };
-      default = { };
-      description = "SAML certificate and key (PEM strings). Both set enables SAML; otherwise the image generates a self-signed pair.";
+      description = "The default admin account.";
     };
 
     telemetry = lib.mkOption {
@@ -289,46 +236,17 @@ in
     };
   };
 
-  assertions =
-    {
-      config,
-      self,
-      deps,
-    }:
-    [
-      {
-        assertion = config.wireguard.privateKey != null;
-        message = "firezone: wireguard.privateKey must be set";
-      }
-      {
-        assertion = config.admin.email != null;
-        message = "firezone: admin.email must be set";
-      }
-      {
-        assertion = config.admin.password != null;
-        message = "firezone: admin.password must be set";
-      }
-      {
-        assertion = config.secrets.guardianSecretKey != null;
-        message = "firezone: secrets.guardianSecretKey must be set";
-      }
-      {
-        assertion = config.secrets.secretKeyBase != null;
-        message = "firezone: secrets.secretKeyBase must be set";
-      }
-      {
-        assertion = config.secrets.databaseEncryptionKey != null;
-        message = "firezone: secrets.databaseEncryptionKey must be set";
-      }
-    ];
-
   build = [
     (
       {
         self,
         config,
-        clusterConfig,
-        postgres,
+        database,
+        applicationSecrets,
+        adminPassword,
+        wireguardKey,
+        samlCertificate ? null,
+        reloader ? null,
         scope,
         kix,
         ...
@@ -336,26 +254,88 @@ in
       let
         wg = config.wireguard;
 
-        hasSaml = config.saml.cert != null && config.saml.key != null;
+        hasSaml = samlCertificate != null;
 
         # The image's bootstrap script writes a telemetry id and, without
         # SAML files, a self-signed SAML pair into /var/firezone, so that
-        # directory is an emptyDir and the Secret's files live beside it.
+        # directory is an emptyDir and the mounted secrets live beside it.
         secretsDir = "/var/firezone-secrets";
+        samlDir = "/var/firezone-saml";
 
-        dbPasswordEnv =
-          if config.database.passwordSecretRef != null then
-            [
-              {
-                name = "DATABASE_PASSWORD";
-                valueFrom.secretKeyRef = {
-                  name = config.database.passwordSecretRef.name;
-                  key = config.database.passwordSecretRef.key;
-                };
-              }
-            ]
-          else
-            [ ];
+        appSecrets = kix.checkSecretKeys {
+          inherit who;
+          arg = "applicationSecrets";
+          dep = applicationSecrets;
+          keys = [
+            "GUARDIAN_SECRET_KEY"
+            "SECRET_KEY_BASE"
+            "DATABASE_ENCRYPTION_KEY"
+          ];
+        };
+        admin = kix.checkSecretKeys {
+          inherit who;
+          arg = "adminPassword";
+          dep = adminPassword;
+          keys = [ "password" ];
+        };
+        wgKey = kix.checkSecretKeys {
+          inherit who;
+          arg = "wireguardKey";
+          dep = wireguardKey;
+          keys = [ "private_key" ];
+        };
+        saml = kix.checkSecretKeys {
+          inherit who;
+          arg = "samlCertificate";
+          dep = samlCertificate;
+          keys = [
+            "saml.crt"
+            "saml.key"
+          ];
+        };
+        dbCreds = database.out.credentials;
+
+        # The salts are optional; Firezone treats an unset salt as empty.
+        salts = builtins.filter (k: builtins.elem k (appSecrets.out.keys or [ ])) [
+          "LIVE_VIEW_SIGNING_SALT"
+          "COOKIE_SIGNING_SALT"
+          "COOKIE_ENCRYPTION_SALT"
+        ];
+
+        secretEnv =
+          appSecrets.out.mkEnv (
+            lib.genAttrs (
+              [
+                "GUARDIAN_SECRET_KEY"
+                "SECRET_KEY_BASE"
+                "DATABASE_ENCRYPTION_KEY"
+              ]
+              ++ salts
+            ) (k: k)
+          )
+          ++ admin.out.mkEnv { DEFAULT_ADMIN_PASSWORD = "password"; }
+          ++ dbCreds.out.mkEnv {
+            DATABASE_USER = "username";
+            DATABASE_PASSWORD = "password";
+          };
+
+        # The container reads every secret once, at start, so a changed
+        # secret must roll the pod. A Kix-built Secret has an identity hash
+        # for the pod template; a `secret-ref` Secret has none, and the
+        # reloader restarts the pod instead.
+        secretDeps = lib.filterAttrs (_: d: d != null) {
+          application-secrets = appSecrets;
+          admin-password = admin;
+          wireguard-key = wgKey;
+          saml-certificate = saml;
+          database-credentials = dbCreds;
+        };
+        kixBuilt = lib.filterAttrs (_: d: d.out ? identityHash) secretDeps;
+        untracked = builtins.attrValues (lib.filterAttrs (_: d: !(d.out ? identityHash)) secretDeps);
+        checksums = lib.mapAttrs' (n: d: lib.nameValuePair "checksum/${n}" d.out.identityHash) kixBuilt;
+        withReload =
+          args:
+          if reloader == null || untracked == [ ] then args else reloader.out.withReloadOn untracked args;
       in
       {
         # --- ConfigMap: non-secret env vars ---
@@ -365,10 +345,10 @@ in
           name = "${name}-env";
           data = {
             EXTERNAL_URL = "https://${config.domain}";
-            DATABASE_HOST = postgres.out.fqdn;
-            DATABASE_PORT = postgres.out.port;
-            DATABASE_NAME = config.database.name;
-            DATABASE_USER = config.database.user;
+            DATABASE_HOST = database.out.host;
+            DATABASE_PORT = toString database.out.port;
+            DATABASE_NAME = database.out.database;
+            DEFAULT_ADMIN_EMAIL = config.admin.email;
             DEFAULT_CLIENT_ENDPOINT = "${config.domain}:${toString wg.port}";
             WIREGUARD_PORT = toString wg.port;
             WIREGUARD_IPV4_NETWORK = wg.ipv4Network;
@@ -388,41 +368,20 @@ in
             ERL_MAX_PORTS = "65536";
           }
           // lib.optionalAttrs hasSaml {
-            SAML_CERTFILE_PATH = "${secretsDir}/saml.crt";
-            SAML_KEYFILE_PATH = "${secretsDir}/saml.key";
+            SAML_CERTFILE_PATH = "${samlDir}/saml.crt";
+            SAML_KEYFILE_PATH = "${samlDir}/saml.key";
           };
         };
 
-        # --- Secret: sensitive env vars ---
-        envSecret = scope.mkSecret {
-          name = "${name}-env";
-          stringData = {
-            DEFAULT_ADMIN_EMAIL = config.admin.email;
-            DEFAULT_ADMIN_PASSWORD = config.admin.password;
-            GUARDIAN_SECRET_KEY = config.secrets.guardianSecretKey;
-            SECRET_KEY_BASE = config.secrets.secretKeyBase;
-            LIVE_VIEW_SIGNING_SALT = config.secrets.liveViewSigningSalt;
-            COOKIE_SIGNING_SALT = config.secrets.cookieSigningSalt;
-            COOKIE_ENCRYPTION_SALT = config.secrets.cookieEncryptionSalt;
-            DATABASE_ENCRYPTION_KEY = config.secrets.databaseEncryptionKey;
-          };
-        };
-
-        # --- Secret: file-based secrets (WireGuard key, optional SAML) ---
-        filesSecret = scope.mkSecret {
-          name = "${name}-files";
-          stringData = {
-            private_key = config.wireguard.privateKey;
-          }
-          // lib.optionalAttrs hasSaml {
-            "saml.crt" = config.saml.cert;
-            "saml.key" = config.saml.key;
-          };
-        };
-
-        # --- Mounts ---
-        filesMount = kix.mount.secret self.filesSecret {
+        # --- Mounts: the WireGuard key and the optional SAML pair, as files ---
+        wireguardMount = kix.mount.secret wgKey {
+          name = "wireguard-key";
           mountPath = secretsDir;
+          defaultMode = 256; # 0400
+        };
+        samlMount = kix.mount.secret saml {
+          name = "saml-certificate";
+          mountPath = samlDir;
           defaultMode = 256; # 0400
         };
 
@@ -433,6 +392,7 @@ in
             spec = {
               replicas = config.replicaCount;
               selector.matchLabels = scope.selectorLabels;
+              template.metadata.annotations = checksums;
               template.spec = {
                 # Kubernetes default: Firezone 0.7 documents no shutdown drain.
                 terminationGracePeriodSeconds = 30;
@@ -474,11 +434,8 @@ in
                       (kix.port "wireguard" wg.port // { protocol = "UDP"; })
                       (kix.port "http" 13000)
                     ];
-                    envFrom = [
-                      { configMapRef.name = self.configMap.out.name; }
-                      self.envSecret.out.envFrom
-                    ];
-                    env = kix.mkEnv config.env dbPasswordEnv;
+                    envFrom = [ { configMapRef.name = self.configMap.out.name; } ];
+                    env = kix.mkEnv config.env secretEnv;
                     # Firezone 0.7 has no health endpoint; "/" redirects to
                     # the sign-in page once the web server is up.
                     livenessProbe = {
@@ -521,7 +478,8 @@ in
             };
           }
           |> kix.withMounts [
-            self.filesMount
+            self.wireguardMount
+            self.samlMount
             (kix.mount.emptyDir {
               name = "state";
               mountPath = "/var/firezone";
@@ -536,6 +494,7 @@ in
               mountPath = "/tmp";
             })
           ]
+          |> withReload
           |> scope.mkDeployment;
 
         # --- Service ---

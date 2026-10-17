@@ -19,12 +19,27 @@
 #                                  For another class, set
 #                                  `deps.storageClasses = ref.<ns>.<instance>`.
 #   priorityClass (optional)       the Alertmanager pods' PriorityClass.
+#   alertmanagerConfig (optional)  a secret with the key `alertmanager.yaml`,
+#                                  the configuration file, in place of
+#                                  `settings`. For a site that keeps the
+#                                  configuration in a secrets operator or a
+#                                  SOPS file. The package then renders no
+#                                  configuration Secret, derives no egress
+#                                  from the receivers (see Network policy),
+#                                  and refuses `settings`.
 #
 # Minimal instance, with a prometheus-operator in the same cluster:
 #
 #   instances.monitoring-system.alertmanager.package = packages.alertmanager;
 #
 # Without `settings` every alert goes to the receiver `null`, which drops it.
+#
+# Where the configuration comes from: `settings` is rendered into a Secret
+# the package classifies as `configuration` (`kix.run/classification`),
+# because Alertmanager reads its configuration from a Secret and the
+# package refuses the credential keys it knows. A cluster whose
+# `cluster.secrets.accept` leaves out `configuration` wires the
+# `alertmanagerConfig` dependency instead.
 #
 # `out`: the Service's `name` and `fqdn`, plus `namespace` and
 # `portName`, which a Prometheus resource's `spec.alerting` names (the
@@ -52,7 +67,9 @@
 # Three kinds of receiver get no egress and need a policy of their own: one
 # inside the cluster, one reached through `http_config.proxy_url`, and one
 # that an AlertmanagerConfig resource adds
-# (`extraSpec.alertmanagerConfigSelector`).
+# (`extraSpec.alertmanagerConfigSelector`). A configuration from the
+# `alertmanagerConfig` dependency opens no receiver ports either, since Kix
+# cannot read it; add a `networkPolicy.platformIntents` entry for the pods.
 #
 # Escape hatches: `settings` for alertmanager.yaml, `extraSpec` for the
 # Alertmanager resource's spec, and the instance's `partsOverlays`.
@@ -161,16 +178,33 @@ in
       prometheusOperator,
       storageClasses ? null,
       priorityClass ? null,
+      alertmanagerConfig ? null,
       ...
     }:
     let
-      settings = refuseInlineSecrets (
-        if config.settings == null then defaultSettings else config.settings
-      );
+      configDep =
+        if alertmanagerConfig != null && config.settings != null then
+          throw "${who}: both settings and the alertmanagerConfig dependency are set, and each supplies the whole configuration file. Remove one."
+        else
+          kix.checkSecretKeys {
+            inherit who;
+            arg = "alertmanagerConfig";
+            dep = alertmanagerConfig;
+            keys = [ "alertmanager.yaml" ];
+          };
+
+      # Null when the configuration comes from the dependency, whose
+      # content Kix cannot read.
+      settings =
+        if configDep != null then
+          null
+        else
+          refuseInlineSecrets (if config.settings == null then defaultSettings else config.settings);
       # Only the header warns that receivers inside the cluster, behind
       # http_config.proxy_url, or from AlertmanagerConfig resources get no
       # egress. Candidates for evaluation errors while network policy is on.
-      ports = receiverPorts settings;
+      # A configuration from the dependency opens no receiver ports.
+      ports = if settings == null then [ ] else receiverPorts settings;
 
       # The labels the operator puts on this resource's pods.
       podSelector = prometheusOperator.out.operandSelectors.alertmanager name;
@@ -182,7 +216,7 @@ in
         serviceAccountName = self.serviceAccount.out.name;
         serviceName = self.service.out.name;
         resources = config.resources;
-        configSecret = self.configSecret.out.name;
+        configSecret = if configDep != null then configDep.out.name else self.configSecret.out.name;
       }
       // lib.optionalAttrs (config.image.pullPolicy != null) {
         imagePullPolicy = config.image.pullPolicy;
@@ -239,10 +273,17 @@ in
         extra.automountServiceAccountToken = false;
       };
 
-      configSecret = scope.mkSecret {
-        name = "${name}-config";
-        stringData."alertmanager.yaml" = builtins.toJSON settings;
-      };
+      configSecret =
+        if settings == null then
+          null
+        else
+          scope.mkSecret {
+            name = "${name}-config";
+            stringData."alertmanager.yaml" = builtins.toJSON settings;
+            # Configuration Alertmanager reads from a Secret; the credential
+            # keys the package knows are refused above.
+            meta.classification = "configuration";
+          };
 
       alertmanager = scope.mkCR prometheusOperator.out.crds.Alertmanager {
         inherit name spec;
@@ -363,10 +404,10 @@ in
         resource = self.service;
         requires = [
           self.serviceAccount
-          self.configSecret
           self.alertmanager
         ]
         ++ builtins.filter (p: p != null) [
+          self.configSecret
           self.egress
           self.peerIngress
           self.podDisruptionBudget
