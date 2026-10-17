@@ -90,6 +90,7 @@ named decision; record the fact and its upstream path in the pull request.
 | Clustering and HA, in source | in-memory state, sessions, caches, job queues, leader election, peer discovery, cron singletons | the `pick` table and any ceiling (step 3) |
 | Monitoring material and failure reports | shipped rules or mixins, outage threads | alerts (step 9) |
 | CRDs (chart `crds/`, `config/crd/bases/`, release bundle) | public URL at the tag, conversion webhooks, condition types | `crds/sources.txt`, readiness (C5) |
+| Kubernetes client calls, for a program that calls the API with RBAC not vendored from upstream (crd-vendoring covers vendored roles) | every call (list, get, watch, create, update, patch, delete, deletecollection) on every resource and subresource (`pods/log`, `<kind>/status`), at startup and in every code path | the Role: one rule per call, nothing extra (C10, C23) |
 
 "Does it run replicated, and what does it need for that?" is a mandatory
 question, answered from source, not from the chart's default.
@@ -242,6 +243,8 @@ The header is the package's contract for a reader who will not open the code
 7. `Limits:` ceilings with the upstream reason and where each is declared,
    untested paths, host prerequisites (tempo:101, falco:45). Operators add
    `Replicas:` and `Moving to another release:` (cnpg-operator:46, 76).
+   A version that existing installs cannot take with a plain deploy adds
+   `Upgrades:`, saying what an operator does first (clickhouse-cluster:30).
 
 ### Pattern to reference package
 
@@ -376,6 +379,33 @@ package at one level; `flake.nix:118-124` shows how the file is imported.
    read-only sysfs, hugepages) use an upstream knob, confine the part in the
    cluster file, and state the limit in the header and the pull request.
    Packages are not bent to fit kind.
+
+   The program runs as the package's own ServiceAccount, never with an
+   admin kubeconfig. Check each rule from the client-call research:
+   `kubectl --context <context> auth can-i <verb> <resource> -n <ns> --as
+   system:serviceaccount:<ns>:<sa>`. A list or watch at startup is the
+   usual miss.
+
+   A fresh install misses what breaks clusters already running the
+   package. So, on a new kind cluster, deploy the package as it is on main,
+   then deploy the change on top:
+
+   ```bash
+   git fetch origin && git worktree add ../kixpkgs-wt/main origin/main
+   nix run .#kix -- deploy <cluster> --flake ../kixpkgs-wt/main/clusters --context <context> -y
+   nix run .#kix -- deploy <cluster> --flake ./clusters --context <context> -y
+   ```
+
+   The second deploy applies with no extra flag (`--accept-migrations`,
+   `--force-conflicts`, or any other the fresh install did not need) and
+   reaches ready. An object its plan deletes or keeps as an orphan is one
+   existing installs lose. This catches a new required input that existing
+   installs lack (a Secret the new version reads), a change of kinds in a
+   stateful package that Kix treats as a data migration, renamed or removed
+   objects, and an immutable field that needs the object recreated. A
+   deliberate breaking change that cannot pass says in the header's
+   `Upgrades:` paragraph what an operator does. A new package has nothing
+   on main; skip this deploy.
 4. **Docs and skills.** Update what the change touched (file list, items 13
    and 14). The pull request lists the upstream facts with their paths, the
    checks run and their results, what could not be verified, and the

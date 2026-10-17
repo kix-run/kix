@@ -195,6 +195,7 @@ when a check fails or the path is not evaluated by default.
 - C20. Does the package write an object another controller owns (an environment's HelmChartConfig, a kube-system Namespace)? Can a second writer exist outside Kix, and does removing the instance prune an object the environment needs? Fix: document both as known limits; housekeeping when the lib cannot help.
 - C21. Can a custom resource built from `out.crds` reach the API server before the operator's admission webhooks serve? A CRD reference is satisfied once the definition is Established, and an operator that installs its own definitions often writes its webhook entries seconds later; a resource created in between misses its defaults. Detection: in the operator log, the definitions are installed before the webhook entries. Fix: a check Job that proves the webhook serves (a server-side dry-run that comes back mutated; for a validating-only webhook with failurePolicy Fail, a server-side dry-run the API server admits; or the operator's own check command) and a gate on every handle that adds it to `requires` (cert-manager `apiCheck`, stackgres-operator `webhookCheck`, external-secrets `webhookCheck`), with an evaluation test that every custom resource's `kix.run/depends-on` names the Job's identity hash (`cert-manager-crd-handles-gated`, `stackgres-operator-crd-handles-gated`, `external-secrets-crd-handles-gated`); without it, a refactor that drops the gate passes every check and the race returns only on a fresh install.
 - C22. Does the package describe an operator's shared Service (one that selects every instance in the namespace) with `mkServiceRef` and a narrower per-instance selector, when the CR takes a governing Service by name (`spec.serviceName` on Prometheus and Alertmanager)? Two instances in one namespace then share the Service, scrape each other, and get egress to one instance's pods only. Fix: render a Service per instance over the instance's pods with `kix.run/operand-of`, and name it in the CR.
+- C23. Does a program that calls the Kubernetes API, with RBAC not vendored from upstream, lack a rule for a call it makes (a list or watch at startup, a subresource such as `pods/log` or `<kind>/status`, a `deletecollection`)? Detect: list every client call in the pinned source, at startup and in every code path, and match each to a rule; the pull request reports `kubectl auth can-i <verb> <resource> -n <ns> --as system:serviceaccount:<ns>:<sa>` for each on kind, with the program running as that ServiceAccount. Fix: one rule per call, nothing extra (C10). Vendored roles follow the crd-vendoring skill.
 
 ### Workloads and availability (W)
 
@@ -346,6 +347,7 @@ These items also apply to text the change adds under `docs/`, `housekeeping/`, a
 - T9. Are host prerequisites (kernel modules, `/dev/kvm`, architecture) undocumented? Fix: header line.
 - T10. Does a how-to tell readers to deploy a test fixture, depend on test-only resources, or assert another page's Secret names or keys? Fix: self-contained steps.
 - T11. Do docs or option descriptions promise that removing config deletes objects? Plain `kix deploy` only reports orphans; deletion needs `--prune`.
+- T12. Does a change to a package that exists on main report no upgrade deploy: main's version on kind, then the change on the same cluster, applied with no extra flag (`--accept-migrations`, `--force-conflicts`) and ready (package-authoring "Handover", step 3)? It catches a new required input, a change of kinds in a stateful package, renamed or removed objects, and immutable-field changes. Fix: run it. A deliberate breaking change that cannot pass says in the header's `Upgrades:` paragraph what an operator does first.
 
 ## Writing a package's alerts
 
@@ -488,7 +490,7 @@ list outside the public repository; ask for it when you do not have it.
 
 **3. Read the code once, for the judgement items.** Read the package in
 checklist order and judge only what the automation and the grep hits do not
-settle: M2 to M15, O6 to O24, D, S, C4 to C21, W, I, N, Mo, E, Na, L, P, and
+settle: M2 to M15, O6 to O24, D, S, C4 to C23, W, I, N, Mo, E, Na, L, P, and
 T. Skip an item marked *(lib)* unless its check failed or its path is off by
 default. Evaluate the package once with every toggle on, once with each
 optional dependency present, and once with two instances in two namespaces
