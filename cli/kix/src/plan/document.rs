@@ -700,6 +700,50 @@ impl Packages {
     }
 }
 
+impl Packages {
+    /// Take every package's `manifests` out, leaving the packages as at
+    /// `--detail fields`, and give them by object id with the key of the
+    /// package that lists them (`_cluster` for `cluster_level`). An object
+    /// two packages list moved between them and has the same sides in each;
+    /// it carries the package it moves to, not the one that removes it.
+    pub fn take_manifests(&mut self) -> BTreeMap<String, (String, ManifestSides)> {
+        let mut out: BTreeMap<String, (String, ManifestSides)> = BTreeMap::new();
+        let mut put = |key: &str,
+                       manifests: Option<BTreeMap<String, ManifestSides>>,
+                       removes: &dyn Fn(&str) -> bool| {
+            for (id, sides) in manifests.into_iter().flatten() {
+                if removes(&id) && out.contains_key(&id) {
+                    continue;
+                }
+                out.insert(id, (key.to_string(), sides));
+            }
+        };
+        for p in &mut self.removed {
+            put(&p.key, p.manifests.take(), &|_| true);
+        }
+        for p in &mut self.added {
+            put(&p.key, p.manifests.take(), &|_| false);
+        }
+        for c in self.changed.iter_mut().chain(self.cluster_level.as_mut()) {
+            let removed = c.removed_resources.clone();
+            put(&c.key, c.manifests.take(), &|id| {
+                removed.iter().any(|r| r == id)
+            });
+        }
+        out
+    }
+
+    /// Drop each modified resource's field changes, leaving the packages
+    /// as at `--detail plain`.
+    pub fn drop_field_changes(&mut self) {
+        for c in self.changed.iter_mut().chain(self.cluster_level.as_mut()) {
+            for m in &mut c.modified_resources {
+                m.changes = None;
+            }
+        }
+    }
+}
+
 impl PackageEntry {
     /// `side` is the side the package exists on: new for an added package,
     /// old for a removed one.

@@ -6,6 +6,8 @@
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 use petgraph::graph::{DiGraph, NodeIndex};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -301,42 +303,76 @@ impl ResourceGraph {
         visited.pop();
     }
 
-    /// Serialize the graph as JSON (for --output json).
+    /// The graph as `kix graph --format json` prints it.
     pub fn to_json(&self) -> serde_json::Value {
-        let nodes: Vec<serde_json::Value> = self
+        serde_json::to_value(self.listing()).expect("a GraphListing serializes")
+    }
+
+    /// Every node and edge, in the graph's order: the order of the
+    /// manifests it was built from.
+    pub fn listing(&self) -> GraphListing {
+        let nodes = self
             .graph
             .node_indices()
             .map(|idx| {
                 let node = &self.graph[idx];
-                let is_import = crate::manifest::lifecycle::is_marker(&node.manifest);
-                serde_json::json!({
-                    "id": node.id.display_id(),
-                    "kind": node.id.kind,
-                    "name": node.id.name,
-                    "namespace": node.id.namespace,
-                    "identityHash": node.identity_hash,
-                    "isImport": is_import,
-                })
+                ListedNode {
+                    id: node.id.display_id(),
+                    kind: node.id.kind.clone(),
+                    name: node.id.name.clone(),
+                    namespace: node.id.namespace.clone(),
+                    identity_hash: node.identity_hash.clone(),
+                    is_import: crate::manifest::lifecycle::is_marker(&node.manifest),
+                }
             })
             .collect();
-
-        let edges: Vec<serde_json::Value> = self
+        let edges = self
             .graph
             .edge_indices()
             .map(|edge| {
                 let (from, to) = self.graph.edge_endpoints(edge).unwrap();
-                serde_json::json!({
-                    "from": self.graph[from].id.display_id(),
-                    "to": self.graph[to].id.display_id(),
-                })
+                ListedEdge {
+                    from: self.graph[from].id.display_id(),
+                    to: self.graph[to].id.display_id(),
+                }
             })
             .collect();
-
-        serde_json::json!({
-            "nodes": nodes,
-            "edges": edges,
-        })
+        GraphListing { nodes, edges }
     }
+}
+
+/// The dependency graph as data: what `kix graph --format json` prints and
+/// a plan file carries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GraphListing {
+    pub nodes: Vec<ListedNode>,
+    pub edges: Vec<ListedEdge>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ListedNode {
+    /// `Kind/name@namespace`, or `Kind/name` for a cluster-scoped object.
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    /// `_cluster` for a cluster-scoped object.
+    pub namespace: String,
+    /// The object's identity hash annotation, by which other objects'
+    /// depends-on annotations name it.
+    pub identity_hash: Option<String>,
+    /// An import marker: an object another package owns, which this build
+    /// only depends on.
+    pub is_import: bool,
+}
+
+/// `from` depends on `to`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListedEdge {
+    pub from: String,
+    pub to: String,
 }
 
 /// Extract an annotation value from a manifest.

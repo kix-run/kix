@@ -9,9 +9,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use miette::{IntoDiagnostic, Result, miette};
+use miette::{Result, miette};
 use serde_json::Value;
 
 use kix::build_source::InstallableBuild;
@@ -33,7 +34,7 @@ use kix::plan::document::{
 use kix::plan::server::comparable;
 use kix::plan::{ManifestIndex, OldSide, PlanEvent, Planned, Planner, Target};
 
-use crate::cli::{Detail as DetailArg, OutputFormat, PlanArgs, PruneMode};
+use crate::cli::{OutputFormat, PlanArgs, PruneMode};
 use crate::output;
 use crate::plan::{self, render};
 
@@ -45,9 +46,25 @@ pub(crate) const EXIT_WOULD_STOP: i32 = 3;
 /// Exit status when the deploy would change something.
 const EXIT_CHANGES: i32 = 2;
 
-pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Result<()> {
+pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Result<()> {
     let format = output::format();
+    if matches!(format, OutputFormat::Json | OutputFormat::Yaml) {
+        return Err(miette!(
+            "kix plan prints text or Markdown. To keep the plan as data, write it with \
+             --save FILE.{}: `kix deploy --plan` reads that file, and `zstd -dc FILE | jq -s '.[0]'` \
+             prints its header",
+            kix::plan::file::EXTENSION
+        ));
+    }
     let Some(mut p) = prepare(args, flags_of(args), ctx)? else {
+        // A plan file needs a plan, and a caller that asked for one must
+        // not find exit 0 and no file.
+        if let Some(path) = save {
+            return Err(miette!(
+                "the build has no resources, so there is no plan to save; {} was not written",
+                path.display()
+            ));
+        }
         return Ok(());
     };
     // A plan decrypts no SOPS file the build carries: those Secrets get
@@ -57,11 +74,14 @@ pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Resu
         Some(client) => Some(dry_run(&mut p, true, client, ctx)?),
         None => None,
     };
-    let doc = document(&mut p, report.as_ref(), detail);
+    let doc = document(&mut p, report.as_ref(), save.is_some());
+    if let Some(path) = save {
+        let sha256 = plan::save(doc.clone(), p.build.graph(), path)?;
+        crate::esay!("Saved the plan to {} (sha256:{sha256})", path.display());
+    }
 
     match format {
-        OutputFormat::Json => println!("{}", doc.to_json()),
-        OutputFormat::Yaml => print!("{}", doc.to_yaml().into_diagnostic()?),
+        OutputFormat::Json | OutputFormat::Yaml => unreachable!("refused above"),
         OutputFormat::Markdown => print!("{}", markdown(&p, &doc)),
         OutputFormat::Text => {
             if !output::quiet() {
@@ -112,8 +132,8 @@ fn old_side(args: &PlanArgs, ctx: &CommandContext) -> OldSide {
 
 /// Build, then plan the deploy with [`Planner`] and `flags`, which are the
 /// command line's or a saved plan's. `None` when the build has nothing to
-/// deploy. Progress lines go through [`crate::say!`], so `kix plan -o json`
-/// keeps them off stdout.
+/// deploy. Progress lines go through [`crate::say!`], so `-o markdown`, and
+/// `kix deploy --plan F --dry-run -o json`, keep them off stdout.
 pub(crate) fn prepare(
     args: &PlanArgs,
     flags: PlanFlags,
@@ -369,7 +389,9 @@ impl DeployObserver for DryRunObserver {
 
 /// Make the plan document, and overlay the apiserver's answers on the
 /// package diff, which the text renderers read ([`Planned::overlay`]).
-pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, detail: DetailArg) -> Plan {
+/// `manifests` makes it at `--detail manifests`, as a plan file needs;
+/// otherwise at `--detail plain`.
+pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests: bool) -> Plan {
     let connected = p.client.is_some();
     let made_by = if connected {
         MadeBy::DryRun
@@ -382,7 +404,7 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, detail: D
     // Built only for `--detail manifests`. Without the deployed build the
     // old side is rebuilt from the old manifests, as the package diff is.
     let rebuilt;
-    let index = if detail == DetailArg::Manifests {
+    let index = if manifests {
         let old = match p.baseline.active_graph() {
             Some(old) => old,
             None => {
@@ -394,10 +416,9 @@ pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, detail: D
     } else {
         None
     };
-    let detail = match (detail, &index) {
-        (_, Some(index)) => Detail::Manifests(index),
-        (DetailArg::Fields | DetailArg::Manifests, None) => Detail::Fields,
-        (DetailArg::Plain, None) => Detail::Plain,
+    let detail = match &index {
+        Some(index) => Detail::Manifests(index),
+        None => Detail::Plain,
     };
 
     let mut doc = Plan::new(

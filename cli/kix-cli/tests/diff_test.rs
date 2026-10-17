@@ -187,3 +187,65 @@ fn diff_refuses_a_from_bundle_that_does_not_verify() {
         .failure()
         .stderr(predicate::str::contains("cannot use the bundle"));
 }
+
+/// `kix diff --save` writes a plan file whose plan is the document `-o json
+/// --detail fields` prints, and whose graph is `kix graph`'s.
+#[test]
+fn diff_save_writes_the_document_and_the_graph() {
+    let bundle = fixture_bundle("kix-enterprise-test");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("diff.kixplan");
+    let out = kix()
+        .env("KUBECONFIG", "/dev/null")
+        .args([
+            "-o",
+            "json",
+            "diff",
+            "kix-enterprise-test",
+            "--detail",
+            "fields",
+        ])
+        .arg("--bundle")
+        .arg(&bundle)
+        .arg("--save")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let printed: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let (mut file, _) = kix::plan::file::PlanFile::verify(fs::File::open(&path).unwrap()).unwrap();
+    let header = file.header().clone();
+    assert_eq!(serde_json::to_value(&header.plan).unwrap(), printed);
+
+    let graph = kix()
+        .args([
+            "graph",
+            "kix-enterprise-test",
+            "--format",
+            "json",
+            "--bundle",
+        ])
+        .arg(&bundle)
+        .output()
+        .unwrap();
+    assert!(
+        graph.status.success(),
+        "{}",
+        String::from_utf8_lossy(&graph.stderr)
+    );
+    let graph: serde_json::Value = serde_json::from_slice(&graph.stdout).unwrap();
+    assert_eq!(serde_json::to_value(&header.graph).unwrap(), graph);
+
+    // Every object of the build is added, so each has a new manifest only.
+    // The Activation record is the one the plan names under `activation`.
+    assert_eq!(header.shown.len() + 1, header.graph.nodes.len());
+    for (id, shown) in &header.shown {
+        assert!(shown.old.is_none(), "{id}");
+        assert!(file.new_manifest(id).unwrap().is_some(), "{id}");
+    }
+}

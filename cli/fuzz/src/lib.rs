@@ -1,10 +1,12 @@
-//! What the fuzz targets share: a bundle written from frames the fuzzer
-//! changes as plain bytes, and a bound on what `PathsChecked::read` holds.
+//! What the fuzz targets share: a container written from frames the fuzzer
+//! changes as plain bytes, and bounds on what `PathsChecked::read` and
+//! `PlanFile::verify` hold.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::io::Cursor;
 use std::sync::atomic::{AtomicIsize, Ordering};
 
+use kix::plan::file::PlanFile;
 use kix_bundle::PathsChecked;
 
 /// Separates the frames of a `*_frames` target's input.
@@ -150,5 +152,34 @@ pub fn check_paths(bundle: &[u8]) {
     assert!(
         peak <= bound,
         "PathsChecked::read held {peak} bytes; header {header}, largest frame {frame}, bound {bound}"
+    );
+}
+
+/// The most [`read_plan_file`] may hold. `PlanFile::verify` holds the
+/// header as read (at most 8 MiB) and parsed (at most
+/// `MAX_HEADER_VALUES` values), and one frame (at most 4 MiB) compressed
+/// and decompressed; reading a manifest holds one file of at most 3 MiB,
+/// parsed.
+pub const PLAN_HOLD_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Read `file` the way the Kix Enterprise server does: verify it, then read
+/// every shown manifest. Fail when that held more than [`PLAN_HOLD_BYTES`].
+pub fn read_plan_file(file: &[u8]) {
+    let (_, peak) = peak_during(|| {
+        let Ok((mut plan, _)) = PlanFile::verify(Cursor::new(file)) else {
+            return;
+        };
+        let ids: Vec<String> = plan.header().shown.keys().cloned().collect();
+        for id in ids {
+            let _ = plan.old_manifest(&id);
+            let _ = plan.new_manifest(&id);
+        }
+    });
+    if std::env::var_os("KIX_FUZZ_REPORT").is_some() {
+        eprintln!("held {peak} for {} bytes", file.len());
+    }
+    assert!(
+        peak <= PLAN_HOLD_BYTES,
+        "reading a plan file held {peak} bytes"
     );
 }

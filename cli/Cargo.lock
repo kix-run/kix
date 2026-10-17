@@ -1517,6 +1517,7 @@ dependencies = [
 name = "kix-bundle"
 version = "0.1.0"
 dependencies = [
+ "kix-container",
  "kix-lib",
  "proptest",
  "serde",
@@ -1564,6 +1565,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kix-container"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "zstd",
+]
+
+[[package]]
 name = "kix-lib"
 version = "0.1.0"
 dependencies = [
@@ -1581,6 +1593,7 @@ dependencies = [
  "indexmap",
  "insta",
  "k8s-openapi",
+ "kix-container",
  "kube",
  "owo-colors",
  "petgraph",
@@ -1603,6 +1616,7 @@ dependencies = [
  "tower",
  "tracing",
  "walkdir",
+ "zstd",
 ]
 
 [[package]]

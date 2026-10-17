@@ -1,0 +1,3 @@
+# 2026-10-17 · `cli/kix/src/plan/file.rs` · A changed byte in a plan file's header is caught only when it breaks the JSON.
+
+Plan files use the bundle's container, which writes zstd frames without checksums. Each manifest file is named by its SHA-256, so a changed file is refused, but nothing names the header. A flipped byte inside a string of the header (a field change value, a message) reads as a valid, different plan. `kix deploy --plan` prints the whole file's SHA-256 and Kix Enterprise binds approvals to it, so an approval system catches it; a person running `kix deploy --plan` by hand does not. See the test `a_flipped_byte_past_the_header_is_refused_or_reads_the_same`.

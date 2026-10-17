@@ -1,6 +1,6 @@
 //! Saved plans: whether a plan made now still matches a reviewed one.
 //!
-//! `kix deploy --plan plan.json` rebuilds, plans again, and refuses when
+//! `kix deploy --plan plan.kixplan` rebuilds, plans again, and refuses when
 //! [`compare`] finds a mismatch. The rules and their keys are in
 //! `v2_discussions/158_saved_plans.md`. A saved plan only restricts a
 //! deploy: the deploy never applies anything read from it.
@@ -53,7 +53,8 @@ pub struct Mismatch {
 /// The result of comparing a fresh plan with a reviewed one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Comparison {
-    /// [`digest`] of the reviewed plan file, set by the caller.
+    /// `sha256:<hex>` of the reviewed plan file, so an approval system can
+    /// check the deploy used the file it approved. Set by the caller.
     pub plan_sha256: Option<String>,
     pub matches: bool,
     pub mismatches: Vec<Mismatch>,
@@ -65,13 +66,6 @@ pub struct Comparison {
     /// objects and build files that were reviewed, and the binary is chosen
     /// by whoever runs the deploy.
     pub kix_differs: Option<(String, String)>,
-}
-
-/// The SHA-256 of a saved plan file, so an approval system can check the
-/// deploy used the file it approved.
-pub fn digest(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
 /// Why a saved plan cannot be used at all, before any build.

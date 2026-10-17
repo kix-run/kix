@@ -24,7 +24,7 @@ This page is hand-maintained. Check `cli/kix-cli/src/cli.rs` and
 ```text
 kix diff <CLUSTER> [--bundle <FILE>] [--from <DIR> | --from-bundle <FILE>]
          [-o text|json|yaml|markdown]
-         [--detail plain|fields|manifests]
+         [--detail plain|fields|manifests] [--save <FILE>]
          [--flake <FLAKE>] [--context <CONTEXT>]
 ```
 
@@ -36,6 +36,7 @@ kix diff <CLUSTER> [--bundle <FILE>] [--from <DIR> | --from-bundle <FILE>]
 | `--from-bundle <FILE>` | Use a bundle as the old side. Needs `--bundle`. |
 | `-o`, `--output` | `text` (default), `json`, `yaml` (the JSON document as YAML), or `markdown` for pull request comments. |
 | `--detail <LEVEL>` | How much `json` and `yaml` say about each change: `plain` (default) names each changed resource and counts its changed fields, `fields` also lists each field change, and `manifests` also includes the old and new manifest of each changed, added, or removed resource. Text and Markdown are the same at every level. |
+| `--save <FILE>` | Also write the comparison to `FILE` as a [plan file](/docs/reference/cli/plan/#plan-file), whatever `--detail` and `--output` say. It is for reading, by people and Kix Enterprise; `kix deploy --plan` takes only a `kix plan` plan file. |
 | `--flake <FLAKE>` | Flake to evaluate. Defaults to the current directory. |
 | `--context <CONTEXT>` | Kubeconfig context for the live cluster. Ignored with `--from`. |
 
@@ -144,8 +145,8 @@ follows `--no-color` and the `NO_COLOR` environment variable.
 
 ### JSON and YAML
 
-The `Plan` document [`kix plan`](/docs/reference/cli/plan/#json-and-yaml)
-prints, with JSON Schema `cli/kix-cli/schema/plan.schema.json`. That page
+The `Plan` document a [plan file](/docs/reference/cli/plan/#the-plan-document)
+holds, with JSON Schema `cli/kix-cli/schema/plan.schema.json`. That page
 describes the top-level keys, the checked-section shape, and the
 `not_checked` reasons. For `kix diff`:
 
@@ -179,7 +180,7 @@ Stateful migrations are under the top-level `migrations` section, each
 
 A Secret value, or a hash of one, reads `(secret, not shown)`, or
 `(secret, changed, not shown)` on the new side when the value changes. A
-field value larger than 16 KiB, or a manifest larger than 256 KiB, reads
+field value larger than 16 KiB, or a manifest larger than 3 MiB (the apiserver's limit on a request), reads
 `(N bytes, not shown)`.
 
 Resource identifiers have the form `Kind/name@namespace`. Package keys have

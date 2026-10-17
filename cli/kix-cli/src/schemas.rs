@@ -34,6 +34,14 @@ fn the_plan_schema_matches_the_type() {
 }
 
 #[test]
+fn the_plan_file_header_schema_matches_the_type() {
+    check(
+        "kixplan.schema.json",
+        schemars::schema_for!(kix::plan::file::Header),
+    );
+}
+
+#[test]
 fn the_deploy_log_schema_matches_the_type() {
     check(
         "deploy-log.schema.json",
