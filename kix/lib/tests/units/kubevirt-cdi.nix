@@ -420,7 +420,7 @@ in
 
   # At `none` KubeVirt runs one virt-api and virt-controller and CDI one of
   # each operand; at `zone` KubeVirt keeps its own counts and CDI runs
-  # three. Both CRs wait for phase Deployed.
+  # two. Both CRs wait for phase Deployed.
   kubevirt-cdi-operand-replicas =
     let
       at =
@@ -450,9 +450,9 @@ in
         }
       &&
         cdiInfra zone == {
-          apiServerReplicas = 3;
-          deploymentReplicas = 3;
-          uploadProxyReplicas = 3;
+          apiServerReplicas = 2;
+          deploymentReplicas = 2;
+          uploadProxyReplicas = 2;
         }
       && readinessOf (find none "KubeVirt" "kubevirt") == deployed
       && readinessOf (find none "CDI" "cdi") == deployed

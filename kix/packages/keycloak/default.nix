@@ -71,8 +71,8 @@
 # bootstrap administrator, and replace that temporary administrator with a
 # permanent one.
 #
-# Replicas follow the cluster's availability level (one at `none`, two at
-# `pod` and `node`, three at `zone`); the instance's `availability` overrides
+# Replicas follow the cluster's availability level (one at `none`, two
+# above); the instance's `availability` overrides
 # it. The pods form one Infinispan cluster through Keycloak's default
 # `jdbc-ping` stack: each pod records its address in the database and dials
 # its peers on ports 7800 (JGroups) and 57800 (failure detection). Keycloak
@@ -220,7 +220,7 @@ in
           none = 1;
           pod = 2;
           node = 2;
-          zone = 3;
+          zone = 2;
         };
         scraped = metricsOn && prometheus != null;
 

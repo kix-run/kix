@@ -39,8 +39,8 @@
 #                              alias, so wire it with
 #                              deps.endpointService = ref.<ns>.<instance>.
 #
-# Defaults: `instances` from the availability level (1 at none, 2 at pod
-# and node, 3 at zone), PostgreSQL 18 from the operand image, 1 CPU and 2Gi
+# Defaults: `instances` from the availability level (1 at none, 2 above),
+# PostgreSQL 18 from the operand image, 1 CPU and 2Gi
 # per instance as requests and limits, 20Gi volumes. PostgreSQL serves TLS
 # with a certificate the operator issues.
 #
@@ -301,15 +301,15 @@ in
     instances = lib.mkOption {
       type = lib.types.ints.positive;
       # One instance cannot survive its own pod's restart, so `pod` needs a
-      # second; three at `zone` keep a quorum of replicas through a zone
-      # loss.
+      # second. The operator promotes a replica on failover without a vote
+      # among the instances, so two survive a lost node or zone.
       default = kix.availability.pick availability {
         none = 1;
         pod = 2;
         node = 2;
-        zone = 3;
+        zone = 2;
       };
-      defaultText = lib.literalExpression "kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 3; }";
+      defaultText = lib.literalExpression "kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 2; }";
       description = "PostgreSQL instances (`spec.instances`): one primary, the rest streaming replicas the operator fails over to.";
     };
 

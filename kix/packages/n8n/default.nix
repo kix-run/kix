@@ -235,10 +235,10 @@ in
         default = kix.availability.pick availability {
           none = 1;
           pod = 2;
-          node = 3;
-          zone = 3;
+          node = 2;
+          zone = 2;
         };
-        defaultText = lib.literalMD "1 at availability `none`, 2 at `pod`, 3 at `node` and `zone`";
+        defaultText = lib.literalMD "1 at availability `none`, 2 above";
         description = "Number of worker pods. Each takes executions from the queue.";
       };
 
