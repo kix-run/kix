@@ -64,7 +64,7 @@ pub fn progress_on_stderr() -> bool {
 }
 
 /// `println!` for progress lines. `-q` silences them, and they go to stderr
-/// when stdout carries a machine-readable document (`kix plan -o json`).
+/// when stdout carries a document (`kix plan -o markdown`).
 #[macro_export]
 macro_rules! say {
     ($($arg:tt)*) => {

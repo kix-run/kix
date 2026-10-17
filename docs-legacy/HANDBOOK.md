@@ -179,7 +179,7 @@ ls result/
 |---|---|---|
 | `kix build <cluster>` | Render manifests to stdout (yaml/json) | `-o yaml|json` |
 | `kix diff <cluster>` | Read-only diff vs live, or vs a directory (previous build result, snapshot, export) | `--from <dir>`, `-o json|yaml|markdown` |
-| `kix plan <cluster>` | What a deploy would do, as a server-side dry run: field changes, refused writes, drift, prune | `--prune`, `--reconcile`, `--force-conflicts`, `--current-activation`, `-o json|yaml|markdown` |
+| `kix plan <cluster>` | What a deploy would do, as a server-side dry run: field changes, refused writes, drift, prune | `--prune`, `--reconcile`, `--force-conflicts`, `--current-activation`, `--save F.kixplan`, `-o markdown` |
 | `kix check <cluster>` | Eval (constructor validators, cross-resource checks, scorecard errors) + scorecard report | `--sarif` |
 | `kix deploy <cluster>` (alias `apply`) | Wave-based apply with confirmation | `-y`, `--dry-run`, `--reconcile`, `--prune`, `--operator`, `--tui`, `--log-format=line|json|pretty` |
 | `kix status <cluster>` | Resource health table | `--operator` (group by package) |
@@ -2160,9 +2160,20 @@ Operator requires `nix-store` binary on the host and read access to `/nix/store/
 ### 26.1 `kix plan` and `kix diff`
 
 `kix plan` runs the deploy pipeline with every write sent as `dryRun=All`,
-so the apiserver answers for each object. `kix diff` reads only. Both print
-the same document for `-o json` and `-o yaml`
-(`cli/kix-cli/schema/plan.schema.json`), so a consumer can read either.
+so the apiserver answers for each object. `kix diff` reads only. Both write
+the same plan file with `--save F.kixplan`, and `kix diff -o json|yaml`
+prints the document the file holds (`cli/kix-cli/schema/plan.schema.json`),
+so a consumer can read either. `kix plan` prints no JSON or YAML.
+
+A plan file (`cli/kix/src/plan/file.rs`, header schema
+`cli/kix-cli/schema/kixplan.schema.json`) is a seekable zstd file, the
+bundle's container (`cli/kix-container`). Frame 0 is the header: the plan
+document at `--detail fields`, the new build's graph as `kix graph --format
+json` prints it, and `shown`, for each changed, added, or removed object the
+SHA-256 of its old and new manifest files and its Pod `rollout` (`restart`,
+`on_delete`, or `null`). The later frames hold the manifests, secrets hidden,
+each named by its SHA-256 and checked against it on every read. `zstd -dc
+F.kixplan | jq -s '.[0]'` prints the header.
 
 | | `kix plan` | `kix diff` |
 |---|---|---|
@@ -2211,7 +2222,8 @@ same file for each, so the package list leaves them out. The document lists
 every object the deploy writes and deletes under `objects`, re-applied ones
 included, and its digest as `objects_digest`.
 
-`kix deploy --plan plan.json` deploys a reviewed plan. It plans again with
+`kix deploy --plan plan.kixplan` deploys a reviewed plan file and reads no
+other kind of file. It plans again with
 the saved plan's flags and exits 4, applying nothing, when the cluster, the
 new or deployed build's identity hash, the objects digest, or the flags
 differ, or when the new plan has a refusal, reverted drift, or prune delete

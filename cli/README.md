@@ -5,16 +5,21 @@ Rust CLI for kixpkgs. Evaluates Nix-defined Kubernetes clusters, diffs against l
 ## Workspace
 
 ```
-kix/             library — eval, manifest handling, cluster operations, planning
+kix/             library — eval, manifest handling, cluster operations, planning, plan files
+kix-container/   library — the seekable zstd container bundles and plan files share
 kix-bundle/      library — bundles: a build as one file, read without Nix
 kix-cli/         binary — clap CLI, command dispatch, plan display
 kix-operator/    binary — kube-rs controller watching Activation CRs
-fuzz/            cargo-fuzz targets for the bundle readers (own workspace)
+fuzz/            cargo-fuzz targets for the bundle and plan file readers (own workspace)
 ```
 
 Both binaries depend on `kix`, and `kix-cli` on `kix-bundle`, which is
 built on `kix` as any other user of the library would be. `kix` knows
-nothing of bundles: a bundle reaches it as a `CarriedBuild`.
+nothing of bundles: a bundle reaches it as a `CarriedBuild`. Both `kix`
+(for `plan::file`) and `kix-bundle` build on `kix-container`, which knows
+frames, the seek table, caps, and hashing, and nothing of store paths or
+plans. Kix Enterprise depends on `kix` and `kix-bundle` by git rev and
+reads plan files through `kix::plan::file`.
 
 ### Bundle acceptance checks
 
@@ -31,9 +36,11 @@ nothing of bundles: a bundle reaches it as a `CarriedBuild`.
   cases by default; `PROPTEST_CASES=20000 cargo test -p kix-bundle --release --test plan_bound`
   for a long run.
 - `fuzz/` holds libFuzzer targets for `PathsChecked::read` (held to a bound
-  on the bytes it allocates, `kix_fuzz::check_paths`) and `Bundle::read`,
-  each on bundle files as uploaded and on frames the fuzzer changes
-  decompressed (`*_frames`). They build on stable rustc without a
+  on the bytes it allocates, `kix_fuzz::check_paths`), `Bundle::read`, and
+  `PlanFile::verify` with every shown manifest read (`kixplan_read`, held to
+  `kix_fuzz::PLAN_HOLD_BYTES`), each on files as uploaded and on frames the
+  fuzzer changes decompressed (`*_frames`). Seed the plan file targets from
+  `kix/tests/fixtures/plan.kixplan`. They build on stable rustc without a
   sanitizer: `cd fuzz && RUSTC_BOOTSTRAP=1 cargo fuzz build -s none -O`, seed
   with `./seed.py <bundle>... seeds` (`kix bundle` of the test clusters), and
   run with `cargo fuzz run -s none -O <target> seeds/raw` (or `seeds/frames`)
@@ -179,12 +186,43 @@ over that plan through `ops::DryRun`, so every SSA and DELETE goes with
 - **Offline.** `--current-activation` connects to nothing: the plan
   compares the cached build with the new one, `made_by: builds`, and every
   write-path check, and drift, is `not_checked` with reason `builds_only`.
-- **Progress.** With `-o json|yaml|markdown`, `main`'s `output_mode` sets
+- **Progress.** With `-o markdown`, `main`'s `output_mode` sets
   `progress_on_stderr` for `plan` and `deploy --dry-run`, so the `crate::say!`
-  progress lines of `prepare` go to stderr and stdout is the document alone.
+  progress lines of `prepare` go to stderr and stdout is the Markdown alone.
+  `kix plan -o json|yaml` is refused, pointing at `--save`.
+- **Saved.** `--save F` makes the document at `Detail::Manifests` and writes
+  it with `crate::plan::save`: `kix::plan::file::write` to a temp file
+  beside `F`, `PlanFile::verify` of it, then a rename, as `write_build`
+  does for bundles. `kix diff --save` does the same, then cuts the printed
+  document down to its `--detail` (`Packages::take_manifests`,
+  `Packages::drop_field_changes`).
 
-The document (`kix/src/plan/document.rs`, `Plan`) is the one shape `kix plan` and
-`kix diff` print for `-o json` and `-o yaml`: `schema_version`, `made_by`
+**Plan files** (`kix/src/plan/file.rs`; the module doc is the
+specification). A `.kixplan` is a `kix-container` file: frame 0 the
+`Header` (`format` `kixplan`, `version` 1, `plan` at `--detail fields`,
+`graph`, a `GraphListing` from `file::graph_of`, which is `kix graph
+--format json`'s shape, `shown`, by object id the SHA-256 of its old and new
+manifest file and its `Rollout`, and `files` as `[sha256, size]` sorted),
+then the manifests as compact JSON, each the `--detail manifests` side as
+shown (secrets hidden, 256 KiB cap), named by its SHA-256. `write(plan,
+graph, out)` takes the manifests out of the plan (`take_manifests`) and
+computes `rollout` (a Deployment, StatefulSet, or DaemonSet with a
+`$.spec.template.` field change is `restart`, or `on_delete` under that
+update strategy; moved from Kix Enterprise's `pods()`). `PlanFile::open`
+reads the seek table and the header, counts the header's JSON values
+before parsing it (`MAX_HEADER_VALUES`), and checks the file list;
+`PlanFile::verify` also reads every file once, checks each against its name
+and that it is JSON, and gives the whole file's SHA-256; `old_manifest`,
+`new_manifest`, and `file` read one manifest, checked. The caps are in the
+module doc. `kix deploy --plan` loads with `verify` and uses `header.plan`;
+`plan_sha256` is `sha256:` and that hash. The header's JSON Schema is
+`kix-cli/schema/kixplan.schema.json` (same `schemas` test).
+`kix/tests/fixtures/plan.kixplan` is the plan file of `file.rs`'s test
+plan, and a test fails when this kix writes it differently
+(`KIX_WRITE_FIXTURES=1 cargo test -p kix-lib plan::file` rewrites it).
+
+The document (`kix/src/plan/document.rs`, `Plan`) is the one shape a plan
+file holds and `kix diff` prints for `-o json` and `-o yaml`: `schema_version`, `made_by`
 (`dry_run`, `live_read`, `builds`), `kix` (`KixBuild`: crate version and the
 binary's store path), `cluster`, `build` (`Build::of`: result directory and the
 Activation record's identity hash), `deployed` (`DeployedBuild`: `kix plan`
@@ -195,9 +233,10 @@ plan shows" below), and `migrations`, `conflicts`, `admission`,
 `drift`, `prune`, `readiness` as `Checked<T>`, serialized
 `{"status":"checked","items":[...]}` or
 `{"status":"not_checked","reason":"builds_only|read_only|deployed_build_unavailable|not_previewable"}`,
-plus `not_checked` objects. `--detail plain|fields|manifests` (default
-`plain`) on both commands sets how much `packages` says about each change
-(see `plan/mod.rs` below); `kix deploy --dry-run` uses `plain`. Its JSON Schema is committed at
+plus `not_checked` objects. `kix diff --detail plain|fields|manifests`
+(default `plain`) sets how much `packages` says about each change (see
+`plan/mod.rs` below); a plan file holds `fields`, with the manifests as
+files. Its JSON Schema is committed at
 `kix-cli/schema/plan.schema.json`, beside the CLI that prints the document;
 `schemas` in `kix-cli` fails when the type and the file differ
 (regenerate with `KIX_WRITE_SCHEMAS=1 cargo test -p kix-cli
@@ -452,10 +491,11 @@ a record line need regenerating.
 - `baseline.rs` — the from-side of a plan, shared by deploy, rollback and soft gc: `Baseline` (the Active record, where its closure came from (`ActiveSource`), the failed and kept closures), made by `of_cluster`, `of_cache` and `of_record`; `Baseline::changes` (detect, fold failed, fold kept, `--reconcile`), `orphans_kept_from` (the `KeptOrphans` the new record's list is made from), `manifests` (the merged set for display and prune ordering), `ran` (every closure the cluster ran, for the objects check) and `diff_side` (the old side of the package diff); `load_kept` (gc uses it too), `record_graph`, `active_build_dir`, and `sync_kept_roots`, which keeps the GC roots for the listed builds. See "Baseline" above.
 - `mod.rs` — `PackageDiff`/`PackageChangeDiff` types, `diff_graphs()` for package-level comparison (`diff_garbage()` for soft gc), `split_never_pruned()`, and `document::Packages::of(&PackageDiff, Detail)` (the `packages` section of the `Plan` document). Every format the CLI prints, JSON, YAML, text and Markdown, starts from the same `PackageDiff`, so they stay in sync. A removed resource whose kind `lifecycle::never_pruned` protects (Namespace, CRD) is never shown as a deletion in any format: `PackageChangeDiff::removed_and_kept()` splits it out, and JSON puts it in `kept_resources`. How much the JSON says is `document::Detail` (`--detail` on `kix diff` and `kix plan`): `Plain` gives each `modified_resources[]` entry `diff_count`; `Fields` adds `changes`, one `{path, change, old?, new?, labels?}` per field (`change` is `added`, `removed`, or `changed`; old to new); `Manifests` adds to that a `manifests` object on each package entry (`changed[]`, `cluster_level`, `added[]`, `removed[]`), `{"<display id>": {"old"?, "new"?}}` for every modified, added, and removed resource (kept ones left out), read through `ManifestIndex`: the two graphs for `kix diff`, and for `kix plan` the live object and the dry-run result of each object the apiserver answered for (`ManifestIndex::answered`). A Secret's `data` and `stringData` values, its `kix.run/content-hash` and `kix.run/applied-hash`, and every `checksum/*` annotation read `SECRET_NOT_SHOWN`, or `SECRET_CHANGED_NOT_SHOWN` on the new side when the old side holds a different value at the same path (so a line diff of the two manifests still shows it); a field value over `MAX_SHOWN_VALUE_BYTES` (16 KiB serialized) and a manifest over `MAX_SHOWN_MANIFEST_BYTES` (256 KiB) read `(N bytes, not shown)`. Literal `env` values and ConfigMap data are shown as they are. A removed package lists its kept resources too (`PackageInfo::kept`), and every JSON package entry (`added[]`, `removed[]`, `changed[]`, `cluster_level`) carries a `kept_resources` list of display ids, empty where nothing is kept; `added[]`/`removed[]` `resources` is the package's total, kept included. `PackageDiff::resource_totals()` feeds the "real content" count of the text summary and markdown, which leaves kept resources out and counts them as kept. `without_secrets` hides the same values for the text plan. `PackageDiff::labels` holds one label list per entry of a resource's `resource_diffs`. `fixtures` (tests and the `test-util` feature) builds the small graphs the library's and the CLI's diff tests compare
 - `objects.rs` — `of` (the writes and deletes of a deploy, each matched to `PackageDiff::shown` or a re-apply, or `Unshown`), and `digest` (the document's `objects_digest`); see "Writes the plan shows"
-- `document.rs` — the `Plan` document `kix plan` and `kix diff` print (see "kix plan" above), `Checked<T>`, `NotCheckedReason` (its committed-schema test is in `kix-cli`)
+- `document.rs` — the `Plan` document a plan file holds and `kix diff` prints (see "kix plan" above), `Checked<T>`, `NotCheckedReason` (its committed-schema test is in `kix-cli`), `Packages::take_manifests` and `drop_field_changes`
+- `file.rs` — plan files (`.kixplan`): `write`, `graph_of`, `PlanFile` (`open`, `verify`, `file`, `old_manifest`, `new_manifest`, `header`), `Header`, `ShownObject`, `Rollout`, `FileEntry`, `PlanFileError`, and the caps; see "Plan files" above
 - `origin.rs` — three-way labels: `ThreeWay::label`, `label_live` (diff against live), `label_builds` (diff `--from <build>`), and `value_at`, which reads a diff-engine path (`$.spec.containers[web].image`) out of an object
 - `server.rs` — `Overlay`, which replaces each answered object's package-diff entry with the dry-run field changes and labels them, and `field_changes`/`comparable`
-- `saved.rs` — `kix deploy --plan`: `unusable` (schema version, no `objects` or `objects_digest` (a `kix diff` plan), an `objects_digest` its `objects` do not give (an edit), `made_by: builds`, and sections that do not match `made_by`: a `dry_run` plan with no `flags` or with conflicts, admission, or prune not checked, a `live_read` plan with `flags`, which only an edit produces; and a `live_read` plan whose drift is not checked: a diff of a snapshot, or one made without the deployed build), `digest` (the file's SHA-256, printed and in the JSON as `plan_sha256`), `flags_for` (the saved plan's planning flags; a command-line flag the plan was made without is an error, and a `kix diff` plan refuses `--prune`, `--force-conflicts`, `--reconcile`, and `--accept-migrations`), and `compare(reviewed, fresh) -> Comparison`, the rules of doc 158 (cluster; new `identity_hash`; `objects_digest`, refused when either is missing or they differ, with the writes and deletes that differ named (`Rule::Objects`); deployed `identity_hash`, or the record name when a record has none; flags; new conflicts by resource and admission refusals by resource and reason; new `reverted` drift by resource and path; new `delete` prune fates; and, for a `dry_run` plan, objects newly in `not_checked`, whose refusals and drift a dry run could not see). A rule the reviewed plan did not check is `skipped`; a different `kix` is `kix_differs`, never a mismatch: the objects digest already holds the deploy to the reviewed objects and files, and the binary is chosen by whoever deploys. `commands/deploy.rs` exits `EXIT_STALE` (4) on a mismatch, loads the plan (`load_saved_plan`) before any build, compares after `plan::document`, passes the merged planning flags to `run_deploy_async` (the apply never reads `args.plan`), and `check_saved_plan` is `--plan` with `--dry-run`, which exits 4 when stale, 3 when it matches but the deploy would stop (`doc.stops()` or migrations not accepted), and 0 otherwise
+- `saved.rs` — `kix deploy --plan`: `unusable` (schema version, no `objects` or `objects_digest` (a `kix diff` plan), an `objects_digest` its `objects` do not give (an edit), `made_by: builds`, and sections that do not match `made_by`: a `dry_run` plan with no `flags` or with conflicts, admission, or prune not checked, a `live_read` plan with `flags`, which only an edit produces; and a `live_read` plan whose drift is not checked: a diff of a snapshot, or one made without the deployed build), `flags_for` (the saved plan's planning flags; a command-line flag the plan was made without is an error, and a `kix diff` plan refuses `--prune`, `--force-conflicts`, `--reconcile`, and `--accept-migrations`), and `compare(reviewed, fresh) -> Comparison`, the rules of doc 158 (cluster; new `identity_hash`; `objects_digest`, refused when either is missing or they differ, with the writes and deletes that differ named (`Rule::Objects`); deployed `identity_hash`, or the record name when a record has none; flags; new conflicts by resource and admission refusals by resource and reason; new `reverted` drift by resource and path; new `delete` prune fates; and, for a `dry_run` plan, objects newly in `not_checked`, whose refusals and drift a dry run could not see). A rule the reviewed plan did not check is `skipped`; a different `kix` is `kix_differs`, never a mismatch: the objects digest already holds the deploy to the reviewed objects and files, and the binary is chosen by whoever deploys. `commands/deploy.rs` exits `EXIT_STALE` (4) on a mismatch, loads the plan file (`load_saved_plan`, `PlanFile::verify`; its SHA-256 is printed and in the JSON as `plan_sha256`) before any build, compares after `plan::document`, passes the merged planning flags to `run_deploy_async` (the apply never reads `args.plan`), and `check_saved_plan` is `--plan` with `--dry-run`, which exits 4 when stale, 3 when it matches but the deploy would stop (`doc.stops()` or migrations not accepted), and 0 otherwise
 
 #### eval (`kix/src/eval/`)
 

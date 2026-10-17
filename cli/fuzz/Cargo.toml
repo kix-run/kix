@@ -1,4 +1,4 @@
-# cargo-fuzz targets for the bundle readers. Its own workspace, so the main
+# cargo-fuzz targets for the bundle and plan file readers. Its own workspace, so the main
 # workspace's `cargo test` and clippy never build libFuzzer. See
 # ../README.md, "Bundle acceptance checks".
 [package]
@@ -14,6 +14,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 kix-bundle = { path = "../kix-bundle" }
+kix-lib = { path = "../kix" }
 zstd = "0.14"
 
 [workspace]
@@ -42,6 +43,20 @@ bench = false
 [[bin]]
 name = "bundle_read_frames"
 path = "fuzz_targets/bundle_read_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kixplan_read"
+path = "fuzz_targets/kixplan_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kixplan_read_frames"
+path = "fuzz_targets/kixplan_read_frames.rs"
 test = false
 doc = false
 bench = false

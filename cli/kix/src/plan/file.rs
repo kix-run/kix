@@ -672,6 +672,26 @@ mod tests {
         }
     }
 
+    /// `kix/tests/fixtures/plan.kixplan` is the plan file of [`sides`], as
+    /// this kix writes it: the same plan gives the same bytes from one build
+    /// to the next. The fuzz targets start from it. Regenerate it with
+    /// `KIX_WRITE_FIXTURES=1 cargo test -p kix-lib plan::file`.
+    #[test]
+    fn the_fixture_is_what_this_kix_writes() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/plan.kixplan");
+        let (old, new) = sides();
+        let bytes = written(&old, &new);
+        if std::env::var_os("KIX_WRITE_FIXTURES").is_some() {
+            std::fs::write(&path, &bytes).unwrap();
+        }
+        assert!(
+            std::fs::read(&path).unwrap_or_default() == bytes,
+            "kix/tests/fixtures/plan.kixplan is not what this kix writes. Regenerate it with \
+             KIX_WRITE_FIXTURES=1 cargo test -p kix-lib plan::file"
+        );
+    }
+
     /// Both sides of a changed Secret are hidden; the new side marks the
     /// changed value.
     #[test]

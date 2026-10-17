@@ -122,8 +122,8 @@ Use JSON when another program will process the result:
   cwd="kix-examples/"
 />
 
-`kix diff` and `kix plan` print the same JSON document, so one consumer can
-read either. The checks a read-only diff cannot make read
+The document is the one a `kix plan --save` [plan file](/docs/reference/cli/plan/#plan-file)
+holds, so one consumer can read either. The checks a read-only diff cannot make read
 `{ "status": "not_checked", "reason": "read_only" }`. By default the JSON
 names each changed resource and counts its changed fields. Add
 `--detail fields` to list each field change, old to new:
@@ -141,8 +141,9 @@ names each changed resource and counts its changed fields. Add
 deployed build is on this machine. Add `--detail manifests` to also include,
 under `manifests` on each package, the old and new manifest of every resource
 that changes, is added, or is removed, for a tool that shows a line-by-line
-diff. In `kix plan` the two manifests of an object the cluster checked are
-the live object and the cluster's dry-run result:
+diff. A plan file holds those manifests too, one file each; in a `kix plan`
+plan file the two manifests of an object the cluster checked are the live
+object and the cluster's dry-run result:
 
 <Command
   commands={["kix diff how-to-application --output json --detail manifests > kix-diff.json"]}

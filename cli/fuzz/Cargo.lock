@@ -1101,13 +1101,24 @@ dependencies = [
 name = "kix-bundle"
 version = "0.1.0"
 dependencies = [
+ "kix-container",
  "kix-lib",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "thiserror",
  "tracing",
+ "zstd",
+]
+
+[[package]]
+name = "kix-container"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
  "zstd",
 ]
 
@@ -1116,6 +1127,7 @@ name = "kix-fuzz"
 version = "0.0.0"
 dependencies = [
  "kix-bundle",
+ "kix-lib",
  "libfuzzer-sys",
  "zstd",
 ]
@@ -1137,6 +1149,7 @@ dependencies = [
  "hyper-util",
  "indexmap",
  "k8s-openapi",
+ "kix-container",
  "kube",
  "owo-colors",
  "petgraph",

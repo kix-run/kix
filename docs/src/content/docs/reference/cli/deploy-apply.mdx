@@ -128,12 +128,17 @@ non-interactive.
 
 ## Deploy a reviewed plan
 
-Save the plan a reviewer approves, then deploy with it:
+Save the plan a reviewer approves as a
+[plan file](/docs/reference/cli/plan/#plan-file), then deploy with it:
 
 ```bash
-kix plan prod --output json > plan.json   # reviewed and approved
-kix deploy prod --plan plan.json --yes
+kix plan prod --save plan.kixplan   # reviewed and approved
+kix deploy prod --plan plan.kixplan --yes
 ```
+
+The deploy reads only plan files. It refuses a file that is not one, and a
+plan file whose manifests do not match their names, before it builds
+anything.
 
 The deploy builds and plans again with the planning flags recorded in the
 plan, and applies nothing if the new plan differs from the reviewed one on
@@ -160,13 +165,13 @@ made, for example a `kix plan` document with prune marked not checked, was
 edited after it was written and is refused. The deploy prints the file's
 SHA-256 so an approval system can check it used the file it approved.
 
-A refusal lists what differs and exits `4`. `kix deploy --plan plan.json
+A refusal lists what differs and exits `4`. `kix deploy --plan plan.kixplan
 --dry-run` makes the same comparison without deploying. It exits `4` when the
 plan no longer matches, `3` when it matches but the deploy would stop on a
 refused write or a migration not accepted, and `0` otherwise. With
 `--output json` it prints `{ plan_sha256, matches, mismatches, skipped, kix_differs }`.
 
-A plan saved from [`kix diff`](/docs/reference/cli/diff/) against the cluster
+A plan saved with [`kix diff --save`](/docs/reference/cli/diff/) against the cluster
 can be used too, when the deployed build was available to it, so its drift
 section is checked. A diff checks no refusals, prune deletes, or objects a
 dry run cannot reach, so those are not compared and the output says so; the
