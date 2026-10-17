@@ -135,7 +135,7 @@
 #   On a replicated ClickHouse, Plausible starts only while the first
 #   replica answers, since the migrations and the replicate step run
 #   there. Plausible's own ON CLUSTER migrations wait for every replica, so
-#   take a Plausible release only while all replicas are up. Community
+#   upgrade Plausible only while all replicas are up. Community
 #   Edition documents a single ClickHouse server; the replicated path is
 #   the one Plausible's hosted service uses, verified here on kind.
 #   Both database passwords go into URLs unescaped (DATABASE_URL,
@@ -655,7 +655,7 @@ in
           replicateScript =
             if replicated then
               lib.warn
-                "${who}: deps.clickhouseDatabase is on a ClickHouse server with ${ch.replicas} replicas. Plausible Community Edition documents a single ClickHouse server; Kix migrates on the first replica and converts Plausible's tables to replicated ones in the `replicate` init container, which Plausible does not support. It is tested with Plausible v${release}; test it again before taking another release, and take a release only while every replica is up."
+                "${who}: deps.clickhouseDatabase is on a ClickHouse server with ${ch.replicas} replicas. Plausible Community Edition documents a single ClickHouse server; Kix migrates on the first replica and converts Plausible's tables to replicated ones in the `replicate` init container, which Plausible does not support. It was tested with Plausible v${release}. Before upgrading Plausible, test the new version on a replicated ClickHouse, and upgrade only while every replica is up."
                 scope.mkResource
                 {
                   apiVersion = "v1";
