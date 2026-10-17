@@ -25,8 +25,8 @@
 #   prometheus (optional)         a PodMonitor for the exporter sidecar,
 #                                 and the alerts below.
 #
-# Defaults: `instances` from the availability level (1 at none, 2 at pod
-# and node, 3 at zone), PostgreSQL 17, 1 CPU and 2Gi per instance, 20Gi
+# Defaults: `instances` from the availability level (1 at none, 2 above),
+# PostgreSQL 17, 1 CPU and 2Gi per instance, 20Gi
 # volumes, TLS on, no connection pooler, no backups.
 #
 # Placement: with more than one instance, the pods spread over nodes and
@@ -317,14 +317,15 @@ in
     instances = lib.mkOption {
       type = lib.types.ints.positive;
       # One instance cannot survive its own pod's restart, so `pod` needs a
-      # second; three at `zone` keep a Patroni majority through a zone loss.
+      # second. Patroni elects a leader through a lock in the Kubernetes API,
+      # not a vote among the instances, so two survive a lost node or zone.
       default = kix.availability.pick availability {
         none = 1;
         pod = 2;
         node = 2;
-        zone = 3;
+        zone = 2;
       };
-      defaultText = lib.literalExpression "kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 3; }";
+      defaultText = lib.literalExpression "kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 2; }";
       description = "PostgreSQL instances (`spec.instances`): one primary, the rest streaming replicas that Patroni fails over to.";
     };
 

@@ -16,7 +16,7 @@
 #
 # Modes (`mode`):
 #   deployment   a gateway. Replicas follow the cluster's availability level
-#                (one at `none`, two at `pod` and `node`, three at `zone`),
+#                (one at `none`, two above),
 #                except with `events.enabled`, below.
 #   daemonset    an agent on every Linux node, tolerating every NoSchedule
 #                taint. The Service sets `internalTrafficPolicy: Local`, so a
@@ -236,7 +236,7 @@ in
               none = 1;
               pod = 2;
               node = 2;
-              zone = 3;
+              zone = 2;
             };
 
         builtinSettings = {
