@@ -330,14 +330,15 @@ fn deploy_and_gc() {
         String::from_utf8_lossy(&current.stderr)
     );
 
+    // A saved diff lists no objects a deploy writes, so it is refused.
     let from_diff = check(&diffed, &[]);
     assert_eq!(
         from_diff.status.code(),
-        Some(0),
-        "a saved kix diff matches: {}{}",
-        String::from_utf8_lossy(&from_diff.stdout),
+        Some(1),
+        "{}",
         String::from_utf8_lossy(&from_diff.stderr)
     );
+    assert!(String::from_utf8_lossy(&from_diff.stderr).contains("save a plan from `kix plan`"));
 
     let contradicted = check(&unforced, &["--prune"]);
     assert_eq!(contradicted.status.code(), Some(1));
@@ -389,17 +390,6 @@ fn deploy_and_gc() {
     );
     assert_eq!(replicas.trim(), "3", "a refused deploy applies nothing");
 
-    // A diff checks no refusals, so the saved diff still matches, and the
-    // check says the deploy would stop on the new conflict.
-    let stops = check(&diffed, &[]);
-    assert_eq!(
-        stops.status.code(),
-        Some(3),
-        "{}{}",
-        String::from_utf8_lossy(&stops.stdout),
-        String::from_utf8_lossy(&stops.stderr)
-    );
-
     let forced_plan = kix(KIND_CLUSTER)
         .args([
             "plan",
@@ -441,9 +431,11 @@ fn deploy_and_gc() {
     );
     assert_eq!(replicas.trim(), "2", "the build's replicas, not kubectl's");
 
+    // The cluster now runs that build, so a deploy of it writes other
+    // objects against another deployed build.
     let stale = check(&forced, &["-o", "json"]);
     assert_eq!(stale.status.code(), Some(4));
-    assert_eq!(mismatched_rules(&stale), vec!["deployed_build"]);
+    assert_eq!(mismatched_rules(&stale), vec!["objects", "deployed_build"]);
     let _ = std::fs::remove_dir_all(&dir);
 
     // Put the first build back for the phases below.
