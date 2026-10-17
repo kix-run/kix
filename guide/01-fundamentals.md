@@ -446,7 +446,7 @@ immich-db = {
 **Scalar / structured** - precise types where shape is fixed:
 
 ```nix
-replicas    = lib.mkOption { type = lib.types.ints.positive; default = kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 3; }; };
+replicas    = lib.mkOption { type = lib.types.ints.positive; default = kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 2; }; };
 environment = lib.mkOption { type = lib.types.str; default = "production"; };
 size        = lib.mkOption { type = kix.types.quantity; default = "10Gi"; };
 ```
