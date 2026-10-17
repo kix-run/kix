@@ -307,7 +307,7 @@ in
       && indexOf "PLAUSIBLE_CH_PASSWORD" < indexOf "CLICKHOUSE_DATABASE_URL"
       &&
         (envOf main).CLICKHOUSE_DATABASE_URL
-        == "http://$(PLAUSIBLE_CH_USERNAME):$(PLAUSIBLE_CH_PASSWORD)@clickhouse.events.svc.cluster.local:8123/plausible_events"
+        == "http://$(PLAUSIBLE_CH_USERNAME):$(PLAUSIBLE_CH_PASSWORD)@clickhouse.events.svc.cluster.local:8123/web_plausible_events"
     )
     || throw "plausible migrate: init ${builtins.toJSON init}, main ${builtins.toJSON main}";
 
@@ -378,8 +378,8 @@ in
     in
     (
       cm.data.extensions == "citext"
-      && lib.hasInfix "GRANT ON CLUSTER '{cluster}' CREATE FUNCTION, DROP FUNCTION, CLUSTER ON *.* TO `plausible_events`;" sql
-      && lib.hasInfix "GRANT ON CLUSTER '{cluster}' SELECT ON system.replicas TO `plausible_events`;" sql
+      && lib.hasInfix "GRANT ON CLUSTER '{cluster}' CREATE FUNCTION, DROP FUNCTION, CLUSTER ON *.* TO `web_plausible_events`;" sql
+      && lib.hasInfix "GRANT ON CLUSTER '{cluster}' SELECT ON system.replicas TO `web_plausible_events`;" sql
     )
     || throw "plausible privileges: extensions ${builtins.toJSON cm.data}, sql ${sql}";
 
@@ -652,31 +652,31 @@ in
     || throw "plausible checksums: base ${builtins.toJSON base}, key ${builtins.toJSON newKey}, password ${builtins.toJSON newPassword}";
 
   # Two instances named alike in two namespaces, both on the one ClickHouse
-  # server, render without a collision and get two databases. Each facade
-  # names its own database and user, which default to the instance name.
+  # server, render without a collision and, with the facades' defaults, get
+  # a database and a user each, named after their namespace.
   plausible-two-namespaces =
     let
       cluster = mkCluster [
         clickhouseServer
-        (plausibleIn {
-          ns = "web";
-          facadeConfig = {
-            database = "plausible_web";
-            user = "plausible_web";
-          };
-        })
-        (plausibleIn {
-          ns = "shop";
-          facadeConfig = {
-            database = "plausible_shop";
-            user = "plausible_shop";
-          };
-        })
+        (plausibleIn { ns = "web"; })
+        (plausibleIn { ns = "shop"; })
       ];
       urls = map (d: (envOf (builtins.head d.spec.template.spec.containers)).CLICKHOUSE_DATABASE_URL) (
         builtins.filter (d: d.metadata.name == "plausible") (ofKind "Deployment" (manifests cluster))
       );
+      bootstrapSql = map (c: c.data."bootstrap.sql") (
+        builtins.filter (c: lib.hasPrefix "plausible-events-" c.metadata.name && c ? data."bootstrap.sql") (
+          ofKind "ConfigMap" (manifests cluster)
+        )
+      );
     in
-    (builtins.length urls == 2 && lib.unique urls == urls)
+    (
+      lib.naturalSort (map (u: lib.last (lib.splitString "/" u)) urls) == [
+        "shop_plausible_events"
+        "web_plausible_events"
+      ]
+      && builtins.any (lib.hasInfix "CREATE USER IF NOT EXISTS `web_plausible_events`") bootstrapSql
+      && builtins.any (lib.hasInfix "CREATE USER IF NOT EXISTS `shop_plausible_events`") bootstrapSql
+    )
     || throw "plausible two namespaces: ${builtins.toJSON urls}";
 }

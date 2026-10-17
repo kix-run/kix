@@ -96,6 +96,10 @@
 }:
 let
   name = scope.instanceName;
+  # The default database and user name. A ClickHouse server is shared
+  # across namespaces, so the name carries the namespace: two instances
+  # named alike in two namespaces get a database and a user each.
+  defaultIdentifier = lib.replaceStrings [ "-" ] [ "_" ] "${scope.namespaceName}_${name}";
 
   # Both end up inside backquoted identifiers in SQL the Job runs as the
   # administrator.
@@ -139,14 +143,16 @@ in
   options = {
     database = lib.mkOption {
       type = identifier;
-      default = lib.replaceStrings [ "-" ] [ "_" ] name;
-      description = "Database to create. Defaults to the instance name with dashes as underscores.";
+      default = defaultIdentifier;
+      defaultText = lib.literalExpression ''"<namespace>_<instance>", dashes as underscores'';
+      description = "Database to create. Defaults to the namespace and the instance name, joined by an underscore, with dashes as underscores.";
     };
 
     user = lib.mkOption {
       type = identifier;
-      default = lib.replaceStrings [ "-" ] [ "_" ] name;
-      description = "User to create. Defaults to the instance name with dashes as underscores.";
+      default = defaultIdentifier;
+      defaultText = lib.literalExpression ''"<namespace>_<instance>", dashes as underscores'';
+      description = "User to create. Defaults to the namespace and the instance name, joined by an underscore, with dashes as underscores.";
     };
 
     privileges = lib.mkOption {
