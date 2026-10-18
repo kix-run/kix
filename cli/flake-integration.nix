@@ -55,6 +55,14 @@
         // {
           inherit cargoArtifacts;
 
+          # cargo-auditable writes the list of crates into the binary, so
+          # SBOM tools such as syft can see what kix is built from. Spelled
+          # out because crane's cargoWithProfile puts --release before the
+          # subcommand, ahead of `auditable`. Not in buildDepsOnly: only the
+          # final binary carries the list.
+          cargoBuildCommand = "cargo auditable build --release";
+          nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.cargo-auditable ];
+
           # Integration tests require a writable nix store (eval cache),
           # which is unavailable inside the nix build sandbox.
           doCheck = false;
