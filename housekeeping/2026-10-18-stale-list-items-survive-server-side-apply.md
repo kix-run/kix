@@ -1,0 +1,3 @@
+# 2026-10-18 · `kix deploy` · List items an older kix wrote with Update survive every later apply, and no plan shows them.
+
+Server-side apply removes only fields its own Apply operation owns. On ludo, `PrometheusRule/node-exporter-alerts` kept its old group `node-exporter` (with a `| float64` template) beside the new `node-exporter-alerts` group, because an earlier kix wrote it with an Update. The Prometheus operator rejected the whole rule, so no node-exporter alert was loaded, while `kix plan` and `kix plan --reconcile` both reported nothing to change. Removed by hand with a JSON patch; any object first written before kix used Apply may carry the same leftovers.
