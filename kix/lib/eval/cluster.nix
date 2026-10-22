@@ -17,6 +17,8 @@
   resolveDepTargets,
   describeRequester,
   buildConfigInjections,
+  checkRefTargets,
+  refsOf,
   evaluateInstanceConfig,
   evaluateInstance,
   mkImport,
@@ -78,23 +80,10 @@
             autoNamespace = cfg.autoNamespace;
           });
 
-      _refTargetsCheck = lib.foldlAttrs (
-        acc: nsName: nsInsts:
-        lib.foldlAttrs (
-          acc: instName: instCfg:
-          lib.foldlAttrs (
-            acc: arg: v:
-            if
-              builtins.isAttrs v
-              && (v._type or "") == "kix-ref"
-              && !((mergedInstances.${v.namespace} or { }) ? ${v.instanceName})
-            then
-              throw "kix: ${nsName}/${instName} sets deps.${arg} = ref.${v.namespace}.${v.instanceName}, which is not an instance. It names a package in availablePackages that nothing auto-instantiated there; declare it under instances.${v.namespace}.${v.instanceName}."
-            else
-              acc
-          ) acc (instCfg.deps or { })
-        ) acc nsInsts
-      ) null cfg.instances;
+      _refTargetsCheck = checkRefTargets {
+        instances = cfg.instances;
+        inherit mergedInstances;
+      };
 
       # Runs over inactive instances too, so a misplaced or malformed entry
       # fails before anything activates the instance.
@@ -335,7 +324,7 @@
       instanceProcessors = hooks.collectHooks cfg "instanceProcessors";
       clusterProcessors = hooks.collectHooks cfg "clusterProcessors";
 
-      # Only `ref` pointers are read here. Any other explicit dep value is a
+      # Only `ref` pointers, alone or in a list, are read here. Any other explicit dep value is a
       # foreign object the fixpoint may own, so it is bound in step 7 and
       # never injected into.
       phase1Instances = lib.mapAttrs (
@@ -366,9 +355,7 @@
                 inherit resolutionIndex;
                 namespace = nsName;
                 requester = describeRequester nsName instName instCfg;
-                explicitOverrides = lib.filterAttrs (_: v: builtins.isAttrs v && (v._type or "") == "kix-ref") (
-                  instCfg.deps or { }
-                );
+                explicitOverrides = lib.filterAttrs (_: v: refsOf v != [ ]) (instCfg.deps or { });
               };
             in
             {

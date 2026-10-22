@@ -7,7 +7,7 @@
 }:
 
 let
-  inherit (resolve) discoverBuildDeps;
+  inherit (resolve) discoverBuildDeps refsOf;
 in
 
 rec {
@@ -67,8 +67,6 @@ rec {
   getRequiredDeps = getDepsWhere (_name: spec: !(spec.optional or false));
 
   getAllDeps = getDepsWhere (_name: _spec: true);
-
-  isRef = v: builtins.isAttrs v && (v._type or "") == "kix-ref";
 
   # Every `<ns>.<inst>` computeAutoInstances could produce, as
   # `{ <ns> = [ <inst> ... ]; }`: the explicit instances plus each shelf
@@ -251,8 +249,8 @@ rec {
 
       # The demands an instance places on optional instances and the shelf.
       # A dependency answered by a mandatory instance places none. One wired
-      # with `deps.<arg>` places none by name; if the wiring is a `ref` to an
-      # optional instance, that instance is demanded directly.
+      # with `deps.<arg>` places none by name; each `ref` in the wiring (one,
+      # or a list) to an optional instance demands that instance directly.
       demandsOf =
         instCfg: ns: instName:
         let
@@ -260,9 +258,11 @@ rec {
           # resolveArg treats a null entry as not wired.
           wired = lib.filterAttrs (_: v: v != null) (instCfg.deps or { });
           required = builtins.filter (d: !(mandatoryKeys ? ${d})) (getRequiredDeps instCfg.package);
-          wiredOptionals = builtins.filter (
-            v: isRef v && (optional.${v.namespace} or { }) ? ${v.instanceName}
-          ) (map (d: wired.${d}) (builtins.filter (d: wired ? ${d}) (getAllDeps instCfg.package)));
+          wiredOptionals = builtins.filter (v: (optional.${v.namespace} or { }) ? ${v.instanceName}) (
+            builtins.concatMap (d: refsOf wired.${d}) (
+              builtins.filter (d: wired ? ${d}) (getAllDeps instCfg.package)
+            )
+          );
         in
         map (d: mkItem d ns requester) (builtins.filter (d: !(wired ? ${d})) required)
         ++ map (v: {
