@@ -93,6 +93,8 @@ let
       resolveDepTargets
       describeRequester
       buildConfigInjections
+      checkRefTargets
+      refsOf
       evaluateInstanceConfig
       ;
     inherit (instance) evaluateInstance;
@@ -121,6 +123,7 @@ in
   inherit (resolve)
     buildResolutionIndex
     resolveArg
+    checkRefTargets
     describeRequester
     extractDeferredDefs
     evaluateInstanceConfig

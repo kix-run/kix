@@ -179,18 +179,17 @@ rec {
       };
 
       compat = packageMeta.compatibleWith or { };
-      compatDiags = map (
+      # A list dependency checks each instance it names.
+      compatDiags = builtins.concatMap (
         depName:
-        let
-          depInfo = resolvedDepMeta.${depName} or null;
-          dep = if depInfo != null then depInfo.instance else null;
-          # A managed instance carries its package's meta; an import may
-          # publish out.version.
-          depVersion = dep._meta.packageMeta.version or (dep.out.version or null);
-        in
-        if dep == null then
-          noDiagnostics
-        else
+        map (
+          depTarget:
+          let
+            dep = depTarget.instance;
+            # A managed instance carries its package's meta; an import may
+            # publish out.version.
+            depVersion = dep._meta.packageMeta.version or (dep.out.version or null);
+          in
           constraintDiagnostics {
             field = "meta.compatibleWith.${depName}";
             subject = "dependency '${depName}'";
@@ -203,6 +202,7 @@ rec {
               else
                 "dependency '${depName}' version ${depVersion} is newer than the supported maximum ${want}";
           }
+        ) (resolvedDepMeta.${depName}.targets or [ ])
       ) (builtins.attrNames compat);
 
       versionDiags = [ k8sDiag ] ++ compatDiags;
@@ -284,7 +284,7 @@ rec {
       ctx = {
         config = evaluatedConfig;
         self = parts;
-        deps = lib.mapAttrs (_: di: di.instance) resolvedDepMeta;
+        deps = lib.mapAttrs (_: di: di.value) resolvedDepMeta;
       };
 
       depDiagnostics =
