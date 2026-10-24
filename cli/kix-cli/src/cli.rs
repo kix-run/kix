@@ -427,8 +427,15 @@ pub enum PinCommand {
 
 #[derive(clap::Args)]
 pub struct PinSetArgs {
-    /// Pin name, as the cluster definition reads it: `pins.get "<key>"`
+    /// Pin name, as the cluster definition reads it (`pins.get "<key>"`), or
+    /// `<namespace>/<instance>` for an instance pin, which Kix applies to the
+    /// instance's `image` option itself
     pub key: String,
+
+    /// For an instance pin, the option it sets, as a path in the instance's
+    /// config such as `server.image`. Default: `image`.
+    #[arg(long)]
+    pub option: Option<String>,
 
     /// Tag to promote to. Kept in the file because it is what a human reads.
     #[arg(long)]
@@ -464,7 +471,8 @@ pub struct PinSetArgs {
     #[arg(long)]
     pub note: Option<String>,
 
-    /// Create the pin file, or add a pin that is not in it yet.
+    /// Create the pin file, or add a pin name that is not in it yet. A new
+    /// instance pin needs no `--init`.
     #[arg(long)]
     pub init: bool,
 
@@ -482,7 +490,8 @@ pub struct PinSetArgs {
 
 #[derive(clap::Args)]
 pub struct PinCheckArgs {
-    /// Check only these pins. Repeatable. Default: all of them.
+    /// Check only these pins: a pin name, or `<namespace>/<instance>` for
+    /// every pin of that instance. Repeatable. Default: all of them.
     #[arg(long = "key")]
     pub keys: Vec<String>,
 
