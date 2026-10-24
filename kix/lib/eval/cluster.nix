@@ -99,7 +99,9 @@
       };
 
       # An instance pin for an instance the cluster does not have would
-      # otherwise pin nothing, and say nothing.
+      # otherwise pin nothing, and say nothing. So a pin file with instance
+      # pins belongs to one cluster: a flake with several clusters gives each
+      # its own, `pins = kix.pins ./<cluster>/pins.json;`.
       _instancePinsCheck =
         if pins == null then
           null
@@ -119,7 +121,7 @@
                   names = builtins.attrNames (mergedInstances.${nsName} or { });
                 in
                 if names == [ ] then "none" else builtins.concatStringsSep ", " names
-              }."
+              }. A pin file with instance pins belongs to one cluster; give each cluster that applies instance pins its own file."
             else if (instCfg.package._type or "") == "kix-import" then
               throw "kix.pins: ${where} pins instance '${key}', which is an import. An import renders no workloads, so it has no image to pin."
             else

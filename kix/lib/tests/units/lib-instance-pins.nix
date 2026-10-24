@@ -61,6 +61,47 @@ let
     config.image.tag = lib.mkDefault "1.5";
   };
 
+  # Two images from one release: `webhook.image.tag` follows `image.tag`
+  # through the package's `config`, as cert-manager's webhook does.
+  releasePackage = {
+    meta.version = "test";
+    options.image = kixlib.options.image {
+      repository = "reg.example/controller";
+      tag = "1.0";
+      digest = digestA;
+    };
+    options.webhook.image = kixlib.options.image {
+      repository = "reg.example/webhook";
+      tag = "1.0";
+      digest = digestB;
+      tagText = "config.image.tag";
+    };
+    config =
+      { config, ... }:
+      {
+        webhook.image.tag = lib.mkDefault config.image.tag;
+      };
+    build =
+      {
+        self,
+        scope,
+        config,
+        ...
+      }:
+      {
+        cm = scope.mkResource {
+          apiVersion = "v1";
+          kind = "ConfigMap";
+          name = "${scope.instanceName}-images";
+          extra.data = {
+            image = kixlib.image.ref config.image;
+            webhook = kixlib.image.ref config.webhook.image;
+          };
+        };
+        root = self.cm;
+      };
+  };
+
   # A consumer that injects a tag into its `target` dependency.
   injectingConsumer = {
     meta.version = "test";
@@ -238,6 +279,15 @@ in
     && throws (withConfig {
       sidecar.image.repository = "reg.example/other";
     })
+    && throws (withConfig {
+      image.tag = lib.mkForce "9.9";
+    })
+    && throws (withConfig {
+      image = {
+        tag = lib.mkDefault "9.9";
+        repository = "reg.example/other";
+      };
+    })
     # Other options of the same instance are free.
     && !(throws (withConfig {
       replicas = 2;
@@ -391,4 +441,113 @@ in
       && inCode.imageSources.pinsFile == null
     )
     || throw "moving a value to a pin changed what is deployed";
+
+  # A follower image can be pinned: the package's `mkDefault` for its tag is
+  # one of the package's defaults, not a second definition. Pinning the main
+  # image alone moves the follower's tag and drops its digest, which belongs
+  # to the old tag, so a release is pinned image by image.
+  lib-instance-pins-follower-image =
+    let
+      pin = repository: tag: digest: { inherit repository tag digest; };
+      digestC = "sha256:" + lib.concatStrings (lib.replicate 64 "c");
+      digestD = "sha256:" + lib.concatStrings (lib.replicate 64 "d");
+      clusterWith =
+        options:
+        build (kixlib.pins {
+          version = 2;
+          instances."app/rel" = options;
+        }) { app.rel.package = releasePackage; };
+      both = imagesOf (clusterWith {
+        image = pin "reg.example/controller" "1.1" digestC;
+        "webhook.image" = pin "reg.example/webhook" "1.1" digestD;
+      }) "rel";
+      followerOnly = imagesOf (clusterWith {
+        "webhook.image" = pin "reg.example/webhook" "1.2" digestD;
+      }) "rel";
+      mainOnly = clusterWith { image = pin "reg.example/controller" "1.1" digestC; };
+      checks = {
+        both =
+          both == {
+            image = "reg.example/controller:1.1@${digestC}";
+            webhook = "reg.example/webhook:1.1@${digestD}";
+          };
+        followerOnly =
+          followerOnly == {
+            image = "reg.example/controller:1.0@${digestA}";
+            webhook = "reg.example/webhook:1.2@${digestD}";
+          };
+        mainOnly = (imagesOf mainOnly "rel").webhook == "reg.example/webhook:1.1";
+        followerOrigin = (sourceOf mainOnly "rel" "webhook.image").origin == "package_default";
+      };
+    in
+    builtins.all (x: x) (builtins.attrValues checks)
+    || throw "follower pins wrong: ${builtins.toJSON { inherit checks both followerOnly; }}";
+
+  # A `lib.mkDefault` in the cluster's code is below the pin, so the pin
+  # wins and evaluation does not fail.
+  lib-instance-pins-win-over-mkdefault-in-code =
+    let
+      web = imagesOf (build pinsFile {
+        app.web = {
+          package = webPackage;
+          config.image.tag = lib.mkDefault "9.9";
+        };
+      }) "web";
+    in
+    web.image == "reg.example/web:1.1@${digestB}" || throw "mkDefault beat the pin: ${web.image}";
+
+  # A pin states its digest. One without a digest, under another
+  # repository at the package's tag, does not inherit the package's digest.
+  lib-instance-pins-digestless-pin-keeps-no-package-digest =
+    let
+      web = imagesOf (build (kixlib.pins {
+        version = 2;
+        instances."app/web".image = {
+          repository = "mirror.example/web";
+          tag = "1.0";
+        };
+      }) { app.web.package = webPackage; }) "web";
+    in
+    web.image == "mirror.example/web:1.0"
+    || throw "a digest-less pin kept the package digest: ${web.image}";
+
+  # Both readers check the image reference grammar and the envelope's
+  # fields; the Rust tests in cli/kix/src/pins/mod.rs cover the same cases.
+  lib-instance-pins-reference-grammar =
+    let
+      refused =
+        pin:
+        throws
+          (kixlib.pins {
+            version = 2;
+            instances."app/web".image = pin;
+          }).instances;
+    in
+    refused {
+      repository = "reg.example/web";
+      tag = "1.1@${digestB}";
+    }
+    && refused {
+      repository = "Reg/Web";
+      tag = "1";
+    }
+    && refused {
+      repository = "reg.example//web";
+      tag = "1";
+    }
+    && refused {
+      repository = "reg.example/web";
+      tag = "-1";
+    }
+    && !(refused {
+      repository = "localhost:5000/team/web-server";
+      tag = "v1.2_3";
+    })
+    &&
+      throws
+        (kixlib.pins {
+          version = 2;
+          images = { };
+          holds = { };
+        }).keys;
 }

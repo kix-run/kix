@@ -418,6 +418,7 @@ rec {
           instancePinsLib.check {
             inherit
               packageOptions
+              packageConfigFile
               options
               instancePins
               instanceText

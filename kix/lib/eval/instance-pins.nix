@@ -5,7 +5,8 @@
 # one more definition of the instance's config, from a module whose `_file`
 # is the pin file, so the module system records the pin file as the place
 # the value was defined. `check` refuses a pin that shares its option with
-# any other definition, and `imageSources` reads those records back.
+# a definition in code it does not win over, and `imageSources` reads those
+# records back.
 { lib, packageDefaultPriority }:
 
 let
@@ -115,9 +116,16 @@ in
   };
 
   # Throws unless each pinned option is an image option of the package and
-  # the pin is its only definition above the package's defaults. A value in
-  # code beside the pin would otherwise merge with it field by field, or win
-  # over it at a higher priority, with no sign of which one runs.
+  # the pin is its only definition outside the package. A value in code
+  # beside the pin would otherwise merge with it field by field, or win over
+  # it at a higher priority, with no sign of which one runs.
+  #
+  # The package's own definitions are left out: they are its defaults, such
+  # as a follower image's `tag = lib.mkDefault config.image.tag`. So is a
+  # definition in code whose every field has a lower priority than the pin,
+  # such as `image.tag = lib.mkDefault "1.0"`: the pin wins over it. The
+  # module system keeps such a definition here because the option itself,
+  # the attrset around the field, is defined at the ordinary priority.
   #
   # The declarations are checked first, against `packageOptions`: reading
   # the evaluated `options` with a pin for an undeclared option throws the
@@ -126,6 +134,7 @@ in
   check =
     {
       packageOptions,
+      packageConfigFile,
       options,
       instancePins,
       instanceText,
@@ -154,7 +163,21 @@ in
         _: option:
         let
           defs = (lib.getAttrFromPath (lib.splitString "." option) options).definitionsWithLocations;
-          others = builtins.filter (d: d.file != instancePins.file) defs;
+          # `lib.mkOverride` wraps a field as `{ _type = "override"; priority; }`;
+          # a higher number is a weaker definition.
+          belowPin =
+            v:
+            builtins.isAttrs v
+            && (v._type or null) == "override"
+            && v.priority > (lib.mkOverride 100 null).priority;
+          weaker =
+            d:
+            builtins.isAttrs d.value
+            && !(d.value ? _type)
+            && builtins.all belowPin (builtins.attrValues d.value);
+          others = builtins.filter (
+            d: d.file != instancePins.file && d.file != packageConfigFile && !(weaker d)
+          ) defs;
         in
         if others != [ ] then
           throw "kix.pins: ${where} pins option '${option}' of ${instanceText}, and ${

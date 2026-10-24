@@ -5,7 +5,9 @@
 
   # Passed to cluster functions that declare a required `pins` argument.
   # A cluster applies the file's instance pins by passing it on:
-  # `kix.buildCluster { inherit pins; ... }`.
+  # `kix.buildCluster { inherit pins; ... }`. Instance pins name instances
+  # of one cluster, so only one cluster passes a file that holds them; any
+  # other reads its own with `kix.pins`.
   pins ? null,
 
   # Prepended to each cluster's modules.
