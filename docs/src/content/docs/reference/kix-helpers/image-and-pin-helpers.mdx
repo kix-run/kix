@@ -171,14 +171,16 @@ Evaluation fails, naming the pin file and the other place, when:
 - the instance is not in the cluster, or is an import;
 - the package has no such option, or the option is not a `kix.options.image`
   option;
-- the cluster's code sets the same option at the pin's priority or above,
-  including a value equal to the pin's and a `lib.mkForce`.
+- the cluster's code or the package sets the same option at the pin's
+  priority or above, including a value equal to the pin's and a
+  `lib.mkForce`.
 
 A pin wins over a `lib.mkDefault` in the cluster's code and over the
 package's own defaults, so a follower image whose tag the package sets with
 `lib.mkDefault config.image.tag` can be pinned. Pinning only the main image
 moves a follower's tag and drops its digest, which belongs to the old tag, so
-pin each image of a release.
+pin each image of a release. A tool that writes pins should pin a release's
+followers together with its main image.
 
 A pin states its digest: a pin without one renders no digest, even at the
 package's tag.

@@ -59,7 +59,8 @@ Kix resolves the tag and writes the digest. The entry sets
 For an image option other than `image`, add `--option` with its path in the
 instance's config, such as `--option sidecar.image`. When a package runs
 several images from one release, pin each of them: pinning only the main
-image moves the others' tags and drops their digests.
+image moves the others' tags and drops their digests. A tool that writes
+pins for you should do the same.
 
 A file with instance pins declares `"version": 2`. A Kix that reads only
 version 1 refuses it with an error asking you to upgrade Kix.

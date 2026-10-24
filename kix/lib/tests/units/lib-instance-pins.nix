@@ -483,6 +483,18 @@ in
     builtins.all (x: x) (builtins.attrValues checks)
     || throw "follower pins wrong: ${builtins.toJSON { inherit checks both followerOnly; }}";
 
+  # A package that forces a field of its image cannot be pinned: the
+  # instance would run the package's tag with the pin's digest.
+  lib-instance-pins-package-mkforce-refused = throws (
+    manifests (
+      build pinsFile {
+        app.web.package = webPackage // {
+          config.image.tag = lib.mkForce "1.0";
+        };
+      }
+    )
+  );
+
   # A `lib.mkDefault` in the cluster's code is below the pin, so the pin
   # wins and evaluation does not fail.
   lib-instance-pins-win-over-mkdefault-in-code =
