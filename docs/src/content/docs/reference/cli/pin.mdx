@@ -6,9 +6,11 @@ description: "Resolve image tags to digests, record them in a committed pin file
 import Command from '/src/components/Command.astro';
 
 `kix pin` reads and writes a pin file: committed JSON that records which
-digest each image reference resolved to. A cluster definition reads it with
-`pins.get "<key>"`. `kix pin` does not evaluate the flake or the cluster, so it
-works while evaluation is failing.
+digest each image reference resolved to. A cluster definition reads an image
+pin with `pins.get "<key>"`. Kix applies an instance pin, keyed
+`<namespace>/<instance>`, to that instance's image option itself. `kix pin`
+does not evaluate the flake or the cluster, so it works while evaluation is
+failing.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
 `cli/kix-cli/src/commands/pin.rs` and `cli/kix-cli/src/commands/pin/locate.rs`
@@ -37,7 +39,7 @@ the file itself, it prints which one it used.
 ## `kix pin set <KEY>`
 
 ```text
-kix pin set <KEY> [--tag <TAG>] [--repository <REPO>]
+kix pin set <KEY> [--option <PATH>] [--tag <TAG>] [--repository <REPO>]
             [--digest <DIGEST> | --no-resolve] [--source-rev <REV>]
             [--promoted-by <WHO>] [--note <TEXT>] [--init] [--force]
             [--pins-file <PATH>]
@@ -45,7 +47,8 @@ kix pin set <KEY> [--tag <TAG>] [--repository <REPO>]
 
 | Argument or flag | Meaning |
 | --- | --- |
-| `<KEY>` | Pin name, as the cluster definition reads it with `pins.get "<KEY>"`. |
+| `<KEY>` | Pin name, as the cluster definition reads it with `pins.get "<KEY>"`, or `<namespace>/<instance>` for an instance pin. |
+| `--option <PATH>` | For an instance pin, the image option it sets, as a path in the instance's config such as `sidecar.image`. Default: `image`. |
 | `--tag <TAG>` | Tag to promote to. Required for a new pin; otherwise the existing tag is kept. |
 | `--repository <REPO>` | Repository including the registry host. Required for a new pin; otherwise the existing repository is kept. |
 | `--digest <DIGEST>` | Record this digest instead of asking the registry, for example in an air-gapped promotion. Use `sha256:` followed by 64 lowercase hexadecimal characters. Conflicts with `--no-resolve`. |
@@ -53,7 +56,7 @@ kix pin set <KEY> [--tag <TAG>] [--repository <REPO>]
 | `--source-rev <REV>` | Source revision the image was built from. `kix pin check --source-rev` compares against it. Kept from the existing pin when omitted. |
 | `--promoted-by <WHO>` | Who promoted it. Defaults to the CI run (`ci:<workflow>#<run>` on GitHub Actions, or the job URL on GitLab, Jenkins, and Buildkite), otherwise `user@host`. |
 | `--note <TEXT>` | A note for readers of the file. Kix never reads it and a later promotion keeps it. `--note ""` clears it. |
-| `--init` | Create the pin file, or add a key that is not in it yet. Without it, an unknown key or a missing file is an error. A new file is created next to the flake. |
+| `--init` | Create the pin file, or add a pin name that is not in it yet. Without it, an unknown pin name or a missing file is an error. A new instance pin needs no `--init`, because evaluation refuses a pin for an instance the cluster does not have. A new file is created next to the flake. |
 | `--force` | Rewrite a pin file that `kix pin` did not write, discarding its comments and layout. |
 | `--pins-file <PATH>` | Pin file to use. See [Finding the pin file](#finding-the-pin-file). |
 
@@ -73,7 +76,7 @@ kix pin check [--key <KEY>]... [--source-rev <REV>] [--allow-unresolved]
 
 | Flag | Meaning |
 | --- | --- |
-| `--key <KEY>` | Check only this pin. Repeatable. Default: all pins. |
+| `--key <KEY>` | Check only this pin, or every pin of the instance `<namespace>/<instance>`. Repeatable. Default: all pins. |
 | `--source-rev <REV>` | Fail when a pin records a different source revision. A short and a full SHA match when one is a prefix of the other. Pins that record no revision are skipped. |
 | `--allow-unresolved` | Report a pin with no digest as a warning instead of a failure. |
 | `--offline` | Check the file's shape without contacting any registry. |
@@ -87,6 +90,28 @@ Each pin gets one verdict:
 | `warn` | The digest exists but the tag now points elsewhere or could not be checked, or the pin has no digest and `--allow-unresolved` was given |
 | `fail` | The digest could not be verified in the registry, the reference is invalid, or the pin has no digest |
 
+## The file
+
+```json
+{
+  "version": 2,
+  "managedBy": "kix pin",
+  "images": {
+    "web": { "repository": "ghcr.io/acme/web", "tag": "main", "digest": "sha256:…" }
+  },
+  "instances": {
+    "monitoring/grafana": {
+      "image": { "repository": "docker.io/grafana/grafana", "tag": "13.1.3", "digest": "sha256:…" }
+    }
+  }
+}
+```
+
+`kix pin set` writes keys in sorted order, so a diff shows only what moved. A
+file with no instance pins is written as version 1 and without `instances`,
+which a Kix that reads only version 1 still reads. Each pin has the fields
+listed under [`kix.pins`](/docs/reference/kix-helpers/image-and-pin-helpers/#kixpins).
+
 ## `kix pin list`
 
 ```text
@@ -99,9 +124,10 @@ when, and its note.
 ## Output
 
 `-o json` prints a JSON document for all three subcommands: for `set`, the
-pin file path, key, resulting pin, and whether it changed; for `check`, each
-pin's result and message, the stale pins, and `ok`; for `list`, the pins
-object. Any other `-o` value prints text.
+pin file path, key, option (null for an image pin), resulting pin, and
+whether it changed; for `check`, each pin's key, option, result and message,
+the stale pins, and `ok`; for `list`, an object with `images` and
+`instances`, shaped as in the file. Any other `-o` value prints text.
 
 ## Exit status
 

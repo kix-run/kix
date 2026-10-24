@@ -1,0 +1,3 @@
+# 2026-10-24 · `kix/lib/eval/cluster.nix` · Instance pins in a file the cluster does not pass to `buildCluster` are ignored without a word.
+
+`kix.buildCluster` applies a pin file's `instances` map only when the file is passed as `pins`. A cluster that reads the same file with `pins.get` alone, or a flake whose `mkFlake { pins = ...; }` file holds instance pins for a cluster that never passes it on, evaluates as though the entries were not there. `kix pin set ns/app` succeeds and nothing changes. Nothing links a pin file to the clusters that apply it, so neither `kix pin check` nor evaluation can tell.

@@ -923,6 +923,14 @@
       "unverifiedNixBlocks": 1
     },
     {
+      "page": "promote-images/pin-an-instance-image-without-code",
+      "scenario": "image-promotion",
+      "status": "implemented",
+      "snippets": [
+        "applyInstancePins"
+      ]
+    },
+    {
       "page": "promote-images/promote-and-verify-an-image-pin",
       "scenario": "image-promotion",
       "status": "implemented"

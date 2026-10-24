@@ -109,7 +109,9 @@ in
 
   options = {
     # One kix.options.image per image the package runs (sidecars and init
-    # containers included), so `pins.get` can supply a digest for each.
+    # containers included), so a pin can supply a digest for each: an
+    # instance pin (`instances` in pins.json) sets one by option path, with
+    # no code reading it, and `kix-image-sources.json` reports each one.
     # A `digest` given here is kept while an instance leaves `image.tag` at
     # this tag and dropped when the tag changes; other field overrides keep it.
     image = kix.options.image { repository = "docker.io/myapp/server"; tag = "1.0.0"; };

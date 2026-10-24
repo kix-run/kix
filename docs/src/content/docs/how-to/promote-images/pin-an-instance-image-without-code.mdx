@@ -1,0 +1,85 @@
+---
+title: "Pin an instance's image without code"
+description: "Set an instance's image option from the pin file, so moving or removing the pin is a change to JSON only."
+---
+
+import Command from '/src/components/Command.astro';
+import Snippet from '/src/components/Snippet.astro';
+import applyInstancePins from '/src/snippets/clusters/test-pins/applyInstancePins.json';
+
+An instance pin sets one image option of one instance. No Nix reads it: Kix
+applies it to the option itself. Pinning a package's default image is then
+adding an entry to the pin file, and returning to the default is deleting it.
+
+This guide assumes your cluster already has a pin file. See
+[Create a committed image pin file](/docs/how-to/promote-images/create-a-committed-image-pin-file/)
+to start one.
+
+## Pass the pin file to the cluster
+
+Kix applies instance pins from the file you pass to `kix.buildCluster` as
+`pins`. With `mkFlake { pins = ./pins.json; }`, a cluster function that takes
+`pins` passes it on:
+
+<Snippet {...applyInstancePins} />
+
+A cluster that reads its own file passes `pins = kix.pins ./pins.json;` the
+same way.
+
+## Pin the image
+
+Name the instance as `<namespace>/<instance>`. A new instance pin needs the
+repository; later moves keep it:
+
+<Command
+  commands={[
+    "kix pin set monitoring/grafana --repository docker.io/grafana/grafana --tag 13.1.3",
+    "kix pin set monitoring/grafana --tag 13.1.4",
+  ]}
+  cwd="kix-project/"
+/>
+
+Kix resolves the tag and writes the digest. The entry sets
+`instances.monitoring.grafana.config.image`:
+
+```json
+"instances": {
+  "monitoring/grafana": {
+    "image": {
+      "repository": "docker.io/grafana/grafana",
+      "tag": "13.1.4",
+      "digest": "sha256:…"
+    }
+  }
+}
+```
+
+For an image option other than `image`, add `--option` with its path in the
+instance's config, such as `--option sidecar.image`.
+
+A file with instance pins declares `"version": 2`. A Kix that reads only
+version 1 refuses it with an error asking you to upgrade Kix.
+
+## Remove the value from code
+
+A pin and a value in the cluster's code for the same option is an evaluation
+error naming both places, so delete the value in code, such as
+`image.tag = "13.1.3";`, in the commit that adds the pin. Kix also refuses an
+instance pin for an instance the cluster does not have, or for an option that
+is not an image option.
+
+Moving a value from code to a pin changes no manifest, so the Activation keeps
+its name and the deploy is a no-op.
+
+## Check where each image comes from
+
+`kix-image-sources.json`, beside the Activation in the build result, lists each
+image option with its value, the package's default, and its origin: `pin`,
+`package_default`, `code`, `injected`, or `nix_built`. After the move, the
+instance's `image` reports `"origin": "pin"`.
+
+:::note[Reference]
+See [`pin`](/docs/reference/cli/pin/) and
+[`image`, `image.ref`, and `pins`](/docs/reference/kix-helpers/image-and-pin-helpers/)
+for every command option, and the file format.
+:::
