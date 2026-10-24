@@ -4,6 +4,8 @@
   clusters ? { },
 
   # Passed to cluster functions that declare a required `pins` argument.
+  # A cluster applies the file's instance pins by passing it on:
+  # `kix.buildCluster { inherit pins; ... }`.
   pins ? null,
 
   # Prepended to each cluster's modules.
@@ -113,6 +115,11 @@ let
           ''
           + slib.optionalString (cluster.extraImages != null) ''
             ln -s ${builtins.toFile "kix-extra-images.json" (builtins.toJSON cluster.extraImages)} $out/kix-extra-images.json
+          ''
+          # Where each image option's value comes from. Beside the
+          # Activation, not in it, so it never changes the Activation's name.
+          + ''
+            ln -s ${builtins.toFile "kix-image-sources.json" (builtins.toJSON cluster.imageSources)} $out/kix-image-sources.json
           ''
         );
       }) resolvedClusters;

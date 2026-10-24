@@ -95,7 +95,8 @@ let
       buildConfigInjections
       checkRefTargets
       refsOf
-      evaluateInstanceConfig
+      evaluateInstanceModules
+      instancePinsLib
       ;
     inherit (instance) evaluateInstance;
     inherit (import_) mkImport checkExtraDeps;
@@ -127,6 +128,7 @@ in
     describeRequester
     extractDeferredDefs
     evaluateInstanceConfig
+    evaluateInstanceModules
     packageDefaultPriority
     callPackagePhase1
     buildEntriesOf

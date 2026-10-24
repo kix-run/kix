@@ -243,6 +243,8 @@ rec {
   # `lib.mkDefault`.
   packageDefaultPriority = 1250;
 
+  instancePinsLib = import ./instance-pins.nix { inherit lib packageDefaultPriority; };
+
   # Moves every `lib.mkDefault` in a package's `config` to
   # `packageDefaultPriority`, through `mkIf`, `mkMerge`, `mkOrder` and
   # nested attrsets. Other priorities and plain values keep their meaning,
@@ -284,8 +286,12 @@ rec {
   # default can derive from a cluster fact such as `clusterDomain`.
   # `packageOptions` is not checked against the option contract here;
   # package CI checks it once per package (eval/options.nix,
-  # kix/package-eval.nix).
-  evaluateInstanceConfig =
+  # kix/package-eval.nix). `instancePins` is `{ file; options; }`, this
+  # instance's entry of a pin file's `instances` map (eval/instance-pins.nix).
+  #
+  # Returns `{ config; options; }`. Reading `config` runs the locked-field
+  # and instance-pin checks.
+  evaluateInstanceModules =
     {
       packageOptions,
       packageConfig ? { },
@@ -295,6 +301,7 @@ rec {
       configInjections ? [ ],
       namespaceName ? null,
       instanceName ? null,
+      instancePins ? null,
     }:
     let
       deferredConfig = instCfg.config;
@@ -385,26 +392,46 @@ rec {
             config = lowerPackageDefaults packageConfig;
           };
 
-      evaluated =
-        removeAttrs
-          (lib.evalModules {
-            prefix = lib.optionals named [
-              "instances"
-              namespaceName
-              instanceName
-              "config"
-            ];
-            specialArgs = { inherit clusterConfig; };
-            modules = [
-              { options = packageOptions; }
-              packageConfigModule
-            ]
-            ++ injectionModules
-            ++ wrappedModules;
-          }).config
-          [ "_module" ];
+      result = lib.evalModules {
+        prefix = lib.optionals named [
+          "instances"
+          namespaceName
+          instanceName
+          "config"
+        ];
+        specialArgs = { inherit clusterConfig; };
+        modules = [
+          { options = packageOptions; }
+          packageConfigModule
+        ]
+        ++ injectionModules
+        ++ lib.optional (instancePins != null) (instancePinsLib.module instancePins)
+        ++ wrappedModules;
+      };
+
+      options = removeAttrs result.options [ "_module" ];
+
+      _pinCheck =
+        if instancePins == null then
+          null
+        else
+          instancePinsLib.check {
+            inherit
+              packageOptions
+              options
+              instancePins
+              instanceText
+              ;
+          };
     in
-    builtins.seq _lockedCheck evaluated;
+    {
+      inherit options;
+      config = builtins.seq _lockedCheck (
+        builtins.seq _pinCheck (removeAttrs result.config [ "_module" ])
+      );
+    };
+
+  evaluateInstanceConfig = args: (evaluateInstanceModules args).config;
 
   # `availability` is the instance's resolved level (core/availability.nix),
   # a plain string a package may take as an argument so its option defaults

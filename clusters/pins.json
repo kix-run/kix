@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "managedBy": "kix pin",
   "images": {
     "web": {
@@ -9,6 +9,18 @@
       "promotedBy": "kixpkgs demo",
       "resolvedAt": "2026-09-09T10:59:45Z",
       "note": "Upstream nginx. A stable tag, so only a person moves it."
+    }
+  },
+  "instances": {
+    "kix-pins/web-next": {
+      "image": {
+        "repository": "docker.io/nginxinc/nginx-unprivileged",
+        "tag": "1.28-alpine",
+        "digest": "sha256:7377697a821c131a924a7105fafbe7414db4e9fcc77a6f08f776f33f141ec3f8",
+        "promotedBy": "kixpkgs demo",
+        "resolvedAt": "2026-10-24T00:00:00Z",
+        "note": "Pins the package's image option. Nothing in test-pins.nix reads it."
+      }
     }
   }
 }
