@@ -139,8 +139,12 @@ does the same for every cluster function that takes a `pins` argument.
 | `pins.file` | The pin file's path as a string, or `null` for an attrset. |
 
 Each pin needs `repository` and `tag`. `digest`, `sourceRev`, `promotedBy`,
-`resolvedAt` and `note` are optional, and any other field is an error. A
-digest must be `sha256:` followed by 64 lower-case hexadecimal characters.
+`resolvedAt` and `note` are optional, and any other field is an error. The
+repository and tag follow the OCI image reference grammar: an optional
+registry host and port, then lower-case path components; a tag of up to 128
+letters, digits, `_`, `.` and `-`, with no digest in it. A digest must be
+`sha256:` followed by 64 lower-case hexadecimal characters. A top-level field
+other than `version`, `managedBy`, `images` and `instances` is an error.
 The file holds image pins under `images` and instance pins under
 `instances`. It declares `"version": 1` when it has only `images`, and
 `"version": 2` when it has `instances`; a bare map of image pins is also
@@ -167,8 +171,22 @@ Evaluation fails, naming the pin file and the other place, when:
 - the instance is not in the cluster, or is an import;
 - the package has no such option, or the option is not a `kix.options.image`
   option;
-- anything other than the package sets the same option, at any priority,
-  including a value equal to the pin's.
+- the cluster's code sets the same option at the pin's priority or above,
+  including a value equal to the pin's and a `lib.mkForce`.
+
+A pin wins over a `lib.mkDefault` in the cluster's code and over the
+package's own defaults, so a follower image whose tag the package sets with
+`lib.mkDefault config.image.tag` can be pinned. Pinning only the main image
+moves a follower's tag and drops its digest, which belongs to the old tag, so
+pin each image of a release.
+
+A pin states its digest: a pin without one renders no digest, even at the
+package's tag.
+
+**One pin file per cluster.** Instance pins name the instances of one
+cluster, and a pin for an instance the cluster lacks is an error, so only
+one cluster passes a file that holds them. In a flake with several clusters,
+give each cluster its own file with `kix.pins ./<cluster>/pins.json`.
 
 A file passed to `buildCluster` can also hold image pins the code reads with
 `pins.get`. Kix does not apply those.

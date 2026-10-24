@@ -24,7 +24,9 @@ Kix applies instance pins from the file you pass to `kix.buildCluster` as
 <Snippet {...applyInstancePins} />
 
 A cluster that reads its own file passes `pins = kix.pins ./pins.json;` the
-same way.
+same way. A file with instance pins belongs to one cluster: Kix refuses a pin
+for an instance the cluster does not have, so in a flake with several
+clusters, give each one its own pin file.
 
 ## Pin the image
 
@@ -55,7 +57,9 @@ Kix resolves the tag and writes the digest. The entry sets
 ```
 
 For an image option other than `image`, add `--option` with its path in the
-instance's config, such as `--option sidecar.image`.
+instance's config, such as `--option sidecar.image`. When a package runs
+several images from one release, pin each of them: pinning only the main
+image moves the others' tags and drops their digests.
 
 A file with instance pins declares `"version": 2`. A Kix that reads only
 version 1 refuses it with an error asking you to upgrade Kix.
@@ -63,7 +67,8 @@ version 1 refuses it with an error asking you to upgrade Kix.
 ## Remove the value from code
 
 A pin and a value in the cluster's code for the same option is an evaluation
-error naming both places, so delete the value in code, such as
+error naming both places, unless the value is a `lib.mkDefault`, which the
+pin wins over, so delete the value in code, such as
 `image.tag = "13.1.3";`, in the commit that adds the pin. Kix also refuses an
 instance pin for an instance the cluster does not have, or for an option that
 is not an image option.

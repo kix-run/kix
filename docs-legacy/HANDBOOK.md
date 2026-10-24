@@ -2482,9 +2482,15 @@ kix.buildCluster { name = "prod"; inherit pins; modules = [ ... ]; }
 
 The entry is one more definition of `instances.monitoring.grafana.config.image`,
 from a module whose file is the pin file, so pinning a package default is
-adding an entry and returning to the default is deleting it. A pin and any
-other definition of the same option, at any priority, is an evaluation error
-naming both. So is a pin for an instance the cluster lacks, an import, an
+adding an entry and returning to the default is deleting it. A pin and a
+definition in code at the pin's priority or above is an evaluation error
+naming both; a pin wins over a `lib.mkDefault` in code and over the package's
+own defaults, so a follower image can be pinned (pin every image of a
+release: pinning only the main one drops the followers' digests). A pin
+states its digest, so one without a digest never keeps the package's. Pin
+repositories and tags follow the OCI reference grammar in both readers. A
+file with instance pins belongs to one cluster, since a pin for an instance
+the cluster lacks is an error. So is a pin for an instance the cluster lacks, an import, an
 option the package lacks, or an option that is not a `kix.options.image`
 option.
 
