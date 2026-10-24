@@ -376,6 +376,14 @@ impl PinFile {
     /// Write the canonical form, refusing to clobber a file Kix did not write
     /// unless the caller has said to.
     pub fn write(&self, force: bool) -> Result<(), PinError> {
+        // The checks a reader makes, so nothing writes a file Kix would
+        // then refuse to read.
+        check_pins(&self.pins)
+            .and_then(|()| check_instances(&self.instances))
+            .map_err(|detail| PinError::Invalid {
+                path: self.path.display().to_string(),
+                detail,
+            })?;
         if self.path.exists() && !self.managed && !force {
             return Err(PinError::NotManaged {
                 path: self.path.display().to_string(),
@@ -501,6 +509,24 @@ fn check_pin(label: &str, pin: &Pin) -> Result<(), String> {
             "{label} has an empty repository or tag. Both are required."
         ));
     }
+    if !is_repository(&pin.repository) {
+        return Err(format!(
+            "{label} has a repository that is not an image repository: '{}'. A repository is an optional registry host, then lower-case path components separated by `/`, such as docker.io/library/nginx.",
+            pin.repository
+        ));
+    }
+    if pin.tag.contains('@') {
+        return Err(format!(
+            "{label} has a digest in its tag: '{}'. Put the tag in `tag` and the digest in `digest`.",
+            pin.tag
+        ));
+    }
+    if !is_tag(&pin.tag) {
+        return Err(format!(
+            "{label} has a tag that is not an image tag: '{}'. A tag is up to 128 letters, digits, `_`, `.` and `-`, and does not start with `.` or `-`.",
+            pin.tag
+        ));
+    }
     if let Some(d) = &pin.digest
         && !is_sha256_digest(d)
     {
@@ -509,6 +535,80 @@ fn check_pin(label: &str, pin: &Pin) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+// The image reference grammar of the OCI distribution spec
+// (distribution/reference), as the Nix reader checks it in
+// kix/lib/vocab/pins.nix: an optional registry host and port, then
+// lower-case path components; a tag of at most 128 word characters, dots,
+// and dashes.
+
+/// `[a-z0-9]+(([.]|_|__|-+)[a-z0-9]+)*`
+fn is_path_component(s: &str) -> bool {
+    let alnum = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+    let mut chars = s.chars().peekable();
+    loop {
+        // A run of letters and digits, at least one.
+        let mut run = 0;
+        while chars.peek().is_some_and(|c| alnum(*c)) {
+            chars.next();
+            run += 1;
+        }
+        if run == 0 {
+            return false;
+        }
+        // Then the end, or one separator and another run.
+        let mut sep = String::new();
+        while let Some(c) = chars.peek().copied().filter(|c| !alnum(*c)) {
+            sep.push(c);
+            chars.next();
+        }
+        if sep.is_empty() {
+            return chars.peek().is_none();
+        }
+        if !(sep == "." || sep == "_" || sep == "__" || sep.chars().all(|c| c == '-')) {
+            return false;
+        }
+    }
+}
+
+/// A registry host: dot-separated labels or a bracketed IPv6 address, and
+/// an optional port.
+fn is_host(s: &str) -> bool {
+    let (name, port) = match s.rsplit_once(':') {
+        Some((name, port)) if !name.ends_with(':') && !port.contains(']') => (name, Some(port)),
+        _ => (s, None),
+    };
+    if port.is_some_and(|p| p.is_empty() || !p.chars().all(|c| c.is_ascii_digit())) {
+        return false;
+    }
+    if let Some(ip) = name.strip_prefix('[').and_then(|n| n.strip_suffix(']')) {
+        return !ip.is_empty() && ip.chars().all(|c| c.is_ascii_hexdigit() || c == ':');
+    }
+    name.split('.').all(|label| {
+        !label.is_empty()
+            && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+    })
+}
+
+fn is_repository(s: &str) -> bool {
+    if s.len() > 255 {
+        return false;
+    }
+    let parts: Vec<&str> = s.split('/').collect();
+    let paths_ok = |paths: &[&str]| !paths.is_empty() && paths.iter().all(|p| is_path_component(p));
+    paths_ok(&parts) || (parts.len() > 1 && is_host(parts[0]) && paths_ok(&parts[1..]))
+}
+
+/// `[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}`
+fn is_tag(s: &str) -> bool {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut chars = s.chars();
+    s.len() <= 128
+        && chars.next().is_some_and(word)
+        && chars.all(|c| word(c) || c == '.' || c == '-')
 }
 
 /// `<namespace>/<instance>`, as the Nix reader requires.
@@ -780,6 +880,60 @@ mod tests {
             ),
         ] {
             let msg = parse_file(text).unwrap_err();
+            assert!(msg.contains(needle), "{needle}: {msg}");
+        }
+    }
+
+    #[test]
+    fn repositories_and_tags_follow_the_image_reference_grammar() {
+        for ok in [
+            "nginx",
+            "docker.io/library/nginx",
+            "harbor.example.com:8443/team/web-server",
+            "localhost:5000/a__b/c.d/e--f",
+            "[::1]:5000/app",
+            "Registry.Example.com/app",
+        ] {
+            assert!(is_repository(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "Docker/Nginx",
+            "reg.example/app/",
+            "reg.example//app",
+            "reg.example/-app",
+            "reg.example/app.",
+            "reg.example/a...b",
+            "reg.example:x/app",
+            "reg example/app",
+        ] {
+            assert!(!is_repository(bad), "{bad}");
+        }
+        for ok in ["1.27-alpine", "v1.154.0", "_x", "main", &"a".repeat(128)] {
+            assert!(is_tag(ok), "{ok}");
+        }
+        for bad in ["", ".x", "-x", "a:b", "a/b", &"a".repeat(129)] {
+            assert!(!is_tag(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_pin_with_a_bad_reference_is_refused() {
+        for (pin, needle) in [
+            (
+                r#"{"repository":"r/w","tag":"1@sha256:aa"}"#,
+                "digest in its tag",
+            ),
+            (
+                r#"{"repository":"R/W","tag":"1"}"#,
+                "not an image repository",
+            ),
+            (r#"{"repository":"r/w","tag":"-1"}"#, "not an image tag"),
+        ] {
+            let text = format!(
+                r#"{{"version":2,"managedBy":"kix pin","instances":{{"ns/app":{{"image":{pin}}}}}}}"#
+            );
+            let msg = parse_file(&text).unwrap_err();
             assert!(msg.contains(needle), "{needle}: {msg}");
         }
     }
