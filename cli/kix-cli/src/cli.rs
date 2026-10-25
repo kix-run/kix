@@ -1,10 +1,17 @@
+use std::ffi::OsString;
 use std::path::PathBuf;
 
+use clap::builder::FalseyValueParser;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
 #[derive(Parser)]
-#[command(name = "kix", version, about = "Kubernetes manifest generator")]
+#[command(
+    name = "kix",
+    version = kix::VERSION,
+    about = "Kubernetes manifest generator",
+    after_help = "Plugins: `kix NAME ARGS...` runs `kix-NAME ARGS...` from PATH."
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -16,15 +23,15 @@ pub struct Cli {
 #[derive(clap::Args, Debug, Clone)]
 pub struct GlobalArgs {
     /// Output format (text, json, yaml, markdown). Default varies by command.
-    #[arg(short, long, global = true)]
+    #[arg(short, long, global = true, env = "KIX_OUTPUT")]
     pub output: Option<OutputFormat>,
 
     /// Increase verbosity (-v, -vv, etc.)
-    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    #[arg(short, long, global = true, env = "KIX_VERBOSE", action = clap::ArgAction::Count)]
     pub verbose: u8,
 
     /// Suppress non-essential output
-    #[arg(short, long, global = true)]
+    #[arg(short, long, global = true, env = "KIX_QUIET", value_parser = FalseyValueParser::new())]
     pub quiet: bool,
 
     /// Disable colored output (also respects NO_COLOR env per no-color.org spec)
@@ -32,21 +39,23 @@ pub struct GlobalArgs {
     pub no_color: bool,
 
     /// Kubeconfig context to use
-    #[arg(long, global = true)]
+    #[arg(long, global = true, env = "KIX_CONTEXT")]
     pub context: Option<String>,
 
     /// Flake reference to evaluate clusters from (default: current directory)
-    #[arg(long, global = true, default_value = ".")]
+    #[arg(long, global = true, env = "KIX_FLAKE", default_value = ".")]
     pub flake: String,
 
     /// Skip the SQLite eval cache (always re-evaluate from Nix)
-    #[arg(long, global = true)]
+    #[arg(long, global = true, env = "KIX_NO_CACHE", value_parser = FalseyValueParser::new())]
     pub no_cache: bool,
 
     /// Override a flake input's URL. Mirrors `nix --override-input`.
     /// Repeatable; takes a name and a URL each time:
     ///   `--override-input kixpkgs path:/nix/store/...kixpkgs`
     /// All overrides are forwarded to every underlying `nix` subprocess.
+    /// Without the flag, `KIX_OVERRIDE_INPUT` gives the names and URLs,
+    /// separated by spaces.
     #[arg(
         long = "override-input",
         global = true,
@@ -59,7 +68,8 @@ pub struct GlobalArgs {
 
 impl GlobalArgs {
     /// Pair up the raw `--override-input NAME URL` tokens into `(name, url)`.
-    /// clap's `num_args = 2` guarantees the vector length is always even.
+    /// The length is even: clap checks the flag's pairs, and `main` those
+    /// read from `KIX_OVERRIDE_INPUT`.
     pub fn input_overrides(&self) -> Vec<(String, String)> {
         self.override_input
             .chunks_exact(2)
@@ -292,6 +302,15 @@ pub enum Command {
     /// Dependency DAG visualization
     Graph(GraphArgs),
 
+    /// Build a cluster and write it as one file, a bundle
+    ///
+    /// A bundle (`.kixbundle`) is a zstd file in the seekable format that
+    /// holds every store file of the build, with its references, so `kix plan`, `kix deploy`
+    /// and `kix graph` can read it with `--bundle` on a machine with no Nix
+    /// store. Reading a bundle recomputes every store path from its file's
+    /// bytes and refuses one that differs.
+    Bundle(BundleArgs),
+
     /// Summarise a cluster's rendered resources by namespace and kind
     Inspect(InspectArgs),
 
@@ -336,6 +355,11 @@ pub enum Command {
     /// Resolve image references and record them in a committed pin file
     #[command(subcommand)]
     Pin(PinCommand),
+
+    /// Any other name: the plugin `kix-NAME` from PATH, with the arguments
+    /// after the name
+    #[command(external_subcommand)]
+    Plugin(Vec<OsString>),
 }
 
 impl Command {
@@ -349,6 +373,7 @@ impl Command {
             Command::Deploy(a) => Some(&a.plan.cluster),
             Command::Status(a) => Some(&a.cluster),
             Command::Graph(a) => Some(&a.cluster),
+            Command::Bundle(a) => Some(&a.cluster),
             Command::Inspect(a) => Some(&a.cluster),
             Command::Gc(a) => Some(&a.cluster),
             Command::Migrate(MigrateCommand::Domain(a)) => Some(&a.cluster),
@@ -370,7 +395,9 @@ impl Command {
             Command::Snapshot(a) => match &a.command {
                 SnapshotCommand::Save(s) => Some(&s.cluster),
             },
-            Command::Completions(_) | Command::Drift(_) | Command::Pin(_) => None,
+            Command::Completions(_) | Command::Drift(_) | Command::Pin(_) | Command::Plugin(_) => {
+                None
+            }
         }
     }
 }
@@ -400,8 +427,15 @@ pub enum PinCommand {
 
 #[derive(clap::Args)]
 pub struct PinSetArgs {
-    /// Pin name, as the cluster definition reads it: `pins.get "<key>"`
+    /// Pin name, as the cluster definition reads it (`pins.get "<key>"`), or
+    /// `<namespace>/<instance>` for an instance pin, which Kix applies to the
+    /// instance's `image` option itself
     pub key: String,
+
+    /// For an instance pin, the option it sets, as a path in the instance's
+    /// config such as `server.image`. Default: `image`.
+    #[arg(long)]
+    pub option: Option<String>,
 
     /// Tag to promote to. Kept in the file because it is what a human reads.
     #[arg(long)]
@@ -437,7 +471,8 @@ pub struct PinSetArgs {
     #[arg(long)]
     pub note: Option<String>,
 
-    /// Create the pin file, or add a pin that is not in it yet.
+    /// Create the pin file, or add a pin name that is not in it yet. A new
+    /// instance pin needs no `--init`.
     #[arg(long)]
     pub init: bool,
 
@@ -455,7 +490,8 @@ pub struct PinSetArgs {
 
 #[derive(clap::Args)]
 pub struct PinCheckArgs {
-    /// Check only these pins. Repeatable. Default: all of them.
+    /// Check only these pins: a pin name, or `<namespace>/<instance>` for
+    /// every pin of that instance. Repeatable. Default: all of them.
     #[arg(long = "key")]
     pub keys: Vec<String>,
 
@@ -579,14 +615,33 @@ pub struct DiffArgs {
     #[arg(long, value_name = "DIR")]
     pub from: Option<String>,
 
+    /// Read the new side from this bundle (`kix bundle`) instead of
+    /// building. Without `--from` or `--from-bundle`, the old side is no
+    /// build at all, so every resource is added and the cluster is not read
+    #[arg(long, value_name = "FILE")]
+    pub bundle: Option<std::path::PathBuf>,
+
+    /// Compare against the build in this bundle instead of the live cluster
+    #[arg(
+        long,
+        value_name = "FILE",
+        requires = "bundle",
+        conflicts_with = "from"
+    )]
+    pub from_bundle: Option<std::path::PathBuf>,
+
     /// How much of each change `--output json` and `--output yaml` include.
     /// Text and Markdown output are the same at every level.
     #[arg(long, value_enum, default_value_t = Detail::Plain)]
     pub detail: Detail,
+
+    /// Also write the comparison to this file, a `.kixplan` as `kix plan
+    /// --save` writes, whatever `--detail` and `--output` say
+    #[arg(long, value_name = "FILE")]
+    pub save: Option<std::path::PathBuf>,
 }
 
-/// What the JSON and YAML of `kix diff` and `kix plan` say about each
-/// changed resource.
+/// What the JSON and YAML of `kix diff` say about each changed resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Detail {
     /// Which resources change, and how many fields of each.
@@ -613,10 +668,12 @@ pub struct PlanCommandArgs {
     #[command(flatten)]
     pub plan: PlanArgs,
 
-    /// How much of each change `--output json` and `--output yaml` include.
-    /// Text and Markdown output are the same at every level.
-    #[arg(long, value_enum, default_value_t = Detail::Plain)]
-    pub detail: Detail,
+    /// Also write the plan to this file, a `.kixplan` that `kix deploy
+    /// --plan` takes and Kix Enterprise reads: the plan with each changed
+    /// field, the build's dependency graph, and the old and new manifest of
+    /// each changed, added, or removed object, secret values hidden
+    #[arg(long, value_name = "FILE")]
+    pub save: Option<std::path::PathBuf>,
 }
 
 /// What a deploy plans from: the cluster and the flags that change which
@@ -665,6 +722,18 @@ pub struct PlanArgs {
     /// loss, and `kix plan` exits 3. Kix does not copy data between them.
     #[arg(long)]
     pub accept_migrations: bool,
+
+    /// Read the build from this bundle (`kix bundle`) instead of building.
+    /// Every store path in it is checked against its content first
+    #[arg(long, value_name = "FILE", conflicts_with = "current_activation")]
+    pub bundle: Option<std::path::PathBuf>,
+
+    /// A bundle of a build the cluster's records name (the Active one, a
+    /// failed or a kept one), used where kix would otherwise look for that
+    /// build in the local Nix store. Matched by the record's identity hash.
+    /// Repeat for several
+    #[arg(long = "deployed-bundle", value_name = "FILE", requires = "bundle")]
+    pub deployed_bundles: Vec<std::path::PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -682,7 +751,7 @@ pub struct DeployArgs {
     pub dry_run: bool,
 
     /// Deploy only if the plan made now still matches this reviewed one, a
-    /// `kix plan -o json` or `kix diff -o json` document. The deploy uses the
+    /// `.kixplan` file from `kix plan --save`. The deploy uses the
     /// plan's planning flags and exits 4, applying nothing, when the cluster,
     /// either build, the flags, or the refusals, reverted drift, and prune
     /// deletes it would make differ from what was reviewed
@@ -703,9 +772,21 @@ pub struct DeployArgs {
     #[arg(long, value_parser = validate_timeout)]
     pub timeout: Option<String>,
 
-    /// Delegate deployment to the kix operator instead of applying directly
-    #[arg(long)]
+    /// Delegate deployment to the kix operator instead of applying directly.
+    /// The operator reads the build from the Nix store, so not with --bundle
+    #[arg(long, conflicts_with = "bundle")]
     pub operator: bool,
+
+    /// Write an annotation onto this deploy's Activation record, as
+    /// KEY=VALUE. KEY may not be under `kix.run/`, a subdomain of it, or a
+    /// retired Kix domain: Kix reads those off the record. Repeat for several
+    #[arg(
+        long = "record-annotation",
+        value_name = "KEY=VALUE",
+        value_parser = parse_record_annotation,
+        conflicts_with = "operator"
+    )]
+    pub record_annotations: Vec<(String, String)>,
 
     /// Render a live inline graph-streaming dashboard. Falls back to
     /// line-oriented output on non-interactive terminals.
@@ -823,9 +904,17 @@ pub struct GcArgs {
     #[arg(long, requires = "hard")]
     pub include_unattributed: bool,
 
-    /// Always keep at least this many of the newest Superseded Activation
-    /// records (rollback history), whatever their age. Applies in every
-    /// mode. 0 keeps none.
+    /// With --hard, also judge copies of Kix objects that a controller made:
+    /// objects that carry Kix's annotations and an owner reference but no
+    /// Kix apply record. Kix did not apply them, so by default --hard only
+    /// reports them.
+    #[arg(long, requires = "hard")]
+    pub include_copies: bool,
+
+    /// Always keep at least this many of the newest rollback targets
+    /// (Superseded Activation records whose deploy finished), whatever their
+    /// age. A record of a deploy that never finished is kept by age alone.
+    /// Applies in every mode. 0 keeps none.
     #[arg(long, value_name = "N", default_value_t = kix::cluster::activation::DEFAULT_KEEP_MIN)]
     pub keep: usize,
 
@@ -1013,6 +1102,22 @@ pub struct GraphArgs {
     /// Graph output format (tree, dot, json)
     #[arg(long)]
     pub format: Option<GraphFormat>,
+
+    /// Read the build from this bundle (`kix bundle`) instead of building
+    #[arg(long, value_name = "FILE")]
+    pub bundle: Option<std::path::PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub struct BundleArgs {
+    /// Cluster name
+    pub cluster: String,
+
+    /// Where to write the bundle [default: <CLUSTER>.kixbundle]
+    // The text is clap's help, so it keeps `<CLUSTER>` as the user reads it.
+    #[allow(rustdoc::invalid_html_tags)]
+    #[arg(value_name = "FILE")]
+    pub file: Option<std::path::PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -1052,6 +1157,21 @@ pub struct ImagesArgs {
     /// Show which resources reference each image
     #[arg(long)]
     pub sources: bool,
+}
+
+fn parse_record_annotation(s: &str) -> Result<(String, String), String> {
+    let (key, value) = s
+        .split_once('=')
+        .ok_or_else(|| format!("expected KEY=VALUE, got '{s}'"))?;
+    // Kix reads its own keys, and those of the retired domain, off the
+    // record: the identity hash, built-via, and more.
+    if key.is_empty() || kix::manifest::keys::is_kix_domain_key(key) {
+        return Err(format!(
+            "'{key}' is not allowed: the key must be set and not under {}",
+            kix::manifest::keys::DOMAIN
+        ));
+    }
+    Ok((key.to_string(), value.to_string()))
 }
 
 fn validate_timeout(s: &str) -> Result<String, String> {
@@ -1172,5 +1292,24 @@ mod tests {
             .expect("parses");
         let cli = Cli::from_arg_matches(&matches).expect("converts");
         assert_eq!(cli.global.flake, "x");
+    }
+
+    #[test]
+    fn a_record_annotation_cannot_use_a_kix_key() {
+        assert_eq!(
+            parse_record_annotation("lithus.net/statement=abc=="),
+            Ok(("lithus.net/statement".into(), "abc==".into()))
+        );
+        let domain = kix::manifest::keys::DOMAIN;
+        let retired = kix::legacy_domain::DOMAINS[0];
+        for refused in [
+            format!("{}=x", kix::manifest::keys::IDENTITY_HASH),
+            format!("deploy.{domain}/x=y"),
+            format!("{retired}/built-via=/tmp"),
+            "=x".to_string(),
+            "no-equals".to_string(),
+        ] {
+            assert!(parse_record_annotation(&refused).is_err(), "{refused}");
+        }
     }
 }

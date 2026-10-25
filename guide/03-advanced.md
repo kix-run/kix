@@ -324,7 +324,7 @@ network = {
 
 ### meta.roles and capability ownership
 
-`meta.roles` - the registry roles the package claims (`kix/lib/eval/roles.nix`: `network-policy-enforcer`, `dns`, `storageClasses`, `snapshotController`, `metricsApi`, `cni`, `loadBalancer`). The registry is closed: an unknown role is an eval error. A role name doubles as a DI alias.
+`meta.roles` - the registry roles the package claims (`kix/lib/eval/roles.nix`: `network-policy-enforcer`, `dns`, `storageClasses`, `snapshotController`, `metricsApi`, `registryMirror`, `cni`, `loadBalancer`). The registry is closed: an unknown role is an eval error. A role name doubles as a DI alias.
 
 **Enforcer lookup.** The cluster finds the package whose `meta.roles` contains `"network-policy-enforcer"` and routes every CNP through its `out.netpol.mkPolicy` (binds the right CRD ref). Cilium declares it:
 
@@ -826,6 +826,26 @@ instances.media.immich = {
 | `extraDeps` | Extra ordering edges on PackageInstance marker. | - |
 | `version` | Overrides `packageMeta.version` on the marker. | - |
 
+### deps: wire a dependency to chosen instances
+
+`deps.<argName> = ref.<ns>.<inst>` binds the build function argument `<argName>` to that instance. The ref resolves as automatic resolution would have: dep config injection lands on the instance, `meta.scope` and `meta.compatibleWith` apply to it, and a ref to an optional instance activates it.
+
+A list of refs binds the argument to several instances. The package receives a list of instance handles, in the order given:
+
+```nix
+instances.apps.collector = {
+  package = packages.collector;
+  deps.registryLogins = [
+    ref.apps.operator-logins   # a Secret an operator keeps up to date
+    ref.apps.extra-logins      # a Secret someone else manages
+  ];
+};
+```
+
+Each element is resolved and checked as a single ref is: the consumer depends on every instance in the list, a `deps.<arg>.config` injection from the package lands on each, a cross-namespace element whose package declares `meta.scope = "namespace"` is refused, and an element naming a shelf package that nothing auto-instantiated is refused. A list that mixes refs with other values is refused. A package that takes a list should accept a single handle too (`lib.toList`), since a single ref still binds one handle.
+
+Any other value (not a ref and not a list of refs) is bound as it is.
+
 ### config: option values
 
 Primary lever. Fed through `evaluateInstanceConfig` (`kix/lib/eval/resolve.nix`): one `lib.evalModules` over the package's options, its own `config` module, dep injections, and the instance config, with `clusterConfig` in `specialArgs`. An instance value merges under the module system's rules: setting one field of a submodule keeps its siblings' defaults, and every package passes the option contract (01-fundamentals.md#the-option-contract), so no default is silently dropped.
@@ -998,7 +1018,7 @@ Gotcha: override merge is shallow `//`, unlike the module merge of instance `con
 - **`aliases` replaces, not extends, `meta.defaultAliases`.** Re-list everything still needed.
 - **mkLocked is top-level only.** Locking `config.foo` does not protect `config.foo.bar` against an injection targeting `foo` wholesale.
 - **`deps` collisions error.** Two modules setting `deps.<arg>` for one instance = hard error.
-- **`meta.scope = "namespace"`**: resolution skips such an instance for consumers in other namespaces, and an explicit cross-namespace ref throws (`_crossNsCheck`). mkEnv per-env namespaces keep deps in-env.
+- **`meta.scope = "namespace"`**: resolution skips such an instance for consumers in other namespaces, and an explicit cross-namespace ref, alone or in a list, throws (`_crossNsCheck`). mkEnv per-env namespaces keep deps in-env.
 - **partsOverlay removes a key via `= null`, never via `//`** (the fold can't drop keys); `root` cannot be removed. **`selectorLabels` must match live pods exactly.**
 
 ### Decision guide: I want to change X, use lever Y
@@ -1008,6 +1028,7 @@ Gotcha: override merge is shallow `//`, unlike the module merge of instance `con
 | Change a config value (size, replicas, image, host) | `instances.<ns>.<inst>.config` (with `mkDefault`/`mkForce`) |
 | Make a package resolve under a different DI name | `aliases` (or `deps.<arg>` at the consumer) |
 | Pin a dep to a specific instance | `deps.<argName> = ref.<ns>.<inst>` |
+| Give a dep several instances | `deps.<argName> = [ ref.<ns>.<a> ref.<ns>.<b> ]` (the package receives a list) |
 | Adopt Helm-managed resources on a live cluster | `labelStyle = "helm"` |
 | Match an immutable StatefulSet selector | `selectorLabels = { ... }` |
 | Pre-stage an instance that ships only when used | `optional = true` |

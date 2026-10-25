@@ -1,8 +1,6 @@
-use std::io::IsTerminal;
-
 use miette::Result;
 
-use crate::cli::{CheckArgs, OutputFormat};
+use crate::cli::CheckArgs;
 use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
@@ -171,20 +169,7 @@ fn eval_failure_sarif(message: &str) -> serde_json::Value {
 pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
     let mut results: Vec<CheckResult> = Vec::new();
 
-    // Show spinner if TTY
-    let spinner = if std::io::stderr().is_terminal() && !ctx.global.quiet {
-        let sp = indicatif::ProgressBar::new_spinner();
-        sp.set_style(
-            indicatif::ProgressStyle::default_spinner()
-                .template("{spinner:.cyan} {msg}")
-                .expect("valid template"),
-        );
-        sp.set_message(format!("Checking cluster '{}'...", args.cluster));
-        sp.enable_steady_tick(std::time::Duration::from_millis(80));
-        Some(sp)
-    } else {
-        None
-    };
+    let spinner = output::spinner(format!("Checking cluster '{}'...", args.cluster));
 
     // Step 1: Nix evaluation. buildCluster runs the constructor validators,
     // the scorecard (error findings) and the cross-resource resolution
@@ -288,10 +273,7 @@ pub fn run(args: &CheckArgs, ctx: &mut CommandContext) -> Result<()> {
     }
 
     let response = CheckResponse { results };
-    println!(
-        "{}",
-        output::render(&response, ctx.output_format(OutputFormat::Text))?
-    );
+    output::result(&response)?;
 
     if has_failure {
         std::process::exit(1);

@@ -56,7 +56,10 @@ stall limit for one run, set `KIX_STALL_TIMEOUT` in seconds:
 
 Progress and readiness are separate: a resource can take longer than the
 stall limit without triggering it when its readiness checks continue to
-report activity.
+report activity. Kix tells you about such a wait anyway: after 10 seconds it
+prints a `waiting:` line with the resource, what its last readiness check
+said, and how much of the readiness timeout has passed, and repeats it at 30,
+60, and 120 seconds and then every minute.
 
 ## Choose when to prune
 
@@ -101,14 +104,14 @@ not a terminal. Select `line` explicitly for stable CI logs:
   cwd="kix-examples/"
 />
 
-Use `json` when another program needs the deploy events. The plan is still
-plain text on the same stream, so filter valid JSON lines before treating the
-result as NDJSON. The last event is a `summary` object with the counts and
-`succeeded`:
+Use `json` when another program needs the deploy events. Stdout then holds
+only the events, one JSON object per line; the plan and the other text go to
+stderr. Every event carries `schema_version`, and the last is a `summary`
+object with the counts and `succeeded`:
 
 <Command
   commands={[
-    "kix deploy how-to-application --yes --log-format json | jq -R -c 'fromjson? // empty' > deploy-events.ndjson",
+    "kix deploy how-to-application --yes --log-format json > deploy-events.ndjson",
   ]}
   cwd="kix-examples/"
 />

@@ -22,7 +22,7 @@
 
 use miette::{IntoDiagnostic, Result, miette};
 
-use kix::pins::{Pin, PinFile};
+use kix::pins::{Pin, PinFile, PinKey};
 use kix::registry::{Reference, RegistryClient, RegistryError, is_sha256_digest};
 
 use crate::cli::{GlobalArgs, OutputFormat, PinCheckArgs, PinCommand, PinListArgs, PinSetArgs};
@@ -50,11 +50,10 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
         locate::locate(args.pins_file.as_deref(), &global.flake)?
     };
     let pins_file = located.path.as_path();
-    if !global.quiet
-        && global.output != Some(OutputFormat::Json)
+    if output::format() != OutputFormat::Json
         && let Some(note) = located.note()
     {
-        println!("{}", output::dim(&note));
+        crate::say!("{}", output::dim(&note));
     }
 
     let mut file = if args.init {
@@ -63,8 +62,12 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
         PinFile::read(pins_file).into_diagnostic()?
     };
 
-    let existing = file.pins.get(&args.key).cloned();
-    if existing.is_none() && !args.init {
+    let key = PinKey::parse(&args.key, args.option.as_deref()).map_err(|e| miette!("{e}"))?;
+    let existing = file.get(&key).cloned();
+    // A new instance pin needs no `--init`: evaluation refuses a pin for an
+    // instance the cluster does not have. A new name in `images` is read
+    // only by code, so nothing would report a misspelt one.
+    if existing.is_none() && !args.init && matches!(key, PinKey::Image(_)) {
         // The remedy has to be runnable from here. A refusal whose fix needs
         // a file the reader does not have is not a remedy.
         return Err(miette!(
@@ -87,9 +90,10 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
         .or_else(|| existing.as_ref().map(|p| p.repository.clone()))
         .ok_or_else(|| {
             miette!(
-                "a new pin needs a repository: kix pin set {} --repository <registry/repository> --tag <tag> --pins-file {} --init",
-                args.key,
-                pins_file.display()
+                "a new pin needs a repository: kix pin set {} --repository <registry/repository> --tag <tag> --pins-file {}{}",
+                key.arguments(),
+                pins_file.display(),
+                if matches!(key, PinKey::Image(_)) { " --init" } else { "" }
             )
         })?;
 
@@ -111,14 +115,12 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
     } else if args.no_resolve {
         None
     } else {
-        if !global.quiet {
-            println!("Resolving {reference}...");
-        }
+        crate::say!("Resolving {reference}...");
         Some(resolve(&reference)?)
     };
 
-    if digest.is_none() && !global.quiet {
-        eprintln!(
+    if digest.is_none() {
+        crate::esay!(
             "{}",
             output::yellow(
                 "warning: saving this pin without a digest. Kix has not checked whether the tag exists and will not check it during deployment."
@@ -170,14 +172,15 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
 
     let changed = changed || existing.as_ref() != Some(&pin);
     if changed {
-        file.pins.insert(args.key.clone(), pin.clone());
+        file.insert(key.clone(), pin.clone());
         file.write(args.force).into_diagnostic()?;
     }
 
-    if global.output == Some(OutputFormat::Json) {
+    if output::format() == OutputFormat::Json {
         let doc = serde_json::json!({
             "pinsFile": pins_file.display().to_string(),
             "key": args.key,
+            "option": option_of(&key),
             "pin": pin,
             "changed": changed,
         });
@@ -185,35 +188,28 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
         return Ok(());
     }
 
-    if !global.quiet {
-        let verb = match (&existing, changed) {
-            (None, _) => "added",
-            (Some(_), true) => "updated",
-            (Some(_), false) => "kept",
-        };
-        println!(
-            "{} {} in {}",
-            output::green(verb),
-            args.key,
-            pins_file.display()
+    let verb = match (&existing, changed) {
+        (None, _) => "added",
+        (Some(_), true) => "updated",
+        (Some(_), false) => "kept",
+    };
+    crate::say!("{} {} in {}", output::green(verb), key, pins_file.display());
+    crate::say!("  {}:{}", pin.repository, pin.tag);
+    match &pin.digest {
+        Some(d) => crate::say!("  {d}"),
+        None => crate::say!("  {}", output::yellow("no digest")),
+    }
+    if let Some(prev) = &existing
+        && prev.digest != pin.digest
+        && let Some(prev_digest) = &prev.digest
+    {
+        crate::say!("  was {prev_digest}");
+    }
+    if !changed {
+        crate::say!(
+            "  {}",
+            output::dim("unchanged, so the file was not rewritten")
         );
-        println!("  {}:{}", pin.repository, pin.tag);
-        match &pin.digest {
-            Some(d) => println!("  {d}"),
-            None => println!("  {}", output::yellow("no digest")),
-        }
-        if let Some(prev) = &existing
-            && prev.digest != pin.digest
-            && let Some(prev_digest) = &prev.digest
-        {
-            println!("  was {prev_digest}");
-        }
-        if !changed {
-            println!(
-                "  {}",
-                output::dim("unchanged, so the file was not rewritten")
-            );
-        }
     }
     Ok(())
 }
@@ -251,22 +247,27 @@ fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<()> {
     let pins_file = located.path.as_path();
     let file = PinFile::read(pins_file).into_diagnostic()?;
 
-    let selected: Vec<(&String, &Pin)> = file
-        .pins
-        .iter()
-        .filter(|(k, _)| args.keys.is_empty() || args.keys.contains(k))
+    // A key names an `images` pin, or every pin of an instance.
+    let selects = |key: &PinKey, wanted: &str| match key {
+        PinKey::Image(name) => name == wanted,
+        PinKey::Instance { instance, .. } => instance == wanted,
+    };
+    let selected: Vec<(PinKey, &Pin)> = file
+        .entries()
+        .filter(|(k, _)| args.keys.is_empty() || args.keys.iter().any(|w| selects(k, w)))
         .collect();
 
-    if !args.keys.is_empty() {
-        for wanted in &args.keys {
-            if !file.pins.contains_key(wanted) {
-                return Err(miette!(
-                    "{} has no pin named '{}'. Pins in that file: {}.",
-                    pins_file.display(),
-                    wanted,
-                    file.pins.keys().cloned().collect::<Vec<_>>().join(", ")
-                ));
-            }
+    for wanted in &args.keys {
+        if !file.entries().any(|(k, _)| selects(&k, wanted)) {
+            return Err(miette!(
+                "{} has no pin named '{}'. Pins in that file: {}.",
+                pins_file.display(),
+                wanted,
+                file.entries()
+                    .map(|(k, _)| k.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
         }
     }
 
@@ -277,11 +278,11 @@ fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<()> {
         Some(RegistryClient::new().into_diagnostic()?)
     };
 
-    let mut results: Vec<(String, Verdict)> = Vec::new();
+    let mut results: Vec<(PinKey, Verdict)> = Vec::new();
 
     for (key, pin) in &selected {
         results.push((
-            (*key).clone(),
+            key.clone(),
             judge(key, pin, args, client.as_ref(), &runtime),
         ));
     }
@@ -299,7 +300,7 @@ fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<()> {
             };
             if !revs_match(have, want) {
                 stale.push(Stale {
-                    key: (*key).clone(),
+                    key: key.to_string(),
                     built_from: have.clone(),
                     expected: want.clone(),
                 });
@@ -309,11 +310,12 @@ fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<()> {
 
     let failed = results.iter().any(|(_, v)| v.failed()) || !stale.is_empty();
 
-    if global.output == Some(OutputFormat::Json) {
+    if output::format() == OutputFormat::Json {
         let doc = serde_json::json!({
             "pinsFile": pins_file.display().to_string(),
             "pins": results.iter().map(|(k, v)| serde_json::json!({
-                "key": k,
+                "key": key_of(k),
+                "option": option_of(k),
                 "result": v.label(),
                 "message": v.message(),
             })).collect::<Vec<_>>(),
@@ -328,7 +330,6 @@ fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<()> {
                 .unwrap_or_else(|| pins_file.display().to_string()),
             &results,
             &stale,
-            global,
         );
     }
 
@@ -339,7 +340,7 @@ fn check(args: &PinCheckArgs, global: &GlobalArgs) -> Result<()> {
 }
 
 fn judge(
-    key: &str,
+    key: &PinKey,
     pin: &Pin,
     args: &PinCheckArgs,
     client: Option<&RegistryClient>,
@@ -354,7 +355,8 @@ fn judge(
             Verdict::Warn(msg)
         } else {
             Verdict::Fail(format!(
-                "{msg}. Resolve it with `kix pin set {key} --tag <tag>`, or pass --allow-unresolved."
+                "{msg}. Resolve it with `kix pin set {} --tag <tag>`, or pass --allow-unresolved.",
+                key.arguments()
             ))
         };
     };
@@ -409,16 +411,9 @@ struct Stale {
     expected: String,
 }
 
-fn print_check_text(
-    path: &str,
-    results: &[(String, Verdict)],
-    stale: &[Stale],
-    global: &GlobalArgs,
-) {
-    if !global.quiet {
-        println!("{path}");
-        println!();
-    }
+fn print_check_text(path: &str, results: &[(PinKey, Verdict)], stale: &[Stale]) {
+    crate::say!("{path}");
+    crate::say!();
     for (key, verdict) in results {
         let mark = match verdict {
             Verdict::Ok(_) => output::green("ok  "),
@@ -450,15 +445,13 @@ fn print_check_text(
         .iter()
         .filter(|(_, v)| matches!(v, Verdict::Warn(_)))
         .count();
-    if !global.quiet {
-        println!();
-        println!(
-            "{} pins checked, {failed} failed, {warned} warned",
-            results.len()
-        );
-        if !stale.is_empty() {
-            println!("{} not current", stale.len());
-        }
+    crate::say!();
+    crate::say!(
+        "{} pins checked, {failed} failed, {warned} warned",
+        results.len()
+    );
+    if !stale.is_empty() {
+        crate::say!("{} not current", stale.len());
     }
 }
 
@@ -468,28 +461,28 @@ fn list(args: &PinListArgs, global: &GlobalArgs) -> Result<()> {
     let located = locate::locate(args.pins_file.as_deref(), &global.flake)?;
     let pins_file = located.path.as_path();
     let file = PinFile::read(pins_file).into_diagnostic()?;
-    if !global.quiet
-        && global.output != Some(OutputFormat::Json)
+    if output::format() != OutputFormat::Json
         && let Some(note) = located.note()
     {
-        println!("{}", output::dim(&note));
+        crate::say!("{}", output::dim(&note));
     }
 
-    if global.output == Some(OutputFormat::Json) {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&file.pins).into_diagnostic()?
-        );
+    if output::format() == OutputFormat::Json {
+        let doc = serde_json::json!({
+            "images": file.pins,
+            "instances": file.instances,
+        });
+        println!("{}", serde_json::to_string_pretty(&doc).into_diagnostic()?);
         return Ok(());
     }
 
-    if file.pins.is_empty() {
+    if file.is_empty() {
         println!("{} holds no pins", pins_file.display());
         return Ok(());
     }
 
-    for (key, pin) in &file.pins {
-        println!("{}", output::bold(key));
+    for (key, pin) in file.entries() {
+        println!("{}", output::bold(&key.to_string()));
         println!("  {}:{}", pin.repository, pin.tag);
         match &pin.digest {
             Some(d) => println!("  {d}"),
@@ -510,6 +503,22 @@ fn list(args: &PinListArgs, global: &GlobalArgs) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------- shared
+
+/// The pin name, or the instance, as JSON output reports it.
+fn key_of(key: &PinKey) -> &str {
+    match key {
+        PinKey::Image(name) => name,
+        PinKey::Instance { instance, .. } => instance,
+    }
+}
+
+/// The option path of an instance pin, null for an `images` pin.
+fn option_of(key: &PinKey) -> Option<&str> {
+    match key {
+        PinKey::Image(_) => None,
+        PinKey::Instance { option, .. } => Some(option),
+    }
+}
 
 fn resolve(reference: &Reference) -> Result<String> {
     let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;

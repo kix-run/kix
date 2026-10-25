@@ -11,19 +11,23 @@
 //! This module is the whole of it. The rest of the codebase reaches it
 //! through four one-line hooks:
 //!
-//! 1. [`fallback`], from `keys::get` and `keys::get_meta`. A live object
+//! 1. `fallback`, from `keys::get` and `keys::get_meta`. A live object
 //!    stamped by an older Kix still parses.
-//! 2. [`upgrade_manifest`], from the store-graph loader and from the live
+//! 2. [`upgrade_manifest`], from stamping a loaded build and from the live
 //!    reconstruction in `kix deploy`. A build loaded from an old activation,
 //!    or a set of live objects projected back to manifests, is brought to
 //!    the current domain before the planner ever sees it.
-//! 3. [`bookkeeping_null_outs`], from the two merge patches in
+//! 3. `bookkeeping_null_outs`, from the two merge patches in
 //!    `cluster::apply`. Server-side apply drops the build-time keys on its
 //!    own because the `kix` field manager owns them; these two are written
 //!    by patch and would otherwise stay on the object forever.
-//! 4. [`check_cluster`] and [`check_build`], the gate. Every command that
-//!    reads Kix records refuses a cluster that has not been migrated, and
-//!    names the command to run.
+//! 4. [`check_discovery`] and `check_build`, the gate. Every command that
+//!    reads Kix records opens them through
+//!    [`crate::cluster::activation::Records::open`], which refuses a cluster
+//!    that has not been migrated and names the command to run. `Build`
+//!    checks each build it loads, and the commands that install a build's
+//!    CRDs refuse a stale one
+//!    ([`crate::build_source::Build::installable`]).
 //!
 //! Plus the migration itself, [`migrate::run`], behind `kix migrate domain`.
 //!
@@ -35,11 +39,12 @@
 //! drop `legacyDomains` from `kix/lib/core/annotations.nix`, and shrink the
 //! allowlist in `keys`'s `no_other_file_spells_a_kix_domain` test.
 
+use kube::discovery::{ApiResource, Scope};
 use serde_json::{Map, Value};
 
 use crate::manifest::keys;
 
-pub mod kube_ops;
+pub(crate) mod kube_ops;
 pub mod migrate;
 
 pub use kube_ops::KubeMigrationOps;
@@ -58,7 +63,7 @@ fn under(key: &str, domain: &str) -> bool {
 }
 
 /// Is this a Kix key under a retired domain?
-pub fn is_legacy_key(key: &str) -> bool {
+pub(crate) fn is_legacy_key(key: &str) -> bool {
     is_key_under_any(key, DOMAINS)
 }
 
@@ -72,7 +77,7 @@ fn is_key_under_any(key: &str, domains: &[&str]) -> bool {
 ///
 /// `key` is a current-domain constant. Returns nothing for a key that is
 /// not Kix's own.
-pub fn legacy_spellings(key: &str) -> Vec<String> {
+pub(crate) fn legacy_spellings(key: &str) -> Vec<String> {
     let Some(name) = key.strip_prefix(keys::PREFIX) else {
         return Vec::new();
     };
@@ -84,7 +89,7 @@ pub fn legacy_spellings(key: &str) -> Vec<String> {
 ///
 /// True when the retired spelling is there and the current one is not. That
 /// is the window between `kix migrate domain` and the first deploy after it:
-/// the records have moved, so the gate in [`check_cluster`] passes, but
+/// the records have moved, so the gate in [`check_discovery`] passes, but
 /// every object on the cluster still carries the annotations the old build
 /// wrote. Nothing reconciles that until a deploy re-applies them.
 ///
@@ -118,7 +123,9 @@ where
 ///
 /// The skipped path must never call this. There the resource was not
 /// re-applied and its retired keys are the only ones it has.
-pub fn retired_keys(annotations: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+pub(crate) fn retired_keys(
+    annotations: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
     annotations
         .keys()
         .filter(|k| is_legacy_key(k))
@@ -130,7 +137,7 @@ pub fn retired_keys(annotations: &std::collections::BTreeMap<String, String>) ->
 ///
 /// The hook in `keys::get` and `keys::get_meta`. `lookup` reads one key out
 /// of whatever map the caller holds.
-pub fn fallback<'a, F>(key: &str, lookup: F) -> Option<&'a str>
+pub(crate) fn fallback<'a, F>(key: &str, lookup: F) -> Option<&'a str>
 where
     F: Fn(&str) -> Option<&'a str>,
 {
@@ -270,7 +277,7 @@ fn upgrade_map(map: &mut Map<String, Value>, domains: &[&str]) {
 /// applied and `applied-hash` is not rewritten, that would blind
 /// drift detection on the resource for good, because an unchanged resource is
 /// never applied again.
-pub fn bookkeeping_null_outs(writing: &[&str]) -> Vec<String> {
+pub(crate) fn bookkeeping_null_outs(writing: &[&str]) -> Vec<String> {
     writing.iter().flat_map(|k| legacy_spellings(k)).collect()
 }
 
@@ -302,10 +309,21 @@ pub enum LegacyDomainError {
 
 /// Does discovery show Kix records under a retired group?
 ///
-/// The gate, called from `activation::find_activation_ar`, so every command
-/// that looks for a record is covered: deploy, rollback, gc, health, status
-/// and the operator.
-pub fn check_cluster(groups_in_discovery: &[&str]) -> Result<(), LegacyDomainError> {
+/// The gate. [`crate::cluster::activation::Records::open`] runs it, so every
+/// command that reads or writes a record is covered. A command that only
+/// reads objects calls it itself where an unmigrated cluster would mislead
+/// it, as `kix diff` and `kix plan` do.
+pub fn check_discovery(discovery: &[(ApiResource, Scope)]) -> Result<(), LegacyDomainError> {
+    let groups: Vec<&str> = discovery
+        .iter()
+        .filter(|(ar, _)| crate::manifest::lifecycle::is_record_kind(&ar.kind))
+        .map(|(ar, _)| ar.group.as_str())
+        .collect();
+    check_cluster(&groups)
+}
+
+/// [`check_discovery`] on the API groups that serve a record kind.
+fn check_cluster(groups_in_discovery: &[&str]) -> Result<(), LegacyDomainError> {
     let legacy = DOMAINS
         .iter()
         .find(|d| groups_in_discovery.contains(&d.to_string().as_str()));
@@ -328,7 +346,14 @@ pub fn check_cluster(groups_in_discovery: &[&str]) -> Result<(), LegacyDomainErr
 /// Catches a kixpkgs pin from before the move. Without it, deploying such a
 /// build would re-create the retired CRDs on a migrated cluster and leave
 /// two groups live, which the CLI cannot tell apart.
-pub fn check_build(manifests: &[Value]) -> Result<(), LegacyDomainError> {
+///
+/// It must see the build as loaded: stamping upgrades a build to the current
+/// domain, after which a stale pin looks exactly like a current one. So
+/// [`crate::build_source::Build`] runs it as it loads a build, before
+/// stamping, and keeps the verdict.
+pub(crate) fn check_build<'a>(
+    manifests: impl IntoIterator<Item = &'a Value>,
+) -> Result<(), LegacyDomainError> {
     for m in manifests {
         // A CustomResourceDefinition for Kix's own kinds under a retired
         // group. This is the one that survives `upgrade_manifest`, because

@@ -1,12 +1,11 @@
-//! Subprocess-based Nix backend using `nix` CLI commands.
-//!
-//! Replaces the FFI backend with standard `nix` subprocess calls:
-//! - `list_clusters` → `nix flake show --json` filtered for `cluster-*-activation`
+//! Subprocess-based Nix backend using `nix` CLI commands:
+//! - `list_clusters`, `list_packages` and `list_cluster_packages` →
+//!   `nix eval --json` of the flake's `kixClusters` and `kixPackages`
 //! - `eval_cluster` → `nix build .#cluster-<name>-activation` + StoreGraph manifest extraction
 //!
-//! This is slower than FFI for raw evaluation but benefits from Nix's built-in
-//! eval cache, making repeated invocations fast. Combined with the SQLite cache
-//! in KixEvaluator, this provides good performance for all commands.
+//! Nix's built-in eval cache makes repeated invocations fast. Combined with
+//! the SQLite cache in KixEvaluator, this provides good performance for all
+//! commands.
 
 use std::path::Path;
 use std::process::Command;
@@ -15,6 +14,7 @@ use std::collections::BTreeMap;
 
 use super::error::KixEvalError;
 use super::evaluator::{ClusterOutput, ClusterPackageInfo, NixBackend, PackageInfo};
+use super::nix;
 
 /// Nix CLI subprocess backend.
 pub struct CliNixBackend {
@@ -31,7 +31,7 @@ impl Default for CliNixBackend {
 }
 
 impl CliNixBackend {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             input_overrides: Vec::new(),
         }
@@ -55,27 +55,15 @@ impl NixBackend for CliNixBackend {
         flake_path: &Path,
         cluster_name: &str,
     ) -> Result<ClusterOutput, KixEvalError> {
-        if !cluster_name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(KixEvalError::not_found(cluster_name));
-        }
-
-        tracing::info!(cluster = cluster_name, "building cluster activation");
-
-        // Build the activation via nix build (same path as deploy/diff/gc)
-        let result_dir = super::build::build_cluster_activation(
+        let result_dir = super::nix::build_cluster_activation(
             flake_path,
             cluster_name,
             &self.input_overrides,
+            &|_| {},
         )?;
 
-        // Load the StoreGraph, stamp identity-hash + package annotations,
-        // then extract manifests. Without stamping, kix.run/depends-on edges
-        // can't be resolved (they reference identity hashes).
-        let mut graph = super::store_graph::StoreGraph::from_result_dir(&result_dir)?;
-        crate::manifest::stamp::stamp_annotations(&mut graph);
+        // Stamped, because kix.run/depends-on edges name identity hashes.
+        let graph = crate::build_source::Build::local(&result_dir, &|_| {})?.into_graph();
 
         let mut raw_manifests: Vec<serde_json::Value> = graph
             .resources
@@ -176,22 +164,10 @@ impl NixBackend for CliNixBackend {
             "nix-command flakes pipe-operators",
         ]);
         self.apply_overrides(&mut cmd);
-        let output =
-            cmd.current_dir(flake_path)
-                .output()
-                .map_err(|e| KixEvalError::StoreGraphError {
-                    message: format!("failed to run nix eval: {e}"),
-                })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(KixEvalError::StoreGraphError {
-                message: format!("nix eval kixClusters failed: {stderr}"),
-            });
-        }
+        let output = nix::output(cmd.current_dir(flake_path))?;
 
         let mut clusters: Vec<String> =
-            serde_json::from_slice(&output.stdout).map_err(|e| KixEvalError::StoreGraphError {
+            serde_json::from_slice(&output).map_err(|e| KixEvalError::StoreGraphError {
                 message: format!("failed to parse cluster names: {e}"),
             })?;
 
@@ -218,22 +194,10 @@ impl NixBackend for CliNixBackend {
             "nix-command flakes pipe-operators",
         ]);
         self.apply_overrides(&mut cmd);
-        let output =
-            cmd.current_dir(flake_path)
-                .output()
-                .map_err(|e| KixEvalError::StoreGraphError {
-                    message: format!("failed to run nix eval: {e}"),
-                })?;
+        let output = nix::output(cmd.current_dir(flake_path))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(KixEvalError::StoreGraphError {
-                message: format!("nix eval kixPackages failed: {stderr}"),
-            });
-        }
-
-        let packages: BTreeMap<String, PackageInfo> = serde_json::from_slice(&output.stdout)
-            .map_err(|e| KixEvalError::StoreGraphError {
+        let packages: BTreeMap<String, PackageInfo> =
+            serde_json::from_slice(&output).map_err(|e| KixEvalError::StoreGraphError {
                 message: format!("failed to parse kixPackages output: {e}"),
             })?;
 
@@ -273,28 +237,13 @@ impl NixBackend for CliNixBackend {
             "nix-command flakes pipe-operators",
         ]);
         self.apply_overrides(&mut cmd);
-        let output =
-            cmd.current_dir(flake_path)
-                .output()
-                .map_err(|e| KixEvalError::StoreGraphError {
-                    message: format!("failed to run nix eval: {e}"),
-                })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            // Check if this looks like a cluster-not-found error
-            if stderr.contains("does not provide attribute") {
-                return Err(KixEvalError::ClusterNotFound {
-                    name: cluster_name.to_string(),
-                });
-            }
-            return Err(KixEvalError::StoreGraphError {
-                message: format!("nix eval cluster info failed: {stderr}"),
-            });
-        }
+        let output = match nix::output(cmd.current_dir(flake_path)) {
+            Err(e) if e.missing_attribute() => return Err(KixEvalError::not_found(cluster_name)),
+            output => output?,
+        };
 
         let info: ClusterPackageInfo =
-            serde_json::from_slice(&output.stdout).map_err(|e| KixEvalError::StoreGraphError {
+            serde_json::from_slice(&output).map_err(|e| KixEvalError::StoreGraphError {
                 message: format!("failed to parse cluster info output: {e}"),
             })?;
 
@@ -330,24 +279,13 @@ pub fn eval_cluster_name(
     let Some(mut cmd) = cluster_name_command(flake, attr, input_overrides) else {
         return Ok(None);
     };
-    let output = cmd.output().map_err(|e| KixEvalError::StoreGraphError {
-        message: format!("failed to run nix eval: {e}"),
-    })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Nix's wording when the flake has no `legacyPackages.<sys>.kixClusters`
-        // output: a flake that is not a kix flake defines no clusters.
-        if stderr.contains("does not provide attribute") {
-            return Ok(None);
-        }
-        return Err(KixEvalError::StoreGraphError {
-            message: format!(
-                "nix eval of the name of cluster '{attr}' failed: {}",
-                stderr.trim()
-            ),
-        });
-    }
-    serde_json::from_slice(&output.stdout).map_err(|e| KixEvalError::StoreGraphError {
+    let output = match nix::output(&mut cmd) {
+        // The flake has no `legacyPackages.<sys>.kixClusters` output: a
+        // flake that is not a kix flake defines no clusters.
+        Err(e) if e.missing_attribute() => return Ok(None),
+        output => output?,
+    };
+    serde_json::from_slice(&output).map_err(|e| KixEvalError::StoreGraphError {
         message: format!("failed to parse the name of cluster '{attr}': {e}"),
     })
 }
@@ -406,7 +344,7 @@ fn current_nix_system() -> &'static str {
 }
 
 /// Stable ordering for manifests: apiVersion, kind, namespace, name.
-fn manifest_sort_key(manifest: &serde_json::Value) -> (String, String, String, String) {
+pub fn manifest_sort_key(manifest: &serde_json::Value) -> (String, String, String, String) {
     let field = |pointer: &str| {
         manifest
             .pointer(pointer)

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kix-cli", "kix", "kix-operator"]
+members = ["kix-cli", "kix", "kix-container", "kix-bundle", "kix-operator"]
 
 [workspace.metadata.crane]
 name = "kix"
@@ -8,13 +8,13 @@ name = "kix"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "LicenseRef-Proprietary"
 repository = "https://github.com/kixpkgs/kixpkgs"
 
 [workspace.dependencies]
 # Serialization
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 serde_yml = "0.0.12"
 # JSON Schema of the `kix plan` and `kix diff` document
 schemars = "1"
@@ -77,6 +77,9 @@ proptest = "1"
 # DAG
 petgraph = "0.7"
 
+# Bundles
+zstd = "0.14"
+
 # SQLite
 rusqlite = { version = "0.32", features = ["bundled"] }
 
@@ -96,15 +99,10 @@ chrono = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Nix FFI bindings
-nix-bindings-expr = { git = "https://github.com/nixops4/nix-bindings-rust.git", rev = "7de15fa26057c8cf0b6178ff166e529c09ea89a7" }
-nix-bindings-store = { git = "https://github.com/nixops4/nix-bindings-rust.git", rev = "7de15fa26057c8cf0b6178ff166e529c09ea89a7" }
-nix-bindings-flake = { git = "https://github.com/nixops4/nix-bindings-rust.git", rev = "7de15fa26057c8cf0b6178ff166e529c09ea89a7" }
-nix-bindings-util = { git = "https://github.com/nixops4/nix-bindings-rust.git", rev = "7de15fa26057c8cf0b6178ff166e529c09ea89a7" }
-nix-bindings-fetchers = { git = "https://github.com/nixops4/nix-bindings-rust.git", rev = "7de15fa26057c8cf0b6178ff166e529c09ea89a7" }
-
 # Internal crates
 kix-lib = { path = "kix" }
+kix-container = { path = "kix-container" }
+kix-bundle = { path = "kix-bundle" }
 
 # Test dependencies (used as dev-dependencies in member crates)
 # Listed here so members can inherit them with .workspace = true

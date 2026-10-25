@@ -96,6 +96,11 @@ rec {
     sopsSource = key "sops-source";
     contentHash = key "content-hash";
     secretKeys = key "secret-keys";
+    # Where each key's value comes from, as `key=source` pairs separated by
+    # commas (`*=controller` when a controller fills the whole Secret).
+    # Sources: inline, plain, sops, controller. The security.secretSource
+    # rule reads it.
+    secretSources = key "secret-sources";
     secretType = key "secret-type";
     classification = key "classification";
     rotationPolicy = key "rotation-policy";

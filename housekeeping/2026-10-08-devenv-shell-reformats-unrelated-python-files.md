@@ -1,0 +1,3 @@
+# 2026-10-08 · `devenv.nix`, `lefthook.yml` · Entering `devenv shell` runs treefmt over the whole repository and rewrites three committed Python files.
+
+The `clippy-rust` hook runs `devenv shell`, whose `devenv:treefmt:run` task formats every file on entry. On main it changes `cli/fuzz/seed.py`, `scripts/vendor-clickhouse-crd-schemas.py` and `scripts/vendor_crds/__init__.py`, which are not formatted as treefmt wants, and ruff reports 4 errors (`l` as a variable name in a test). So every commit that touches Rust leaves those three files modified in the working tree, outside the change being committed. Hit 2026-10-08 committing a kix change; the files had to be restored by hand after each attempt.

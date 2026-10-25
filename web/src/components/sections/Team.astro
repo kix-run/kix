@@ -1,0 +1,66 @@
+---
+import { Image } from 'astro:assets';
+import Container from '../Container.astro';
+import luca from '@/assets/luca-dombetzki.jpg';
+import adam from '@/assets/adam-charnock.jpg';
+
+// `bio` is trusted HTML so it can carry links.
+const people = [
+  {
+    name: 'Luca Dombetzki',
+    photo: luca,
+    bio: "Built TUM.ai, Europe's largest AI student initiative. Senior Machine Learning Engineer at Valinor Discovery, virtual patient models for medicine.",
+    linkedin: 'https://www.linkedin.com/in/luca-dombetzki',
+  },
+  {
+    name: 'Adam Charnock',
+    photo: adam,
+    bio: '20 years in production, founder of <a href="https://lithus.eu" class="text-accent-text hover:underline">Lithus</a>, managed bare-metal Kubernetes in the EU. Previously of Twitter, off-grid ISP founder, and house builder.',
+    linkedin: 'https://www.linkedin.com/in/adamcharnock/',
+  },
+];
+---
+
+<section aria-labelledby="team-title" class="bg-paper text-ink">
+  <Container>
+    <div class="pb-16 md:pb-20 lg:pb-28">
+      <div class="grid grid-cols-1 gap-10 border-t border-line pt-12 md:pt-16 lg:grid-cols-2 lg:gap-6">
+        <div class="flex flex-col gap-5">
+          <p class="kicker text-ink-2">Core team</p>
+          <h2
+            id="team-title"
+            class="text-[30px] leading-[1.1] font-semibold tracking-[-0.75px] text-balance md:text-[40px] md:tracking-[-1px]"
+          >
+            Built from experience running clusters.
+          </h2>
+        </div>
+        <ul class="grid grid-cols-1 gap-8 sm:grid-cols-2 sm:gap-6">
+          {
+            people.map((person) => (
+              <li class="flex flex-col gap-4">
+                <Image
+                  src={person.photo}
+                  alt={person.name}
+                  width={420}
+                  height={280}
+                  class="h-[280px] w-full rounded-[10px] border border-line bg-paper-2 object-cover"
+                />
+                <div class="flex flex-col gap-2">
+                  <h3 class="text-[18px] font-semibold">{person.name}</h3>
+                  <p class="text-[15px] leading-[1.55] text-ink-2" set:html={person.bio} />
+                  <a
+                    href={person.linkedin}
+                    class="self-start text-sm font-medium text-accent-text hover:underline"
+                    aria-label={`${person.name} on LinkedIn`}
+                  >
+                    LinkedIn
+                  </a>
+                </div>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+    </div>
+  </Container>
+</section>

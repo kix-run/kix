@@ -93,7 +93,10 @@ let
       resolveDepTargets
       describeRequester
       buildConfigInjections
-      evaluateInstanceConfig
+      checkRefTargets
+      refsOf
+      evaluateInstanceModules
+      instancePinsLib
       ;
     inherit (instance) evaluateInstance;
     inherit (import_) mkImport checkExtraDeps;
@@ -121,9 +124,11 @@ in
   inherit (resolve)
     buildResolutionIndex
     resolveArg
+    checkRefTargets
     describeRequester
     extractDeferredDefs
     evaluateInstanceConfig
+    evaluateInstanceModules
     packageDefaultPriority
     callPackagePhase1
     buildEntriesOf

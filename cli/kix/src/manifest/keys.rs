@@ -1,10 +1,11 @@
-//! The Kubernetes domain Kix owns, and every annotation, label and API name
-//! built on it.
+//! The Kubernetes domain Kix owns, and the annotations, labels and API names
+//! built on it that the CLI and operator read or write. Keys only the Nix
+//! library writes are listed in `kix/lib/core/annotations.nix`.
 //!
 //! # One literal
 //!
-//! The domain is spelled exactly once in this crate, in [`domain`]. Every key
-//! is built from it with [`key`], so a rename is a one-line change here.
+//! The domain is spelled exactly once in this crate, in `domain!`. Every key
+//! is built from it with `key!`, so a rename is a one-line change here.
 //! A test in this module walks the source tree and fails if any other file
 //! spells a Kix domain, so the invariant cannot rot.
 //!
@@ -56,7 +57,7 @@ pub const GROUP: &str = domain!();
 pub const API_VERSION: &str = concat!(domain!(), "/v1alpha1");
 
 /// The prefix every Kix key starts with, including the slash.
-pub const PREFIX: &str = concat!(domain!(), "/");
+pub(crate) const PREFIX: &str = concat!(domain!(), "/");
 
 /// Kix's website. Not a Kubernetes key: it appears in SARIF reports and SLSA
 /// attestations, which name the tool by URI.
@@ -74,20 +75,17 @@ pub const SLSA_BUILD_TYPE: &str = concat!("https://", domain!(), "/build/v1");
 pub const RECEIPT_SCHEMA: &str = concat!(domain!(), "/receipt/v1");
 
 /// Field under an Activation's `status` that carries the deploy receipt.
-pub const RECEIPT_FIELD: &str = "receipt";
+pub(crate) const RECEIPT_FIELD: &str = "receipt";
 
 /// Field under an Activation's `status` that lists the builds whose orphans
 /// the deploy that finalized it reported and did not delete. See
 /// `cluster::activation::KeptOrphanSource`.
-pub const ORPHANS_KEPT_FROM_FIELD: &str = "orphansKeptFrom";
+pub(crate) const ORPHANS_KEPT_FROM_FIELD: &str = "orphansKeptFrom";
 
 /// `activations.<domain>`, the CRD name.
 pub const ACTIVATIONS_CRD: &str = concat!("activations.", domain!());
 
-/// `packageinstances.<domain>`, the CRD name.
-pub const PACKAGE_INSTANCES_CRD: &str = concat!("packageinstances.", domain!());
-
-// --- Stamped by the CLI at load time (manifest/stamp.rs) ---
+// --- Stamped by the CLI at load time (eval/stamp.rs) ---
 
 /// The 32-char Nix store hash of the resource's sealed manifest. The identity
 /// the whole deploy engine compares on.
@@ -126,18 +124,6 @@ pub const DEPLOYED_AT: &str = key!("deployed-at");
 /// Cluster name. A **label**, so records can be listed per cluster.
 pub const CLUSTER_LABEL: &str = key!("cluster");
 
-/// Root resource of a package instance.
-pub const ROOT: &str = key!("root");
-
-/// Resources that depend on the package instance.
-pub const INVERSE_DEPS: &str = key!("inverse-deps");
-
-/// Package instances this one requires.
-pub const PACKAGE_REQUIRES: &str = key!("package-requires");
-
-/// Resources that run after the package instance is ready.
-pub const POST_HOOKS: &str = key!("post-hooks");
-
 /// `import` on a PackageInstance marks it as a marker for a resource Kix
 /// references but does not own.
 pub const MODE: &str = key!("mode");
@@ -145,45 +131,32 @@ pub const MODE: &str = key!("mode");
 // --- Import markers ---
 
 /// Kind of the imported resource.
-pub const IMPORT_KIND: &str = key!("import-kind");
+pub(crate) const IMPORT_KIND: &str = key!("import-kind");
 
 /// `apiVersion` of the imported resource.
-pub const IMPORT_API_VERSION: &str = key!("import-apiversion");
+pub(crate) const IMPORT_API_VERSION: &str = key!("import-apiversion");
 
 /// Name of the imported resource.
-pub const IMPORT_NAME: &str = key!("import-name");
-
-/// Fully qualified DNS name of an imported Service.
-pub const IMPORT_FQDN: &str = key!("import-fqdn");
+pub(crate) const IMPORT_NAME: &str = key!("import-name");
 
 /// Comma-separated keys an imported Secret must carry.
-pub const IMPORT_SECRET_KEYS: &str = key!("import-secret-keys");
+pub(crate) const IMPORT_SECRET_KEYS: &str = key!("import-secret-keys");
 
 /// Kind a CRD ref marker declares (`scope.mkCRDRef`, `kix.mkImport { crds }`).
 /// An import marker that carries it is a CRD ref marker.
-pub const CRD_KIND: &str = key!("crd-kind");
+pub(crate) const CRD_KIND: &str = key!("crd-kind");
 
 /// Default API version a CRD ref marker declares for its kind: the version
-/// custom resources built from the ref use unless they set their own.
-pub const CRD_VERSION: &str = key!("crd-version");
+/// custom resources built from the ref use unless they set their own. The
+/// deploy does not read it; tests stamp it to show that.
+#[cfg(test)]
+pub(crate) const CRD_VERSION: &str = key!("crd-version");
 
-/// Comma-separated API versions a CRD ref marker declares as served,
-/// `CRD_VERSION` among them. The library stamps it on every CRD ref marker,
+/// Comma-separated API versions a CRD ref marker declares as served, its
+/// default version among them. The library stamps it on every CRD ref marker,
 /// and it is the only list the deploy checks against the live CRD. A deploy
 /// refuses a build with a CRD ref marker that lacks it.
-pub const CRD_SERVED_VERSIONS: &str = key!("crd-served-versions");
-
-/// Scope a CRD ref marker declares for its kind: `Namespaced` or `Cluster`.
-pub const CRD_SCOPE: &str = key!("crd-scope");
-
-/// Selector of an imported Service, as JSON.
-pub const SERVICE_SELECTOR: &str = key!("service-selector");
-
-/// Ports of an imported Service, as JSON.
-pub const SERVICE_PORTS: &str = key!("service-ports");
-
-/// Labels of an imported Service, as JSON.
-pub const SERVICE_LABELS: &str = key!("service-labels");
+pub(crate) const CRD_SERVED_VERSIONS: &str = key!("crd-served-versions");
 
 // --- Graph and deploy behaviour ---
 
@@ -196,19 +169,19 @@ pub const READINESS: &str = key!("readiness");
 /// Comma-separated field paths the resource cedes to another field manager
 /// after creation (`spec.versions`, `webhooks[*].rules`). On a 409 confined
 /// to these paths, apply retries without them.
-pub const CEDE_FIELDS: &str = key!("cede-fields");
+pub(crate) const CEDE_FIELDS: &str = key!("cede-fields");
 
 /// Objects the resource expects something else to have created, as
 /// comma-separated `apiVersion|Kind|name` entries in the resource's own
 /// namespace. Apply waits for each to exist first.
-pub const EXPECTS: &str = key!("expects");
+pub(crate) const EXPECTS: &str = key!("expects");
 
 /// A Job carrying `rerun: on-change` is deleted and created again rather than
 /// patched. See [`RERUN_ON_CHANGE`].
-pub const RERUN: &str = key!("rerun");
+pub(crate) const RERUN: &str = key!("rerun");
 
 /// The only value [`RERUN`] honours.
-pub const RERUN_ON_CHANGE: &str = "on-change";
+pub(crate) const RERUN_ON_CHANGE: &str = "on-change";
 
 /// Finalizer the operator holds on records it reconciles.
 pub const OPERATOR_GC_FINALIZER: &str = key!("operator-gc");
@@ -216,50 +189,15 @@ pub const OPERATOR_GC_FINALIZER: &str = key!("operator-gc");
 // --- Secrets ---
 
 /// Store path of the SOPS file a Secret is decrypted from at apply time.
-pub const SOPS_SOURCE: &str = key!("sops-source");
+pub(crate) const SOPS_SOURCE: &str = key!("sops-source");
 
 /// Hash of a Secret's decrypted content.
 pub const CONTENT_HASH: &str = key!("content-hash");
 
-/// Comma-separated keys a Secret carries.
-pub const SECRET_KEYS: &str = key!("secret-keys");
-
-/// Kubernetes Secret type.
-pub const SECRET_TYPE: &str = key!("secret-type");
-
-/// Data classification of a Secret.
-pub const CLASSIFICATION: &str = key!("classification");
-
-/// Rotation policy of a Secret.
-pub const ROTATION_POLICY: &str = key!("rotation-policy");
-
-// --- Derived policy and package claims ---
-
-/// `true` on a resource Kix derived rather than one the author wrote.
-pub const DERIVED: &str = key!("derived");
-
-/// Which derivation rule produced a network policy.
-pub const POLICY_TYPE: &str = key!("policy-type");
-
-/// `<group>/<Kind>/<name>` of the custom resource whose operator created the
-/// pods a Service selects.
-pub const OPERAND_OF: &str = key!("operand-of");
-
-/// `true` on a monitor that targets something outside Kix, so selector
-/// matching is skipped for it.
-pub const MONITORS_EXTERNAL_SERVICE: &str = key!("monitors-external-service");
-
-/// Role a resource plays within its package.
-pub const ROLE: &str = key!("role");
-
-/// Name of the database cluster a resource belongs to.
-pub const DB_CLUSTER: &str = key!("db-cluster");
-
-/// `true` on an instance Kix instantiated on the author's behalf.
-pub const AUTO_INSTANTIATED: &str = key!("auto-instantiated");
-
-/// `true` on an optional instance a dependency activated.
-pub const OPTIONAL_ACTIVATED: &str = key!("optional-activated");
+/// Comma-separated keys a Secret carries. The deploy takes the keys from the
+/// SOPS file instead; tests stamp it to show that.
+#[cfg(test)]
+pub(crate) const SECRET_KEYS: &str = key!("secret-keys");
 
 /// Is this one of Kix's own annotation or label keys?
 ///
@@ -269,15 +207,34 @@ pub fn is_kix_key(key: &str) -> bool {
     key.starts_with(PREFIX) || crate::legacy_domain::is_legacy_key(key)
 }
 
+/// Is `key` under Kix's domain, a subdomain of it (`operator.kix.run/`),
+/// or a retired domain? Kix reads such keys off the records it writes, so
+/// no one else may set them there.
+pub fn is_kix_domain_key(key: &str) -> bool {
+    let prefix = key.split_once('/').map_or("", |(p, _)| p);
+    std::iter::once(DOMAIN)
+        .chain(crate::legacy_domain::DOMAINS.iter().copied())
+        .any(|d| prefix == d || prefix.ends_with(&format!(".{d}")))
+}
+
 /// Read a Kix annotation off a manifest.
 ///
 /// `key` is a constant from this module. Pass the manifest, not its
 /// annotations map.
 pub fn get<'a>(manifest: &'a Value, key: &str) -> Option<&'a str> {
-    let annotations = manifest.pointer("/metadata/annotations")?.as_object()?;
-    annotations.get(key).and_then(Value::as_str).or_else(|| {
-        crate::legacy_domain::fallback(key, |k| annotations.get(k).and_then(Value::as_str))
-    })
+    get_in(manifest, "/metadata/annotations", key)
+}
+
+/// Read a Kix label off a manifest, as [`get`] reads an annotation.
+pub fn label<'a>(manifest: &'a Value, key: &str) -> Option<&'a str> {
+    get_in(manifest, "/metadata/labels", key)
+}
+
+fn get_in<'a>(manifest: &'a Value, map: &str, key: &str) -> Option<&'a str> {
+    let map = manifest.pointer(map)?.as_object()?;
+    map.get(key)
+        .and_then(Value::as_str)
+        .or_else(|| crate::legacy_domain::fallback(key, |k| map.get(k).and_then(Value::as_str)))
 }
 
 /// Read a Kix annotation or label off a `kube` metadata map.
@@ -304,7 +261,6 @@ mod tests {
         assert_eq!(PREFIX, format!("{DOMAIN}/"));
         assert_eq!(IDENTITY_HASH, format!("{DOMAIN}/identity-hash"));
         assert_eq!(ACTIVATIONS_CRD, format!("activations.{DOMAIN}"));
-        assert_eq!(PACKAGE_INSTANCES_CRD, format!("packageinstances.{DOMAIN}"));
         assert_eq!(WEBSITE, format!("https://{DOMAIN}"));
     }
 

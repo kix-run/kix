@@ -1,0 +1,32 @@
+---
+import Section from '../Section.astro';
+import Heading from '../Heading.astro';
+
+const items = [
+  { marker: 'A.', title: 'check the definition', href: '#check' },
+  { marker: 'B.', title: 'plan a change', href: '#plan' },
+  { marker: 'C.', title: 'see what was deployed', href: '#receipt' },
+  { marker: 'D.', title: 'use packages across clusters', href: '#clusters' },
+];
+---
+
+<Section labelledby="payoffs-title" class="[&>div>div]:pb-10 lg:[&>div>div]:pb-14">
+  <div class="flex flex-col gap-10">
+    <Heading id="payoffs-title" class="max-w-[980px]">What the compiler can do with that information</Heading>
+    <ul class="grid grid-cols-1 gap-x-4 sm:grid-cols-2 lg:grid-cols-4">
+      {
+        items.map((item) => (
+          <li>
+            <a
+              href={item.href}
+              class="group flex gap-[5px] border-t-[1.5px] border-ink py-[18px] text-[17px] leading-[1.35] font-medium text-ink"
+            >
+              <span class="text-accent-text">{item.marker}</span>
+              <span class="group-hover:underline group-hover:underline-offset-4">{item.title}</span>
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+</Section>

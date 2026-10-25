@@ -47,12 +47,12 @@ in
     replicaCount = lib.mkOption {
       type = lib.types.int;
       # Stateless and serving: two replicas as soon as a pod restart must
-      # not be downtime, three once a whole zone may go.
+      # not be downtime, spread so either survives a lost node or zone.
       default = kix.availability.pick availability {
         none = 1;
         pod = 2;
         node = 2;
-        zone = 3;
+        zone = 2;
       };
       description = ''
         Number of `Deployment` replicas for the echo-server pods. Defaults

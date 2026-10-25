@@ -55,6 +55,14 @@
         // {
           inherit cargoArtifacts;
 
+          # cargo-auditable writes the list of crates into the binary, so
+          # SBOM tools such as syft can see what kix is built from. Spelled
+          # out because crane's cargoWithProfile puts --release before the
+          # subcommand, ahead of `auditable`. Not in buildDepsOnly: only the
+          # final binary carries the list.
+          cargoBuildCommand = "cargo auditable build --release";
+          nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.cargo-auditable ];
+
           # Integration tests require a writable nix store (eval cache),
           # which is unavailable inside the nix build sandbox.
           doCheck = false;
@@ -62,7 +70,9 @@
           meta = {
             description = "Kubernetes manifest generator CLI";
             homepage = "https://github.com/kixpkgs/kixpkgs";
-            license = lib.licenses.mit;
+            # Kix is proprietary, but nixpkgs refuses to evaluate a package
+            # whose license is unfree unless allowUnfree is set, so the
+            # license is left unset.
             mainProgram = "kix";
           };
         }

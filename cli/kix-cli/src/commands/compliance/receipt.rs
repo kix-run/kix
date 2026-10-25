@@ -35,14 +35,40 @@ use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
+use kix::build_source::{Build, Provenance};
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::keys;
 
 use super::shared;
+use crate::commands::ReceiptMaker;
+use crate::output;
+
+/// The receipt this module writes, for `kix deploy` and `kix bundle`.
+pub struct ComplianceReceipts;
+
+impl ReceiptMaker for ComplianceReceipts {
+    fn of_build(&self, build: &Build, flake_ref: &str) -> Value {
+        of_build(build, flake_ref)
+    }
+
+    fn warnings(&self, receipt: &Value) -> Vec<String> {
+        dirty_source_warning(receipt)
+    }
+}
+
+/// The receipt for a build about to be deployed: for a build made here,
+/// from the flake at `flake_ref` ([`build_receipt`]), and otherwise from
+/// what the machine that made it recorded ([`from_provenance`]).
+fn of_build(build: &Build, flake_ref: &str) -> Value {
+    match build.carried_provenance() {
+        None => build_receipt(build.graph(), flake_ref),
+        Some((made, sha256)) => from_provenance(build.graph(), made, sha256),
+    }
+}
 
 /// Assemble the receipt for a build that is about to be deployed.
-pub fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
-    let flake_path = shared::resolve_flake_path(flake_ref).ok();
+pub(super) fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
+    let flake_path = crate::commands::resolve_flake_path(flake_ref).ok();
 
     let git = flake_path.as_ref().and_then(|p| shared::git_state(p));
     let flake_lock_digest = flake_path
@@ -62,11 +88,11 @@ pub fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
     }
 
     let mut builder = json!({
-        "kixVersion": env!("CARGO_PKG_VERSION"),
+        "kixVersion": kix::VERSION,
         "arch": std::env::consts::ARCH,
         "os": std::env::consts::OS,
     });
-    if let Some(v) = shared::nix_version() {
+    if let Some(v) = kix::eval::nix::version() {
         builder["nixVersion"] = json!(v);
     }
 
@@ -84,6 +110,69 @@ pub fn build_receipt(graph: &StoreGraph, flake_ref: &str) -> Value {
             .unwrap_or_else(|| json!([])),
         "images": images(graph),
     })
+}
+
+/// The receipt for a deploy of a build made on another machine.
+///
+/// The source, inputs and builder are what that machine recorded; this
+/// machine has no source tree to read them from. They are claims by whoever
+/// made the build. `source.bundle.sha256` is not: it is `sha256`, of the
+/// bytes this machine read, so it names exactly what was deployed.
+fn from_provenance(graph: &StoreGraph, made: Provenance, sha256: &str) -> Value {
+    let mut source = made.source;
+    let mut bundle = serde_json::Map::from_iter([("sha256".to_string(), json!(sha256))]);
+    if let Some(Value::Object(claimed)) = source.remove("bundle") {
+        for (key, value) in claimed {
+            bundle.entry(key).or_insert(value);
+        }
+    }
+    source.insert("bundle".to_string(), Value::Object(bundle));
+    json!({
+        "schema": keys::RECEIPT_SCHEMA,
+        "cluster": graph.cluster_name,
+        "activationHash": shared::activation_identity_hash(graph),
+        "deployedAt": shared::now_rfc3339(),
+        "source": source,
+        "builder": made.builder,
+        "deployer": {
+            "kixVersion": kix::VERSION,
+            "arch": std::env::consts::ARCH,
+            "os": std::env::consts::OS,
+        },
+        "inputs": made.inputs,
+        "images": images(graph),
+    })
+}
+
+/// The warning to print before confirming a deploy whose receipt records a
+/// dirty source, then the recorded revision. A dirty tree is allowed, but
+/// its recorded commit does not fully describe the deployed source. A build
+/// made elsewhere has `source.bundle` ([`from_provenance`]): its receipt
+/// says what the machine that made it recorded, so the revision is shown
+/// with its control characters escaped.
+fn dirty_source_warning(receipt: &Value) -> Vec<String> {
+    if receipt["source"]["dirty"] != Value::Bool(true) {
+        return Vec::new();
+    }
+    let warning = if receipt["source"].get("bundle").is_some() {
+        [
+            "The build was made from a source tree with uncommitted changes, so the commit it",
+            "records does not contain what is about to be applied. The record will say so.",
+        ]
+    } else {
+        [
+            "The working tree has uncommitted changes, so the commit recorded for this deploy",
+            "does not contain what is about to be applied. The record will say so.",
+        ]
+    };
+    let mut lines: Vec<String> = warning
+        .iter()
+        .map(|l| output::yellow(l).into_owned())
+        .collect();
+    if let Some(rev) = receipt["source"]["revision"].as_str() {
+        lines.push(format!("  {}", output::dim(&output::printable(rev))));
+    }
+    lines
 }
 
 /// Every container image the build renders, sorted and deduplicated.
@@ -476,5 +565,106 @@ mod tests {
         // A malformed digest is a reference Kix will not vouch for.
         collect_images(&json!({ "image": "reg/app@sha256:short" }), &mut found);
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// A build carried in a bundle whose maker recorded `made`, with the
+    /// bundle's bytes and the kix revision it names.
+    fn carried_build(made: Value) -> (Build, Vec<u8>, String) {
+        use kix_bundle::Bundle;
+
+        let fixture: &[u8] =
+            include_bytes!("../../../../kix-bundle/tests/fixtures/kix-enterprise-test.kixbundle");
+        let mut contents = Bundle::read(std::io::Cursor::new(fixture))
+            .unwrap()
+            .0
+            .contents()
+            .unwrap();
+        contents.receipt = Some(serde_json::from_value(made).unwrap());
+        let file = tempfile::NamedTempFile::new().unwrap();
+        contents.write(file.as_file()).unwrap();
+        let build = kix_bundle::read_build(file.path(), &[], "kix-enterprise-test").unwrap();
+        (build, std::fs::read(file.path()).unwrap(), contents.kix_rev)
+    }
+
+    /// A deploy from a bundle records the bytes it deployed, and repeats
+    /// what the bundle's maker recorded about the source.
+    #[test]
+    fn a_bundle_receipt_names_the_bundle_and_keeps_its_makers_record() {
+        let (build, bytes, kix_rev) = carried_build(json!({
+            "source": {"revision": "abc", "dirty": false},
+            "inputs": [{"name": "nixpkgs"}],
+            "builder": {"kixVersion": "0.0.1"},
+        }));
+        let r = ComplianceReceipts.of_build(&build, "unused");
+        let digest = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));
+        assert_eq!(r["source"]["revision"], "abc");
+        assert_eq!(r["source"]["bundle"]["sha256"], json!(digest));
+        assert_eq!(r["source"]["bundle"]["kixRev"], json!(kix_rev));
+        assert_eq!(r["inputs"][0]["name"], "nixpkgs");
+        assert_eq!(r["builder"]["kixVersion"], "0.0.1");
+        assert_eq!(r["deployer"]["kixVersion"], kix::VERSION);
+        assert_eq!(
+            r["activationHash"],
+            json!(kix::eval::store_graph::store_hash(
+                &build.graph().activation_path
+            ))
+        );
+        assert!(ComplianceReceipts.warnings(&r).is_empty());
+    }
+
+    /// A bundle's receipt is written by whoever made the bundle: its text
+    /// reaches the terminal without control characters, and the warning
+    /// is about the bundle's source, not the operator's tree.
+    #[test]
+    fn a_dirty_bundle_source_is_named_as_the_bundles_and_escaped() {
+        let (build, _, _) = carried_build(json!({"source": {
+            "dirty": true, "revision": "abc\u{1b}[2J\u{202e}-dirty"}}));
+        let receipt = ComplianceReceipts.of_build(&build, "unused");
+        let lines = ComplianceReceipts.warnings(&receipt);
+        assert_eq!(
+            lines[..2],
+            [
+                "The build was made from a source tree with uncommitted changes, so the commit it",
+                "records does not contain what is about to be applied. The record will say so.",
+            ]
+        );
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines[2].starts_with("  abc"), "{lines:?}");
+        assert!(
+            !lines[2].chars().any(|c| c.is_control() || c == '\u{202e}'),
+            "{lines:?}"
+        );
+    }
+
+    /// The warning for a build made here names the working tree.
+    #[test]
+    fn a_dirty_working_tree_is_named_as_such() {
+        let receipt = json!({"source": {"dirty": true, "revision": "abc-dirty"}});
+        assert_eq!(
+            ComplianceReceipts.warnings(&receipt),
+            [
+                "The working tree has uncommitted changes, so the commit recorded for this deploy",
+                "does not contain what is about to be applied. The record will say so.",
+                "  abc-dirty",
+            ]
+        );
+        let clean = json!({"source": {"dirty": false, "revision": "abc"}});
+        assert!(ComplianceReceipts.warnings(&clean).is_empty());
+    }
+
+    /// The digest in the receipt is the one this machine computed. A
+    /// source that claims another is not believed.
+    #[test]
+    fn a_source_cannot_supply_the_receipts_digest() {
+        let made = Provenance {
+            source: serde_json::from_value(json!({"bundle": {"sha256": "forged", "kixRev": "r"}}))
+                .unwrap(),
+            ..Default::default()
+        };
+        let r = from_provenance(&StoreGraph::empty("c"), made, "read");
+        assert_eq!(
+            r["source"]["bundle"],
+            json!({"sha256": "read", "kixRev": "r"})
+        );
     }
 }

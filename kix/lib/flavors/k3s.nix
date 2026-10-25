@@ -43,6 +43,20 @@
       binding = lib.mkDefault "exclusive";
       provider = lib.mkDefault "metrics-server (k3s packaged component)";
     };
+    # registryMirror stays unknown: k3s embeds Spegel but runs it only with
+    # `embedded-registry: true` in the server config. A cluster that turns
+    # it on sets the binding to "exclusive", so a spegel instance is refused.
+  };
+
+  # k3s runs its own containerd (pkg/agent/config in k3s). Its config
+  # template does not set discard_unpacked_layers, which containerd
+  # defaults to false. k3s rewrites only the hosts.toml files it generated,
+  # so a spegel instance's files survive a restart.
+  cluster.containerd = {
+    socket = lib.mkDefault "/run/k3s/containerd/containerd.sock";
+    registryConfigPath = lib.mkDefault "/var/lib/rancher/k3s/agent/etc/containerd/certs.d";
+    contentPath = lib.mkDefault "/var/lib/rancher/k3s/agent/containerd/io.containerd.content.v1.content";
+    discardUnpackedLayers = lib.mkDefault false;
   };
 
   cluster.capabilities = {

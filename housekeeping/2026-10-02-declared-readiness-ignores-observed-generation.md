@@ -1,10 +1,10 @@
-# 2026-10-02 · `cli/kix/src/cluster/readiness.rs` · A declared `{ path; equals; }` readiness rule passes on a stale status right after an apply.
+# 2026-10-02 · `kix/packages/arc` · An AutoscalingRunnerSet's declared readiness passes on a stale status right after an apply.
 
-`check_readiness` compares the value at `path` and never looks at
-`metadata.generation` or `status.observedGeneration`, unlike the built-in
-workload checks. An AutoscalingRunnerSet (`kix/packages/arc`) that was
-`Running` stays `Running` until its controller reconciles the new spec and
-writes `Pending`, so a deploy that changed its credentials or URL can pass
-before the controller has seen the change. The condition form of the rule has
-the same gap when the operator does not stamp `observedGeneration` on its
-conditions.
+The package's `{ path; equals; }` rule reads `status.phase`, and the
+AutoscalingRunnerSet status has no `observedGeneration` (the vendored
+schema lists only the runner counts and `phase`), so the CLI has nothing to
+compare with `metadata.generation`. A set that was `Running` stays
+`Running` until its controller reconciles the new spec and writes
+`Pending`, so a deploy that changed its credentials or URL can pass before
+the controller has seen the change. `kix/packages/arc/default.nix`
+documents the gap.

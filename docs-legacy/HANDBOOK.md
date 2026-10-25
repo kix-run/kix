@@ -179,7 +179,7 @@ ls result/
 |---|---|---|
 | `kix build <cluster>` | Render manifests to stdout (yaml/json) | `-o yaml|json` |
 | `kix diff <cluster>` | Read-only diff vs live, or vs a directory (previous build result, snapshot, export) | `--from <dir>`, `-o json|yaml|markdown` |
-| `kix plan <cluster>` | What a deploy would do, as a server-side dry run: field changes, refused writes, drift, prune | `--prune`, `--reconcile`, `--force-conflicts`, `--current-activation`, `-o json|yaml|markdown` |
+| `kix plan <cluster>` | What a deploy would do, as a server-side dry run: field changes, refused writes, drift, prune | `--prune`, `--reconcile`, `--force-conflicts`, `--current-activation`, `--save F.kixplan`, `-o markdown` |
 | `kix check <cluster>` | Eval (constructor validators, cross-resource checks, scorecard errors) + scorecard report | `--sarif` |
 | `kix deploy <cluster>` (alias `apply`) | Wave-based apply with confirmation | `-y`, `--dry-run`, `--reconcile`, `--prune`, `--operator`, `--tui`, `--log-format=line|json|pretty` |
 | `kix status <cluster>` | Resource health table | `--operator` (group by package) |
@@ -187,7 +187,7 @@ ls result/
 | `kix list packages` | List registered packages | `--cluster <name>` |
 | `kix graph <cluster>` | DAG visualization | `--format tree|dot|json` |
 | `kix inspect <cluster>` | Rendered resources by namespace and kind | |
-| `kix gc <cluster>` | Garbage-collect stale resources; retire old Activation records | `--hard`, `--operator`, `--keep N` (always keep the N newest, default 10), `--keep-max N` (never more than N, default 50), `--keep-for 30d` (retire older, default 30d, `0` off), `--include-unstamped`, `--include-unattributed`, `-y` |
+| `kix gc <cluster>` | Garbage-collect stale resources; retire old Activation records | `--hard`, `--operator`, `--keep N` (always keep the N newest rollback targets, default 10), `--keep-max N` (never more than N, default 50), `--keep-for 30d` (retire older, default 30d, `0` off), `--include-unstamped`, `--include-unattributed`, `--include-copies`, `-y` |
 | `kix rollback <cluster>` | Roll back to a previous activation | `-y`, `--dry-run`, `--prune`, `--list`, `--operator` |
 | `kix health <cluster>` | Drift detection vs live | |
 | `kix snapshot save <cluster> <dir>` | Dump one Kix cluster's live state | |
@@ -202,7 +202,7 @@ ls result/
 
 **Global flags:** `-o text|json|yaml`, `-v|-vv|-vvv`, `-q`, `--no-color`, `--context <ctx>`, `--flake <path>`, `--no-cache` (bypass SQLite eval cache), `--override-input <name> <url>`. A subcommand's `--help` lists only the ones it reads (`SCOPED_GLOBALS` in `cli/kix-cli/src/cli.rs`); the rest are accepted and ignored.
 
-**Env vars:** `KIX_LOG` overrides the log-filter (RUST_LOG syntax). Apiserver transport (every command and the operator share one policy; defaults suit a cluster mid-incident, override only to debug): `KIX_RETRY_ATTEMPTS` total attempts per request (default 7, `1` disables retries), `KIX_SWEEP_CONCURRENCY` parallel LISTs in the managed-resource sweep (default 16), `KIX_REQUEST_TIMEOUT` per-attempt deadline in seconds for non-watch requests (default 120, `0` none), `KIX_CONNECT_TIMEOUT` TCP connect timeout in seconds (default 15), which also sets the deadline for the first-contact probe (`KIX_PREFLIGHT=0` skips it), `KIX_STALL_TIMEOUT` seconds of no progress before `kix deploy` gives up (default 600, `0` never; a `stalled:` line naming every resource in flight, its phase and its age prints after 30s of no progress regardless). Retries: 429 always, with `Retry-After` honoured; 5xx and connection loss only for idempotent requests (GET, DELETE, PATCH including server-side apply). A request that still fails after the retries is an error, never an empty result: `diff`, `deploy` and `gc` refuse to plan from a partial view of the cluster. Resource types the account may not list (403) are reported, not hidden. First contact: every command proves the apiserver answers before doing anything else, so an unreachable cluster fails in seconds with the endpoint named instead of hanging on whatever request happened to run first. A refused port fails in 0.1s, a blackholed address in 15s, and an endpoint that completes the handshake and then goes silent in 20s.
+**Env vars:** `KIX_LOG` overrides the log-filter (RUST_LOG syntax). Apiserver transport (every command and the operator share one policy; defaults suit a cluster mid-incident, override only to debug): `KIX_RETRY_ATTEMPTS` total attempts per request (default 7, `1` disables retries), `KIX_SWEEP_CONCURRENCY` parallel LISTs in the managed-resource sweep (default 8), `KIX_REQUEST_TIMEOUT` per-attempt deadline in seconds for non-watch requests (default 120, `0` none), `KIX_CONNECT_TIMEOUT` TCP connect timeout in seconds (default 15), which also sets the deadline for the first-contact probe (`KIX_PREFLIGHT=0` skips it), `KIX_STALL_TIMEOUT` seconds of no progress before `kix deploy` gives up (default 600, `0` never; a `stalled:` line naming every resource in flight, its phase and its age prints after 30s of no progress regardless; a resource that keeps reporting readiness without reaching it is not a stall, so for it a `waiting:` line with its last readiness message and the readiness budget prints at 10s, 30s, 60s, 120s, then every minute). A retry the API server's rate limiter forces is logged only at debug level; a request that outlasts its retries still warns. Retries: 429 always, with `Retry-After` honoured; 5xx and connection loss only for idempotent requests (GET, DELETE, PATCH including server-side apply). A request that still fails after the retries is an error, never an empty result: `diff`, `deploy` and `gc` refuse to plan from a partial view of the cluster. Resource types the account may not list (403) are reported, not hidden. First contact: every command proves the apiserver answers before doing anything else, so an unreachable cluster fails in seconds with the endpoint named instead of hanging on whatever request happened to run first. A refused port fails in 0.1s, a blackholed address in 15s, and an endpoint that completes the handshake and then goes silent in 20s.
 
 **Exit codes:** `0` success; `1` error / failed resources; `2` differences detected (diff).
 
@@ -613,6 +613,8 @@ The `kix` arg to packages comes from `kix/lib/vocab/compose.nix` (`kixlib`).
 | `kix.guardArgs { who; option ? "extraArgs"; owned; } args` | Returns `args` unless one sets an owned flag (`owned` maps flag → reason and fix). An argument sets a flag when it equals it or starts with `"<flag>="`, so `--ingress-class-by-name=true` passes a `--ingress-class` guard. A one-letter flag (`-c`) also matches `-c<value>`. Every hit is one line: `<who>: extraArgs sets "<arg>", which the package owns: <owned.<flag>>` |
 | `kix.contracts.gateway` | The `out` a `gateway` provider publishes (`kix/lib/vocab/gateway.nix`): `gatewayRef` (`{ name; namespace; }`), `listeners` (the Gateway's rendered `spec.listeners`), and `podSelector` and `podNamespace` (the data-plane pods, both null when the provider cannot tell). A provider passes its out through `check who out`, which requires every field (envoy-gateway and traefik use it). `kix.expose` calls `require who dep`, which requires only `gatewayRef`, so a `kix.mkImport` stand-in may publish just that, and checks the shape of the rest. `claims dep` says whether the resolved instance offers itself as a gateway (`out.gatewayRef`, or the `gateway` alias on the instance or in its package's `meta.defaultAliases`); `kix.expose` ignores one that does not, such as an OpenTelemetry Collector named `gateway` |
 | `kix.contracts.postgresDatabase` | The `out` a `database` provider publishes (`kix/lib/vocab/postgres-database.nix`): `host` (string), `port` (string; pass an integer through `toString`), `database` (string), `credentials` (a Secret instance with `out.keyRef`; when it declares keys, `username` and `password` among them), `username` (string), `extensions` (names or `{ name; version; }`), and `tls` (bool, or null when the provider cannot tell). A provider package passes its out through `check who out`, which requires every field and throws naming each missing or misshapen one. A consumer sets `deps.database.assertions = dep: kix.contracts.postgresDatabase.assertions who dep;`, which requires `host`, `port`, `database`, and `credentials`, so a `kix.mkImport` stand-in may omit the other three, and checks the shape of those it publishes. The message names the consumer, the instance the dependency resolved to, and each field. The assertion is evaluated after the build, so a field the build reads and the `out` lacks fails first with Nix's missing-attribute error; the assertion reports misshapen fields and absent fields the build does not read. `fields` and `problems out` expose the table |
+| `kix.contracts.oidcProvider` | The `out` an OpenID Connect provider publishes (`kix/lib/vocab/oidc-provider.nix`): `issuerUrl` (a function from a realm name to the issuer URL) and `endpoints` (a function from a realm name to `{ authorizationUrl; tokenUrl; userinfoUrl; }`; the authorization URL is public, the other two are what the application's server dials, which keycloak gives as its Service address so the egress is derived). keycloak passes its out through `check who out`, which requires both. A consumer sets `deps.oidcProvider.assertions = dep: kix.contracts.oidcProvider.assertions who dep;`, which requires `issuerUrl`, and calls `requireClient { who; oidc; provider; client; }`, which throws when `oidc.enabled` is set without a provider, a client secret, or `oidc.realm`, and returns `{ issuerUrl; endpoints; }` for the realm (`endpoints` throws on read when the provider lacks it). `clientKeys` is `[ "clientId" "clientSecret" ]`, for `kix.checkSecretKeys` on the `oidcClient` dependency. keycloak answers no alias: two instances answering one would fail every optional `oidcProvider` dependency in the cluster, so a cluster wires `deps.oidcProvider = ref.<ns>.<instance>` |
+| `kix.options.oidc { scopes; autoLogin ? null; }` | The `oidc` option set of an application that signs users in through an `oidcProvider`: `enabled` (default false), `realm` (null; required while enabled), `scopes` (the application's default list; one without `openid` is refused), and `autoLogin` (default false; only when the application has such a setting, named in `autoLogin`). harbor adds `groupsClaim` and `adminGroup`, which its assertion reads; grafana and immich take role mapping through `settings` (`auth.generic_oauth.role_attribute_path`, `oauth.roleClaim`) |
 | `kix.contracts.otlpEndpoint` | The `out` an `otlp` provider publishes (`kix/lib/vocab/otlp-endpoint.nix`): `otlpGrpcUrl` and `otlpHttpUrl` (strings, `scheme://host:port` with no path; an OTLP/HTTP exporter appends `/v1/traces` and the other signal paths itself) and `tls` (bool, or null when the provider cannot tell). A provider passes its out through `check who out`, which requires every field. A consumer sets `deps.otlp.assertions = dep: kix.contracts.otlpEndpoint.assertions who dep;`, which requires the two URLs, so a `kix.mkImport` stand-in may omit `tls`. `tempo` and `otel-collector` publish it; `alias` is `"otlp"`. Tempo does not answer the alias by default, so a consumer names it with `ref`, or the cluster adds `aliases = [ "otlp" ]` to the instance. |
 | `kix.checkSecretKeys { who; arg; dep; keys ? [ ]; anyOf ? null; }` | Returns `dep` (a secret dependency; `null` passes through) once `dep.out.keys` declares every name in `keys` and, with `anyOf` (a list of key groups), every name of one group. Read the secret through the result so the check runs before any `keyRef`; a `deps.<x>.assertions` key check never shows, because `keyRef` throws first. Message: `<who>: deps.<arg> resolved to secret "<name>", which declares <keys or no keys>; this package reads <missing>. Add them to that instance's keys (a SOPS secret lists them in keys), or wire another secret with deps.<arg> = ref.<ns>.<instance>.` |
 | `kix.parseQuantity resource q` | The Kubernetes quantity `q` in millicores when `resource` is `"cpu"`, in bytes otherwise, rounded down, as an integer; `null` when `q` is not a quantity. Same grammar as `kix.types.quantity` (non-negative decimal or integer, optional suffix `m k M G T P E Ki Mi Gi Ti Pi Ei`; no sign, no exponent). A value above the signed 64-bit range (`"8Ei"`), or with more than 18 significant digits (leading zeros and trailing fraction zeros do not count), throws, and the error says which limit it exceeds; the type refuses it too. The type checks the range in bytes, so a cpu value can pass it and still throw in millicores (`"2Ei"`). Discards string context, so it works on `dep.out.size` |
@@ -691,7 +693,8 @@ These return functions whose own DI args are auto-discovered.
   path ? "/metrics",
   scheme ? "http",               # primary endpoint only
   tlsConfig ? null,              # primary endpoint only; a ServiceMonitor endpoint tlsConfig
-  alerts ? {},                   # { alertName = { expr, "for"?, severity?, description?, summary?, runbook_url?, labels?, annotations? }; }
+  params ? null,                 # primary endpoint only; query parameters, { format = [ "prometheus" ]; }
+  alerts ? {},                   # { alertName = { expr, "for"?, keep_firing_for?, severity?, description?, summary?, runbook_url?, labels?, annotations? }; }
   extraEndpoints ? [],           # each over { scheme = "http"; path = "/metrics"; } and metrics.interval
   extraLabels ? {},
   name ? null,                   # ServiceMonitor name; default the instance name. Rules are `<name>-alerts`.
@@ -700,7 +703,126 @@ These return functions whose own DI args are auto-discovered.
 })
 ```
 
-The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule`, which the prometheus package exposes on its `out`. `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`). `scheme` and `tlsConfig` set the primary endpoint's; each `extraEndpoints` entry defaults to `scheme = "http"`, `path = "/metrics"`, and the instance's `metrics.interval`.
+The builder consumes `prometheus.out.mkServiceMonitor` and `prometheus.out.mkPrometheusRule`, which the prometheus package exposes on its `out`. `metrics.enabled` and `metrics.interval` are read from `config.metrics` (use `options.metrics = kix.options.monitor;`). `scheme`, `tlsConfig`, and `params` set the primary endpoint's; each `extraEndpoints` entry defaults to `scheme = "http"`, `path = "/metrics"`, and the instance's `metrics.interval`.
+
+**`kix.alerts`**: the PrometheusRule half of `kix.monitor` on its own, for a package whose scrape is not one `kix.monitor` ServiceMonitor: a PodMonitor it builds with `prometheus.out.mkPodMonitor` (cnpg-cluster, stackgres-cluster, clickhouse-cluster), or a scrape the operator configures. It renders under the same conditions, a `prometheus` dependency and `metrics.enabled` not false, and renders nothing when `alerts` is empty.
+
+```nix
+(kix.alerts {
+  alerts,                        # as kix.monitor's
+  name ? null,                   # rule name `<name>-alerts`; default the instance name
+  extraLabels ? {},
+  rulesPart ? "prometheusRules",
+})
+```
+
+#### Writing alerts
+
+The principles are in BEST-PRACTICES §9.6. The `package-review` skill has the review items (`Mo`) and the research steps to follow before writing a package's alerts. This section is the mechanics.
+
+**What `kix.monitor` and `kix.alerts` render.** Each `alerts` entry becomes one rule in a single group named `<name>-alerts`, inside a PrometheusRule of the same name. Only `severity` has a default, `warning`. The builder adds no `for`, no labels, and no annotations, so the package sets every one. It reads only the keys in the signature above and ignores any other. The prometheus package's Prometheus selects every PrometheusRule in every namespace. Under VictoriaMetrics, the operator converts each PrometheusRule into a VMRule, and `victoria-metrics-alert` evaluates every VMRule. The VictoriaMetrics packages render their own alerts as VMRules, by handing `kix.alerts` a `prometheus` whose `out.mkPrometheusRule` is the operator's `mkVMRule`, so they do not depend on the converter and a prometheus-operator Prometheus on the same cluster never loads them.
+
+`alerts` is an attrset keyed by alert name, so a package cannot render two rules with one name. kube-prometheus pairs a `warning` and a `critical` rule under one name, so that inhibition on equal `alertname` drops the warning while the critical fires. A package gives the two levels distinct names (`DiskPoolUsageHigh`, `DiskPoolUsageCritical`) instead.
+
+**Names.** CamelCase, starting with the component (`ClickHouseReplicaReadOnly`, `VeleroBackupMissing`), so a package's alerts sort together. The name states the condition, not the cause.
+
+**Selectors and labels.** Bind the selector once in a `let` and use it in every expression, as Mo5 describes:
+
+```nix
+let
+  metricsService = "${scope.instanceName}-metrics";
+  sel = ''namespace="${scope.namespaceName}",service="${metricsService}"'';
+in
+```
+
+A PodMonitor's series carry no `service` label. Prometheus Operator and the VictoriaMetrics operator both set `job` to `<namespace>/<PodMonitor name>`, so select on that instead, and aggregate `by (namespace, job)` wherever the patterns below say `by (namespace, service)`:
+
+```nix
+sel = ''namespace="${scope.namespaceName}",job="${scope.namespaceName}/${podMonitorName}"'';
+```
+
+Aggregate with `by (namespace, service, ...)`, and keep `namespace` in every result. A bare `sum(...)` drops every label. The alertmanager package's default route groups by `namespace` and `alertname`, and inhibition rules usually compare `namespace`. An alert without it groups and inhibits across the whole cluster. Labels are the alert's identity. Never put a value in a label, because each new value starts a new alert. Values go in annotations.
+
+`absent()` keeps labels only from a plain selector. `absent(up{${sel}} == 1)` returns a series with no labels at all, so prefer the form below.
+
+**Patterns.**
+
+```nix
+# The component stopped reporting: every target down, or no target at all.
+# Both branches carry namespace and service.
+expr = "sum by (namespace, service) (up{${sel}}) == 0 or absent(up{${sel}})";
+"for" = "10m";
+
+# A metric the other alerts rely on disappeared while the target is up.
+expr = "count by (namespace, service) (up{${sel}} == 1) unless on (namespace, service) count by (namespace, service) (foo_ready{${sel}})";
+
+# Last success too old. `kix.schedules.staleAfter schedule` gives two periods
+# plus two hours as a duration ("50h" for a daily schedule), or null when the
+# period cannot be read; make a threshold option required then. One missed
+# run stays quiet while the failure alert reports it. The gauge's own window
+# is the age, so a short `for` only rides out a scrape gap.
+expr = "time() - max by (namespace, service, schedule) (foo_last_success_timestamp_seconds{${sel}}) > ${toString (kix.durations.toSeconds maxAge)}";
+"for" = "5m";
+```
+
+A last-success alert evaluates to nothing when its series is missing, and the down alert does not fire while the target is up. Pair it with the missing-metric pattern over the same series. Some programs publish the timestamp only after their first success since start (Velero does), so a missing-metric alert would fire after every restart. Build the alert from the success and attempt counters instead, but only for an age that fits inside the Prometheus retention (7d by default), since `offset` and `increase` see no older sample. `VeleroBackupMissing` uses the counters up to 6d and the timestamp past that, where it stays silent after a restart until the next success.
+
+The down pattern fires only when every target is down. One replica of several down is left to kube-prometheus's `TargetDown` (`warning`, more than 10% of a job's targets down for 10 minutes). A per-target `up == 0` alert at `critical` on a DaemonSet pages for one node, which the generic node alerts already report. When the component can run with zero replicas by design, or its metrics Service can be switched off, gate the rule on the same configuration, or `absent()` fires.
+
+A ratio alert, such as errors over requests, divides by traffic. At ten requests an hour one failure is a 10% error rate. Add a floor: `... > 0.05 and sum by (namespace, service) (rate(foo_requests_total{${sel}}[5m])) > 1`, with the floor an option when no default fits every site.
+
+Apply `rate()` or `increase()` to the raw counter first and aggregate second: `sum by (namespace, service) (rate(foo_total{${sel}}[5m]))`. A rate over an aggregated subquery, `rate(sum(foo_total)[5m:])`, reads any drop in the sum as a counter reset. Cover at least four scrape intervals with a range window, so a failed scrape and misaligned timing still leave enough samples ([Robust Perception](https://www.robustperception.io/what-range-should-i-use-with-rate/)). `[5m]` is safe for scrape intervals up to 75 seconds.
+
+**`for`.** Use at least `5m`, so a restart or a rollout does not fire the alert. A down alert uses `10m`, like kube-prometheus's `TargetDown`. A threshold on a gauge that moves around uses `15m`. Leave `for` out only when the expression already spans a long window, such as `increase(foo_failures_total[1h]) > 0`, and say so in a comment. `keep_firing_for` holds an alert after its condition clears, which stops a flapping condition from resolving and refiring. Prometheus 2.42, prometheus-operator 0.66, and vmalert all support it.
+
+**Thresholds.** Derive a threshold from evaluated configuration where the package has one: `resources.limits.memory` through `kix.parseQuantity "memory"`, a replica count, or a schedule. Otherwise extend the monitor options with a typed threshold, as cnpg-cluster does, and derive its default where the configuration allows:
+
+```nix
+metrics = kix.options.monitor // {
+  maxBackupAge = lib.mkOption {
+    type = lib.types.nullOr kix.types.promDuration;
+    default = null;
+    description = "How long the cluster may go without a completed base backup before CNPGBackupMissing fires ... Null derives it from `backup.schedule` with `kix.schedules.staleAfter` ...";
+  };
+};
+```
+
+**Annotations.** `summary` is one sentence with no template, so every firing of an alert shares it and Alertmanager can group them. `description` uses `{{ $labels.<name> }}` and `{{ $value | humanize }}` (also `humanizePercentage` and `humanizeDuration`) to name the instance and the value. It says what the condition means and what to check first. Set `runbook_url` only to a maintained upstream runbook for the same condition. Nix interpolates `${...}`, not `{{ ... }}`, so templates need no escaping.
+
+**VictoriaMetrics compatibility.** The same rule must work under vmalert:
+
+- Use only template functions that both Prometheus and vmalert define. `float64` is in neither. Prometheus refuses the rule file at load, prometheus-operator refuses the whole PrometheusRule, and the VictoriaMetrics operator's converter refuses the whole rule group. `promtool check rules` reports it. Format numbers with `printf` or the `humanize` functions instead.
+- Do not set `query_offset`. The converter maps it to vmalert's `eval_offset`, which means something else.
+- Do not compare `increase()` or `rate()` with exact equality. Prometheus extrapolates both and VictoriaMetrics does not, so their values differ slightly. Use `> 0`, or a threshold with margin.
+- vmalert restores how long an alert has been pending from remote read after a restart. The `victoria-metrics-alert` package sets `remoteRead.url`, so a long `for` survives restarts there. A vmalert without remote read starts every pending alert over.
+
+**Routing.** The alertmanager package's default settings send everything to a `null` receiver and define no inhibition rules. A site that wants pages writes `settings` with its receivers, and usually a route on `severity`. Packages make that possible by setting `severity` on every rule and keeping `namespace` on every alert. The site also routes `Watchdog`, the always-firing alert in `prometheus-default-rules`, to an external heartbeat service that pages when it stops arriving. Nothing else notices when Prometheus, Alertmanager, or the route to the receiver fails.
+
+**Tests.** A package that ships alerts has a unit test in `kix/lib/tests/units/<package>.nix`, like `reloader-metrics`. It checks that the PrometheusRule renders under the expected name, that every expression contains the instance's selector, and that nothing renders without a `prometheus` dependency or with `metrics.enabled = false`. A unit test does not catch a rule that never matches, so every cluster also gets the flake check `rules-cluster-<name>` (`kix/checks.nix` `rulesCheck`, wired in `kix/lib/mkFlake.nix`). It writes the `spec` of each rendered PrometheusRule and VMRule, which is a Prometheus rule file, to `<namespace>/<file>` and runs `promtool check rules` over them, so a PromQL syntax error, a bad duration, or an unknown template function fails the check. promtool also prints a lint warning, with the word `FAILED`, for a duplicated recording rule; it does not fail the check, and the vendored `kube-apiserver-availability.rules` group has one.
+
+When a cluster file has a sibling with the same base name and the suffix `.rules-test.yaml` (`clusters/test-foo.nix` and `clusters/test-foo.rules-test.yaml`), the check also runs `promtool test rules` on it, from the directory of rendered rules:
+
+```yaml
+rule_files:
+  - observability/agent-alerts-prometheusrule.yaml   # <namespace>/<file> in the cluster's manifests
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="observability",service="agent",instance="10.0.0.1:8888"}'
+        values: '1 1 0x10'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: OtelCollectorDown
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: observability, service: agent, instance: "10.0.0.1:8888" }
+            exp_annotations:
+              summary: An OpenTelemetry Collector is down.
+              description: Prometheus has not scraped the collector at 10.0.0.1:8888 for 5 minutes; telemetry sent to it may be lost.
+```
+
+`clusters/test-otel-collector.rules-test.yaml` is the full example. Give each alert input series that break the condition and series that stay healthy (`exp_alerts: []`). Set `eval_time` past `for` plus one evaluation. `exp_labels` must list every label, including `severity`, and `exp_annotations` every annotation with its templates rendered. The check refuses a test file without `rule_files` and an entry that matches no rendered file, because promtool reads the entries as globs and would otherwise load nothing. The [Prometheus unit-testing docs](https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/) give the format.
+
+Run it with `nix build ./clusters#checks.x86_64-linux.rules-cluster-<name> --extra-experimental-features pipe-operators`. Before shipping, check every metric name against the program's source or a scrape at the version the package pins. A misspelled metric name passes both checks.
 
 **`kix.healthCheck`**: a post-deploy probe, a Job in the package's namespace that runs a script against addresses passed in as env vars from `out.*` values. Every callback receives the same `{ self, config, deps }`.
 
@@ -838,7 +960,7 @@ These come from `kix.lib` (top-level), distinct from the per-package `kix` arg (
 | `kix.flavors.{k3s,kind,kubeadm,eks,gke,gke-autopilot,aks,openshift,rke2,talos,scaleway,ovh}` | Platform flavor modules (§15) |
 | `kix.modules.monitoring` | Reusable Prometheus/Grafana/Loki module (see `kix/lib/modules/monitoring.nix`) |
 | `kix.rules.{security,reliability,governance,architecture}` | Built-in scorecard rule sets (§17) |
-| `kix.pins <path>` | Read a committed pin file (JSON): `{ get, ref, keys, all }`. Usually unnecessary: declare `pins = ./pins.json;` in `mkFlake` and take a `pins` argument (§29) |
+| `kix.pins <path>` | Read a committed pin file (JSON): `{ get, ref, keys, all, instances, file }`. Usually unnecessary: declare `pins = ./pins.json;` in `mkFlake` and take a `pins` argument (§29). Pass it to `kix.buildCluster { pins = ...; }` to apply its instance pins (§29.2a) |
 | `kix.image.ref <image>` | Render `repository:tag[@digest]` (§29) |
 | `kix.peekPackageMeta` | Extract package meta without full evaluation (used by tooling) |
 
@@ -1127,6 +1249,8 @@ modules = [
 
 **Capability flags** (full list, all on `cluster.capabilities`): `multiNode`, `availabilityZones` (list), `nodeAutoscaling`, `managedControlPlane`, `gpu`, `privilegedContainers`, `podSecurityEnforcement` (`"privileged" | "baseline" | "restricted" | null`), `daemonSets`. Flags are three-valued substrate axioms: `null` = unknown (relying workloads warn), `false` = hard error, `true` = pass.
 
+A package that cannot run without a capability may refuse it in its own words before the lib's generic check fires: `falco` reads `clusterConfig.cluster.capabilities` in its build and throws, naming `daemonSets` and `privilegedContainers`, when either is false (GKE Autopilot, and `privilegedContainers` on OpenShift).
+
 **Availability level, pod spread and PDBs** (`kix/lib/plugins/availability/module.nix`, v2_discussions/145; spread mechanism from archive/143). `cluster.availability.default = "none" | "pod" | "node" | "zone"` names the largest failure a workload must survive without downtime. It is derived from the capabilities when unset (`multiNode = false` gives `none`, two or more `availabilityZones` give `zone`, otherwise `node`; unknown capabilities derive `node` with one warning), capped by them (asking `zone` without zones is an eval error), and overridable per instance with `instances.<ns>.<inst>.availability`, which may exceed the cluster default up to the substrate. `cluster.availability.substrate` (read-only) is the derived maximum. Every package receives the resolved level as its `availability` function argument, and every replica-shaped option default maps it: `kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 3; }`, `kix.availability.atLeast "node" availability`. An explicit instance value still wins. A ceiling is the highest level a workload supports: `none` (one pod at a time: a single writer, no coordination between pods), `pod` (survives a pod crash or rolling update, not a node loss), `node` (survives a node loss, not a zone loss). `meta.availability.max` is for a limit of the program itself that holds for every workload and that no configuration lifts; a request above it is lowered with a warning. A limit that depends on configuration, on what the package wires, or on one workload goes on that builder call instead (`scope.mkDeployment { availability.max = "none"; ... }`), computed from `config` where needed: that workload is sealed at the lower level and warns once when it caps, the rest of the instance and the package's `availability` argument keep the requested level, and the one-replica warning judges each workload at its own level (a quorum store beside a single-replica controller keeps hard spread). A workload's effective ceiling is the lower of the two; the sealed resource carries it as `_availability.{ceiling,ceilingFrom}`. A Deployment or StatefulSet with more than one replica under an effective ceiling of `none` is an evaluation error naming the workload and the ceiling's source; it judges the final manifests, so chart workloads, instance options, and `partsOverlays` are covered. A `partsOverlays` entry that rebuilds the workload without `availability.max` drops a builder ceiling (the escape); a package ceiling has none. Ceilings are validated where written: an unknown level, an unknown key beside `max`, or `availability` on `mkDaemonSet` fails evaluation. `meta.availability` takes only `max`. Under a package ceiling the package never sees a higher level, so `kix.availability.atLeast` refuses a threshold above the ceiling, which is always false (`underCeiling` in `core/availability.nix`, handed to the package by `eval/instance.nix`). The error names the instance and points at a builder ceiling. Every Deployment or StatefulSet with `spec.replicas > 1` gets `topologySpreadConstraints` on `cluster.topology.failureDomainKeys` (read-only: `[ zoneKey hostKey ]` with more than one zone, `[ hostKey ]` otherwise, `[ ]` on `multiNode = false`; `cluster.topology.zoneKey` and `cluster.topology.hostKey` default to the well-known labels `topology.kubernetes.io/zone` and `kubernetes.io/hostname`, and a cluster whose nodes are labelled by hand sets its own) and a `PodDisruptionBudget` (`maxUnavailable = 1`). Strictness is a lowering of the level: `zone` is DoNotSchedule on the zone key, `node` is DoNotSchedule on hostname, `pod` and `none` are ScheduleAnyway everywhere; an explicit replica count above one at the level `none` still gets best-effort spread and a PDB (under the ceiling `none` it is an error). Author-written `topologySpreadConstraints` on a workload switch off both derivations for it; an author PDB over the same pods is kept. A workload that switches the derivations off and then has no PDB selecting its pods warns, naming the workload; the plugin says it because the plugin is where the skip is decided (`reliability.hasPDB` stays retired for that reason, not because rules cannot see derived resources: since 2026-09-20 manifest and package rules score the shipped set, derived PodDisruptionBudgets and materialised network policies included). On `multiNode = false`, a hand-written `requiredDuringScheduling` anti-affinity or `DoNotSchedule` spread on a multi-replica workload is an eval error; on `multiNode = null` it warns. A root-reachable workload with one replica under `node` or above warns (the package did not map the level). Packages whose pods an operator renders put the same rule in the CR's pod spec with `kix.availability.spreadConstraints { level = availability; selector = <operand labels>; topology = clusterConfig.cluster.topology; }`; the victoria-metrics packages still read `clusterConfig.cluster.topology.failureDomainKeys` for their CR's anti-affinity. With `maxSkew = 1` a hard constraint means even distribution, not one pod per domain: five replicas across three zones is 2/2/1.
 
 The old role-backed bools (`cni`, `networkPolicyAPI`, `loadBalancer`, `persistentStorage`, `rwxStorage`, `volumeSnapshots`, `ingressController`) are gone (v2_discussions/127): role providers derive from `meta.roles`, the environment's claim on a role is a `cluster.roles.<name>.binding`, and no provider publishes rwx or snapshot facts yet (housekeeping/2026-10-01-rwx-claims-unchecked-against-provider.md). The CNI/LB/storage columns in the table above describe role bindings and platform imports, not capability flags.
@@ -1173,6 +1297,8 @@ The flavour declares the platform import `kube-system/platform-cilium` with `out
 The storage, snapshot, and Cilium imports are not optional. Packages take `storageClasses`, `snapshotController`, and `platform-cilium` as optional dependencies, and an optional dependency neither activates an optional import nor resolves to an inactive one, so an optional import would leave those dependencies null, emit no marker for the StorageClass check or the CRD markers its handles need, and make a `cilium` instance under a shadowable `cni` refuse to evaluate. An optional import becomes active, and its marker is emitted, when a required dependency or a `deps` ref of an active instance demands it. If a cluster installs its own `coredns` or `storage-classes` instance, the explicit instance wins: it claims the role, and DI prefers a managed provider over an import. Under network policy, coredns runs in `kube-system`. A `storage-classes` class annotated `storageclass.kubernetes.io/is-default-class` is refused where the flavor imports a default class.
 
 **Resource metrics API.** The `metricsApi` role stands for metrics.k8s.io and has no out contract. rke2, k3s, gke, gke-autopilot, and aks bind it `exclusive` (their environment runs metrics-server; no import); kind, kubeadm, talos, and eks bind it `absent`; openshift, ovh, and scaleway leave it `null`. `scope.mkResource` checks every HorizontalPodAutoscaler that reads the API (autoscaling/v1, autoscaling/v2 with no `metrics`, or a `Resource` or `ContainerResource` metric) against the role, the way `checkLoadBalancer` checks LoadBalancer Services: `absent` with no provider instance is an evaluation error, `null` a warning. A package that reads the API from a config file calls `scope.requireMetricsApi "<what reads it>"` (the descheduler does, for a `KubernetesMetrics` provider). The `metrics-server` package claims the role: `instances.metrics-server.metrics-server.package = packages.metrics-server;`, plus `config.extraArgs = [ "--kubelet-insecure-tls" ];` where kubelets serve self-signed certificates (kind, Talos without kubelet certificate rotation).
+
+**Registry mirror and containerd.** The `registryMirror` role stands for a node-local OCI registry mirror that containerd tries first, and has no out contract. kind binds it `absent` and the other flavours leave it `null`. k3s and rke2 embed Spegel but run it only with `embedded-registry: true`; a cluster that turns it on sets the binding to `exclusive`, which refuses a `spegel` instance. The `spegel` package claims it. Kix cannot read or change the nodes' containerd configuration, so `cluster.containerd` declares it: `socket`, `registryConfigPath` (the CRI `config_path`), and `contentPath` default to containerd's paths, Talos and GKE move `registryConfigPath`, k3s and rke2 set all three to their paths under `/var/lib/rancher` and `/run/k3s`, and `discardUnpackedLayers` is `true` on kind, Talos, EKS, and GKE, `false` on AKS, Scaleway, k3s, and rke2, and `null` (unknown) elsewhere. Spegel serves layers that containerd keeps, and a pod becomes ready only once it has a peer, so the package refuses `discardUnpackedLayers = true` and `cluster.capabilities.multiNode = false`, and warns on `null`. A kind cluster for Spegel has a worker node and a `containerdConfigPatches` entry setting `discard_unpacked_layers = false` in `[plugins."io.containerd.grpc.v1.cri".containerd]`, the table kind's node image sets it in (containerd 2 copies that table over the newer `io.containerd.cri.v1.images` one), and declares both facts (`clusters/test-spegel.nix`).
 
 ## 16. Network policy auto-derivation
 
@@ -1511,7 +1637,27 @@ A CSI driver package (`zfs-localpv`) publishes its class through `out.storageCla
 
 `mayastor` renders replicated NVMe-oF block storage: StorageClasses through `kix.types.storageClass`/`kix.storage.mkClasses` with a required `parameters.repl`, VolumeSnapshotClasses through the `snapshotController` dependency, and DiskPools as `diskPools.<name> = { node; disks; }`. Its etcd takes its class from the `storageClasses` dependency or `etcd.storage.storageClassName`, and evaluation refuses one of Mayastor's own classes: etcd on a Mayastor volume cannot start after a full restart. `out.storageClassName` has the shape `storage-classes` gives, so `deps.storageClasses = ref.<ns>.<mayastor>` works for consumers. Neither driver claims the `storageClasses` role.
 
-### 20.3 PriorityClasses
+### 20.3 Volume replication (VolSync)
+
+`volsync` runs the VolSync operator, one per cluster. It needs the `snapshotController` role whatever the copy method, because the operator watches VolumeSnapshots and does not start without their CRD. A consumer that takes `volsync` as a dependency backs up a claim with restic:
+
+```nix
+backup = volsync.out.mkReplicationSource scope {
+  name = "data";                 # at most 51 characters
+  claim = storage;               # a storage dependency or a PVC part
+  schedule = "0 3 * * *";        # five cron fields or @daily and friends
+  copyMethod = "Snapshot";       # Direct, Clone, or Snapshot
+  restic = {
+    repository = resticRepository;  # secret with RESTIC_REPOSITORY, RESTIC_PASSWORD, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+    endpointService = s3;           # in-cluster store; or null with storePort for one outside
+  };
+};
+root.requires = [ self.backup.replicationSource ];
+```
+
+The result is a folder: `replicationSource` and `egress`. VolSync's restic mover reads every value from the one Secret named in `restic.repository`, so the store credentials go there too, and Kix cannot check that `RESTIC_REPOSITORY` names `endpointService`. The CRDs declare `factBehavior.endpoint = "terminate"` with the mover pods' selector (`app.kubernetes.io/created-by: volsync`, `batch.kubernetes.io/job-name: volsync-src-<name>`); the builder attaches the store's address to the repository name, so the movers get egress to the store and the store ingress from them. Without `endpointService`, `egress` opens DNS and TCP `storePort` (443 by default) to the world. Both kinds are ready when `status.latestMoverStatus.result` is `Successful`; VolSync runs the first sync on creation, so the deploy waits for the first backup.
+
+### 20.4 PriorityClasses
 
 `priority-class` creates one PriorityClass per instance, named after the instance. The class is cluster-scoped, and the instance may live in any namespace the cluster deploys, such as its main consumer's. The instance's namespace holds only its PackageInstance record. A workload takes the class as an optional dependency, which also applies the workload after the class:
 
@@ -1551,6 +1697,8 @@ creds = scope.mkSecret {
 ```
 
 A declared key needs a value: in `stringData`, in `extra.data` or `extra.stringData`, or in the SOPS `source`. Without `source`, the build refuses a key with no value, since the Secret would be created without it. A `kubernetes.io/service-account-token` Secret is exempt (Kubernetes fills it). Use `scope.mkSecretRef` when something outside Kix creates the Secret.
+
+The builder stamps where each key's value comes from as `kix.run/secret-sources` (`username=plain,password=sops`): `inline` for a value written in the expression, `sops` for a key the SOPS file fills, `controller` for a key a controller writes (`*=controller` when `keys = [ ]`), and `plain` for an inline value that is not a credential. `plainKeys = [ "username" ]` marks a plain key; a `kubernetes.io/basic-auth` username and the `tls.crt` and `ca.crt` of a `kubernetes.io/tls` Secret are plain by type. A plain key with no value in the manifest is refused. §21.11 says what reads the stamp.
 
 ### 21.2 `scope.mkSecretRef` — external
 
@@ -1609,6 +1757,8 @@ A package whose `out` gives consumers a Secret they read through `secretKeyRef` 
 ### 21.7 Credentials in a CR spec
 
 A package that writes a custom resource whose spec names Secret keys takes the Secret as a dependency named for what it holds and fills each selector from `dep.out.keyRef key`, so the custom resource carries a tracked name and Kix checks the key. `cluster-issuer` does this for every `SecretKeySelector` in a ClusterIssuer spec: `(issuerCredentials.out.keyRef key).valueFrom.secretKeyRef`. A selector the user names with a literal string is refused; `kix.untrackedRef` opts out. `cnpg-cluster` fills a backup ObjectStore's `s3Credentials` from its `storageCredentials` dependency the same way, and `cnpg-barman-cloud`'s `out.mkObjectStore` refuses a literal selector anywhere else in the spec (`backup.extraSpec.configuration.endpointCA`).
+
+S3 credentials follow one shape across packages: a `storageCredentials` secret dependency with the keys `accessKeyId` and `secretAccessKey` (renamed through the package's `credentialKeys`), and an optional `endpointService` dependency for a store in the cluster, whose `out.url` becomes the endpoint so the derived policy opens it. `stackgres-object-storage` and `cnpg-cluster` write the keys into a custom resource's selectors. `tempo` runs its own pod, so it passes them as the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` env vars, which Tempo's S3 client reads when its config holds no keys, and refuses the keys in `settings` and on the command line. Without `endpointService`, the endpoint's port is opened to addresses outside the cluster; `cnpg-cluster` and `tempo` refuse an endpoint that names a Service in the cluster, because a world rule does not reach pods.
 
 ### 21.8 Secrets synced by the Infisical operator
 
@@ -1675,7 +1825,65 @@ credentials = self.sync.out.secretRef { keys = [ "API_KEY" ]; };   # then self.c
 
 The admission webhook validates ExternalSecrets, SecretStores, and ClusterSecretStores with failurePolicy Fail, and the cert-controller injects the webhook's CA after it starts. Every custom resource built from `out` therefore requires the package's webhook check Job, which succeeds once the API server admits a server-side dry-run create of an ExternalSecret and of a SecretStore.
 
-The controller reads and writes Secrets in every namespace, so a cluster runs one instance. Its network intent opens TCP 443 to destinations outside the cluster; a provider inside the cluster or on another port needs a `networkPolicy.platformIntents` entry for the controller's pods.
+The controller reads and writes Secrets in every namespace, so a cluster runs one instance. Its network intent opens TCP 443 to destinations outside the cluster. The SecretStore and ClusterSecretStore definitions declare `factBehavior.endpoint = "terminate"` with the controller's pods and namespace (`podNamespace`), so a store whose spec carries a Kix Service address opens the controller's egress to that Service and the Service's ingress from the controller (§21.10). A provider outside the cluster on another port, or one inside it written as a literal address, needs a `networkPolicy.platformIntents` entry for the controller's pods.
+
+### 21.10 Secrets stored in OpenBao
+
+`openbao` runs OpenBao 2.7 as a StatefulSet on integrated Raft storage, one pod at availability `none` and three from `pod` up, with TLS from a cert-manager CA it creates. It takes a required `certManager` dependency and, with the default `seal.type = "static"`, a required `unsealKey` secret with key `key` (32 bytes as raw, hex, or base64 text, with no trailing newline). OpenBao unseals itself with that key on every start. Anyone who can read the `unsealKey` Secret and a Raft volume can decrypt the data, so protection at rest is no stronger than the RBAC on Secrets in that namespace and the cluster's etcd encryption. `seal.type = "shamir"` keeps the unseal keys out of the cluster: a person runs `bao operator init` once and `bao operator unseal` on every pod after each start. Transit and cloud KMS seals are not supported.
+
+With the static seal, pod 0 initializes OpenBao on its first start through OpenBao's declarative self-initialization: it enables Kubernetes auth and creates the policy and role `kix-reconcile`, bound only to the ServiceAccount of the package's reconcile Job. The root token is revoked and no recovery keys exist. The reconcile Job then writes `policies` (HCL by name), `kubernetesAuth.roles` (the body of `auth/kubernetes/role/<name>`), and `secretsEngines` (the body of `sys/mounts/<path>`) on every change. It never deletes: its log lists the policies and roles OpenBao holds that are not declared, and an existing secrets engine is left unchanged. The Job can rewrite any policy, its own included, so its ServiceAccount is as powerful as a root token. In shamir mode no Job runs, and declaring any of the three options is an evaluation error.
+
+```nix
+# OpenBao, in namespace `secrets`
+openbao = {
+  package = packages.openbao;
+  config = {
+    secretsEngines.secret = { type = "kv"; options.version = "2"; };
+    policies.app-read = ''path "secret/data/app/*" { capabilities = ["read"] }'';
+    kubernetesAuth.roles.app = {
+      bound_service_account_names = [ "openbao-store" ];
+      bound_service_account_namespaces = [ "app" ];
+      token_policies = [ "app-read" ];
+    };
+  };
+};
+
+# In a package in namespace `app`, with deps externalSecrets and openbao
+storeServiceAccount = scope.mkResource { apiVersion = "v1"; kind = "ServiceAccount"; name = "openbao-store"; };
+store = externalSecrets.out.mkClusterSecretStore scope {
+  name = "openbao-app";
+  spec = {
+    provider = openbao.out.externalSecretsProvider scope {
+      serviceAccount = self.storeServiceAccount;
+      role = "app";
+      mount = "secret";
+    };
+    conditions = [ { namespaces = [ scope.namespaceName ]; } ];
+  };
+};
+```
+
+`out.externalSecretsProvider` returns the `vault` provider: the Service URL, the CA from the `<instance>-tls` Secret in OpenBao's namespace, the mount and its KV version, and Kubernetes auth with a token of the given ServiceAccount. It refuses a role that `kubernetesAuth.roles` does not declare or that does not bind that ServiceAccount and namespace (`*` binds any), and a mount that is not a declared `kv` engine. The role name it writes carries the reconcile Job, so the store is applied after the Job has written the role. A namespaced SecretStore cannot read the CA Secret from OpenBao's namespace, so the provider is for a ClusterSecretStore, limited to its namespaces with `conditions`. `clusters/test-openbao.nix` evaluates this shape.
+
+The store carries the OpenBao Service's address, so the external-secrets store definitions' `factBehavior` (§21.9) gives the controller egress to port 8200 of the OpenBao pods and those pods ingress from the controller.
+
+Metrics. With a `prometheus` dependency and `metrics.enabled` (the default), each pod opens a second listener on TCP 8202 that serves only `/v1/sys/metrics`, over plain HTTP and without a token, so standbys and sealed pods report too. The output names mount paths, auth methods, and policies. Under network policy only the Prometheus scrape and the other OpenBao pods reach the port; on a cluster without an enforcer any pod can read it. Set `metrics.enabled = false` to close the listener, which also drops the ServiceMonitor and the alert rules.
+
+Known limits. If self-initialization fails on pod 0's first start, OpenBao has already initialized the volume and revoked the root token, and it refuses to unseal on every later start; delete the claim `data-<instance>-0` and the pod and let it start again (self-initialization runs only on an empty volume). The static key cannot be rotated: a changed `unsealKey` value restarts the pods, and they cannot unseal the existing data until the old value is restored.
+
+### 21.11 Where a Secret's value comes from is the site's choice
+
+A package declares the shape of a Secret (its keys and type) and takes every credential a site supplies as a secret dependency, so the cluster file decides the source: a `packages.secret` instance with `stringData` (the value is in the build) or a SOPS `source` (the deploy decrypts it), or a `packages.secret-ref` instance for a Secret a secrets operator, cert-manager, or a person creates. The three share the alias the package names and the same `out`, so the package's code does not change with the source. A package does not take a credential as a string or path option (`token`/`tokenSource` was the last such pair; cloudflared takes `tunnelToken` now).
+
+A cluster says which sources it accepts:
+
+```nix
+cluster.secrets.accept = [ "sops" "external" "controller" ];
+```
+
+Null (the default) accepts everything. When set, the `security.secretSource` scorecard rule reports each key of a rendered Secret whose source is not listed, reading the `kix.run/secret-sources` stamp (§21.1), and each `scope.mkSecretRef` marker when `external` is not listed. A `plain` key is never reported. The finding names the instance, the Secret, the keys, and the accepted sources; at `scorecard.maxSeverity = "error"` it fails the build. A key with a value in `data` or `stringData` counts as inline (or plain, when the stamp says so) whatever else the stamp claims, so a stamp on a Secret `scope.mkSecret` did not build cannot hide a value; a Secret without the stamp (a chart's) is inline for every key in its data. `scope.mkSecret` refuses a valued key that `keys` leaves out, so a stamp it writes covers every value.
+
+Software that reads plain configuration from a Secret (Alertmanager's `alertmanager.yaml`) is the case the sources above do not fit: the Secret is rendered from options, so its keys are `inline`, and whether it holds a credential depends on what the site wrote. Such a package offers three routes, the first two where the software allows them: the configuration in a non-Secret field of its custom resource (victoria-metrics-alert's `alertmanager.configRawYaml`), an optional secret dependency in place of the rendered Secret (`alertmanagerConfig`, key `alertmanager.yaml`, on alertmanager and victoria-metrics-alert), and the rendered Secret classified as configuration (`meta.classification = "configuration"`, which renders as `kix.run/classification`) with the credential keys the package knows refused (alertmanager's `inline-secrets.nix`). The rule reports an inline key of such a Secret as `configuration`, and a cluster that lists `configuration` in `cluster.secrets.accept` takes the package's word that the Secret holds no credential. The library does not check that word: the classification is an annotation any package or `partsOverlays` can set, and nothing ties it to a credential refusal.
 
 ## 22. CRDs
 
@@ -1709,7 +1917,7 @@ in {
 
 An operator whose admission webhook guards its own kinds gates its CRD handles on its API-check Job, so every custom resource built with `scope.mkCR dep.out.crds.<Kind>` waits for it; the handles also declare the kind's readiness. Because the handle carries the gate, the package needs no `out.mk<Kind>` builder. Example: cert-manager (`kix/packages/cert-manager/crds.nix`, `gate`).
 
-The same gate applies when the operator writes its webhook entries after it reports ready, since a CRD reference is satisfied once the definition is Established. `stackgres-operator` installs its definitions, reports ready, and writes its webhook entries a few seconds later; an SGCluster created in that window gets no defaults or status, and StackGres then rejects every update of it. Its `webhookCheck` Job waits until both configurations hold their entries and a server-side dry-run create comes back mutated, and every handle on `out.crds` adds that Job to the custom resource's `requires`. `cnpg-operator` gates its handles the same way: Kix renders CloudNativePG's webhook configurations without `caBundle`, the operator writes it when it starts, and the check Job's server-side dry-run create of a Cluster succeeds only once the API server can call both Cluster webhooks. The ScheduledBackup and Pooler handles that `cnpg-cluster` and `cnpg-pooler` build from are gated too. The `cnpg-barman-cloud` plugin serves no admission webhook, so its ObjectStore needs no check; the ObjectStore definition declares `factBehavior.endpoint = "conduct"`, so an in-cluster S3 Service named in its `endpointURL` reaches the instance pods of the Cluster that names the ObjectStore.
+The same gate applies when the operator writes its webhook entries after it reports ready, since a CRD reference is satisfied once the definition is Established. `stackgres-operator` installs its definitions, reports ready, and writes its webhook entries a few seconds later; an SGCluster created in that window gets no defaults or status, and StackGres then rejects every update of it. Its `webhookCheck` Job waits until both configurations hold their entries and a server-side dry-run create comes back mutated, and every handle on `out.crds` adds that Job to the custom resource's `requires`. `cnpg-operator` gates its handles the same way: Kix renders CloudNativePG's webhook configurations without `caBundle`, the operator writes it when it starts, and the check Job's server-side dry-run create of a Cluster succeeds only once the API server can call both Cluster webhooks. The ScheduledBackup and Pooler handles that `cnpg-cluster` and `cnpg-pooler` build from are gated too. `rabbitmq-operator` gates its RabbitmqCluster handle the same way: cert-manager's cainjector writes `caBundle` into the webhook configurations Kix renders, from the Certificate their `cert-manager.io/inject-ca-from` annotation names, and the check Job's dry-run create of a RabbitmqCluster succeeds once both webhooks answer. The `cnpg-barman-cloud` plugin serves no admission webhook, so its ObjectStore needs no check; the ObjectStore definition declares `factBehavior.endpoint = "conduct"`, so an in-cluster S3 Service named in its `endpointURL` reaches the instance pods of the Cluster that names the ObjectStore.
 
 `fromKind` builds a single-version stub whose spec accepts anything. It is
 for kinds Kix invents. A package that wraps an upstream operator vendors the
@@ -1734,8 +1942,8 @@ owner's `out.crds.<Kind>`) in a package.
 
 Both `mkCRD` and `mkCRDRef` accept two per-kind controller-semantics declarations that ride the typed chain into every CR built via `mkCR`:
 
-- `factBehavior = { endpoint = "terminate"|"conduct"; podSelector = cr: {...}; }` — netpol semantics (§facts).
-- `readiness = { path = "/status/updateStatus"; equals = "operational"; }` or `readiness = { condition = { type = "Bootstrapped"; status = "True"; }; }`: the controller's health convention, stamped on each CR as the `kix.run/readiness` annotation; `kix deploy` evaluates it instead of the generic Ready/Available condition check. The path form compares one status field with a string; a boolean or number field compares by its JSON text, so `equals = "true"` matches `true` (CloudNativePG's Database reports `status.applied` as a boolean); the condition form looks for an entry in `status.conditions` with that type and status. Declare one whenever the operator never stamps Ready/Available (VictoriaMetrics uses `updateStatus`, StackGres reports `Bootstrapped`, the Gateway API reports `Accepted` and `Programmed`); without it, deploys time out waiting on healthy CRs.
+- `factBehavior = { endpoint = "terminate"|"conduct"; podSelector = cr: {...}; podNamespace ? <namespace> | cr: "<namespace>"; }` — netpol semantics (§facts). `podNamespace` places the operand pods outside the custom resource's namespace, as for a controller that serves every namespace (external-secrets' stores); the egress policy then lands in that namespace, named with the instance's namespace first.
+- `readiness = { path = "/status/updateStatus"; equals = "operational"; }`, `readiness = { path = "/status/updateStatus"; notEquals = "failed"; }`, or `readiness = { condition = { type = "Bootstrapped"; status = "True"; }; }`: the controller's health convention, stamped on each CR as the `kix.run/readiness` annotation; `kix deploy` evaluates it instead of the generic Ready/Available condition check. The path form compares one status field with a string; a boolean or number field compares by its JSON text, so `equals = "true"` matches `true` (CloudNativePG's Database reports `status.applied` as a boolean); `notEquals` is ready while the field is absent or holds another value, for a resource whose status only a consumer writes (a VictoriaMetrics VMServiceScrape gets `updateStatus` only from a VMAgent that selects it); the condition form looks for an entry in `status.conditions` with that type and status. Declare one whenever the operator never stamps Ready/Available (VictoriaMetrics uses `updateStatus`, StackGres reports `Bootstrapped`, the Gateway API reports `Accepted` and `Programmed`); without it, deploys time out waiting on healthy CRs.
 
 A CRD the operator installs itself, with condition readiness (mayastor's DiskPool):
 
@@ -1925,7 +2133,7 @@ checklist is in `v2_discussions/archive/137_kix_run_domain_migration.md`.
 
 ## 25. Activation CR and operator
 
-The cluster's root resource is an `Activation` CR. `mkActivation` references every PackageInstance via Nix string context, so `nix-store -q --tree` on the Activation derivation yields the full deploy DAG. This contract is what the CLI (and operator) rely on for ordering.
+The cluster's root resource is an `Activation` CR. `mkActivation` references every PackageInstance via Nix string context, so `nix-store -q --tree` on the Activation derivation yields the full deploy DAG. This contract is what the CLI (and operator) rely on for ordering. The record's store file also references `kix-packages.json`, which references every resource it lists, so the record's closure holds every file a deploy applies (an import marker that no object uses among them) and the record's name changes when any of them does. That reference adds no `kix.run/depends-on` entry.
 
 **Activation lifecycle:** `Queued → Deploying → Active | Degraded | Failed → Superseded`.
 
@@ -1968,9 +2176,20 @@ Operator requires `nix-store` binary on the host and read access to `/nix/store/
 ### 26.1 `kix plan` and `kix diff`
 
 `kix plan` runs the deploy pipeline with every write sent as `dryRun=All`,
-so the apiserver answers for each object. `kix diff` reads only. Both print
-the same document for `-o json` and `-o yaml`
-(`cli/kix-cli/schema/plan.schema.json`), so a consumer can read either.
+so the apiserver answers for each object. `kix diff` reads only. Both write
+the same plan file with `--save F.kixplan`, and `kix diff -o json|yaml`
+prints the document the file holds (`cli/kix-cli/schema/plan.schema.json`),
+so a consumer can read either. `kix plan` prints no JSON or YAML.
+
+A plan file (`cli/kix/src/plan/file.rs`, header schema
+`cli/kix-cli/schema/kixplan.schema.json`) is a seekable zstd file, the
+bundle's container (`cli/kix-container`). Frame 0 is the header: the plan
+document at `--detail fields`, the new build's graph as `kix graph --format
+json` prints it, and `shown`, for each changed, added, or removed object its
+package key, the SHA-256 of its old and new manifest files, and its Pod `rollout` (`restart`,
+`on_delete`, or `null`). The later frames hold the manifests, secrets hidden,
+each named by its SHA-256 and checked against it on every read. `zstd -dc
+F.kixplan | jq -s '.[0]'` prints the header.
 
 | | `kix plan` | `kix diff` |
 |---|---|---|
@@ -2011,12 +2230,24 @@ it would change or delete something, and 3 when it would stop. `kix deploy` make
 before it asks for confirmation, and under `--on-error stop` it stops before
 applying anything when the plan shows a refused write.
 
-`kix deploy --plan plan.json` deploys a reviewed plan. It plans again with
+`kix plan` and `kix deploy` refuse a build when the deploy would write or
+delete an object the package list does not show, and name the objects.
+`--reconcile`, a repair after a deploy that stopped part way, and a rerun
+probe Job write some objects again unchanged: the cluster already ran the
+same file for each, so the package list leaves them out. The document lists
+every object the deploy writes and deletes under `objects`, re-applied ones
+included, and its digest as `objects_digest`.
+
+`kix deploy --plan plan.kixplan` deploys a reviewed plan file and reads no
+other kind of file. It plans again with
 the saved plan's flags and exits 4, applying nothing, when the cluster, the
-new or deployed build's identity hash, or the flags differ, or when the new
-plan has a refusal, reverted drift, or prune delete the reviewed one did not.
-A saved `kix diff` plan skips the refusal and prune comparisons, and a plan
-made from two builds alone is refused.
+new or deployed build's identity hash, the objects digest, or the flags
+differ, or when the new plan has a refusal, reverted drift, or prune delete
+the reviewed one did not. So the deploy writes and deletes the objects the
+reviewed plan lists, made from the same build files, or nothing. A plan
+without `objects`, such as a saved `kix diff`, is refused, as is a plan made
+from two builds alone. A plan made by another Kix binary is reported, not
+refused.
 
 Diff features:
 - Structural (path-based) differences with **keyed-list awareness** — containers→name, ports→name, env→name, volumeMounts→mountPath, subjects→kind:name. So reordering doesn't show as a diff.
@@ -2075,7 +2306,7 @@ Diff features:
 | Native single-Deployment package (RBAC, leader election, guarded `extraArgs`/`env`, `out` transformer, `kix.monitor`) | `kix/packages/reloader/` |
 | `kix.storage.mkClasses` over a typed map of classes | `kix/packages/storage-classes/` |
 | First-class PVC instance | `kix/packages/persistent-volume-claim/` |
-| Image reference read from a committed pin file | `clusters/test-pins.nix` + `clusters/pins.json` |
+| Image reference read from a committed pin file, and an instance pin no code reads | `clusters/test-pins.nix` + `clusters/pins.json` |
 | Mid-complexity with DI storage, expose, monitor, mounts, `kix.mergeEnv` owned groups, an optional dependency with a version check | `kix/packages/immich/` |
 | Complex multi-component | `kix/packages/harbor/` |
 | Helm-wrapped capability owner | `kix/packages/cilium/` (chart, HelmChartConfig, or environment delivery) |
@@ -2223,6 +2454,60 @@ imagePullPolicy = config.image.pullPolicy;
 `kix.image.ref` renders the digest when there is one and omits it when there
 is not, so an unresolved pin still deploys and is visibly different from a
 resolved one.
+
+### 29.2a Instance pins: no code reads them
+
+An `images` pin needs a line of code to reach an option. An instance pin
+needs none. It lives under `instances`, keyed by instance and then by option
+path, and `kix.buildCluster` applies it to that option when the file is passed
+as `pins`:
+
+```json
+{
+  "version": 2,
+  "managedBy": "kix pin",
+  "images": {},
+  "instances": {
+    "monitoring/grafana": {
+      "image": { "repository": "docker.io/grafana/grafana", "tag": "13.1.3", "digest": "sha256:…" }
+    }
+  }
+}
+```
+
+```nix
+{ kix, pins, ... }:
+kix.buildCluster { name = "prod"; inherit pins; modules = [ ... ]; }
+```
+
+The entry is one more definition of `instances.monitoring.grafana.config.image`,
+from a module whose file is the pin file, so pinning a package default is
+adding an entry and returning to the default is deleting it. A pin and a
+definition in code at the pin's priority or above is an evaluation error
+naming both; a pin wins over a `lib.mkDefault` in code and over the package's
+own defaults, so a follower image can be pinned (pin every image of a
+release: pinning only the main one drops the followers' digests). A pin
+states its digest, so one without a digest never keeps the package's. Pin
+repositories and tags follow the OCI reference grammar in both readers. A
+file with instance pins belongs to one cluster, since a pin for an instance
+the cluster lacks is an error. So is a pin for an instance the cluster lacks, an import, an
+option the package lacks, or an option that is not a `kix.options.image`
+option.
+
+A file with `instances` declares `version: 2`. One without stays version 1, so
+a Kix that reads only version 1 keeps reading it, and refuses a version 2
+file by name rather than ignoring its instance pins.
+
+`kix pin set monitoring/grafana --tag 13.1.4` moves one; `--option
+sidecar.image` names another option. A new instance pin needs `--repository`
+and no `--init`. Implementation: `kix/lib/eval/instance-pins.nix`.
+
+**Image sources.** Every cluster build result holds `kix-image-sources.json`
+beside the Activation: for each image option of each active instance, the
+value, the package's default, and its origin (`pin`, `package_default`,
+`injected`, `nix_built`, or `code`), with the pin key, the dependency, or the
+file and line. It is outside the Activation, so it never changes its name.
+Its shape is in the docs site's image and pin helpers reference.
 
 ### 29.3 Promoting
 

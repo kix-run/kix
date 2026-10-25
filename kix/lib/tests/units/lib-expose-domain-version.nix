@@ -297,7 +297,7 @@ let
       instanceName = "consumer";
       namespaceName = "app";
       clusterConfig.k8sVersion = null;
-      resolvedDepMeta.dep.instance._meta.packageMeta.version = depVersion;
+      resolvedDepMeta.dep.targets = [ { instance._meta.packageMeta.version = depVersion; } ];
       resolutionIndex.byKey = { };
     }).assertions;
 
@@ -428,7 +428,9 @@ in
       && (recordOf { cluster = derived; }).url == "http://web.example.test"
       && ingressHosts derived == [ "web.example.test" ]
     )
-    || throw "deriveHost = false: ${builtins.toJSON (removeAttrs rNoHost [ "url" ])} / ${builtins.toJSON (removeAttrs rWithHost [ "url" ])}";
+    || throw "deriveHost = false: ${builtins.toJSON (removeAttrs rNoHost [ "url" ])} / ${
+      builtins.toJSON (removeAttrs rWithHost [ "url" ])
+    }";
 
   # Default part names are `route` and `exposure`; both arguments rename them.
   lib-expose-domain-version-part-names =
@@ -559,13 +561,11 @@ in
       && r.scheme == null
       && r.urlOrNull == null
       && fails r.url
-      && evalFails (
-        mkExposeCluster {
-          app = mkWebPackage { };
-          gatewayConfig = { };
-          gatewayPackage = importedGateway;
-        }
-      )
+      && evalFails (mkExposeCluster {
+        app = mkWebPackage { };
+        gatewayConfig = { };
+        gatewayPackage = importedGateway;
+      })
     )
     || throw "imported gateway: ${builtins.toJSON (removeAttrs r [ "url" ])}";
 
@@ -796,7 +796,9 @@ in
       && builtins.length (domainRule "corp.test" [ (configMapWith "cluster.local:53") ]) == 1
       && quoted "x.svc.corp.test mycluster.local a.svc.cluster.local:53"
       && quoted "cluster.local"
-      && lib.hasInfix "contains \"line\\na.svc.cluster.local\\n\"" (messageFor "line\na.svc.cluster.local\n")
+      && lib.hasInfix "contains \"line\\na.svc.cluster.local\\n\"" (
+        messageFor "line\na.svc.cluster.local\n"
+      )
       && domainRule "corp.test" [ (configMapWith "mycluster.local") ] == [ ]
       && domainRule "corp.test" [ (configMapWith "cluster.localhost") ] == [ ]
       && domainRule "corp.test" [ crd ] == [ ]

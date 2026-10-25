@@ -1,0 +1,30 @@
+---
+// Link styled as a button. "primary" is the orange install button, "ink"
+// the small nav button, "outline" the ink-bordered secondary, and
+// "outline-night" the secondary on a night section.
+interface Props {
+  href: string;
+  variant?: 'primary' | 'ink' | 'outline' | 'outline-night';
+  size?: 'lg' | 'sm';
+  class?: string;
+}
+const { href, variant = 'primary', size = 'lg', class: className } = Astro.props;
+---
+
+<a
+  href={href}
+  class:list={[
+    'inline-flex items-center justify-center gap-2 rounded-lg font-semibold whitespace-nowrap transition-colors [&_svg]:shrink-0',
+    {
+      'px-[22px] py-[15px] text-base': size === 'lg',
+      'px-4 py-2.5 text-sm': size === 'sm',
+      'bg-accent-button text-white hover:bg-accent-text': variant === 'primary',
+      'bg-ink text-paper hover:bg-ink/85': variant === 'ink',
+      'border-[1.5px] border-ink text-ink hover:bg-ink/5': variant === 'outline',
+      'border-[1.5px] border-on-night text-on-night hover:bg-on-night/10': variant === 'outline-night',
+    },
+    className,
+  ]}
+>
+  <slot />
+</a>

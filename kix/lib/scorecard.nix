@@ -209,6 +209,8 @@ rec {
       maxSeverity ? "error",
       owner ? null,
       meta ? { },
+      # `cluster.secrets.accept`, for security.secretSource.
+      acceptedSecretSources ? null,
     }:
     let
       manifestRules = builtins.filter (r: (r.rule.level or "") == "manifest") (flattenRules rules);
@@ -235,6 +237,7 @@ rec {
             instanceName
             namespaceName
             meta
+            acceptedSecretSources
             ;
         };
         applies = checkAppliesTo rule ctx;

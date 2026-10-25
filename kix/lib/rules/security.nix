@@ -8,6 +8,8 @@
 { lib }:
 
 let
+  kixKeys = (import ../core/annotations.nix).keys;
+
   # Extract all containers (regular + init) from a workload resource.
   listOr = v: if v == null then [ ] else v;
 
@@ -57,8 +59,120 @@ let
       "DaemonSet"
       "Job"
     ];
+
+  # A scope.mkSecretRef marker: the Secret is created outside Kix.
+  isSecretRefMarker =
+    resource:
+    (resource.kind or "") == "PackageInstance"
+    && (resource.metadata.annotations or { }).${kixKeys.mode} or null == "import"
+    && (resource.metadata.annotations or { }).${kixKeys.importKind} or null == "Secret";
+
+  # A chart may render `data: null` for an empty block.
+  attrsOr = v: if builtins.isAttrs v then v else { };
+
+  # Where each key of a rendered Secret comes from, as { key = source; }.
+  # A key with a value in `data` or `stringData` is inline (or plain when
+  # the `kix.run/secret-sources` stamp says so), whatever else the stamp
+  # claims, so a stamp on a resource scope.mkSecret did not build cannot
+  # hide a value. The stamp supplies the source of every other key. An
+  # inline key of a Secret classified `configuration` counts as
+  # `configuration`.
+  secretKeySources =
+    resource:
+    let
+      annotations = resource.metadata.annotations or { };
+      stamp = annotations.${kixKeys.secretSources} or "";
+      classification = annotations.${kixKeys.classification} or null;
+      fromStamp = builtins.listToAttrs (
+        map (
+          pair:
+          let
+            parts = lib.splitString "=" pair;
+          in
+          {
+            name = builtins.head parts;
+            value = builtins.elemAt parts 1;
+          }
+        ) (builtins.filter (pair: pair != "") (lib.splitString "," stamp))
+      );
+      dataKeys = builtins.attrNames (
+        attrsOr (resource.data or null) // attrsOr (resource.stringData or null)
+      );
+      fromData = lib.genAttrs dataKeys (
+        k: if fromStamp.${k} or null == "plain" then "plain" else "inline"
+      );
+      sources = lib.filterAttrs (k: _: !(builtins.elem k dataKeys)) fromStamp // fromData;
+    in
+    lib.mapAttrs (
+      _: source:
+      if source == "inline" && classification == "configuration" then "configuration" else source
+    ) sources;
+
+  describeSource = {
+    inline = "written into the build (inline)";
+    sops = "decrypted from a SOPS file at deploy (sops)";
+    controller = "filled by a controller after Kix creates the Secret (controller)";
+    configuration = "configuration the package rendered, classified as holding no credential (configuration)";
+    external = "created outside Kix (external)";
+  };
 in
 {
+  # Applies only when the cluster lists the sources it accepts
+  # (`cluster.secrets.accept`); a cluster that says nothing accepts every
+  # source. A key marked plain is never reported.
+  secretSource = {
+    description = "Secret values come only from the sources the cluster accepts";
+    level = "manifest";
+    severity = "error";
+    tags = [
+      "security"
+      "secrets"
+    ];
+    appliesTo =
+      {
+        resource,
+        acceptedSecretSources ? null,
+        ...
+      }:
+      acceptedSecretSources != null && ((resource.kind or "") == "Secret" || isSecretRefMarker resource);
+    check =
+      {
+        resource,
+        acceptedSecretSources,
+        ...
+      }:
+      let
+        accepted = lib.concatStringsSep ", " acceptedSecretSources;
+        fix = "Supply the value from a source this cluster accepts (a secret-ref dependency for a Secret something else creates, a SOPS source for a packages.secret instance), or add the source to cluster.secrets.accept.";
+      in
+      if isSecretRefMarker resource then
+        lib.optional (!(builtins.elem "external" acceptedSecretSources)) {
+          message = "Secret '${
+            resource.metadata.annotations.${kixKeys.importName}
+          }' is ${describeSource.external}, and this cluster accepts ${accepted}. ${fix}";
+        }
+      else
+        let
+          sources = secretKeySources resource;
+          offending = lib.filterAttrs (
+            _: source: source != "plain" && !(builtins.elem source acceptedSecretSources)
+          ) sources;
+          bySource = lib.groupBy (k: offending.${k}) (builtins.attrNames offending);
+        in
+        lib.mapAttrsToList (
+          source: keys:
+          let
+            keyText = if keys == [ "*" ] then "every key" else "key(s) ${lib.concatStringsSep ", " keys}";
+            verb = if builtins.length keys == 1 then "is" else "are";
+          in
+          {
+            message = "Secret '${resource.metadata.name or "?"}': ${keyText} ${verb} ${
+              describeSource.${source} or source
+            }, and this cluster accepts ${accepted}. ${fix}";
+          }
+        ) bySource;
+  };
+
   nonRoot = {
     description = "All containers must run as non-root";
     level = "manifest";

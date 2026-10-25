@@ -21,6 +21,7 @@ use serde_json::Value;
 use kix::eval::store_graph::StoreGraph;
 
 use crate::cli::{ComplianceAttestArgs, OutputFormat};
+use crate::output;
 
 use super::receipt;
 use crate::commands::CommandContext;
@@ -37,7 +38,7 @@ pub fn run(args: &ComplianceAttestArgs, ctx: &mut CommandContext) -> Result<()> 
             args.invocation_id.as_deref(),
         )
     } else {
-        let (_result_path, graph) = super::shared::build_and_load(ctx, &args.cluster)?;
+        let graph = super::shared::build_and_load(ctx, &args.cluster)?;
         build_attestation(
             &graph,
             &ctx.global.flake,
@@ -46,7 +47,7 @@ pub fn run(args: &ComplianceAttestArgs, ctx: &mut CommandContext) -> Result<()> 
         )
     };
 
-    let text = match ctx.output_format(OutputFormat::Json) {
+    let text = match output::format() {
         OutputFormat::Yaml => serde_yml::to_string(&statement).into_diagnostic()?,
         _ => serde_json::to_string_pretty(&statement).into_diagnostic()?,
     };
@@ -75,25 +76,28 @@ pub fn build_attestation(
 
 /// Read the receipt from the cluster's active Activation.
 async fn fetch_receipt(cluster: &str, context: Option<&str>) -> Result<Value> {
-    use kix::cluster::{activation, fetch};
+    use crate::client;
+    use kix::cluster::{activation::Records, discovery};
 
-    let client = fetch::make_client(context)
+    let client = client::make_client(context)
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-    let discovery = fetch::discover_resources(&client)
+    let discovery = discovery::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
-    let Some((ar, _)) = activation::find_activation_ar(&discovery).map_err(|e| miette!("{e}"))?
+    let Some(records) = Records::open(&client, &discovery)
+        .map_err(|e| miette!("{e}"))?
+        .into_records()
     else {
         return Err(miette!(
             "this cluster has no Activation CRD, so Kix has never deployed to it"
         ));
     };
-    match activation::read_receipt(&client, ar, cluster).await {
+    match records.receipt(cluster).await {
         Ok(Some(receipt)) => Ok(receipt),
         Ok(None) => Err(miette!(
             "no deploy receipt on cluster '{cluster}'. Either nothing is deployed, or it was deployed by a kix that predates receipts. Deploy again to write one."
         )),
-        Err(e) => Err(miette!("failed to read the activation: {e}")),
+        Err(e) => Err(miette!("{e}")),
     }
 }

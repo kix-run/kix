@@ -19,6 +19,9 @@ kix.healthCheck:
   CLICKHOUSE_REPLICAS  replicas the cluster must list; unset means one (the
                        clickhouse-cluster package sets it, this probe is
                        shared by both implementations of the contract)
+  CLICKHOUSE_REPLICA_URLS
+                       space-separated HTTP interfaces of every replica,
+                       each addressed directly and not through the Service
   RETRY_FOR            seconds to keep re-checking before giving up
 
 Checks, all of which must pass in the same round:
@@ -33,9 +36,14 @@ Checks, all of which must pass in the same round:
      which is what `ON CLUSTER '{cluster}'` resolves against
   4. Keeper's root is readable, which is what ReplicatedMergeTree and the
      distributed DDL queue need
+  5. no replica in CLICKHOUSE_REPLICA_URLS has a read-only replicated
+     table. A table goes read-only when it loses its Keeper session or
+     cannot find its metadata there, and then refuses inserts while reads
+     still work
 
 One round must finish inside kix.healthCheck's round budget (90 s): five
-requests at a 10 s timeout each, then the 10 s pause.
+requests in turn and then the replicas in parallel, at a 10 s timeout
+each, then the 10 s pause.
 
 Runs with the standard library only. To try it from a laptop, run
 `kubectl port-forward svc/<name> 8123`, point CLICKHOUSE_URL at
@@ -50,9 +58,10 @@ import signal
 import sys
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 CLICKHOUSE_URL = os.environ["CLICKHOUSE_URL"]
@@ -60,6 +69,7 @@ CLICKHOUSE_USER = os.environ["CLICKHOUSE_USER"]
 CLICKHOUSE_PASSWORD = os.environ["CLICKHOUSE_PASSWORD"]
 CLICKHOUSE_CLUSTER = os.environ["CLICKHOUSE_CLUSTER"]
 CLICKHOUSE_REPLICAS = int(os.environ.get("CLICKHOUSE_REPLICAS", "1"))
+CLICKHOUSE_REPLICA_URLS = os.environ["CLICKHOUSE_REPLICA_URLS"].split()
 RETRY_FOR = int(os.environ["RETRY_FOR"])
 
 
@@ -73,15 +83,16 @@ def query(
     sql: str,
     password: str = CLICKHOUSE_PASSWORD,
     params: dict[str, str] | None = None,
+    url: str = CLICKHOUSE_URL,
 ) -> str:
-    """The first column of the first row, as text.
+    """The result in TabSeparated format, with surrounding whitespace stripped.
 
-    `params` are bound by the server ({name:Type} in the SQL), never spliced
-    into the text.
+    A one-row, one-column result is its value. `params` are bound by the
+    server ({name:Type} in the SQL), never spliced into the text.
     """
     bound = urlencode({f"param_{key}": value for key, value in (params or {}).items()})
     request = Request(
-        f"{CLICKHOUSE_URL}/?{bound}",
+        f"{url}/?{bound}",
         data=sql.encode(),
         headers={
             "X-ClickHouse-User": CLICKHOUSE_USER,
@@ -138,11 +149,41 @@ def check_keeper() -> Check:
     return Check(True, f"Keeper answers, {nodes} node(s) under /")
 
 
+def replica_problem(url: str) -> str:
+    """What is wrong with the replica at `url`, or "" when nothing is."""
+    try:
+        tables = query(
+            "SELECT arrayStringConcat(groupArray(database || '.' || table), ', ') "
+            "FROM system.replicas WHERE is_readonly",
+            url=url,
+        )
+    except Exception as error:  # noqa: BLE001
+        return f"not answering: {error}"
+    return f"read-only tables {tables}" if tables else ""
+
+
+def check_readonly_replicas() -> Check:
+    with ThreadPoolExecutor(max_workers=len(CLICKHOUSE_REPLICA_URLS)) as pool:
+        problems = list(pool.map(replica_problem, CLICKHOUSE_REPLICA_URLS))
+    bad = [
+        f"{urlsplit(url).hostname}: {problem}"
+        for url, problem in zip(CLICKHOUSE_REPLICA_URLS, problems)
+        if problem
+    ]
+    if bad:
+        return Check(False, "; ".join(bad)[:400])
+    return Check(
+        True,
+        f"no read-only replicated tables on {len(CLICKHOUSE_REPLICA_URLS)} replica(s)",
+    )
+
+
 CHECKS: list[Callable[[], Check]] = [
     check_login,
     check_password_required,
     check_cluster,
     check_keeper,
+    check_readonly_replicas,
 ]
 
 

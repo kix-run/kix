@@ -16,9 +16,11 @@ use kube::{
 };
 use serde_json::Value;
 
-use super::activation::Tenancy;
-use super::fetch::{self, FetchError};
+use super::activation::OpenedRecords;
+use super::errors::FetchError;
 use super::fieldsv1::{self, KIX_FIELD_MANAGER};
+use super::inventory;
+use super::tenancy::Tenancy;
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 
@@ -108,21 +110,22 @@ pub struct DriftReport {
 }
 
 /// Check kix-managed resources on the cluster: every one when `cluster` is
-/// `None`, otherwise the ones [`fetch::SweepScope::Cluster`] gives for it.
+/// `None`, otherwise the ones [`inventory::SweepScope::Cluster`] gives for it.
 /// Also returns the sweep's [`Tenancy`], which names each report's clusters.
 ///
-/// Fetches through [`fetch::sweep_managed`] and hashes raw objects.
-/// `fetch::normalize_for_diff` cannot be used because it removes managedFields.
+/// Fetches through [`inventory::sweep_managed`] and hashes raw objects.
+/// `owned_view::normalize_for_diff` cannot be used because it removes managedFields.
 pub async fn check_cluster(
     client: &Client,
     discovery: &[(ApiResource, Scope)],
+    records: &OpenedRecords,
     cluster: Option<&str>,
 ) -> Result<(Vec<DriftReport>, Tenancy), FetchError> {
     let scope = match cluster {
-        Some(cluster) => fetch::SweepScope::Cluster(cluster),
-        None => fetch::SweepScope::All,
+        Some(cluster) => inventory::SweepScope::Cluster(cluster),
+        None => inventory::SweepScope::All,
     };
-    let sweep = fetch::sweep_managed(client, discovery, scope).await?;
+    let sweep = inventory::sweep_managed(client, discovery, records, scope).await?;
     let mut reports: Vec<DriftReport> = sweep
         .managed
         .iter()
@@ -247,7 +250,7 @@ fn serves_scale(obj: &DynamicObject) -> bool {
 /// (subresource `scale`, owning `spec.replicas`, no time). Kubernetes records
 /// one only when the write sets a non-zero value and some manager owned
 /// `spec.replicas` before it; [`UnrecordedScale`] covers the other writes.
-pub fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
+pub(crate) fn foreign_owners(obj: &DynamicObject) -> Vec<ForeignOwner> {
     let Some(entries) = obj.metadata.managed_fields.as_deref() else {
         return Vec::new();
     };

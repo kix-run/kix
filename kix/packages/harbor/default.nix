@@ -31,6 +31,8 @@
 #                             through kix.expose.
 #   prometheus (optional)     the exporter, ServiceMonitors, and alerts.
 #   reloader (optional)       restarts pods when a secret-ref Secret changes.
+#   oidcProvider, oidcClient (with `oidc.enabled`)
+#                             single sign-on; see below.
 #
 #   instances.harbor = {
 #     harbor.package = packages.harbor;
@@ -89,6 +91,31 @@
 # and portal to the controller; through a Gateway, no policy admits the
 # Gateway's data plane yet (ROADMAP, "kix.expose with paths renders an
 # HTTPRoute").
+#
+# Single sign-on: with `oidc.enabled`, core runs in `oidc_auth` mode
+# against the `oidcProvider` dependency (`kix.contracts.oidcProvider`, such
+# as a keycloak instance wired with `deps.oidcProvider = ref.<ns>.<name>`)
+# in the realm `oidc.realm`. `oidcClient` is a secret with keys `clientId`
+# and `clientSecret`; register a confidential client with the redirect URI
+# `<EXT_ENDPOINT>/c/oidc/callback`. Core applies the auth mode, the issuer,
+# `oidc.scopes`, `oidc.groupsClaim`, and `oidc.adminGroup` from
+# CONFIG_OVERWRITE_JSON on every start, with the client id and secret
+# expanded into it by Kubernetes from the secret, so neither lands in a
+# ConfigMap. The secret must hold no `"` or `\`, which would break that JSON;
+# a secret Keycloak generates holds neither. Harbor then makes every
+# setting read-only in its UI: set the others in `core.settings`. Harbor
+# refuses to change the auth mode once users other than admin exist, and
+# core exits at start when that change fails, so turn OIDC on before the
+# first user signs in.
+#
+# Core discovers the provider at the issuer URL, the public URL, and
+# requires the issuer the provider reports to match it, so it cannot use a
+# Keycloak Service address. Derived policy has no edge for that request.
+# The world:443 egress above admits it when the public URL resolves to a
+# load balancer outside the cluster. When it resolves to an address the
+# cluster's own data plane answers (a load balancer IP that Cilium or
+# kube-proxy serves inside the cluster), the request reaches the ingress
+# controller from a pod, which its policy does not admit.
 #
 # Core and jobservice dial each other, which would be a store-path cycle,
 # so the core and jobservice Services use a literal selector rather than
@@ -299,7 +326,42 @@ in
       message = "${who}: deps.database publishes no out.username, which Harbor sets as POSTGRESQL_USERNAME and HARBOR_DATABASE_USERNAME. Set out.username to the role name on that instance.";
     };
 
+  deps.oidcProvider.assertions = dep: kix.contracts.oidcProvider.assertions who dep;
+
+  assertions =
+    { config, ... }:
+    [
+      {
+        assertion = config.oidc.adminGroup == null || config.oidc.groupsClaim != null;
+        message = "oidc.adminGroup is ${builtins.toJSON config.oidc.adminGroup}, but oidc.groupsClaim is null, so Harbor reads no groups to match it against. Set oidc.groupsClaim to the claim that lists the user's groups, such as \"groups\".";
+      }
+    ];
+
   options = {
+    oidc =
+      kix.options.oidc {
+        scopes = [
+          "openid"
+          "profile"
+          "email"
+          "offline_access"
+        ];
+      }
+      // {
+        groupsClaim = lib.mkOption {
+          type = lib.types.nullOr lib.types.nonEmptyStr;
+          default = null;
+          example = "groups";
+          description = "The ID token claim that lists the user's groups (`oidc_groups_claim`). Harbor creates a group for each and maps project membership to it. Keycloak adds such a claim through a \"Group Membership\" mapper on the client.";
+        };
+        adminGroup = lib.mkOption {
+          type = lib.types.nullOr lib.types.nonEmptyStr;
+          default = null;
+          example = "harbor-admins";
+          description = "Members of this group, read from `groupsClaim`, are Harbor system administrators (`oidc_admin_group`). Requires `groupsClaim`.";
+        };
+      };
+
     externalURL = lib.mkOption {
       type = lib.types.nullOr (lib.types.strMatching "https?://[^/]+");
       default = null;
@@ -358,6 +420,34 @@ in
         };
       };
       env = envOption "core" "LOG_LEVEL, PERMITTED_REGISTRY_TYPES_FOR_PROXY_CACHE, REPLICATION_ADAPTER_WHITELIST, POSTGRESQL_MAX_IDLE_CONNS, and POSTGRESQL_MAX_OPEN_CONNS";
+      settings = lib.mkOption {
+        type = lib.types.attrsOf (
+          lib.types.oneOf [
+            lib.types.bool
+            lib.types.int
+            lib.types.str
+          ]
+        );
+        default = { };
+        example = {
+          oidc_auto_onboard = true;
+          oidc_user_claim = "preferred_username";
+          project_creation_restriction = "adminonly";
+        };
+        description = ''
+          Harbor configuration items (the keys of `GET /api/v2.0/configurations`),
+          which core applies from CONFIG_OVERWRITE_JSON on every start. A
+          non-empty value, or `oidc.enabled`, makes every setting read-only
+          in Harbor's UI. With `oidc.enabled` the package sets `auth_mode`,
+          `oidc_endpoint`, `oidc_client_id`, `oidc_client_secret`,
+          `oidc_scope`, `oidc_groups_claim`, and `oidc_admin_group`, and
+          refuses them here; it defaults `oidc_name` to "OpenID Connect".
+          `oidc_client_secret` and `ldap_search_password` are always
+          refused, because the value would land in the pod spec. Values
+          reach Harbor as written: the package escapes `$` against
+          Kubernetes' `$(VAR)` expansion.
+        '';
+      };
     };
 
     portal = {
@@ -500,10 +590,101 @@ in
         caBundle ? null,
         prometheus ? null,
         reloader ? null,
+        oidcProvider ? null,
+        oidcClient ? null,
         ...
       }:
       let
         metricsEnabled = config.metrics.enabled && prometheus != null;
+
+        oidcOn = config.oidc.enabled;
+        oidcProviderInfo = kix.contracts.oidcProvider.requireClient {
+          inherit who;
+          inherit (config) oidc;
+          provider = oidcProvider;
+          client = oidcClient;
+        };
+        # Forcing oidcProviderInfo first reports a missing dependency by
+        # name rather than as a missing attribute of null.
+        oidcCredentials =
+          if oidcOn then
+            builtins.seq oidcProviderInfo (
+              kix.checkSecretKeys {
+                inherit who;
+                arg = "oidcClient";
+                dep = oidcClient;
+                keys = kix.contracts.oidcProvider.clientKeys;
+              }
+            )
+          else
+            null;
+
+        # Harbor configuration items for CONFIG_OVERWRITE_JSON. The client
+        # id and secret are `$(VAR)` references that Kubernetes expands from
+        # the env entries before it, so the JSON in the pod spec holds no
+        # credential.
+        oidcClientRefs = lib.optionalAttrs oidcOn {
+          oidc_client_id = "$(OIDC_CLIENT_ID)";
+          oidc_client_secret = "$(OIDC_CLIENT_SECRET)";
+        };
+        oidcSettings = lib.optionalAttrs oidcOn (
+          {
+            auth_mode = "oidc_auth";
+            oidc_endpoint = oidcProviderInfo.issuerUrl;
+            oidc_scope = lib.concatStringsSep "," config.oidc.scopes;
+          }
+          // lib.optionalAttrs (config.oidc.groupsClaim != null) {
+            oidc_groups_claim = config.oidc.groupsClaim;
+          }
+          // lib.optionalAttrs (config.oidc.adminGroup != null) {
+            oidc_admin_group = config.oidc.adminGroup;
+          }
+        );
+        oidcOwnedSettings = [
+          "auth_mode"
+          "oidc_endpoint"
+          "oidc_client_id"
+          "oidc_client_secret"
+          "oidc_scope"
+          "oidc_groups_claim"
+          "oidc_admin_group"
+        ];
+        settingsProblems =
+          map
+            (
+              k:
+              "core.settings sets ${k}, a credential that would land in the pod spec. ${
+                if k != "oidc_client_secret" then
+                  "Harbor has no reference form for it; configure it in Harbor's UI without core.settings."
+                else if oidcOn then
+                  "oidc.enabled already sets it from the oidcClient dependency; remove it from core.settings."
+                else
+                  "Set oidc.enabled and wire the client through deps.oidcClient instead."
+              }"
+            )
+            (
+              builtins.filter (k: config.core.settings ? ${k}) [
+                "oidc_client_secret"
+                "ldap_search_password"
+              ]
+            )
+          ++ lib.optionals oidcOn (
+            map (
+              k:
+              "core.settings sets ${k}, which oidc.enabled sets. Use the oidc option and the oidcProvider and oidcClient dependencies instead."
+            ) (builtins.filter (k: k != "oidc_client_secret" && config.core.settings ? ${k}) oidcOwnedSettings)
+          );
+        coreSettings =
+          if settingsProblems != [ ] then
+            throw "${who}: ${lib.concatStringsSep " " settingsProblems}"
+          else
+            # Kubernetes expands `$(VAR)` and turns `$$` into `$` across the
+            # whole env value, so every `$` except the client references is
+            # doubled to reach Harbor as written.
+            lib.mapAttrs (_: v: if builtins.isString v then lib.replaceStrings [ "$" ] [ "$$" ] v else v) (
+              lib.optionalAttrs oidcOn { oidc_name = "OpenID Connect"; } // config.core.settings // oidcSettings
+            )
+            // oidcClientRefs;
 
         # Every read of a secret dependency goes through these bindings, so
         # a missing key fails here with the secret's name, before any
@@ -628,6 +809,7 @@ in
             vars ? { },
             tunables ? { },
             env ? { },
+            owned ? [ ],
           }:
           secretEnv
           ++ kix.mkEnvVars (
@@ -660,7 +842,8 @@ in
                 names = [ sslmodeVar ];
                 from = "database.sslmode";
                 fix = "Set database.sslmode instead.";
-              };
+              }
+              ++ owned;
             } env
           );
 
@@ -1060,7 +1243,8 @@ in
               // checksumOf "harbor-secrets" secrets
               // checksumOf "ca-bundle" ca
               // checksumOf "database-credentials" dbCredentials
-              // valkeyChecksum;
+              // valkeyChecksum
+              // checksumOf "oidc-client" oidcCredentials;
               template.spec = harborPodDefaults // {
                 containers = [
                   {
@@ -1086,13 +1270,29 @@ in
                           REGISTRY_CREDENTIAL_PASSWORD = "registryPassword";
                         }
                         ++ dbPasswordEnv "POSTGRESQL_PASSWORD"
-                        ++ redisPasswordEnv;
+                        ++ redisPasswordEnv
+                        ++ lib.optionals oidcOn (
+                          oidcCredentials.out.mkEnv {
+                            OIDC_CLIENT_ID = "clientId";
+                            OIDC_CLIENT_SECRET = "clientSecret";
+                          }
+                        );
                       facts = builtins.attrNames coreConfigData;
                       sslmodeVar = "POSTGRESQL_SSLMODE";
                       vars = {
                         _REDIS_URL_CORE = "${redisUrl 0}?idle_timeout_seconds=30";
                         _REDIS_URL_REG = "${redisUrl 2}?idle_timeout_seconds=30";
+                      }
+                      // lib.optionalAttrs (coreSettings != { }) {
+                        CONFIG_OVERWRITE_JSON = builtins.toJSON coreSettings;
                       };
+                      owned = [
+                        {
+                          names = [ "CONFIG_OVERWRITE_JSON" ];
+                          from = "core.settings and oidc";
+                          fix = "Set the configuration items in core.settings.";
+                        }
+                      ];
                       tunables = {
                         LOG_LEVEL = "info";
                         PERMITTED_REGISTRY_TYPES_FOR_PROXY_CACHE = "docker-hub,harbor,azure-acr,ali-acr,aws-ecr,google-gcr,docker-registry,github-ghcr,jfrog-artifactory";
@@ -1164,6 +1364,7 @@ in
             ca
             dbCredentials
             valkeySecret
+            oidcCredentials
           ]
           |> scope.mkDeployment;
 

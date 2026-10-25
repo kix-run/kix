@@ -65,11 +65,12 @@ in
 
   # The cluster's deploy record, and the root of its Merkle tree.
   #
-  # `instances` is built from every PackageInstance's `out.name`, and `out`
-  # carries each instance's identity context, which transitively carries every
-  # resource. So this node depends on the whole closure by construction, its
-  # store hash covers everything, and "the activation hash changed" means
-  # "something changed". That is also why it lands in the last wave: the
+  # The record references `index`, kix-packages.json, which references every
+  # file it lists. So the record's closure is the whole build, an import
+  # marker no object uses included, its store hash covers everything, and
+  # "the activation hash changed" means "something changed". `instances`,
+  # built from every PackageInstance's `out.name`, carries each instance's
+  # identity context, which is why the record lands in the last wave: the
   # position is the dependency, not a choice.
   #
   # The engine does not wait for that wave to create the record. It applies
@@ -83,6 +84,7 @@ in
     {
       name,
       instances,
+      index,
       extraDeps ? [ ],
     }:
     mkResource {
@@ -95,6 +97,7 @@ in
       };
       requires = [ kixCRDs.activation ];
       extraDeps = extraDeps;
+      storeReferences = [ index ];
       namespace = clusterScoped;
       extra.spec = {
         inherit instances;

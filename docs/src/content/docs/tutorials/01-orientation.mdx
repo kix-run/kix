@@ -50,25 +50,6 @@ simple question feel scattered: what should this cluster look like now?
 Kix is trying to make the graph explicit enough that tools can use it. That is
 where the interesting parts start.
 
-<CardGrid>
-  <Card title="Know Before Deploy">
-    Evaluate, check, diff, and inspect the cluster before anything touches the
-    Kubernetes API server.
-  </Card>
-  <Card title="Derive Network Policy">
-    Use declared service relationships to generate network policy instead of
-    hand-maintaining it beside the app graph.
-  </Card>
-  <Card title="Prove Ownership And Policy">
-    Track which package owns each manifest, then run checks against the rendered
-    system before it ships.
-  </Card>
-  <Card title="See Blast Radius">
-    Ask what depends on the thing you are changing before the change lands in a
-    real cluster.
-  </Card>
-</CardGrid>
-
 Once Kix has the graph, it can do more than render YAML. It can use the same
 model for deploy order, network policy, ownership, policy checks, diffs, and
 change impact.

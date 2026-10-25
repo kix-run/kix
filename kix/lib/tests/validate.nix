@@ -1218,6 +1218,22 @@ in
     builtins.length hits == 1
     || throw "expected one ConfigMap/twice, got ${toString (builtins.length hits)}";
 
+  # kix-packages.json lists a resource once under its instance, even when
+  # the instance names it under two parts.
+  v20-package-index-lists-an-alias-once =
+    let
+      index =
+        (mkCluster [
+          baseInstances
+          { instances.infra.twice.package = aliasedPackage; }
+        ]).packageIndexContent;
+      repeated = lib.filterAttrs (
+        _: paths: builtins.length paths != builtins.length (lib.unique paths)
+      ) index.packages;
+    in
+    repeated == { }
+    || throw "kix-packages.json repeats a path under ${toString (builtins.attrNames repeated)}";
+
   # A dangling Service selector fails the cluster eval, not just a flake check.
   v21-cross-resource-failure-fails-the-build = evalFails (mkCluster [
     baseInstances

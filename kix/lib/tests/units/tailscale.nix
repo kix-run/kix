@@ -197,7 +197,7 @@ let
     builtins.listToAttrs (
       map (e: lib.nameValuePair e.name (e.value or e.valueFrom))
         (builtins.head (byName "tailscale" (ofKind "Deployment" (manifests c)))
-          .spec.template.spec.containers).env
+        .spec.template.spec.containers).env
     );
 
   # A one-Service package for the loadBalancerClass tests. `class` is

@@ -1,0 +1,25 @@
+{
+  "version": 2,
+  "managedBy": "kix pin",
+  "images": {
+    "shared": {
+      "repository": "reg.example/shared",
+      "tag": "3.0",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "instances": {
+    "app/web": {
+      "image": {
+        "repository": "reg.example/web",
+        "tag": "1.1",
+        "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "promotedBy": "lib tests"
+      },
+      "sidecar.image": {
+        "repository": "reg.example/sidecar",
+        "tag": "2.1"
+      }
+    }
+  }
+}

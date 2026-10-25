@@ -60,34 +60,90 @@ fn apply_alias_works() {
         .stdout(predicate::str::contains("Two builds compared"));
 }
 
-/// `kix plan -o json` keeps stdout to the document: the progress lines go
-/// to stderr, and the output parses as a plan made from builds.
+/// `kix plan --save` writes a plan file that reads back as a plan made
+/// from builds, with the build's graph and each added object's manifest.
 #[test]
-fn plan_json_is_the_document_alone() {
-    let out = kix()
-        .args(["plan", "example", "--current-activation", "-o", "json"])
+fn plan_save_writes_the_plan_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("plan.kixplan");
+    kix()
+        .args(["plan", "example", "--current-activation", "--save"])
+        .arg(&path)
         .assert()
         .code(2)
-        .get_output()
-        .stdout
-        .clone();
-    let doc: serde_json::Value = serde_json::from_slice(&out).expect("stdout is one JSON document");
-    assert_eq!(doc["made_by"], "builds");
-    assert_eq!(doc["conflicts"]["status"], "not_checked");
-    assert_eq!(doc["conflicts"]["reason"], "builds_only");
-    assert_eq!(doc["migrations"]["status"], "checked");
-    assert!(!doc["packages"]["added"].as_array().unwrap().is_empty());
-    let store_path = doc["build"]["store_path"]
-        .as_str()
-        .expect("a build store path");
-    assert!(store_path.starts_with("/nix/store/"), "{store_path}");
+        .stderr(predicate::str::contains("Saved the plan to"));
+    let file = std::fs::File::open(&path).unwrap();
+    let (mut file, _) = kix::plan::file::PlanFile::verify(file).expect("a valid plan file");
+    let header = file.header().clone();
+    let doc = &header.plan;
+    assert_eq!(doc.made_by, kix::plan::document::MadeBy::Builds);
+    assert!(doc.conflicts.items().is_empty());
+    assert!(!doc.packages.added.is_empty());
+    assert!(doc.packages.added.iter().all(|p| p.manifests.is_none()));
     assert!(
-        doc["build"]["identity_hash"].is_string(),
+        doc.build.store_path.starts_with("/nix/store/"),
         "{}",
-        doc["build"]
+        doc.build.store_path
     );
-    assert_eq!(doc["flags"]["prune"], false);
-    assert!(doc["kix"]["version"].is_string());
+    assert!(doc.build.identity_hash.is_some());
+    assert_eq!(doc.flags.map(|f| f.prune), Some(false));
+    // A first deploy writes every object of the build, each as added.
+    let writes = &doc.objects.as_ref().expect("objects").writes;
+    assert!(!writes.is_empty());
+    assert!(
+        writes
+            .iter()
+            .all(|w| w.change == kix::plan::document::WriteChange::Added)
+    );
+    assert!(!header.graph.nodes.is_empty());
+    let (id, shown) = header.shown.iter().next().expect("an added object");
+    assert!(shown.old.is_none() && shown.new.is_some());
+    let manifest = file.new_manifest(id).unwrap().expect("its new manifest");
+    assert!(manifest["kind"].is_string());
+}
+
+/// `kix plan` prints no JSON or YAML: a plan kept as data is a plan file.
+#[test]
+fn plan_refuses_json_and_points_at_save() {
+    for format in ["json", "yaml"] {
+        kix()
+            .args(["plan", "example", "--current-activation", "-o", format])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains("--save"));
+    }
+}
+
+/// `kix deploy --plan` reads only plan files: a JSON plan is refused before
+/// anything is built, as is a plan file with one byte changed.
+#[test]
+fn deploy_plan_refuses_json_and_a_changed_plan_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let json = dir.path().join("plan.json");
+    std::fs::write(&json, "{}").unwrap();
+    kix()
+        .args(["deploy", "example", "--dry-run", "--plan"])
+        .arg(&json)
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("not a .kixplan"));
+
+    let saved = dir.path().join("plan.kixplan");
+    kix()
+        .args(["plan", "example", "--current-activation", "--save"])
+        .arg(&saved)
+        .assert()
+        .code(2);
+    let mut bytes = std::fs::read(&saved).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 1;
+    std::fs::write(&saved, bytes).unwrap();
+    kix()
+        .args(["deploy", "example", "--dry-run", "--plan"])
+        .arg(&saved)
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("cannot read the plan"));
 }
 
 /// Flake attribute `minimal` builds the cluster named `test-minimal`. The
@@ -141,4 +197,56 @@ fn deploy_reads_the_cache_under_the_cluster_name_not_the_attribute() {
             "Loading previous activation from cache",
         ))
         .stdout(predicate::str::contains("First deploy").not());
+}
+
+/// `kix deploy --log-format json` keeps stdout to the log: the build, the
+/// plan and everything else a person reads before the run go to stderr.
+/// Offline the deploy stops when it connects to apply, after the plan.
+#[test]
+fn the_json_deploy_log_has_stdout_to_itself() {
+    let cache = tempfile::tempdir().unwrap();
+    let out = kix()
+        .env("XDG_CACHE_HOME", cache.path())
+        .args([
+            "deploy",
+            "example",
+            "--current-activation",
+            "--yes",
+            "--log-format",
+            "json",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    for line in stdout.lines() {
+        serde_json::from_str::<serde_json::Value>(line)
+            .unwrap_or_else(|e| panic!("stdout line is not JSON ({e}): {line}"));
+    }
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("Cluster example:"), "{stderr}");
+    assert!(
+        stderr.contains("No previous activation. First deploy."),
+        "{stderr}"
+    );
+    assert!(stderr.contains("failed to connect to cluster"), "{stderr}");
+}
+
+/// `kix deploy --dry-run` without `--plan` prints no JSON, and says so in
+/// its own name.
+#[test]
+fn deploy_dry_run_refuses_json_in_its_own_name() {
+    kix()
+        .args([
+            "deploy",
+            "example",
+            "--dry-run",
+            "--current-activation",
+            "-o",
+            "json",
+        ])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("kix deploy --dry-run prints text"));
 }

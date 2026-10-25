@@ -1,6 +1,6 @@
 use miette::{IntoDiagnostic, Result};
 
-use crate::cli::{GraphArgs, GraphFormat, OutputFormat};
+use crate::cli::{GraphArgs, GraphFormat};
 use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
@@ -25,10 +25,23 @@ impl CommandResponse for GraphResponse {
 }
 
 pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
-    let cluster = ctx.eval_cluster_or_suggest(&args.cluster)?;
+    let manifests = match &args.bundle {
+        Some(path) => {
+            let build = kix_bundle::read_build(path, &[], &args.cluster)
+                .map_err(|e| miette::miette!("{e}"))?;
+            let mut manifests: Vec<serde_json::Value> = build
+                .graph()
+                .resources
+                .values()
+                .map(|r| r.manifest.clone())
+                .collect();
+            manifests.sort_by_cached_key(kix::eval::cli_backend::manifest_sort_key);
+            manifests
+        }
+        None => ctx.eval_cluster_or_suggest(&args.cluster)?.raw_manifests,
+    };
 
-    let graph = kix::cluster::graph::ResourceGraph::from_manifests(&cluster.raw_manifests)
-        .into_diagnostic()?;
+    let graph = kix::cluster::graph::ResourceGraph::from_manifests(&manifests).into_diagnostic()?;
 
     // --format takes priority over global -o
     match args.format {
@@ -52,20 +65,15 @@ pub fn run(args: &GraphArgs, ctx: &mut CommandContext) -> Result<()> {
                 tree: graph.to_tree(),
                 json: graph.to_json(),
             };
-            println!(
-                "{}",
-                output::render(&response, ctx.output_format(OutputFormat::Text))?
-            );
+            output::result(&response)?;
         }
     }
 
-    if !ctx.global.quiet {
-        eprintln!(
-            "{} resources, {} dependencies",
-            graph.node_count(),
-            graph.edge_count()
-        );
-    }
+    crate::esay!(
+        "{} resources, {} dependencies",
+        graph.node_count(),
+        graph.edge_count()
+    );
 
     Ok(())
 }

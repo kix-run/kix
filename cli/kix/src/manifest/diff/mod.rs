@@ -4,11 +4,10 @@
 //! and path-based ignore patterns.
 
 pub mod display;
-pub mod engine;
-pub mod equivalence;
-pub mod ignore;
-pub mod keyed_lists;
-pub mod rename;
+pub(crate) mod engine;
+pub(crate) mod equivalence;
+pub(crate) mod ignore;
+pub(crate) mod keyed_lists;
 
 use std::collections::BTreeSet;
 
@@ -41,7 +40,7 @@ pub struct Difference {
 }
 
 impl Difference {
-    pub fn missing_in_b(path: String, a_value: Value) -> Self {
+    pub(crate) fn missing_in_b(path: String, a_value: Value) -> Self {
         Self {
             path,
             kind: DiffKind::MissingInB,
@@ -50,7 +49,7 @@ impl Difference {
         }
     }
 
-    pub fn extra_in_b(path: String, b_value: Value) -> Self {
+    pub(crate) fn extra_in_b(path: String, b_value: Value) -> Self {
         Self {
             path,
             kind: DiffKind::ExtraInB,
@@ -59,7 +58,7 @@ impl Difference {
         }
     }
 
-    pub fn value_mismatch(path: String, a_value: Value, b_value: Value) -> Self {
+    pub(crate) fn value_mismatch(path: String, a_value: Value, b_value: Value) -> Self {
         Self {
             path,
             kind: DiffKind::ValueMismatch,
@@ -68,7 +67,7 @@ impl Difference {
         }
     }
 
-    pub fn type_mismatch(path: String, a_value: Value, b_value: Value) -> Self {
+    pub(crate) fn type_mismatch(path: String, a_value: Value, b_value: Value) -> Self {
         Self {
             path,
             kind: DiffKind::TypeMismatch,
@@ -87,6 +86,12 @@ pub struct DiffConfig {
     pub a_label: String,
     /// Label for side B in output (e.g. "cluster").
     pub b_label: String,
+    /// A list in a different order is a difference. Set it when both sides
+    /// are what kix writes: the API server stores a list in the order it is
+    /// sent, even one it merges by key, and `args` or a route list reads
+    /// first to last. Leave it off against a live object, whose merged
+    /// lists another manager may have reordered.
+    pub ordered: bool,
 }
 
 impl Default for DiffConfig {
@@ -95,6 +100,7 @@ impl Default for DiffConfig {
             ignore_paths: BTreeSet::new(),
             a_label: "a".to_string(),
             b_label: "b".to_string(),
+            ordered: false,
         }
     }
 }
@@ -105,6 +111,15 @@ impl DiffConfig {
             ignore_paths: BTreeSet::new(),
             a_label: a_label.into(),
             b_label: b_label.into(),
+            ordered: false,
+        }
+    }
+
+    /// This config, comparing lists in order: see [`DiffConfig::ordered`].
+    pub(crate) fn in_order(self) -> Self {
+        Self {
+            ordered: true,
+            ..self
         }
     }
 }

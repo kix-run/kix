@@ -104,7 +104,10 @@ imagePullPolicy = config.image.pullPolicy;
 
 Renders `repository:tag`, followed by `@digest` when `digest` is not null.
 Throws when `repository` or `tag` is missing or empty. It does not validate
-the digest or contact a registry.
+the digest or contact a registry. It drops the string context of a tag
+derived from a Nix build, so the manifest does not depend on that build; the
+context it drops is what makes [image sources](#image-sources) report the
+image as `nix_built`.
 
 A `null` `pullPolicy` renders no `imagePullPolicy`, because Kix drops null
 fields from manifests.
@@ -132,13 +135,109 @@ does the same for every cluster function that takes a `pins` argument.
 | `pins.ref <key>` | `kix.image.ref (pins.get <key>)`. |
 | `pins.keys` | Every pin name in the file. |
 | `pins.all` | Every pin, shape-checked. |
+| `pins.instances` | The instance pins, shape-checked: `"<namespace>/<instance>"` to an attrset from option path to pin. |
+| `pins.file` | The pin file's path as a string, or `null` for an attrset. |
 
 Each pin needs `repository` and `tag`. `digest`, `sourceRev`, `promotedBy`,
-`resolvedAt` and `note` are optional, and any other field is an error. A
-digest must be `sha256:` followed by 64 lower-case hexadecimal characters.
-The file declares `"version": 1` and holds the pins under `images`; a bare
-map of pins is also accepted. The shape check does not contact a registry;
-`kix pin check` does.
+`resolvedAt` and `note` are optional, and any other field is an error. The
+repository and tag follow the OCI image reference grammar: an optional
+registry host and port, then lower-case path components; a tag of up to 128
+letters, digits, `_`, `.` and `-`, with no digest in it. A digest must be
+`sha256:` followed by 64 lower-case hexadecimal characters. A top-level field
+other than `version`, `managedBy`, `images` and `instances` is an error.
+The file holds image pins under `images` and instance pins under
+`instances`. It declares `"version": 1` when it has only `images`, and
+`"version": 2` when it has `instances`; a bare map of image pins is also
+accepted. The shape check does not contact a registry; `kix pin check` does.
+
+### Instance pins
+
+```nix
+kix.buildCluster {
+  name = "prod";
+  inherit pins;
+  modules = [ ... ];
+}
+```
+
+`kix.buildCluster` applies the instance pins of the file passed as `pins`.
+Each entry is a definition of the named option, such as
+`instances.monitoring.grafana.config.image` for `"monitoring/grafana": { "image": … }`,
+and the module system records the pin file as the file that defined it. No
+cluster code reads an instance pin.
+
+Evaluation fails, naming the pin file and the other place, when:
+
+- the instance is not in the cluster, or is an import;
+- the package has no such option, or the option is not a `kix.options.image`
+  option;
+- the cluster's code or the package sets the same option at the pin's
+  priority or above, including a value equal to the pin's and a
+  `lib.mkForce`.
+
+A pin wins over a `lib.mkDefault` in the cluster's code and over the
+package's own defaults, so a follower image whose tag the package sets with
+`lib.mkDefault config.image.tag` can be pinned. Pinning only the main image
+moves a follower's tag and drops its digest, which belongs to the old tag, so
+pin each image of a release. A tool that writes pins should pin a release's
+followers together with its main image.
+
+A pin states its digest: a pin without one renders no digest, even at the
+package's tag.
+
+**One pin file per cluster.** Instance pins name the instances of one
+cluster, and a pin for an instance the cluster lacks is an error, so only
+one cluster passes a file that holds them. In a flake with several clusters,
+give each cluster its own file with `kix.pins ./<cluster>/pins.json`.
+
+A file passed to `buildCluster` can also hold image pins the code reads with
+`pins.get`. Kix does not apply those.
+
+## Image sources
+
+Each cluster's build result holds `kix-image-sources.json` beside the
+Activation, as the cluster's `imageSources` attribute. It is outside the
+Activation, so it never changes the Activation's name.
+
+```json
+{
+  "version": 1,
+  "cluster": "prod",
+  "pinsFile": "clusters/prod/pins.json",
+  "images": [
+    {
+      "namespace": "monitoring",
+      "instance": "grafana",
+      "option": "image",
+      "repository": "docker.io/grafana/grafana",
+      "tag": "13.1.3",
+      "digest": "sha256:…",
+      "default": { "repository": "docker.io/grafana/grafana", "tag": "12.4.0" },
+      "origin": "pin",
+      "pin": { "map": "instances", "key": "monitoring/grafana" },
+      "dependency": null,
+      "file": "clusters/prod/pins.json",
+      "line": null
+    }
+  ]
+}
+```
+
+There is one record for each `kix.options.image` option of each active
+instance. `default` is the package's declared default, or `null` when the
+package has none. `origin` is one of:
+
+| Origin | When | Also set |
+|---|---|---|
+| `pin` | The instance pin sets it, or the value equals an `images` pin of the file passed as `pins` | `pin.map` (`instances` or `images`), `pin.key`, `file` |
+| `package_default` | Nothing above the package's own defaults sets it | |
+| `injected` | A dependency's config injection sets it | `dependency`, as `<namespace>/<instance>` |
+| `nix_built` | The tag or repository carries a Nix string context: it was derived from a build | `file`, `line` when known |
+| `code` | Any other definition in the cluster's code | `file`, and `line` when the value is an attribute set in Nix source |
+
+Paths are relative to the root of the flake's source. `pinsFile` is the file
+passed as `pins`, or `null`. The record's own `version` changes only for a
+change readers must handle.
 
 :::tip[Use it in a task]
 See [Create a committed image pin file](/docs/how-to/promote-images/create-a-committed-image-pin-file/)

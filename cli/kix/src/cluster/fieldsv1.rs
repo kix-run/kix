@@ -11,10 +11,10 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::ManagedFieldsEntry;
 use kube::api::DynamicObject;
 use serde_json::{Map, Value};
 
-use super::normalize;
+use crate::manifest::hash;
 
 /// The field manager kix uses for server-side apply.
-pub const KIX_FIELD_MANAGER: &str = "kix";
+pub(crate) const KIX_FIELD_MANAGER: &str = "kix";
 
 /// Extract the fieldsV1 tree of kix's SSA entry: manager == "kix",
 /// operation == "Apply", no subresource.
@@ -28,7 +28,7 @@ pub fn kix_fieldset(obj: &DynamicObject) -> Option<Value> {
 }
 
 /// The managedFields entry kix's SSA writes, if present.
-pub fn kix_apply_entry(entries: &[ManagedFieldsEntry]) -> Option<&ManagedFieldsEntry> {
+pub(crate) fn kix_apply_entry(entries: &[ManagedFieldsEntry]) -> Option<&ManagedFieldsEntry> {
     entries.iter().find(|e| {
         e.manager.as_deref() == Some(KIX_FIELD_MANAGER)
             && e.operation.as_deref() == Some("Apply")
@@ -194,17 +194,17 @@ pub fn applied_content_hash(obj: &DynamicObject) -> Option<String> {
 
 /// Steps 3 and 4 of [`applied_content_hash`], for a projection the caller
 /// has already built or edited.
-pub fn projection_hash(mut projection: Value) -> String {
-    normalize::strip_kix_annotations(&mut projection);
-    normalize::hash_value(&normalize::sort_keys(&projection))
+pub(crate) fn projection_hash(mut projection: Value) -> String {
+    hash::strip_kix_annotations(&mut projection);
+    hash::hash_value(&hash::sort_keys(&projection))
 }
 
 /// The part of a live object kix's server-side apply owns: typed metadata
 /// merged back, then projected onto kix's `Apply` fieldset. Steps 1 and 2
 /// of the applied-content hash, and the whole of what `kix diff` and
-/// `kix snapshot save` look at (see `fetch::kix_owned_view`). `None` when
+/// `kix snapshot save` look at (see `owned_view::kix_owned_view`). `None` when
 /// the object has no kix SSA managedFields entry.
-pub fn kix_owned_projection(obj: &DynamicObject) -> Option<Value> {
+pub(crate) fn kix_owned_projection(obj: &DynamicObject) -> Option<Value> {
     let fields = kix_fieldset(obj)?;
     Some(project(&merge_typed_metadata(obj), &fields))
 }

@@ -220,7 +220,12 @@ in
     builtins.length portMessages == 1
     && lib.hasInfix "port is not the PostgreSQL port as a string" (builtins.head portMessages)
     && lib.hasInfix "toString" (builtins.head portMessages)
-    && ofKind "Deployment" (manifests (metabaseCluster { port = "5432"; })) != [ ]
+    &&
+      ofKind "Deployment" (
+        manifests (metabaseCluster {
+          port = "5432";
+        })
+      ) != [ ]
     && evalFails (metabaseCluster {
       port = 5432;
     });

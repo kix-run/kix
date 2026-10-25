@@ -221,14 +221,14 @@ in
     replicas = lib.mkOption {
       type = lib.types.ints.positive;
       # Every lookup in the cluster goes through these pods: two keep DNS up
-      # across a pod restart, three across the loss of a zone.
+      # across a pod restart or the loss of a node or zone.
       default = kix.availability.pick availability {
         none = 1;
         pod = 2;
         node = 2;
-        zone = 3;
+        zone = 2;
       };
-      defaultText = lib.literalMD "from the availability level: 1 at none, 2 at pod and node, 3 at zone";
+      defaultText = lib.literalMD "from the availability level: 1 at none, 2 above";
       description = "CoreDNS replicas.";
     };
 

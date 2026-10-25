@@ -83,10 +83,11 @@ let
 
   configOf =
     cluster:
-    builtins.fromJSON (byName "collector-config" (ofKind "ConfigMap" (manifests cluster))).data."config.yaml";
-  workloadOf =
-    kind: cluster: byName "collector" (ofKind kind (manifests cluster));
-  containerOf = cluster: builtins.head (workloadOf "Deployment" cluster).spec.template.spec.containers;
+    builtins.fromJSON
+      (byName "collector-config" (ofKind "ConfigMap" (manifests cluster))).data."config.yaml";
+  workloadOf = kind: cluster: byName "collector" (ofKind kind (manifests cluster));
+  containerOf =
+    cluster: builtins.head (workloadOf "Deployment" cluster).spec.template.spec.containers;
   serviceOf = cluster: byName "collector" (ofKind "Service" (manifests cluster));
   servicePortsOf = cluster: map (p: p.name) (serviceOf cluster).spec.ports;
 
@@ -122,13 +123,14 @@ in
       (workloadOf "Deployment" c).spec.replicas == 1
       && cfg.service.pipelines."logs/events".receivers == [ "k8s_objects" ]
       && cfg.exporters."file/events".path == "/dev/stdout"
-      && cfg.receivers.k8s_objects.objects == [
-        {
-          name = "events";
-          mode = "watch";
-          exclude_watch_type = [ "DELETED" ];
-        }
-      ]
+      &&
+        cfg.receivers.k8s_objects.objects == [
+          {
+            name = "events";
+            mode = "watch";
+            exclude_watch_type = [ "DELETED" ];
+          }
+        ]
       && map (r: r.resources) role.rules == [ [ "events" ] ]
       && !((workloadOf "Deployment" c).spec.template.spec ? automountServiceAccountToken)
     )
@@ -165,10 +167,11 @@ in
       })
       && builtins.length messages == 1
       && lib.hasInfix "mode = \"deployment\"" (builtins.head messages)
-      && assertionMessages {
-        mode = "deployment";
-        events.enabled = true;
-      } == [ ]
+      &&
+        assertionMessages {
+          mode = "deployment";
+          events.enabled = true;
+        } == [ ]
     )
     || throw "otel-collector events in daemonset mode: ${builtins.toJSON messages}";
 
@@ -176,9 +179,15 @@ in
   # plaintext endpoint sets tls.insecure; out.tls = true leaves TLS on.
   otel-collector-traces =
     let
-      plain = configOf (clusterWith { traces = false; });
-      absent = configOf (clusterWith { traces = "absent"; });
-      secure = configOf (clusterWith { traces = true; });
+      plain = configOf (clusterWith {
+        traces = false;
+      });
+      absent = configOf (clusterWith {
+        traces = "absent";
+      });
+      secure = configOf (clusterWith {
+        traces = true;
+      });
     in
     (
       plain.exporters."otlp_grpc/traces".endpoint == "http://backend.otel.svc:4317"
@@ -274,10 +283,11 @@ in
     (
       accepted == [ ]
       && merged.processors.batch.timeout == "5s"
-      && merged.service.extensions == [
-        "health_check"
-        "pprof"
-      ]
+      &&
+        merged.service.extensions == [
+          "health_check"
+          "pprof"
+        ]
       && evalFails (clusterWith {
         traces = false;
         config.settings.receivers.k8s_objects.auth_type = "serviceAccount";
@@ -350,16 +360,14 @@ in
               package = otelPackage;
               config.settings.processors.k8sattributes = { };
               partsOverlays = [
-                (
-                  scope: self: base: {
-                    configMap = scope.mkResource {
-                      apiVersion = "v1";
-                      kind = "ConfigMap";
-                      name = "collector-config";
-                      data."config.yaml" = "{}";
-                    };
-                  }
-                )
+                (scope: _self: _base: {
+                  configMap = scope.mkResource {
+                    apiVersion = "v1";
+                    kind = "ConfigMap";
+                    name = "collector-config";
+                    data."config.yaml" = "{}";
+                  };
+                })
               ];
             };
           };
@@ -381,23 +389,40 @@ in
   # --config and --set are refused; other flags follow --config.
   otel-collector-owned-args-refused =
     let
-      accepted = builtins.filter (arg: !(evalFails (clusterWith (events // { config = events.config // { extraArgs = [ arg ]; }; })))) [
-        "--config=/tmp/x.yaml"
-        "--config"
-        "--set=processors.batch.timeout=1s"
-      ];
-      args = (containerOf (clusterWith {
-        config = events.config // {
-          extraArgs = [ "--feature-gates=+extension.healthcheck.useComponentStatus" ];
-        };
-      })).args;
+      accepted =
+        builtins.filter
+          (
+            arg:
+            !(evalFails (
+              clusterWith (
+                events
+                // {
+                  config = events.config // {
+                    extraArgs = [ arg ];
+                  };
+                }
+              )
+            ))
+          )
+          [
+            "--config=/tmp/x.yaml"
+            "--config"
+            "--set=processors.batch.timeout=1s"
+          ];
+      args =
+        (containerOf (clusterWith {
+          config = events.config // {
+            extraArgs = [ "--feature-gates=+extension.healthcheck.useComponentStatus" ];
+          };
+        })).args;
     in
     (
       accepted == [ ]
-      && args == [
-        "--config=/etc/otelcol-contrib/config.yaml"
-        "--feature-gates=+extension.healthcheck.useComponentStatus"
-      ]
+      &&
+        args == [
+          "--config=/etc/otelcol-contrib/config.yaml"
+          "--feature-gates=+extension.healthcheck.useComponentStatus"
+        ]
     )
     || throw "otel-collector extraArgs: accepted ${builtins.toJSON accepted}, args ${builtins.toJSON args}";
 
@@ -456,18 +481,20 @@ in
         "otlp-grpc"
         "otlp-http"
       ]
-      && servicePortsOf scraped == [
-        "otlp-grpc"
-        "otlp-http"
-        "metrics"
-      ]
+      &&
+        servicePortsOf scraped == [
+          "otlp-grpc"
+          "otlp-http"
+          "metrics"
+        ]
       && ofKind "ServiceMonitor" (manifests scraped) != [ ]
       && (workloadOf "Deployment" plain).spec.template == (workloadOf "Deployment" scraped).spec.template
       && (configOf off).service.telemetry.metrics == { level = "none"; }
-      && servicePortsOf off == [
-        "otlp-grpc"
-        "otlp-http"
-      ]
+      &&
+        servicePortsOf off == [
+          "otlp-grpc"
+          "otlp-http"
+        ]
       && ofKind "ServiceMonitor" (manifests off) == [ ]
     )
     || throw "otel-collector metrics: plain ${builtins.toJSON (servicePortsOf plain)} scraped ${builtins.toJSON (servicePortsOf scraped)}";

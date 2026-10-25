@@ -1,4 +1,4 @@
-# 2026-10-03 · `cli/kix-cli/src/plan/server.rs` · `membership` files an object listed by several packages under whichever package comes last.
+# 2026-10-03 · `cli/kix/src/plan/server.rs` · `membership` files an object listed by several packages under whichever package comes last.
 
 The build's packages are a HashMap, so for an import marker that several
 packages list, the overlay's entry is chosen in no fixed order. It can clear

@@ -14,14 +14,9 @@ pub fn default_cache_dir() -> PathBuf {
         })
 }
 
-/// Returns the default path for the eval cache database.
-pub fn default_cache_db() -> PathBuf {
-    default_cache_dir().join("eval-cache.db")
-}
-
 /// Resolve symlinks because Nix store paths must not traverse them. On macOS,
 /// `/tmp` commonly points to `/private/tmp`.
-pub fn resolve_symlinks(path: &Path) -> PathBuf {
+pub(crate) fn resolve_symlinks(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|e| {
         tracing::warn!(path = ?path, error = %e, "failed to canonicalize path, using as-is");
         path.to_path_buf()
@@ -50,27 +45,10 @@ pub fn save_activation_path(cluster: &str, result_dir: &Path) -> std::io::Result
     // bookkeeping.
     let root_link = dir.join(format!("{cluster}.root"));
     let _ = std::fs::remove_file(&root_link);
-    if let Err(e) = add_gc_root(&root_link, result_dir) {
+    if let Err(e) = super::nix::add_gc_root(&root_link, result_dir) {
         tracing::warn!(cluster, ?result_dir, error = %e, "could not protect this deployment build from Nix garbage collection; it may become unavailable for rollback");
     }
     Ok(())
-}
-
-/// Register `link` as a Nix GC root for `target` with `nix-store --add-root`.
-fn add_gc_root(link: &Path, target: &Path) -> Result<(), String> {
-    match std::process::Command::new("nix-store")
-        .arg("--add-root")
-        .arg(link)
-        .arg("--realise")
-        .arg(target)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-    {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(format!("nix-store --add-root exited with {status}")),
-        Err(e) => Err(format!("could not run nix-store --add-root: {e}")),
-    }
 }
 
 /// Keep one Nix GC root, `{cluster}.kept-{identity_hash}`, for every build an
@@ -82,8 +60,10 @@ fn add_gc_root(link: &Path, target: &Path) -> Result<(), String> {
 /// build moves on the next deploy, so without these a listed build is
 /// collectable and every later plan reports it as unreadable. Best-effort:
 /// failures are logged, never returned.
-pub fn sync_kept_roots(cluster: &str, listed: &[(String, Option<PathBuf>)]) {
-    sync_kept_roots_in(&activations_dir(), cluster, listed, add_gc_root);
+pub(crate) fn sync_kept_roots(cluster: &str, listed: &[(String, Option<PathBuf>)]) {
+    sync_kept_roots_in(&activations_dir(), cluster, listed, |link, target| {
+        super::nix::add_gc_root(link, target).map_err(|e| e.to_string())
+    });
 }
 
 fn sync_kept_roots_in(
@@ -184,7 +164,7 @@ pub fn resolve_activation_by_hash(cluster: &str, identity_hash: &str) -> Option<
 /// The identity hash of the Activation a result dir holds: the first 32
 /// characters of the store path its `activation` link points at, which is
 /// the hash the Activation record carries. `None` when the link is missing.
-pub fn build_hash_of(result_dir: &Path) -> Option<String> {
+pub(crate) fn build_hash_of(result_dir: &Path) -> Option<String> {
     let target = std::fs::read_link(result_dir.join("activation")).ok()?;
     let name = target.file_name()?.to_str()?;
     name.get(..32).map(str::to_string)

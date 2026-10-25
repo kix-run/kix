@@ -9,28 +9,25 @@ use std::io::Write;
 use std::sync::Arc;
 
 use miette::{IntoDiagnostic, Result, miette};
-use serde_json::Value;
 
-use crate::commands::baseline;
-use kix::cluster::activation;
+use crate::client;
+use kix::build_source::SopsSources;
+use kix::cluster::activation::{Record, Records};
 use kix::cluster::apply::ChangeAction;
-use kix::cluster::fetch;
-use kix::cluster::graph::ResourceGraph;
-use kix::cluster::ops::{ClusterOps, KubeOps, KubeOpsConfig};
+use kix::cluster::discovery;
 use kix::cluster::readiness;
-use kix::cluster::scheduler::{self, DeployPlan, OnErrorPolicy, PrunePolicy, SchedulerConfig};
+use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::{DeployObserver, DeployResult};
 use kix::cluster::watchdog::StallPolicy;
-use kix::eval::store_graph::StoreGraph;
-use kix::manifest::stamp::stamp_annotations;
-use kix::manifest::types::ResourceId;
+use kix::plan::baseline::{self, Baseline};
+use kix::plan::document::PlanFlags;
+use kix::plan::{CheckedPlan, PlanEvent, Planner, Target};
 
 use crate::cli::{OutputFormat, RollbackArgs};
 use crate::output;
 use crate::plan;
 
 use super::CommandContext;
-use kix::manifest::keys;
 
 pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<()> {
     let lookup = if args.list {
@@ -54,38 +51,30 @@ pub fn run(args: &RollbackArgs, ctx: &mut CommandContext) -> Result<()> {
 /// Works the same whether the cluster is operator-managed or direct-apply
 /// because it only inspects Activation CRs. Supports `--output json|yaml`.
 async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
-    let client = fetch::make_client(ctx.global.context.as_deref())
+    let client = client::make_client(ctx.global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
-    let discovery = fetch::discover_resources(&client)
+    let discovery = discovery::discover_resources(&client)
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    let (activation_ar, _) = activation::find_activation_ar(&discovery)
-        .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?
-        .clone();
+    let records = Records::open_installed(&client, &discovery).map_err(|e| miette!("{e}"))?;
 
     // The current Active activation is an optional position marker
     // in the history listing, but we must still print even if none exists.
-    let current = activation::find_active(&client, &activation_ar, cluster)
-        .await
-        .map_err(|e| miette!("failed to find active activation: {e}"))?;
+    let current = records.active(cluster).await.map_err(|e| miette!("{e}"))?;
 
     // Only records that really were the cluster's state. A deploy that
     // stopped part way is Superseded once a later plan folded its leftovers
     // in, but it was never running, so rolling back to it would apply a state
     // the cluster has never been in.
-    let superseded: Vec<_> =
-        activation::list_superseded_activations(&client, &activation_ar, cluster)
-            .await
-            .map_err(|e| miette!("failed to list superseded activations: {e}"))?
-            .into_iter()
-            .filter(activation::SupersededActivation::was_ever_current)
-            .collect();
+    let superseded = records
+        .rollback_targets(cluster)
+        .await
+        .map_err(|e| miette!("{e}"))?;
 
-    let format = ctx.output_format(OutputFormat::Text);
+    let format = output::format();
     match format {
         OutputFormat::Json | OutputFormat::Yaml => {
             let value = serde_json::json!({
@@ -130,11 +119,7 @@ async fn run_list_async(cluster: &str, ctx: &CommandContext) -> Result<()> {
     Ok(())
 }
 
-fn print_history_text(
-    cluster: &str,
-    current: Option<&kix::cluster::activation::ActiveActivation>,
-    superseded: &[kix::cluster::activation::SupersededActivation],
-) {
+fn print_history_text(cluster: &str, current: Option<&Record>, superseded: &[Record]) {
     println!(
         "{} activation history for '{}'",
         output::bold("Rollback:"),
@@ -177,11 +162,11 @@ fn print_history_text(
             .as_deref()
             .map(|h| format!("{}...", &h[..8.min(h.len())]))
             .unwrap_or_else(|| "no hash".to_string());
-        let ts = if s.deployed_at.is_empty() {
-            output::dim("unknown").into_owned()
-        } else {
-            s.deployed_at.clone()
-        };
+        let ts = s
+            .deployed_at
+            .clone()
+            .filter(|at| !at.is_empty())
+            .unwrap_or_else(|| output::dim("unknown").into_owned());
         let available = s
             .identity_hash
             .as_deref()
@@ -218,27 +203,26 @@ fn print_history_text(
 
 async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> Result<()> {
     // 1. Connect to cluster
-    if !ctx.global.quiet {
-        println!("Connecting to cluster...");
-    }
+    crate::say!("Connecting to cluster...");
 
-    let client = fetch::make_client(ctx.global.context.as_deref())
+    let client = client::make_client(ctx.global.context.as_deref())
         .await
         .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
 
-    let discovery = fetch::discover_resources(&client)
+    // SOPS sources are read from the paths the target's Secrets name, on
+    // this machine.
+    let target = Target::connect(client.clone(), SopsSources::Local)
         .await
         .map_err(|e| miette!("{e}"))?;
 
-    let (activation_ar, _) = activation::find_activation_ar(&discovery)
-        .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?
-        .clone();
+    let records =
+        Records::open_installed(&client, target.discovery()).map_err(|e| miette!("{e}"))?;
 
     // 2. Find current Active activation
-    let current = activation::find_active(&client, &activation_ar, cluster)
+    let current = records
+        .active(cluster)
         .await
-        .map_err(|e| miette!("failed to find active activation: {e}"))?
+        .map_err(|e| miette!("{e}"))?
         .ok_or_else(|| {
             miette!(
                 "no active deployment record found for cluster '{}'",
@@ -246,31 +230,17 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
             )
         })?;
 
-    if !ctx.global.quiet {
-        let hash_preview = current
-            .identity_hash
-            .as_deref()
-            .map(|h| format!(" ({}...)", &h[..8.min(h.len())]))
-            .unwrap_or_default();
-        println!(
-            "Current activation: {}{}",
-            output::bold(&current.name),
-            hash_preview,
-        );
-    }
+    print_current(&current);
 
     // 3. Find available Superseded activations
     // Only records that really were the cluster's state. A deploy that
     // stopped part way is Superseded once a later plan folded its leftovers
     // in, but it was never running, so rolling back to it would apply a state
     // the cluster has never been in.
-    let superseded: Vec<_> =
-        activation::list_superseded_activations(&client, &activation_ar, cluster)
-            .await
-            .map_err(|e| miette!("failed to list superseded activations: {e}"))?
-            .into_iter()
-            .filter(activation::SupersededActivation::was_ever_current)
-            .collect();
+    let superseded = records
+        .rollback_targets(cluster)
+        .await
+        .map_err(|e| miette!("{e}"))?;
 
     if superseded.is_empty() {
         return Err(miette!(
@@ -326,203 +296,53 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         )
     })?;
 
-    if !ctx.global.quiet {
-        println!(
-            "Rollback target:   {} ({}...)",
-            output::bold(&target_name),
-            &target_hash[..8.min(target_hash.len())],
-        );
-    }
-
-    // 4. Resolve target activation to local store graph.
-    //    Prefer built-via annotation (direct path), fall back to hash-based lookup.
-    let target_result_dir = selected
-        .built_via
-        .as_ref()
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.join("kix-packages.json").exists())
-        .or_else(|| kix::eval::store::resolve_activation_by_hash(cluster, target_hash))
-        .ok_or_else(|| {
-            miette!(
-                "store path for activation '{}' not found locally (hash: {}). \
-                 The build may have been garbage-collected or created on another machine. Restore it to the local Nix store or run the rollback on a machine that still has it.",
-                target_name,
-                target_hash,
-            )
-        })?;
-
-    let noop = |_: &str| {};
-    let mut target_graph = StoreGraph::from_result_dir_with_status(&target_result_dir, &noop)
-        .map_err(|e| miette!("failed to load target activation: {e}"))?;
-    // No `check_build` here. A rollback target is a build from before the
-    // domain move by definition, and refusing it would make every record the
-    // migration carefully preserved unusable. `stamp_annotations` upgrades
-    // its keys, its record's API group and Kix's own CRDs, so what gets
-    // applied names the current domain throughout.
-    stamp_annotations(&mut target_graph);
-
-    let target_manifests: Vec<Value> = target_graph
-        .resources
-        .values()
-        .map(|r| r.manifest.clone())
-        .collect();
-
-    // 5. Resolve current activation to local store graph (for diff).
-    //    Prefer built-via, fall back to hash-based lookup.
-    let noop2 = |_: &str| {};
-    let current_result_dir = current
-        .built_via
-        .as_ref()
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.join("kix-packages.json").exists())
-        .or_else(|| {
-            let hash = current.identity_hash.as_deref().unwrap_or("");
-            kix::eval::store::resolve_activation_by_hash(cluster, hash)
-        });
-    let (current_graph, current_manifests) = match current_result_dir {
-        Some(dir) => match StoreGraph::from_result_dir_with_status(&dir, &noop2) {
-            Ok(mut g) => {
-                stamp_annotations(&mut g);
-                let m = g.resources.values().map(|r| r.manifest.clone()).collect();
-                (Some(g), m)
-            }
-            Err(_) => (None, vec![]),
-        },
-        None => (None, vec![]),
-    };
-
-    // 5b. Closures of deploys that stopped part way. A rollback is the most
-    //     likely thing to run straight after one, and its baseline has exactly
-    //     the same hole as a deploy's: those objects are in neither the
-    //     current closure nor the target one (kixpkgs#82).
-    let failed_baseline = match baseline::deploy_in_flight(&client, &activation_ar, cluster).await {
-        Some(record) => {
-            baseline::report_in_flight(&record, ctx.global.quiet);
-            baseline::FailedBaseline::default()
-        }
-        None => baseline::load_failed(&client, &activation_ar, cluster, ctx.global.quiet).await,
-    };
-
-    // The merged set is for the plan display and for prune ordering only.
-    // The comparison itself stays against the current closure: folding the
-    // failed manifests into the old side would make an object that a failed
-    // deploy declared but never created read as already present, and if the
-    // target declares it at the same hash the plan would skip it and the
-    // rollback would finalize claiming an object that is not there.
-    // Builds whose orphans an earlier warn-only deploy kept, as in deploy.
-    let kept_baseline = baseline::load_kept(&current, cluster, ctx.global.quiet);
-    let baseline_manifests = kix::cluster::apply::baseline_manifests(
-        &current_manifests,
-        &[
-            failed_baseline.closures.as_slice(),
-            kept_baseline.closures.as_slice(),
-        ]
-        .concat(),
+    crate::say!(
+        "Rollback target:   {} ({}...)",
+        output::bold(&target_name),
+        &target_hash[..8.min(target_hash.len())],
     );
 
-    // Compute changes from current to target, then fold in what failed
-    //    deploys may have left behind.
-    let all_actions = kix::cluster::apply::fold_kept_closures(
-        kix::cluster::apply::fold_failed_closures(
-            kix::cluster::apply::detect_changes(&target_manifests, &current_manifests),
-            &target_manifests,
-            &failed_baseline.closures,
-        ),
-        &target_manifests,
-        &kept_baseline.closures,
-    );
-    let kept_orphans = baseline::orphans_kept_from(
-        &target_manifests,
-        Some(&current),
-        &current_manifests,
-        &failed_baseline,
-        &kept_baseline,
-    );
-
-    let mut orphan_rids: Vec<ResourceId> = Vec::new();
-    for action in &all_actions {
-        if let ChangeAction::Orphan(rid) = action {
-            orphan_rids.push(rid.clone());
-        }
+    let planned = plan_rollback(&client, &records, cluster, &current, selected, args.prune).await?;
+    if !output::quiet() {
+        planned.print(cluster, &target_name, args.prune, ctx.global.verbose > 0);
     }
-    let (orphan_rids, shared_orphans) =
-        super::shared_orphans::keep_shared(&client, cluster, orphan_rids).await?;
+    let RollbackPlan {
+        target_result_dir,
+        checked,
+    } = planned;
 
-    let resource_graph = ResourceGraph::from_manifests(&target_manifests).into_diagnostic()?;
-    let plan =
-        DeployPlan::from_graph_and_changes(&resource_graph, &all_actions).into_diagnostic()?;
-
-    // Find the target activation name and identity hash
-    let record = kix::manifest::lifecycle::record_of(&target_manifests);
-    let activation_name =
-        record.and_then(|m| m.pointer("/metadata/name")?.as_str().map(|s| s.to_string()));
-    let activation_identity_hash = record.and_then(|m| {
-        m.pointer("/metadata/annotations")
-            .and_then(|a| a.get(keys::IDENTITY_HASH))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    });
-
-    // 7. Display plan
-    if !ctx.global.quiet {
-        let mut pkg_diff = match &current_graph {
-            Some(old) => plan::diff_graphs(old, &target_graph),
-            None => plan::diff_graphs(
-                &StoreGraph::empty(&target_graph.cluster_name),
-                &target_graph,
-            ),
-        };
-        pkg_diff.keep_shared(&shared_orphans);
-
-        println!();
-        println!(
-            "{} Rolling back cluster '{}' to activation '{}'",
-            output::bold("Rollback:"),
-            output::bold(cluster),
-            output::bold(&target_name),
-        );
-        plan::print_package_plan(&pkg_diff, ctx.global.verbose > 0);
-        plan::print_plan_summary(&pkg_diff);
-        super::shared_orphans::print(&shared_orphans);
-    }
-
-    let total_apply = plan
-        .nodes
+    let total_apply = checked
+        .plan()
+        .nodes()
         .iter()
         .filter(|n| matches!(n.action, ChangeAction::Apply(_)))
         .count();
 
     if args.dry_run {
-        if !ctx.global.quiet {
-            println!();
-            println!("{}", output::dim("Dry run. No changes applied."));
-        }
+        crate::say!();
+        crate::say!("{}", output::dim("Dry run. No changes applied."));
         return Ok(());
     }
 
-    if total_apply == 0 && orphan_rids.is_empty() {
+    if total_apply == 0 && checked.orphans().is_empty() {
         // Same rule as deploy: an unchanged probe under `kix.run/rerun`
         // whose last run failed still runs, and only the engine does that.
-        let failed_reruns = if plan.nodes.iter().any(|n| n.rerun.is_some()) {
-            scheduler::failed_rerun_nodes(&client, &discovery, &plan).await
+        let failed_reruns = if checked.plan().nodes().iter().any(|n| n.rerun.is_some()) {
+            scheduler::failed_rerun_nodes(&client, target.discovery(), checked.plan()).await
         } else {
             Vec::new()
         };
         if failed_reruns.is_empty() {
-            if !ctx.global.quiet {
-                println!("Nothing to change. Cluster already matches target activation.");
-            }
+            crate::say!("Nothing to change. Cluster already matches target activation.");
             return Ok(());
         }
-        if !ctx.global.quiet {
-            let names: Vec<String> = failed_reruns.iter().map(|r| r.to_string()).collect();
-            println!(
-                "{} nothing changed, but {} failed on the last run and will run again: {}",
-                output::yellow("↻"),
-                failed_reruns.len(),
-                names.join(", "),
-            );
-        }
+        let names: Vec<String> = failed_reruns.iter().map(|r| r.to_string()).collect();
+        crate::say!(
+            "{} nothing changed, but {} failed on the last run and will run again: {}",
+            output::yellow("↻"),
+            failed_reruns.len(),
+            names.join(", "),
+        );
     }
 
     // 8. Confirmation
@@ -547,17 +367,13 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         }
     }
 
+    super::deploy::refuse_before_writing(&checked, Some(&records), target.discovery()).await?;
+
     // 9. Apply via DAG-streaming scheduler.
     let config = SchedulerConfig {
         timeout: readiness::DEFAULT_TIMEOUT,
         on_error: OnErrorPolicy::Stop,
-        prune: if args.prune {
-            PrunePolicy::Delete
-        } else {
-            PrunePolicy::WarnOnly
-        },
         cancel: kix::cluster::cancel::CancelToken::new(),
-        dry_run: false,
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
         rerun_failed: true,
@@ -569,59 +385,26 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
         })
     } else {
         Arc::new(super::deploy::StreamCliObserver {
-            quiet: ctx.global.quiet,
             verbose: ctx.global.verbose > 0,
         })
     };
 
-    let cluster_name = target_graph.cluster_name.clone();
-    let discovery = Arc::new(tokio::sync::RwLock::new(discovery));
     // Ctrl-C and SIGTERM now have to reach the engine: the record exists from
     // the start of the run, so a process that just dies leaves it Deploying.
     config.cancel.cancel_on_interrupt();
 
-    let kube_ops = Arc::new(KubeOps::new(
-        client.clone(),
-        discovery,
-        KubeOpsConfig {
-            cluster_name,
-            activation_name: activation_name.clone(),
-            activation_identity_hash: activation_identity_hash.clone(),
-            // A rollback re-applies a build from an earlier deploy, and that
-            // deploy wrote its own receipt. Writing a fresh one here would
-            // record the machine running the rollback as the provenance of a
-            // build it did not make.
-            receipt: None,
-            // A rollback's target record already exists on the cluster as a
-            // Superseded one, so this re-asserts it and marks it Deploying
-            // for the duration, the same as a deploy.
-            activation_manifest: record.cloned(),
-            consumed_failed: failed_baseline.consumed.clone(),
-            kept_orphans,
-            mark_failed_on_abort: true,
-            // Rollback re-applies a known-good prior activation; conflicts
-            // fail loudly rather than silently overwriting whatever the
-            // cluster has.
-            force_conflicts: false,
-            dry_run: false,
-        },
-    ));
-    let ops: Arc<dyn ClusterOps> = kube_ops.clone();
+    // A rollback's target record already exists on the cluster as a
+    // Superseded one, so the run re-asserts it and marks it Deploying for the
+    // duration, the same as a deploy.
+    //
+    // A rollback re-applies a build from an earlier deploy, and that deploy
+    // wrote its own receipt. Writing a fresh one here would record the
+    // machine running the rollback as the provenance of a build it did not
+    // make.
+    let (result, kept) = checked.run(target, None, config, observer).await;
 
-    let result = scheduler::run_deploy(
-        ops,
-        plan,
-        &orphan_rids,
-        // The merged set, so `prune_order` can topologically sort an orphan
-        // that exists in no current closure.
-        &baseline_manifests,
-        &config,
-        observer,
-    )
-    .await;
-
-    if let Some(recorded) = kube_ops.recorded_orphans_kept_from() {
-        baseline::sync_kept_roots(cluster, &recorded);
+    if let Some(recorded) = kept {
+        kix::plan::baseline::sync_kept_roots(cluster, &recorded);
     }
 
     // Save activation path for next deploy's diff, once the target's record
@@ -641,9 +424,7 @@ async fn run_async(args: &RollbackArgs, cluster: &str, ctx: &CommandContext) -> 
             print_summary(r, end.succeeded);
         }
         Err(e) => {
-            if let Some(r) = e.partial() {
-                print_summary(r, end.succeeded);
-            }
+            print_summary(e.partial(), end.succeeded);
             // The event stream already reports failed nodes and cancellation.
             if !matches!(
                 e,
@@ -667,23 +448,14 @@ async fn run_operator_async(
     ctx: &CommandContext,
 ) -> Result<()> {
     // 1. Connect and find current + superseded activations
-    let (client, ar) =
-        super::operator::connect_and_verify(ctx.global.context.as_deref(), ctx.global.quiet)
-            .await?;
-
-    let discovery = kix::cluster::fetch::discover_resources(&client)
-        .await
-        .map_err(|e| miette!("{e}"))?;
-
-    let (activation_ar, _) = activation::find_activation_ar(&discovery)
-        .map_err(|e| miette!("{e}"))?
-        .ok_or_else(|| miette!("the Kix Activation resource type is not installed on this cluster. Check the Kubernetes context and deploy the Kix CRDs before retrying."))?
-        .clone();
+    let (client, records) =
+        super::operator::connect_and_verify(ctx.global.context.as_deref()).await?;
 
     // 2. Find current Active activation
-    let current = activation::find_active(&client, &activation_ar, cluster)
+    let current = records
+        .active(cluster)
         .await
-        .map_err(|e| miette!("failed to find active activation: {e}"))?
+        .map_err(|e| miette!("{e}"))?
         .ok_or_else(|| {
             miette!(
                 "no active deployment record found for cluster '{}'",
@@ -691,31 +463,17 @@ async fn run_operator_async(
             )
         })?;
 
-    if !ctx.global.quiet {
-        let hash_preview = current
-            .identity_hash
-            .as_deref()
-            .map(|h| format!(" ({}...)", &h[..8.min(h.len())]))
-            .unwrap_or_default();
-        println!(
-            "Current activation: {}{}",
-            output::bold(&current.name),
-            hash_preview,
-        );
-    }
+    print_current(&current);
 
     // 3. Find superseded activations
     // Only records that really were the cluster's state. A deploy that
     // stopped part way is Superseded once a later plan folded its leftovers
     // in, but it was never running, so rolling back to it would apply a state
     // the cluster has never been in.
-    let superseded: Vec<_> =
-        activation::list_superseded_activations(&client, &activation_ar, cluster)
-            .await
-            .map_err(|e| miette!("failed to list superseded activations: {e}"))?
-            .into_iter()
-            .filter(activation::SupersededActivation::was_ever_current)
-            .collect();
+    let superseded = records
+        .rollback_targets(cluster)
+        .await
+        .map_err(|e| miette!("{e}"))?;
 
     if superseded.is_empty() {
         return Err(miette!(
@@ -766,37 +524,22 @@ async fn run_operator_async(
     let target_name = selected.name.clone();
     let target_hash = selected.identity_hash.clone();
 
-    // 4. Resolve the target's store path
-    let target_source_path = selected
-        .built_via
-        .as_ref()
-        .filter(|p| std::path::Path::new(p).join("kix-packages.json").exists())
-        .cloned()
-        .or_else(|| {
-            target_hash.as_ref().and_then(|h| {
-                kix::eval::store::resolve_activation_by_hash(cluster, h)
-                    .map(|p| p.display().to_string())
-            })
-        })
-        .ok_or_else(|| {
-            miette!(
-                "store path for activation '{}' not found locally. The build may have been garbage-collected or created on another machine. Restore it to the local Nix store or run the rollback on a machine that still has it.",
-                target_name,
-            )
-        })?;
+    crate::say!(
+        "Rollback target:   {} (via operator)",
+        output::bold(&target_name),
+    );
 
-    if !ctx.global.quiet {
-        println!(
-            "Rollback target:   {} (via operator)",
-            output::bold(&target_name),
-        );
+    // The plan a direct rollback would show, with its check, though the
+    // operator plans again against the live objects and always prunes.
+    let planned = plan_rollback(&client, &records, cluster, &current, selected, true).await?;
+    if !output::quiet() {
+        planned.print(cluster, &target_name, true, ctx.global.verbose > 0);
     }
+    let target_source_path = planned.target_result_dir.display().to_string();
 
     if args.dry_run {
-        if !ctx.global.quiet {
-            println!();
-            println!("{}", output::dim("Dry run. No changes applied."));
-        }
+        crate::say!();
+        crate::say!("{}", output::dim("Dry run. No changes applied."));
         return Ok(());
     }
 
@@ -824,16 +567,13 @@ async fn run_operator_async(
 
     // 6. Patch the current Activation CR to point to the target's source path
     //    The operator will detect the source change and reconcile.
-    if !ctx.global.quiet {
-        println!(
-            "Updating Activation CR '{}' to point to rollback target...",
-            output::bold(&current.name),
-        );
-    }
+    crate::say!(
+        "Updating Activation CR '{}' to point to rollback target...",
+        output::bold(&current.name),
+    );
 
     super::operator::apply_activation(
-        &client,
-        &ar,
+        &records,
         &current.name,
         cluster,
         &target_source_path,
@@ -844,21 +584,12 @@ async fn run_operator_async(
     )
     .await?;
 
-    if !ctx.global.quiet {
-        println!(
-            "  {} Activation CR updated. Waiting for operator...",
-            output::green("✓"),
-        );
-    }
+    crate::say!(
+        "  {} Activation CR updated. Waiting for operator...",
+        output::green("✓"),
+    );
 
-    let reconciled = super::operator::watch_activation_progress(
-        &client,
-        &ar,
-        &current.name,
-        &target_source_path,
-        ctx.global.quiet,
-    )
-    .await?;
+    let reconciled = super::operator::watch_activation_progress(&records, &current.name).await?;
 
     println!();
     match reconciled {
@@ -881,25 +612,142 @@ async fn run_operator_async(
     Ok(())
 }
 
+/// The current activation, with the start of its identity hash.
+fn print_current(current: &Record) {
+    let hash_preview = current
+        .identity_hash
+        .as_deref()
+        .map(|h| format!(" ({}...)", &h[..8.min(h.len())]))
+        .unwrap_or_default();
+    crate::say!(
+        "Current activation: {}{}",
+        output::bold(&current.name),
+        hash_preview,
+    );
+}
+
+/// A rollback to one record, planned the way `kix deploy` plans: the target
+/// build against the current one, with what failed and kept deploys left.
+struct RollbackPlan {
+    target_result_dir: std::path::PathBuf,
+    checked: CheckedPlan,
+}
+
+impl RollbackPlan {
+    fn print(&self, cluster: &str, target_name: &str, prune: bool, verbose: bool) {
+        println!();
+        println!(
+            "{} Rolling back cluster '{}' to activation '{}'",
+            output::bold("Rollback:"),
+            output::bold(cluster),
+            output::bold(target_name),
+        );
+        plan::print_package_plan(self.checked.pkg_diff(), verbose);
+        plan::print_plan_summary(self.checked.pkg_diff());
+        let fate = if prune {
+            "will be deleted".to_string()
+        } else {
+            format!("kept; {}", plan::KEPT_ORPHANS_HINT)
+        };
+        print!(
+            "{}",
+            plan::render_plan_orphans(self.checked.orphans(), &fate)
+        );
+        plan::print_shared(self.checked.shared_orphans());
+    }
+}
+
+/// A rollback's planning flags: only whether it prunes. A rollback
+/// re-applies a known-good prior activation; conflicts fail loudly rather
+/// than silently overwriting whatever the cluster has.
+fn flags(prune: bool) -> PlanFlags {
+    PlanFlags {
+        prune,
+        prune_mode: None,
+        reconcile: false,
+        force_conflicts: false,
+        accept_migrations: false,
+    }
+}
+
+/// Plan a rollback of `cluster`, which runs `current`, to `selected`, with
+/// the pieces of [`Planner`]: the current record's baseline, the changes,
+/// and the checked plan. Refuses a target whose plan writes or deletes an
+/// object the diff leaves out, as `kix deploy` does.
+async fn plan_rollback(
+    client: &kube::Client,
+    records: &Records,
+    cluster: &str,
+    current: &Record,
+    selected: &Record,
+    prune: bool,
+) -> Result<RollbackPlan> {
+    // The target's build: the path its record was built via, or a build in
+    // the local store with its identity hash, refused unless it is the
+    // build the record names. Not refused for a retired domain
+    // (`Build::installable`): a rollback target can be a build from before
+    // the domain move, and stamping upgrades its keys, its record's API
+    // group and Kix's own CRDs, so what gets applied names the current
+    // domain throughout.
+    let target_hash = selected.identity_hash.as_deref().ok_or_else(|| {
+        miette!(
+            "superseded activation '{}' has no identity hash",
+            selected.name
+        )
+    })?;
+    let target_graph = baseline::target_build(
+        cluster,
+        &selected.name,
+        target_hash,
+        selected.built_via.as_deref(),
+    )
+    .map_err(|e| miette!("{e}"))?;
+    let target_result_dir = target_graph.result_dir.clone();
+    same_cluster(&selected.name, &target_graph.cluster_name, cluster)?;
+
+    let report = |event: PlanEvent<'_>| plan::progress::print(event);
+    let baseline = Baseline::of_record(records, cluster, current, &report).await;
+    // The records and the orphans another Kix cluster deploys are looked up
+    // under `cluster`, the name the rollback resolved its records by.
+    let checked = Planner::new(flags(prune), &report)
+        .plan(&target_graph, cluster, &baseline, Some(client))
+        .await
+        .map_err(|e| miette!("{e}"))?;
+    Ok(RollbackPlan {
+        target_result_dir,
+        checked,
+    })
+}
+
+/// Refuses a rollback target whose build names another Kix cluster than
+/// `cluster`, the one the rollback found its records by. The run finalizes
+/// under the plan's cluster, so a build of another one would supersede that
+/// cluster's records and prune as if it were it.
+fn same_cluster(record: &str, build_cluster: &str, cluster: &str) -> Result<()> {
+    if build_cluster == cluster {
+        return Ok(());
+    }
+    Err(miette!(
+        "activation '{record}' is a build of Kix cluster '{build_cluster}', not '{cluster}'. Nothing was applied."
+    ))
+}
+
 /// Shared formatter for a list of superseded activations used by both the
 /// interactive rollback selector and `kix rollback --list`. Shows store path
 /// availability, source directory, and the `previousActivation` link so the
 /// operator sees exactly what each history entry points at.
-fn print_superseded_entries(
-    cluster: &str,
-    superseded: &[kix::cluster::activation::SupersededActivation],
-) {
+fn print_superseded_entries(cluster: &str, superseded: &[Record]) {
     for (i, act) in superseded.iter().enumerate() {
         let hash_preview = act
             .identity_hash
             .as_deref()
             .map(|h| format!("{}...", &h[..8.min(h.len())]))
             .unwrap_or_else(|| "no hash".to_string());
-        let ts = if act.deployed_at.is_empty() {
-            "unknown".to_string()
-        } else {
-            act.deployed_at.clone()
-        };
+        let ts = act
+            .deployed_at
+            .clone()
+            .filter(|at| !at.is_empty())
+            .unwrap_or_else(|| "unknown".to_string());
         let available = act
             .identity_hash
             .as_deref()
@@ -948,4 +796,21 @@ fn print_summary(r: &DeployResult, succeeded: bool) {
             output::dim(&failed_str)
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A target built for the cluster the records were found by is
+    /// accepted; one built for another Kix cluster is refused, naming both.
+    #[test]
+    fn a_target_built_for_another_cluster_is_refused() {
+        assert!(same_cluster("act-1", "prod", "prod").is_ok());
+        let err = same_cluster("act-1", "staging", "prod")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("'staging'") && err.contains("'prod'"), "{err}");
+        assert!(err.contains("Nothing was applied"), "{err}");
+    }
 }

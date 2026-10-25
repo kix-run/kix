@@ -1,5 +1,5 @@
-pub mod baseline;
 pub mod build;
+pub mod bundle;
 pub mod check;
 pub mod completions;
 pub mod compliance;
@@ -22,36 +22,48 @@ pub mod pf;
 pub mod pin;
 pub mod plan;
 pub mod rollback;
-pub mod shared_orphans;
 pub mod snapshot;
 pub mod status;
 pub mod workload;
 
 use std::path::PathBuf;
 
+use kix::build_source::{Build, FlakeBuildError};
 use miette::IntoDiagnostic;
 
-use crate::cli::{GlobalArgs, OutputFormat};
+use crate::cli::GlobalArgs;
+
+/// Makes the receipt a deploy records on its Activation. `kix bundle` also
+/// fills the bundle's `Provenance` from the receipt's `source`, `inputs` and
+/// `builder`. Both treat the receipt as opaque otherwise, so what goes into
+/// it is chosen once, in `main`.
+pub trait ReceiptMaker {
+    /// The receipt for a deploy of `build`. A local build reads its source
+    /// from the flake at `flake_ref`.
+    fn of_build(&self, build: &Build, flake_ref: &str) -> serde_json::Value;
+
+    /// Styled lines to print before the deploy is confirmed. Empty when
+    /// there is nothing to say.
+    fn warnings(&self, receipt: &serde_json::Value) -> Vec<String>;
+}
 
 pub struct CommandContext {
     pub evaluator: kix::eval::KixEvaluator,
     pub global: GlobalArgs,
     pub runtime: tokio::runtime::Runtime,
+    pub receipts: &'static dyn ReceiptMaker,
 }
 
 impl CommandContext {
-    pub fn new(global: &GlobalArgs) -> miette::Result<Self> {
+    pub fn new(global: &GlobalArgs, receipts: &'static dyn ReceiptMaker) -> miette::Result<Self> {
         let evaluator = create_evaluator(&global.flake, global.no_cache, global.input_overrides())?;
         let runtime = tokio::runtime::Runtime::new().into_diagnostic()?;
         Ok(Self {
             evaluator,
             global: global.clone(),
             runtime,
+            receipts,
         })
-    }
-
-    pub fn output_format(&self, default: OutputFormat) -> OutputFormat {
-        self.global.output.unwrap_or(default)
     }
 
     /// The name that identifies the cluster `arg` names, for every lookup a
@@ -87,9 +99,7 @@ impl CommandContext {
         }
         let context = self.global.context.clone();
         let has_records = self.runtime.block_on(async {
-            let client = kix::cluster::fetch::make_client(context.as_deref())
-                .await
-                .ok()?;
+            let client = crate::client::make_client(context.as_deref()).await.ok()?;
             kix::cluster::activation::records_exist(&client, arg)
                 .await
                 .ok()
@@ -162,11 +172,33 @@ fn resolve_identity(
     }
 }
 
+/// A build of `cluster` from the flake `global.flake`, made now into this
+/// machine's Nix store. `status` gets progress lines. A failed `nix build`
+/// reads `{build_failed}: {error}`; a failure to load what it built reads
+/// as the error alone. Each command keeps the wording it had.
+pub(crate) fn build_flake(
+    global: &GlobalArgs,
+    cluster: &str,
+    status: &dyn Fn(&str),
+    build_failed: &str,
+) -> miette::Result<Build> {
+    let flake_path = resolve_flake_path(&global.flake)?;
+    Build::of_flake(&flake_path, cluster, &global.input_overrides(), status).map_err(|e| match e {
+        FlakeBuildError::Build(e) => miette::miette!("{build_failed}: {e}"),
+        FlakeBuildError::Load(e) => miette::miette!("{e}"),
+    })
+}
+
+/// What a command whose `nix build` failed says, before the error.
+pub(crate) const BUILD_FAILED: &str = "failed to build cluster";
+/// The same, in the commands that have always said "activation".
+pub(crate) const ACTIVATION_BUILD_FAILED: &str = "failed to build cluster activation";
+
 /// Resolve a flake reference to a path for evaluation.
 ///
 /// For local paths (relative or absolute), resolves to an absolute path.
 /// For remote references (e.g. "github:org/repo"), passes through as-is.
-fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
+pub(crate) fn resolve_flake_path(flake: &str) -> miette::Result<PathBuf> {
     if flake.contains(':') {
         Ok(PathBuf::from(flake))
     } else {
@@ -205,7 +237,7 @@ mod tests {
     fn context(flake: &str) -> CommandContext {
         let cli = crate::cli::Cli::try_parse_from(["kix", "--flake", flake, "health", "x"])
             .expect("arguments parse");
-        CommandContext::new(&cli.global).expect("context")
+        CommandContext::new(&cli.global, &compliance::receipt::ComplianceReceipts).expect("context")
     }
 
     fn eval_error() -> kix::eval::error::KixEvalError {

@@ -8,7 +8,7 @@
 //! the same per-kind readiness checks as managed resources". Used to gate waves
 //! on CRDs installed by operators outside Kix (e.g. stackgres `INSTALL_CRDS=true`)
 //! and on platform-provided workloads (e.g. coredns Deployment).
-//! See [`ImportTarget`] and [`wait_for_import_target`].
+//! See [`ImportTarget`] and `wait_for_import_target`.
 
 use std::time::{Duration, Instant};
 
@@ -21,8 +21,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::cancel::CancelToken;
+use super::discovery;
 use super::errors::{FailureClass, classify};
-use super::fetch;
 use crate::manifest::keys;
 use crate::manifest::types::ResourceId;
 
@@ -50,7 +50,7 @@ async fn probe_crd_discovery(client: &Client, crd: &Value) -> bool {
     loop {
         // One group, not a full walk: a full walk waits out every listed
         // group version that answers 404, which would outlast this budget.
-        if let Ok(walk) = fetch::discover_group(client, group).await
+        if let Ok(walk) = discovery::discover_group(client, group).await
             && walk
                 .resources
                 .iter()
@@ -223,7 +223,7 @@ pub fn import_target_from_manifest(
 /// Scope is determined by the target kind: `CustomResourceDefinition` is
 /// cluster-scoped, everything else is namespaced and queried in
 /// `target.namespace` (sourced from the marker's own `metadata.namespace`).
-pub async fn wait_for_import_target(
+pub(crate) async fn wait_for_import_target(
     client: &Client,
     target: &ImportTarget,
     timeout: Duration,
@@ -491,7 +491,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Errors from readiness polling.
 #[derive(Error, Debug)]
-pub enum ReadinessError {
+pub(crate) enum ReadinessError {
     #[error("failed to fetch resource for readiness check: {0}")]
     FetchError(#[source] kube::Error),
     #[error("malformed import target: {0}")]
@@ -504,7 +504,7 @@ pub enum ReadinessError {
 
 /// One object a manifest expects something else to have created.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Expectation {
+pub(crate) struct Expectation {
     pub api_version: String,
     pub kind: String,
     pub name: String,
@@ -517,7 +517,7 @@ impl Expectation {
 }
 
 /// The `kix.run/expects` entries of a manifest, malformed ones dropped.
-pub fn expectations(manifest: &Value) -> Vec<Expectation> {
+pub(crate) fn expectations(manifest: &Value) -> Vec<Expectation> {
     manifest
         .pointer("/metadata/annotations")
         .and_then(|a| a.get(keys::EXPECTS))
@@ -546,7 +546,7 @@ pub fn expectations(manifest: &Value) -> Vec<Expectation> {
 /// Wait until every object the manifest expects exists, in the manifest's
 /// namespace (or at cluster scope for a cluster-scoped kind). Returns the
 /// first expectation still unmet at the timeout, with the reason.
-pub async fn wait_for_expectations(
+pub(crate) async fn wait_for_expectations(
     client: &Client,
     manifest: &Value,
     timeout: Duration,
@@ -603,7 +603,7 @@ pub async fn wait_for_expectations(
 const CRASHLOOP_RESTART_THRESHOLD: i64 = 3;
 
 /// Classification of a terminal workload failure. Bubbles up from the per-pod
-/// and per-workload classifiers in [`classify_terminal_failure`] so callers
+/// and per-workload classifiers ([`classify_pod_terminal`], [`classify_workload_terminal`]) so callers
 /// can render the machine-readable reason distinctly from the free-form message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalReason {
@@ -633,7 +633,7 @@ impl TerminalReason {
 
 /// Result of a readiness check.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReadinessResult {
+pub(crate) enum ReadinessResult {
     /// Resource is ready.
     Ready,
     /// An `OnDelete` DaemonSet is ready, but `stale` of its pods still run
@@ -991,7 +991,7 @@ struct ScanResult {
 /// something. At most the last [`TERMINATION_OUTPUT_LINES`] lines are
 /// kept; a truncated result starts with a line saying how many were
 /// dropped.
-pub fn termination_output(pods: &[Value]) -> Vec<String> {
+pub(crate) fn termination_output(pods: &[Value]) -> Vec<String> {
     let newest = pods.iter().max_by_key(|p| {
         p.pointer("/status/startTime")
             .or_else(|| p.pointer("/metadata/creationTimestamp"))
@@ -1038,7 +1038,7 @@ pub fn termination_output(pods: &[Value]) -> Vec<String> {
 }
 
 /// How many lines of a failed container's output the deploy shows.
-pub const TERMINATION_OUTPUT_LINES: usize = 20;
+pub(crate) const TERMINATION_OUTPUT_LINES: usize = 20;
 
 /// Full terminal-failure scan: checks workload-level signals first, then
 /// pod-level signals for pod-backed kinds. Returns on the first hit (in
@@ -1177,7 +1177,7 @@ const HARD_CEILING: Duration = Duration::from_secs(5 * 60);
 /// either the idle or hard budget elapsing, or `Cancelled` if the cancel
 /// token flips mid-wait.
 #[allow(clippy::too_many_arguments)]
-pub async fn wait_for_ready(
+pub(crate) async fn wait_for_ready(
     client: &Client,
     ar: &ApiResource,
     scope: &Scope,
@@ -1192,7 +1192,7 @@ pub async fn wait_for_ready(
         return Ok(ReadinessResult::Ready);
     }
 
-    let api: Api<DynamicObject> = fetch::api_for(client, ar, scope, rid);
+    let api: Api<DynamicObject> = discovery::api_for(client, ar, scope, rid);
 
     let idle_budget = timeout;
     let hard_ceiling = HARD_CEILING;
@@ -1332,19 +1332,27 @@ pub fn is_immediate_kind(kind: &str) -> bool {
 }
 
 /// A readiness convention declared by the CRD-owning package and stamped on
-/// the CR as the `kix.run/readiness` annotation. Two JSON shapes:
+/// the CR as the `kix.run/readiness` annotation. Three JSON shapes:
 /// `{"path": "/status/...", "equals": "<value>"}` is ready when the string at
 /// `path` equals `equals`, or the boolean or number there is written as
 /// `equals` (`true` matches "true", `3` matches "3", a float `1.0` matches
 /// only "1.0"), and `status.observedGeneration`, when present, has reached
-/// `metadata.generation`; `{"condition": {"type": "<Type>", "status": "True"}}`
+/// `metadata.generation`; `{"path": "/status/...", "notEquals": "<value>"}`
+/// is ready when the value at `path` is absent or anything but `notEquals`,
+/// under the same generation guard, for a resource whose status only a
+/// consumer that may not exist writes; `{"condition": {"type": "<Type>", "status": "True"}}`
 /// is ready when `status.conditions` holds an entry with that type and
-/// status whose own `observedGeneration`, when present, has reached
-/// `metadata.generation`.
+/// status whose `observedGeneration` has reached `metadata.generation`. A
+/// condition without its own `observedGeneration` is judged by
+/// `status.observedGeneration`; with neither there is no guard.
 enum DeclaredReadiness {
     Path {
         path: String,
         equals: String,
+    },
+    PathNot {
+        path: String,
+        not_equals: String,
     },
     Condition {
         condition_type: String,
@@ -1367,10 +1375,28 @@ fn declared_readiness(obj: &DynamicObject) -> Option<DeclaredReadiness> {
             status: condition.get("status")?.as_str()?.to_string(),
         });
     }
+    let path = v.get("path")?.as_str()?.to_string();
+    if let Some(not_equals) = v.get("notEquals") {
+        return Some(DeclaredReadiness::PathNot {
+            path,
+            not_equals: not_equals.as_str()?.to_string(),
+        });
+    }
     Some(DeclaredReadiness::Path {
-        path: v.get("path")?.as_str()?.to_string(),
+        path,
         equals: v.get("equals")?.as_str()?.to_string(),
     })
+}
+
+/// A scalar status value as the text a readiness rule compares: a string
+/// itself, a boolean or number by its JSON text. Other JSON types have none.
+fn scalar_text(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
 }
 
 /// Synchronous readiness check for a single resource.
@@ -1394,19 +1420,31 @@ pub fn check_readiness(obj: &DynamicObject, kind: &str) -> bool {
                 generation_observed(
                     obj.metadata.generation,
                     obj.data.pointer("/status/observedGeneration"),
-                ) && obj.data.pointer(&path).is_some_and(|v| match v {
-                    Value::String(s) => *s == equals,
-                    Value::Bool(b) => b.to_string() == equals,
-                    Value::Number(n) => n.to_string() == equals,
-                    _ => false,
-                })
+                ) && obj
+                    .data
+                    .pointer(&path)
+                    .and_then(scalar_text)
+                    .is_some_and(|t| t == equals)
+            }
+            DeclaredReadiness::PathNot { path, not_equals } => {
+                generation_observed(
+                    obj.metadata.generation,
+                    obj.data.pointer("/status/observedGeneration"),
+                ) && obj
+                    .data
+                    .pointer(&path)
+                    .and_then(scalar_text)
+                    .is_none_or(|t| t != not_equals)
             }
             DeclaredReadiness::Condition {
                 condition_type,
                 status,
             } => find_condition(&obj.data, &condition_type).is_some_and(|c| {
                 c.get("status").and_then(Value::as_str) == Some(status.as_str())
-                    && generation_observed(obj.metadata.generation, c.get("observedGeneration"))
+                    && generation_observed(
+                        obj.metadata.generation,
+                        condition_observed_generation(&obj.data, c),
+                    )
             }),
         };
     }
@@ -1509,7 +1547,7 @@ fn is_on_delete(data: &Value) -> bool {
 /// The number of pods of an `OnDelete` DaemonSet that still run a previous
 /// pod template, or `None` when there are none or the DaemonSet rolls its
 /// pods itself.
-pub fn daemonset_pending_restart(data: &Value) -> Option<i64> {
+pub(crate) fn daemonset_pending_restart(data: &Value) -> Option<i64> {
     if !is_on_delete(data) {
         return None;
     }
@@ -1631,6 +1669,15 @@ fn generation_observed(generation: Option<i64>, observed: Option<&Value>) -> boo
     }
 }
 
+/// The generation a condition describes: its own `observedGeneration`, or
+/// `status.observedGeneration` when the operator stamps only the status (the
+/// RabbitMQ Cluster Operator does this for `AllReplicasReady`).
+fn condition_observed_generation<'a>(data: &'a Value, condition: &'a Value) -> Option<&'a Value> {
+    condition
+        .get("observedGeneration")
+        .or_else(|| data.pointer("/status/observedGeneration"))
+}
+
 /// The suffix a readiness message carries when the status predates the spec.
 fn stale_note(generation: Option<i64>, observed: Option<&Value>) -> String {
     match (generation, observed.and_then(Value::as_i64)) {
@@ -1674,6 +1721,19 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                     "{kind}/{name}: declared readiness {path}=\"{equals}\", currently {current}{stale}"
                 )
             }
+            DeclaredReadiness::PathNot { path, not_equals } => {
+                let current = match obj.data.pointer(&path) {
+                    None => "<absent>".to_string(),
+                    Some(v) => v.to_string(),
+                };
+                let stale = stale_note(
+                    obj.metadata.generation,
+                    obj.data.pointer("/status/observedGeneration"),
+                );
+                format!(
+                    "{kind}/{name}: declared readiness {path}!=\"{not_equals}\", currently {current}{stale}"
+                )
+            }
             DeclaredReadiness::Condition {
                 condition_type,
                 status,
@@ -1682,8 +1742,10 @@ fn readiness_message(obj: &DynamicObject, kind: &str) -> String {
                     None => format!("no {condition_type} condition yet"),
                     Some(c) => {
                         let actual = c.get("status").and_then(Value::as_str).unwrap_or("?");
-                        let stale =
-                            stale_note(obj.metadata.generation, c.get("observedGeneration"));
+                        let stale = stale_note(
+                            obj.metadata.generation,
+                            condition_observed_generation(&obj.data, c),
+                        );
                         match c.get("message").and_then(Value::as_str) {
                             Some(msg) if !msg.is_empty() => {
                                 format!("{condition_type}={actual} ({msg}){stale}")
@@ -1840,8 +1902,58 @@ mod tests {
                 assert_eq!(path, "/status/updateStatus");
                 assert_eq!(equals, "operational");
             }
-            DeclaredReadiness::Condition { .. } => panic!("parsed as condition form"),
+            _ => panic!("parsed as another form"),
         }
+    }
+
+    const VM_CHILD_RULE: &str = r#"{"path":"/status/updateStatus","notEquals":"failed"}"#;
+
+    // A VMServiceScrape gets updateStatus only from a VMAgent that selects
+    // it: absent with no consumer, `failed` when the consumer rejects it.
+    #[test]
+    fn declared_not_equals_readiness_accepts_absent_and_refuses_the_value() {
+        match declared_readiness(&make_annotated_obj(VM_CHILD_RULE, json!({})))
+            .expect("should parse")
+        {
+            DeclaredReadiness::PathNot { path, not_equals } => {
+                assert_eq!(path, "/status/updateStatus");
+                assert_eq!(not_equals, "failed");
+            }
+            _ => panic!("parsed as another form"),
+        }
+
+        let unclaimed = make_annotated_obj(VM_CHILD_RULE, json!({}));
+        assert!(check_readiness(&unclaimed, "VMServiceScrape"));
+        let applied = make_annotated_obj(
+            VM_CHILD_RULE,
+            json!({"status": {"updateStatus": "operational"}}),
+        );
+        assert!(check_readiness(&applied, "VMServiceScrape"));
+
+        let failed =
+            make_annotated_obj(VM_CHILD_RULE, json!({"status": {"updateStatus": "failed"}}));
+        assert!(!check_readiness(&failed, "VMServiceScrape"));
+        let msg = readiness_message(&failed, "VMServiceScrape");
+        assert!(
+            msg.contains(
+                r#"declared readiness /status/updateStatus!="failed", currently "failed""#
+            ),
+            "got: {msg}"
+        );
+
+        // The generation guard applies as for `equals`.
+        let stale = with_generation(
+            make_annotated_obj(
+                VM_CHILD_RULE,
+                json!({"status": {"updateStatus": "operational", "observedGeneration": 1}}),
+            ),
+            2,
+        );
+        assert!(!check_readiness(&stale, "VMServiceScrape"));
+
+        // A non-string notEquals is malformed and ignored.
+        let bad = make_annotated_obj(r#"{"path":"/status/x","notEquals":true}"#, json!({}));
+        assert!(declared_readiness(&bad).is_none());
     }
 
     #[test]
@@ -1887,7 +1999,7 @@ mod tests {
                 assert_eq!(condition_type, "Bootstrapped");
                 assert_eq!(status, "True");
             }
-            DeclaredReadiness::Path { .. } => panic!("parsed as path form"),
+            _ => panic!("parsed as a path form"),
         }
         for bad in [
             r#"{"condition":{"type":"Bootstrapped"}}"#, // missing status
@@ -2064,6 +2176,33 @@ mod tests {
 
         let absent = with_generation(make_annotated_obj(rule, condition(json!({}))), 4);
         assert!(check_readiness(&absent, "Cluster"));
+    }
+
+    // A condition without its own observedGeneration falls back to
+    // status.observedGeneration; the condition's own value wins when present.
+    #[test]
+    fn declared_condition_readiness_falls_back_to_status_generation() {
+        let rule = r#"{"condition":{"type":"AllReplicasReady","status":"True"}}"#;
+        let obj = |condition: Value, observed: i64| {
+            with_generation(
+                make_annotated_obj(
+                    rule,
+                    json!({"status": {"observedGeneration": observed, "conditions": [condition]}}),
+                ),
+                5,
+            )
+        };
+        let bare = json!({"type": "AllReplicasReady", "status": "True"});
+
+        let stale = obj(bare.clone(), 4);
+        assert!(!check_readiness(&stale, "RabbitmqCluster"));
+        let msg = readiness_message(&stale, "RabbitmqCluster");
+        assert!(msg.contains("observed generation 4 of 5"), "got: {msg}");
+
+        assert!(check_readiness(&obj(bare, 5), "RabbitmqCluster"));
+
+        let own = json!({"type": "AllReplicasReady", "status": "True", "observedGeneration": 5});
+        assert!(check_readiness(&obj(own, 4), "RabbitmqCluster"));
     }
 
     #[test]

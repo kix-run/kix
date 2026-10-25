@@ -16,15 +16,16 @@ it, with field changes shown under `-v`. `kix deploy --dry-run` runs
 `kix plan` with the same flags.
 
 This page is hand-maintained. Check `cli/kix-cli/src/cli.rs`,
-`cli/kix-cli/src/commands/plan.rs`, and
-`cli/kix-cli/schema/plan.schema.json` when in doubt.
+`cli/kix-cli/src/commands/plan.rs`, `cli/kix/src/plan/file.rs`,
+`cli/kix-cli/schema/plan.schema.json`, and
+`cli/kix-cli/schema/kixplan.schema.json` when in doubt.
 
 ## Synopsis
 
 ```text
 kix plan <CLUSTER> [--prune | --prune-mode default|no] [--reconcile]
          [--force-conflicts] [--accept-migrations] [--current-activation]
-         [-o text|json|yaml|markdown] [--detail plain|fields|manifests]
+         [-o text|markdown] [--save <FILE>]
          [--flake <FLAKE>] [--context <CONTEXT>]
 ```
 
@@ -37,8 +38,8 @@ kix plan <CLUSTER> [--prune | --prune-mode default|no] [--reconcile]
 | `--force-conflicts` | Plan the apply with forced field ownership. Fields another manager owns show as drift the deploy reverts instead of as conflicts. |
 | `--accept-migrations` | Accept the stateful migrations the plan lists, so they do not count as a reason the deploy would stop. |
 | `--current-activation` | Take the previous activation from the local cache and connect to nothing. The plan compares the cached build with the new one, and every write-path check reads `not_checked`. See [Offline plans](#offline-plans). |
-| `-o`, `--output` | `text` (default), `json`, `yaml`, or `markdown`. With anything but `text`, progress lines go to stderr so stdout holds the document alone. |
-| `--detail <LEVEL>` | How much `json` and `yaml` say about each change, as for [`kix diff`](/docs/reference/cli/diff/#json-and-yaml). At `manifests`, the two manifests of an object the cluster checked are the live object and the dry-run result, with server-maintained metadata and `status` left out. |
+| `-o`, `--output` | `text` (default) or `markdown`. With `markdown`, progress lines go to stderr so stdout holds the Markdown alone. `json` and `yaml` are refused: save a [plan file](#plan-file) instead. |
+| `--save <FILE>` | Also write the plan to `FILE` as a [plan file](#plan-file), which [`kix deploy --plan`](/docs/reference/cli/deploy-apply/#deploy-a-reviewed-plan) reads. The file is written beside `FILE`, read back, and only then renamed, so a file that would be refused never appears at `FILE`. The text or Markdown output is printed as well. |
 | `--flake`, `--context`, `--override-input` | See [Global flags](/docs/reference/cli/global-flags/). |
 
 The planning flags are the ones `kix deploy` takes, so a plan made with the
@@ -88,15 +89,55 @@ say:
 - `Not checked by the dry run (N)`, grouped by reason, five names per group.
 - A closing note that no preview checks whether Pods start.
 
-### JSON and YAML
+### Markdown
 
-The `Plan` document. `kix diff` prints the same document, so a consumer can
-read either. Its JSON Schema is
-`cli/kix-cli/schema/plan.schema.json`.
+GitHub-flavoured Markdown for pull request comments: the package plan, then
+the writes the deploy would stop on, and the objects the dry run did not
+check in a `<details>` block.
+
+## Plan file
+
+`--save plan.kixplan` writes the plan as one file that
+[`kix deploy --plan`](/docs/reference/cli/deploy-apply/#deploy-a-reviewed-plan)
+and Kix Enterprise read. It holds:
+
+- the `Plan` document, with each field change listed;
+- the new build's dependency graph, as
+  [`kix graph --format json`](/docs/reference/cli/graph/) prints it;
+- the old and new manifest of each changed, added, or removed object, each
+  as its own file named by its SHA-256. For an object the dry run checked,
+  the old manifest is the live object and the new one the dry-run result.
+  Secret values are hidden as in [field changes](#field-change-labels), and
+  each manifest is whole up to 3 MiB, the apiserver's limit on a request,
+  so only a build manifest the cluster would refuse is replaced by a size note.
+
+The file is a seekable zstd file, the container a bundle uses. Any zstd tool
+reads it: `zstd -dc plan.kixplan` gives the header, JSON, followed by each
+manifest, so `zstd -dc plan.kixplan | jq -s '.[0].plan'` prints the `Plan`
+document. The same plan gives the same bytes from the same Kix. The
+header's JSON Schema is `cli/kix-cli/schema/kixplan.schema.json`.
+
+| Header key | Content |
+| --- | --- |
+| `format`, `version` | `"kixplan"` and `1`. A Kix refuses any other version. |
+| `plan` | The `Plan` document, below. |
+| `graph` | `{ nodes, edges }`: each node `{ id, kind, name, namespace, identityHash, isImport }`, each edge `{ from, to }` where `from` depends on `to`. |
+| `shown` | By resource identifier, each changed, added, or removed object's `{ package, old, new, rollout }`. `package` is the key `plan.packages` lists the object under (`namespace/instance`, or `_cluster` for a resource outside every package); an object that moves between packages names the one it moves to. `old` and `new` are the SHA-256 of the manifest's file, `null` when that side has none. `rollout` is `restart` when the deploy replaces the object's Pods (a Deployment, StatefulSet, or DaemonSet whose pod template changes), `on_delete` when its new manifest sets `spec.updateStrategy.type: OnDelete`, and `null` otherwise. |
+| `files` | Each manifest file as `[sha256, size]`, sorted by SHA-256. Objects with equal manifests share a file. |
+
+A reader recomputes each file's SHA-256 and refuses a file whose bytes do not
+match its name. It refuses a plan file over 64 MiB, a header over 8 MiB or
+of more than a million JSON values, more than 100,000 files, and a file over
+3 MiB, each before reading what the cap guards.
+
+### The `Plan` document
+
+`kix diff -o json` prints the same document, so a consumer can read either.
+Its JSON Schema is `cli/kix-cli/schema/plan.schema.json`.
 
 | Key | Content |
 | --- | --- |
-| `schema_version` | A date string, `YYYY-MM-DD`, currently `"2026-10-03"`. It changes only when the document changes in a way that is not backward compatible. |
+| `schema_version` | A date string, `YYYY-MM-DD`, currently `"2026-10-07"`. It changes only when the document changes in a way that is not backward compatible. |
 | `made_by` | `dry_run` from `kix plan`; `builds` from `kix plan --current-activation` or `kix diff --from <build>`; `live_read` from `kix diff` against the cluster or a snapshot. |
 | `kix` | `{ version, store_path }` of the Kix that made the plan. `store_path` is the Nix store path of the binary, `null` for a binary built outside the store. |
 | `cluster` | The name the build gives the Kix cluster. |
@@ -127,12 +168,6 @@ Each checked section is one of:
 | `not_previewable` | No preview can tell. |
 
 Resource identifiers have the form `Kind/name@namespace`.
-
-### Markdown
-
-GitHub-flavoured Markdown for pull request comments: the package plan, then
-the writes the deploy would stop on, and the objects the dry run did not
-check in a `<details>` block.
 
 ## Field change labels
 
@@ -224,17 +259,17 @@ In CI, treat `0` and `2` as success and fail the job on anything else:
 
 ```bash
 status=0
-kix plan prod --output json > plan.json || status=$?
+kix plan prod --save plan.kixplan || status=$?
 case "$status" in
   0|2) ;;
-  3) echo "the deploy would stop; see plan.json" >&2; exit 1 ;;
+  3) echo "the deploy would stop; see the plan above" >&2; exit 1 ;;
   *) exit "$status" ;;
 esac
 ```
 
-A build with no resources prints no document and exits `0`.
+A build with no resources prints no plan, writes no file, and exits `0`.
 
-To deploy exactly what a reviewer approved, save the JSON and pass it to
+To deploy exactly what a reviewer approved, pass the plan file to
 [`kix deploy --plan`](/docs/reference/cli/deploy-apply/#deploy-a-reviewed-plan),
 which refuses when the plan made at deploy time differs.
 
@@ -267,7 +302,7 @@ plan shows a refused write. See [`kix deploy`](/docs/reference/cli/deploy-apply/
 <Command commands={[
   "kix plan demo",
   "kix plan demo --prune --reconcile",
-  "kix plan demo -o json > plan.json",
+  "kix plan demo --save plan.kixplan",
   "kix plan demo -o markdown > plan.md",
 ]} />
 

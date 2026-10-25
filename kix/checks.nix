@@ -1,4 +1,4 @@
-# kix checks: the kubeconform schema check.
+# kix checks: the kubeconform schema check and the alert rule check.
 #
 # Imported by kix/lib/mkFlake.nix as:
 #   kixChecks = import ./checks.nix { inherit pkgs lib; };
@@ -34,5 +34,66 @@ rec {
           -schema-location '${kubernetesSchemas}/master-standalone-strict/{{ .ResourceKind }}{{ .KindSuffix }}.json'
         touch $out
       '';
+
+  # Run promtool over the alert rules in a manifest directory. The `spec` of
+  # a PrometheusRule or a VictoriaMetrics VMRule is a Prometheus rule file,
+  # so each one is written
+  # to rules/<namespace>/<file> and checked with `promtool check rules`.
+  # `ruleTests`, when not null, is a `promtool test rules` file; it runs from
+  # rules/, so its `rule_files` entries are `<namespace>/<file>` as in the
+  # manifest directory.
+  rulesCheck =
+    name: drv: ruleTests:
+    pkgs.runCommand "rules-${name}"
+      {
+        nativeBuildInputs = [
+          pkgs.yq-go
+          pkgs.prometheus.cli
+        ];
+      }
+      (
+        ''
+          mkdir rules
+          count=0
+          # A top-level `kind:` line; the CRDs name their kind only indented
+          # under `names`.
+          for f in $(grep -rlxE --include='*.yaml' 'kind: (PrometheusRule|VMRule)' ${drv} || true); do
+            rel=''${f#${drv}/}
+            mkdir -p "rules/$(dirname "$rel")"
+            yq '.spec' "$f" > "rules/$rel"
+            count=$((count + 1))
+          done
+          if [ "$count" -gt 0 ]; then
+            find rules -name '*.yaml' -print0 | xargs -0 promtool check rules
+          fi
+          echo "${name}: $count rule resource(s) checked."
+        ''
+        + lib.optionalString (ruleTests != null) ''
+          cp ${ruleTests} rules/rules-test.yaml
+          # promtool reads `rule_files` as globs and loads nothing from one
+          # that matches no file, so a test expecting no alerts would pass.
+          # stdenv sets nullglob, which would drop such an entry here too.
+          shopt -u nullglob
+          if [ "$(yq '.rule_files | length' rules/rules-test.yaml)" = 0 ]; then
+            echo "${name}: ${baseNameOf (toString ruleTests)} lists no rule_files." >&2
+            exit 1
+          fi
+          yq '.rule_files[]' rules/rules-test.yaml | while IFS= read -r g; do
+            set -- rules/$g
+            if [ ! -e "$1" ]; then
+              echo "${name}: rule_files entry '$g' in ${baseNameOf (toString ruleTests)} matches no rendered PrometheusRule or VMRule. Rendered: $(cd rules && find . -name '*.yaml' ! -name rules-test.yaml | sed 's|^\./||' | tr '\n' ' ')" >&2
+              exit 1
+            fi
+          done
+          (cd rules && promtool test rules rules-test.yaml) 2>&1 | tee test.log
+          if grep -q 'no file match pattern' test.log; then
+            echo "${name}: promtool loaded no rules for an entry of rule_files." >&2
+            exit 1
+          fi
+        ''
+        + ''
+          touch $out
+        ''
+      );
 
 }

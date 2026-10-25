@@ -1,0 +1,162 @@
+---
+import Section from '../Section.astro';
+import Heading from '../Heading.astro';
+import TermLine from '../TermLine.astro';
+
+const yaml = [
+  'kind: Service',
+  'metadata:',
+  '  name: web',
+  '  namespace: shop',
+  'spec:',
+  '  selector:',
+  null, // the line with the typo, rendered with its highlight below
+  '  ports:',
+  '    - port: 80',
+];
+
+// Each message is copied from the check that raises it in kix/lib; keep
+// them verbatim.
+const mistakes = [
+  {
+    mistake: 'The same environment variable defined twice, usually from a copied block.',
+    k8s: 'Accepts it, warns, and the last value wins.',
+    kix: "[web] Container 'web' has duplicate env var name(s): [DATABASE_URL].",
+  },
+  {
+    mistake: "The app reads a Secret key that doesn't exist: password, when the key is pass.",
+    k8s: 'The pod fails to start.',
+    kix: 'secret "db" does not declare key "password"\n  declared keys: pass',
+  },
+  {
+    mistake: "A migration Job reuses the app's labels.",
+    k8s: "The Service sends real user traffic to the Job's pod for as long as it runs.",
+    kix: 'Job shop/migrate pod labels {"app.kubernetes.io/instance":"web","app.kubernetes.io/name":"web"} satisfy Service shop/web selector {"app.kubernetes.io/instance":"web","app.kubernetes.io/name":"web"}; the Service would route traffic to the Job pod',
+  },
+  {
+    mistake: "A workload names a PriorityClass that doesn't exist.",
+    k8s: 'The workload applies, then every pod is rejected at admission.',
+    kix: "Deployment shop/web sets priorityClassName 'critical', which no resource in this cluster creates. Every pod of this workload would be rejected at admission. Add the PriorityClass, or declare it as externally managed with an import or kix.untrackedRef",
+  },
+  {
+    mistake: 'A PodDisruptionBudget whose selector matches nothing.',
+    k8s: 'It protects nothing, and you find out during a node drain.',
+    kix: 'PodDisruptionBudget shop/web selector {"app":"wbe"} matches no workload pod template in namespace shop. Check the selector against the intended workload\'s pod labels',
+  },
+  {
+    mistake: 'type: LoadBalancer on a cluster with no load balancer provider.',
+    k8s: 'The external IP sits at <pending>.',
+    kix: '[web] Service \'web\' uses type=LoadBalancer but no load balancer provider is configured (cluster.roles.loadBalancer.binding = "absent", no provider instance). Use type=ClusterIP or NodePort, add a provider instance, or configure cluster.roles.loadBalancer.binding to match your environment.',
+  },
+];
+---
+
+<Section id="check" labelledby="check-title" class="[&>div>div]:pt-8 lg:[&>div>div]:pt-14">
+  <div class="flex flex-col gap-14">
+    <div class="grid grid-cols-1 gap-10 xl:grid-cols-[420px_minmax(0,1fr)] xl:gap-16">
+      <div class="flex flex-col gap-5">
+        <Heading id="check-title" size="lg"><span class="text-accent-brand">A.</span> check the definition</Heading>
+        <p class="text-[17px] leading-[1.6] text-ink-2">
+          Kix checks the complete definition before applying it. If a Service points to no workload, for example, the
+          error identifies the Service and the selector to check. Other mistakes, such as a Deployment selector drifting
+          from its pod labels, are prevented by how Kix builds the resources.
+        </p>
+        <p class="text-[17px] leading-[1.6] text-ink-2">
+          The scorecard also checks security, reliability, and governance. Its findings are warnings by default, and you
+          can choose which rules should stop a build.
+        </p>
+      </div>
+      <div class="grid grid-cols-1 overflow-hidden rounded-xl border-[1.5px] border-ink md:grid-cols-2">
+        <figure class="flex flex-col gap-4 bg-paper-2 p-6">
+          <figcaption class="font-mono text-[13px] font-semibold text-ink">service.yaml</figcaption>
+          <pre class="overflow-x-auto font-mono text-[13.5px] leading-[1.6] text-ink"><code>{yaml.map((line) =>
+            line === null ? (
+              <span class="block">{'    app.kubernetes.io/name: '}<mark class="rounded-[3px] bg-accent-soft px-0.5 font-semibold text-accent-text">shop-wbe</mark></span>
+            ) : (
+              <span class="block">{line}</span>
+            ))}</code></pre>
+          <p class="text-sm leading-normal text-ink-2">The Service has no endpoints, so traffic cannot reach the app.</p>
+        </figure>
+        <div class="flex flex-col gap-3.5 bg-night p-6 font-mono text-[13.5px] leading-[1.6]">
+          <TermLine>kix check shop</TermLine>
+          <TermLine mark="✗" tone="command">
+            Service shop/web selector {'{"app.kubernetes.io/name":"shop-wbe"}'} matches no workload pod template in namespace
+            shop. Check the selector against the intended workload's pod labels
+          </TermLine>
+          <TermLine mark="#" tone="dim" class="pt-1.5">kix deploy stops at the same error</TermLine>
+        </div>
+      </div>
+    </div>
+
+    <table class="mistakes w-full border-collapse text-left">
+      <caption class="sr-only">Everyday mistakes, what Kubernetes does with them, and what Kix reports</caption>
+      <thead>
+        <tr class="border-b-[1.5px] border-ink">
+          <th scope="col" class="kicker pb-3 font-normal text-ink-2 md:w-[30%] md:pr-10">The everyday mistake</th>
+          <th scope="col" class="kicker pb-3 font-normal text-ink-2 md:w-[25%] md:pr-10">What Kubernetes does</th>
+          <th scope="col" class="kicker pb-3 font-normal text-ink-2">What Kix says</th>
+        </tr>
+      </thead>
+      <tbody>
+        {
+          mistakes.map((row) => (
+            <tr class="border-b border-line">
+              <td data-label="The everyday mistake" class="align-top text-base leading-[1.45] font-medium text-ink md:py-5 md:pr-10">
+                {row.mistake}
+              </td>
+              <td data-label="What Kubernetes does" class="align-top text-[15px] leading-normal text-ink-2 md:py-5 md:pr-10">
+                {row.k8s}
+              </td>
+              <td data-label="What Kix says" class="align-top md:py-5">
+                <div class="flex gap-2.5 rounded-md bg-night px-3.5 py-2.5 font-mono text-[13px] leading-[1.55] text-on-night">
+                  <span class="shrink-0 text-t-red">✗</span>
+                  <span class="min-w-0 break-words whitespace-pre-wrap">{row.kix}</span>
+                </div>
+              </td>
+            </tr>
+          ))
+        }
+      </tbody>
+    </table>
+  </div>
+</Section>
+
+<style>
+  /* Below md the table stacks: one block per mistake, each cell with its
+     column label above it. */
+  @media (max-width: 47.99rem) {
+    .mistakes thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
+    .mistakes,
+    .mistakes tbody,
+    .mistakes tr,
+    .mistakes td {
+      display: block;
+    }
+    .mistakes tbody {
+      border-top: 1.5px solid var(--ink);
+    }
+    .mistakes tr {
+      padding: 20px 0;
+    }
+    .mistakes td + td {
+      margin-top: 14px;
+    }
+    .mistakes td::before {
+      content: attr(data-label);
+      display: block;
+      margin-bottom: 6px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 400;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--ink-2);
+    }
+  }
+</style>

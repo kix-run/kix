@@ -71,17 +71,19 @@ Core language, evaluation model, wiring primitives.
 | # | Document | Status | Relevance | Summary |
 |---|----------|--------|-----------|---------|
 | 26 | [Nix-built images (vertical integration)](26_images-vertical-integration.md) | Design | Future-leaning | dockerTools, registry push, nix-snapshotter for supply chain guarantees. Now also covers BGP routing as a capability contract unlocked by node-image ownership (one `cluster.bgp` → frr/bird config + cilium/metallb CRs). Tightly linked to `interesting_thoughts/72_ai_cluster_recipes.md`. |
+| 159 | [Patched images pipeline](159_patched_images_pipeline.md) | RFC | Near-term | The pipeline behind business doc 54: CVE feeds and a per-cluster image inventory feed scanning, fix finding, kind verification, pin-bump pull requests, and the existing plan, sign-off, and in-cluster deploy, with a timeline per CVE from disclosure to running. A deterministic pipeline with a Claude Code queue for what it cannot settle. Upstream images first; gap images built on a distribution base, because customer scanners read Nix-built images badly (no package database, `pkg:nix` not standardized). Prerequisite: every image in kixpkgs reachable by a pin. |
 | 63a | [Storage as a cluster concern](63a_storage_as_cluster_concern.md) | Design | Near-term | Storage choice is the cluster operator's concern, not the package author's. Read together with `32_volume_mount_dsl.md` for the full storage+mount story. |
 
 > Note: `45_cluster_hardware_profile.md` has been archived (built). Expect follow-up hardware/topology discussions as we touch scheduling — see also `interesting_thoughts/69_hardware_driven_scheduling.md`.
 
-## Secrets (implementation-only; design corpus archived)
+## Secrets
 
-The first SOPS flow is being implemented against a minimum viable design. **All design-level secrets docs have been archived but still carry open questions.** The implementation plan has a header that enumerates them.
+The first SOPS flow is being implemented against a minimum viable design. **The design-level secrets docs from 74 to 78 have been archived but still carry open questions.** The implementation plan has a header that enumerates them. Doc 160 reopens one question at the package level: where a Secret's value comes from is the site's choice, not the package's.
 
 | # | Document | Status | Relevance | Summary |
 |---|----------|--------|-----------|---------|
 | 77b | [Secrets implementation plan](77_secrets_implementation_plan.md) | In progress | Active | Deploy-time SOPS hydration in Rust CLI, kind integration test. Header links to archived `74`/`75`/`76`/`77a`/`78` with their open questions — re-read those before extending secrets scope. |
+| 160 | [Secret provenance](160_secret_provenance.md) | Accepted, mostly shipped | **Active** | Triggered by kixpkgs#236: packages decide where secret values come from (inline, SOPS, an existing Secret, a controller), so a site that forbids inline content cannot deploy `victoria-metrics-alert`, `alertmanager`, or `firezone`, and `cloudflared` and the database facades reimplement the choice per package as `foo`/`fooSource`. Inventories every package's pattern and outside prior art (Helm `existingSecret`, sops-nix, ESO, Flux+SOPS, Terraform `sensitive`). Model: shape belongs to the package, provenance to the site, per key. Proposes: every site-supplied credential is a secret dependency (the dependency already is the union of `secret` and `secret-ref`); a per-key `kix.run/secret-sources` stamp from `mkSecret` with `plainKeys`; a `cluster.secrets.accept` scorecard rule, advisory first; a non-Secret or dependency route for configuration software reads from a Secret, with `classification = "configuration"` on the default. For the database facades, which need one password in two namespaces, a `password` dependency plus a named server-side reference the operator also writes, with the SOPS route kept and generation as the later improvement. |
 
 ## Flavors & Platform Ordering
 

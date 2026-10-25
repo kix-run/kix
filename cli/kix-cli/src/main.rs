@@ -1,16 +1,22 @@
 mod cli;
+mod client;
 mod commands;
 mod output;
 mod plan;
+mod plugin;
+#[cfg(test)]
+mod schemas;
 pub mod trace_sink;
 
 use clap::FromArgMatches;
-use cli::{Cli, Command};
+use cli::{Cli, Command, OutputFormat};
 
 /// Validate cluster name format.
 ///
 /// SECURITY: This is the primary defense against Nix expression injection.
-/// The cluster name is interpolated into Nix eval strings in kix-eval's FFI layer.
+/// The cluster name is spliced into the flake reference `nix build` gets
+/// (`kix::eval::nix`) and into the `--apply` expression of `nix eval`
+/// (`cluster_name_command`).
 /// Only alphanumeric characters, hyphens, and underscores are safe.
 fn validate_cluster_name(name: &str) -> miette::Result<()> {
     if name.is_empty()
@@ -68,14 +74,74 @@ fn init_tracing(verbose: u8, quiet: bool) {
         .init();
 }
 
+/// How the command `cli` names prints: see [`output::Mode`].
+fn output_mode(cli: &Cli) -> output::Mode {
+    let default = match &cli.command {
+        Command::Build(_) => OutputFormat::Yaml,
+        Command::Compliance(args) => match args.command {
+            cli::ComplianceCommand::Sbom(_) | cli::ComplianceCommand::Attest(_) => {
+                OutputFormat::Json
+            }
+            cli::ComplianceCommand::Audit(_) => OutputFormat::Text,
+        },
+        _ => OutputFormat::Text,
+    };
+    let format = cli.global.output.unwrap_or(default);
+    // Whether stdout carries a document: a plan, from `kix plan` and
+    // `kix deploy --dry-run` under `-o`, or the deploy log.
+    let document = match &cli.command {
+        Command::Plan(_) => format != OutputFormat::Text,
+        Command::Deploy(args) if args.dry_run => format != OutputFormat::Text,
+        Command::Deploy(args) => !args.operator && args.log_format == cli::LogFormat::Json,
+        _ => false,
+    };
+    output::Mode {
+        quiet: cli.global.quiet,
+        format,
+        progress_on_stderr: document,
+    }
+}
+
+/// Reads `KIX_OVERRIDE_INPUT` when `--override-input` is not given.
+///
+/// clap does not read it: splitting the variable on spaces with a value
+/// delimiter would split the flag's own values too, and a `path:` URL may
+/// hold a space.
+fn override_input_from_env(global: &mut cli::GlobalArgs) -> miette::Result<()> {
+    if !global.override_input.is_empty() {
+        return Ok(());
+    }
+    let Some(var) = std::env::var_os("KIX_OVERRIDE_INPUT") else {
+        return Ok(());
+    };
+    let words: Vec<String> = var
+        .to_str()
+        .ok_or_else(|| miette::miette!("KIX_OVERRIDE_INPUT is not UTF-8"))?
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+    if !words.len().is_multiple_of(2) {
+        return Err(miette::miette!(
+            "KIX_OVERRIDE_INPUT must hold pairs of an input name and a URL, separated by spaces"
+        ));
+    }
+    global.override_input = words;
+    Ok(())
+}
+
 fn main() -> miette::Result<()> {
     miette::set_hook(Box::new(|_| {
         Box::new(miette::MietteHandlerOpts::new().build())
     }))?;
 
-    let cli = Cli::from_arg_matches(&cli::command().get_matches()).unwrap_or_else(|e| e.exit());
+    let mut cli = Cli::from_arg_matches(&cli::command().get_matches()).unwrap_or_else(|e| e.exit());
+    override_input_from_env(&mut cli.global)?;
+    if let Command::Plugin(args) = &cli.command {
+        return plugin::run(args, &cli.global);
+    }
     init_tracing(cli.global.verbose, cli.global.quiet);
     output::init_color(&cli.global);
+    output::init(output_mode(&cli));
 
     // Completions doesn't need a CommandContext (no evaluator, no runtime)
     if let Command::Completions(args) = &cli.command {
@@ -100,17 +166,21 @@ fn main() -> miette::Result<()> {
         validate_cluster_name(name)?;
     }
 
-    let mut ctx = commands::CommandContext::new(&cli.global)?;
+    let mut ctx = commands::CommandContext::new(
+        &cli.global,
+        &commands::compliance::receipt::ComplianceReceipts,
+    )?;
 
     match &cli.command {
         Command::Build(args) => commands::build::run(args, &mut ctx),
         Command::Diff(args) => commands::diff::run(args, &mut ctx),
-        Command::Plan(args) => commands::plan::run(&args.plan, args.detail, &mut ctx),
+        Command::Plan(args) => commands::plan::run(&args.plan, args.save.as_deref(), &mut ctx),
         Command::Check(args) => commands::check::run(args, &mut ctx),
         Command::Deploy(args) => commands::deploy::run(args, &mut ctx),
         Command::Status(args) => commands::status::run(args, &mut ctx),
         Command::List(args) => commands::list::run(args, &mut ctx),
         Command::Graph(args) => commands::graph::run(args, &mut ctx),
+        Command::Bundle(args) => commands::bundle::run(args, &mut ctx),
         Command::Inspect(args) => commands::inspect::run(args, &mut ctx),
         Command::Gc(args) => commands::gc::run(args, &mut ctx),
         Command::Migrate(cli::MigrateCommand::Domain(args)) => {
@@ -124,7 +194,9 @@ fn main() -> miette::Result<()> {
         Command::Images(args) => commands::images::run(args, &mut ctx),
         Command::Snapshot(args) => commands::snapshot::run(args, &mut ctx),
         Command::Compliance(args) => commands::compliance::run(args, &mut ctx),
-        Command::Completions(_) | Command::Drift(_) | Command::Pin(_) => unreachable!(),
+        Command::Completions(_) | Command::Drift(_) | Command::Pin(_) | Command::Plugin(_) => {
+            unreachable!()
+        }
     }
 }
 
@@ -169,5 +241,60 @@ mod tracing_filter_tests {
         assert!(out.contains("Server cert bypassed"), "{out}");
         assert!(out.contains("impersonating user"), "{out}");
         assert!(out.contains("a kix warning"), "{out}");
+    }
+}
+
+#[cfg(test)]
+mod output_mode_tests {
+    use super::*;
+
+    fn mode(args: &[&str]) -> output::Mode {
+        let matches = cli::command().get_matches_from(args);
+        output_mode(&Cli::from_arg_matches(&matches).unwrap())
+    }
+
+    /// Only a document on stdout sends the progress before it to stderr: a
+    /// plan from `kix plan` and `kix deploy --dry-run` with `-o` other than
+    /// text, and the deploy log.
+    #[test]
+    fn progress_goes_to_stderr_only_beside_a_document() {
+        assert!(mode(&["kix", "plan", "c", "-o", "json"]).progress_on_stderr);
+        assert!(mode(&["kix", "plan", "c", "-o", "markdown"]).progress_on_stderr);
+        assert!(!mode(&["kix", "plan", "c"]).progress_on_stderr);
+        assert!(mode(&["kix", "deploy", "c", "--dry-run", "-o", "yaml"]).progress_on_stderr);
+        assert!(!mode(&["kix", "deploy", "c", "-o", "json"]).progress_on_stderr);
+        assert!(!mode(&["kix", "status", "c", "-o", "json"]).progress_on_stderr);
+        assert!(mode(&["kix", "deploy", "c", "--log-format", "json"]).progress_on_stderr);
+        assert!(!mode(&["kix", "deploy", "c", "--log-format", "line"]).progress_on_stderr);
+        assert!(
+            !mode(&["kix", "deploy", "c", "--operator", "--log-format", "json"]).progress_on_stderr
+        );
+    }
+
+    #[test]
+    fn each_command_has_its_default_format() {
+        assert_eq!(mode(&["kix", "build", "c"]).format, OutputFormat::Yaml);
+        assert_eq!(
+            mode(&["kix", "compliance", "sbom", "c"]).format,
+            OutputFormat::Json
+        );
+        assert_eq!(
+            mode(&["kix", "compliance", "attest", "c"]).format,
+            OutputFormat::Json
+        );
+        assert_eq!(
+            mode(&["kix", "list", "clusters"]).format,
+            OutputFormat::Text
+        );
+        assert_eq!(
+            mode(&["kix", "build", "c", "-o", "json"]).format,
+            OutputFormat::Json
+        );
+    }
+
+    #[test]
+    fn quiet_is_the_flag() {
+        assert!(mode(&["kix", "-q", "gc", "c"]).quiet);
+        assert!(!mode(&["kix", "gc", "c"]).quiet);
     }
 }

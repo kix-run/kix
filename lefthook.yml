@@ -3,6 +3,26 @@
 #
 # Rust hooks adapted from lithus monorepo pattern (no mise — uses cargo directly)
 
+# A hook that cannot find lefthook fails the commit or push. Without this,
+# the script `lefthook install` writes prints "Can't find lefthook in PATH"
+# and exits 0, so every check here is skipped. That happens outside the dev
+# shell once `nix store gc` has removed the lefthook store path the script
+# was installed with; `nix develop` reinstalls it (flake.nix shellHook).
+assert_lefthook_installed: true
+#
+# .github/workflows/lint.yml runs the nixfmt, deadnix, and Co-Authored-By
+# checks on every pull request too, for commits made without these hooks.
+
+# The installed git hooks run lefthook through Nix rather than looking for it
+# on PATH. Their own lookup prints "Can't find lefthook in PATH" and lets the
+# commit through unchecked, which is what happens in a shell outside devenv.
+# Nix is needed for the hooks below anyway, and once nixpkgs is evaluated
+# this costs about 0.1 s. A command rather than a script in the repository
+# keeps the hooks working on branches cut before this line. `--inputs-from .`
+# takes lefthook from this flake's locked nixpkgs, as nixfmt and deadnix do,
+# not from the committer's registry.
+lefthook: "nix run --inputs-from . nixpkgs#lefthook --"
+
 commit-msg:
   commands:
     no-co-authored-by:
@@ -47,14 +67,14 @@ pre-commit:
     - merge
     - rebase
   commands:
-    # rustfmt does no compilation, so it needs neither devenv nor the Nix
-    # FFI libs — running it on the host keeps this well under a second.
+    # rustfmt does no compilation, so it does not need devenv — running it
+    # on the host keeps this well under a second.
     format-rust:
       glob: "cli/**/*.rs"
       run: bash -c 'cd cli && cargo fmt --check'
 
-    # Clippy compiles, so it does need devenv shell: the FFI crates find
-    # the Nix C libraries (nix-expr-c, etc.) via PKG_CONFIG_PATH.
+    # Clippy compiles, so it runs in the devenv shell, which has the Rust
+    # toolchain and pkg-config.
     #
     # This is affordable only because of two things, and it goes back to
     # being unusable if either regresses:
@@ -85,7 +105,9 @@ pre-commit:
       glob: "*.nix"
       exclude:
         - "docs/src/snippets/**/*.nix"
-      run: nix shell nixpkgs#nixfmt-rfc-style -c nixfmt --check {staged_files}
+      # `--inputs-from .` takes nixfmt from this flake's locked nixpkgs, as
+      # deadnix below and the lint workflow do.
+      run: nix shell --inputs-from . nixpkgs#nixfmt -c nixfmt --check {staged_files}
 
     # Unused bindings. Attrset pattern names are exempt: kix reads them
     # with builtins.functionArgs to resolve a package's dependencies.
@@ -102,12 +124,12 @@ pre-commit:
       glob: "scripts/**/*.py"
       run: devenv shell -- treefmt {staged_files}
 
-    # Type-check the landing page. This is the exact check the Pages
-    # deploy runs (`tsc -b`, with noEmit set in tsconfig.app.json).
-    # A tsc failure only surfaces in CI, and because GitHub Pages
-    # artifacts expire after ~1 day, a broken build streak silently
-    # takes kix.run offline once the last good artifact ages out.
-    # Catching it here keeps a red build from ever reaching main.
+    # Type-check the landing page. This is the check the Pages deploy runs
+    # first (`npm run build` starts with `astro check`). A failure only
+    # surfaces in CI, and because GitHub Pages artifacts expire after ~1
+    # day, a broken build streak silently takes kix.run offline once the
+    # last good artifact ages out. Catching it here keeps a red build from
+    # ever reaching main.
     typecheck-web:
-      glob: "web/**/*.{ts,tsx}"
-      run: bash -c 'cd web && ./node_modules/.bin/tsc -b'
+      glob: "web/**/*.{ts,astro,mjs}"
+      run: bash -c 'cd web && ./node_modules/.bin/astro check'

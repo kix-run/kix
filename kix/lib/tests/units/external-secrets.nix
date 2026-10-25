@@ -156,7 +156,8 @@ let
   find = kind: name: byName name (ofKind kind ms);
   hashOf =
     nsName: inst: part:
-    builtins.unsafeDiscardStringContext cluster.instances.${nsName}.${inst}.raw.${part}.out.identityHash;
+    builtins.unsafeDiscardStringContext
+      cluster.instances.${nsName}.${inst}.raw.${part}.out.identityHash;
   dependsOn = m: lib.splitString "," ((m.metadata.annotations or { }).${kixKeys.dependsOn} or "");
   readinessOf = m: (m.metadata.annotations or { }).${kixKeys.readiness} or null;
   ready = builtins.toJSON {
@@ -175,7 +176,12 @@ let
       availability = null;
     }).assertions;
   failedAssertions =
-    config: map (a: a.message) (builtins.filter (a: !a.assertion) (assertionsOf { inherit config; }));
+    config:
+    map (a: a.message) (
+      builtins.filter (a: !a.assertion) (assertionsOf {
+        inherit config;
+      })
+    );
   defaultConfig = {
     image.tag = "v2.11.0";
     extraArgs = [ ];
@@ -198,7 +204,9 @@ in
       ungated = builtins.filter (m: !(lib.any (lib.hasInfix job) (dependsOn m))) crs;
     in
     (builtins.all (m: m != null) crs && ungated == [ ])
-    || throw "external-secrets gate: job ${job}, ungated ${builtins.toJSON (map (m: m.metadata) ungated)}";
+    || throw "external-secrets gate: job ${job}, ungated ${
+      builtins.toJSON (map (m: m.metadata) ungated)
+    }";
 
   # ExternalSecret, SecretStore, and ClusterSecretStore have no handle, so
   # their custom resources always go through the builders; GeneratorState is
@@ -258,11 +266,14 @@ in
       db = (find "ExternalSecret" "db").spec.target;
     in
     (
-      billing == { template.metadata = { }; }
-      && db == {
-        name = "db-password";
-        template.metadata.labels.team = "billing";
+      billing == {
+        template.metadata = { };
       }
+      &&
+        db == {
+          name = "db-password";
+          template.metadata.labels.team = "billing";
+        }
     )
     || throw "external-secrets pinning: billing ${builtins.toJSON billing}, db ${builtins.toJSON db}";
 
@@ -288,7 +299,9 @@ in
       && builtins.length tokenRefs == 1
       && builtins.elem (builtins.head tokenRefs) (dependsOn store)
       && builtins.elem "requires:${hashOf "app" "consumer" "sync"}" (dependsOn (marker "billing"))
-      && builtins.elem "requires:${hashOf "app" "consumer" "generated"}" (dependsOn (marker "db-password"))
+      && builtins.elem "requires:${hashOf "app" "consumer" "generated"}" (
+        dependsOn (marker "db-password")
+      )
     )
     || throw "external-secrets edges: store ${builtins.toJSON store.metadata}, markers ${
       builtins.toJSON [
@@ -335,13 +348,16 @@ in
           modules = [ { instances.monitoring.prometheus.package = prometheusStub; } ];
         };
       on = manifests (withPrometheus { });
-      off = manifests (withPrometheus { metrics.enabled = false; });
+      off = manifests (withPrometheus {
+        metrics.enabled = false;
+      });
       services = ofKind "Service";
       monitors = ofKind "ServiceMonitor" on;
       selected =
         monitor:
         builtins.filter (
-          s: lib.all (k: (s.metadata.labels or { }).${k} or null == monitor.spec.selector.matchLabels.${k}) (
+          s:
+          lib.all (k: (s.metadata.labels or { }).${k} or null == monitor.spec.selector.matchLabels.${k}) (
             builtins.attrNames monitor.spec.selector.matchLabels
           )
         ) (services on);
@@ -355,7 +371,9 @@ in
       && map (p: p.name) (find "Service" "external-secrets-webhook").spec.ports == [ "webhook" ]
       && ofKind "ServiceMonitor" off == [ ]
     )
-    || throw "external-secrets metrics: monitors ${builtins.toJSON (map (m: m.spec.selector) monitors)}";
+    || throw "external-secrets metrics: monitors ${
+      builtins.toJSON (map (m: m.spec.selector) monitors)
+    }";
 
   # The definitions keep the vendored label the cert-controller's partial
   # cache selects, and the check Job dry-runs one object per webhook
@@ -368,20 +386,27 @@ in
       unlabelled = builtins.filter (
         c: (c.metadata.labels or { })."external-secrets.io/component" or null != "controller"
       ) crds;
-      certArgs = (builtins.head (find "Deployment" "external-secrets-cert-controller").spec.template.spec.containers).args;
+      certArgs =
+        (builtins.head (find "Deployment" "external-secrets-cert-controller").spec.template.spec.containers)
+        .args;
       checkFiles = builtins.attrNames (find "ConfigMap" "external-secrets-webhook-check").data;
-      checkKinds = map (f: (builtins.fromJSON (find "ConfigMap" "external-secrets-webhook-check").data.${f}).kind) checkFiles;
+      checkKinds = map (
+        f: (builtins.fromJSON (find "ConfigMap" "external-secrets-webhook-check").data.${f}).kind
+      ) checkFiles;
     in
     (
       builtins.length crds == 25
       && unlabelled == [ ]
       && builtins.elem "--enable-partial-cache=true" certArgs
-      && checkKinds == [
-        "ExternalSecret"
-        "SecretStore"
-      ]
+      &&
+        checkKinds == [
+          "ExternalSecret"
+          "SecretStore"
+        ]
     )
-    || throw "external-secrets cert-controller cache: unlabelled ${builtins.toJSON (map (c: c.metadata.name) unlabelled)}, args ${builtins.toJSON certArgs}, check ${builtins.toJSON checkKinds}";
+    || throw "external-secrets cert-controller cache: unlabelled ${
+      builtins.toJSON (map (c: c.metadata.name) unlabelled)
+    }, args ${builtins.toJSON certArgs}, check ${builtins.toJSON checkKinds}";
 
   # crds/sources.txt fetches the release the package pins.
   external-secrets-sources-match-release =
@@ -416,10 +441,11 @@ in
       && builtins.length generic == 1
       && lib.hasInfix "--unsafe-allow-generic-targets" (builtins.head generic)
       &&
-        failedAssertions (
-          defaultConfig // { extraArgs = [ "--unsafe-allow-generic-targets=false" ]; }
-        ) == [ ]
-      && failedAssertions (defaultConfig // { extraArgs = [ "--unsafe-allow-generic-targets=true" ]; }) != [ ]
+        failedAssertions (defaultConfig // { extraArgs = [ "--unsafe-allow-generic-targets=false" ]; })
+        == [ ]
+      &&
+        failedAssertions (defaultConfig // { extraArgs = [ "--unsafe-allow-generic-targets=true" ]; })
+        != [ ]
     )
     || throw "external-secrets assertions: latest ${builtins.toJSON latest}, generic ${builtins.toJSON generic}";
 
@@ -552,12 +578,20 @@ in
         };
         templateReplacesKeys = {
           bad = externalSecret { template.data.URL = "https://{{ .A }}"; } { keys = [ "A" ]; };
-          good = externalSecret {
-            template = {
-              mergePolicy = "Merge";
-              data.URL = "https://{{ .A }}";
-            };
-          } { keys = [ "A" "URL" ]; };
+          good =
+            externalSecret
+              {
+                template = {
+                  mergePolicy = "Merge";
+                  data.URL = "https://{{ .A }}";
+                };
+              }
+              {
+                keys = [
+                  "A"
+                  "URL"
+                ];
+              };
         };
         leaderElect = {
           bad = clusterWith { config.extraArgs = [ "--enable-leader-election=false" ]; };
@@ -574,5 +608,6 @@ in
       };
       wrong = builtins.attrNames (lib.filterAttrs (_: c: !(evalFails c.bad) || evalFails c.good) cases);
     in
-    wrong == [ ] || throw "external-secrets refusals: bad case built or good case failed: ${builtins.toJSON wrong}";
+    wrong == [ ]
+    || throw "external-secrets refusals: bad case built or good case failed: ${builtins.toJSON wrong}";
 }

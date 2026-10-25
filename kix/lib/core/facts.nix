@@ -94,8 +94,18 @@ rec {
           )
         else
           null;
+      # The operand pods may run outside the custom resource's namespace,
+      # as a controller serving resources in every namespace does.
+      _ns =
+        if
+          entry ? podNamespace
+          && !(builtins.isString entry.podNamespace || builtins.isFunction entry.podNamespace)
+        then
+          throw "kix: factBehavior for '${kindKey}' (${source}): podNamespace must be a namespace name or a function `cr: \"<namespace>\"` of the manifest"
+        else
+          null;
     in
-    builtins.seq _enum (builtins.seq _sel entry);
+    builtins.seq _enum (builtins.seq _sel (builtins.seq _ns entry));
 
   # Custom API groups need factBehavior from their CRD declaration or a
   # cluster override keyed by "group/Kind". Groups without a dot, *.k8s.io,

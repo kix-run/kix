@@ -1,0 +1,88 @@
+---
+// Recap: the "What you learned" list at the end of a tutorial, as rows with
+// an orange check.
+//
+// Usage: wrap a Markdown list. Rows that start with inline code show the
+// code in a command column; other rows are plain statements.
+//
+//   <Recap>
+//   - `kix check` catches problems before deploy;
+//   - one managed namespace;
+//   </Recap>
+import { parseListRows } from '../lib/list-rows';
+
+const rows = parseListRows(await Astro.slots.render('default'));
+---
+
+<ul class="kix-recap not-content">
+  {
+    rows.map((row) => (
+      <li class:list={{ 'is-text': !row.command }}>
+        <svg class="check" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>
+        {row.command && <span class="command" set:html={row.command} />}
+        <span class="text" set:html={row.text} />
+      </li>
+    ))
+  }
+</ul>
+
+<style>
+  .kix-recap {
+    margin: 1.25rem 0 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--kix-line);
+  }
+  li {
+    display: grid;
+    grid-template-columns: 1.25rem minmax(8rem, max-content) 1fr;
+    column-gap: 0.75rem;
+    align-items: baseline;
+    margin: 0;
+    border-bottom: 1px solid var(--kix-line);
+    padding: 0.625rem 0;
+    font-size: 0.9375rem;
+    line-height: 1.5;
+  }
+  li.is-text {
+    grid-template-columns: 1.25rem 1fr;
+  }
+  .check {
+    align-self: center;
+    color: var(--kix-brand);
+  }
+  .command {
+    padding-inline-end: 1.5rem;
+    color: var(--kix-ink);
+    font-family: var(--__sl-font-mono);
+    font-size: 0.875rem;
+  }
+  .command :global(code) {
+    font-family: inherit;
+  }
+  .text {
+    color: var(--kix-ink-2);
+  }
+  li.is-text .text {
+    color: var(--kix-ink);
+  }
+  .text :global(code) {
+    border: 1px solid var(--kix-line);
+    border-radius: 4px;
+    padding: 0.0625rem 0.375rem;
+    background-color: var(--kix-paper-2);
+    color: var(--kix-ink);
+    font-size: 0.875em;
+  }
+  .text :global(a) {
+    color: var(--kix-accent-text);
+  }
+  @media (max-width: 36rem) {
+    li {
+      grid-template-columns: 1.25rem 1fr;
+    }
+    .text {
+      grid-column: 2;
+    }
+  }
+</style>

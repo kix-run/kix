@@ -11,6 +11,8 @@
 //! is answered, which models a concurrent writer between a read and a delete.
 //! [`FakeApi::fail_next`] answers the next requests for one path with a
 //! plain-text error, as the apiserver does for a path it has not registered.
+//! [`FakeApi::serve_retired_records`] adds the Activation kind under a
+//! retired domain to discovery, as on a cluster that has not migrated.
 
 use std::sync::{Arc, Mutex};
 
@@ -42,9 +44,20 @@ const KINDS: &[(&str, &str, &str, &str, bool)] = &[
     (TWO_VERSION_GROUP, "v1beta1", "Gadget", "gadgets", true),
 ];
 
+/// The Activation kind under the first retired domain, which
+/// [`FakeApi::serve_retired_records`] adds, as on a cluster deployed before
+/// the domain moved.
+const RETIRED_RECORDS: (&str, &str, &str, &str, bool) = (
+    crate::legacy_domain::DOMAINS[0],
+    "v1alpha1",
+    RECORD_KIND,
+    "activations",
+    false,
+);
+
 /// The group [`KINDS`] serves at two versions. Its preferred version is
 /// `v1`, the first listed.
-pub const TWO_VERSION_GROUP: &str = "example.kix.test";
+pub(crate) const TWO_VERSION_GROUP: &str = "example.kix.test";
 
 type Hook = Box<dyn FnOnce(&mut Value) + Send>;
 
@@ -58,6 +71,8 @@ struct State {
     /// `(path, remaining, status)`: answer that many requests for `path`
     /// with `status` and a plain-text body.
     failures: Vec<(String, u32, u16)>,
+    /// Discovery also serves [`RETIRED_RECORDS`].
+    retired_records: bool,
 }
 
 impl State {
@@ -83,7 +98,7 @@ impl FakeApi {
     }
 
     /// Add an object, assigning it a uid and a resourceVersion.
-    pub fn insert(&self, mut obj: Value) {
+    pub(crate) fn insert(&self, mut obj: Value) {
         let mut st = self.state.lock().unwrap();
         let rv = st.bump();
         let meta = obj["metadata"].as_object_mut().expect("metadata");
@@ -112,6 +127,12 @@ impl FakeApi {
             .unwrap()
             .failures
             .push((path.to_string(), times, status));
+    }
+
+    /// Serve the Activation kind under a retired domain too, which is what
+    /// the domain gate refuses.
+    pub fn serve_retired_records(&self) {
+        self.state.lock().unwrap().retired_records = true;
     }
 
     /// Names of the objects of `kind` still held, sorted.
@@ -186,7 +207,11 @@ impl FakeApi {
 
     fn handle(&self, method: &http::Method, path: &str, query: &str, body: &[u8]) -> (u16, Value) {
         let mut st = self.state.lock().unwrap();
-        if let Some(doc) = discovery(path) {
+        let mut kinds = KINDS.to_vec();
+        if st.retired_records {
+            kinds.push(RETIRED_RECORDS);
+        }
+        if let Some(doc) = discovery(&kinds, path) {
             return (200, doc);
         }
         let Some(target) = Target::parse(path) else {
@@ -297,9 +322,10 @@ impl Target {
     }
 }
 
-fn discovery(path: &str) -> Option<Value> {
+/// The discovery document at `path` for the served `kinds`.
+fn discovery(kinds: &[(&str, &str, &str, &str, bool)], path: &str) -> Option<Value> {
     let resources = |group: &str, version: &str| -> Value {
-        let list: Vec<Value> = KINDS
+        let list: Vec<Value> = kinds
             .iter()
             .filter(|(g, v, ..)| *g == group && *v == version)
             .map(|(_, _, kind, plural, namespaced)| {
@@ -329,7 +355,7 @@ fn discovery(path: &str) -> Option<Value> {
             // Each group once, its versions in the order KINDS first lists
             // them; the first is the preferred version.
             let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
-            for (g, v, ..) in KINDS.iter().filter(|(g, ..)| !g.is_empty()) {
+            for (g, v, ..) in kinds.iter().filter(|(g, ..)| !g.is_empty()) {
                 match groups.iter_mut().find(|(name, _)| name == g) {
                     Some((_, versions)) if !versions.contains(v) => versions.push(v),
                     Some(_) => {}
@@ -348,7 +374,7 @@ fn discovery(path: &str) -> Option<Value> {
                 .collect();
             Some(json!({ "kind": "APIGroupList", "apiVersion": "v1", "groups": groups }))
         }
-        ["apis", g, v] if KINDS.iter().any(|(kg, kv, ..)| kg == g && kv == v) => {
+        ["apis", g, v] if kinds.iter().any(|(kg, kv, ..)| kg == g && kv == v) => {
             Some(resources(g, v))
         }
         _ => None,

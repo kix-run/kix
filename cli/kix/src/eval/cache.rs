@@ -8,13 +8,13 @@ use rusqlite::Connection;
 use super::error::KixEvalError;
 
 /// SQLite eval cache for memoizing Nix evaluation results.
-pub struct SqliteCache {
+pub(crate) struct SqliteCache {
     conn: Connection,
 }
 
 impl SqliteCache {
     /// Open (or create) a cache database at the given path.
-    pub fn open(path: &Path) -> Result<Self, KixEvalError> {
+    pub(crate) fn open(path: &Path) -> Result<Self, KixEvalError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
@@ -39,7 +39,7 @@ impl SqliteCache {
     }
 
     /// Open an in-memory cache (for testing).
-    pub fn open_in_memory() -> Result<Self, KixEvalError> {
+    pub(crate) fn open_in_memory() -> Result<Self, KixEvalError> {
         let conn = Connection::open_in_memory()
             .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
         conn.execute_batch(
@@ -60,7 +60,7 @@ impl SqliteCache {
     }
 
     /// Look up a cached evaluation result by key.
-    pub fn get(&self, key: &str) -> Result<Option<String>, KixEvalError> {
+    pub(crate) fn get(&self, key: &str) -> Result<Option<String>, KixEvalError> {
         let mut stmt = self
             .conn
             .prepare_cached("SELECT value FROM eval_cache WHERE key = ?1")
@@ -73,7 +73,7 @@ impl SqliteCache {
     }
 
     /// Store an evaluation result.
-    pub fn put(&self, key: &str, value: &str) -> Result<(), KixEvalError> {
+    pub(crate) fn put(&self, key: &str, value: &str) -> Result<(), KixEvalError> {
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO eval_cache (key, value) VALUES (?1, ?2)",
@@ -83,27 +83,6 @@ impl SqliteCache {
         Ok(())
     }
 
-    /// Compute a cache key from flake path, lockfile contents, and attribute name.
-    ///
-    /// The key is a BLAKE3 hash of: canonical flake path + flake.lock contents + attr.
-    /// If flake.lock doesn't exist, the flake path alone is hashed with the attr
-    /// (the cache will still work, but won't invalidate on dependency changes).
-    pub fn compute_key(flake_path: &Path, attr: &str) -> Result<String, KixEvalError> {
-        let canonical = super::store::resolve_symlinks(flake_path);
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(canonical.to_string_lossy().as_bytes());
-
-        let lockfile = canonical.join("flake.lock");
-        if lockfile.exists() {
-            let lock_contents = std::fs::read(&lockfile)
-                .map_err(|e| KixEvalError::CacheError { source: e.into() })?;
-            hasher.update(&lock_contents);
-        }
-
-        hasher.update(attr.as_bytes());
-        Ok(hasher.finalize().to_hex().to_string())
-    }
-
     /// Compute a source fingerprint that changes when any `.nix` file is added, removed, or modified.
     ///
     /// Uses a two-level strategy:
@@ -111,7 +90,10 @@ impl SqliteCache {
     ///    the stored content hash without reading file contents.
     /// 2. **content hash**: read all `.nix` files, compute BLAKE3 over sorted (path, content) pairs,
     ///    store the new snapshot.
-    pub fn compute_source_fingerprint(&self, flake_path: &Path) -> Result<String, KixEvalError> {
+    pub(crate) fn compute_source_fingerprint(
+        &self,
+        flake_path: &Path,
+    ) -> Result<String, KixEvalError> {
         let canonical = super::store::resolve_symlinks(flake_path);
         let canonical_str = canonical.to_string_lossy().to_string();
         let files = walk_nix_files(&canonical)?;
@@ -169,7 +151,7 @@ impl SqliteCache {
     /// Compute a cache key that includes the source fingerprint.
     ///
     /// Key = BLAKE3(canonical_path + flake.lock contents + source_fingerprint + attr).
-    pub fn compute_key_with_source(
+    pub(crate) fn compute_key_with_source(
         flake_path: &Path,
         attr: &str,
         source_fingerprint: &str,
@@ -201,7 +183,7 @@ impl SqliteCache {
 ///
 /// Skips `.git`, `.direnv`, `result`, and `node_modules` directories.
 /// Results are sorted by relative path for deterministic ordering.
-pub fn walk_nix_files(flake_path: &Path) -> Result<Vec<(String, u64)>, KixEvalError> {
+pub(crate) fn walk_nix_files(flake_path: &Path) -> Result<Vec<(String, u64)>, KixEvalError> {
     use std::time::UNIX_EPOCH;
 
     const SKIP_DIRS: &[&str] = &[".git", ".direnv", "result", "node_modules"];
@@ -285,14 +267,6 @@ mod tests {
         let cache = SqliteCache::open_in_memory().unwrap();
         let val = cache.get("nonexistent").unwrap();
         assert_eq!(val, None);
-    }
-
-    #[test]
-    fn compute_key_is_deterministic() {
-        let dir = tempfile::tempdir().unwrap();
-        let k1 = SqliteCache::compute_key(dir.path(), "cluster-nw1").unwrap();
-        let k2 = SqliteCache::compute_key(dir.path(), "cluster-nw1").unwrap();
-        assert_eq!(k1, k2);
     }
 
     #[test]

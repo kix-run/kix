@@ -1,4 +1,5 @@
-//! A scripted [`ClusterOps`] for engine tests. No cluster.
+//! A scripted [`ResourceIo`], [`DeployRecord`] and [`SecretHydrator`] for
+//! engine tests. No cluster.
 //!
 //! The rule that makes this useful: **nothing completes unless the script
 //! says so.** A fake that answers on the first poll cannot show a parked
@@ -26,11 +27,15 @@ use crate::manifest::types::ResourceId;
 
 use super::super::apply::{ApplyAction, ApplyError, ApplyResult};
 use super::super::cancel::CancelToken;
-use super::super::fetch::FetchError;
+use super::super::errors::FetchError;
 use super::super::prune_guard::Pruned;
 use super::super::readiness::{ImportTarget, ReadinessError, ReadinessResult};
 use super::super::secrets::{HydrationResult, SecretError};
-use super::{ClusterOps, Finalized, OnStatus};
+pub use super::Finalized;
+use super::{
+    DeleteError, DeployRecord, OnStatus, ReadError, RecordWriteError, RecreateError, ResourceIo,
+    SecretHydrator, StampError,
+};
 
 /// A latch many calls can wait on. Opened once by the test.
 #[derive(Clone, Default, Debug)]
@@ -107,7 +112,7 @@ pub struct NodeScript {
     pub apply: Behaviour<Result<ApplyAction, ApplyFailure>>,
     pub recreate: Behaviour<Result<ApplyAction, String>>,
     pub ready: Behaviour<Ready>,
-    /// What [`ClusterOps::get_live`] answers. Default: nothing is live.
+    /// What [`ResourceIo::get_live`] answers. Default: nothing is live.
     pub live: Behaviour<Result<Option<Value>, String>>,
 }
 
@@ -196,6 +201,7 @@ pub struct ScriptedOps {
     default_node: Mutex<NodeScript>,
     rediscover: Mutex<VecDeque<Behaviour<Result<(), String>>>>,
     default_rediscover: Mutex<Behaviour<Result<(), String>>>,
+    begin: Mutex<Behaviour<Result<(), String>>>,
     checkpoint: Mutex<Behaviour<Result<(), String>>>,
     stamp: Mutex<Behaviour<Result<(), String>>>,
     delete: Mutex<Behaviour<Result<Pruned, String>>>,
@@ -221,6 +227,7 @@ impl ScriptedOps {
             default_node: Mutex::new(NodeScript::default()),
             rediscover: Mutex::new(VecDeque::new()),
             default_rediscover: Mutex::new(Behaviour::Now(Ok(()))),
+            begin: Mutex::new(Behaviour::Now(Ok(()))),
             checkpoint: Mutex::new(Behaviour::Now(Ok(()))),
             stamp: Mutex::new(Behaviour::Now(Ok(()))),
             delete: Mutex::new(Behaviour::Now(Ok(Pruned::Deleted))),
@@ -233,10 +240,15 @@ impl ScriptedOps {
         }
     }
 
-    /// What [`ClusterOps::dry_run`] answers.
+    /// Whether the engine runs against the fake as a dry run, which has no
+    /// record (see [`super::Cluster::scripted`]).
     pub fn set_dry_run(&self, dry_run: bool) -> &Self {
         self.dry_run.store(dry_run, Ordering::SeqCst);
         self
+    }
+
+    pub(crate) fn is_dry_run(&self) -> bool {
+        self.dry_run.load(Ordering::SeqCst)
     }
 
     /// Script one node. Unscripted nodes use [`Self::default_node`].
@@ -260,6 +272,11 @@ impl ScriptedOps {
 
     pub fn default_rediscover(&self, b: Behaviour<Result<(), String>>) -> &Self {
         *self.default_rediscover.lock().unwrap() = b;
+        self
+    }
+
+    pub fn begin_behaviour(&self, b: Behaviour<Result<(), String>>) -> &Self {
+        *self.begin.lock().unwrap() = b;
         self
     }
 
@@ -359,16 +376,7 @@ impl Drop for InFlightApply<'_> {
 }
 
 #[async_trait]
-impl ClusterOps for ScriptedOps {
-    fn dry_run(&self) -> bool {
-        self.dry_run.load(Ordering::SeqCst)
-    }
-
-    async fn begin(&self) -> Result<(), String> {
-        self.record(Call::Begin);
-        Ok(())
-    }
-
+impl SecretHydrator for ScriptedOps {
     async fn hydrate(&self, manifest: Value) -> Result<(Value, Vec<HydrationResult>), SecretError> {
         let rid = ResourceId::from_value(&manifest);
         self.record(Call::HydrateStart(rid.clone()));
@@ -387,7 +395,10 @@ impl ClusterOps for ScriptedOps {
             }),
         }
     }
+}
 
+#[async_trait]
+impl ResourceIo for ScriptedOps {
     async fn apply(&self, manifest: &Value) -> Result<ApplyResult, ApplyError> {
         let rid = ResourceId::from_value(manifest);
         let _in_flight = InFlightApply::enter(self);
@@ -398,7 +409,6 @@ impl ClusterOps for ScriptedOps {
         match out {
             Ok(action) => Ok(ApplyResult {
                 action,
-                resource_id: rid,
                 preview: None,
             }),
             Err(ApplyFailure::Other(msg)) => Err(ApplyError::UnknownKind { kind: msg }),
@@ -411,21 +421,25 @@ impl ClusterOps for ScriptedOps {
         }
     }
 
-    async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, String> {
+    async fn get_live(&self, rid: &ResourceId) -> Result<Option<Value>, ReadError> {
         self.record(Call::GetLive(rid.clone()));
         let script = self.node_script(rid);
-        script.live.run().await
+        script.live.run().await.map_err(ReadError::Scripted)
     }
 
-    async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, String> {
+    async fn recreate_in_place(&self, manifest: &Value) -> Result<ApplyResult, RecreateError> {
         let rid = ResourceId::from_value(manifest);
         self.record(Call::RecreateStart(rid.clone()));
         let script = self.node_script(&rid);
-        script.recreate.run().await.map(|action| ApplyResult {
-            action,
-            resource_id: rid,
-            preview: None,
-        })
+        script
+            .recreate
+            .run()
+            .await
+            .map(|action| ApplyResult {
+                action,
+                preview: None,
+            })
+            .map_err(RecreateError::Scripted)
     }
 
     async fn wait_ready(
@@ -484,51 +498,62 @@ impl ClusterOps for ScriptedOps {
         })
     }
 
+    async fn prune(&self, rid: &ResourceId) -> Result<Pruned, DeleteError> {
+        self.record(Call::Delete(rid.clone()));
+        let b = self.delete.lock().unwrap().clone();
+        b.run().await.map_err(DeleteError::Scripted)
+    }
+}
+
+#[async_trait]
+impl DeployRecord for ScriptedOps {
+    async fn begin(&self) -> Result<(), RecordWriteError> {
+        self.record(Call::Begin);
+        let b = self.begin.lock().unwrap().clone();
+        b.run().await.map_err(RecordWriteError::Scripted)
+    }
+
+    async fn discovery_refreshed(&self) {}
+
     async fn checkpoint(
         &self,
         applied: usize,
         failed: usize,
         finalizing: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), RecordWriteError> {
         self.record(Call::Checkpoint {
             applied,
             failed,
             finalizing,
         });
         let b = self.checkpoint.lock().unwrap().clone();
-        b.run().await
+        b.run().await.map_err(RecordWriteError::Scripted)
     }
 
-    async fn record_activation_on_skipped(&self, rid: &ResourceId) -> Result<(), String> {
+    async fn stamp_unchanged(&self, rid: &ResourceId) -> Result<(), StampError> {
         self.record(Call::Stamp(rid.clone()));
         let b = self.stamp.lock().unwrap().clone();
-        b.run().await
-    }
-
-    async fn delete(&self, rid: &ResourceId) -> Result<Pruned, String> {
-        self.record(Call::Delete(rid.clone()));
-        let b = self.delete.lock().unwrap().clone();
-        b.run().await
+        b.run().await.map_err(StampError::Scripted)
     }
 
     async fn finalize(
         &self,
         had_failures: bool,
         orphans_left: bool,
-    ) -> Result<Option<Finalized>, String> {
+    ) -> Result<Option<Finalized>, RecordWriteError> {
         self.record(Call::Finalize {
             had_failures,
             orphans_left,
         });
         let b = self.finalize.lock().unwrap().clone();
-        b.run().await
+        b.run().await.map_err(RecordWriteError::Scripted)
     }
 
-    async fn abort(&self, reason: &str) -> Result<(), String> {
+    async fn abort(&self, reason: &str) -> Result<(), RecordWriteError> {
         self.record(Call::Abort {
             reason: reason.to_string(),
         });
         let b = self.abort.lock().unwrap().clone();
-        b.run().await
+        b.run().await.map_err(RecordWriteError::Scripted)
     }
 }

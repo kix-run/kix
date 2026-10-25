@@ -159,6 +159,11 @@ rec {
       outputs ? { },
       requires ? [ ],
       extraDeps ? [ ],
+      # Store files the manifest's store path references without a deploy
+      # order (no `kix.run/depends-on` entry), as a store path interpolated
+      # into a field would. The Activation record references
+      # kix-packages.json this way.
+      storeReferences ? [ ],
       extra ? { },
       clusterDomain ? "cluster.local",
       # per-kind terminate/conduct override from the factBehavior index
@@ -394,7 +399,13 @@ rec {
         acc: dep: if builtins.isAttrs dep && dep ? outPath then acc // builtins.getContext "${dep}" else acc
       ) { } allDeps;
 
-      manifestJsonWithDeps = builtins.appendContext manifestJsonStamped depContexts;
+      storeReferenceContexts = builtins.foldl' (
+        acc: file: acc // builtins.getContext "${file}"
+      ) { } storeReferences;
+
+      manifestJsonWithDeps = builtins.appendContext manifestJsonStamped (
+        depContexts // storeReferenceContexts
+      );
 
       # Forward facts from manifest values through out.* for conducting
       # resources. manifestJsonSealed removes fact tokens from store references
@@ -720,6 +731,16 @@ rec {
         && builtins.isString readiness.path
         && lib.hasPrefix "/" readiness.path
         && builtins.isString readiness.equals;
+      isPathNotForm =
+        builtins.isAttrs readiness
+        &&
+          builtins.attrNames readiness == [
+            "notEquals"
+            "path"
+          ]
+        && builtins.isString readiness.path
+        && lib.hasPrefix "/" readiness.path
+        && builtins.isString readiness.notEquals;
       isConditionForm =
         builtins.isAttrs readiness
         && builtins.attrNames readiness == [ "condition" ]
@@ -734,13 +755,15 @@ rec {
     in
     if readiness == null then
       null
-    else if !(isPathForm || isConditionForm) then
+    else if !(isPathForm || isPathNotForm || isConditionForm) then
       throw ''
         ${context}: readiness declaration for ${groupKind} must be one of
           { path = "/status/..."; equals = "<value>"; }
+          { path = "/status/..."; notEquals = "<value>"; }
           { condition = { type = "<Type>"; status = "True"; }; }
         (path: a JSON pointer string starting with "/"; every value a string,
         and equals = "true" or "3" also matches a JSON true or 3 at the path;
+        notEquals is ready while the path is absent or holds another value;
         no other keys)
       ''
     else
@@ -770,17 +793,21 @@ rec {
       factBehavior ? null,
       # Stamp kix.run/readiness on each CR for the CLI to evaluate at deploy.
       # Use this for operators with conditions other than Ready/Available.
-      # Two shapes:
+      # Three shapes:
       #   readiness = { path = "/status/updateStatus"; equals = "operational"; }
+      #   readiness = { path = "/status/updateStatus"; notEquals = "failed"; }
       #   readiness = { condition = { type = "Bootstrapped"; status = "True"; }; }
       # path is a JSON pointer into the live object; readiness requires its
       # value to equal the string in equals, or, for a JSON boolean or
       # number, its JSON text to equal it: `equals = "true"` matches
-      # `true`. The condition form requires an entry in status.conditions
-      # whose type and status both match. Both forms wait while the
-      # operator's observedGeneration (status.observedGeneration for a
-      # path, the condition's own for a condition) is below
-      # metadata.generation, and impose no such wait when it is absent.
+      # `true`. notEquals is ready while the path is absent or holds any
+      # other value, for a resource whose status only a consumer writes
+      # when the consumer may not exist. The condition form requires an
+      # entry in status.conditions whose type and status both match. Every
+      # form waits while the operator's observedGeneration
+      # (status.observedGeneration for a path; for a condition, its own,
+      # else status.observedGeneration) is below metadata.generation, and
+      # imposes no such wait when it is absent.
       readiness ? null,
     }:
     let

@@ -16,7 +16,7 @@
 #
 # Modes (`mode`):
 #   deployment   a gateway. Replicas follow the cluster's availability level
-#                (one at `none`, two at `pod` and `node`, three at `zone`),
+#                (one at `none`, two above),
 #                except with `events.enabled`, below.
 #   daemonset    an agent on every Linux node, tolerating every NoSchedule
 #                taint. The Service sets `internalTrafficPolicy: Local`, so a
@@ -236,7 +236,7 @@ in
               none = 1;
               pod = 2;
               node = 2;
-              zone = 3;
+              zone = 2;
             };
 
         builtinSettings = {
@@ -386,11 +386,7 @@ in
         # Components that read pods, nodes, or the kubelet. The package
         # renders no RBAC for them and mounts a token only for events.
         unsupported =
-          builtins.concatMap
-            (
-              { section, type }:
-              map (key: "${section}.${key}") (ofType type section)
-            )
+          builtins.concatMap ({ section, type }: map (key: "${section}.${key}") (ofType type section))
             [
               {
                 section = "processors";
@@ -412,8 +408,7 @@ in
 
         # The ClusterRole grants core/v1 events only, so every object a
         # k8s_objects receiver lists must be that resource.
-        watchesEvents =
-          o: builtins.isAttrs o && (o.name or null) == "events" && (o.group or "") == "";
+        watchesEvents = o: builtins.isAttrs o && (o.name or null) == "events" && (o.group or "") == "";
         objectsReceivers = ofType "k8s_objects" "receivers";
         badObjects = builtins.filter (
           key:
@@ -426,18 +421,17 @@ in
         refusals =
           lib.optional (unsupported != [ ])
             "settings sets ${lib.concatStringsSep ", " unsupported}, which needs a ServiceAccount token and RBAC this package does not render. Remove it, or replace the configMap and workload parts and add a ClusterRole through partsOverlays."
-          ++ lib.optional (objectsReceivers != [ ] && !events)
-            "settings sets receivers.${builtins.head objectsReceivers}, which needs events.enabled = true (the ServiceAccount token and the events RBAC)."
-          ++ lib.optional (events && badObjects != [ ])
-            "receivers.${builtins.head badObjects}.objects must be a non-empty list whose entries all have name = \"events\" and no group other than \"\" (core/v1 Events), the only resource the package's ClusterRole grants.";
+          ++
+            lib.optional (objectsReceivers != [ ] && !events)
+              "settings sets receivers.${builtins.head objectsReceivers}, which needs events.enabled = true (the ServiceAccount token and the events RBAC)."
+          ++
+            lib.optional (events && badObjects != [ ])
+              "receivers.${builtins.head badObjects}.objects must be a non-empty list whose entries all have name = \"events\" and no group other than \"\" (core/v1 Events), the only resource the package's ClusterRole grants.";
 
         # The configMap part throws, so a partsOverlays entry that replaces
         # it also clears the refusal.
         checkedConfig =
-          if refusals == [ ] then
-            collectorConfig
-          else
-            throw "${who}: ${lib.concatStringsSep " " refusals}";
+          if refusals == [ ] then collectorConfig else throw "${who}: ${lib.concatStringsSep " " refusals}";
 
         # The collector opens the otlp receiver only when a pipeline lists it.
         otlpServed = builtins.any (p: builtins.elem "otlp" (p.receivers or [ ])) (
@@ -487,8 +481,10 @@ in
               ++ kix.guardArgs {
                 inherit who;
                 owned = {
-                  "--config" = "the package's merged settings are the collector's only configuration; put configuration in settings.";
-                  "--set" = "it overrides configuration paths after the package's checks; put configuration in settings.";
+                  "--config" =
+                    "the package's merged settings are the collector's only configuration; put configuration in settings.";
+                  "--set" =
+                    "it overrides configuration paths after the package's checks; put configuration in settings.";
                 };
               } config.extraArgs;
               env = kix.mkEnvVars (kix.mergeEnv { inherit who; } config.env);

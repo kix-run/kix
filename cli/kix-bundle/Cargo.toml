@@ -1,0 +1,27 @@
+[package]
+name = "kix-bundle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "kix bundles: a cluster build as one file, planned and deployed without Nix"
+
+[lib]
+name = "kix_bundle"
+
+[dependencies]
+kix-container.workspace = true
+kix-lib.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# zstd's seekable format
+zstd.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+kix-lib = { workspace = true, features = ["test-util"] }
+proptest.workspace = true
+# The tests read bundles with zstd's own seekable-format reader too.
+zstd-safe = { version = "8", features = ["seekable"] }

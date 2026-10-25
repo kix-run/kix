@@ -8,7 +8,8 @@ Each command chooses its own default and decides which values it supports. A
 value a command does not support is not an error: the command falls back to
 the output shown in the table below. Add `-q` when a script parses the result, so
 that progress lines do not mix with it. `kix plan` sends its progress lines to
-stderr for every format except `text`.
+stderr for `markdown`, and refuses `json` and `yaml`: it keeps a plan as data
+in a [plan file](/docs/reference/cli/plan/#plan-file) (`--save`).
 
 This page is hand-maintained. Check the `output_format` and
 `global.output` reads in `cli/kix-cli/src/commands/` when in doubt.
@@ -19,7 +20,7 @@ This page is hand-maintained. Check the `output_format` and
 | --- | --- | --- | --- | --- | --- |
 | `build` | `yaml` | YAML | JSON | YAML | YAML |
 | `diff` | `text` | Text | `Plan` document as JSON | `Plan` document as YAML | Markdown for pull request comments |
-| `plan`, `deploy --dry-run` | `text` | Text | `Plan` document as JSON | `Plan` document as YAML | Markdown for pull request comments |
+| `plan`, `deploy --dry-run` | `text` | Text | Refused: use `--save` | Refused: use `--save` | Markdown for pull request comments |
 | `check` | `text` | Text | JSON | YAML | Text |
 | `list clusters`, `list packages` | `text` | Text | JSON | YAML | Text |
 | `graph` | `text` (tree) | Tree | JSON | YAML | Tree |
@@ -57,8 +58,8 @@ clear-line control sequences with `--no-color`; redirecting stderr may
 therefore preserve those sequences.
 
 :::note[Reference]
-See [`kix plan`](/docs/reference/cli/plan/#json-and-yaml) for the `Plan`
-document that `kix plan` and `kix diff` print as JSON and YAML, and
+See [`kix plan`](/docs/reference/cli/plan/#the-plan-document) for the `Plan`
+document that `kix diff` prints as JSON and YAML and a plan file holds, and
 [`kix diff`](/docs/reference/cli/diff/#output-formats) for the values a
 read-only comparison fills in.
 :::

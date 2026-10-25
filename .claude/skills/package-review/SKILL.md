@@ -9,6 +9,9 @@ This skill is for two readers: a package author checking their own work before
 opening a pull request, and an agent reviewing a contributed package. The top
 section says what a good package is. The checklist says how to find the ways a
 package usually falls short. Cite principles as `P<n>` (`PRINCIPLES.md`).
+An author starting a package uses the `package-authoring` skill first
+(`.claude/skills/package-authoring/SKILL.md`): the decision order, upstream
+research, and verification steps live there, not here.
 
 Every helper named here exists in `kix/lib` (`vocab/compose.nix`,
 `vocab/default.nix`, `scope/builders.nix`, `meta.nix`). When a name does not
@@ -58,6 +61,11 @@ resolve, search for the behaviour, then fix this file in the same change
 14. **Comments describe the current contract in plain, verified sentences.**
     No history, no site names, no claims the code does not enforce
     (`CLAUDE.md` "Code comments", `CLAUDE.prose.md`).
+15. **A package with metrics ships alerts for its own failure modes.** It
+    alerts when it stops reporting, when data is at risk, on stuck states,
+    and on exhaustion, at a severity that says how soon to act. It does not
+    restate the cluster's generic rules (BEST-PRACTICES §9.6; research steps
+    in "Writing a package's alerts" below).
 
 ## Checklist
 
@@ -74,7 +82,7 @@ when a check fails or the path is not evaluated by default.
 - M4. Is the version string typed in more than one place, including a `v`-prefixed tag beside an unprefixed version? `grep -c '<version>'` in the package. Fix: derive both from `release`.
 - M5. Does `meta` restate a default (`lifecycle = "stateless"`, `availability.max` at its default)? Fix: delete.
 - M6. Does a package that holds state others depend on (a volume, a database inside another server, a Secret) lack `meta.lifecycle = "stateful"`, or does a package that only consumes state claim it? Fix: match what it provides.
-- M7. Does the package fill an infrastructure role (`cni`, `dns`, `storageClasses`, `loadBalancer`, `network-policy-enforcer`, `snapshotController`, `metricsApi`) without claiming it in `meta.roles`, or claim a role for a plain service? Check `kix/lib/eval/roles.nix`. Fix: roles for registry slots only; `meta.defaultAliases` for services. A CSI driver does not claim `storageClasses`; the cluster aliases the instance.
+- M7. Does the package fill an infrastructure role (`cni`, `dns`, `storageClasses`, `loadBalancer`, `network-policy-enforcer`, `snapshotController`, `metricsApi`, `registryMirror`) without claiming it in `meta.roles`, or claim a role for a plain service? Check `kix/lib/eval/roles.nix`. Fix: roles for registry slots only; `meta.defaultAliases` for services. A CSI driver does not claim `storageClasses`; the cluster aliases the instance.
 - M8. Is `meta.defaultAliases` missing on a package others consume, so an instance with another name is invisible? Fix: add the provider alias (`database`, `valkey`, `storage`, `prometheus`, ...).
 - M9. Is the package genuinely one per cluster (its controller watches every namespace with no option to scope it, or two copies would fight over the same objects) without `meta.conflictsWith = [ "cluster:<defaultAlias>" ]`? Fix: add it and say "one per cluster" in the header. The entry must name one of the package's own keys: auto-instantiation reads it to refuse a copy in each of several requesting namespaces (a role claim also counts). Shipping CRDs or other cluster-scoped objects is not by itself a reason: two instances that render the same cluster-scoped object fail evaluation without the entry. When the package also declares `meta.annotationDomains`, the annotation-domain check fires first on a second instance; test each guard with the other removed (T3).
 - M10. Is a `meta.unsafe` grant (`raw-pvc`, `host-network`, `privileged`, `run-as-root`, `cluster-admin`) missing a comment saying why, or described as debt? Is a needed grant replaced by a `knownFailures` entry? Fix: grant with reason, or restructure.
@@ -143,11 +151,12 @@ when a check fails or the path is not evaluated by default.
 - D27. Does a public `out.mk*` builder that creates a resource in the caller's scope derive its default name from the provider instead of the caller's `instanceName`? Fix: the caller's name. Errors it raises name the consumer resource from the arguments it receives (P9).
 - D28. Does the package read `self.exposure.urlOrNull` although it cannot work without a public URL, or `url` although it can? *(lib: reading `url` without a route or scheme throws)* Fix: `url` when the URL is required; `urlOrNull` with a comment saying what the program does without one.
 - D29. Does the package read a cluster field, or ask for a new one, that names one implementation of an environment-provided role (a CNI, a DNS server)? Fix: the flavour declares the implementation as a platform `kix.mkImport` claiming the role, with the facts the package needs in its `out`, and not `optional = true` (an optional dependency never activates an optional import); the package takes it as an optional dependency and refuses, at evaluation, every combination of that dependency and `cluster.roles.<role>.binding` it cannot serve (the `cilium` package and `platform-cilium`).
-- D30. Does a package take `deps.database` without holding it to `kix.contracts.postgresDatabase.assertions`, or provide the `database` alias without passing `root.out` through `kix.contracts.postgresDatabase.check`? Detect: `grep -n 'deps.database\|"database"' default.nix`. Fix: the contract on both sides, so a provider swap fails at eval naming the field. A `gateway` provider likewise passes `root.out` through `kix.contracts.gateway.check`; `kix.expose` is the consumer and holds the dependency with `require`. An OTLP endpoint (tempo, otel-collector) passes `root.out` through `kix.contracts.otlpEndpoint.check`, and a package that takes `deps.otlp` holds it with `kix.contracts.otlpEndpoint.assertions`.
+- D30. Does a package take `deps.database` without holding it to `kix.contracts.postgresDatabase.assertions`, or provide the `database` alias without passing `root.out` through `kix.contracts.postgresDatabase.check`? Detect: `grep -n 'deps.database\|"database"' default.nix`. Fix: the contract on both sides, so a provider swap fails at eval naming the field. A `gateway` provider likewise passes `root.out` through `kix.contracts.gateway.check`; `kix.expose` is the consumer and holds the dependency with `require`. An OTLP endpoint (tempo, otel-collector) passes `root.out` through `kix.contracts.otlpEndpoint.check`, and a package that takes `deps.otlp` holds it with `kix.contracts.otlpEndpoint.assertions`. An OpenID Connect provider (keycloak) passes `root.out` through `kix.contracts.oidcProvider.check`; a package that signs users in takes `oidcProvider ? null` and `oidcClient ? null` read only under `oidc.enabled` (`kix.options.oidc`), holds the first with `kix.contracts.oidcProvider.assertions`, and calls `requireClient` before reading either.
+- D31. Does the build make a resource in a `let` binding that it never returns as a part? This usually happens with a `scope.mkSecretRef` or `scope.mkServiceRef` marker that only a pod reads. A build lists only a package's parts as its resources. Such a resource still deploys, because a workload depends on it, but it belongs to no package, so Kix stamps it `_cluster`. When `kix plan` or `kix diff` runs without the deployed build (as CI does), Kix files a `_cluster` marker as a package of its own. The marker then appears as a removed package and an added cluster-level resource on every deploy, although nothing changed. Detect: check that every `scope.mk*` call in the build sits in the returned set; or build the cluster and list the store paths in the activation's closure that no package in `kix-packages.json` lists. Fix: return the resource as a part and read it through `self.<part>`. A null part is skipped, so a part behind a toggle can stay `if … then scope.mkSecretRef { … } else null`.
 
 ### Secrets (S)
 
-- S1. Is a credential a `str` option or a CLI arg, so it lands in the Nix store or argv? Does the upstream binary take secrets as flags that `extraArgs` would pass? Fix: a secret dep with declared keys; refuse secret flags in `kix.guardArgs` and point at the dep (or the flag's env-var form). Does a `settings` or `datasources` passthrough that lands in a Kix-rendered Secret or ConfigMap accept the program's inline credential keys? Fix: refuse them with the key path and point at the program's file or reference form (alertmanager's `*_file` keys, Grafana's `$VAR` and `$__file{}`).
+- S1. Is a credential a `str` option or a CLI arg, so it lands in the Nix store or argv? Does the package take a credential as a `foo` string option with a `fooSource` SOPS path beside it, a pair that cannot name a Secret an operator creates? Fix: one secret dependency; the site picks `packages.secret` (stringData or SOPS) or `packages.secret-ref`. Does the upstream binary take secrets as flags that `extraArgs` would pass? Fix: a secret dep with declared keys; refuse secret flags in `kix.guardArgs` and point at the dep (or the flag's env-var form). Does a `settings` or `datasources` passthrough that lands in a Kix-rendered Secret or ConfigMap accept the program's inline credential keys? Fix: refuse them with the key path and point at the program's file or reference form (alertmanager's `*_file` keys, Grafana's `$VAR` and `$__file{}`).
 - S2. Is a credential passed as a Secret name string? Fix: a dep (`secret`/`secret-ref`) read through `out.keyRef`, `out.envFrom`, or `out.volume`.
 - S3. Is a secret dep named `credentials` or another generic name? Fix: a purpose name (`valkeyPassword`, `encryptionKey`, `cloudCredentials`); two packages share a name only when they read the same keys.
 - S4. Is a dep's key checked in `deps.<x>.assertions` or not at all? Remove a key and eval: `keyRef` throws first. Fix: bind once through `kix.checkSecretKeys { who; arg; dep; keys; }` (or `anyOf`) and read through that binding.
@@ -160,7 +169,9 @@ when a check fails or the path is not evaluated by default.
 - S11. Does `envFrom` a whole Secret inject variables that set flags the package owns? Fix: map only the keys read (`secretEnv`), or refuse colliding keys. A Secret key named after a flag's env var is the right way to pass a secret flag to a program that reads every flag from env (kingpin `DefaultEnvars`, viper `AutomaticEnv`).
 - S12. Do docs or examples outside `clusters/test-*` fixtures show `stringData`, plaintext placeholders, or `dep.out.keyRef` in a cluster file (which cannot reach `out`)? Fix: SOPS `source` with `keys`, or `secret-ref`; credentials wired by the package. Fixtures with `stringData` carry a "test values only" comment.
 - S13. Is RBAC granting cluster-wide `secrets get/list` where a namespaced Role or `resourceNames` would do? A package that parses a namespace-list flag (`--namespaces`, `--watch-namespace`) emits a Role per namespace (`scope.forNamespace`). Fix: narrow it.
-- S14. Can an operator copy Kix labels or annotations from a Kix-built CR onto a child it creates? `kix gc` proves ownership by the identity-hash annotation, so a copied annotation gets the child deleted (a copied label only adds report noise). Fix: keep that kind out of `out.crds`, or pin metadata in a builder, with the reason.
+- S14. Can an operator copy Kix labels or annotations from a Kix-built CR onto a child it creates? `kix gc` lists objects by the `app.kubernetes.io/managed-by=kix` label and proves ownership by the identity-hash annotation, so a child that gets both is deleted. A copied label alone adds report noise, and a copied annotation alone is never listed (rabbitmq-operator copies annotations and drops `app.kubernetes.io` labels; say so in the header). Fix: keep that kind out of `out.crds`, or pin metadata in a builder, with the reason.
+- S15. Does the package render software configuration into a Secret because the program reads it from one (Alertmanager's `alertmanager.yaml`)? Fix, in order of preference and each where the program allows: deliver it through a non-Secret field of the custom resource (`configRawYaml`); accept an optional secret dependency in place of the rendered Secret, refusing the option when both are set; set `meta.classification = "configuration"` on the rendered Secret and refuse the program's inline credential keys (S1). The header says where the configuration comes from.
+- S16. Does a `scope.mkSecret` put a non-credential value (a username, a host, a port) beside a credential without `plainKeys`, so `cluster.secrets.accept` without `inline` refuses the whole Secret? Fix: `plainKeys`, or move the value to `out` or a ConfigMap. A `kubernetes.io/basic-auth` username is plain by type.
 
 ### CRDs and operators (C)
 
@@ -186,6 +197,7 @@ when a check fails or the path is not evaluated by default.
 - C20. Does the package write an object another controller owns (an environment's HelmChartConfig, a kube-system Namespace)? Can a second writer exist outside Kix, and does removing the instance prune an object the environment needs? Fix: document both as known limits; housekeeping when the lib cannot help.
 - C21. Can a custom resource built from `out.crds` reach the API server before the operator's admission webhooks serve? A CRD reference is satisfied once the definition is Established, and an operator that installs its own definitions often writes its webhook entries seconds later; a resource created in between misses its defaults. Detection: in the operator log, the definitions are installed before the webhook entries. Fix: a check Job that proves the webhook serves (a server-side dry-run that comes back mutated; for a validating-only webhook with failurePolicy Fail, a server-side dry-run the API server admits; or the operator's own check command) and a gate on every handle that adds it to `requires` (cert-manager `apiCheck`, stackgres-operator `webhookCheck`, external-secrets `webhookCheck`), with an evaluation test that every custom resource's `kix.run/depends-on` names the Job's identity hash (`cert-manager-crd-handles-gated`, `stackgres-operator-crd-handles-gated`, `external-secrets-crd-handles-gated`); without it, a refactor that drops the gate passes every check and the race returns only on a fresh install.
 - C22. Does the package describe an operator's shared Service (one that selects every instance in the namespace) with `mkServiceRef` and a narrower per-instance selector, when the CR takes a governing Service by name (`spec.serviceName` on Prometheus and Alertmanager)? Two instances in one namespace then share the Service, scrape each other, and get egress to one instance's pods only. Fix: render a Service per instance over the instance's pods with `kix.run/operand-of`, and name it in the CR.
+- C23. Does a program that calls the Kubernetes API, with RBAC not vendored from upstream, lack a rule for a call it makes (a list or watch at startup, a subresource such as `pods/log` or `<kind>/status`, a `deletecollection`)? Detect: list every client call in the pinned source, at startup and in every code path, and match each to a rule; the pull request reports `kubectl auth can-i <verb> <resource> -n <ns> --as system:serviceaccount:<ns>:<sa>` for each on kind, with the program running as that ServiceAccount. Fix: one rule per call, nothing extra (C10). Vendored roles follow the crd-vendoring skill.
 
 ### Workloads and availability (W)
 
@@ -245,11 +257,11 @@ when a check fails or the path is not evaluated by default.
 ### Monitoring (Mo)
 
 - Mo1. Is `metrics` declared other than `kix.options.monitor` (or that `//` an `enabled` default of false)? Fix: use it.
-- Mo2. Is a ServiceMonitor or PrometheusRule built directly, or emitted without a `prometheus ? null` dep? Fix: `kix.monitor`.
+- Mo2. Is a ServiceMonitor or PrometheusRule built directly, or emitted without a `prometheus ? null` dep? Fix: `kix.monitor`; for a PodMonitor scrape, `prometheus.out.mkPodMonitor` plus `kix.alerts`.
 - Mo3. Is a metrics-only Service rendered when `metrics.enabled` is false or `prometheus` is null? Fix: gate on both. Exception: a Service that is `root` or the target of `kix.healthCheck` renders always.
 - Mo4. Do `prometheus.io` annotations stand in for a monitor? Fix: `kix.monitor` or delete.
-- Mo5. Are alerts not scoped to the instance (`job=~` regex, cluster-wide expr)? Fix: `namespace="<ns>", service="<metrics Service name>"`, aggregated `by (namespace, service)`. `kix.monitor`'s `alerts` is a static set, so one `let` binding feeds both the Service name and the selector.
-- Mo6. If the package ships alerts, do they miss the common outage (target absent, no leader, last success stale)? A last-success alert evaluates to nothing when the target is down, so pair it with `absent()` or `up == 0`. A package may ship no alerts; say so in the header.
+- Mo5. Are alerts not scoped to the instance (`job=~` regex, cluster-wide expr)? Fix: `namespace="<ns>", service="<metrics Service name>"`, aggregated `by (namespace, service)`; behind a PodMonitor, `job="<ns>/<PodMonitor name>"` and `by (namespace, job)`. `kix.monitor`'s `alerts` is a static set, so one `let` binding feeds both the Service name and the selector.
+- Mo6. Does the package expose metrics but ship no alerts, or miss the common outage (target absent, no leader, last success stale)? A last-success alert evaluates to nothing when the target is down, so pair it with a down alert. Fix: alerts from "Writing a package's alerts"; a package that still ships none says why in its header.
 - Mo7. Does an alert depend on another component's metrics? Fix: use the package's own.
 - Mo8. Do two monitors select each other's Services (same labels)? Fix: a component label per Service.
 - Mo9. Is the scrape scheme wrong for an HTTPS port? Fix: `kix.monitor` `scheme` and `tlsConfig`.
@@ -257,6 +269,16 @@ when a check fails or the path is not evaluated by default.
 - Mo11. Is `/metrics` served on the public route by default? Fix: off, `kix.expose { deriveHost = false; }` so only an instance that sets `ingress.host` is routed (Grafana), or state the trade-off.
 - Mo12. Does the program need a flag or setting before it serves the metrics the ServiceMonitor scrapes (ingress-nginx `--enable-metrics`)? Read upstream's flag defaults, not the chart's values.
 - Mo13. When `root` is an attrset with its own `requires`, does it omit the `kix.monitor` parts (`serviceMonitor`, `prometheusRules`, filtered for null), leaving them orphaned? Detection: a package-eval fixture with a real `prometheus` provider and the orphaned-part trace.
+- Mo14. Does an alert's result lose `namespace` (a bare `sum(...)`, a `by` list without it, a `without` list that includes it, or `absent()` over an expression such as `absent(up{...} == 1)`, which returns no labels)? Routing, grouping, and inhibition then span the cluster, and `$labels` templates render empty. Fix: `sum by (namespace, service) (up{sel}) == 0 or absent(up{sel})` (HANDBOOK §9.4 "Writing alerts").
+- Mo15. Is a rule's severity unset (the builder's default is `warning`), `critical` for a condition that is not an outage or data at risk now, or outside `critical`, `warning`, and `info`? The one exception is an always-firing `Watchdog` heartbeat, which carries `none` as kube-prometheus's does and which the alertmanager package's default settings route by name. Fix: set it on every rule, choosing the lower level when in doubt (BEST-PRACTICES §9.6).
+- Mo16. Does a rule lack `summary` or `description`, template the `summary`, put a value or other changing text in a label, or set `runbook_url` to anything but a maintained upstream runbook for the same condition? Fix: a fixed `summary`; a `description` naming the instance, the value, the meaning, and the first thing to check.
+- Mo17. Is `for` missing or under `5m` without a comment saying the expression's window already spans the restart time? Is a range window under four scrape intervals, or is `rate()` applied after `sum`? Fix: HANDBOOK §9.4 "Writing alerts".
+- Mo18. Is a threshold a literal tuned for one site, when the evaluated configuration knows it (memory limit, replica count, schedule) or an instance would need to change it? Fix: derive it, or add a typed option to `metrics` (velero's `maxBackupAge`) whose description says where the default comes from.
+- Mo19. Does an alert restate a kube-prometheus rule from `prometheus-default-rules` (crash looping, replicas mismatch, volume filling up, Job failed, TargetDown)? Detection: `grep -h '"alert"' kix/packages/prometheus-default-rules/rules/*.json`. Fix: delete it; alert on what only the package's own metrics show.
+- Mo20. Does a rule break under Prometheus or vmalert: a template function one of them lacks, such as `float64` (prometheus-operator refuses the whole PrometheusRule, the VM converter the whole group), `query_offset`, or an exact comparison of `rate()` or `increase()`? Fix: HANDBOOK §9.4 "Writing alerts".
+- Mo23. Does a ratio alert (errors over requests) lack a traffic floor, so one failure at low traffic fires it? Does a down alert fire when the component runs zero replicas by design or its metrics Service is off? Does a last-success alert lack a missing-metric partner? Fix: HANDBOOK §9.4 "Writing alerts".
+- Mo21. Does an alert use a metric name not found in the program's source or a scrape at the pinned version? Upstream renames metrics between releases, and a rule over a missing metric never fires. Fix: cite where each metric is defined in the pull request; recheck on version bumps.
+- Mo22. Do the rules lack a unit test (renders under its name, every expression has the selector, nothing without `prometheus` or with `metrics.enabled = false`), or does the package's test cluster lack a `.rules-test.yaml` beside its cluster file (same base name) that gives each alert a failing and a healthy fixture? The `rules-cluster-<name>` check runs `promtool check rules` on every cluster and `promtool test rules` on that file. Fix: HANDBOOK §9.4 "Writing alerts", "Tests".
 
 ### Escape hatches (E)
 
@@ -327,6 +349,37 @@ These items also apply to text the change adds under `docs/`, `housekeeping/`, a
 - T9. Are host prerequisites (kernel modules, `/dev/kvm`, architecture) undocumented? Fix: header line.
 - T10. Does a how-to tell readers to deploy a test fixture, depend on test-only resources, or assert another page's Secret names or keys? Fix: self-contained steps.
 - T11. Do docs or option descriptions promise that removing config deletes objects? Plain `kix deploy` only reports orphans; deletion needs `--prune`.
+- T12. Does a change to a package that exists on main report no upgrade deploy: main's version on kind, then the change on the same cluster, applied with no extra flag (`--accept-migrations`, `--force-conflicts`) and ready (package-authoring "Handover", step 3)? It catches a new required input, a change of kinds in a stateful package, renamed or removed objects, and immutable-field changes. Fix: run it. A deliberate breaking change that cannot pass says in the header's `Upgrades:` paragraph what an operator does first.
+
+## Writing a package's alerts
+
+Research the software's failure modes before writing a rule. Keep notes with
+a source for each claim; they go in the pull request description.
+
+1. **Read upstream's monitoring material at the pinned version.** The
+   project's monitoring or operations docs, its metric reference, its source
+   where metrics are registered, and any rules it ships: Helm chart
+   `PrometheusRule` templates, sample rule YAML, or a mixin. Note whether
+   those rules are maintained, which exporter they need, and how their
+   selectors are written.
+2. **Read how it fails in practice.** Practitioner write-ups, postmortems,
+   and Hacker News threads on running it; upstream issues about outages,
+   data loss, and confusing states; and the upstream runbooks. Prefer
+   personal blogs and issue threads to vendor marketing.
+3. **List the failure modes.** For each, note the first metric that shows
+   it, and whether a symptom would show before it is too late to act.
+4. **Sort each failure mode** into one of: covered by a kube-prometheus rule
+   in `prometheus-default-rules` (no package alert); a package alert, in the
+   four kinds of BEST-PRACTICES §9.6; or a dashboard concern, not an alert.
+5. **Decide vendor or write** (BEST-PRACTICES §9.6). To vendor, pin the file
+   and its version beside the package, rewrite its selectors to the instance
+   as `prometheus-default-rules` does (string substitution of the `job`
+   matchers in `rebake`), and test that every expression got the selector.
+6. **Write and test the rules** against HANDBOOK §9.4 "Writing alerts" and
+   items Mo5 to Mo23. Test each rule with a fixture that breaks the condition
+   and one that stays healthy.
+7. **Say what is covered.** The package header lists the alerts and the
+   failure modes left to the generic rules or to the site.
 
 ## Reviewing a deletion
 
@@ -420,6 +473,8 @@ N5 entities =|k8s:io\.kubernetes\.pod\.namespace|endpointSelector
 Mo2 kind = "(ServiceMonitor|PodMonitor|PrometheusRule)"
 Mo4 prometheus\.io/
 Mo5 job=~
+Mo14 absent\([^)]*==|without \(|\b(sum|max|min|avg|count) *\(
+Mo20 float64|query_offset
 E5 config\.(values|extraSpec|settings) //|// config\.(values|extraSpec|settings)
 E7 hasPrefix "-
 E11 releaseName|fullnameOverride|namePrefix|labelStyle
@@ -437,7 +492,7 @@ list outside the public repository; ask for it when you do not have it.
 
 **3. Read the code once, for the judgement items.** Read the package in
 checklist order and judge only what the automation and the grep hits do not
-settle: M2 to M15, O6 to O24, D, S, C4 to C21, W, I, N, Mo, E, Na, L, P, and
+settle: M2 to M15, O6 to O24, D, S, C4 to C23, W, I, N, Mo, E, Na, L, P, and
 T. Skip an item marked *(lib)* unless its check failed or its path is off by
 default. Evaluate the package once with every toggle on, once with each
 optional dependency present, and once with two instances in two namespaces

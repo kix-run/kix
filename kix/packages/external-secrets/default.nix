@@ -36,8 +36,13 @@
 #
 # Network policy: the intents open TCP 443 to destinations outside the
 # cluster for provider APIs, and admit the API server to TCP 10250 for the
-# webhook. Package intents apply to every workload of the instance. A
-# provider inside the cluster or on another port (Vault on 8200) needs a
+# webhook. Package intents apply to every workload of the instance. The
+# SecretStore and ClusterSecretStore definitions declare that the
+# controller dials the provider, so a store whose spec carries a Kix
+# Service address (`openbao.out.externalSecretsProvider`) opens the
+# controller's egress to that Service and the Service's ingress from the
+# controller. A provider outside the cluster on another port, or one
+# inside it written as a literal address, needs a
 # `networkPolicy.platformIntents` entry for the controller's pods.
 #
 # Escape hatches: `extraArgs` and `env` for the controller;
@@ -168,6 +173,12 @@ let
   pluralOf = spec: spec.names.plural;
   isGenerator = spec: spec.group == "generators.external-secrets.io";
 
+  # The kinds whose provider the controller dials.
+  storeKinds = [
+    "ClusterSecretStore"
+    "SecretStore"
+  ];
+
   # Every kind with status conditions sets Ready to True on success
   # (apis/externalsecrets/v1/*_types.go, apis/externalsecrets/v1alpha1/pushsecret_types.go,
   # apis/generators/v1alpha1/generator_state_types.go). ClusterPushSecret
@@ -207,11 +218,14 @@ let
           v ? name
           && v ? key
           && builtins.isString v.name
-          && lib.all (n: builtins.elem n [
-            "name"
-            "key"
-            "namespace"
-          ]) (builtins.attrNames v);
+          && lib.all (
+            n:
+            builtins.elem n [
+              "name"
+              "key"
+              "namespace"
+            ]
+          ) (builtins.attrNames v);
       in
       if isSelector then
         [
@@ -275,7 +289,9 @@ in
       generic = builtins.filter (
         a:
         a == "--unsafe-allow-generic-targets"
-        || (lib.hasPrefix "--unsafe-allow-generic-targets=" a && a != "--unsafe-allow-generic-targets=false")
+        || (
+          lib.hasPrefix "--unsafe-allow-generic-targets=" a && a != "--unsafe-allow-generic-targets=false"
+        )
       ) config.extraArgs;
     in
     [
@@ -417,7 +433,9 @@ in
 
         # Builder errors name this instance (`who`) and the consumer's
         # custom resource.
-        crName = consumerScope: kind: args: "${kind} ${consumerScope.namespaceName}/${args.name}";
+        crName =
+          consumerScope: kind: args:
+          "${kind} ${consumerScope.namespaceName}/${args.name}";
 
         # Returns `result` once every Secret selector in the store's spec has
         # a tracked name and, when `needNamespace`, a namespace. A
@@ -642,37 +660,34 @@ in
             kind = "ValidatingWebhookConfiguration";
             name = configName;
             labels."external-secrets.io/component" = "webhook";
-            extra.webhooks = map (
-              e:
-              {
-                name = "validate.${e.singular}.external-secrets.io";
-                rules = [
-                  {
-                    apiGroups = [ "external-secrets.io" ];
-                    apiVersions = [ "v1" ];
-                    operations = [
-                      "CREATE"
-                      "UPDATE"
-                      "DELETE"
-                    ];
-                    resources = [ "${e.singular}s" ];
-                    inherit (e) scope;
-                  }
-                ];
-                clientConfig.service = {
-                  name = webhookServiceName;
-                  namespace = ns;
-                  path = "/validate-external-secrets-io-v1-${e.singular}";
-                };
-                admissionReviewVersions = [
-                  "v1"
-                  "v1beta1"
-                ];
-                sideEffects = "None";
-                timeoutSeconds = 5;
-                failurePolicy = "Fail";
-              }
-            ) entries;
+            extra.webhooks = map (e: {
+              name = "validate.${e.singular}.external-secrets.io";
+              rules = [
+                {
+                  apiGroups = [ "external-secrets.io" ];
+                  apiVersions = [ "v1" ];
+                  operations = [
+                    "CREATE"
+                    "UPDATE"
+                    "DELETE"
+                  ];
+                  resources = [ "${e.singular}s" ];
+                  inherit (e) scope;
+                }
+              ];
+              clientConfig.service = {
+                name = webhookServiceName;
+                namespace = ns;
+                path = "/validate-external-secrets-io-v1-${e.singular}";
+              };
+              admissionReviewVersions = [
+                "v1"
+                "v1beta1"
+              ];
+              sideEffects = "None";
+              timeoutSeconds = 5;
+              failurePolicy = "Fail";
+            }) entries;
           };
 
         metricsServiceFor =
@@ -784,9 +799,7 @@ in
             # keys unless mergePolicy is Merge (ApplyTemplate in
             # pkg/controllers/externalsecret/externalsecret_controller_template.go).
             knownKeys =
-              if
-                policy == "Merge" || (spec.dataFrom or [ ]) != [ ] || (template.templateFrom or [ ]) != [ ]
-              then
+              if policy == "Merge" || (spec.dataFrom or [ ]) != [ ] || (template.templateFrom or [ ]) != [ ] then
                 null
               else if templateKeys == [ ] then
                 dataKeys
@@ -798,8 +811,7 @@ in
                 type ? null,
               }:
               let
-                unknown =
-                  if knownKeys == null then [ ] else builtins.filter (k: !(builtins.elem k knownKeys)) keys;
+                unknown = if knownKeys == null then [ ] else builtins.filter (k: !(builtins.elem k knownKeys)) keys;
               in
               if policy == "None" then
                 throw "${who}: out.secretRef of ${what}: creationPolicy None writes no Secret. Use another creationPolicy, or reference the Secret through its own dependency."
@@ -857,6 +869,16 @@ in
                     readiness.condition = {
                       type = "Ready";
                       status = "True";
+                    };
+                  }
+                  # The controller pods, in this namespace, dial the provider
+                  # a store names, so a Service address in a store's spec
+                  # opens their egress to it and its ingress from them.
+                  // lib.optionalAttrs (builtins.elem (kindOf doc.spec) storeKinds) {
+                    factBehavior = {
+                      endpoint = "terminate";
+                      podSelector = controllerLabels;
+                      podNamespace = ns;
                     };
                   }
                 )

@@ -8,8 +8,7 @@ name: CLI tests
 # The tests cannot run inside a Nix build: the crane package sets
 # `doCheck = false` because the integration tests need a writable Nix store
 # for the eval cache and the build sandbox has none. So this runs them from
-# the flake's devShell instead, which carries the Rust toolchain and the
-# Nix C libraries the nix-bindings-*-sys crates link against.
+# the flake's devShell instead, which carries the Rust toolchain.
 #
 # Spindle (runners.example.com) brokers this onto an ephemeral GCE VM whose
 # image ships Nix; see .github/workflows/spindle-smoke.yml for the runner
@@ -87,3 +86,95 @@ jobs:
       # commit the result in the same change that moved the output.
       - name: Tests
         run: nix develop --command bash -c 'cd cli && cargo test --workspace'
+
+  # Publishes the kix binary after the tests pass on a push to main. This
+  # repository is private and so are its releases, so the binaries go to
+  # the public kix-run/kix-releases instead. KIX_RELEASES_TOKEN is a
+  # fine-grained token with Contents read/write on that repository only.
+  #
+  # The version is the workspace version from cli/Cargo.toml with this
+  # workflow's run number as semver build metadata, `0.1.0+250`. The run
+  # number counts pull request runs too, so released build numbers rise
+  # but skip. Raise the workspace version to start a new release line.
+  #
+  # A workflow_dispatch run builds and uploads the binaries as a workflow
+  # artifact but publishes nothing, which is how to try a change to this
+  # job from a branch: `gh workflow run cli-tests.yml --ref <branch>`.
+  release:
+    needs: test
+    if: github.event_name != 'pull_request'
+    # GitHub-hosted rather than Spindle. The binaries are static musl, and
+    # nixpkgs has no musl standard library for its rustc in the binary
+    # cache, while rustup's toolchains do not run on the NixOS image.
+    runs-on: ubuntu-latest
+    env:
+      TARGETS: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+
+      # cargo-zigbuild uses zig as the C compiler and linker, which builds
+      # ring and the bundled SQLite for both architectures from one runner.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Version
+        id: version
+        run: |
+          base=$(cargo metadata --manifest-path cli/Cargo.toml --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "kix-cli") | .version')
+          echo "version=${base}+${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      # kix::VERSION reads KIX_VERSION at compile time, so `kix --version`,
+      # plan documents and compliance receipts carry the build number.
+      - name: Build
+        env:
+          KIX_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          for target in $TARGETS; do
+            cargo zigbuild --manifest-path cli/Cargo.toml --locked --release \
+              -p kix-cli --target "$target"
+          done
+
+      - name: Package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          bin=cli/target/x86_64-unknown-linux-musl/release/kix
+          file "$bin" | grep -Eq 'statically linked|static-pie linked' || { file "$bin"; exit 1; }
+          test "$("$bin" --version)" = "kix $VERSION" || { "$bin" --version; exit 1; }
+
+          # Asset names carry no version, so
+          # releases/latest/download/kix-<arch>-linux.tar.gz always resolves.
+          mkdir dist
+          for target in $TARGETS; do
+            tar -czf "dist/kix-${target%%-*}-linux.tar.gz" \
+              -C "cli/target/$target/release" kix
+          done
+          (cd dist && sha256sum -- *.tar.gz > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kix-${{ steps.version.outputs.version }}
+          path: dist/
+
+      - name: Publish
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.KIX_RELEASES_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "v$VERSION" dist/* \
+            --repo kix-run/kix-releases \
+            --title "kix $VERSION" \
+            --notes "Built from kix-run/kixpkgs@${GITHUB_SHA}." \
+            --latest

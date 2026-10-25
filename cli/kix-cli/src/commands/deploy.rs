@@ -1,78 +1,86 @@
 //! Build, plan, and deploy a cluster activation.
 //!
-//! Uses the store graph for proper stamping and dependency tracking.
-//! Change detection compares two Nix store graphs
-//! by K8s identity (kind+ns+name) and identity-hash, without querying
-//! the live cluster.
-//!
-//! It builds and stamps the requested activation, resolves the current state,
-//! displays the package-grouped diff, applies the dependency graph, and prunes
-//! authorized orphans in reverse dependency order.
+//! The plan is `kix plan`'s: [`super::plan::prepare`] builds and runs
+//! [`kix::plan::Planner`], which compares the build with the closures the
+//! cluster runs by K8s identity (kind+ns+name) and identity hash, without
+//! querying the live objects. This module shows the plan, confirms, applies
+//! the dependency graph, and prunes authorized orphans in reverse dependency
+//! order.
 
 use std::io::Write;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use miette::{IntoDiagnostic, Result, miette};
 use serde_json::Value;
 
-use crate::commands::baseline;
-use kix::cluster::activation;
+use crate::client;
+use kix::cluster::activation::{OpenedRecords, Records};
 use kix::cluster::apply::{ApplyAction, ChangeAction};
-use kix::cluster::fetch;
-use kix::cluster::graph::ResourceGraph;
-use kix::cluster::migrate::{MigrationPair, detect_migration_pairs};
-use kix::cluster::ops::{ClusterOps, KubeOps, KubeOpsConfig};
+use kix::cluster::discovery;
+use kix::cluster::migrate::MigrationPair;
 use kix::cluster::readiness;
-use kix::cluster::scheduler::{self, DeployPlan, OnErrorPolicy, PrunePolicy, SchedulerConfig};
+use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::{
     CancelReason, DeployEvent, DeployObserver, DeployResult, NodeDetail, NodeId, TransitionKind,
     Verdict,
 };
 use kix::cluster::watchdog::StallPolicy;
-use kix::eval::build::build_cluster_activation_with_status;
-use kix::eval::store_graph::StoreGraph;
-use kix::manifest::lifecycle;
-use kix::manifest::stamp::stamp_annotations;
 use kix::manifest::types::ResourceId;
+use kix::plan::document::PlanFlags;
+use kix::plan::{CheckedPlan, Target};
 
-use crate::cli::{DeployArgs, Detail, OnError, PlanArgs, PruneMode};
+use crate::cli::{DeployArgs, OnError, PlanArgs};
 use crate::output;
 use crate::plan;
 
 use super::CommandContext;
 use super::operator::Reconciled;
-use kix::manifest::keys;
+use super::plan::{document, dry_run, flags_of, prepare, print_text};
 
 pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let saved = match &args.saved_plan {
-        Some(path) => Some(load_saved_plan(path, &args.plan)?),
+        Some(path) => Some(load_saved_plan(path, &flags_of(&args.plan))?),
         None => None,
-    };
-    let plan_args = match &saved {
-        Some(s) => &s.args,
-        None => &args.plan,
     };
     // A dry run is the plan, made by the same code with the same flags.
     if args.dry_run {
         return match &saved {
-            Some(s) => check_saved_plan(s, ctx),
-            None => super::plan::run(&args.plan, Detail::Plain, ctx),
+            Some(s) => check_saved_plan(s, &args.plan, ctx),
+            None if matches!(
+                output::format(),
+                crate::cli::OutputFormat::Json | crate::cli::OutputFormat::Yaml
+            ) =>
+            {
+                Err(miette!(
+                    "kix deploy --dry-run prints text or Markdown. To keep the plan as data, \
+                     write it with `kix plan --save FILE.{}`; `kix deploy --plan FILE --dry-run \
+                     -o json` prints the comparison with a saved plan as JSON",
+                    kix::plan::file::EXTENSION
+                ))
+            }
+            None => super::plan::run(&args.plan, None, ctx),
         };
     }
     if args.operator {
         return run_operator(args, ctx);
     }
 
-    let Some(mut p) = prepare(plan_args, ctx)? else {
+    // The apply reads the planning flags from here and never from
+    // `args.plan`, so under `--plan` it does what the reviewed plan does.
+    let flags = saved.as_ref().map_or(flags_of(&args.plan), |s| s.flags);
+    let Some(mut p) = prepare(&args.plan, flags, ctx)? else {
         return Ok(());
     };
+    // A deploy decrypts the SOPS files for real, after review.
+    let sops = p.sops_sources(false).map_err(|e| miette!("{e}"))?;
+    p.annotate_record(&args.record_annotations)
+        .map_err(|e| miette!("{e}"))?;
 
     // Detect stateful migration pairs and require --accept-migrations.
     if !p.migration_pairs.is_empty() {
         print_migration_pairs(&p.migration_pairs);
-        if !plan_args.accept_migrations {
+        if !p.checked.flags().accept_migrations {
             eprintln!(
                 "{}",
                 output::red(
@@ -87,14 +95,12 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             );
             std::process::exit(1);
         }
-        if !ctx.global.quiet {
-            println!(
-                "{}",
-                output::yellow(
-                    "--accept-migrations set: continuing deployment. Kix will not copy data. Workloads using the new storage will see only the data already present there."
-                )
-            );
-        }
+        crate::say!(
+            "{}",
+            output::yellow(
+                "--accept-migrations set: continuing deployment. Kix will not copy data. Workloads using the new storage will see only the data already present there."
+            )
+        );
     }
 
     // The plan the deploy shows is the one `kix plan` makes: when connected
@@ -102,35 +108,36 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // run, so what the apiserver would refuse shows before anything is
     // applied.
     let total_apply = p
-        .plan
-        .nodes
+        .checked
+        .plan()
+        .nodes()
         .iter()
         .filter(|n| matches!(n.action, ChangeAction::Apply(_)))
         .count();
-    let report = match &p.pre_client {
-        Some(client) if total_apply > 0 || !p.orphan_rids.is_empty() => {
+    let report = match &p.client {
+        Some(client) if total_apply > 0 || !p.checked.orphans().is_empty() => {
             let client = client.clone();
-            Some(super::plan::dry_run(&p, plan_args, client, ctx)?)
+            Some(dry_run(&mut p, false, client, ctx)?)
         }
         _ => None,
     };
-    let doc = super::plan::document(&mut p, report.as_ref(), plan_args, Detail::Plain);
+    let doc = document(&mut p, report.as_ref(), false);
 
-    if !ctx.global.quiet {
-        super::plan::print_text(&p, &doc, plan_args, ctx.global.verbose > 0);
+    if !output::quiet() {
+        print_text(&p, &doc, ctx.global.verbose > 0);
     }
 
     // A reviewed plan that no longer matches applies nothing.
     if let Some(s) = &saved {
-        let mut comparison = plan::saved::compare(&s.reviewed, &doc);
+        let mut comparison = kix::plan::saved::compare(&s.reviewed, &doc);
         comparison.plan_sha256 = Some(s.sha256.clone());
         eprintln!();
         eprint!(
             "{}",
-            plan::saved::render_text(&comparison, &s.reviewed, &s.path)
+            plan::render::render_comparison(&comparison, &s.reviewed, &s.path)
         );
         if !comparison.matches {
-            std::process::exit(plan::saved::EXIT_STALE);
+            std::process::exit(EXIT_STALE);
         }
     }
 
@@ -153,48 +160,34 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         std::process::exit(1);
     }
 
-    let Prepared {
-        result_path,
-        new_manifests,
-        cluster,
-        old_manifests,
-        pre_client,
-        active_hash,
-        failed_baseline,
-        kept_orphans,
-        plan,
-        orphan_rids,
-        activation_name,
-        activation_identity_hash,
-        new_graph,
-        ..
-    } = p;
+    let cluster = p.build.graph().cluster_name.clone();
+    let active_hash = p.baseline.active_hash().map(str::to_string);
 
     // Imports are applied like any other resource (SSA); readiness polls the
     // cluster for the described resource via `wait_for_import_target`, which
     // is triggered when the import node becomes eligible under the DAG.
 
-    if total_apply == 0 && orphan_rids.is_empty() {
+    if total_apply == 0 && p.checked.orphans().is_empty() {
         // An unchanged plan can still owe a run: a probe Job under
         // `kix.run/rerun` whose last run failed (the failure kept the
         // activation from switching, so the next deploy sees the same
         // hashes). The engine's Skip path recreates it, but only if the
         // engine runs.
-        let has_reruns = plan.nodes.iter().any(|n| n.rerun.is_some());
-        let failed_reruns = match &pre_client {
+        let has_reruns = p.checked.plan().nodes().iter().any(|n| n.rerun.is_some());
+        let failed_reruns = match &p.client {
             Some(client) if has_reruns => ctx.runtime.block_on(async {
-                let discovery = fetch::discover_resources(client)
+                let discovery = discovery::discover_resources(client)
                     .await
                     .map_err(|e| miette!("{e}"))?;
                 Ok::<_, miette::Report>(
-                    scheduler::failed_rerun_nodes(client, &discovery, &plan).await,
+                    scheduler::failed_rerun_nodes(client, &discovery, p.checked.plan()).await,
                 )
             })?,
             _ => Vec::new(),
         };
         // Without a client here (`--current-activation`) the engine's Skip
         // path makes the call instead: it reads the live objects itself.
-        let engine_decides = pre_client.is_none() && has_reruns;
+        let engine_decides = p.client.is_none() && has_reruns;
         if failed_reruns.is_empty() && !engine_decides {
             // A folded-in record still has to be superseded, even when its
             // closure turned out to differ from the plan only in things
@@ -202,30 +195,28 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             // never runs on this path, and `finalize_deploy` is where records
             // are normally consumed, so do it here or report the same failed
             // deploy on every deploy from now on.
-            if let Some(client) = &pre_client {
-                supersede_consumed(ctx, client, &failed_baseline.consumed, ctx.global.quiet);
+            if let Some(client) = &p.client {
+                supersede_consumed(ctx, client, &p.baseline.failed().consumed);
             }
-            if !ctx.global.quiet {
-                match (&activation_identity_hash, &active_hash) {
-                    (Some(new), Some(old)) if new == old => println!(
-                        "{} activation identical to active ({}...). Nothing to apply.",
-                        output::dim("="),
-                        &new[..8.min(new.len())],
-                    ),
-                    _ => println!("Nothing to apply."),
-                }
+            match (p.checked.activation_identity_hash(), active_hash.as_deref()) {
+                (Some(new), Some(old)) if new == old => crate::say!(
+                    "{} activation identical to active ({}...). Nothing to apply.",
+                    output::dim("="),
+                    &new[..8.min(new.len())],
+                ),
+                _ => crate::say!("Nothing to apply."),
             }
             return Ok(());
         }
-        if !ctx.global.quiet && engine_decides {
-            println!(
+        if engine_decides {
+            crate::say!(
                 "{} nothing changed; the engine reads the live probe Jobs to see whether one must run again",
                 output::yellow("↻"),
             );
         }
-        if !ctx.global.quiet && !failed_reruns.is_empty() {
+        if !failed_reruns.is_empty() {
             let names: Vec<String> = failed_reruns.iter().map(|r| r.to_string()).collect();
-            println!(
+            crate::say!(
                 "{} nothing changed, but {} failed on the last run and will run again: {}",
                 output::yellow("↻"),
                 failed_reruns.len(),
@@ -236,35 +227,17 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 
     // Build the deployment receipt before confirmation so dirty source state
     // is visible in the prompt.
-    let receipt =
-        crate::commands::compliance::receipt::build_receipt(&new_graph, &ctx.global.flake);
+    let receipt = ctx.receipts.of_build(&p.build, &ctx.global.flake);
 
-    if receipt["source"]["dirty"] == Value::Bool(true) && !ctx.global.quiet {
-        // A dirty tree is allowed, but its recorded commit does not fully
-        // describe the deployed source.
-        println!();
-        println!(
-            "{}",
-            output::yellow(
-                "The working tree has uncommitted changes, so the commit recorded for this deploy"
-            )
-        );
-        println!(
-            "{}",
-            output::yellow("does not contain what is about to be applied. The record will say so.")
-        );
-        if let Some(rev) = receipt["source"]["revision"].as_str() {
-            println!("  {}", output::dim(rev));
-        }
-    }
+    print_warnings(&ctx.receipts.warnings(&receipt));
 
     // The nodes: do they carry the labels the plan's placement rules name?
     // Only when a connection already exists: --current-activation is the
     // no-cluster-before-confirm mode.
-    if let Some(client) = &pre_client
-        && !ctx.global.quiet
+    if let Some(client) = &p.client
+        && !output::quiet()
     {
-        report_topology_labels(ctx, client, &new_manifests);
+        report_topology_labels(ctx, client, p.new_manifests());
     }
 
     // Confirm before writing to the cluster.
@@ -278,39 +251,31 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
             );
             std::process::exit(1);
         }
-        print!("\nProceed with deploy? [y/N] ");
+        output::progress_text("\nProceed with deploy? [y/N] ");
         std::io::stdout().flush().into_diagnostic()?;
         let mut input = String::new();
         std::io::stdin().read_line(&mut input).into_diagnostic()?;
         let input = input.trim().to_lowercase();
         if input != "y" && input != "yes" {
-            println!("Deploy cancelled.");
+            output::progress_text("Deploy cancelled.\n");
             return Ok(());
         }
     }
 
-    let activation_manifest = lifecycle::record_of(&new_manifests);
     let global = ctx.global.clone();
     let end = ctx.runtime.block_on(run_deploy_async(
         args,
-        plan_args,
         &global,
-        plan,
-        &orphan_rids,
-        &old_manifests,
+        p.checked,
         &cluster,
-        activation_name.as_deref(),
-        activation_identity_hash.as_deref(),
         Some(&receipt),
-        pre_client,
-        activation_manifest,
-        &failed_baseline.consumed,
-        kept_orphans,
-        if plan_args.current_activation {
+        p.client,
+        if args.plan.current_activation {
             active_hash.as_deref()
         } else {
             None
         },
+        sops,
     ))?;
 
     // Save activation path for next deploy's diff and for soft `kix gc`.
@@ -319,7 +284,9 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     // makes soft gc treat the current closure as garbage, and makes the next
     // `--current-activation` plan skip the nodes this run never applied.
     if end.current
-        && let Err(e) = kix::eval::store::save_activation_path(&cluster, &result_path)
+        && p.build.is_local()
+        && let Err(e) =
+            kix::eval::store::save_activation_path(&cluster, &p.build.graph().result_dir)
     {
         tracing::warn!(
             "could not save the local build path; later commands may be unable to find this deployment: {e}"
@@ -332,62 +299,56 @@ pub fn run(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     Ok(())
 }
 
+/// Exit status of `kix deploy --plan` when the reviewed plan no longer
+/// matches.
+const EXIT_STALE: i32 = 4;
+
 /// A reviewed plan read for `kix deploy --plan`, with the planning flags the
 /// deploy uses.
-pub(crate) struct SavedPlan {
-    pub path: String,
-    /// [`plan::saved::digest`] of the file as read.
-    pub sha256: String,
-    pub reviewed: plan::document::Plan,
-    pub args: PlanArgs,
+struct SavedPlan {
+    path: String,
+    /// `sha256:<hex>` of the file as read.
+    sha256: String,
+    reviewed: kix::plan::document::Plan,
+    flags: PlanFlags,
 }
 
 /// Read a saved plan and take its planning flags. Fails before any build
-/// when the plan cannot be used or the command line contradicts its flags.
-fn load_saved_plan(path: &std::path::Path, given: &PlanArgs) -> Result<SavedPlan> {
-    let bytes =
-        std::fs::read(path).map_err(|e| miette!("cannot read the plan {}: {e}", path.display()))?;
-    let reviewed: plan::document::Plan = serde_json::from_slice(&bytes)
-        .map_err(|e| miette!("{} is not a Kix plan document: {e}", path.display()))?;
-    if let Some(why) = plan::saved::unusable(&reviewed) {
+/// when the plan cannot be used or the flags `given` on the command line
+/// contradict its flags.
+fn load_saved_plan(path: &std::path::Path, given: &PlanFlags) -> Result<SavedPlan> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| miette!("cannot read the plan {}: {e}", path.display()))?;
+    let (file, sha256) = kix::plan::file::PlanFile::verify(std::io::BufReader::new(file))
+        .map_err(|e| miette!("cannot read the plan {}: {e}", path.display()))?;
+    let reviewed = file.into_header().plan;
+    if let Some(why) = kix::plan::saved::unusable(&reviewed) {
         return Err(miette!("cannot deploy from {}: {why}", path.display()));
     }
-    let flags = plan::saved::flags_for(&reviewed, &super::plan::flags_of(given))
+    let flags = kix::plan::saved::flags_for(&reviewed, given)
         .map_err(|e| miette!("cannot deploy from {}: {e}", path.display()))?;
-    let mut args = given.clone();
-    args.prune = flags.prune;
-    args.prune_mode = flags.prune_mode.map(|m| match m {
-        plan::document::PruneModeFlag::Default => PruneMode::Default,
-        plan::document::PruneModeFlag::No => PruneMode::No,
-    });
-    args.reconcile = flags.reconcile;
-    args.force_conflicts = flags.force_conflicts;
-    args.accept_migrations = flags.accept_migrations;
     Ok(SavedPlan {
         path: path.display().to_string(),
-        sha256: plan::saved::digest(&bytes),
+        sha256: format!("sha256:{sha256}"),
         reviewed,
-        args,
+        flags,
     })
 }
 
 /// `kix deploy --plan <file> --dry-run`: plan again, compare, and exit 0
-/// when the reviewed plan matches or [`plan::saved::EXIT_STALE`] when not.
+/// when the reviewed plan matches or [`EXIT_STALE`] when not.
 /// The dry run always runs when connected, as `kix plan` does.
-fn check_saved_plan(saved: &SavedPlan, ctx: &mut CommandContext) -> Result<()> {
-    let format = ctx.output_format(crate::cli::OutputFormat::Text);
-    if format != crate::cli::OutputFormat::Text {
-        output::progress_to_stderr();
-    }
-    let Some(mut p) = prepare(&saved.args, ctx)? else {
+fn check_saved_plan(saved: &SavedPlan, args: &PlanArgs, ctx: &mut CommandContext) -> Result<()> {
+    let format = output::format();
+    let Some(mut p) = prepare(args, saved.flags, ctx)? else {
         return Ok(());
     };
-    let report = match &p.pre_client {
-        Some(client) => Some(super::plan::dry_run(&p, &saved.args, client.clone(), ctx)?),
+    let report = match p.client.clone() {
+        Some(client) => Some(dry_run(&mut p, false, client, ctx)?),
         None => None,
     };
-    let doc = super::plan::document(&mut p, report.as_ref(), &saved.args, Detail::Plain);
-    let mut comparison = plan::saved::compare(&saved.reviewed, &doc);
+    let doc = document(&mut p, report.as_ref(), false);
+    let mut comparison = kix::plan::saved::compare(&saved.reviewed, &doc);
     comparison.plan_sha256 = Some(saved.sha256.clone());
     match format {
         crate::cli::OutputFormat::Json => println!(
@@ -399,15 +360,15 @@ fn check_saved_plan(saved: &SavedPlan, ctx: &mut CommandContext) -> Result<()> {
         }
         _ => print!(
             "{}",
-            plan::saved::render_text(&comparison, &saved.reviewed, &saved.path)
+            plan::render::render_comparison(&comparison, &saved.reviewed, &saved.path)
         ),
     }
     if !comparison.matches {
-        std::process::exit(plan::saved::EXIT_STALE);
+        std::process::exit(EXIT_STALE);
     }
     // A matching plan can still be one the deploy stops on, as `kix plan`
     // exits 3 for: a refused write, or migrations not accepted.
-    let migrations_refused = !doc.migrations.items().is_empty() && !saved.args.accept_migrations;
+    let migrations_refused = !doc.migrations.items().is_empty() && !saved.flags.accept_migrations;
     if doc.stops() || migrations_refused {
         if format == crate::cli::OutputFormat::Text {
             eprintln!(
@@ -420,311 +381,6 @@ fn check_saved_plan(saved: &SavedPlan, ctx: &mut CommandContext) -> Result<()> {
         std::process::exit(super::plan::EXIT_WOULD_STOP);
     }
     Ok(())
-}
-
-/// Everything a deploy decides before it writes: the two builds compared,
-/// the actions, and the engine plan. `kix plan` and `kix deploy` share it,
-/// so a plan made with the deploy's flags is the deploy's plan.
-pub(crate) struct Prepared {
-    pub result_path: PathBuf,
-    pub new_graph: StoreGraph,
-    pub new_manifests: Vec<Value>,
-    /// The name the build gives the cluster, which keys its records and the
-    /// local cache.
-    pub cluster: String,
-    /// The deployed build, when its store path loaded. `None` when there is
-    /// no previous deploy or its manifests were reconstructed from the live
-    /// objects.
-    pub old_graph: Option<StoreGraph>,
-    /// The Active record's closure.
-    pub active_manifests: Vec<Value>,
-    /// `active_manifests` with the failed and kept closures merged in.
-    pub old_manifests: Vec<Value>,
-    /// `None` under `--current-activation`, which plans without connecting.
-    pub pre_client: Option<kube::Client>,
-    pub active_hash: Option<String>,
-    /// The Active record the plan compares against.
-    pub active: Option<activation::ActiveActivation>,
-    pub failed_baseline: baseline::FailedBaseline,
-    pub kept_orphans: activation::KeptOrphans,
-    /// Against the Active closure only.
-    pub migration_pairs: Vec<MigrationPair>,
-    pub plan: DeployPlan,
-    /// Orphans this cluster's prune may delete; ones another Kix cluster
-    /// still deploys are in `shared_orphans` instead.
-    pub orphan_rids: Vec<ResourceId>,
-    pub shared_orphans: Vec<fetch::SharedOrphan>,
-    pub activation_name: Option<String>,
-    pub activation_identity_hash: Option<String>,
-    /// The package-grouped comparison of the old side with the new build.
-    pub pkg_diff: plan::PackageDiff,
-}
-
-/// Build, load the old side, and compute the actions and the engine plan.
-/// `None` when the build has nothing to deploy. Progress lines go through
-/// [`crate::say!`], so `kix plan -o json` keeps them off stdout.
-pub(crate) fn prepare(args: &PlanArgs, ctx: &mut CommandContext) -> Result<Option<Prepared>> {
-    let flake_path = resolve_flake_path(&ctx.global.flake)?;
-
-    // Build the new activation and load its store graph.
-    if !ctx.global.quiet {
-        crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
-    }
-    let status = |msg: &str| {
-        if !ctx.global.quiet {
-            eprint!("\r\x1b[2K  {msg}");
-        }
-    };
-    let overrides = ctx.global.input_overrides();
-    let result_path =
-        build_cluster_activation_with_status(&flake_path, &args.cluster, &overrides, &status)
-            .map_err(|e| miette!("failed to build cluster: {e}"))?;
-    let mut new_graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
-        .map_err(|e| miette!("{e}"))?;
-    // A kixpkgs pin from before the domain move renders Kix's own CRDs under
-    // the retired group. Deploying it would put those CRDs back and leave two
-    // groups live, which the CLI cannot tell apart. Check before
-    // `stamp_annotations`, which upgrades a loaded build to the current
-    // domain: after that a stale pin is indistinguishable from a current one.
-    kix::legacy_domain::check_build(
-        &new_graph
-            .resources
-            .values()
-            .map(|r| r.manifest.clone())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|e| miette!("{e}"))?;
-    stamp_annotations(&mut new_graph);
-    if !ctx.global.quiet {
-        eprint!("\r\x1b[2K");
-    }
-    // Records and the local cache are keyed by the name the build gives the
-    // cluster, which need not match the flake attribute in `args.cluster`.
-    let cluster = new_graph.cluster_name.clone();
-
-    // Collect stamped manifests from the new graph.
-    let new_manifests: Vec<Value> = new_graph
-        .resources
-        .values()
-        .map(|r| r.manifest.clone())
-        .collect();
-
-    let manifest_count = new_manifests.len();
-    if !ctx.global.quiet {
-        crate::say!(
-            "Cluster {}: {} manifests",
-            output::bold(&new_graph.cluster_name),
-            manifest_count,
-        );
-    }
-
-    if manifest_count == 0 {
-        if !ctx.global.quiet {
-            crate::say!("Nothing to deploy.");
-        }
-        return Ok(None);
-    }
-
-    // Resolve the old activation from the cluster or local cache.
-    let (old_graph, active_manifests, pre_client, active) = if args.current_activation {
-        // Local cache mode does not connect before confirmation.
-        let (og, om) = load_old_from_cache(&cluster, &ctx.global);
-        let active = cached_as_active(&cluster, &om);
-        (og, om, None, active)
-    } else {
-        // Fetch the active Activation from the cluster.
-        ctx.runtime
-            .block_on(load_old_from_cluster(&cluster, &ctx.global))?
-    };
-    let active_hash = active.as_ref().and_then(|a| a.identity_hash.clone());
-
-    // Builds whose orphans an earlier warn-only deploy kept. The Active
-    // closure no longer declares those objects, so without these the plan
-    // cannot see them.
-    let kept_baseline = match &active {
-        Some(active) => baseline::load_kept(active, &cluster, ctx.global.quiet),
-        None => baseline::KeptBaseline::default(),
-    };
-
-    // Include closures from deploys that stopped part way. They applied objects and
-    //     never became Active, so neither side of the comparison above knows
-    //     about them (kixpkgs#82). Resolved from the local store by hash, so
-    //     every input to the plan is still a compiler output.
-    //
-    //     `--current-activation` has no cluster connection, so it
-    //     cannot see the records and says so in its own flag documentation.
-    let failed_baseline = match (&pre_client, args.current_activation) {
-        (Some(client), false) => ctx.runtime.block_on(async {
-            let discovery = fetch::discover_resources(client)
-                .await
-                .map_err(|e| miette!("{e}"))?;
-            let Some((ar, _)) = kix::cluster::activation::find_activation_ar(&discovery)
-                .map_err(|e| miette!("{e}"))?
-            else {
-                return Ok(baseline::FailedBaseline::default());
-            };
-            // Another deploy still in flight would be applying the very
-            // objects this plan might prune, so leave its work alone rather
-            // than guessing which of the two is real.
-            if let Some(record) = baseline::deploy_in_flight(client, ar, &cluster).await {
-                baseline::report_in_flight(&record, ctx.global.quiet);
-                return Ok(baseline::FailedBaseline::default());
-            }
-            Ok::<_, miette::Report>(
-                baseline::load_failed(client, ar, &cluster, ctx.global.quiet).await,
-            )
-        })?,
-        _ => baseline::FailedBaseline::default(),
-    };
-
-    // The plan display and the prune ordering both need a manifest for an
-    // object that exists only in a failed or kept closure.
-    let old_manifests = kix::cluster::apply::baseline_manifests(
-        &active_manifests,
-        &[
-            failed_baseline.closures.as_slice(),
-            kept_baseline.closures.as_slice(),
-        ]
-        .concat(),
-    );
-
-    // 4. Local DAG diff: old vs new, then fold in what the failed deploys may
-    //    have left. The fold can turn a Skip into an Apply (repair) and can
-    //    add orphans (prune); it never invents a change the closures do not
-    //    justify.
-    let all_actions = kix::cluster::apply::fold_kept_closures(
-        kix::cluster::apply::fold_failed_closures(
-            kix::cluster::apply::detect_changes(&new_manifests, &active_manifests),
-            &new_manifests,
-            &failed_baseline.closures,
-        ),
-        &new_manifests,
-        &kept_baseline.closures,
-    );
-
-    // What the new record lists under `status.orphansKeptFrom` if this run
-    // leaves orphans on the cluster.
-    let mut kept_orphans = baseline::orphans_kept_from(
-        &new_manifests,
-        active.as_ref(),
-        &active_manifests,
-        &failed_baseline,
-        &kept_baseline,
-    );
-    // The plan did not read the Active record, so its list is carried
-    // forward unexamined.
-    kept_orphans.carry_current = args.current_activation;
-
-    // Stateful migration pairs, against the Active closure only. A
-    // half-applied closure is not a previous intended state, so pairing
-    // against it would invent migrations nobody declared.
-    let migration_pairs = detect_migration_pairs(&new_manifests, &active_manifests);
-
-    // --reconcile reapplies resources regardless of identity match.
-    let all_actions: Vec<ChangeAction> = if args.reconcile {
-        let manifest_by_k8s_id: std::collections::HashMap<String, &Value> = new_manifests
-            .iter()
-            .map(|m| {
-                let rid = ResourceId::from_value(m);
-                (format!("{}/{}/{}", rid.kind, rid.namespace, rid.name), m)
-            })
-            .collect();
-
-        all_actions
-            .into_iter()
-            .map(|action| match action {
-                ChangeAction::Skip(ref rid) => {
-                    let k8s_id = format!("{}/{}/{}", rid.kind, rid.namespace, rid.name);
-                    if let Some(&manifest) = manifest_by_k8s_id.get(&k8s_id) {
-                        ChangeAction::Apply(manifest.clone())
-                    } else {
-                        action
-                    }
-                }
-                other => other,
-            })
-            .collect()
-    } else {
-        all_actions
-    };
-
-    // Separate apply actions from orphans.
-    let mut orphan_rids: Vec<ResourceId> = Vec::new();
-
-    for action in &all_actions {
-        if let ChangeAction::Orphan(rid) = action {
-            orphan_rids.push(rid.clone());
-        }
-    }
-    // `--current-activation` has no client yet; `run_deploy_async` checks
-    // once it connects.
-    let (orphan_rids, shared_orphans) = match &pre_client {
-        Some(client) => ctx.runtime.block_on(super::shared_orphans::keep_shared(
-            client,
-            &new_graph.cluster_name,
-            orphan_rids,
-        ))?,
-        None => (orphan_rids, Vec::new()),
-    };
-
-    // Build the DAG and streaming plan.
-    let resource_graph = ResourceGraph::from_manifests(&new_manifests).into_diagnostic()?;
-
-    if resource_graph.graph.node_count() == 0 {
-        if !ctx.global.quiet {
-            crate::say!("No resources to deploy.");
-        }
-        return Ok(None);
-    }
-
-    let plan =
-        DeployPlan::from_graph_and_changes(&resource_graph, &all_actions).into_diagnostic()?;
-
-    // Read the Activation name and identity hash from the new manifests.
-    let activation_manifest = lifecycle::record_of(&new_manifests);
-    let activation_name = activation_manifest.and_then(|m| {
-        m.pointer("/metadata/name")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    });
-    let activation_identity_hash =
-        activation_manifest.and_then(|m| keys::get(m, keys::IDENTITY_HASH).map(|s| s.to_string()));
-
-    let mut pkg_diff = if let Some(old) = &old_graph {
-        plan::diff_graphs(old, &new_graph)
-    } else if !old_manifests.is_empty() {
-        // Synthesize a package view from the old manifests when the old
-        // store graph is unavailable, so untouched packages show as
-        // unchanged instead of everything "added".
-        let synthetic = StoreGraph::synthesize(&old_manifests, &new_graph);
-        plan::diff_graphs(&synthetic, &new_graph)
-    } else {
-        // A first deploy adds every package.
-        plan::diff_graphs(&StoreGraph::empty(&new_graph.cluster_name), &new_graph)
-    };
-    pkg_diff.keep_shared(&shared_orphans);
-
-    Ok(Some(Prepared {
-        result_path,
-        new_graph,
-        new_manifests,
-        cluster,
-        old_graph,
-        active_manifests,
-        old_manifests,
-        pre_client,
-        active_hash,
-        active,
-        failed_baseline,
-        kept_orphans,
-        migration_pairs,
-        plan,
-        orphan_rids,
-        shared_orphans,
-        activation_name,
-        activation_identity_hash,
-        pkg_diff,
-    }))
 }
 
 /// How an engine run ends `kix deploy` and `kix rollback`.
@@ -755,58 +411,6 @@ impl RunEnd {
     }
 }
 
-/// Load old activation from local cache (--current-activation mode).
-fn load_old_from_cache(
-    cluster: &str,
-    global: &crate::cli::GlobalArgs,
-) -> (Option<StoreGraph>, Vec<Value>) {
-    let old_path = kix::eval::store::load_activation_path(cluster);
-    match old_path {
-        Some(old_result_dir) => {
-            if !global.quiet {
-                crate::say!("Loading previous activation from cache...");
-            }
-            let noop = |_: &str| {};
-            match StoreGraph::from_result_dir_with_status(&old_result_dir, &noop) {
-                Ok(mut old_graph) => {
-                    stamp_annotations(&mut old_graph);
-                    let manifests: Vec<Value> = old_graph
-                        .resources
-                        .values()
-                        .map(|r| r.manifest.clone())
-                        .collect();
-                    (Some(old_graph), manifests)
-                }
-                Err(e) => {
-                    tracing::warn!("failed to load old activation: {e}, treating as first deploy");
-                    (None, vec![])
-                }
-            }
-        }
-        None => {
-            if !global.quiet {
-                crate::say!("No previous activation. First deploy.");
-            }
-            (None, vec![])
-        }
-    }
-}
-
-/// The cached build as the current record, for `--current-activation`, which
-/// does not read the cluster's records before confirmation. It has no
-/// `orphansKeptFrom`, so orphans kept by earlier deploys are not in its plan;
-/// finalize carries the real record's list forward instead.
-fn cached_as_active(cluster: &str, manifests: &[Value]) -> Option<activation::ActiveActivation> {
-    let record = lifecycle::record_of(manifests)?;
-    Some(activation::ActiveActivation {
-        name: record.pointer("/metadata/name")?.as_str()?.to_string(),
-        identity_hash: keys::get(record, keys::IDENTITY_HASH).map(str::to_string),
-        built_via: kix::eval::store::load_activation_path(cluster)
-            .map(|p| p.to_string_lossy().into_owned()),
-        orphans_kept_from: Vec::new(),
-    })
-}
-
 /// Refuse a `--current-activation` plan whose cached build is not the Active
 /// build of `cluster` in the context this run connected to.
 ///
@@ -816,15 +420,12 @@ fn cached_as_active(cluster: &str, manifests: &[Value]) -> Option<activation::Ac
 /// and the prune deletes by name. The plan has already been confirmed, so
 /// this refuses rather than planning again from the cluster's record.
 async fn check_cached_baseline(
-    client: &kube::Client,
-    discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
+    records: Option<&Records>,
     cluster: &str,
     cached_hash: &str,
 ) -> Result<()> {
-    let active = match activation::find_activation_ar(discovery).map_err(|e| miette!("{e}"))? {
-        Some((ar, _)) => activation::find_active(client, ar, cluster)
-            .await
-            .map_err(|e| miette!("failed to find the active activation: {e}"))?,
+    let active = match records {
+        Some(records) => records.active(cluster).await.map_err(|e| miette!("{e}"))?,
         None => None,
     };
     let active_hash = active.as_ref().and_then(|a| a.identity_hash.as_deref());
@@ -843,119 +444,68 @@ async fn check_cached_baseline(
     ))
 }
 
-/// Connect to cluster, fetch Active Activation, resolve to local store graph.
-/// The final tuple element is the Active record, whose identity hash reports
-/// a no-op deploy as "activation identical" and whose `orphansKeptFrom` names
-/// earlier builds to prune against.
-async fn load_old_from_cluster(
-    cluster: &str,
-    global: &crate::cli::GlobalArgs,
-) -> Result<(
-    Option<StoreGraph>,
-    Vec<Value>,
-    Option<kube::Client>,
-    Option<activation::ActiveActivation>,
-)> {
-    if !global.quiet {
-        crate::say!("Connecting to cluster...");
-    }
-
-    let client = fetch::make_client(global.context.as_deref())
-        .await
-        .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-
-    let discovery = fetch::discover_resources(&client)
-        .await
-        .map_err(|e| miette!("{e}"))?;
-
-    // Try to find the Active Activation on the cluster
-    let active = if let Some((ar, _)) =
-        activation::find_activation_ar(&discovery).map_err(|e| miette!("{e}"))?
+/// Refuse, before anything is written, what would go wrong part way through
+/// the run: an Activation record of this name that belongs to another build,
+/// and objects the engine would refuse for a missing namespace. Deploy and
+/// rollback both run it once connected.
+pub(crate) async fn refuse_before_writing(
+    checked: &CheckedPlan,
+    records: Option<&Records>,
+    discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
+) -> Result<()> {
+    if let (Some(name), Some(hash)) = (
+        checked.activation_name(),
+        checked.activation_identity_hash(),
+    ) && let Some(records) = records
     {
-        activation::find_active(&client, ar, cluster)
-            .await
-            .ok()
-            .flatten()
-    } else {
-        None
-    };
-
-    match active {
-        Some(act) if act.identity_hash.is_some() => {
-            let hash = act.identity_hash.as_ref().unwrap();
-            if !global.quiet {
-                crate::say!(
-                    "Active activation: {} ({}...)",
-                    output::bold(&act.name),
-                    &hash[..8.min(hash.len())],
-                );
-            }
-
-            // Prefer built-via, then fall back to the activation hash.
-            let result_dir = act
-                .built_via
-                .as_ref()
-                .map(std::path::PathBuf::from)
-                .filter(|p| p.join("kix-packages.json").exists())
-                .or_else(|| kix::eval::store::resolve_activation_by_hash(cluster, hash));
-
-            match result_dir {
-                Some(result_dir) => {
-                    let noop = |_: &str| {};
-                    match StoreGraph::from_result_dir_with_status(&result_dir, &noop) {
-                        Ok(mut old_graph) => {
-                            stamp_annotations(&mut old_graph);
-                            let manifests: Vec<Value> = old_graph
-                                .resources
-                                .values()
-                                .map(|r| r.manifest.clone())
-                                .collect();
-                            Ok((Some(old_graph), manifests, Some(client), Some(act)))
-                        }
-                        Err(e) => {
-                            // A store path that exists but will not load is
-                            // not a first deploy. Fall back to the cluster
-                            // rather than planning against nothing.
-                            if !global.quiet {
-                                crate::say!(
-                                    "  {} previous build at {} would not load ({e}). Reconstructing previous state from cluster",
-                                    output::yellow("!"),
-                                    result_dir.display(),
-                                );
-                            }
-                            let old_manifests = reconstruct_old_from_live(
-                                &client,
-                                &discovery,
-                                cluster,
-                                &act,
-                                global.quiet,
-                            )
-                            .await?;
-                            Ok((None, old_manifests, Some(client), Some(act)))
-                        }
-                    }
-                }
-                None => {
-                    if !global.quiet {
-                        crate::say!(
-                            "  {} store path for activation not found locally. Reconstructing previous state from cluster",
-                            output::yellow("!"),
-                        );
-                    }
-                    let old_manifests =
-                        reconstruct_old_from_live(&client, &discovery, cluster, &act, global.quiet)
-                            .await?;
-                    Ok((None, old_manifests, Some(client), Some(act)))
-                }
-            }
-        }
-        _ => {
-            if !global.quiet {
-                crate::say!("No previous activation on cluster. First deploy.");
-            }
-            Ok((None, vec![], Some(client), None))
-        }
+        refuse_name_taken(records, name, hash).await?;
     }
+    refuse_namespaceless(discovery, checked.plan())
+}
+
+/// Refuse a record name the cluster already has for another build.
+async fn refuse_name_taken(records: &Records, name: &str, hash: &str) -> Result<()> {
+    if let Some(found) = records
+        .identity_hash_of(name)
+        .await
+        .map_err(|e| miette!("{e}"))?
+        && found != hash
+    {
+        return Err(miette!(
+            "the cluster already has an Activation named {name} for another build \
+             (identity hash {found}, this build is {hash}). Nothing was applied."
+        ));
+    }
+    Ok(())
+}
+
+/// The engine would refuse each of these on its own, part way through the
+/// run; refusing here applies nothing.
+fn refuse_namespaceless(
+    discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
+    plan: &kix::cluster::scheduler::DeployPlan,
+) -> Result<()> {
+    let namespaceless = kix::cluster::apply::namespaceless(
+        discovery,
+        plan.nodes().iter().filter_map(|n| match &n.id {
+            NodeId::Resource(rid) => Some(rid),
+            _ => None,
+        }),
+    );
+    if namespaceless.is_empty() {
+        return Ok(());
+    }
+    Err(miette!(
+        "{}",
+        namespaceless
+            .iter()
+            .map(|rid| kix::cluster::apply::ApplyError::NoNamespace {
+                resource: rid.display_id()
+            }
+            .to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    ))
 }
 
 /// Mark records Superseded whose leftovers this run has nothing left to do
@@ -965,43 +515,36 @@ async fn load_old_from_cluster(
 /// goes through `finalize_deploy`, which does this as part of the lifecycle.
 /// Best-effort: a record that will not supersede is reported again next time,
 /// which is annoying but not wrong.
-fn supersede_consumed(
-    ctx: &CommandContext,
-    client: &kube::Client,
-    consumed: &[String],
-    quiet: bool,
-) {
+fn supersede_consumed(ctx: &CommandContext, client: &kube::Client, consumed: &[String]) {
     if consumed.is_empty() {
         return;
     }
     let done = ctx.runtime.block_on(async {
-        let Ok(discovery) = fetch::discover_resources(client).await else {
+        let Ok(discovery) = discovery::discover_resources(client).await else {
             return 0usize;
         };
-        let Ok(Some((ar, _))) = kix::cluster::activation::find_activation_ar(&discovery) else {
+        let Some(records) = Records::open(client, &discovery)
+            .ok()
+            .and_then(OpenedRecords::into_records)
+        else {
             return 0;
         };
         let mut done = 0;
         for name in consumed {
-            match kix::cluster::activation::supersede_activation(client, ar, name).await {
+            match records.supersede(name).await {
                 Ok(()) => done += 1,
                 Err(e) => tracing::warn!(activation = %name, error = %e, "could not supersede"),
             }
         }
         done
     });
-    if done > 0 && !quiet {
-        println!(
+    if done > 0 {
+        crate::say!(
             "  {} {done} failed deploy record(s) had nothing left to reconcile; marked superseded",
             output::dim("="),
         );
     }
 }
-
-/// What deletes the orphans a warn-only run keeps. Both work because the
-/// record the run finalizes lists the builds they came from under
-/// `status.orphansKeptFrom`.
-pub(crate) const KEPT_ORPHANS_HINT: &str = "`kix deploy --prune` or `kix gc` deletes them";
 
 /// The topology label preflight, printed above the confirmation. The
 /// compiler derives spread on cluster.topology.zoneKey and cannot see a
@@ -1023,17 +566,17 @@ fn report_topology_labels(ctx: &CommandContext, client: &kube::Client, manifests
                 } else {
                     output::dim("note:")
                 };
-                println!("{tag} {}", finding.describe());
+                crate::say!("{tag} {}", finding.describe());
             }
         }
         Ok(NodesOutcome::Forbidden) => {
-            println!(
+            crate::say!(
                 "{}",
                 output::dim("note: topology labels not checked; this account may not list nodes")
             );
         }
         Err(e) => {
-            println!(
+            crate::say!(
                 "{} could not list nodes to check topology labels: {}",
                 output::yellow("warn:"),
                 kix::cluster::errors::describe(&e)
@@ -1042,98 +585,11 @@ fn report_topology_labels(ctx: &CommandContext, client: &kube::Client, manifests
     }
 }
 
-/// The prune policy the flags ask for. `--prune-mode=no` skips, plain
-/// `deploy` reports orphans without deleting (warn-only), `--prune` deletes.
-pub(crate) fn prune_policy_for(args: &PlanArgs) -> PrunePolicy {
-    match args.prune_mode.unwrap_or(PruneMode::Default) {
-        PruneMode::No => PrunePolicy::Skip,
-        PruneMode::Default if !args.prune => PrunePolicy::WarnOnly,
-        PruneMode::Default => PrunePolicy::Delete,
-    }
-}
-
-/// Will this run delete orphans? Used to word the plan honestly.
-pub(crate) fn prune_flag_requested(args: &PlanArgs) -> bool {
-    prune_policy_for(args) == PrunePolicy::Delete
-}
-
-/// Reconstruct the previous deploy's manifest set from live cluster state.
-///
-/// Fallback for when the old activation's store path is gone (garbage-
-/// collected, or the deploy came from another machine). Every kix-managed
-/// resource carries the identity-hash and depends-on annotations that
-/// change detection and prune ordering read, so live objects projected
-/// back to manifests substitute for the old store graph. Activation CRs
-/// are excluded: their lifecycle is supersede-managed, never prune (same
-/// policy as the operator's reconcile).
-///
-/// Only objects naming the Active record, a Failed record of this cluster,
-/// or a build the Active record lists under `status.orphansKeptFrom`: the
-/// closures the store-graph path would read. Objects of other Kix clusters
-/// on the same Kubernetes cluster name none of these, so they never become
-/// orphans. This cluster's objects that name only older builds are left out
-/// too, and unless `quiet` a line says how many and that `kix gc --hard`
-/// finds them.
-///
-/// A failed sweep is an error, not an empty previous state. Planning
-/// against an empty old set would show every resource as "added" and,
-/// with `--prune`, would compute no orphans at all: a plan that looks
-/// plausible and is wrong.
-async fn reconstruct_old_from_live(
-    client: &kube::Client,
-    discovery: &[(kube::discovery::ApiResource, kube::discovery::Scope)],
-    cluster: &str,
-    active: &activation::ActiveActivation,
-    quiet: bool,
-) -> Result<Vec<Value>> {
-    let refuse = |e: &dyn std::fmt::Display| {
-        miette!(
-            "cannot reconstruct the previous state from the cluster: {e}. \
-             Refusing to plan from a partial view; retry when the apiserver is healthy."
-        )
-    };
-    let mut hashes: std::collections::HashSet<String> =
-        active.identity_hash.iter().cloned().collect();
-    hashes.extend(
-        active
-            .orphans_kept_from
-            .iter()
-            .map(|s| s.identity_hash.clone()),
-    );
-    if let Some((ar, _)) = activation::find_activation_ar(discovery).map_err(|e| miette!("{e}"))? {
-        let failed = activation::find_failed(client, ar, cluster)
-            .await
-            .map_err(|e| refuse(&e))?;
-        hashes.extend(failed.into_iter().filter_map(|f| f.identity_hash));
-    }
-    let scope = fetch::SweepScope::Records {
-        cluster,
-        hashes: &hashes,
-    };
-    let sweep = fetch::sweep_managed(client, discovery, scope)
-        .await
-        .map_err(|e| refuse(&e))?;
-    if sweep.other_builds > 0 && !quiet {
-        crate::say!(
-            "  {} {} objects of this Kix cluster name only older builds, so this plan leaves them; `kix gc --hard` finds them",
-            output::dim("note:"),
-            sweep.other_builds,
-        );
-    }
-    Ok(fetch::kix_owned_manifests(
-        sweep
-            .managed
-            .into_iter()
-            .filter(|obj| lifecycle::lifecycle_of_live(obj).prunable()),
-    ))
-}
-
 /// Line-oriented observer for DAG-streaming deploys. Emits one line per
 /// terminal verdict or phase boundary; readiness
 /// heartbeats land on stderr with `-v`.
 ///
 pub(crate) struct StreamCliObserver {
-    pub(crate) quiet: bool,
     pub(crate) verbose: bool,
 }
 
@@ -1141,9 +597,7 @@ impl DeployObserver for StreamCliObserver {
     fn on_event(&self, event: &DeployEvent) {
         match event {
             DeployEvent::PlanComputed { nodes, .. } => {
-                if !self.quiet {
-                    println!("{} {} nodes", output::dim("plan:"), nodes.len(),);
-                }
+                crate::say!("{} {} nodes", output::dim("plan:"), nodes.len(),);
             }
             DeployEvent::NodeStateChanged {
                 node,
@@ -1169,16 +623,14 @@ impl DeployObserver for StreamCliObserver {
                 activation,
                 previous,
             } => {
-                if !self.quiet {
-                    if let Some(prev) = previous {
-                        println!("  {} activation '{}' → Superseded", output::dim("•"), prev);
-                    }
-                    println!(
-                        "  {} activation '{}' → Active",
-                        output::green("•"),
-                        activation,
-                    );
+                if let Some(prev) = previous {
+                    crate::say!("  {} activation '{}' → Superseded", output::dim("•"), prev);
                 }
+                crate::say!(
+                    "  {} activation '{}' → Active",
+                    output::green("•"),
+                    activation,
+                );
             }
             DeployEvent::Stopped { reason } => {
                 eprintln!("\n{} {}", output::red("✗"), output::red(reason));
@@ -1195,6 +647,22 @@ impl DeployObserver for StreamCliObserver {
                     eprintln!("{} {line}", output::yellow("stalled:"));
                 }
             }
+            DeployEvent::Waiting {
+                node,
+                phase,
+                since,
+                status,
+                budget,
+            } => {
+                let line = kix::cluster::watchdog::describe_wait(
+                    node,
+                    *phase,
+                    *since,
+                    status.as_deref(),
+                    *budget,
+                );
+                crate::say!("  {} {}", output::dim("…"), output::dim(&line));
+            }
             DeployEvent::BestEffortFailed { what, message } => {
                 eprintln!("{} {what} failed: {message}", output::yellow("warn:"),);
             }
@@ -1210,7 +678,7 @@ impl StreamCliObserver {
         verdict: &Verdict,
         detail: Option<&NodeDetail>,
     ) {
-        let label = self.node_label(node);
+        let label = node.to_string();
         let tag = kind
             .tag()
             .map(|t| format!("{} ", output::dim(t)))
@@ -1219,13 +687,13 @@ impl StreamCliObserver {
             Verdict::Pending => {}
             Verdict::Running => match detail {
                 Some(NodeDetail::Applied(action))
-                    if (!self.quiet || !matches!(action, ApplyAction::Unchanged)) =>
+                    if (!output::quiet() || !matches!(action, ApplyAction::Unchanged)) =>
                 {
                     let (symbol, lbl) = apply_symbol(action);
                     println!("  {} {}{} {}", symbol, tag, label, output::dim(lbl));
                 }
-                Some(NodeDetail::SecretHydrated { keys }) if !self.quiet => {
-                    println!(
+                Some(NodeDetail::SecretHydrated { keys }) => {
+                    crate::say!(
                         "  {} {} hydrated ({} keys from SOPS)",
                         output::green("🔓"),
                         label,
@@ -1361,13 +829,6 @@ impl StreamCliObserver {
             }
         }
     }
-
-    fn node_label(&self, node: &NodeId) -> String {
-        match node {
-            NodeId::Resource(rid) => rid.to_string(),
-            NodeId::Synthetic(s) => format!("⟦{s}⟧"),
-        }
-    }
 }
 
 fn apply_symbol(action: &ApplyAction) -> (std::borrow::Cow<'static, str>, &'static str) {
@@ -1383,96 +844,62 @@ fn apply_symbol(action: &ApplyAction) -> (std::borrow::Cow<'static, str>, &'stat
     }
 }
 
-/// `plan_args` are the planning flags the deploy uses: `args.plan`, or a
-/// saved plan's flags under `--plan`. The apply reads them from here and
-/// never from `args.plan`, so it does what the plan it was compared on does.
+/// `checked` is the plan, with the prune policy and conflict handling of
+/// the flags it was checked with: `args.plan`'s, or a saved plan's under
+/// `--plan`. The apply never reads `args.plan`'s flags, so it does what the
+/// plan it was compared on does.
 #[allow(clippy::too_many_arguments)]
 async fn run_deploy_async(
     args: &DeployArgs,
-    plan_args: &PlanArgs,
     global: &crate::cli::GlobalArgs,
-    plan: DeployPlan,
-    orphan_rids: &[ResourceId],
-    old_manifests: &[Value],
+    mut checked: CheckedPlan,
     cluster_name: &str,
-    activation_name: Option<&str>,
-    activation_identity_hash: Option<&str>,
     receipt: Option<&Value>,
     pre_client: Option<kube::Client>,
-    activation_manifest: Option<&Value>,
-    consumed_failed: &[String],
-    kept_orphans: activation::KeptOrphans,
     cached_baseline: Option<&str>,
+    sops: kix::build_source::SopsSources,
 ) -> Result<RunEnd> {
     let timeout = parse_timeout(args.timeout.as_deref())?;
 
     // Reuse pre-established connection or create a new one. A plan made
     // without one has not checked its orphans against other Kix clusters.
-    let (client, orphan_rids) = match pre_client {
-        Some(c) => (c, orphan_rids.to_vec()),
+    let client = match pre_client {
+        Some(c) => c,
         None => {
-            let client = fetch::make_client(global.context.as_deref())
+            let client = client::make_client(global.context.as_deref())
                 .await
                 .map_err(|e| miette!("failed to connect to cluster: {e}"))?;
-            let (prune, shared) =
-                super::shared_orphans::keep_shared(&client, cluster_name, orphan_rids.to_vec())
-                    .await?;
-            if !global.quiet {
-                super::shared_orphans::print(&shared);
-            }
-            (client, prune)
+            let (_, shared) =
+                kix::plan::keep_shared(&client, cluster_name, checked.orphans().to_vec())
+                    .await
+                    .map_err(|e| miette!("{e}"))?;
+            checked.keep_shared(&shared);
+            plan::print_shared(&shared);
+            client
         }
     };
 
-    let discovery = fetch::discover_resources(&client)
+    let target = Target::connect(client, sops)
         .await
         .map_err(|e| miette!("{e}"))?;
+    let discovery = target.discovery();
 
-    // The gate, again, here. `load_old_from_cluster` checks it too, but
-    // `--current-activation` reads the previous build from the local cache
-    // and never contacts the cluster before this point. Without this check
+    // The gate, again, here. `Baseline::of_cluster` opens the records too,
+    // but `--current-activation` reads the previous build from the local
+    // cache and never contacts the cluster before this point. Without this
     // that flag skips the gate, and with `--prune` the deploy would compute
     // the retired CRDs as orphans and delete them, which cascades away every
     // Activation record on the cluster.
-    kix::legacy_domain::check_cluster(
-        &discovery
-            .iter()
-            .filter(|(ar, _)| kix::manifest::lifecycle::is_record_kind(&ar.kind))
-            .map(|(ar, _)| ar.group.as_str())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|e| miette!("{e}"))?;
+    let records = Records::open(target.client(), discovery)
+        .map_err(|e| miette!("{e}"))?
+        .into_records();
 
     if let Some(hash) = cached_baseline {
-        check_cached_baseline(&client, &discovery, cluster_name, hash).await?;
+        check_cached_baseline(records.as_ref(), cluster_name, hash).await?;
     }
 
-    // The engine would refuse each of these on its own, part way through
-    // the run; refusing here applies nothing.
-    let namespaceless = kix::cluster::apply::namespaceless(
-        &discovery,
-        plan.nodes.iter().filter_map(|n| match &n.id {
-            NodeId::Resource(rid) => Some(rid),
-            _ => None,
-        }),
-    );
-    if !namespaceless.is_empty() {
-        return Err(miette!(
-            "{}",
-            namespaceless
-                .iter()
-                .map(|rid| kix::cluster::apply::ApplyError::NoNamespace {
-                    resource: rid.display_id()
-                }
-                .to_string())
-                .collect::<Vec<_>>()
-                .join("\n")
-        ));
-    }
+    refuse_before_writing(&checked, records.as_ref(), discovery).await?;
 
-    let discovery = Arc::new(tokio::sync::RwLock::new(discovery));
-
-    let prune_policy = prune_policy_for(plan_args);
     let on_error = match args.on_error {
         OnError::Stop => OnErrorPolicy::Stop,
         OnError::Continue => OnErrorPolicy::Continue,
@@ -1481,9 +908,7 @@ async fn run_deploy_async(
     let config = SchedulerConfig {
         timeout,
         on_error,
-        prune: prune_policy,
         cancel: kix::cluster::cancel::CancelToken::new(),
-        dry_run: false,
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
         rerun_failed: true,
@@ -1491,28 +916,6 @@ async fn run_deploy_async(
     // Ctrl-C and SIGTERM now have to reach the engine: the record exists from
     // the start of the run, so a process that just dies leaves it Deploying.
     config.cancel.cancel_on_interrupt();
-
-    let kube_ops = Arc::new(KubeOps::new(
-        client.clone(),
-        discovery,
-        KubeOpsConfig {
-            cluster_name: cluster_name.to_string(),
-            activation_name: activation_name.map(str::to_string),
-            activation_identity_hash: activation_identity_hash.map(str::to_string),
-            receipt: receipt.cloned(),
-            force_conflicts: plan_args.force_conflicts,
-            dry_run: false,
-            // Create the record before the first wave, so a run that stops
-            // part way leaves something that says what it was attempting
-            // (kixpkgs#82). The plan applies this same manifest again as its
-            // last node, which is then an unchanged no-op.
-            activation_manifest: activation_manifest.cloned(),
-            consumed_failed: consumed_failed.to_vec(),
-            kept_orphans,
-            mark_failed_on_abort: true,
-        },
-    ));
-    let ops: Arc<dyn ClusterOps> = kube_ops.clone();
 
     // Select the TUI, NDJSON, plain line, or colored observer from CLI flags
     // and terminal capabilities.
@@ -1547,13 +950,12 @@ async fn run_deploy_async(
     // The JSON log ends with a summary object in place of the summary line,
     // so its stdout stays NDJSON.
     let json_log = (tui_driver.is_none() && args.log_format == crate::cli::LogFormat::Json)
-        .then(|| Arc::new(super::deploy_log::JsonObserver::new(global.verbose > 0)));
+        .then(|| Arc::new(super::deploy_log::JsonObserver::new()));
     let observer: Arc<dyn DeployObserver> = match (&tui_driver, &json_log) {
         (Some(d), _) => d.observer(),
         (None, Some(json)) => json.clone(),
         (None, None) if args.log_format == crate::cli::LogFormat::Pretty && interactive => {
             Arc::new(StreamCliObserver {
-                quiet: global.quiet,
                 verbose: global.verbose > 0,
             })
         }
@@ -1562,29 +964,29 @@ async fn run_deploy_async(
         }),
     };
 
-    let result =
-        scheduler::run_deploy(ops, plan, &orphan_rids, old_manifests, &config, observer).await;
+    let (result, kept) = checked
+        .run(target, receipt.cloned(), config, observer)
+        .await;
 
     // Tear down the TUI before the summary prints so it lands in normal
     // scrollback below the history lines.
     drop(tui_driver);
 
-    if let Some(recorded) = kube_ops.recorded_orphans_kept_from() {
-        baseline::sync_kept_roots(cluster_name, &recorded);
+    if let Some(recorded) = kept {
+        kix::plan::baseline::sync_kept_roots(cluster_name, &recorded);
     }
 
     let end = RunEnd::of(&result);
     let counts = match &result {
-        Ok(r) => Some(r),
+        Ok(r) => r,
         Err(e) => e.partial(),
     };
-    match (&json_log, counts) {
-        (Some(json), counts) => json.summary(counts, false, end.succeeded),
-        (None, Some(r)) => {
+    match &json_log {
+        Some(json) => json.summary(counts, false, end.succeeded),
+        None => {
             println!();
-            println!("{}", summary_line(r, false, end.succeeded));
+            println!("{}", summary_line(counts, false, end.succeeded));
         }
-        (None, None) => {}
     }
     // The event stream already reports failed nodes and cancellation.
     if let Err(e) = &result
@@ -1596,24 +998,6 @@ async fn run_deploy_async(
         eprintln!("{} {e}", output::red("error:"));
     }
     Ok(end)
-}
-
-/// The orphan lines of deploy's plan. `fate` says what this deploy does with
-/// the orphans prune may delete; the kinds `lifecycle::never_pruned` protects
-/// are listed apart and are never counted as orphans.
-pub(crate) fn render_plan_orphans(orphan_rids: &[ResourceId], fate: &str) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-    let (prunable, kept) = plan::split_never_pruned(orphan_rids.to_vec());
-    if !prunable.is_empty() {
-        let orphan_str = prunable.len().to_string();
-        let _ = writeln!(out, "  {} orphaned ({fate})", output::red(&orphan_str));
-        for rid in &prunable {
-            let _ = writeln!(out, "    {} {}", output::red("-"), rid.display_id());
-        }
-    }
-    out.push_str(&plan::render_never_pruned(&kept));
-    out
 }
 
 /// The engine's prune section: the orphans prune deletes or reports, then
@@ -1633,9 +1017,10 @@ fn render_prune_start(resources: &[ResourceId], kept: &[ResourceId], delete: boo
         } else {
             let _ = writeln!(
                 out,
-                "{} {} orphaned resources kept (warn-only; {KEPT_ORPHANS_HINT})",
+                "{} {} orphaned resources kept (warn-only; {})",
                 output::bold("prune:"),
                 resources.len(),
+                plan::KEPT_ORPHANS_HINT,
             );
         }
         for rid in resources {
@@ -1721,163 +1106,64 @@ fn parse_timeout(s: Option<&str>) -> Result<Duration> {
     ))
 }
 
-pub(crate) fn resolve_flake_path(flake: &str) -> Result<PathBuf> {
-    if flake.contains(':') {
-        Ok(PathBuf::from(flake))
-    } else {
-        let path = PathBuf::from(flake);
-        if path.is_absolute() {
-            Ok(path)
-        } else {
-            let cwd = std::env::current_dir().into_diagnostic()?;
-            Ok(cwd.join(path))
-        }
+/// The planning flags of an operator deploy. The operator always prunes, so
+/// the objects check treats every orphan as deleted, as the operator will.
+fn operator_flags(flags: PlanFlags) -> PlanFlags {
+    PlanFlags {
+        prune: true,
+        prune_mode: None,
+        ..flags
     }
 }
 
 fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
-    let flake_path = resolve_flake_path(&ctx.global.flake)?;
-
-    // Build the new activation and load its store graph.
-    if !ctx.global.quiet {
-        println!(
-            "Building cluster '{}' (operator mode)...",
-            output::bold(&args.plan.cluster)
-        );
-    }
-    let status = |msg: &str| {
-        if !ctx.global.quiet {
-            eprint!("\r\x1b[2K  {msg}");
-        }
-    };
-    let overrides = ctx.global.input_overrides();
-    let result_path =
-        build_cluster_activation_with_status(&flake_path, &args.plan.cluster, &overrides, &status)
-            .map_err(|e| miette!("failed to build cluster: {e}"))?;
-    let mut new_graph = StoreGraph::from_result_dir_with_status(&result_path, &status)
-        .map_err(|e| miette!("{e}"))?;
-    // The same stale-pin check the direct path makes, and for the same
-    // reason: a pin from before the domain move renders Kix's own CRDs under
-    // the retired group. Before `stamp_annotations`, which would upgrade
-    // them and make a stale pin indistinguishable from a current one. Two
-    // deploy paths that answer differently about one build is worse than
-    // either answer.
-    kix::legacy_domain::check_build(
-        &new_graph
-            .resources
-            .values()
-            .map(|r| r.manifest.clone())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|e| miette!("{e}"))?;
-    stamp_annotations(&mut new_graph);
-    if !ctx.global.quiet {
-        eprint!("\r\x1b[2K");
-    }
-    // Keyed by the build's cluster name, as in the direct path.
-    let cluster = new_graph.cluster_name.clone();
-
-    let new_manifests: Vec<Value> = new_graph
-        .resources
-        .values()
-        .map(|r| r.manifest.clone())
-        .collect();
-
-    let manifest_count = new_manifests.len();
-    if !ctx.global.quiet {
-        println!(
-            "Cluster {}: {} manifests",
-            output::bold(&new_graph.cluster_name),
-            manifest_count,
-        );
-    }
-
-    if manifest_count == 0 {
-        if !ctx.global.quiet {
-            println!("Nothing to deploy.");
-        }
+    // The plan and the objects check of the direct path. The operator plans
+    // again against the live objects, but a build whose plan hides an
+    // object is refused here, before it reaches the cluster.
+    let Some(p) = prepare(&args.plan, operator_flags(flags_of(&args.plan)), ctx)? else {
         return Ok(());
-    }
-
-    // Read the Activation name and identity hash.
-    let activation_manifest = lifecycle::record_of(&new_manifests);
-    let activation_name = activation_manifest
-        .and_then(|m| {
-            m.pointer("/metadata/name")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        })
+    };
+    let checked = &p.checked;
+    let activation_name = checked
+        .activation_name()
+        .map(str::to_string)
         .ok_or_else(|| miette!("no Activation resource found in cluster manifests"))?;
-    let activation_identity_hash = activation_manifest.and_then(|m| {
-        m.pointer("/metadata/annotations")
-            .and_then(|a| a.get(keys::IDENTITY_HASH))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    });
-
-    // Show the plan when requested.
-    if !ctx.global.quiet {
-        let old_graph = if args.plan.current_activation {
-            let (og, _) = load_old_from_cache(&cluster, &ctx.global);
-            og
-        } else {
-            ctx.runtime
-                .block_on(load_old_from_cluster(&cluster, &ctx.global))
-                .ok()
-                .and_then(|(og, _, _, _)| og)
-        };
-
-        let pkg_diff = match &old_graph {
-            Some(old) => plan::diff_graphs(old, &new_graph),
-            None => plan::diff_graphs(&StoreGraph::empty(&new_graph.cluster_name), &new_graph),
-        };
-
-        plan::print_package_plan(&pkg_diff, ctx.global.verbose > 0);
-        plan::print_plan_summary(&pkg_diff);
-
-        // Apply the same migration acknowledgement gate as direct mode.
-        // Operator-mode is non-interactive on the operator side, so the
-        // CLI must enforce the gate before handing off the Activation CR.
-        let old_manifests_for_pairs: Vec<Value> = old_graph
-            .as_ref()
-            .map(|g| g.resources.values().map(|r| r.manifest.clone()).collect())
-            .unwrap_or_default();
-        let migration_pairs = detect_migration_pairs(&new_manifests, &old_manifests_for_pairs);
-        if !migration_pairs.is_empty() {
-            print_migration_pairs(&migration_pairs);
-            if !args.plan.accept_migrations {
-                eprintln!(
-                    "{}",
-                    output::red(
-                        "Refusing to delegate to operator: stateful migration pairs detected but --accept-migrations was not passed."
-                    )
-                );
-                std::process::exit(1);
-            }
+    if !output::quiet() {
+        plan::print_package_plan(checked.pkg_diff(), ctx.global.verbose > 0);
+        plan::print_plan_summary(checked.pkg_diff());
+        print!(
+            "{}",
+            plan::render_plan_orphans(
+                checked.orphans(),
+                "will be deleted; the operator always prunes"
+            )
+        );
+        plan::print_shared(checked.shared_orphans());
+    }
+    // Operator-mode is non-interactive on the operator side, so the CLI
+    // must enforce the migration gate before handing off the Activation CR.
+    if !p.migration_pairs.is_empty() {
+        print_migration_pairs(&p.migration_pairs);
+        if !args.plan.accept_migrations {
+            eprintln!(
+                "{}",
+                output::red(
+                    "Refusing to delegate to operator: stateful migration pairs detected but --accept-migrations was not passed."
+                )
+            );
+            std::process::exit(1);
         }
     }
+    let cluster = p.build.graph().cluster_name.clone();
+    let activation_identity_hash = p.checked.activation_identity_hash().map(str::to_string);
+    let build = p.build;
+    let result_path = build.graph().result_dir.clone();
 
     // The receipt, same as the direct path. The operator has no source tree,
     // so provenance is computed here and written onto the Activation when it
     // is applied.
-    let receipt =
-        crate::commands::compliance::receipt::build_receipt(&new_graph, &ctx.global.flake);
-    if receipt["source"]["dirty"] == Value::Bool(true) && !ctx.global.quiet {
-        println!();
-        println!(
-            "{}",
-            output::yellow(
-                "The working tree has uncommitted changes, so the commit recorded for this deploy"
-            )
-        );
-        println!(
-            "{}",
-            output::yellow("does not contain what is about to be applied. The record will say so.")
-        );
-        if let Some(rev) = receipt["source"]["revision"].as_str() {
-            println!("  {}", output::dim(rev));
-        }
-    }
+    let receipt = ctx.receipts.of_build(&build, &ctx.global.flake);
+    print_warnings(&ctx.receipts.warnings(&receipt));
 
     // Confirm before submitting the Activation.
     if !args.yes {
@@ -1906,20 +1192,16 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
     let source_path = result_path.display().to_string();
 
     let reconciled = ctx.runtime.block_on(async {
-        let (client, ar) =
-            super::operator::connect_and_verify(global.context.as_deref(), global.quiet).await?;
+        let (_, records) = super::operator::connect_and_verify(global.context.as_deref()).await?;
 
-        if !global.quiet {
-            println!(
-                "Applying Activation CR '{}' (source: {})...",
-                output::bold(&activation_name),
-                output::dim(&source_path),
-            );
-        }
+        crate::say!(
+            "Applying Activation CR '{}' (source: {})...",
+            output::bold(&activation_name),
+            output::dim(&source_path),
+        );
 
         super::operator::apply_activation(
-            &client,
-            &ar,
+            &records,
             &activation_name,
             &cluster,
             &source_path,
@@ -1928,21 +1210,13 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
         )
         .await?;
 
-        if !global.quiet {
-            println!(
-                "  {} Activation CR applied. Waiting for operator...",
-                output::green("✓"),
-            );
-        }
+        crate::say!(
+            "  {} Activation CR applied. Waiting for operator...",
+            output::green("✓"),
+        );
 
-        let reconciled = super::operator::watch_activation_progress(
-            &client,
-            &ar,
-            &activation_name,
-            &source_path,
-            global.quiet,
-        )
-        .await?;
+        let reconciled =
+            super::operator::watch_activation_progress(&records, &activation_name).await?;
 
         let (ending, phase) = match reconciled {
             Reconciled::Active => (output::green("complete"), output::green("Active")),
@@ -1974,23 +1248,45 @@ fn run_operator(args: &DeployArgs, ctx: &mut CommandContext) -> Result<()> {
 /// Render detected stateful migration pairs. The user must handle data movement before
 /// re-running deploy with --accept-migrations.
 fn print_migration_pairs(pairs: &[MigrationPair]) {
-    println!();
-    println!(
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
         "{}",
         output::bold(&format!("Stateful migrations detected ({}):", pairs.len()))
     );
     for p in pairs {
-        println!("  {} {}", output::yellow("~"), output::yellow(&p.summary()));
-        println!(
+        let _ = writeln!(
+            out,
+            "  {} {}",
+            output::yellow("~"),
+            output::yellow(&p.summary())
+        );
+        let _ = writeln!(
+            out,
             "      source: {}/{}/{}",
             p.source.kind, p.source.namespace, p.source.name
         );
-        println!(
+        let _ = writeln!(
+            out,
             "      target: {}/{}/{}",
             p.target.kind, p.target.namespace, p.target.name
         );
     }
-    println!();
+    let _ = writeln!(out);
+    output::progress_text(&out);
+}
+
+/// Print `lines` as progress after a blank line, if there are any.
+fn print_warnings(lines: &[String]) {
+    if lines.is_empty() {
+        return;
+    }
+    crate::say!();
+    for line in lines {
+        crate::say!("{line}");
+    }
 }
 
 #[cfg(test)]
@@ -2010,16 +1306,6 @@ mod tests {
                 namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
             },
         ]
-    }
-
-    /// Deploy's plan counts a Namespace orphan as kept, not as an orphan.
-    #[test]
-    fn plan_orphans_list_a_namespace_as_kept() {
-        let text = render_plan_orphans(&orphans(), "will be deleted");
-        assert!(text.contains("1 orphaned (will be deleted)"), "{text}");
-        assert!(text.contains("- ConfigMap/old@app"), "{text}");
-        assert!(!text.contains("- Namespace"), "{text}");
-        assert!(text.contains("! Namespace/gone"), "{text}");
     }
 
     /// The engine's prune section under warn-only lists a Namespace orphan
@@ -2073,45 +1359,34 @@ mod tests {
 
 #[cfg(test)]
 mod prune_flag_tests {
-    use super::*;
     use crate::cli::{Cli, Command};
     use clap::Parser;
+    use kix::cluster::scheduler::PrunePolicy;
 
-    fn deploy_args(extra: &[&str]) -> PlanArgs {
-        let mut argv = vec!["kix", "deploy", "x"];
-        argv.extend_from_slice(extra);
-        match Cli::try_parse_from(argv).expect("args parse").command {
-            Command::Deploy(args) => args.plan,
-            _ => unreachable!(),
-        }
+    fn prune_policy(extra: &[&str]) -> PrunePolicy {
+        let argv = [&["kix", "deploy", "x"][..], extra].concat();
+        let Command::Deploy(args) = Cli::try_parse_from(argv).expect("args parse").command else {
+            unreachable!()
+        };
+        super::flags_of(&args.plan).prune_policy()
     }
 
     #[test]
     fn prune_policy_follows_the_flags() {
-        assert_eq!(prune_policy_for(&deploy_args(&[])), PrunePolicy::WarnOnly);
-        assert!(!prune_flag_requested(&deploy_args(&[])));
+        assert_eq!(prune_policy(&[]), PrunePolicy::WarnOnly);
+        assert_eq!(prune_policy(&["--prune"]), PrunePolicy::Delete);
         assert_eq!(
-            prune_policy_for(&deploy_args(&["--prune"])),
-            PrunePolicy::Delete
-        );
-        assert!(prune_flag_requested(&deploy_args(&["--prune"])));
-        assert_eq!(
-            prune_policy_for(&deploy_args(&["--prune", "--prune-mode", "default"])),
+            prune_policy(&["--prune", "--prune-mode", "default"]),
             PrunePolicy::Delete
         );
         assert_eq!(
-            prune_policy_for(&deploy_args(&["--prune-mode", "default"])),
+            prune_policy(&["--prune-mode", "default"]),
             PrunePolicy::WarnOnly
         );
         assert_eq!(
-            prune_policy_for(&deploy_args(&["--prune", "--prune-mode", "no"])),
+            prune_policy(&["--prune", "--prune-mode", "no"]),
             PrunePolicy::Skip
         );
-        assert!(!prune_flag_requested(&deploy_args(&[
-            "--prune",
-            "--prune-mode",
-            "no"
-        ])));
     }
 
     /// Reject the removed `eager` value instead of treating it as `--prune`.
@@ -2126,12 +1401,12 @@ mod prune_flag_tests {
 }
 
 #[cfg(test)]
-mod rebuild_from_live_tests {
+mod cached_baseline_tests {
     use super::*;
-    use kix::cluster::activation::{
-        ActiveActivation, KeptOrphanSource, PHASE_ACTIVE, PHASE_FAILED, PHASE_SUPERSEDED,
-    };
     use kix::cluster::fake_api::FakeApi;
+    use kix::manifest::keys;
+    use kix::manifest::lifecycle;
+    use kix::manifest::lifecycle::PHASE_ACTIVE;
     use serde_json::json;
 
     fn record(cluster: &str, hash: &str, phase: &str) -> Value {
@@ -2150,22 +1425,6 @@ mod rebuild_from_live_tests {
         })
     }
 
-    fn cm(name: &str, activations: &str) -> Value {
-        json!({
-            "apiVersion": "v1",
-            "kind": "ConfigMap",
-            "metadata": {
-                "name": name,
-                "namespace": "app",
-                "labels": { "app.kubernetes.io/managed-by": "kix" },
-                "annotations": {
-                    (keys::IDENTITY_HASH): format!("h-{name}"),
-                    (keys::ACTIVATIONS): activations,
-                },
-            },
-        })
-    }
-
     /// A cached build of another context's cluster `a` (hash `p9`) is
     /// refused against this context's Active record (`a2`), and so is any
     /// cached build when the context has no Active record for the cluster.
@@ -2173,71 +1432,66 @@ mod rebuild_from_live_tests {
     async fn a_cached_build_must_be_the_contexts_active_build() {
         let api = FakeApi::new([record("a", "a2", PHASE_ACTIVE)]);
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
-        assert!(
-            check_cached_baseline(&client, &discovery, "a", "a2")
-                .await
-                .is_ok()
-        );
-        let err = check_cached_baseline(&client, &discovery, "a", "p9")
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let records = Records::open(&client, &discovery).unwrap().into_records();
+        let records = records.as_ref();
+        assert!(check_cached_baseline(records, "a", "a2").await.is_ok());
+        let err = check_cached_baseline(records, "a", "p9")
             .await
             .unwrap_err()
             .to_string();
         assert!(err.contains("Active build is a2"), "{err}");
-        let err = check_cached_baseline(&client, &discovery, "b", "p9")
+        let err = check_cached_baseline(records, "b", "p9")
             .await
             .unwrap_err()
             .to_string();
         assert!(err.contains("no Active record"), "{err}");
     }
 
-    /// The previous state of `a`, rebuilt from live objects, is the closures
-    /// of its Active record, its Failed record and the build its Active
-    /// record kept orphans from. Leftovers of a Superseded build, and every
-    /// object only `b` deploys, are not in it.
+    /// A record name the cluster has for another build is refused; the same
+    /// build's, or an unknown name, is not.
     #[tokio::test]
-    async fn the_previous_state_is_the_active_failed_and_kept_closures() {
-        let api = FakeApi::new([
-            record("a", "a1", PHASE_SUPERSEDED),
-            record("a", "a2", PHASE_ACTIVE),
-            record("a", "af", PHASE_FAILED),
-            record("b", "b1", PHASE_ACTIVE),
-            cm("current", "a2"),
-            cm("failed-left", "af"),
-            cm("kept-left", "ak"),
-            cm("superseded-left", "a1"),
-            cm("b-web", "b1"),
-            cm("shared", "a2,b1"),
-        ]);
+    async fn a_record_name_held_by_another_build_is_refused() {
+        let api = FakeApi::new([record("a", "a2", PHASE_ACTIVE)]);
         let client = api.client();
-        let discovery = fetch::discover_resources(&client).await.unwrap();
-        let active = ActiveActivation {
-            name: "rec-a2".into(),
-            identity_hash: Some("a2".into()),
-            built_via: None,
-            orphans_kept_from: vec![KeptOrphanSource {
-                activation: "rec-ak".into(),
-                identity_hash: "ak".into(),
-                built_via: None,
-            }],
-        };
-        let old = reconstruct_old_from_live(&client, &discovery, "a", &active, true)
-            .await
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let records = Records::open(&client, &discovery)
+            .unwrap()
+            .into_records()
             .unwrap();
-        let mut names: Vec<&str> = old
-            .iter()
-            .filter_map(|m| m.pointer("/metadata/name")?.as_str())
-            .collect();
-        names.sort();
-        assert_eq!(names, vec!["current", "failed-left", "kept-left", "shared"]);
+        assert!(refuse_name_taken(&records, "rec-a2", "a2").await.is_ok());
+        assert!(refuse_name_taken(&records, "rec-new", "n1").await.is_ok());
+        let err = refuse_name_taken(&records, "rec-a2", "n1")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("identity hash a2, this build is n1"), "{err}");
+    }
+
+    /// A namespaced object without a namespace is refused before the run.
+    #[tokio::test]
+    async fn an_object_without_its_namespace_is_refused() {
+        let api = FakeApi::new([]);
+        let discovery = discovery::discover_resources(&api.client()).await.unwrap();
+        let plan = kix::cluster::scheduler::DeployPlan::applying(&[json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": { "name": "c" },
+        })]);
+        let err = refuse_namespaceless(&discovery, &plan)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("ConfigMap"), "{err}");
     }
 }
 
 #[cfg(test)]
 mod run_end_tests {
     use super::*;
-    use kix::cluster::ops::scripted::{ApplyFailure, Behaviour, NodeScript, ScriptedOps};
+    use kix::cluster::scheduler::{DeployPlan, PrunePolicy};
+    use kix::cluster::scripted::{ApplyFailure, Behaviour, NodeScript, ScriptedOps};
     use kix::cluster::stream::NullObserver;
+    use kix::manifest::keys;
     use serde_json::json;
 
     fn deployment(name: &str, deps: &[&str]) -> Value {
@@ -2262,23 +1516,23 @@ mod run_end_tests {
         }
     }
 
-    fn apply_all(manifests: &[Value]) -> DeployPlan {
-        let graph = ResourceGraph::from_manifests(manifests).unwrap();
-        let changes: Vec<ChangeAction> =
-            manifests.iter().cloned().map(ChangeAction::Apply).collect();
-        DeployPlan::from_graph_and_changes(&graph, &changes).unwrap()
+    /// A run's engine settings and its prune policy.
+    struct Settings {
+        config: SchedulerConfig,
+        prune: PrunePolicy,
     }
 
-    fn config(on_error: OnErrorPolicy, prune: PrunePolicy) -> SchedulerConfig {
-        SchedulerConfig {
-            timeout: Duration::from_secs(300),
-            on_error,
+    fn config(on_error: OnErrorPolicy, prune: PrunePolicy) -> Settings {
+        Settings {
+            config: SchedulerConfig {
+                timeout: Duration::from_secs(300),
+                on_error,
+                cancel: kix::cluster::cancel::CancelToken::new(),
+                concurrency: scheduler::CONCURRENCY,
+                stall: StallPolicy::off(),
+                rerun_failed: true,
+            },
             prune,
-            cancel: kix::cluster::cancel::CancelToken::new(),
-            dry_run: false,
-            concurrency: scheduler::CONCURRENCY,
-            stall: StallPolicy::off(),
-            rerun_failed: true,
         }
     }
 
@@ -2297,15 +1551,15 @@ mod run_end_tests {
         manifests: &[Value],
         orphans: &[ResourceId],
         old: &[Value],
-        config: &SchedulerConfig,
+        settings: &Settings,
     ) -> std::result::Result<DeployResult, scheduler::DeployError> {
-        let ops: Arc<dyn ClusterOps> = ops.clone();
-        scheduler::run_deploy(
-            ops,
-            apply_all(manifests),
+        scheduler::run_scripted(
+            ops.clone(),
+            DeployPlan::applying(manifests),
             orphans,
             old,
-            config,
+            settings.prune,
+            &settings.config,
             Arc::new(NullObserver),
         )
         .await
@@ -2436,5 +1690,43 @@ mod run_end_tests {
         assert!(stopped.starts_with("Deploy stopped: "), "{stopped}");
         let ok = summary_line(&DeployResult::default(), true, true);
         assert!(ok.starts_with("Dry run complete: "), "{ok}");
+    }
+}
+
+#[cfg(test)]
+mod operator_tests {
+    use super::*;
+    use crate::cli::{Cli, Command};
+    use clap::Parser;
+    use kix::cluster::scheduler::PrunePolicy;
+
+    /// The operator always prunes, so an operator deploy's check holds every
+    /// delete to the plan, whatever the prune flags say.
+    #[test]
+    fn an_operator_deploy_is_checked_as_one_that_prunes() {
+        for extra in [&[][..], &["--prune-mode", "no"][..]] {
+            let argv = [&["kix", "deploy", "x", "--operator"][..], extra].concat();
+            let Command::Deploy(args) = Cli::try_parse_from(argv).expect("args parse").command
+            else {
+                unreachable!()
+            };
+            let flags = operator_flags(flags_of(&args.plan));
+            assert_eq!(flags.prune_policy(), PrunePolicy::Delete, "{extra:?}");
+        }
+    }
+
+    /// The operator reads the build from the Nix store, and a bundle's build
+    /// is not there: with `--bundle` it would be handed a path it cannot read.
+    #[test]
+    fn an_operator_deploy_does_not_take_a_bundle() {
+        let parsed = Cli::try_parse_from([
+            "kix",
+            "deploy",
+            "x",
+            "--operator",
+            "--bundle",
+            "x.kixbundle",
+        ]);
+        assert!(parsed.is_err());
     }
 }

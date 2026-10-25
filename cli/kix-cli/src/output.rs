@@ -7,32 +7,114 @@ use miette::IntoDiagnostic;
 
 use crate::cli::{GlobalArgs, OutputFormat};
 
+pub use kix::text::printable;
+
 static COLOR_ENABLED: OnceLock<bool> = OnceLock::new();
 
-/// Set when stdout carries a machine-readable document (`kix plan -o json`),
-/// so the progress lines a plan prints on the way go to stderr instead.
-static PROGRESS_TO_STDERR: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// Send the lines [`say!`] prints to stderr from now on.
-pub fn progress_to_stderr() {
-    PROGRESS_TO_STDERR.store(true, std::sync::atomic::Ordering::Relaxed);
+/// How this run prints. `main` sets it once with [`init`], before the
+/// command runs.
+///
+/// Where a command prints what:
+/// - its answer goes to stdout: [`result`], or `println!` for text;
+/// - warnings and errors go to stderr with `eprintln!`, even under `-q`;
+/// - progress goes through [`say!`](crate::say) or
+///   [`esay!`](crate::esay), which `-q` silences.
+#[derive(Debug, Clone, Copy)]
+pub struct Mode {
+    /// `-q`.
+    pub quiet: bool,
+    /// `-o`, or the command's default when it is not given.
+    pub format: OutputFormat,
+    /// Stdout carries a machine-readable document that the progress lines
+    /// [`say!`](crate::say) and [`progress_text`] print must not interleave
+    /// with, so they go to stderr.
+    pub progress_on_stderr: bool,
 }
 
-/// Whether [`say!`] prints to stderr.
+static MODE: OnceLock<Mode> = OnceLock::new();
+
+/// Set this run's [`Mode`].
+pub fn init(mode: Mode) {
+    MODE.get_or_init(|| mode);
+}
+
+/// This run's [`Mode`]. Before [`init`], the defaults: not quiet, text,
+/// progress on stdout.
+fn mode() -> Mode {
+    MODE.get().copied().unwrap_or(Mode {
+        quiet: false,
+        format: OutputFormat::Text,
+        progress_on_stderr: false,
+    })
+}
+
+/// Whether `-q` is set.
+pub fn quiet() -> bool {
+    mode().quiet
+}
+
+/// The output format: `-o`, or the command's default.
+pub fn format() -> OutputFormat {
+    mode().format
+}
+
+/// Whether [`say!`](crate::say) prints to stderr.
 pub fn progress_on_stderr() -> bool {
-    PROGRESS_TO_STDERR.load(std::sync::atomic::Ordering::Relaxed)
+    mode().progress_on_stderr
 }
 
-/// `println!` for progress lines that a machine-readable plan on stdout
-/// must not interleave with: stderr after [`progress_to_stderr`].
+/// `println!` for progress lines. `-q` silences them, and they go to stderr
+/// when stdout carries a document (`kix plan -o markdown`).
 #[macro_export]
 macro_rules! say {
     ($($arg:tt)*) => {
-        if $crate::output::progress_on_stderr() {
+        if !$crate::output::quiet() {
+            if $crate::output::progress_on_stderr() {
+                eprintln!($($arg)*);
+            } else {
+                println!($($arg)*);
+            }
+        }
+    };
+}
+
+/// `print!` for text printed on the way to the answer, such as the plan a
+/// deploy shows before it asks: stdout, or stderr when stdout carries a
+/// machine-readable document. Unlike [`say!`](crate::say), `-q` does not
+/// silence it.
+pub fn progress_text(text: &str) {
+    if progress_on_stderr() {
+        eprint!("{text}");
+    } else {
+        print!("{text}");
+    }
+}
+
+/// A spinner on stderr showing `msg`. `None` under `-q`, or when stderr is
+/// not a terminal.
+pub fn spinner(msg: impl Into<Cow<'static, str>>) -> Option<indicatif::ProgressBar> {
+    use std::io::IsTerminal;
+    if std::io::stderr().is_terminal() && !quiet() {
+        let sp = indicatif::ProgressBar::new_spinner();
+        sp.set_style(
+            indicatif::ProgressStyle::default_spinner()
+                .template("{spinner:.cyan} {msg}")
+                .expect("valid template"),
+        );
+        sp.set_message(msg);
+        sp.enable_steady_tick(std::time::Duration::from_millis(80));
+        Some(sp)
+    } else {
+        None
+    }
+}
+
+/// `eprintln!` for progress lines: `-q` silences them.
+#[macro_export]
+macro_rules! esay {
+    ($($arg:tt)*) => {
+        if !$crate::output::quiet() {
             eprintln!($($arg)*);
-        } else {
-            println!($($arg)*);
         }
     };
 }
@@ -104,8 +186,6 @@ pub fn bold(s: &str) -> Cow<'_, str> {
     }
 }
 
-/// Check if the terminal is interactive (for confirmation prompts).
-/// Returns false in CI or when piped. Respects KIX_NO_INTERACTIVE env var.
 /// A suffix for sweep summaries naming the resource types this account
 /// may not list. Empty when there are none, so it can be appended blindly.
 pub fn forbidden_note(forbidden: &[String]) -> String {
@@ -119,6 +199,8 @@ pub fn forbidden_note(forbidden: &[String]) -> String {
     )
 }
 
+/// Check if the terminal is interactive (for confirmation prompts).
+/// Returns false in CI or when piped. Respects KIX_NO_INTERACTIVE env var.
 pub fn is_interactive() -> bool {
     use std::io::IsTerminal;
     std::env::var_os("KIX_NO_INTERACTIVE").is_none() && std::io::stdin().is_terminal()
@@ -133,15 +215,19 @@ pub trait CommandResponse {
     fn as_json(&self) -> serde_json::Value;
 }
 
-/// Render a CommandResponse based on the output format.
+/// Print a command's answer to stdout in the output [`format()`].
 ///
 /// `Markdown` is not a generic `CommandResponse` format. Only specific commands
-/// (currently `kix diff`) implement it. For other commands we fall back to
+/// (`kix plan`, `kix diff`) implement it. For other commands we fall back to
 /// `Text` so the flag remains a no-op rather than an error.
-pub fn render(response: &dyn CommandResponse, format: OutputFormat) -> miette::Result<String> {
-    match format {
-        OutputFormat::Text | OutputFormat::Markdown => Ok(response.format_text()),
-        OutputFormat::Json => serde_json::to_string_pretty(&response.as_json()).into_diagnostic(),
-        OutputFormat::Yaml => serde_yml::to_string(&response.as_json()).into_diagnostic(),
-    }
+pub fn result(response: &dyn CommandResponse) -> miette::Result<()> {
+    let rendered = match format() {
+        OutputFormat::Text | OutputFormat::Markdown => response.format_text(),
+        OutputFormat::Json => {
+            serde_json::to_string_pretty(&response.as_json()).into_diagnostic()?
+        }
+        OutputFormat::Yaml => serde_yml::to_string(&response.as_json()).into_diagnostic()?,
+    };
+    println!("{rendered}");
+    Ok(())
 }

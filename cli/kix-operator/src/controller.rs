@@ -31,29 +31,23 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use kube::{
-    api::{Api, DynamicObject, Patch, PatchParams},
-    client::Client,
-    discovery::ApiResource,
-    runtime::controller::Action,
-};
+use kube::{api::DynamicObject, client::Client, runtime::controller::Action};
 use serde_json::Value;
 use thiserror::Error;
 
-use kix::cluster::activation::{
-    self, PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_SUPERSEDED,
-};
-use kix::cluster::apply::ChangeAction;
-use kix::cluster::fetch;
+use kix::build_source::Build;
+use kix::cluster::activation::{Record, Records};
+use kix::cluster::discovery;
 use kix::cluster::graph::ResourceGraph;
-use kix::cluster::ops::{ClusterOps, KubeOps, KubeOpsConfig};
 use kix::cluster::prune_guard::{PruneGuard, Pruned};
-use kix::cluster::scheduler::{self, DeployPlan, OnErrorPolicy, PrunePolicy, SchedulerConfig};
+use kix::cluster::scheduler::{self, OnErrorPolicy, SchedulerConfig};
 use kix::cluster::stream::DeployObserver;
 use kix::cluster::watchdog::StallPolicy;
-use kix::eval::store_graph::StoreGraph;
-use kix::manifest::stamp::stamp_annotations;
+use kix::manifest::lifecycle::{
+    PHASE_ACTIVE, PHASE_DEGRADED, PHASE_DEPLOYING, PHASE_FAILED, PHASE_QUEUED, PHASE_SUPERSEDED,
+};
 use kix::manifest::types::ResourceId;
+use kix::plan::live::{LivePlan, LivePlanError, cluster_of};
 
 use crate::k8s_events::{CompositeObserver, K8sEventObserver};
 use crate::observer::OperatorObserver;
@@ -81,7 +75,7 @@ const ERROR_REQUEUE_INTERVAL: Duration = Duration::from_secs(30);
 /// Shared context for the controller.
 pub struct Context {
     pub client: Client,
-    pub activation_ar: ApiResource,
+    pub records: Records,
 }
 
 /// Errors from the operator reconcile loop.
@@ -122,104 +116,40 @@ fn source_path(activation: &DynamicObject) -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
-/// The Kix cluster an Activation CR belongs to: its `kix.run/cluster`
-/// label, which the compiler stamps on every record, else `spec.cluster`,
-/// which a record built by Nix lacks until the CLI finalizes it.
-fn cluster_name(activation: &DynamicObject) -> Option<String> {
-    activation
-        .metadata
-        .labels
-        .as_ref()
-        .and_then(|l| keys::get_meta(l, keys::CLUSTER_LABEL))
-        .or_else(|| {
-            activation
-                .data
-                .pointer("/spec/cluster")
-                .and_then(|v| v.as_str())
-        })
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
-/// Extract identity hash from annotations.
-fn identity_hash(activation: &DynamicObject) -> Option<String> {
-    activation
-        .metadata
-        .annotations
-        .as_ref()
-        .and_then(|a| keys::get_meta(a, keys::IDENTITY_HASH))
-        .map(str::to_string)
-}
-
 // ---------------------------------------------------------------------------
 // Store graph loading
 // ---------------------------------------------------------------------------
 
-/// Load a StoreGraph from a result directory, stamp annotations, and collect manifests.
-fn load_and_stamp(path: &Path) -> Result<(StoreGraph, Vec<Value>), OperatorError> {
-    let noop = |_: &str| {};
-    let mut graph = StoreGraph::from_result_dir_with_status(path, &noop).map_err(|e| {
-        OperatorError::StoreGraphError {
-            path: path.display().to_string(),
-            reason: e.to_string(),
-        }
+/// The stamped manifests of the build in the result directory `path`.
+///
+/// Not refused for a retired domain ([`Build::installable`]): the record
+/// may name a build from before the domain move, as `kix rollback
+/// --operator` does, and `kix deploy` has already checked a new build
+/// before it writes the record.
+fn load_manifests(path: &Path) -> Result<Vec<Value>, OperatorError> {
+    let build = Build::local(path, &|_| {}).map_err(|e| OperatorError::StoreGraphError {
+        path: path.display().to_string(),
+        reason: e.to_string(),
     })?;
-    stamp_annotations(&mut graph);
-    let manifests = graph
+    Ok(build
+        .graph()
         .resources
         .values()
         .map(|r| r.manifest.clone())
-        .collect();
-    Ok((graph, manifests))
+        .collect())
 }
 
-/// Compare desired manifests with this cluster's live objects by identity
-/// hash, keeping out of the orphans every object another Kix cluster's
-/// current build still contains.
-fn live_changes(
-    desired: &[Value],
-    live: &[DynamicObject],
-    tenancy: &activation::Tenancy,
-) -> (Vec<ChangeAction>, Vec<fetch::SharedOrphan>) {
-    let actions = kix::cluster::apply::detect_changes_live(desired, live);
-    let orphans: Vec<ResourceId> = actions
-        .iter()
-        .filter_map(|a| match a {
-            ChangeAction::Orphan(rid) => Some(rid.clone()),
-            _ => None,
-        })
-        .collect();
-    let (_, shared) = fetch::split_shared_orphans(orphans, live, tenancy);
-    let actions = actions
-        .into_iter()
-        .filter(|a| match a {
-            ChangeAction::Orphan(rid) => !shared.iter().any(|s| &s.rid == rid),
-            _ => true,
-        })
-        .collect();
-    (actions, shared)
-}
-
-/// Build a streaming [`DeployPlan`] + orphan list from change detection.
-fn build_deploy_plan(
-    all_actions: &[ChangeAction],
-    new_manifests: &[Value],
-) -> Result<(DeployPlan, Vec<ResourceId>), OperatorError> {
-    let resource_graph = ResourceGraph::from_manifests(new_manifests)
-        .map_err(|e| OperatorError::GraphError(e.to_string()))?;
-    let plan = DeployPlan::from_graph_and_changes(&resource_graph, all_actions)
-        .map_err(|e| OperatorError::GraphError(e.to_string()))?;
-    let orphan_rids: Vec<ResourceId> = all_actions
-        .iter()
-        .filter_map(|a| {
-            if let ChangeAction::Orphan(rid) = a {
-                Some(rid.clone())
-            } else {
-                None
-            }
-        })
-        .collect();
-    Ok((plan, orphan_rids))
+/// The operator's error for a live plan that could not be made, worded as
+/// the step that failed.
+fn operator_error(e: LivePlanError) -> OperatorError {
+    match e {
+        LivePlanError::Fetch(_) | LivePlanError::Domain(_) => {
+            OperatorError::DiscoveryError(e.to_string())
+        }
+        LivePlanError::Graph(_) | LivePlanError::Marker(_) => {
+            OperatorError::GraphError(e.to_string())
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -237,7 +167,7 @@ pub async fn reconcile_activation(
     // Records are looked up by the cluster label, so a record that names no
     // cluster finds only itself. The sweep and the prune get an empty name
     // instead, under which no record counts as this cluster's own.
-    let own_cluster = cluster_name(&activation).unwrap_or_default();
+    let own_cluster = cluster_of(&activation).unwrap_or_default();
     let cluster = if own_cluster.is_empty() {
         name.to_string()
     } else {
@@ -249,7 +179,8 @@ pub async fn reconcile_activation(
         return handle_delete(&activation, &ctx, name, &own_cluster).await;
     }
 
-    let phase = activation::read_phase(&activation);
+    let record = Record::of(&activation);
+    let phase = record.phase.as_str();
 
     match phase {
         // Superseded activations require no further work.
@@ -268,7 +199,7 @@ pub async fn reconcile_activation(
         // a record we do not own, and put two writers on one closure.
         // `spec.source` is the discriminator: we write it when we adopt a
         // deploy, and the CLI never does. Same rule as the Deploying arm.
-        s if s.is_empty() || s == activation::PHASE_QUEUED => {
+        s if s.is_empty() || s == PHASE_QUEUED => {
             if source_path(&activation).is_none() {
                 tracing::debug!(name, "record has no spec.source; not ours to drive");
                 return Ok(Action::await_change());
@@ -276,7 +207,9 @@ pub async fn reconcile_activation(
             tracing::info!(name, cluster = %cluster, "Processing Queued activation");
 
             // 1. Find all Queued activations for this cluster
-            let queued = activation::find_queued(&ctx.client, &ctx.activation_ar, &cluster)
+            let queued = ctx
+                .records
+                .queued(&cluster)
                 .await
                 .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
 
@@ -289,7 +222,8 @@ pub async fn reconcile_activation(
                     newest = %newest.name,
                     "Newer Queued activation exists, superseding self"
                 );
-                activation::supersede_activation(&ctx.client, &ctx.activation_ar, name)
+                ctx.records
+                    .supersede(name)
                     .await
                     .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
                 return Ok(Action::await_change());
@@ -299,29 +233,33 @@ pub async fn reconcile_activation(
             for q in &queued {
                 if q.name != name {
                     tracing::info!(name, superseding = %q.name, "Superseding older Queued activation");
-                    activation::supersede_activation(&ctx.client, &ctx.activation_ar, &q.name)
+                    ctx.records
+                        .supersede(&q.name)
                         .await
                         .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
                 }
             }
 
             // 4. Find and supersede current Active activation
-            let old_active = activation::find_active(&ctx.client, &ctx.activation_ar, &cluster)
+            let old_active = ctx
+                .records
+                .active(&cluster)
                 .await
                 .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
 
             if let Some(ref old) = old_active {
                 tracing::info!(name, old = %old.name, "Superseding current Active activation");
-                activation::supersede_activation(&ctx.client, &ctx.activation_ar, &old.name)
+                ctx.records
+                    .supersede(&old.name)
                     .await
                     .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
             }
 
             // 5. Ensure finalizer is set, then fall through to reconcile
-            ensure_finalizer(&ctx.client, &ctx.activation_ar, name, &activation).await?;
+            ensure_finalizer(&ctx.records, name, &activation).await?;
 
             // Run reconcile with lifecycle management (will set phase to Active on success)
-            return run_reconcile(&activation, &ctx, name, &own_cluster, true).await;
+            return run_reconcile(&activation, &ctx, name, true).await;
         }
 
         // Active and Degraded records run drift detection on requeue. Degraded means the
@@ -329,7 +267,9 @@ pub async fn reconcile_activation(
         // current intended state and we want drift correction to keep trying.
         s if s == PHASE_ACTIVE || s == PHASE_DEGRADED => {
             // Yield to a queued Activation so it can perform the transition.
-            let queued = activation::find_queued(&ctx.client, &ctx.activation_ar, &cluster)
+            let queued = ctx
+                .records
+                .queued(&cluster)
                 .await
                 .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
 
@@ -343,10 +283,10 @@ pub async fn reconcile_activation(
             }
 
             // Ensure finalizer
-            ensure_finalizer(&ctx.client, &ctx.activation_ar, name, &activation).await?;
+            ensure_finalizer(&ctx.records, name, &activation).await?;
 
             // Run reconcile without lifecycle management (already Active)
-            return run_reconcile(&activation, &ctx, name, &own_cluster, false).await;
+            return run_reconcile(&activation, &ctx, name, false).await;
         }
 
         // Deploying: a resume, the same as a Queued one already transitioning.
@@ -368,8 +308,8 @@ pub async fn reconcile_activation(
                 return Ok(Action::await_change());
             }
             tracing::info!(name, "Resuming Deploying activation");
-            ensure_finalizer(&ctx.client, &ctx.activation_ar, name, &activation).await?;
-            return run_reconcile(&activation, &ctx, name, &own_cluster, true).await;
+            ensure_finalizer(&ctx.records, name, &activation).await?;
+            return run_reconcile(&activation, &ctx, name, true).await;
         }
 
         // Failed is terminal. The deploy that owned it has stopped, and the
@@ -389,23 +329,20 @@ pub async fn reconcile_activation(
 
 /// Unified reconcile: load desired state, fetch live state, diff, wave-plan, apply.
 ///
-/// If `manage_lifecycle` is true, passes `activation_name` to the reconcile engine
-/// so it runs begin_deploy/record_waves/finalize_deploy. Used for new deployments.
+/// If `manage_lifecycle` is true, the run writes the record's lifecycle
+/// (begin_deploy/record_waves/finalize_deploy). Used for new deployments.
 /// If false, run drift correction without lifecycle changes.
-///
-/// `cluster` is the record's Kix cluster, empty when it names none.
 async fn run_reconcile(
     activation: &DynamicObject,
     ctx: &Context,
     name: &str,
-    cluster: &str,
     manage_lifecycle: bool,
 ) -> Result<Action, OperatorError> {
     // 1. Resolve source store path
     let path = source_path(activation).ok_or(OperatorError::MissingSourcePath)?;
 
     // 2. Load desired manifests
-    let (_new_graph, new_manifests) = load_and_stamp(&path)?;
+    let new_manifests = load_manifests(&path)?;
 
     if new_manifests.is_empty() {
         tracing::warn!(name, "No manifests found in store graph");
@@ -430,60 +367,35 @@ async fn run_reconcile(
         return Ok(Action::requeue(requeue_interval()));
     }
 
-    // 4. Fetch live kix-managed resources from the cluster
-    let discovery = fetch::discover_resources(&ctx.client)
+    // 4. Compare desired vs live by identity-hash, over this Kix cluster's
+    //    live objects only, and plan the changes.
+    let plan = LivePlan::sweep(&ctx.client, activation, &managed_manifests)
         .await
-        .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
-
-    // Only this Kix cluster's objects: every other Kix cluster's objects are
-    // absent from this build and would otherwise be pruned as orphans.
-    let sweep = fetch::sweep_managed(&ctx.client, &discovery, fetch::SweepScope::Cluster(cluster))
-        .await
-        .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
-    let tenancy = sweep.tenancy.clone();
-    for (owner, count) in &sweep.foreign {
+        .map_err(operator_error)?;
+    for (owner, count) in plan.foreign() {
         tracing::debug!(name, owner = %owner, count, "left out objects of another Kix cluster");
     }
-    if !sweep.unattributed.is_empty() {
+    if plan.unattributed() > 0 {
         tracing::info!(
             name,
-            count = sweep.unattributed.len(),
+            count = plan.unattributed(),
             "left out Kix objects that name no Activation record; another Kix cluster deploys here",
         );
     }
-    let live_resources = sweep.managed;
-
-    // 5. Compare desired vs live by identity-hash
-    let (all_actions, shared) = live_changes(&managed_manifests, &live_resources, &tenancy);
-    for s in &shared {
+    for s in plan.shared_orphans() {
         tracing::info!(name, resource = %s.rid, clusters = ?s.clusters, "prune: {}", s.describe());
     }
 
-    let apply_count = all_actions
-        .iter()
-        .filter(|a| matches!(a, ChangeAction::Apply(_)))
-        .count();
-    let orphan_count = all_actions
-        .iter()
-        .filter(|a| matches!(a, ChangeAction::Orphan(_)))
-        .count();
-    let skip_count = all_actions.len() - apply_count - orphan_count;
-
     tracing::info!(
         name,
-        apply = apply_count,
-        orphans = orphan_count,
-        unchanged = skip_count,
+        apply = plan.applies(),
+        orphans = plan.orphans().len(),
+        unchanged = plan.unchanged(),
         lifecycle = manage_lifecycle,
         "Live change detection complete"
     );
 
-    // 6. Build the streaming plan.
-    let (plan, orphan_rids) = build_deploy_plan(&all_actions, &managed_manifests)?;
-
-    let act_identity_hash = identity_hash(activation);
-
-    // 7. Run the DAG-streaming scheduler.
+    // 5. Run the DAG-streaming scheduler.
     //
     // TODO(operator-cancel): wire this token to a per-Activation supervisor
     // so a newer Activation can cancel the in-flight loop. This caller does
@@ -491,9 +403,7 @@ async fn run_reconcile(
     let config = SchedulerConfig {
         timeout: Duration::from_secs(300),
         on_error: OnErrorPolicy::Stop,
-        prune: PrunePolicy::Delete,
         cancel: kix::cluster::cancel::CancelToken::new(),
-        dry_run: false,
         concurrency: scheduler::CONCURRENCY,
         stall: StallPolicy::from_env(),
         // Never retry a failed probe from the reconcile loop: it would
@@ -512,51 +422,7 @@ async fn run_reconcile(
             Some(name.to_string()),
         )) as Arc<dyn DeployObserver>,
     ]));
-    let reconcile_act_name = if manage_lifecycle { Some(name) } else { None };
-    let old_manifest_values: Vec<Value> =
-        live_resources.iter().map(|obj| obj.data.clone()).collect();
-    let discovery_shared = Arc::new(tokio::sync::RwLock::new(discovery));
-    let ops: Arc<dyn ClusterOps> = Arc::new(KubeOps::new(
-        ctx.client.clone(),
-        discovery_shared,
-        KubeOpsConfig {
-            cluster_name: cluster.to_string(),
-            activation_name: reconcile_act_name.map(str::to_string),
-            activation_identity_hash: act_identity_hash.clone(),
-            // The operator reconciles a build somebody else made, from inside
-            // the cluster, with no source tree to read provenance from. The
-            // receipt the deploy wrote stays as it is.
-            receipt: None,
-            // The operator runs unattended; surface conflicts in Activation
-            // status rather than silently clobbering fields owned by other
-            // controllers.
-            force_conflicts: false,
-            dry_run: false,
-            // The operator created the record itself and owns `spec.source`;
-            // it has no stamped manifest to re-apply and needs none.
-            activation_manifest: None,
-            // The operator plans against live objects by design, so a failed
-            // deploy's leftovers are already visible to its next reconcile.
-            // Nothing to fold, nothing to supersede.
-            consumed_failed: Vec::new(),
-            // Its orphans are live objects the next reconcile finds again,
-            // so there are no builds to record.
-            kept_orphans: Default::default(),
-            // Its model is resume-on-requeue: a reconcile that returns early
-            // is retried, so marking the record Failed would fight it.
-            mark_failed_on_abort: false,
-        },
-    ));
-
-    let result = scheduler::run_deploy(
-        ops,
-        plan,
-        &orphan_rids,
-        &old_manifest_values,
-        &config,
-        observer,
-    )
-    .await;
+    let result = plan.run(manage_lifecycle, config, observer).await;
 
     match result {
         Ok(r) => {
@@ -598,7 +464,8 @@ async fn handle_delete(
         return Ok(Action::await_change());
     }
 
-    let phase = activation::read_phase(activation);
+    let record = Record::of(activation);
+    let phase = record.phase.as_str();
 
     // Only clean up resources for current activations
     if phase == PHASE_ACTIVE || phase == PHASE_DEPLOYING || phase == PHASE_DEGRADED {
@@ -609,7 +476,7 @@ async fn handle_delete(
         );
 
         if let Some(path) = source_path(activation)
-            && let Ok((_graph, manifests)) = load_and_stamp(&path)
+            && let Ok(manifests) = load_manifests(&path)
         {
             let all_rids: Vec<ResourceId> = manifests
                 .iter()
@@ -639,7 +506,7 @@ async fn handle_delete(
             .filter(|rid| !kix::manifest::lifecycle::never_pruned(&rid.kind))
             .collect();
 
-            delete_closure(&ctx.client, cluster, name, &ordered).await?;
+            delete_closure(&ctx.client, &ctx.records, cluster, name, &ordered).await?;
         }
     } else {
         tracing::info!(
@@ -650,17 +517,15 @@ async fn handle_delete(
     }
 
     // Remove finalizer
-    let api: Api<DynamicObject> = Api::all_with(ctx.client.clone(), &ctx.activation_ar);
-    let patch = serde_json::json!({
-        "metadata": {
-            "finalizers": finalizers
-                .iter()
-                .filter(|f| f.as_str() != FINALIZER)
-                .collect::<Vec<_>>()
-        }
-    });
-    api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
-        .await?;
+    let rest: Vec<String> = finalizers
+        .iter()
+        .filter(|f| f.as_str() != FINALIZER)
+        .cloned()
+        .collect();
+    ctx.records
+        .set_finalizers(name, &rest)
+        .await
+        .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
 
     tracing::info!(name, "Finalizer removed, Activation can be deleted");
     Ok(Action::await_change())
@@ -673,14 +538,15 @@ async fn handle_delete(
 /// own hash counts as this cluster's.
 async fn delete_closure(
     client: &Client,
+    records: &Records,
     cluster: &str,
     name: &str,
     ordered: &[ResourceId],
 ) -> Result<(), OperatorError> {
-    let discovery = fetch::discover_resources(client)
+    let discovery = discovery::discover_resources(client)
         .await
         .map_err(|e| OperatorError::DiscoveryError(e.to_string()))?;
-    let guard = PruneGuard::new(client.clone(), &discovery, cluster);
+    let guard = PruneGuard::new(client.clone(), records.clone().into(), cluster);
     for rid in ordered {
         let Some((ar, scope)) = discovery.iter().find(|(ar, _)| ar.kind == rid.kind) else {
             continue;
@@ -707,8 +573,7 @@ async fn delete_closure(
 
 /// Ensure the finalizer is set on the Activation CR.
 async fn ensure_finalizer(
-    client: &Client,
-    ar: &ApiResource,
+    records: &Records,
     name: &str,
     activation: &DynamicObject,
 ) -> Result<(), OperatorError> {
@@ -718,17 +583,12 @@ async fn ensure_finalizer(
         return Ok(());
     }
 
-    let api: Api<DynamicObject> = Api::all_with(client.clone(), ar);
     let mut new_finalizers: Vec<String> = finalizers.to_vec();
     new_finalizers.push(FINALIZER.to_string());
-
-    let patch = serde_json::json!({
-        "metadata": {
-            "finalizers": new_finalizers
-        }
-    });
-    api.patch(name, &PatchParams::default(), &Patch::Merge(&patch))
-        .await?;
+    records
+        .set_finalizers(name, &new_finalizers)
+        .await
+        .map_err(|e| OperatorError::LifecycleError(e.to_string()))?;
 
     tracing::info!(name, "Added finalizer {FINALIZER}");
     Ok(())
@@ -751,125 +611,7 @@ pub fn error_policy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kix::cluster::activation::Tenancy;
     use serde_json::json;
-
-    fn annotated(kind: &str, name: &str, hash: &str, activations: &str) -> Value {
-        json!({
-            "apiVersion": "v1",
-            "kind": kind,
-            "metadata": {
-                "name": name,
-                "namespace": "d",
-                "annotations": {
-                    (keys::IDENTITY_HASH): hash,
-                    (keys::ACTIVATIONS): activations,
-                },
-            },
-        })
-    }
-
-    fn live(kind: &str, name: &str, hash: &str, activations: &str) -> DynamicObject {
-        serde_json::from_value(annotated(kind, name, hash, activations)).unwrap()
-    }
-
-    fn record(cluster: &str, hash: &str) -> DynamicObject {
-        serde_json::from_value(json!({
-            "apiVersion": keys::API_VERSION,
-            "kind": "Activation",
-            "metadata": {
-                "name": cluster,
-                "labels": { (keys::CLUSTER_LABEL): cluster },
-                "annotations": { (keys::IDENTITY_HASH): hash },
-            },
-            "status": { "phase": PHASE_ACTIVE },
-        }))
-        .unwrap()
-    }
-
-    fn orphans(actions: &[ChangeAction]) -> Vec<String> {
-        let mut v: Vec<String> = actions
-            .iter()
-            .filter_map(|a| match a {
-                ChangeAction::Orphan(rid) => Some(rid.name.clone()),
-                _ => None,
-            })
-            .collect();
-        v.sort();
-        v
-    }
-
-    /// The reconcile of Kix cluster `a` in a Kubernetes cluster that also
-    /// runs `b`: it prunes its own stale object, never `b`'s, and keeps the
-    /// ClusterRole both deployed after `a` dropped it.
-    #[test]
-    fn reconcile_prunes_only_this_clusters_orphans() {
-        let records = [record("a", "a2"), record("b", "b1")];
-        let objects = vec![
-            live("ConfigMap", "a-web", "h-web", "a2"),
-            live("ConfigMap", "a-stale", "h-stale", "a2"),
-            live("ConfigMap", "b-web", "h-b", "b1"),
-            live("ClusterRole", "shared", "h-shared", "a2,b1"),
-        ];
-        let desired = [annotated("ConfigMap", "a-web", "h-web", "")];
-
-        let tenancy = Tenancy::from_records(&records, "a");
-        let sweep = fetch::scope_sweep(
-            fetch::partition_sweep(objects.clone()),
-            fetch::SweepScope::Cluster("a"),
-            tenancy.clone(),
-        );
-        let (actions, shared) = live_changes(&desired, &sweep.managed, &tenancy);
-        assert_eq!(orphans(&actions), vec!["a-stale"]);
-        assert_eq!(shared.len(), 1);
-        assert_eq!(shared[0].rid.name, "shared");
-
-        // `b`'s reconcile, with `b`'s build unchanged, prunes nothing of `a`.
-        let tenancy = Tenancy::from_records(&records, "b");
-        let sweep = fetch::scope_sweep(
-            fetch::partition_sweep(objects),
-            fetch::SweepScope::Cluster("b"),
-            tenancy.clone(),
-        );
-        let desired = [
-            annotated("ConfigMap", "b-web", "h-b", ""),
-            annotated("ClusterRole", "shared", "h-shared", ""),
-        ];
-        let (actions, shared) = live_changes(&desired, &sweep.managed, &tenancy);
-        assert!(orphans(&actions).is_empty());
-        assert!(shared.is_empty());
-    }
-
-    /// One Kix cluster: every stale object is an orphan, as before scoping.
-    #[test]
-    fn reconcile_on_a_single_cluster_is_unchanged() {
-        let tenancy = Tenancy::from_records(&[record("a", "a2")], "a");
-        let objects = vec![
-            live("ConfigMap", "a-web", "h-web", "a2"),
-            live("ConfigMap", "leftover", "h-left", "retired"),
-        ];
-        let sweep = fetch::scope_sweep(
-            fetch::partition_sweep(objects),
-            fetch::SweepScope::Cluster("a"),
-            tenancy.clone(),
-        );
-        let desired = [annotated("ConfigMap", "a-web", "h-web", "")];
-        let (actions, _) = live_changes(&desired, &sweep.managed, &tenancy);
-        assert_eq!(orphans(&actions), vec!["leftover"]);
-    }
-
-    /// The operator reads a record's cluster from its label before
-    /// `spec.cluster`, and a record naming neither has no cluster.
-    #[test]
-    fn a_records_cluster_comes_from_its_label() {
-        let mut rec = record("a", "a1");
-        rec.data = json!({ "spec": { "cluster": "stale" } });
-        assert_eq!(cluster_name(&rec).as_deref(), Some("a"));
-        rec.metadata.labels = None;
-        assert_eq!(cluster_name(&rec).as_deref(), Some("stale"));
-        rec.data = json!({});
-        assert_eq!(cluster_name(&rec), None);
-    }
 
     /// Deleting `b`'s Active record tears down `b`'s closure but leaves the
     /// ClusterRole `a`'s current build also contains.
@@ -906,7 +648,10 @@ mod tests {
             namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
             name: name.into(),
         };
-        delete_closure(&api.client(), "b", "b", &[rid("b-only"), rid("shared")])
+        let client = api.client();
+        let discovery = discovery::discover_resources(&client).await.unwrap();
+        let records = Records::open_installed(&client, &discovery).unwrap();
+        delete_closure(&client, &records, "b", "b", &[rid("b-only"), rid("shared")])
             .await
             .unwrap();
         assert_eq!(api.names("ClusterRole"), vec!["shared"]);

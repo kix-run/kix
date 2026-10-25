@@ -71,9 +71,7 @@ in
 
   # Printed on the build that passes too, as the reminder to undo the
   # override afterwards.
-  warnings =
-    { config, ... }:
-    lib.optional config.initChownData chownOverrideHint;
+  warnings = { config, ... }: lib.optional config.initChownData chownOverrideHint;
 
   options = {
     image = kix.options.image {

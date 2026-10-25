@@ -1,30 +1,27 @@
 //! Non-interactive deploy observers.
 //!
-//! Two output modes beyond the colored [`StreamCliObserver`]:
+//! Two output modes beyond the colored [`StreamCliObserver`](super::deploy::StreamCliObserver):
 //!
 //! - [`LineObserver`]: one line per terminal verdict,
 //!   phase boundary, prune event, or finalization. No ANSI codes, no cursor
 //!   motion. Safe to pipe into `less`, CI logs, `tee`. Used automatically
 //!   when `--log-format=pretty` is requested against a non-TTY stdout.
-//! - [`JsonObserver`]: one NDJSON object per [`DeployEvent`],
-//!   flushed immediately, then one `summary` object with the counts and
-//!   whether the run succeeded. Shape is stable across events (every object
-//!   carries `type` and timestamp); consumers can `jq -c` or pipe to log
-//!   aggregators. Readiness progress events are suppressed unless `-v` is
-//!   on to match the `line` format's suppression rule.
+//! - [`JsonObserver`]: one NDJSON object per [`DeployEvent`], a
+//!   [`kix::cluster::deploy_log::Line`], flushed immediately, then one
+//!   `summary` object with the counts and whether the run succeeded. Every
+//!   object carries `type`, `elapsed_ms` and `schema_version`; consumers can
+//!   `jq -c` or pipe to log aggregators. Readiness progress events are left out, as the `line`
+//!   format leaves them out.
 //!
 //! Both observers are allocation-light and do not
 //! track state beyond a `started_at` timestamp for elapsed fields.
 
-use std::io::{self, Write};
 use std::time::Instant;
 
-use serde_json::json;
-
 use kix::cluster::apply::ApplyAction;
+use kix::cluster::deploy_log::Line;
 use kix::cluster::stream::{
-    CancelReason, DeployEvent, DeployObserver, DeployResult, NodeDetail, NodeId, TransitionKind,
-    Verdict,
+    CancelReason, DeployEvent, DeployObserver, DeployResult, NodeDetail, Verdict,
 };
 use kix::manifest::types::ResourceId;
 
@@ -44,7 +41,7 @@ impl DeployObserver for LineObserver {
                 verdict,
                 detail,
             } => {
-                let label = node_label(node);
+                let label = node.to_string();
                 let tag = kind.tag().map(|t| format!("{t} ")).unwrap_or_default();
                 match verdict {
                     Verdict::Pending => {}
@@ -154,177 +151,67 @@ impl DeployObserver for LineObserver {
                     eprintln!("stalled> {line}");
                 }
             }
+            DeployEvent::Waiting {
+                node,
+                phase,
+                since,
+                status,
+                budget,
+            } => {
+                let line = kix::cluster::watchdog::describe_wait(
+                    node,
+                    *phase,
+                    *since,
+                    status.as_deref(),
+                    *budget,
+                );
+                println!("waiting> {line}");
+            }
             DeployEvent::BestEffortFailed { what, message } => {
                 eprintln!("warn> {what} failed: {message}");
             }
         }
-        // Line format is unbuffered so CI logs land promptly.
-        let _ = io::stdout().flush();
     }
 }
 
 pub struct JsonObserver {
-    pub started_at: Instant,
+    started_at: Instant,
 }
 
 impl JsonObserver {
-    pub fn new(_verbose: bool) -> Self {
+    /// An observer whose elapsed times count from now.
+    pub fn new() -> Self {
         Self {
             started_at: Instant::now(),
         }
     }
 
-    /// Print the run's last object, which stands in for the text summary
-    /// line. `counts` is `None` when the run ended before the engine counted
-    /// anything.
-    pub fn summary(&self, counts: Option<&DeployResult>, dry_run: bool, succeeded: bool) {
+    /// Print the run's last line, which stands in for the text summary
+    /// line.
+    pub fn summary(&self, counts: &DeployResult, dry_run: bool, succeeded: bool) {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
-        println!("{}", summary_json(counts, dry_run, succeeded, elapsed_ms));
-        let _ = io::stdout().flush();
+        println!(
+            "{}",
+            json_line(&Line::summary(counts, dry_run, succeeded, elapsed_ms))
+        );
     }
-}
-
-/// The `summary` object: whether the run succeeded, which matches the exit
-/// status, and the counts the text summary line shows.
-fn summary_json(
-    counts: Option<&DeployResult>,
-    dry_run: bool,
-    succeeded: bool,
-    elapsed_ms: u64,
-) -> serde_json::Value {
-    let mut obj = json!({
-        "type": "summary",
-        "elapsed_ms": elapsed_ms,
-        "dry_run": dry_run,
-        "succeeded": succeeded,
-    });
-    if let Some(r) = counts {
-        obj["created"] = json!(r.created);
-        obj["configured"] = json!(r.configured);
-        obj["unchanged"] = json!(r.unchanged);
-        obj["failed"] = json!(r.failed);
-        obj["cancelled"] = json!(r.cancelled);
-        obj["pruned"] = json!(r.pruned);
-    }
-    obj
 }
 
 impl DeployObserver for JsonObserver {
     fn on_event(&self, event: &DeployEvent) {
         let elapsed_ms = self.started_at.elapsed().as_millis() as u64;
-        let obj = match event {
-            DeployEvent::PlanComputed { nodes, edges } => json!({
-                "type": "plan",
-                "elapsed_ms": elapsed_ms,
-                "nodes": nodes
-                    .iter()
-                    .map(|n| json!({
-                        "id": json_node_id(&n.id),
-                        "kind": transition_kind_str(n.kind),
-                        "package": n.meta.package,
-                        "namespace": n.meta.namespace,
-                        "import": n.meta.import_target.as_ref().map(|t| json!({
-                            "kind": t.kind,
-                            "name": t.name,
-                            "apiVersion": t.api_version,
-                            "namespace": t.namespace,
-                        })),
-                    }))
-                    .collect::<Vec<_>>(),
-                "edges": edges
-                    .iter()
-                    .map(|(dep, pred)| json!({
-                        "dependent": json_node_id(dep),
-                        "predecessor": json_node_id(pred),
-                    }))
-                    .collect::<Vec<_>>(),
-            }),
-            DeployEvent::NodeStateChanged {
-                node,
-                kind,
-                verdict,
-                detail,
-            } => {
-                // Suppress mid-flight readiness-progress entirely: the log
-                // emits one `created` + one `ready` event per resource and
-                // nothing in between. Structured progress belongs in the TUI.
-                if matches!(detail, Some(NodeDetail::ReadinessProgress(_))) {
-                    return;
-                }
-                json!({
-                    "type": "node",
-                    "elapsed_ms": elapsed_ms,
-                    "id": json_node_id(node),
-                    "kind": transition_kind_str(*kind),
-                    "verdict": json_verdict(verdict),
-                    "detail": detail.as_ref().map(json_detail),
-                })
-            }
-            DeployEvent::CrdRediscovery => json!({
-                "type": "crd_rediscovery",
-                "elapsed_ms": elapsed_ms,
-            }),
-            DeployEvent::PruneStart {
-                count,
-                resources,
-                kept,
-                delete,
-            } => json!({
-                "type": "prune_start",
-                "elapsed_ms": elapsed_ms,
-                "count": count,
-                "delete": delete,
-                "resources": resources.iter().map(|r| r.display_id()).collect::<Vec<_>>(),
-                "kept": kept.iter().map(|r| r.display_id()).collect::<Vec<_>>(),
-            }),
-            DeployEvent::PruneKept { resource, reason } => json!({
-                "type": "prune_kept",
-                "elapsed_ms": elapsed_ms,
-                "resource": resource.display_id(),
-                "reason": reason,
-            }),
-            DeployEvent::Finalized {
-                activation,
-                previous,
-            } => json!({
-                "type": "finalized",
-                "elapsed_ms": elapsed_ms,
-                "activation": activation,
-                "previous": previous,
-            }),
-            DeployEvent::Stopped { reason } => json!({
-                "type": "stopped",
-                "elapsed_ms": elapsed_ms,
-                "reason": reason,
-            }),
-            DeployEvent::Stalled {
-                idle,
-                in_flight,
-                aborting,
-            } => json!({
-                "type": "stalled",
-                "elapsed_ms": elapsed_ms,
-                "idle_ms": idle.as_millis() as u64,
-                "aborting": aborting,
-                "in_flight": in_flight
-                    .iter()
-                    .map(|f| json!({
-                        "node": node_label(&f.node),
-                        "phase": f.phase.as_str(),
-                        "since_ms": f.since.as_millis() as u64,
-                    }))
-                    .collect::<Vec<_>>(),
-            }),
-            DeployEvent::BestEffortFailed { what, message } => json!({
-                "type": "best_effort_failed",
-                "elapsed_ms": elapsed_ms,
-                "what": what,
-                "message": message,
-            }),
-        };
-        println!("{obj}");
-        let _ = io::stdout().flush();
+        if let Some(line) = Line::of(event, elapsed_ms) {
+            println!("{}", json_line(&line));
+        }
     }
+}
+
+/// `line` as one line of JSON. Through a `Value`, whose keys are sorted, as
+/// the log's keys have always been.
+fn json_line(line: &Line) -> String {
+    serde_json::to_value(line)
+        .expect("a log line serializes")
+        .to_string()
 }
 
 /// `LineObserver`'s lines for a `PruneStart`: the orphans prune deletes or
@@ -338,7 +225,7 @@ fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> V
         } else {
             format!(
                 "prune> {count} orphaned resources kept (warn-only; {})",
-                super::deploy::KEPT_ORPHANS_HINT
+                crate::plan::KEPT_ORPHANS_HINT
             )
         });
         lines.extend(
@@ -360,103 +247,6 @@ fn prune_lines(resources: &[ResourceId], kept: &[ResourceId], delete: bool) -> V
     lines
 }
 
-fn node_label(id: &NodeId) -> String {
-    match id {
-        NodeId::Resource(rid) => rid.to_string(),
-        NodeId::Synthetic(s) => format!("⟦{s}⟧"),
-    }
-}
-
-fn json_node_id(id: &NodeId) -> serde_json::Value {
-    match id {
-        NodeId::Resource(rid) => json!({
-            "kind": rid.kind,
-            "namespace": rid.namespace,
-            "name": rid.name,
-        }),
-        NodeId::Synthetic(s) => json!({ "synthetic": s }),
-    }
-}
-
-fn transition_kind_str(k: TransitionKind) -> &'static str {
-    match k {
-        TransitionKind::Apply => "apply",
-        TransitionKind::Skip => "skip",
-        TransitionKind::Recreate => "recreate",
-        TransitionKind::Migrate => "migrate",
-        TransitionKind::Drain => "drain",
-        TransitionKind::Delete => "delete",
-        TransitionKind::Pause => "pause",
-    }
-}
-
-fn json_verdict(v: &Verdict) -> serde_json::Value {
-    match v {
-        Verdict::Pending => json!({ "state": "pending" }),
-        Verdict::Running => json!({ "state": "running" }),
-        Verdict::Ready => json!({ "state": "ready" }),
-        Verdict::Failed { message } => json!({ "state": "failed", "message": message }),
-        Verdict::Cancelled { because } => {
-            let reason = match because {
-                CancelReason::PredecessorFailed(rid) => json!({
-                    "predecessor_failed": json!({
-                        "kind": rid.kind,
-                        "namespace": rid.namespace,
-                        "name": rid.name,
-                    }),
-                }),
-                CancelReason::External => json!({ "external": true }),
-            };
-            json!({ "state": "cancelled", "because": reason })
-        }
-        Verdict::AwaitingInput { prompt } => {
-            json!({ "state": "awaiting_input", "prompt": prompt })
-        }
-        Verdict::DriftDetected { since, message } => json!({
-            "state": "drift",
-            "since_ms": since.as_millis() as u64,
-            "message": message,
-        }),
-    }
-}
-
-fn json_detail(detail: &NodeDetail) -> serde_json::Value {
-    match detail {
-        NodeDetail::Applied(action) => json!({
-            "applied": apply_label(action),
-        }),
-        NodeDetail::ReadinessProgress(msg) => json!({ "readiness": msg }),
-        NodeDetail::ApplyFailed(msg) => json!({ "apply_failed": msg }),
-        NodeDetail::ReadinessTimeout { elapsed, message } => json!({
-            "readiness_timeout": {
-                "elapsed_ms": elapsed.as_millis() as u64,
-                "message": message,
-            },
-        }),
-        NodeDetail::ReadinessFailed {
-            message,
-            missing_keys,
-            output,
-        } => json!({
-            "readiness_failed": {
-                "message": message,
-                "missing_keys": missing_keys,
-                "output": output,
-            },
-        }),
-        NodeDetail::SecretHydrated { keys } => json!({ "secret_hydrated": keys }),
-        NodeDetail::SecretHydrationFailed(msg) => json!({ "secret_hydration_failed": msg }),
-        NodeDetail::RecreatedInPlace { reason } => json!({ "recreated_in_place": reason }),
-        NodeDetail::Rerun { reason } => json!({ "rerun": reason }),
-        NodeDetail::PendingRestart { stale, message } => json!({
-            "pending_restart": {
-                "stale": stale,
-                "message": message,
-            },
-        }),
-    }
-}
-
 fn apply_label(action: &ApplyAction) -> &'static str {
     match action {
         ApplyAction::Created => "created",
@@ -469,6 +259,7 @@ fn apply_label(action: &ApplyAction) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kix::cluster::stream::{NodeId, TransitionKind};
 
     fn rid(kind: &str, name: &str) -> ResourceId {
         ResourceId {
@@ -478,22 +269,323 @@ mod tests {
         }
     }
 
-    #[test]
-    fn pending_restart_detail_json() {
-        let detail = NodeDetail::PendingRestart {
-            stale: 2,
-            message: "the DaemonSet replaces a pod with the current template only when the pod is deleted".into(),
-        };
-        assert_eq!(
-            json_detail(&detail),
-            json!({
-                "pending_restart": {
-                    "stale": 2,
-                    "message": "the DaemonSet replaces a pod with the current template only when the pod is deleted",
-                },
-            })
-        );
+    fn node(kind: &str, name: &str) -> NodeId {
+        NodeId::Resource(rid(kind, name))
     }
+
+    fn state(
+        id: NodeId,
+        kind: TransitionKind,
+        verdict: Verdict,
+        detail: Option<NodeDetail>,
+    ) -> DeployEvent {
+        DeployEvent::NodeStateChanged {
+            node: id,
+            kind,
+            verdict,
+            detail,
+        }
+    }
+
+    /// Every kind of event, with every verdict and every detail, as a
+    /// deploy can send them.
+    fn every_event() -> Vec<DeployEvent> {
+        use kix::cluster::readiness::ImportTarget;
+        use kix::cluster::stream::{InFlight, NodeMeta, Phase, PlanNode};
+        use std::time::Duration;
+        let crd = NodeId::Resource(ResourceId {
+            kind: "CustomResourceDefinition".into(),
+            name: "things.example.com".into(),
+            namespace: kix::manifest::types::CLUSTER_SCOPED.into(),
+        });
+        let gate = NodeId::Synthetic("pause-1".into());
+        let web = || node("Deployment", "web");
+        vec![
+            DeployEvent::PlanComputed {
+                nodes: vec![
+                    PlanNode {
+                        id: web(),
+                        kind: TransitionKind::Apply,
+                        meta: NodeMeta {
+                            package: Some("web".into()),
+                            namespace: Some("app".into()),
+                            import_target: None,
+                        },
+                    },
+                    PlanNode {
+                        id: crd.clone(),
+                        kind: TransitionKind::Skip,
+                        meta: NodeMeta {
+                            package: Some("crds".into()),
+                            namespace: None,
+                            import_target: Some(ImportTarget {
+                                kind: "CustomResourceDefinition".into(),
+                                api_version: "apiextensions.k8s.io/v1".into(),
+                                name: "things.example.com".into(),
+                                namespace: None,
+                                expected_keys: vec!["unused".into()],
+                                served_versions: vec!["v1".into()],
+                            }),
+                        },
+                    },
+                    PlanNode {
+                        id: gate.clone(),
+                        kind: TransitionKind::Pause,
+                        meta: NodeMeta {
+                            package: None,
+                            namespace: None,
+                            import_target: None,
+                        },
+                    },
+                    PlanNode {
+                        id: node("ImportMarker", "db-creds"),
+                        kind: TransitionKind::Apply,
+                        meta: NodeMeta {
+                            package: Some("web".into()),
+                            namespace: Some("app".into()),
+                            import_target: Some(ImportTarget {
+                                kind: "Secret".into(),
+                                api_version: "v1".into(),
+                                name: "db-creds".into(),
+                                namespace: Some("app".into()),
+                                expected_keys: vec!["password".into()],
+                                served_versions: vec![],
+                            }),
+                        },
+                    },
+                ],
+                edges: vec![(web(), crd.clone()), (gate.clone(), web())],
+            },
+            state(web(), TransitionKind::Apply, Verdict::Pending, None),
+            state(
+                web(),
+                TransitionKind::Apply,
+                Verdict::Running,
+                Some(NodeDetail::Applied(ApplyAction::Created)),
+            ),
+            state(
+                web(),
+                TransitionKind::Apply,
+                Verdict::Running,
+                Some(NodeDetail::ReadinessProgress("1/2 ready".into())),
+            ),
+            state(
+                web(),
+                TransitionKind::Apply,
+                Verdict::Ready,
+                Some(NodeDetail::Applied(ApplyAction::Configured)),
+            ),
+            state(
+                crd.clone(),
+                TransitionKind::Skip,
+                Verdict::Ready,
+                Some(NodeDetail::Applied(ApplyAction::Unchanged)),
+            ),
+            state(
+                node("Job", "probe"),
+                TransitionKind::Recreate,
+                Verdict::Ready,
+                Some(NodeDetail::Rerun {
+                    reason: "its last run failed".into(),
+                }),
+            ),
+            state(
+                node("StatefulSet", "db"),
+                TransitionKind::Migrate,
+                Verdict::Ready,
+                Some(NodeDetail::RecreatedInPlace {
+                    reason: "spec.selector is immutable".into(),
+                }),
+            ),
+            state(
+                node("DaemonSet", "agent"),
+                TransitionKind::Apply,
+                Verdict::Ready,
+                Some(NodeDetail::PendingRestart {
+                    stale: 2,
+                    message: "OnDelete".into(),
+                }),
+            ),
+            state(
+                node("Secret", "creds"),
+                TransitionKind::Apply,
+                Verdict::Running,
+                Some(NodeDetail::SecretHydrated { keys: 3 }),
+            ),
+            state(
+                node("Secret", "creds"),
+                TransitionKind::Apply,
+                Verdict::Failed {
+                    message: "cannot decrypt".into(),
+                },
+                Some(NodeDetail::SecretHydrationFailed("no key".into())),
+            ),
+            state(
+                node("Service", "web"),
+                TransitionKind::Apply,
+                Verdict::Failed {
+                    message: "refused".into(),
+                },
+                Some(NodeDetail::ApplyFailed("field is immutable".into())),
+            ),
+            state(
+                node("Deployment", "slow"),
+                TransitionKind::Apply,
+                Verdict::Failed {
+                    message: "timed out".into(),
+                },
+                Some(NodeDetail::ReadinessTimeout {
+                    elapsed: Duration::from_secs(300),
+                    message: "0/1 ready".into(),
+                }),
+            ),
+            state(
+                node("Job", "check"),
+                TransitionKind::Apply,
+                Verdict::Failed {
+                    message: "probe failed".into(),
+                },
+                Some(NodeDetail::ReadinessFailed {
+                    message: "probe failed".into(),
+                    missing_keys: vec!["password".into()],
+                    output: vec!["FAIL: \"quoted\" \u{1b}[31m".into()],
+                }),
+            ),
+            state(
+                node("Pod", "after"),
+                TransitionKind::Drain,
+                Verdict::Cancelled {
+                    because: CancelReason::PredecessorFailed(rid("Job", "check")),
+                },
+                None,
+            ),
+            state(
+                node("ConfigMap", "old"),
+                TransitionKind::Delete,
+                Verdict::Cancelled {
+                    because: CancelReason::External,
+                },
+                Some(NodeDetail::Applied(ApplyAction::Skipped)),
+            ),
+            state(
+                gate.clone(),
+                TransitionKind::Pause,
+                Verdict::AwaitingInput {
+                    prompt: "approve?".into(),
+                },
+                None,
+            ),
+            state(
+                web(),
+                TransitionKind::Apply,
+                Verdict::DriftDetected {
+                    since: Duration::from_millis(1500),
+                    message: "replicas changed".into(),
+                },
+                None,
+            ),
+            DeployEvent::CrdRediscovery,
+            DeployEvent::PruneStart {
+                count: 1,
+                resources: vec![rid("ConfigMap", "old")],
+                kept: vec![rid("Namespace", "gone")],
+                delete: true,
+            },
+            DeployEvent::PruneKept {
+                resource: rid("ConfigMap", "shared"),
+                reason: "Kix cluster other still deploys it".into(),
+            },
+            DeployEvent::Finalized {
+                activation: "act-2".into(),
+                previous: Some("act-1".into()),
+            },
+            DeployEvent::Finalized {
+                activation: "act-1".into(),
+                previous: None,
+            },
+            DeployEvent::Stopped {
+                reason: "halted on first failure".into(),
+            },
+            DeployEvent::Stalled {
+                idle: Duration::from_secs(90),
+                in_flight: vec![
+                    InFlight {
+                        node: web(),
+                        phase: Phase::Readiness,
+                        since: Duration::from_secs(30),
+                    },
+                    InFlight {
+                        node: gate,
+                        phase: Phase::Discovery,
+                        since: Duration::from_millis(250),
+                    },
+                    InFlight {
+                        node: node("Secret", "creds"),
+                        phase: Phase::Hydrate,
+                        since: Duration::from_millis(40),
+                    },
+                    InFlight {
+                        node: node("Service", "web"),
+                        phase: Phase::Apply,
+                        since: Duration::from_secs(2),
+                    },
+                ],
+                aborting: true,
+            },
+            DeployEvent::Waiting {
+                node: web(),
+                phase: Phase::Readiness,
+                since: Duration::from_secs(30),
+                status: Some("import target Service/web not found yet".into()),
+                budget: Some(Duration::from_secs(180)),
+            },
+            DeployEvent::BestEffortFailed {
+                what: "checkpoint".into(),
+                message: "conflict".into(),
+            },
+        ]
+    }
+
+    /// The deploy log, line by line, as consumers read it. The file holds
+    /// every event of [`every_event`], then a summary. A change here breaks
+    /// whoever parses the log.
+    #[test]
+    fn the_log_lines_are_unchanged() {
+        let counts = DeployResult {
+            created: 1,
+            configured: 2,
+            unchanged: 3,
+            failed: 4,
+            cancelled: 5,
+            pruned: 6,
+        };
+        let lines: Vec<String> = every_event()
+            .iter()
+            .filter_map(|e| Line::of(e, 7))
+            .chain([Line::summary(&counts, true, false, 7)])
+            .map(|line| json_line(&line))
+            .collect();
+        // The fixture is written along with the schemas:
+        // `KIX_WRITE_SCHEMAS=1 cargo test -p kix-cli`.
+        if std::env::var_os("KIX_WRITE_SCHEMAS").is_some() {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/deploy-log.ndjson");
+            std::fs::write(path, lines.join("\n") + "\n").unwrap();
+        }
+        assert_eq!(lines, GOLDEN.lines().collect::<Vec<_>>());
+    }
+
+    /// A program that reads the log with these types reads every line, and
+    /// reads it whole.
+    #[test]
+    fn every_log_line_reads_back_as_written() {
+        for text in GOLDEN.lines() {
+            let line: Line = serde_json::from_str(text).unwrap();
+            assert_eq!(json_line(&line), text);
+        }
+    }
+
+    const GOLDEN: &str = include_str!("../../tests/fixtures/deploy-log.ndjson");
 
     /// Under warn-only, a kept orphan is not counted or listed with the
     /// orphans the policy reports.
@@ -512,33 +604,6 @@ mod tests {
                 "prune> 1 orphaned resources are never deleted automatically",
                 "Namespace/gone@app> orphan, kept",
             ]
-        );
-    }
-
-    /// A run with failed nodes reports `succeeded: false` and its counts.
-    #[test]
-    fn summary_json_reports_failures() {
-        let counts = DeployResult {
-            created: 2,
-            unchanged: 348,
-            failed: 2,
-            cancelled: 3,
-            ..DeployResult::default()
-        };
-        assert_eq!(
-            summary_json(Some(&counts), false, false, 7),
-            json!({
-                "type": "summary",
-                "elapsed_ms": 7,
-                "dry_run": false,
-                "succeeded": false,
-                "created": 2,
-                "configured": 0,
-                "unchanged": 348,
-                "failed": 2,
-                "cancelled": 3,
-                "pruned": 0,
-            })
         );
     }
 }

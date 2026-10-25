@@ -40,6 +40,7 @@
           clickhouse-swap-bare = ./clusters/test-clickhouse-swap/bare.nix;
           clickhouse-swap-replicated = ./clusters/test-clickhouse-swap/replicated.nix;
           cnpg = ./clusters/test-cnpg.nix;
+          rabbitmq = ./clusters/test-rabbitmq.nix;
           postgres-swap-stackgres = ./clusters/test-postgres-swap/stackgres.nix;
           postgres-swap-cnpg = ./clusters/test-postgres-swap/cnpg.nix;
           gateway-swap-envoy = ./clusters/test-gateway-swap/envoy.nix;
@@ -47,13 +48,18 @@
           kind = ./clusters/test-kind.nix;
           kind-v2 = ./clusters/test-kind-v2.nix;
           metrics-server = ./clusters/test-metrics-server.nix;
+          spegel = ./clusters/test-spegel.nix;
+          volsync = ./clusters/test-volsync.nix;
           otel-collector = ./clusters/test-otel-collector.nix;
+          falco = ./clusters/test-falco.nix;
           monitoring-native = ./clusters/test-monitoring-native.nix;
           monitoring-loki = ./clusters/test-monitoring-loki.nix;
           victoria-metrics = ./clusters/test-victoria-metrics.nix;
           victoria-metrics-crd-ref = ./clusters/test-victoria-metrics-crd-ref.nix;
           external-secrets = ./clusters/test-external-secrets.nix;
+          openbao = ./clusters/test-openbao.nix;
           doc-how-tos = ./clusters/test-doc-how-tos.nix;
+          bundle-alias = ./clusters/test-bundle-alias.nix;
 
           # Register documented examples so routine builds catch evaluation
           # errors in them.
@@ -143,10 +149,6 @@
       # them and CI needs somewhere outside a build to run them from. This
       # is that place, and it is also the one entry point that does not
       # need devenv installed.
-      #
-      # The Nix C libraries are what the nix-bindings-*-sys crates find
-      # through pkg-config; mkShell puts their .dev outputs on
-      # PKG_CONFIG_PATH. devenv.nix lists the same set for the same reason.
       devShells = lib.genAttrs systems (
         system:
         let
@@ -159,14 +161,9 @@
               pkgs.rustc
               pkgs.clippy
               pkgs.rustfmt
+              pkgs.lefthook
               pkgs.pkg-config
               pkgs.openssl
-              pkgs.nix.libs.nix-expr-c
-              pkgs.nix.libs.nix-store-c
-              pkgs.nix.libs.nix-util-c
-              pkgs.nix.libs.nix-flake-c
-              pkgs.nix.libs.nix-fetchers-c
-              pkgs.nix.libs.nix-main-c
             ]
             ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.dbus ];
 
@@ -179,6 +176,11 @@
             shellHook = ''
               export CARGO_TARGET_DIR="''${XDG_CACHE_HOME:-$HOME/.cache}/kix-cargo-target/$(basename "$PWD")-$(printf %s "$PWD" | sha256sum | cut -c1-12)"
               mkdir -p "$CARGO_TARGET_DIR"
+
+              # The git hooks name lefthook by store path, which a
+              # `nix store gc` can remove. Reinstalling points them at this
+              # shell's lefthook.
+              lefthook install >/dev/null 2>&1 || echo "lefthook install failed; git hooks may be stale" >&2
             '';
           };
         }

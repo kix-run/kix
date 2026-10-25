@@ -112,6 +112,7 @@ reconciler, and no runbook should need to.
 | Custom resource applied before its CRD, or of a kind nothing declares | cross-resource check 21 (depends-on closure, served versions); `kix deploy` checks a CRD ref's versions against the live CRD |
 | Pod reads a Secret or ConfigMap key that is not there | `out.keyRef` at build time; cross-resource check 22 for names written directly |
 | Managed Secret created without its keys | `scope.mkSecret` refuses a key with no value and no SOPS source |
+| Secret value from a source the cluster does not accept (a plain-text value in a cluster that keeps secrets in an operator) | `cluster.secrets.accept` and the `security.secretSource` scorecard rule, reading the per-key `kix.run/secret-sources` stamp |
 | Two default StorageClasses, IngressClasses, or global-default PriorityClasses | cross-resource check 23 |
 | Instance value discards part of an option default | The option contract (`kix/lib/eval/options.nix`): an untyped or `attrsOf` option with a non-empty attrset default, a submodule default that disagrees with its fields, or a declaration the check cannot read fails `every-package-evaluates` (§12.13); outside kixpkgs, `kix.checkPackageOptions` or `mkFlake { packages.<name> = ...; }` |
 | Instance value replaces a config path, env var, or flag the package owns | `kix.mergeGuarded`, `kix.mergeEnv`, and `kix.guardArgs` refuse it with one message per hit |
@@ -530,6 +531,21 @@ cluster with default-deny network policy: it publishes its pods, so
 `kix.expose` opens each backend to them, while Envoy Gateway's proxy pods
 are placed by its controller and get no derived policy.
 
+The OpenID Connect contract, `kix.contracts.oidcProvider`
+(`kix/lib/vocab/oidc-provider.nix`), lets an application sign users in
+through any provider that publishes an issuer per realm. keycloak passes its
+`out` through `check`; grafana, harbor, and immich take it as an optional
+`oidcProvider` dependency that only `oidc.enabled` reads, beside an
+`oidcClient` secret, so a provider in the cluster turns nothing on by
+itself. keycloak answers no alias, and the cluster names it with
+`deps.oidcProvider = ref.<ns>.<instance>`: an optional dependency that two
+instances answer fails every consumer, even one that never reads it. Where
+the application lets the server call the token endpoint at another address
+(Grafana), the contract's `endpoints` give the provider's Service, so the
+egress is derived. Harbor and Immich check the issuer they discover against
+the public URL, so they dial it and get no derived edge; their headers say
+when the world egress covers that request.
+
 When both implementations are on the shelf, auto-instantiation refuses a
 demanded alias until the cluster selects one with an optional instance
 named after the alias, which is created only when something depends on it.
@@ -567,7 +583,7 @@ gracefully omits resources when they're absent.
 
 Infrastructure-role owners claim their role from the closed registry in
 `kix/lib/eval/roles.nix` (currently: `network-policy-enforcer`, `dns`,
-`storageClasses`, `snapshotController`, `metricsApi`, `cni`, `loadBalancer`):
+`storageClasses`, `snapshotController`, `metricsApi`, `registryMirror`, `cni`, `loadBalancer`):
 
 ```nix
 # kix/packages/storage-classes/default.nix
@@ -728,7 +744,12 @@ inputs.kix.lib.mkFlake { inherit inputs; pins = ./pins.json; clusters = { ... };
 
 `kix pin set web --tag v1.2.3` asks the registry what that tag resolves to,
 refuses a tag that is not there, and rewrites `pins.json` with the repository,
-the tag and the digest. Promotion is then an ordinary commit, which means the
+the tag and the digest. A cluster that passes the file to `kix.buildCluster { inherit pins; }`
+can also pin an instance's image option with no line of code reading it:
+`kix pin set monitoring/grafana --tag 13.1.3` writes an `instances` entry
+that Kix applies to `instances.monitoring.grafana.config.image`. Prefer that
+for an upstream image: the version lives in one JSON entry, and deleting the
+entry returns the package's default. Promotion is then an ordinary commit, which means the
 repository can always answer what is deployed, a clean checkout deploys
 something real, and both a person and a CI job promote the same way.
 
@@ -754,6 +775,104 @@ Three properties are worth stating because they are easy to lose:
 - **Kix never resolves a tag at apply time.** A `digest: null` that tells the
   truth is worth more than a value fetched over the network during a deploy,
   which nobody could review before it was applied.
+
+### 9.6 A package ships the alerts only it can write
+
+A package knows things about its software that a generic rule set cannot:
+which metric means a replica has gone read-only, how often its backups run,
+what memory limit it was given. So a package that exposes metrics ships alerts
+for its own failure modes, the same way it ships its own health probe. The
+mechanics are in HANDBOOK §9.4 ("Writing alerts"). The review items are `Mo`
+in the `package-review` skill, which also gives the research steps for
+writing a package's alerts.
+
+**Every alert must be actionable.** A page should be urgent, important,
+actionable, and real ([Ewaschuk][ewaschuk]). People can respond urgently to
+only a few pages a day, so each rule must earn its place. It must detect a
+condition nothing else catches, someone must be able to act on it, and it
+must not fire on a healthy cluster ([Google SRE, ch. 6][sre6]). An alert that
+fires falsely teaches people to ignore the others.
+
+**A package alerts on the causes it understands, and leaves symptom paging to
+the site.** The best page is a symptom users notice: requests failing, or
+latency high ([Ewaschuk][ewaschuk]). Symptom thresholds depend on traffic and
+on the site's service-level objectives, and a package knows neither. A
+package therefore alerts on these:
+
+- **The component stopped reporting.** No target, or every target down. Every
+  other alert in the package evaluates to nothing when its metrics disappear,
+  so this one has to exist.
+- **Data at risk.** A backup, WAL archive, or replication that has not
+  succeeded recently enough, measured against the schedule the package
+  configured. Alert on "last success too old", not on one failure, and allow
+  at least two missed runs ([Prometheus docs][promalert]).
+- **A stuck state the software reports.** A replica read-only, a vault
+  sealed, no leader, or a certificate not ready.
+- **Exhaustion before it becomes an outage.** Disk, memory against the
+  container limit, connection slots, or quota. These are causes, but by the
+  time the symptom shows it is too late to act ([Ewaschuk][ewaschuk]).
+
+Latency and error-rate alerts in a package are `warning`, with thresholds the
+instance can change. The site writes its own SLO alerts.
+
+**Severity says how soon a person must act.** The three values are the
+monitoring-mixins ones ([mixins][mixins]); the meanings below are how Kix
+packages use them:
+
+| Severity | Meaning | Use in a package |
+|---|---|---|
+| `critical` | Act now. Usually pages. | The service is down, or data is at risk now. |
+| `warning` | Act within a working day, as a ticket. | Degradation, a resource heading for its limit, or a failure a retry may still fix. |
+| `info` | No action on its own. Context for other alerts. | Rarely. Alertmanager should not send an `info` alert on its own. |
+
+Choose the lower severity when in doubt. A site can still page on a
+`warning` it cares about through its Alertmanager routes, while a noisy
+`critical` teaches people to ignore pages.
+
+**Thresholds come from what the package knows.** Derive a threshold from the
+evaluated configuration where one exists: memory alerts from
+`resources.limits.memory`, replica alerts from the replica count, and
+staleness from the backup schedule. Otherwise make the threshold a typed
+option with a default that holds on any healthy cluster, and say in the
+option description where the default comes from.
+
+**Alerts do not duplicate the cluster's generic rules.**
+`prometheus-default-rules` (`monitoring.defaultRules.enabled`) vendors the
+kube-prometheus rules, which cover crash-looping pods, unavailable replicas,
+volumes filling up, failed Jobs, nodes, and the API server. A package alert
+that restates one of those pages twice for one fault. A package adds what
+those rules cannot see, which is the meaning of the software's own metrics.
+
+**Prefer upstream's rules when upstream maintains them.** The authors of a
+program write its basic alerts best, and those alerts should change with its
+versions ([mixins design][mixinsdesign]). Some upstreams ship maintained rules
+as YAML or a compiled mixin, for example CloudNativePG, RabbitMQ,
+VictoriaMetrics, Tempo, and Loki. When those rules match the version the
+package pins, vendor them the way `prometheus-default-rules` does: a pinned
+copy, selectors rewritten to the instance, a typed toggle per rule group, and
+a test that every expression carries the instance's selector.
+Write your own when upstream ships none, when its rules need an exporter the
+package does not run, or when they cannot be scoped to one instance. Vendored
+rules pass the same review as written ones.
+
+**An alert says what it means and what to check first.** `summary` is one
+fixed sentence. `description` names the instance and the value, says what
+the alert means, and gives the first thing to check. A few lines on what the
+alert means are more use on call than a long playbook ([Ewaschuk][ewaschuk]). Kix has no runbook site, so `runbook_url`
+points only at a maintained upstream runbook for the same condition.
+
+**A rule is tested like code.** A rule that cannot match, because a label is
+misspelled or a metric was renamed, looks exactly like a healthy system
+([Cloudflare][pint]). A test shows the rule fires on a fixture that breaks
+the condition, stays quiet on a healthy one, and carries the labels
+Alertmanager routes on.
+
+[ewaschuk]: https://docs.google.com/document/d/199PqyG3UsyXlwieHaqbGiWVa8eMWi8zzAn0YfcApr8Q
+[sre6]: https://sre.google/sre-book/monitoring-distributed-systems/
+[promalert]: https://prometheus.io/docs/practices/alerting/
+[mixins]: https://github.com/monitoring-mixins/docs
+[mixinsdesign]: https://github.com/monitoring-mixins/docs/blob/master/design.pdf
+[pint]: https://blog.cloudflare.com/monitoring-our-monitoring/
 
 ## 10. AI as multiplier on typed surfaces
 
@@ -896,7 +1015,7 @@ that's the price of the workaround being visible.
 resolve via arg name → instance name → instance aliases (which *replace*
 package `defaultAliases` when non-empty). Roles are only for the registry's
 infrastructure slots (network-policy-enforcer, dns, storageClasses,
-snapshotController, metricsApi, cni, loadBalancer).
+snapshotController, metricsApi, registryMirror, cni, loadBalancer).
 
 ### 12.8 Backwards-compatibility shims
 

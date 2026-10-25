@@ -1,12 +1,24 @@
 //! Core manifest types.
 
+use kube::api::DynamicObject;
 use serde::{Deserialize, Serialize};
 
 /// Sentinel namespace value for cluster-scoped resources.
 pub const CLUSTER_SCOPED: &str = "_cluster";
 
+/// Whether `manifest` is a Kubernetes Secret: `apiVersion` `v1` and `kind`
+/// `Secret`. Kix hides a Secret's values by this rule, which is also the one
+/// Kix Enterprise's agent and server use. An object of another API group
+/// with kind `Secret` is a custom resource, and its values show.
+pub(crate) fn is_secret(manifest: &serde_json::Value) -> bool {
+    manifest.get("apiVersion").and_then(|v| v.as_str()) == Some("v1")
+        && manifest.get("kind").and_then(|v| v.as_str()) == Some("Secret")
+}
+
 /// Unique identifier for a K8s resource.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct ResourceId {
     pub kind: String,
     pub namespace: String, // "_cluster" for cluster-scoped
@@ -38,7 +50,7 @@ impl ResourceId {
     /// Parse from flat filename format: `{ns}--{name}-{kind}.yaml`
     ///
     /// The kind is the last `-`-separated segment before `.yaml`, lowercased in the filename.
-    pub fn from_filename(filename: &str) -> Option<Self> {
+    pub(crate) fn from_filename(filename: &str) -> Option<Self> {
         let stem = filename.strip_suffix(".yaml")?;
         let (namespace, rest) = stem.split_once("--")?;
         let (name, kind) = rest.rsplit_once('-')?;
@@ -53,7 +65,7 @@ impl ResourceId {
     }
 
     /// Parse from nested path format: namespace directory + `{name}-{kind}.yaml` filename.
-    pub fn from_nested_path(ns_dir: &str, filename: &str) -> Option<Self> {
+    pub(crate) fn from_nested_path(ns_dir: &str, filename: &str) -> Option<Self> {
         let stem = filename.strip_suffix(".yaml")?;
         let (name, kind) = stem.rsplit_once('-')?;
         if ns_dir.is_empty() || name.is_empty() || kind.is_empty() {
@@ -66,7 +78,8 @@ impl ResourceId {
         })
     }
 
-    /// Display as "Kind/name@namespace".
+    /// "Kind/name@namespace", as given: for keys, and for messages that
+    /// escape their text as a whole. Showing an id goes through `Display`.
     pub fn display_id(&self) -> String {
         if self.namespace == CLUSTER_SCOPED {
             format!("{}/{}", self.kind, self.name)
@@ -76,10 +89,38 @@ impl ResourceId {
     }
 }
 
+/// "Kind/name@namespace" for people to read: each part through
+/// [`crate::text::printable`], since a build's kinds, names and namespaces
+/// are its author's text, and plans, logs and graphs show them. This is
+/// where kix shows an object's id.
 impl std::fmt::Display for ResourceId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.display_id())
+        use crate::text::printable;
+        write!(f, "{}/{}", printable(&self.kind), printable(&self.name))?;
+        if self.namespace != CLUSTER_SCOPED {
+            write!(f, "@{}", printable(&self.namespace))?;
+        }
+        Ok(())
     }
+}
+
+/// Serialise a fetched object into a whole-manifest `Value`.
+///
+/// `DynamicObject` keeps `metadata` in a typed field and puts only the
+/// *remaining* keys (`spec`, `data`, …) in `.data`. Serialising `.data`
+/// alone therefore yields a manifest with no `metadata`, name, or namespace.
+/// This silently degrades every `ResourceId` built from it to `Kind/unknown`.
+/// Every live object of the same kind then
+/// collapses onto one id, matches nothing on the kix side, and the diff
+/// reports the whole cluster as "will be created".
+///
+/// `kind`/`apiVersion` come from `.data` (the cluster sweep injects them,
+/// since LIST responses omit them per item) rather than from `.types`.
+pub fn to_manifest_value(obj: &DynamicObject) -> serde_json::Value {
+    serde_json::to_value(obj).unwrap_or_else(|e| {
+        // ObjectMeta + a JSON Value cannot fail to serialise.
+        unreachable!("DynamicObject failed to serialise: {e}")
+    })
 }
 
 #[cfg(test)]
@@ -119,6 +160,18 @@ mod tests {
             name: "coredns".into(),
         };
         assert_eq!(rid.to_string(), "deployment/coredns@kube-system");
+    }
+
+    /// Two names that look alike show differently.
+    #[test]
+    fn display_flags_hidden_characters() {
+        let rid = ResourceId {
+            kind: "ClusterRoleBinding".into(),
+            namespace: CLUSTER_SCOPED.into(),
+            name: "cluster-admin\u{200b}".into(),
+        };
+        assert_eq!(rid.to_string(), "ClusterRoleBinding/cluster-admin⟨U+200B⟩");
+        assert_eq!(rid.display_id(), "ClusterRoleBinding/cluster-admin\u{200b}");
     }
 
     #[test]

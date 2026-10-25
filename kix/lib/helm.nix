@@ -20,25 +20,8 @@ let
   helmDag = import ./helm-dag.nix { inherit lib; };
   helpers = import ./eval/helpers.nix { inherit lib; };
 
-  # Kinds that are always cluster-scoped (no namespace in metadata).
-  clusterScopedKinds = [
-    "Namespace"
-    "ClusterRole"
-    "ClusterRoleBinding"
-    "CustomResourceDefinition"
-    "PersistentVolume"
-    "StorageClass"
-    "PriorityClass"
-    "IngressClass"
-    "ValidatingWebhookConfiguration"
-    "MutatingWebhookConfiguration"
-    "APIService"
-    "CSIDriver"
-    "CSINode"
-    "VolumeAttachment"
-  ];
-
-  isClusterScopedKind = kind: builtins.elem kind clusterScopedKinds;
+  # Rendered with no namespace in metadata.
+  isClusterScopedKind = kind: builtins.elem kind helpers.builtInClusterScopedKinds;
 
   # Annotations/labels injected by Helm that we strip.
   helmAnnotationPrefixes = [

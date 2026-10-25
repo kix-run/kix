@@ -2,7 +2,7 @@
 
 Prune deletes orphans in reverse dependency order with background
 propagation and does not wait for them to go (`scheduler.rs` prune pass,
-`ops/kube.rs` delete). Removing a `mayastor` instance deletes its DiskPools
+`ops/resources.rs` prune). Removing a `mayastor` instance deletes its DiskPools
 and operator-diskpool together; the DiskPools keep the operator's finalizer
 and stay Terminating with no operator left to clear it. The install-mayastor
 how-to tells users to remove the pools first and wait. Any operator whose

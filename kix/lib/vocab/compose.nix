@@ -290,6 +290,74 @@ let
           inherit (chosen) scheme;
           inherit (chosen.l) port;
         };
+
+  # The PrometheusRule part behind `alerts` and `monitor`. A separate binding
+  # because `monitor` takes an argument named `alerts`, which shadows the
+  # public builder inside its body.
+  alertsPart =
+    {
+      alerts,
+      name,
+      extraLabels,
+      rulesPart,
+    }:
+    {
+      config,
+      scope,
+      prometheus ? null,
+      ...
+    }:
+    let
+      ruleName = if name != null then name else scope.instanceName;
+      metricsEnabled = ((config.metrics or { }).enabled or true) && prometheus != null;
+      alertRules = lib.mapAttrsToList (
+        alertName: alertDef:
+        {
+          alert = alertName;
+          expr = alertDef.expr;
+          labels = {
+            severity = alertDef.severity or "warning";
+          }
+          // (alertDef.labels or { });
+          annotations =
+            { }
+            // lib.optionalAttrs (alertDef ? description) {
+              description = alertDef.description;
+            }
+            // lib.optionalAttrs (alertDef ? summary) {
+              summary = alertDef.summary;
+            }
+            // lib.optionalAttrs (alertDef ? runbook_url) {
+              runbook_url = alertDef.runbook_url;
+            }
+            // (alertDef.annotations or { });
+        }
+        // lib.optionalAttrs (alertDef ? "for") {
+          "for" = alertDef."for";
+        }
+        // lib.optionalAttrs (alertDef ? keep_firing_for) {
+          inherit (alertDef) keep_firing_for;
+        }
+      ) alerts;
+    in
+    {
+      ${rulesPart} =
+        if metricsEnabled && alerts != { } then
+          prometheus.out.mkPrometheusRule scope {
+            name = "${ruleName}-alerts";
+            labels = extraLabels;
+            spec = {
+              groups = [
+                {
+                  name = "${ruleName}-alerts";
+                  rules = alertRules;
+                }
+              ];
+            };
+          }
+        else
+          null;
+    };
 in
 
 rec {
@@ -329,10 +397,17 @@ rec {
     in
     {
       # Render `repository:tag` plus `@digest` when a digest is pinned.
+      #
+      # The reference names an image in a registry, so the string context of
+      # a tag derived from a Nix build is dropped here: the manifest does not
+      # depend on the build. Keeping that context up to this point is what
+      # lets `kix-image-sources.json` report the image as `nix_built`.
       ref =
         image:
-        "${needField image "repository"}:${needField image "tag"}"
-        + lib.optionalString (image.digest or null != null) "@${image.digest}";
+        builtins.unsafeDiscardStringContext (
+          "${needField image "repository"}:${needField image "tag"}"
+          + lib.optionalString (image.digest or null != null) "@${image.digest}"
+        );
 
       # Test whether digest is present and non-null; this does not validate it.
       isPinned = image: (image.digest or null) != null;
@@ -1877,10 +1952,12 @@ rec {
   # this once per Service without the parts or the resource names
   # colliding. The defaults are the single-Service case.
   #
-  # `scheme` and `tlsConfig` (a ServiceMonitor endpoint `tlsConfig`) apply
-  # to the primary endpoint only. Each of `extraEndpoints` is a ServiceMonitor
-  # endpoint over the defaults `scheme = "http"`, `path = "/metrics"`, and the
-  # instance's `metrics.interval` when that is set.
+  # `scheme`, `tlsConfig` (a ServiceMonitor endpoint `tlsConfig`), and
+  # `params` (query parameters, as a ServiceMonitor endpoint's `params`:
+  # an attrset of string lists) apply to the primary endpoint only. Each of
+  # `extraEndpoints` is a ServiceMonitor endpoint over the defaults
+  # `scheme = "http"`, `path = "/metrics"`, and the instance's
+  # `metrics.interval` when that is set.
   monitor =
     {
       service,
@@ -1888,6 +1965,7 @@ rec {
       path ? "/metrics",
       scheme ? "http",
       tlsConfig ? null,
+      params ? null,
       alerts ? { },
       extraEndpoints ? [ ],
       extraLabels ? { },
@@ -1902,7 +1980,7 @@ rec {
       lib,
       prometheus ? null,
       ...
-    }:
+    }@args:
     let
       monitorName = if name != null then name else scope.instanceName;
       svc = self.${service};
@@ -1917,7 +1995,12 @@ rec {
       primaryEndpoint = {
         port = if builtins.isInt port then null else port;
         targetPort = if builtins.isInt port then port else null;
-        inherit scheme path tlsConfig;
+        inherit
+          scheme
+          path
+          tlsConfig
+          params
+          ;
       }
       // intervalAttrs;
       extraEndpoint =
@@ -1932,34 +2015,6 @@ rec {
         (lib.filterAttrs (_: v: v != null) primaryEndpoint)
       ]
       ++ map extraEndpoint extraEndpoints;
-
-      alertRules = lib.mapAttrsToList (
-        alertName: alertDef:
-        {
-          alert = alertName;
-          expr = alertDef.expr;
-          labels = {
-            severity = alertDef.severity or "warning";
-          }
-          // (alertDef.labels or { });
-          annotations =
-            { }
-            // lib.optionalAttrs (alertDef ? description) {
-              description = alertDef.description;
-            }
-            // lib.optionalAttrs (alertDef ? summary) {
-              summary = alertDef.summary;
-            }
-            // lib.optionalAttrs (alertDef ? runbook_url) {
-              runbook_url = alertDef.runbook_url;
-            }
-            // (alertDef.annotations or { });
-        }
-        // lib.optionalAttrs (alertDef ? "for") {
-          "for" = alertDef."for";
-        }
-      ) alerts;
-      hasAlerts = alerts != { };
     in
     {
       ${monitorPart} =
@@ -1975,23 +2030,34 @@ rec {
           }
         else
           null;
+    }
+    // alertsPart {
+      inherit alerts extraLabels rulesPart;
+      name = monitorName;
+    } args;
 
-      ${rulesPart} =
-        if metricsEnabled && hasAlerts then
-          prometheus.out.mkPrometheusRule scope {
-            name = "${monitorName}-alerts";
-            labels = extraLabels;
-            spec = {
-              groups = [
-                {
-                  name = "${monitorName}-alerts";
-                  rules = alertRules;
-                }
-              ];
-            };
-          }
-        else
-          null;
+  # A PrometheusRule `<name>-alerts` from `alerts`, for a package whose
+  # scrape is not one `kix.monitor` ServiceMonitor: a PodMonitor, an
+  # operator-built monitor, or several. `kix.monitor` renders its `alerts`
+  # through this. The rule renders only when the instance has a `prometheus`
+  # dependency, `metrics.enabled` is not false, and `alerts` is non-empty.
+  #
+  # Each alert is { expr; for?; keep_firing_for?; severity? ("warning");
+  # summary?; description?; runbook_url?; labels?; annotations?; }; other
+  # keys are ignored. `name` defaults to the instance name.
+  alerts =
+    {
+      alerts,
+      name ? null,
+      extraLabels ? { },
+      rulesPart ? "prometheusRules",
+    }:
+    alertsPart {
+      inherit
+        alerts
+        name
+        extraLabels
+        rulesPart
+        ;
     };
-
 }

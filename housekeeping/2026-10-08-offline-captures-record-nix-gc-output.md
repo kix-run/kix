@@ -1,0 +1,3 @@
+# 2026-10-08 · `docs/` · Offline captures record Nix's garbage-collection output.
+
+`regen-captures-offline -- --apply` records a failing command's stderr as it is. If Nix runs auto-GC during the capture (for example, a machine with `min-free` set and a nearly full store), the "running auto-GC…" and "deleting '/nix/store/…'" lines end up in the checked-in capture. CI then fails on them, or the docs show them. This happened to `how-to/application-typed-options/check-invalid-environment.json` and `tutorials/06-service-dep/check-broken-name.json` while refreshing for bundle format 3. Either run captures with auto-GC off (`--option min-free 0`), or drop those lines when masking.

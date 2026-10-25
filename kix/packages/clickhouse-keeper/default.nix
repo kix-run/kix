@@ -57,7 +57,11 @@ in
     replicas = lib.mkOption {
       type = lib.types.ints.positive;
       default = 3;
-      description = "Keeper replicas. Odd, and three or more to survive the loss of one.";
+      description = ''
+        Keeper replicas: 1, or an odd number. Three is the smallest quorum
+        that survives the loss of one. An even count is refused, since it
+        survives no more losses than one fewer replica.
+      '';
     };
 
     storage = {
@@ -176,66 +180,71 @@ in
           // spec;
         };
     in
-    {
-      keeper = clickhouseOperator.out.mkKeeperInstallation scope {
-        inherit name;
-        spec = kix.mergeGuarded {
-          who = "clickhouse-keeper (${name})";
-          # The replica count is the quorum, the pod template carries
-          # the image and the spread, the volume has its option.
-          locked = [
-            [
-              "configuration"
-              "clusters"
-            ]
-            [
-              "templates"
-              "podTemplates"
-            ]
-            [
-              "templates"
-              "volumeClaimTemplates"
-            ]
+    # Raft needs a majority. Two replicas stop when either one is lost, and
+    # every ReplicatedMergeTree table on the servers goes read-only with them.
+    if lib.mod config.replicas 2 == 0 then
+      throw "clickhouse-keeper (${name}): replicas is ${toString config.replicas}. A Keeper quorum needs a majority, so an even count survives no more losses than one fewer replica. Set config.replicas to 1 or an odd number (3 survives the loss of one)."
+    else
+      {
+        keeper = clickhouseOperator.out.mkKeeperInstallation scope {
+          inherit name;
+          spec = kix.mergeGuarded {
+            who = "clickhouse-keeper (${name})";
+            # The replica count is the quorum, the pod template carries
+            # the image and the spread, the volume has its option.
+            locked = [
+              [
+                "configuration"
+                "clusters"
+              ]
+              [
+                "templates"
+                "podTemplates"
+              ]
+              [
+                "templates"
+                "volumeClaimTemplates"
+              ]
+            ];
+          } baseSpec config.extraSpec;
+        };
+
+        service = scope.mkServiceRef {
+          name = "keeper-${name}";
+          selector = podSelector;
+          ports = [
+            {
+              name = "zk";
+              port = clientPort;
+              protocol = "TCP";
+            }
           ];
-        } baseSpec config.extraSpec;
-      };
+          requires = [ self.keeper ];
+        };
 
-      service = scope.mkServiceRef {
-        name = "keeper-${name}";
-        selector = podSelector;
-        ports = [
-          {
-            name = "zk";
-            port = clientPort;
-            protocol = "TCP";
-          }
-        ];
-        requires = [ self.keeper ];
-      };
+        # Raft between the replicas, and name resolution for it.
+        peerEgress = mkOperandPolicy "egress" {
+          egress = [
+            netpol.dnsEgressRule
+            { toEndpoints = [ { matchLabels = podSelector; } ]; }
+          ];
+        };
+        peerIngress = mkOperandPolicy "ingress" {
+          ingress = [ { fromEndpoints = [ { matchLabels = podSelector; } ]; } ];
+        };
 
-      # Raft between the replicas, and name resolution for it.
-      peerEgress = mkOperandPolicy "egress" {
-        egress = [
-          netpol.dnsEgressRule
-          { toEndpoints = [ { matchLabels = podSelector; } ]; }
-        ];
-      };
-      peerIngress = mkOperandPolicy "ingress" {
-        ingress = [ { fromEndpoints = [ { matchLabels = podSelector; } ]; } ];
-      };
-
-      root = {
-        resource = self.service;
-        requires = [
-          self.keeper
-        ]
-        ++ lib.optional (self.peerEgress != null) self.peerEgress
-        ++ lib.optional (self.peerIngress != null) self.peerIngress;
-        out = {
-          host = self.service.out.fqdn;
-          port = toString clientPort;
-          extraImages = [ (kix.image.ref config.image) ];
+        root = {
+          resource = self.service;
+          requires = [
+            self.keeper
+          ]
+          ++ lib.optional (self.peerEgress != null) self.peerEgress
+          ++ lib.optional (self.peerIngress != null) self.peerIngress;
+          out = {
+            host = self.service.out.fqdn;
+            port = toString clientPort;
+            extraImages = [ (kix.image.ref config.image) ];
+          };
         };
       };
-    };
 }

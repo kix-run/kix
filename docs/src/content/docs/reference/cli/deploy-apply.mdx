@@ -40,7 +40,7 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--plan <FILE>] [--prune | --prune-mode de
 | `--accept-migrations` | Proceed when the plan removes and adds stateful resources in the same slot. Without it such a deploy stops, even with `--yes`. Kix does not copy data. |
 | `--current-activation` | Take the previous activation from the local cache instead of the cluster. The plan is computed offline, so it cannot see deploys that stopped part way or orphans that earlier deploys kept; the new Activation lists the builds those orphans came from again, so a later plain deploy can prune them. With `--dry-run` nothing contacts the cluster. Without `--dry-run`, the deploy refuses before applying anything when the cached build is not the Active build of the cluster in the current context: the cache is keyed by cluster name only, so another context's cluster of the same name can have written it. |
 | `--operator` | Hand the build to the Kix operator instead of applying it from this machine. See [Operator mode](/docs/reference/cli/operator-mode/). |
-| `--log-format <FORMAT>` | `pretty` (default): interactive progress, coloured when stdout is a terminal; falls back to `line` when stdin is not a terminal. `line`: one plain line per resource outcome. `json`: JSON deploy events, one per line, ending with a `summary` object. The plan is still plain text on the same stream. |
+| `--log-format <FORMAT>` | `pretty` (default): interactive progress, coloured when stdout is a terminal; falls back to `line` when stdin is not a terminal. `line`: one plain line per resource outcome. `json`: JSON deploy events, one per line, ending with a `summary` object; stdout holds only the events, and the plan and other text go to stderr. |
 | `--tui` | Draw a live dependency tree while deploying. Ignored when stdin is not a terminal. |
 | `--group-by-ns` | With `--tui`, group the tree by namespace instead of package. Execution order does not change. |
 | `--fold-height <ROWS>` | With `--tui`, cap the live view at this many rows. Default: half the terminal height, between 10 and 40. |
@@ -120,7 +120,11 @@ kix deploy <CLUSTER> [-y] [--dry-run] [--plan <FILE>] [--prune | --prune-mode de
 
 `Ctrl-C` cancels the run and marks the record `Failed`. A run that makes no
 progress for 600 seconds is cancelled; set `KIX_STALL_TIMEOUT` to a number of
-seconds to change that, or `0` to disable it. Retries and request timeouts
+seconds to change that, or `0` to disable it. A resource that is still being
+checked for readiness counts as progress. For such a wait, the plain output
+prints a `waiting:` line after 10 seconds, then at 30, 60, and 120 seconds,
+then every minute, naming the resource, its last readiness message, and the
+readiness timeout it runs against. Retries and request timeouts
 are covered in [API server retries and request limits](/docs/reference/cli/api-server-transport/).
 
 Set `KIX_NO_INTERACTIVE` to any value to treat the terminal as
@@ -128,12 +132,17 @@ non-interactive.
 
 ## Deploy a reviewed plan
 
-Save the plan a reviewer approves, then deploy with it:
+Save the plan a reviewer approves as a
+[plan file](/docs/reference/cli/plan/#plan-file), then deploy with it:
 
 ```bash
-kix plan prod --output json > plan.json   # reviewed and approved
-kix deploy prod --plan plan.json --yes
+kix plan prod --save plan.kixplan   # reviewed and approved
+kix deploy prod --plan plan.kixplan --yes
 ```
+
+The deploy reads only plan files. It refuses a file that is not one, and a
+plan file whose manifests do not match their names, before it builds
+anything.
 
 The deploy builds and plans again with the planning flags recorded in the
 plan, and applies nothing if the new plan differs from the reviewed one on
@@ -160,22 +169,16 @@ made, for example a `kix plan` document with prune marked not checked, was
 edited after it was written and is refused. The deploy prints the file's
 SHA-256 so an approval system can check it used the file it approved.
 
-A refusal lists what differs and exits `4`. `kix deploy --plan plan.json
+A refusal lists what differs and exits `4`. `kix deploy --plan plan.kixplan
 --dry-run` makes the same comparison without deploying. It exits `4` when the
 plan no longer matches, `3` when it matches but the deploy would stop on a
 refused write or a migration not accepted, and `0` otherwise. With
 `--output json` it prints `{ plan_sha256, matches, mismatches, skipped, kix_differs }`.
 
-A plan saved from [`kix diff`](/docs/reference/cli/diff/) against the cluster
-can be used too, when the deployed build was available to it, so its drift
-section is checked. A diff checks no refusals, prune deletes, or objects a
-dry run cannot reach, so those are not compared and the output says so; the
-deploy still makes its own dry run first. A deploy from a diff plan refuses
-`--prune`, `--force-conflicts`, `--reconcile`, and `--accept-migrations`,
-since the diff shows no reviewer what they would do. Refused outright: a
-plan that compared two builds without reading the cluster
-(`made_by: builds`), and a `kix diff` of a snapshot or export, or one made
-without the deployed build, since neither shows drift.
+A plan file saved with [`kix diff --save`](/docs/reference/cli/diff/) is
+refused: a diff plans no deploy, so it lists no objects for the deploy to be
+held to. So is a plan that compared two builds without reading the cluster
+(`made_by: builds`).
 
 The checks above catch an edited plan only when its sections contradict how
 it says it was made. Adding items to a list, or marking a drift section not

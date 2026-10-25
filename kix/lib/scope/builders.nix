@@ -811,6 +811,10 @@ in
           stringData ? { },
           source ? null,
           hash ? null,
+          # Keys whose value is in the manifest and is not a credential (a
+          # username, a host). The security.secretSource rule accepts them
+          # whatever `cluster.secrets.accept` lists.
+          plainKeys ? [ ],
           meta ? { },
           labels ? { },
           annotations ? { },
@@ -821,6 +825,24 @@ in
           # Keys with a value in the manifest itself.
           valuedKeys = builtins.attrNames (stringData // (extra.data or { }) // (extra.stringData or { }));
 
+          # Keys the Secret's type makes public.
+          typePlainKeys =
+            {
+              "kubernetes.io/basic-auth" = [ "username" ];
+              "kubernetes.io/tls" = [
+                "tls.crt"
+                "ca.crt"
+              ];
+            }
+            .${type} or [ ];
+
+          unknownPlain = builtins.filter (k: !(builtins.elem k valuedKeys)) plainKeys;
+          _plainCheck =
+            if unknownPlain == [ ] then
+              null
+            else
+              throw "mkSecret \"${name}\" in ${namespaceName}/${instanceName}: plainKeys lists ${builtins.concatStringsSep ", " unknownPlain}, which has no value in stringData or extra.data. plainKeys marks a key whose value is written in the manifest and is not a credential.";
+
           declaredKeys =
             if keys != null then
               keys
@@ -828,6 +850,15 @@ in
               valuedKeys
             else
               throw "mkSecret \"${name}\" in ${namespaceName}/${instanceName}: either 'keys' or 'stringData' must be provided";
+
+          # Every key with a value must be declared, or the stamp and the
+          # security.secretSource rule would miss it.
+          undeclared = builtins.filter (k: !(builtins.elem k declaredKeys)) valuedKeys;
+          _declaredCheck =
+            if undeclared == [ ] then
+              null
+            else
+              throw "mkSecret \"${name}\" in ${namespaceName}/${instanceName}: key(s) ${builtins.concatStringsSep ", " undeclared} have a value in stringData or extra.data but are not in 'keys'. List every key the Secret holds, or omit 'keys' to derive them from the values.";
 
           # Without a SOPS source nothing fills a key at deploy, so a key with
           # no value here would be missing from the live Secret. Kubernetes
@@ -838,6 +869,24 @@ in
               declaredKeys
             else
               throw "mkSecret \"${name}\" in ${namespaceName}/${instanceName}: key(s) ${builtins.concatStringsSep ", " unvalued} have no value and there is no SOPS source, so the Secret would be created without them and a pod that reads them would not start. Give the values in stringData, set source to a SOPS file that holds them, or use scope.mkSecretRef when something outside Kix creates this Secret.";
+
+          # Where each key's value comes from. A declared key with no value
+          # here is filled by the SOPS source at deploy, or, for a
+          # service-account-token Secret, by Kubernetes.
+          sourceOf =
+            k:
+            if builtins.elem k valuedKeys then
+              (if builtins.elem k plainKeys || builtins.elem k typePlainKeys then "plain" else "inline")
+            else if source != null then
+              "sops"
+            else
+              "controller";
+          secretSources =
+            if effectiveKeys == [ ] then
+              "*=controller"
+            else
+              builtins.concatStringsSep "," (map (k: "${k}=${sourceOf k}") effectiveKeys);
+          _sourceChecks = builtins.seq _plainCheck _declaredCheck;
 
           realizedSource =
             if source == null then
@@ -862,6 +911,7 @@ in
               annotations
               // {
                 ${kixKeys.secretKeys} = builtins.concatStringsSep "," effectiveKeys;
+                ${kixKeys.secretSources} = builtins.seq _sourceChecks secretSources;
               }
               // lib.optionalAttrs (source != null) {
                 ${kixKeys.sopsSource} = toString realizedSource;

@@ -159,7 +159,7 @@ in
           none = 1;
           pod = 2;
           node = 2;
-          zone = 3;
+          zone = 2;
         };
         selector.matchLabels = c.componentLabels "api-rest";
         template.spec = placement // {

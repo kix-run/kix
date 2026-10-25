@@ -9,6 +9,7 @@ import deployOutput from '/src/command-output/tutorials/04-from-scratch/deploy.j
 import deployAfterEditOutput from '/src/command-output/tutorials/04-from-scratch/deploy-after-edit.json';
 import kubectlPods from '/src/command-output/tutorials/04-from-scratch/kubectl-get-pods.json';
 import kubectlSvc from '/src/command-output/tutorials/04-from-scratch/kubectl-get-svc.json';
+import Recap from '/src/components/Recap.astro';
 
 In the previous tutorial you read the files that make an example cluster work.
 Now you will create one small cluster yourself.
@@ -158,11 +159,13 @@ Port-forward and curl again. The response should use your new message.
 
 You created the smallest useful Kix cluster from scratch:
 
+<Recap>
 - a cluster file that calls `kix.buildCluster`;
 - a kind flavor;
 - one managed namespace;
 - one package instance;
 - one flake entry that gives the cluster a CLI name.
+</Recap>
 
 The next tutorial slows down on the deploy loop. You will check, build, diff,
 and inspect this cluster before applying changes.

@@ -11,9 +11,16 @@ use super::{DiffConfig, Difference};
 ///
 /// Walks both trees in parallel, reporting differences by JSON path.
 /// Dict key ordering does not matter. Lists use keyed matching for
-/// known K8s fields, content-based matching otherwise. Spellings the API
-/// server treats as equal are not differences: see [`super::equivalence`].
-pub fn structural_diff(a: &Value, b: &Value, path: &str, config: &DiffConfig) -> Vec<Difference> {
+/// known K8s fields, content-based matching otherwise. With
+/// [`DiffConfig::ordered`], a list whose shared items sit in another order
+/// is also a difference, at the list's path. Spellings the API server
+/// treats as equal are not differences: see [`super::equivalence`].
+pub(crate) fn structural_diff(
+    a: &Value,
+    b: &Value,
+    path: &str,
+    config: &DiffConfig,
+) -> Vec<Difference> {
     if path_ignored(path, &config.ignore_paths) {
         return Vec::new();
     }
@@ -107,11 +114,43 @@ fn diff_arrays(a: &[Value], b: &[Value], path: &str, config: &DiffConfig) -> Vec
 
     // Try keyed-list matching first
     if let Some((a_map, b_map)) = try_key_lists(parent_field, a, b) {
-        return diff_keyed_arrays(&a_map, &b_map, path, config);
+        let mut diffs = diff_keyed_arrays(&a_map, &b_map, path, config);
+        let a_keys: Vec<&String> = a_map.keys().collect();
+        let b_keys: Vec<&String> = b_map.keys().collect();
+        if config.ordered && reordered(&a_keys, &b_keys) {
+            diffs.push(Difference::value_mismatch(
+                path.to_string(),
+                serde_json::json!(a_keys),
+                serde_json::json!(b_keys),
+            ));
+        }
+        return diffs;
     }
 
     // Fall back to content-based matching
     diff_content_arrays(a, b, path, config)
+}
+
+/// Whether the items both lists hold, by key, sit in another order. A
+/// repeated item counts as often as the side with fewer copies holds it.
+fn reordered(a: &[&String], b: &[&String]) -> bool {
+    let shared = |side: &[&String], other: &[&String]| -> Vec<String> {
+        let mut left: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for k in other {
+            *left.entry(k.as_str()).or_default() += 1;
+        }
+        side.iter()
+            .filter(|k| match left.get_mut(k.as_str()) {
+                Some(n) if *n > 0 => {
+                    *n -= 1;
+                    true
+                }
+                _ => false,
+            })
+            .map(|k| k.to_string())
+            .collect()
+    };
+    shared(a, b) != shared(b, a)
 }
 
 /// Diff two keyed arrays by matching on natural keys.
@@ -156,7 +195,9 @@ fn diff_keyed_arrays(
     diffs
 }
 
-/// Diff two arrays by normalizing and matching on content.
+/// Diff two arrays by normalizing and matching on content. Unordered, the
+/// lists inside each item are sorted first; ordered, an item whose inner
+/// list moved is a different item.
 fn diff_content_arrays(
     a: &[Value],
     b: &[Value],
@@ -165,8 +206,15 @@ fn diff_content_arrays(
 ) -> Vec<Difference> {
     let mut diffs = Vec::new();
 
-    let a_normed: Vec<Value> = a.iter().map(normalize_for_compare).collect();
-    let b_normed: Vec<Value> = b.iter().map(normalize_for_compare).collect();
+    let normed = |items: &[Value]| -> Vec<Value> {
+        if config.ordered {
+            items.to_vec()
+        } else {
+            items.iter().map(normalize_for_compare).collect()
+        }
+    };
+    let a_normed = normed(a);
+    let b_normed = normed(b);
 
     let a_keyed: Vec<(String, &Value)> = a_normed.iter().map(|v| (sort_key_string(v), v)).collect();
     let b_keyed: Vec<(String, &Value)> = b_normed.iter().map(|v| (sort_key_string(v), v)).collect();
@@ -220,6 +268,16 @@ fn diff_content_arrays(
             diffs.push(Difference::extra_in_b(child_path, (*item).clone()));
             idx += 1;
         }
+    }
+
+    let a_keys: Vec<&String> = a_keyed.iter().map(|(k, _)| k).collect();
+    let b_keys: Vec<&String> = b_keyed.iter().map(|(k, _)| k).collect();
+    if config.ordered && reordered(&a_keys, &b_keys) {
+        diffs.push(Difference::value_mismatch(
+            path.to_string(),
+            Value::Array(a.to_vec()),
+            Value::Array(b.to_vec()),
+        ));
     }
 
     diffs

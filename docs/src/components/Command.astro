@@ -8,8 +8,8 @@
 //     A Step object can carry stdout / stderr / exitCode captured against a
 //     real run, plus a per-step `cwd` override.
 //   cwd?: string       — working directory shown in the terminal chrome.
-//   title?: string     — overrides the chrome label (defaults to "Run in $cwd"
-//                        when `cwd` is set, otherwise no label).
+//   title?: string     — overrides the chrome label (defaults to `cwd`; with
+//                        neither, the block has no chrome row).
 //   expandable?: boolean
 //     When set, output is collapsed inside a <details> disclosure. The
 //     command lines remain visible.
@@ -69,7 +69,8 @@ const steps: NormalisedStep[] = commands.map((entry) => {
   return entry;
 });
 
-const terminalLabel = title ?? (cwd ? `Run in ${cwd}` : null);
+const terminalLabel = title ?? cwd ?? null;
+const captureLabel = generator ? `${generator} capture` : null;
 
 // Missing-output detection: prevent silent blank-output regressions.
 // `expandable` and spread sidecars (identified by the `generator` tag)
@@ -144,11 +145,10 @@ function renderOutput(stdout: string, stderr: string, exitCode: number): Span[] 
 // https://github.com/withastro/astro/issues/6955 for the restriction.
 
 // Each step renders as either a `<pre>` (command lines + optional inline
-// output, the default) or a `<details>` (when `expandable` is set and the
-// step has output). The `<details>` summary holds the command lines on the
-// left and a right-aligned "Show output" toggle; the output reveals below
-// the summary when open. Sibling units render visually contiguous via the
-// adjacency CSS rules below.
+// output, the default) or, when `expandable` is set and the step has output,
+// a `<pre>` of command lines followed by a `<details>` whose summary is the
+// "Show output · N lines" row and whose body is the output. Sibling units
+// render visually contiguous via the adjacency CSS rules below.
 //
 // Astro's template compiler only accepts expression-bodied arrow functions
 // in `{...}` expressions, and trips up on nested ternaries returning JSX.
@@ -163,13 +163,13 @@ type LineItem = {
   spans: InnerSpan[];
 };
 type PreUnit = { kind: 'pre'; items: LineItem[] };
-// Expandable step: command lines live inside the <summary> (alongside the
-// right-aligned toggle), output lives inside the <details> body. Closed
-// state shows only the command + toggle row; open state reveals the output.
+// Expandable step: command lines stay visible above the <details>; the
+// output lives inside it. `lineCount` labels the disclosure row.
 type DetailsUnit = {
   kind: 'details';
   commandItems: LineItem[];
   output: InnerSpan[];
+  lineCount: number;
 };
 type RenderUnit = PreUnit | DetailsUnit;
 
@@ -194,6 +194,9 @@ function commandLineToItem(tokens: Token[], leadingNewline: boolean): LineItem {
   return { wrapClass: 'command-line', leadingNewline, spans };
 }
 
+// Text for the copy button: every command, one per line.
+const copyText = steps.map((step) => step.command.replace(/\s+$/u, '')).join('\n');
+
 const units: RenderUnit[] = [];
 
 for (const step of steps) {
@@ -209,7 +212,8 @@ for (const step of steps) {
   );
 
   if (hasOutput && expandable) {
-    units.push({ kind: 'details', commandItems: items, output: outputSpans });
+    const lineCount = outputSpans.map((span) => span.text).join('').split('\n').length;
+    units.push({ kind: 'details', commandItems: items, output: outputSpans, lineCount });
   } else {
     if (hasOutput) {
       items.push({ wrapClass: 'output', leadingNewline: true, spans: outputSpans });
@@ -219,16 +223,27 @@ for (const step of steps) {
 }
 ---
 
-<figure class="command-block">
-  <figcaption>
-    <span class="terminal-dots" aria-hidden="true">
-      <span></span>
-      <span></span>
-      <span></span>
-    </span>
-    {terminalLabel && <span class="terminal-label">{terminalLabel}</span>}
-    {outputExcerpt && <span class="terminal-label">Output excerpt</span>}
-  </figcaption>
+<figure class:list={["command-block not-content", { "has-chrome": terminalLabel }]}>
+  {terminalLabel ? (
+    <figcaption>
+      <span class="terminal-label">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>
+        <span>{terminalLabel}</span>
+      </span>
+      <span class="terminal-tags">
+        {outputExcerpt && <span class="terminal-tag">output excerpt</span>}
+        {captureLabel && expandable && <span class="terminal-tag capture-tag">{captureLabel}</span>}
+        <button type="button" class="copy" data-command-copy={copyText} aria-label="Copy command" title="Copy command">
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
+        </button>
+      </span>
+    </figcaption>
+  ) : (
+    <button type="button" class="copy floating" data-command-copy={copyText} aria-label="Copy command" title="Copy command">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>
+    </button>
+  )}
+  {!terminalLabel && outputExcerpt && <span class="terminal-tag floating-tag">output excerpt</span>}
   {units.map((unit) => (
     unit.kind === 'pre' ? (
       <pre><code>{unit.items.map((item) => (
@@ -237,219 +252,217 @@ for (const step of steps) {
         ))}</span>
       ))}</code></pre>
     ) : (
-      <details class="command-block-disclosure not-content">
-        <summary>
-          <span class="disclosure-command"><code>{unit.commandItems.map((item) => (
-            <span class={item.wrapClass}>{item.leadingNewline ? '\n' : ''}{item.spans.map((s) => (
-              <span class={s.classes} style={s.style || undefined}>{s.text}</span>
-            ))}</span>
-          ))}</code></span>
-          <span class="disclosure-toggle">Show output</span>
-        </summary>
-        <pre><code>{unit.output.map((s) => (
-          <span class={s.classes} style={s.style || undefined}>{s.text}</span>
+      <div class="command-step">
+        <pre class="disclosure-command"><code>{unit.commandItems.map((item) => (
+          <span class={item.wrapClass}>{item.leadingNewline ? '\n' : ''}{item.spans.map((s) => (
+            <span class={s.classes} style={s.style || undefined}>{s.text}</span>
+          ))}</span>
         ))}</code></pre>
-      </details>
+        <details class="command-block-disclosure not-content">
+          <summary>
+            <svg class="chevron" aria-hidden="true" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg>
+            <span class="disclosure-toggle"><span class="when-closed">Show output</span><span class="when-open">Hide output</span></span>
+            <span class="line-count">· {unit.lineCount} {unit.lineCount === 1 ? 'line' : 'lines'}</span>
+          </summary>
+          <pre class="output-pre"><code><span class="output">{unit.output.map((s) => (
+            <span class={s.classes} style={s.style || undefined}>{s.text}</span>
+          ))}</span></code></pre>
+        </details>
+      </div>
     )
   ))}
 </figure>
 
 <style>
+  /* A night panel in both themes. Colours come from the --kix-* tokens in
+     src/styles/kix.css, including the --ansi-* palette used by the
+     ansi-fg-* and ansi-bg-* classes below. */
   .command-block {
-    --command-block-command-color: #82aaff;
-    --command-block-argument-color: #ecc48d;
-    margin: 1rem 0;
-    border: var(--ec-brdWd, 1px) solid var(--ec-brdCol, var(--sl-color-gray-5));
-    background: var(--ec-frm-trmTtbBg, var(--sl-color-gray-6));
-  }
-  :global(:root:not([data-theme='dark'])) .command-block {
-    --command-block-command-color: #3b61b0;
-    --command-block-argument-color: #3b61b0;
-  }
-  :global(:root[data-theme='dark']) .command-block {
-    --command-block-command-color: #82aaff;
-    --command-block-argument-color: #ecc48d;
+    position: relative;
+    margin: 1.25rem 0 0;
+    border: 1px solid var(--kix-code-line);
+    border-radius: 10px;
+    background: var(--kix-code-bg);
+    color: var(--kix-on-night);
+    overflow: hidden;
   }
   .command-block figcaption {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    min-height: 2.5rem;
-    padding: 0 1rem;
-    border-bottom: var(--ec-brdWd, 1px) solid
-      var(--ec-frm-trmTtbBrdBtmCol, var(--sl-color-gray-5));
-    color: var(--ec-frm-trmTtbFg, var(--sl-color-text));
-    font-size: 0.85rem;
+    min-height: 2.375rem;
+    padding: 0.375rem 0.75rem 0.375rem 1rem;
+    border-bottom: 1px solid var(--kix-code-line);
+    color: var(--kix-on-night-2);
+    font-family: var(--__sl-font-mono);
+    font-size: 0.75rem;
   }
   .terminal-label {
-    font-family: var(--__sl-font-mono);
-  }
-  .terminal-dots {
     display: inline-flex;
-    gap: 0.38rem;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
   }
-  .terminal-dots span {
-    width: 0.65rem;
-    height: 0.65rem;
-    border-radius: 999px;
-    background: var(--ec-frm-trmTtbDotsFg, var(--sl-color-gray-5));
-    opacity: var(--ec-frm-trmTtbDotsOpa, 0.75);
+  .terminal-label svg {
+    flex: none;
+    color: var(--kix-on-night-dim);
+  }
+  .terminal-tags {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .terminal-tag {
+    border: 1px solid var(--kix-code-line);
+    border-radius: 4px;
+    padding: 0.0625rem 0.4375rem;
+    color: var(--kix-on-night-2);
+    font-family: var(--__sl-font-mono);
+    font-size: 0.6875rem;
+    white-space: nowrap;
+  }
+  /* The capture tag describes the output, so it shows only while output is
+     visible. */
+  .command-block:not(:has(details[open])) .capture-tag {
+    display: none;
+  }
+  .floating-tag {
+    position: absolute;
+    top: 0.625rem;
+    inset-inline-end: 2.75rem;
+  }
+  .copy {
+    display: inline-grid;
+    place-items: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border: 0;
+    border-radius: 6px;
+    padding: 0;
+    background: transparent;
+    color: var(--kix-on-night-2);
+    cursor: pointer;
+  }
+  .copy:hover {
+    background: var(--kix-code-chrome);
+    color: var(--kix-on-night);
+  }
+  .copy[data-copied] {
+    color: var(--kix-t-green);
+  }
+  .copy.floating {
+    position: absolute;
+    top: 0.5rem;
+    inset-inline-end: 0.5rem;
+    z-index: 1;
   }
   .command-block pre {
     margin: 0;
     border: 0;
-    padding: 1rem;
+    padding: 0.875rem 1.125rem;
     overflow-x: auto;
-    background: var(--ec-frm-trmBg, var(--sl-color-gray-7));
-    color: var(--ec-codeFg, var(--sl-color-text));
-    font-size: var(--sl-text-code);
+    background: transparent;
+    color: var(--kix-on-night);
+    font-size: 0.84375rem;
     line-height: 1.6;
+  }
+  .command-block:not(.has-chrome) > pre:first-of-type,
+  .command-block:not(.has-chrome) > .command-step:first-of-type > pre {
+    padding-inline-end: 3rem;
   }
   .command-block code {
     font-family: var(--__sl-font-mono);
   }
-  .command {
-    color: var(--command-block-command-color);
-  }
+  .command,
   .argument {
-    color: var(--command-block-argument-color);
+    color: var(--kix-on-night);
   }
   .prompt {
-    color: var(--command-block-command-color);
+    color: var(--kix-brand);
+  }
+  .output {
+    color: var(--kix-on-night-2);
   }
 
-  /* Disclosure rendered as a single terminal row: command on the left
-     (matching the prompt styling of a regular <pre>) and a right-aligned
-     "Show output" toggle. Output reveals below the summary on open. We
-     fully override Starlight's markdown <details> chrome here because the
-     disclosure has to read as a terminal row, not as a callout. */
+  /* Expandable output: the command stays visible; a disclosure row on the
+     chrome colour reveals the output below it. */
   .command-block-disclosure {
-    background: var(--ec-frm-trmBg, var(--sl-color-gray-7));
+    margin: 0;
     border: 0;
     padding: 0;
-    margin-top: 0;
-    color: var(--ec-codeFg, var(--sl-color-text));
+    background: transparent;
   }
   .command-block-disclosure > summary {
     display: flex;
-    /* Baseline alignment: the toggle and the first command line share the
-       same baseline regardless of their independent font-sizes/line-heights.
-       For multi-line commands, the toggle anchors to the first line. */
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 1rem;
+    align-items: center;
+    gap: 0.5rem;
     margin: 0;
+    border-top: 1px solid var(--kix-code-line);
+    padding: 0.5rem 1.125rem;
+    background: var(--kix-code-chrome);
+    color: var(--kix-on-night);
     cursor: pointer;
+    font-family: var(--__sl-font-mono);
+    font-size: 0.75rem;
+    font-weight: 400;
     list-style: none;
-    font-weight: normal;
-    color: var(--ec-codeFg, var(--sl-color-text));
+    user-select: none;
   }
   .command-block-disclosure > summary::-webkit-details-marker,
   .command-block-disclosure > summary::marker {
     display: none;
     content: '';
   }
-  /* Command lives in a <code> so it picks up the monospace font and
-     whitespace handling we use in <pre>. The wrapper span owns scrolling
-     so long commands don't push the toggle off-screen. */
-  .disclosure-command {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow-x: auto;
+  .command-block-disclosure > summary::before {
+    display: none;
   }
-  .disclosure-command > code {
-    font-family: var(--__sl-font-mono);
-    font-size: var(--sl-text-code);
-    line-height: 1.6;
-    white-space: pre;
-    display: block;
+  .command-block-disclosure > summary:hover .disclosure-toggle {
+    text-decoration: underline;
   }
-  /* Right-aligned toggle label. Vertical alignment is handled by the
-     summary's `align-items: baseline` so the toggle's text baseline lines
-     up with the first command-line baseline regardless of font-size. */
-  .disclosure-toggle {
-    flex: 0 0 auto;
-    font-family: var(--sl-font);
-    font-size: 0.8em;
-    color: var(--sl-color-gray-3);
-    user-select: none;
-    white-space: nowrap;
-  }
-  .disclosure-toggle::after {
-    content: '›';
-    display: inline-block;
-    margin-inline-start: 0.4ch;
+  .chevron {
+    flex: none;
+    color: var(--kix-on-night-2);
     transition: transform 0.15s ease;
   }
-  .command-block-disclosure[open] > summary .disclosure-toggle::after {
+  .command-block-disclosure[open] .chevron {
     transform: rotate(90deg);
   }
-  /* Output pre inside an open details — sits flush against the summary
-     above, with the surrounding terminal padding on the sides/bottom. */
-  .command-block-disclosure > pre {
-    padding-top: 0;
+  .when-open,
+  .command-block-disclosure[open] .when-closed {
+    display: none;
   }
-  /* Adjacency: keep consecutive step blocks (pre or disclosure) visually
-     continuous by tightening the inner edge padding to 0.25rem instead of
-     the 1rem outer padding. */
-  .command-block > pre + pre,
-  .command-block > pre + .command-block-disclosure > summary,
-  .command-block > .command-block-disclosure + pre,
-  .command-block > .command-block-disclosure + .command-block-disclosure > summary {
-    padding-top: 0.25rem;
+  .command-block-disclosure[open] .when-open {
+    display: inline;
   }
-  .command-block > pre:has(+ pre),
-  .command-block > pre:has(+ .command-block-disclosure) {
-    padding-bottom: 0.25rem;
+  .line-count {
+    color: var(--kix-on-night-dim);
   }
-  .command-block > .command-block-disclosure:not([open]):has(+ *) > summary {
-    padding-bottom: 0.25rem;
+  .command-block-disclosure[open] > summary {
+    border-bottom: 1px solid var(--kix-code-line);
   }
-  .command-block > .command-block-disclosure[open]:has(+ *) > pre {
-    padding-bottom: 0.25rem;
+  .output-pre {
+    padding-top: 0.75rem;
   }
 
-  /* ANSI palette — dark theme defaults; light theme overrides below. The
-     colours are taken from a low-contrast terminal palette so they read on
-     the Starlight terminal background without clashing with the existing
-     command-line tokens. */
-  .command-block {
-    --ansi-black: #1f2230;
-    --ansi-red: #ff5f6b;
-    --ansi-green: #7fd364;
-    --ansi-yellow: #ecc48d;
-    --ansi-blue: #82aaff;
-    --ansi-magenta: #c792ea;
-    --ansi-cyan: #7fdbca;
-    --ansi-white: #d6deeb;
-    --ansi-bright-black: #4b5263;
-    --ansi-bright-red: #ff7b86;
-    --ansi-bright-green: #a3e081;
-    --ansi-bright-yellow: #f3d68f;
-    --ansi-bright-blue: #a3c4ff;
-    --ansi-bright-magenta: #d7adee;
-    --ansi-bright-cyan: #9beadc;
-    --ansi-bright-white: #ffffff;
+  /* Consecutive steps read as one terminal session: tighten the padding
+     between them. */
+  .command-block > pre + pre {
+    padding-top: 0.125rem;
   }
-  :global(:root:not([data-theme='dark'])) .command-block {
-    --ansi-black: #1f2230;
-    --ansi-red: #c0394a;
-    --ansi-green: #2f8a35;
-    --ansi-yellow: #ab7706;
-    --ansi-blue: #3b61b0;
-    --ansi-magenta: #8e3aaa;
-    --ansi-cyan: #157e80;
-    --ansi-white: #4a4f63;
-    --ansi-bright-black: #4b5263;
-    --ansi-bright-red: #e15a6b;
-    --ansi-bright-green: #4ea35a;
-    --ansi-bright-yellow: #c08c0a;
-    --ansi-bright-blue: #5f81c9;
-    --ansi-bright-magenta: #a657c3;
-    --ansi-bright-cyan: #2d9ea0;
-    --ansi-bright-white: #2c2f3e;
+  .command-block > pre:has(+ pre) {
+    padding-bottom: 0.125rem;
+  }
+  .command-step + .command-step,
+  .command-block > pre + .command-step,
+  .command-step + pre {
+    border-top: 1px solid var(--kix-code-line);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chevron {
+      transition: none;
+    }
   }
 
   .ansi-fg-black { color: var(--ansi-black); }
@@ -493,3 +506,17 @@ for (const step of steps) {
   .ansi-strikethrough { text-decoration: line-through; }
   .ansi-inverse { filter: invert(1); }
 </style>
+
+<script>
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-command-copy]')) {
+    button.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(button.dataset.commandCopy ?? '');
+        button.dataset.copied = '';
+        setTimeout(() => delete button.dataset.copied, 1500);
+      } catch (error) {
+        console.error(error);
+      }
+    });
+  }
+</script>

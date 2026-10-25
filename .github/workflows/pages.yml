@@ -1,16 +1,16 @@
 name: Deploy site to Cloudflare Pages
 
-# Builds the landing page (React/Vite app in `web/`) and the Starlight
+# Builds the landing page (Astro site in `web/`) and the Starlight
 # docs site (`nix build ./docs#site`), then merges them into one
 # directory uploaded to the Cloudflare Pages project `kix-run`:
 #
-#   kix.run/             ← web/ (Vite build; compiler-H1 hero)
+#   kix.run/             ← web/ (Astro build)
 #   kix.run/alt1/        ← web/ at ALT1_REF (pre-refactor variant)
 #   kix.run/alt2/        ← web/ at ALT2_REF (get-shit-done hero)
 #   kix.run/docs/        ← docs site (current tree)
 #   kix.run/docs/v0.1/   ← starlight-versions snapshot
 #
-# web/public/ also carries the agent-facing surface, which Vite copies
+# web/public/ also carries the agent-facing surface, which Astro copies
 # into web/dist/ and the staging step merges into the site root:
 # robots.txt, llms.txt, 404.html, and _worker.js. Pages runs _worker.js
 # as the site Worker (it is not published as an asset); it serves the
@@ -18,7 +18,8 @@ name: Deploy site to Cloudflare Pages
 # See docs/README.md § Agent-facing surface.
 #
 # /alt1/ and /alt2/ serve alternate landing pages built from pinned
-# refs, for A/B comparison. Vite's --base flag rewrites all asset
+# refs, for A/B comparison. Both refs predate the move to Astro and
+# are still React/Vite apps; Vite's --base flag rewrites all asset
 # paths, so each build works untouched under its subdirectory. Update
 # or remove the ALT*_REF envs on the build step to change/retire them.
 #

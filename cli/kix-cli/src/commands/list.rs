@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use miette::{IntoDiagnostic, Result};
 
-use crate::cli::{ListArgs, ListCommand, OutputFormat};
+use crate::cli::{ListArgs, ListCommand};
 use crate::output::{self, CommandResponse};
 
 use super::CommandContext;
@@ -116,11 +116,7 @@ fn run_clusters(ctx: &mut CommandContext) -> Result<()> {
     }
 
     let response = ClustersResponse { clusters };
-    println!(
-        "{}",
-        output::render(&response, ctx.output_format(OutputFormat::Text))?
-    );
-    Ok(())
+    output::result(&response)
 }
 
 fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
@@ -196,9 +192,5 @@ fn run_packages(cluster: Option<&str>, ctx: &mut CommandContext) -> Result<()> {
         packages,
         show_status,
     };
-    println!(
-        "{}",
-        output::render(&response, ctx.output_format(OutputFormat::Text))?
-    );
-    Ok(())
+    output::result(&response)
 }

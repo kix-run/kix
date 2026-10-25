@@ -336,7 +336,7 @@ in
         description = "Flags appended to the node plugin's. `--endpoint`, `--plugin`, `--nodename`, and `--name` are refused.";
       };
       env = kix.options.env // {
-        description = "Extra environment variables of the node plugin. A value is a string, a `fieldRef` source, or a `secretKeyRef` naming a Secret managed outside Kix with `kix.untrackedRef`. The package sets ALLOWED_TOPOLOGIES to \"All\", so every node label is a topology key; set it to a comma-separated list of label keys to narrow that. The package owns OPENEBS_NAMESPACE, OPENEBS_NODE_NAME, OPENEBS_CSI_ENDPOINT, and OPENEBS_NODE_DRIVER.";
+        description = "Extra environment variables of the node plugin. A value is a string, a `fieldRef` source, or a `secretKeyRef` naming a Secret managed outside Kix with `kix.untrackedRef`. The package sets ALLOWED_TOPOLOGIES to kubernetes.io/hostname plus every key the classes in `storageClasses` select on in allowedTopologies; the driver always adds openebs.io/nodeid and openebs.io/nodename, and volumes pin to openebs.io/nodeid. Set it to a comma-separated list of node label keys when a StorageClass defined outside this instance selects on other keys, or to \"All\" to register every node label, which stops new volumes on a node once one of its labels is removed (openebs/zfs-localpv#528). The package owns OPENEBS_NAMESPACE, OPENEBS_NODE_NAME, OPENEBS_CSI_ENDPOINT, and OPENEBS_NODE_DRIVER.";
       };
       kubeletDir = lib.mkOption {
         type = absolutePath;
@@ -488,6 +488,25 @@ in
       ];
 
       fieldRef = path: { valueFrom.fieldRef.fieldPath = path; };
+
+      # Node label keys the node plugin registers as topology keys: the
+      # hostname, plus every key the instance's own classes select on in
+      # allowedTopologies. The upstream default "All" registers every node
+      # label, and once one of them goes away csi-provisioner publishes no
+      # CSIStorageCapacity for the node, so the scheduler rejects every new
+      # claim there. KubeVirt renames its
+      # scheduling.node.kubevirt.io/tsc-frequency-<hz> label when it
+      # re-measures the clock (openebs/zfs-localpv#528). Upstream added
+      # ALLOWED_TOPOLOGIES for this failure (issue openebs/zfs-localpv#394,
+      # PR openebs/zfs-localpv#395) and kept "All" only so existing installs
+      # did not change. The driver adds openebs.io/nodeid
+      # and openebs.io/nodename itself, and volumes pin to openebs.io/nodeid.
+      allowedTopologyKeys = lib.unique (
+        [ "kubernetes.io/hostname" ]
+        ++ lib.concatMap (
+          cls: lib.concatMap (term: map (e: e.key) term.matchLabelExpressions) cls.allowedTopologies
+        ) (builtins.attrValues config.storageClasses)
+      );
 
       # One group per variable, so a refusal explains the variable it names
       # and points at the option that set it.
@@ -811,7 +830,7 @@ in
                   env = kix.mkEnvVars (
                     kix.mergeEnv {
                       inherit who;
-                      defaults.ALLOWED_TOPOLOGIES = "All";
+                      defaults.ALLOWED_TOPOLOGIES = lib.concatStringsSep "," allowedTopologyKeys;
                       owned = ownedEnv "node.env" (
                         namespaceVar
                         // {

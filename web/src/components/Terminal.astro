@@ -1,0 +1,29 @@
+---
+// A night panel for anything you run or read as output. With `title`, it
+// gets the window title bar (three dots and a centred file or command name).
+interface Props {
+  title?: string;
+  class?: string;
+  bodyClass?: string;
+}
+const { title, class: className, bodyClass } = Astro.props;
+---
+
+<div class:list={['overflow-hidden rounded-xl bg-night text-on-night', className]}>
+  {
+    title && (
+      <div class="flex items-center justify-between gap-4 border-b border-night-line px-[18px] py-3.5">
+        <span aria-hidden="true" class="flex w-12 gap-[7px]">
+          <span class="size-[11px] rounded-full bg-t-dot" />
+          <span class="size-[11px] rounded-full bg-t-dot" />
+          <span class="size-[11px] rounded-full bg-t-dot" />
+        </span>
+        <span class="truncate font-mono text-[13px] text-on-night-2">{title}</span>
+        <span aria-hidden="true" class="w-12" />
+      </div>
+    )
+  }
+  <div class:list={['font-mono text-[13.5px] leading-[1.6]', bodyClass]}>
+    <slot />
+  </div>
+</div>

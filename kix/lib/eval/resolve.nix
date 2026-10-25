@@ -64,6 +64,52 @@ rec {
       lib.optionalString (instCfg._autoInstantiated or false) " (auto-instantiated)"
     }";
 
+  isRef = v: builtins.isAttrs v && (v._type or "") == "kix-ref";
+
+  # The `ref` pointers in an explicit `deps.<arg>` value: the value itself
+  # when it is a ref, the refs in a list, or none.
+  refsOf =
+    v:
+    if isRef v then
+      [ v ]
+    else if builtins.isList v then
+      builtins.filter isRef v
+    else
+      [ ];
+
+  # The instances a resolution names, as `{ namespace; instanceName; }`.
+  # A list override (`deps.x = [ ref.a.b ref.c.d ]`) names several; any
+  # other instance resolution names one.
+  targetsOf = resolution: resolution.targets or [ { inherit (resolution) namespace instanceName; } ];
+
+  # Refuses a `deps` entry, or an element of a list entry, that is a ref to
+  # a name `ref` covers but that no instance was created for (a shelf
+  # package nothing auto-instantiated there). `instances` are the declared
+  # instances; `mergedInstances` adds the auto-instantiated ones.
+  checkRefTargets =
+    { instances, mergedInstances }:
+    lib.foldlAttrs (
+      acc: nsName: nsInsts:
+      lib.foldlAttrs (
+        acc: instName: instCfg:
+        lib.foldlAttrs (
+          acc: arg: v:
+          lib.foldl' (
+            acc: r:
+            if (mergedInstances.${r.namespace} or { }) ? ${r.instanceName} then
+              acc
+            else
+              throw "kix: ${nsName}/${instName} ${
+                if builtins.isList v then
+                  "lists ref.${r.namespace}.${r.instanceName} in deps.${arg}"
+                else
+                  "sets deps.${arg} = ref.${r.namespace}.${r.instanceName}"
+              }, which is not an instance. It names a package in availablePackages that nothing auto-instantiated there; declare it under instances.${r.namespace}.${r.instanceName}."
+          ) acc (refsOf v)
+        ) acc (instCfg.deps or { })
+      ) acc nsInsts
+    ) null instances;
+
   # `requester` (from `describeRequester`) prefixes every error, so a failure
   # names the instance that asked for the dependency.
   resolveArg =
@@ -81,13 +127,24 @@ rec {
     if explicitOverride != null then
       # `deps.x = ref.a.b` names an instance and resolves like the index
       # would have, so every check an auto-resolved dep gets applies to it.
-      # Any other value is bound as it is.
-      if builtins.isAttrs explicitOverride && (explicitOverride._type or "") == "kix-ref" then
+      # A list of refs names several instances, each checked the same way,
+      # and the package receives a list of them. Any other value is bound
+      # as it is.
+      if isRef explicitOverride then
         {
           found = true;
           inherit (explicitOverride) namespace instanceName;
           direct = false;
         }
+      else if builtins.isList explicitOverride && builtins.any isRef explicitOverride then
+        if builtins.all isRef explicitOverride then
+          {
+            found = true;
+            targets = map (r: { inherit (r) namespace instanceName; }) explicitOverride;
+            direct = false;
+          }
+        else
+          throw "${prefix}deps.${argName} is a list that mixes ref.<namespace>.<instance> entries with other values. Make every entry a ref, or set deps.${argName} to a value without refs."
       else
         {
           found = true;
@@ -186,6 +243,8 @@ rec {
   # `lib.mkDefault`.
   packageDefaultPriority = 1250;
 
+  instancePinsLib = import ./instance-pins.nix { inherit lib packageDefaultPriority; };
+
   # Moves every `lib.mkDefault` in a package's `config` to
   # `packageDefaultPriority`, through `mkIf`, `mkMerge`, `mkOrder` and
   # nested attrsets. Other priorities and plain values keep their meaning,
@@ -227,8 +286,12 @@ rec {
   # default can derive from a cluster fact such as `clusterDomain`.
   # `packageOptions` is not checked against the option contract here;
   # package CI checks it once per package (eval/options.nix,
-  # kix/package-eval.nix).
-  evaluateInstanceConfig =
+  # kix/package-eval.nix). `instancePins` is `{ file; options; }`, this
+  # instance's entry of a pin file's `instances` map (eval/instance-pins.nix).
+  #
+  # Returns `{ config; options; }`. Reading `config` runs the locked-field
+  # and instance-pin checks.
+  evaluateInstanceModules =
     {
       packageOptions,
       packageConfig ? { },
@@ -238,6 +301,7 @@ rec {
       configInjections ? [ ],
       namespaceName ? null,
       instanceName ? null,
+      instancePins ? null,
     }:
     let
       deferredConfig = instCfg.config;
@@ -328,26 +392,46 @@ rec {
             config = lowerPackageDefaults packageConfig;
           };
 
-      evaluated =
-        removeAttrs
-          (lib.evalModules {
-            prefix = lib.optionals named [
-              "instances"
-              namespaceName
-              instanceName
-              "config"
-            ];
-            specialArgs = { inherit clusterConfig; };
-            modules = [
-              { options = packageOptions; }
-              packageConfigModule
-            ]
-            ++ injectionModules
-            ++ wrappedModules;
-          }).config
-          [ "_module" ];
+      result = lib.evalModules {
+        prefix = lib.optionals named [
+          "instances"
+          namespaceName
+          instanceName
+          "config"
+        ];
+        specialArgs = { inherit clusterConfig; };
+        modules = [
+          { options = packageOptions; }
+          packageConfigModule
+        ]
+        ++ injectionModules
+        ++ lib.optional (instancePins != null) (instancePinsLib.module instancePins)
+        ++ wrappedModules;
+      };
+
+      options = removeAttrs result.options [ "_module" ];
+
+      _pinCheck =
+        if instancePins == null then
+          null
+        else
+          instancePinsLib.check {
+            inherit
+              packageOptions
+              options
+              instancePins
+              instanceText
+              ;
+          };
     in
-    builtins.seq _lockedCheck evaluated;
+    {
+      inherit options;
+      config = builtins.seq _lockedCheck (
+        builtins.seq _pinCheck (removeAttrs result.config [ "_module" ])
+      );
+    };
+
+  evaluateInstanceConfig = args: (evaluateInstanceModules args).config;
 
   # `availability` is the instance's resolved level (core/availability.nix),
   # a plain string a package may take as an argument so its option defaults
@@ -436,6 +520,8 @@ rec {
           ${argName} =
             if resolution.direct or false then
               resolution.value
+            else if resolution ? targets then
+              map (t: allInstances.${t.namespace}.${t.instanceName}) resolution.targets
             else
               allInstances.${resolution.namespace}.${resolution.instanceName};
         }
@@ -473,6 +559,11 @@ rec {
             found = true;
             direct = true;
           }
+        else if resolution ? targets then
+          {
+            found = true;
+            inherit (resolution) targets;
+          }
         else
           {
             found = true;
@@ -499,17 +590,16 @@ rec {
               depEnrichment = p1.depsEnrichment.${depName} or { };
               hasConfig = depEnrichment ? config;
             in
+            # A list dependency injects into each instance it names.
             if target.found && !(target.direct or false) && hasConfig then
-              [
-                {
-                  targetNs = target.namespace;
-                  targetInst = target.instanceName;
-                  config = depEnrichment.config;
-                  consumerNs = ns;
-                  consumerInst = inst;
-                  source = "${ns}/${inst}";
-                }
-              ]
+              map (t: {
+                targetNs = t.namespace;
+                targetInst = t.instanceName;
+                config = depEnrichment.config;
+                consumerNs = ns;
+                consumerInst = inst;
+                source = "${ns}/${inst}";
+              }) (targetsOf target)
             else
               [ ]
           ) (builtins.attrNames p1.discoveredDeps)

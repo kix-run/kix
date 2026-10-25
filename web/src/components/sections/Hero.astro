@@ -1,0 +1,83 @@
+---
+import { ArrowDown, ArrowUpRight } from '@lucide/astro';
+import Container from '../Container.astro';
+import Button from '../Button.astro';
+import CodeCard from '../CodeCard.astro';
+import TermLine from '../TermLine.astro';
+// import CommandBar from '../CommandBar.astro';
+import { DOCS_URL, INSTALL_URL } from '@/lib/links';
+import type { Line } from '@/lib/code';
+
+const check = [
+  { tool: 'eval', result: 'pass', details: '37 manifests evaluated' },
+  { tool: 'scorecard', result: 'pass', details: '0 errors, 2 warnings, 0 info' },
+];
+
+const shop: Line[] = [
+  ['{ kix, packages }:'],
+  ['kix.', ['buildCluster', 'fn'], ' {'],
+  ['  name = ', ['"shop"', 'str'], ';'],
+  ['  modules = ['],
+  ['    kix.flavors.', ['eks', 'pkg']],
+  ['    {'],
+  ['      availablePackages = packages;'],
+  ['      instances.shop.db.package = packages.', ['cnpg-cluster', 'pkg'], ';'],
+  [],
+  [['      # web asks for a Postgres. The cluster provides one.', 'comment']],
+  ['      instances.shop.web = {'],
+  ['        package = import ./web.nix;'],
+  ['        config.replicas = ', ['3', 'num'], ';'],
+  ['      };'],
+  ['    }'],
+  ['  ];'],
+  ['}'],
+];
+---
+
+<section aria-labelledby="hero-title" class="bg-paper">
+  <Container>
+    <div class="grid grid-cols-1 items-center gap-12 pt-10 pb-16 md:pt-14 xl:grid-cols-[minmax(0,1fr)_minmax(0,600px)] xl:gap-16 lg:pt-16 lg:pb-28">
+      <div class="flex flex-col gap-7">
+        <h1
+          id="hero-title"
+          class="text-[46px] leading-none font-semibold tracking-[-1.5px] text-balance text-ink sm:text-[60px] sm:tracking-[-2px] xl:text-[76px] xl:tracking-[-2.5px]"
+        >
+          Kix is a Kubernetes compiler.
+        </h1>
+        <p class="max-w-[540px] text-[18px] leading-[1.45] text-ink-2 md:text-[20px]">
+          Compile your whole cluster from one definition.<br />Make deploys boring.
+        </p>
+        <div class="flex flex-wrap items-center gap-3 pt-2">
+          <Button href={INSTALL_URL}>Install the Kix CLI <ArrowDown size={18} aria-hidden="true" /></Button>
+          <Button href={DOCS_URL} variant="outline">Read the docs <ArrowUpRight size={18} aria-hidden="true" /></Button>
+        </div>
+        {/* Shown once web/install.sh is published at kix.run/install (see web/HANDOVER.md).
+        <CommandBar command={INSTALL_COMMAND} />
+        */}
+        <p class="text-sm text-ink-2">
+          The CLI is available in early access. Deploy from your laptop or CI; Kix requires no controller in the cluster.
+        </p>
+      </div>
+      <CodeCard title="clusters/shop.nix" lines={shop} class="shadow-[0_24px_60px_-28px_rgb(21_23_28/0.45)]">
+        <div slot="footer" class="font-mono text-[13.5px] leading-[1.6]">
+          <TermLine>kix check shop</TermLine>
+          {/* The real `kix check` table. The hero cluster evaluates to 37 manifests; the warning count depends on web.nix and matches the OG image. */}
+          <table class="mt-1.5 border-separate border-spacing-x-0 text-left">
+            <thead class="sr-only">
+              <tr><th>Tool</th><th>Result</th><th>Details</th></tr>
+            </thead>
+            <tbody>
+              {check.map((row) => (
+                <tr>
+                  <td class="pr-6 pl-[1.4em] text-on-night-2">{row.tool}</td>
+                  <td class="pr-6 text-t-green">{row.result}</td>
+                  <td class="text-on-night-2">{row.details}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CodeCard>
+    </div>
+  </Container>
+</section>

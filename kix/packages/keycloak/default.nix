@@ -71,8 +71,8 @@
 # bootstrap administrator, and replace that temporary administrator with a
 # permanent one.
 #
-# Replicas follow the cluster's availability level (one at `none`, two at
-# `pod` and `node`, three at `zone`); the instance's `availability` overrides
+# Replicas follow the cluster's availability level (one at `none`, two
+# above); the instance's `availability` overrides
 # it. The pods form one Infinispan cluster through Keycloak's default
 # `jdbc-ping` stack: each pod records its address in the database and dials
 # its peers on ports 7800 (JGroups) and 57800 (failure detection). Keycloak
@@ -104,13 +104,23 @@
 # CiliumNetworkPolicy that selects this instance's pods and allows that
 # egress.
 #
-# `out`:
+# `out`, checked by `kix.contracts.oidcProvider`:
 #   url          the public URL, `KC_HOSTNAME`.
 #   issuerUrl    a function from a realm name to that realm's OpenID
 #                Connect issuer, `<url>/realms/<realm>`.
-# OIDC clients such as Grafana (`auth.generic_oauth`), Immich
-# (`settings.oauth.issuerUrl`), and Harbor read these through their own
-# settings; none takes a keycloak dependency yet.
+#   endpoints    a function from a realm name to `{ authorizationUrl;
+#                tokenUrl; userinfoUrl; }`. The authorization URL is
+#                public, for the browser. The token and userinfo URLs are
+#                the Service's in-cluster address, so an application that
+#                dials them gets derived egress to Keycloak. They are plain
+#                HTTP (port 8080), so the client secret crosses the pod
+#                network unencrypted.
+# grafana, harbor, and immich take an instance as their `oidcProvider`
+# dependency when their `oidc.enabled` is set; each package header names the
+# redirect URI to register. The package answers no alias by default, because
+# two Keycloak instances answering one would fail every such application in
+# the cluster. Wire it with `deps.oidcProvider = ref.<ns>.<instance>`, or
+# give the one instance `aliases = [ "oidcProvider" ]`.
 #
 # Escape hatches: `env` for Keycloak options (`KC_*`), `extraArgs` for
 # options of `kc.sh start`, and the instance's `partsOverlays` for probes,
@@ -210,7 +220,7 @@ in
           none = 1;
           pod = 2;
           node = 2;
-          zone = 3;
+          zone = 2;
         };
         scraped = metricsOn && prometheus != null;
 
@@ -356,6 +366,13 @@ in
             "--hostname" = "it comes from the route. Set env.KC_HOSTNAME instead.";
           };
         } config.extraArgs;
+
+        realmPath =
+          field: realm:
+          if builtins.isString realm && builtins.match "[^/?#[:space:]]+" realm != null then
+            "/realms/${realm}"
+          else
+            throw "${who}: ${field} takes a realm name without '/', '?', '#', or spaces; got ${builtins.toJSON realm}.";
 
         httpProbe = path: {
           httpGet = {
@@ -508,14 +525,22 @@ in
             (self.serviceMonitor or null)
             (self.prometheusRules or null)
           ];
-          out = {
+          out = kix.contracts.oidcProvider.check who {
             url = hostname;
-            issuerUrl =
+            issuerUrl = realm: "${hostname}${realmPath "out.issuerUrl" realm}";
+            # Keycloak computes every URL it issues from KC_HOSTNAME, so a
+            # token from the in-cluster address carries the public issuer.
+            endpoints =
               realm:
-              if builtins.isString realm && builtins.match "[^/?#[:space:]]+" realm != null then
-                "${hostname}/realms/${realm}"
-              else
-                throw "${who}: out.issuerUrl takes a realm name without '/', '?', '#', or spaces; got ${builtins.toJSON realm}.";
+              let
+                path = realmPath "out.endpoints" realm;
+                internal = self.service.out.url { port = httpPort; };
+              in
+              {
+                authorizationUrl = "${hostname}${path}/protocol/openid-connect/auth";
+                tokenUrl = "${internal}${path}/protocol/openid-connect/token";
+                userinfoUrl = "${internal}${path}/protocol/openid-connect/userinfo";
+              };
           };
         };
       }

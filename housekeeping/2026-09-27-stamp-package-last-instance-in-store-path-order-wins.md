@@ -1,4 +1,4 @@
-# 2026-09-27 · `cli/kix/src/manifest/stamp.rs`, `packageIndex` · A resource that two package instances emit gets `kix.run/package` from the last instance in store-path order, so unrelated hash changes move its owner.
+# 2026-09-27 · `cli/kix/src/eval/stamp.rs`, `packageIndex` · A resource that two package instances emit gets `kix.run/package` from the last instance in store-path order, so unrelated hash changes move its owner.
 
 In the example cluster, `postgres` and `immich-db` both emit
 `PackageInstance/secret-ref-postgres-postgres` and

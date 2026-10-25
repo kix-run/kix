@@ -1,21 +1,21 @@
 //! `kix plan`: the deploy pipeline as a server-side dry run.
 //!
-//! The plan is made by the code that deploys. [`super::deploy::prepare`]
-//! builds and computes the deploy's actions; [`dry_run`] runs the engine
-//! over them with every write sent as `dryRun=All`, so the apiserver answers
-//! for each object; [`document`] turns those answers into the [`Plan`]
-//! document `kix diff` also emits. `kix deploy` runs the same three steps
-//! before it asks for confirmation.
+//! The plan is made by the code that deploys. [`prepare`] builds and runs
+//! [`kix::plan::Planner`], which computes the deploy's actions; [`dry_run`]
+//! runs the engine over them with every write sent as `dryRun=All`, so the
+//! apiserver answers for each object; [`document`] turns those answers into
+//! the [`Plan`] document `kix diff` also emits. `kix deploy` runs the same
+//! three steps before it asks for confirmation.
 
 use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use miette::{IntoDiagnostic, Result, miette};
+use miette::{Result, miette};
 use serde_json::Value;
 
-use kix::cluster::fetch;
-use kix::cluster::ops::{ClusterOps, KubeOps, KubeOpsConfig};
+use kix::build_source::InstallableBuild;
 use kix::cluster::preview::{DryRunAnswer, DryRunOutcome, PruneAnswer, Refusal};
 use kix::cluster::readiness;
 use kix::cluster::scheduler::{self, OnErrorPolicy, PrunePolicy, SchedulerConfig};
@@ -26,19 +26,19 @@ use kix::cluster::watchdog::StallPolicy;
 use kix::eval::store_graph::StoreGraph;
 use kix::manifest::lifecycle;
 use kix::manifest::types::ResourceId;
-
-use crate::cli::{Detail as DetailArg, OutputFormat, PlanArgs, PruneMode};
-use crate::output;
-use crate::plan::document::{
+use kix::plan::document::{
     AdmissionRefusal, Build, Checked, Conflict, ConflictOwner, DeployedBuild, Detail, MadeBy,
     NotCheckedReason, Plan, PlanFlags, PruneEntry, PruneFate, PruneModeFlag, RefusalReason,
     UncheckedObject, UncheckedReason,
 };
-use crate::plan::server::{Overlay, comparable};
-use crate::plan::{self, ManifestIndex, render};
+use kix::plan::server::comparable;
+use kix::plan::{ManifestIndex, OldSide, PlanEvent, Planned, Planner, Target};
+
+use crate::cli::{OutputFormat, PlanArgs, PruneMode};
+use crate::output;
+use crate::plan::{self, render};
 
 use super::CommandContext;
-use super::deploy::{self, Prepared};
 
 /// Exit status when the deploy would stop: a refused write, or a stateful
 /// migration not accepted with `--accept-migrations`.
@@ -46,34 +46,54 @@ pub(crate) const EXIT_WOULD_STOP: i32 = 3;
 /// Exit status when the deploy would change something.
 const EXIT_CHANGES: i32 = 2;
 
-pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Result<()> {
-    let format = ctx.output_format(OutputFormat::Text);
-    if format != OutputFormat::Text {
-        output::progress_to_stderr();
+pub fn run(args: &PlanArgs, save: Option<&Path>, ctx: &mut CommandContext) -> Result<()> {
+    let format = output::format();
+    if matches!(format, OutputFormat::Json | OutputFormat::Yaml) {
+        return Err(miette!(
+            "kix plan prints text or Markdown. To keep the plan as data, write it with \
+             --save FILE.{}: `kix deploy --plan` reads that file, and `zstd -dc FILE | jq -s '.[0]'` \
+             prints its header",
+            kix::plan::file::EXTENSION
+        ));
     }
-    let Some(mut p) = deploy::prepare(args, ctx)? else {
+    let Some(mut p) = prepare(args, flags_of(args), ctx)? else {
+        // A plan file needs a plan, and a caller that asked for one must
+        // not find exit 0 and no file.
+        if let Some(path) = save {
+            return Err(miette!(
+                "the build has no resources, so there is no plan to save; {} was not written",
+                path.display()
+            ));
+        }
         return Ok(());
     };
-    let report = match &p.pre_client {
-        Some(client) => Some(dry_run(&p, args, client.clone(), ctx)?),
+    // A plan decrypts no SOPS file the build carries: those Secrets get
+    // placeholder values, so planning before anyone has approved reads no
+    // secret.
+    let report = match p.client.clone() {
+        Some(client) => Some(dry_run(&mut p, true, client, ctx)?),
         None => None,
     };
-    let doc = document(&mut p, report.as_ref(), args, detail);
+    let doc = document(&mut p, report.as_ref(), save.is_some());
+    if let Some(path) = save {
+        let sha256 = plan::save(doc.clone(), p.build.graph(), path)?;
+        crate::esay!("Saved the plan to {} (sha256:{sha256})", path.display());
+    }
 
     match format {
-        OutputFormat::Json => println!("{}", doc.to_json()),
-        OutputFormat::Yaml => print!("{}", doc.to_yaml().into_diagnostic()?),
+        OutputFormat::Json | OutputFormat::Yaml => unreachable!("refused above"),
         OutputFormat::Markdown => print!("{}", markdown(&p, &doc)),
         OutputFormat::Text => {
-            if !ctx.global.quiet {
-                print_migrations(&doc, args);
+            if !output::quiet() {
+                print_migrations(&doc, p.checked.flags().accept_migrations);
                 // A plan exists to be read, so it always shows each change.
-                print_text(&p, &doc, args, true);
+                print_text(&p, &doc, true);
             }
         }
     }
 
-    let migrations_refused = !doc.migrations.items().is_empty() && !args.accept_migrations;
+    let migrations_refused =
+        !doc.migrations.items().is_empty() && !p.checked.flags().accept_migrations;
     if doc.stops() || migrations_refused {
         std::process::exit(EXIT_WOULD_STOP);
     }
@@ -83,6 +103,7 @@ pub fn run(args: &PlanArgs, detail: DetailArg, ctx: &mut CommandContext) -> Resu
     Ok(())
 }
 
+/// The planning flags the command line sets.
 pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
     PlanFlags {
         prune: args.prune,
@@ -94,6 +115,76 @@ pub(crate) fn flags_of(args: &PlanArgs) -> PlanFlags {
         force_conflicts: args.force_conflicts,
         accept_migrations: args.accept_migrations,
     }
+}
+
+/// What a plan of `args` compares the build with: the local cache under
+/// `--current-activation`, else the cluster.
+fn old_side(args: &PlanArgs, ctx: &CommandContext) -> OldSide {
+    if args.current_activation {
+        OldSide::LocalCache
+    } else {
+        OldSide::Cluster {
+            context: ctx.global.context.clone(),
+            policy: crate::client::policy(),
+        }
+    }
+}
+
+/// Build, then plan the deploy with [`Planner`] and `flags`, which are the
+/// command line's or a saved plan's. `None` when the build has nothing to
+/// deploy. Progress lines go through [`crate::say!`], so `-o markdown`, and
+/// `kix deploy --plan F --dry-run -o json`, keep them off stdout.
+pub(crate) fn prepare(
+    args: &PlanArgs,
+    flags: PlanFlags,
+    ctx: &CommandContext,
+) -> Result<Option<Planned>> {
+    let build = new_build(args, ctx)?;
+    if !output::quiet() {
+        eprint!("\r\x1b[2K");
+    }
+    let graph = build.graph();
+    crate::say!(
+        "Cluster {}: {} manifests",
+        output::bold(&graph.cluster_name),
+        graph.resources.len(),
+    );
+    if graph.resources.is_empty() {
+        crate::say!("Nothing to deploy.");
+        return Ok(None);
+    }
+    let report = |event: PlanEvent<'_>| plan::progress::print(event);
+    let planned = ctx
+        .runtime
+        .block_on(Planner::new(flags, &report).run(build, &old_side(args, ctx)))
+        .map_err(|e| miette!("{e}"))?;
+    Ok(Some(planned))
+}
+
+/// The new build: the bundle `--bundle` names, or a build of the flake
+/// into the local Nix store.
+///
+/// A kixpkgs pin from before the domain move renders Kix's own CRDs under
+/// the retired group. Deploying it would put those CRDs back and leave two
+/// groups live, which the CLI cannot tell apart, so it is refused.
+fn new_build(args: &PlanArgs, ctx: &CommandContext) -> Result<InstallableBuild> {
+    let build = match &args.bundle {
+        Some(path) => {
+            crate::say!("Reading bundle {}...", path.display());
+            kix_bundle::read_build(path, &args.deployed_bundles, &args.cluster)
+                .map_err(|e| miette::miette!("{e}"))?
+        }
+        None => {
+            let status = |msg: &str| {
+                if !output::quiet() {
+                    eprint!("\r\x1b[2K  {msg}");
+                }
+            };
+            crate::say!("Building cluster '{}'...", output::bold(&args.cluster));
+            super::build_flake(&ctx.global, &args.cluster, &status, super::BUILD_FAILED)?
+        }
+    };
+    build.installable().map_err(|e| miette!("{e}"))
 }
 
 /// The graphs' manifests, with each object the apiserver answered for shown
@@ -134,75 +225,55 @@ pub(crate) struct DryRunReport {
 ///
 /// The engine runs with `--on-error continue`, and under dry run it still
 /// tries the dependents of a refused node, so one refused write does not hide
-/// the answers for the rest. Nothing is persisted: `KubeOps` sends every write with
-/// `dryRun=All` and skips the Activation record's lifecycle writes.
+/// the answers for the rest. Nothing is persisted: every write goes with
+/// `dryRun=All` and the Activation record's lifecycle writes are skipped
+/// ([`kix::plan::CheckedPlan::dry_run`]).
+///
+/// `placeholders` goes to [`kix::build_source::Build::sops_sources`]: true
+/// for `kix plan`, which decrypts nothing.
 pub(crate) fn dry_run(
-    p: &Prepared,
-    args: &PlanArgs,
+    p: &mut Planned,
+    placeholders: bool,
     client: kube::Client,
     ctx: &CommandContext,
 ) -> Result<DryRunReport> {
-    let quiet = ctx.global.quiet;
+    let sops = p.sops_sources(placeholders).map_err(|e| miette!("{e}"))?;
+    let p = &*p;
     ctx.runtime.block_on(async {
-        let discovery = fetch::discover_resources(&client)
+        let target = Target::connect(client, sops)
             .await
             .map_err(|e| miette!("{e}"))?;
-        kix::legacy_domain::check_cluster(
-            &discovery
-                .iter()
-                .filter(|(ar, _)| lifecycle::is_record_kind(&ar.kind))
-                .map(|(ar, _)| ar.group.as_str())
-                .collect::<Vec<_>>(),
-        )
-        .map_err(|e| miette!("{e}"))?;
-        let served_kinds: HashSet<String> =
-            discovery.iter().map(|(ar, _)| ar.kind.clone()).collect();
+        kix::legacy_domain::check_discovery(target.discovery()).map_err(|e| miette!("{e}"))?;
+        let served_kinds: HashSet<String> = target
+            .discovery()
+            .iter()
+            .map(|(ar, _)| ar.kind.clone())
+            .collect();
 
-        let ops = Arc::new(KubeOps::new(
-            client,
-            Arc::new(tokio::sync::RwLock::new(discovery)),
-            KubeOpsConfig {
-                cluster_name: p.cluster.clone(),
-                activation_name: p.activation_name.clone(),
-                activation_identity_hash: p.activation_identity_hash.clone(),
-                force_conflicts: args.force_conflicts,
-                dry_run: true,
-                ..Default::default()
-            },
-        ));
         let config = SchedulerConfig {
             timeout: readiness::DEFAULT_TIMEOUT,
             on_error: OnErrorPolicy::Continue,
-            prune: deploy::prune_policy_for(args),
             cancel: kix::cluster::cancel::CancelToken::new(),
-            dry_run: true,
             concurrency: scheduler::CONCURRENCY,
             stall: StallPolicy::from_env(),
             rerun_failed: true,
         };
-        config.cancel.cancel_on_interrupt();
+        let cancel = config.cancel.clone();
+        cancel.cancel_on_interrupt();
 
         let writes = p
-            .plan
-            .nodes
+            .checked
+            .plan()
+            .nodes()
             .iter()
             .filter(|n| !matches!(n.kind, TransitionKind::Skip))
             .count();
-        let observer = Arc::new(PlanObserver::new(writes, quiet));
-        let dyn_ops: Arc<dyn ClusterOps> = ops.clone();
-        let result = scheduler::run_deploy(
-            dyn_ops,
-            p.plan.clone(),
-            &p.orphan_rids,
-            &p.old_manifests,
-            &config,
-            observer.clone(),
-        )
-        .await;
+        let observer = Arc::new(DryRunObserver::new(writes));
+        let (result, answers) = p.checked.dry_run(target, config, observer.clone()).await;
         // Cancelling the token ends its interrupt watcher, so Ctrl-C at the
         // deploy's confirmation exits the process.
-        let interrupted = config.cancel.is_cancelled();
-        config.cancel.cancel();
+        let interrupted = cancel.is_cancelled();
+        cancel.cancel();
         observer.finish();
         if interrupted {
             return Err(miette!("plan interrupted"));
@@ -213,7 +284,6 @@ pub(crate) fn dry_run(
             return Err(miette!("the dry run stopped: {e}"));
         }
 
-        let answers = ops.take_dry_run_answers();
         let answered: HashSet<&ResourceId> = answers.iter().map(|a| &a.rid).collect();
         let seen = observer.take();
         let failed = seen
@@ -237,14 +307,16 @@ struct Seen {
     done: usize,
 }
 
-/// Collects the engine's verdicts, and shows a progress line on stderr.
-struct PlanObserver {
+/// Collects the engine's verdicts in a dry run, and shows a progress line
+/// on stderr.
+struct DryRunObserver {
     seen: Mutex<Seen>,
     bar: Option<indicatif::ProgressBar>,
 }
 
-impl PlanObserver {
-    fn new(writes: usize, quiet: bool) -> Self {
+impl DryRunObserver {
+    fn new(writes: usize) -> Self {
+        let quiet = output::quiet();
         let bar = (!quiet && std::io::stderr().is_terminal() && writes > 0).then(|| {
             let bar = indicatif::ProgressBar::new(writes as u64);
             bar.set_style(
@@ -258,7 +330,7 @@ impl PlanObserver {
         if bar.is_none() && !quiet && writes > 0 {
             eprintln!("Checking {writes} writes with the apiserver (dry run)...");
         }
-        PlanObserver {
+        DryRunObserver {
             seen: Mutex::new(Seen::default()),
             bar,
         }
@@ -278,7 +350,7 @@ impl PlanObserver {
     }
 }
 
-impl DeployObserver for PlanObserver {
+impl DeployObserver for DryRunObserver {
     fn on_event(&self, event: &DeployEvent) {
         let DeployEvent::NodeStateChanged {
             node: NodeId::Resource(rid),
@@ -315,75 +387,58 @@ impl DeployObserver for PlanObserver {
     }
 }
 
-/// Make the plan document, and overlay the apiserver's answers on
-/// `p.pkg_diff`, which the text renderers read.
-pub(crate) fn document(
-    p: &mut Prepared,
-    report: Option<&DryRunReport>,
-    args: &PlanArgs,
-    detail: DetailArg,
-) -> Plan {
-    let connected = p.pre_client.is_some();
+/// Make the plan document, and overlay the apiserver's answers on the
+/// package diff, which the text renderers read ([`Planned::overlay`]).
+/// `manifests` makes it at `--detail manifests`, as a plan file needs;
+/// otherwise at `--detail plain`.
+pub(crate) fn document(p: &mut Planned, report: Option<&DryRunReport>, manifests: bool) -> Plan {
+    let connected = p.client.is_some();
     let made_by = if connected {
         MadeBy::DryRun
     } else {
         MadeBy::Builds
     };
-    // Without the deployed build's manifests (the old side was rebuilt from
-    // the live objects) a commit's change and drift look the same.
-    // A first deploy has no deployed build: every change is intended.
-    let first_deploy = p.active_hash.is_none() && p.active_manifests.is_empty();
-    let deployed: Option<HashMap<ResourceId, &Value>> = (p.old_graph.is_some() || first_deploy)
-        .then(|| {
-            p.active_manifests
-                .iter()
-                .map(|m| (ResourceId::from_value(m), m))
-                .collect()
-        });
-    let has_deployed = deployed.is_some();
     let answers: &[DryRunAnswer] = report.map(|r| r.answers.as_slice()).unwrap_or(&[]);
-    let drift = Overlay {
-        new_graph: &p.new_graph,
-        deployed,
-    }
-    .apply(&mut p.pkg_diff, answers);
+    let drift = p.overlay(answers);
 
     // Built only for `--detail manifests`. Without the deployed build the
-    // old side is rebuilt from the old manifests, as `deploy::prepare` does.
+    // old side is rebuilt from the old manifests, as the package diff is.
     let rebuilt;
-    let index = if detail == DetailArg::Manifests {
-        let old = match &p.old_graph {
+    let index = if manifests {
+        let old = match p.baseline.active_graph() {
             Some(old) => old,
             None => {
-                rebuilt = StoreGraph::synthesize(&p.old_manifests, &p.new_graph);
+                rebuilt = StoreGraph::synthesize(&p.baseline.manifests(), p.build.graph());
                 &rebuilt
             }
         };
-        Some(manifest_index(old, &p.new_graph, answers))
+        Some(manifest_index(old, p.build.graph(), answers))
     } else {
         None
     };
-    let detail = match (detail, &index) {
-        (_, Some(index)) => Detail::Manifests(index),
-        (DetailArg::Fields | DetailArg::Manifests, None) => Detail::Fields,
-        (DetailArg::Plain, None) => Detail::Plain,
+    let detail = match &index {
+        Some(index) => Detail::Manifests(index),
+        None => Detail::Plain,
     };
 
     let mut doc = Plan::new(
+        plan::kix_build(),
         made_by,
-        &p.cluster,
-        Build::of(&p.new_graph),
-        &p.pkg_diff,
+        &p.build.graph().cluster_name,
+        Build::of(p.build.graph()),
+        p.checked.pkg_diff(),
         detail,
         &p.migration_pairs,
         NotCheckedReason::BuildsOnly,
     );
-    doc.deployed = p.active.as_ref().map(|a| DeployedBuild {
+    doc.deployed = p.baseline.active().map(|a| DeployedBuild {
         activation: a.name.clone(),
         identity_hash: a.identity_hash.clone(),
         store_path: a.built_via.clone(),
     });
-    doc.flags = Some(flags_of(args));
+    doc.flags = Some(p.checked.flags());
+    doc.objects_digest = Some(kix::plan::objects::digest(p.checked.objects()));
+    doc.objects = Some(p.checked.objects().clone());
     if !connected {
         return doc;
     }
@@ -392,14 +447,14 @@ pub(crate) fn document(
     let mut admission = Vec::new();
     let mut not_checked = Vec::new();
     let mut prune_answers: HashMap<ResourceId, PruneAnswer> = HashMap::new();
-    let crds = BuildCrds::of(&p.new_manifests);
+    let crds = BuildCrds::of(p.new_manifests());
     let manifests: HashMap<ResourceId, &Value> = p
-        .new_manifests
+        .new_manifests()
         .iter()
         .map(|m| (ResourceId::from_value(m), m))
         .collect();
     let built_namespaces: HashSet<String> = p
-        .new_manifests
+        .new_manifests()
         .iter()
         .map(ResourceId::from_value)
         .filter(|rid| rid.kind == "Namespace")
@@ -545,12 +600,11 @@ pub(crate) fn document(
     doc.conflicts = Checked::found(conflicts);
     doc.admission = Checked::found(admission);
     doc.not_checked = not_checked;
-    doc.drift = if has_deployed {
-        Checked::found(drift)
-    } else {
-        Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable)
+    doc.drift = match drift {
+        Some(drift) => Checked::found(drift),
+        None => Checked::not_checked(NotCheckedReason::DeployedBuildUnavailable),
     };
-    doc.prune = Checked::found(prune_entries(p, args, &prune_answers));
+    doc.prune = Checked::found(prune_entries(p, &prune_answers));
     doc
 }
 
@@ -622,14 +676,11 @@ impl BuildCrds {
 }
 
 /// Every resource that leaves the build, with what the deploy does to it.
-fn prune_entries(
-    p: &Prepared,
-    args: &PlanArgs,
-    answers: &HashMap<ResourceId, PruneAnswer>,
-) -> Vec<PruneEntry> {
-    let policy = deploy::prune_policy_for(args);
+fn prune_entries(p: &Planned, answers: &HashMap<ResourceId, PruneAnswer>) -> Vec<PruneEntry> {
+    let policy = p.checked.flags().prune_policy();
     let mut entries: Vec<PruneEntry> = p
-        .orphan_rids
+        .checked
+        .orphans()
         .iter()
         .map(|rid| {
             let (fate, detail) = if lifecycle::never_pruned(&rid.kind) {
@@ -662,7 +713,7 @@ fn prune_entries(
             }
         })
         .collect();
-    entries.extend(p.shared_orphans.iter().map(|s| PruneEntry {
+    entries.extend(p.checked.shared_orphans().iter().map(|s| PruneEntry {
         resource: s.rid.display_id(),
         fate: PruneFate::KeptShared,
         detail: Some(s.describe()),
@@ -671,7 +722,7 @@ fn prune_entries(
     entries
 }
 
-fn print_migrations(doc: &Plan, args: &PlanArgs) {
+fn print_migrations(doc: &Plan, accepted: bool) {
     let pairs = doc.migrations.items();
     if pairs.is_empty() {
         return;
@@ -686,7 +737,7 @@ fn print_migrations(doc: &Plan, args: &PlanArgs) {
         println!("      target: {}", m.target);
     }
     println!();
-    if args.accept_migrations {
+    if accepted {
         println!(
             "{}",
             output::yellow(
@@ -705,15 +756,16 @@ fn print_migrations(doc: &Plan, args: &PlanArgs) {
 
 /// The text plan: the package list, the summary, and every section of
 /// `doc` that found something. `verbose` lists each resource and field.
-pub(crate) fn print_text(p: &Prepared, doc: &Plan, args: &PlanArgs, verbose: bool) {
-    plan::print_package_plan(&p.pkg_diff, verbose);
-    plan::print_plan_summary(&p.pkg_diff);
+pub(crate) fn print_text(p: &Planned, doc: &Plan, verbose: bool) {
+    plan::print_package_plan(p.checked.pkg_diff(), verbose);
+    plan::print_plan_summary(p.checked.pkg_diff());
 
     // Jobs under the rerun rule that changed: the engine deletes and
     // recreates them, so the preview says so.
     let reruns: Vec<String> = p
-        .plan
-        .nodes
+        .checked
+        .plan()
+        .nodes()
         .iter()
         .filter(|n| matches!(n.kind, TransitionKind::Recreate))
         .map(|n| match &n.id {
@@ -722,7 +774,7 @@ pub(crate) fn print_text(p: &Prepared, doc: &Plan, args: &PlanArgs, verbose: boo
         })
         .collect();
     if !reruns.is_empty() {
-        println!(
+        crate::say!(
             "  {} {} under the rerun rule (deleted first when live): {}",
             output::yellow("↻"),
             reruns.len(),
@@ -730,33 +782,35 @@ pub(crate) fn print_text(p: &Prepared, doc: &Plan, args: &PlanArgs, verbose: boo
         );
     }
 
-    let fate = if args.prune_mode == Some(PruneMode::No) {
+    let deletes = p.checked.flags().prune_policy() == PrunePolicy::Delete;
+    let fate = if p.checked.flags().prune_mode == Some(PruneModeFlag::No) {
         "kept (--prune-mode=no)".to_string()
-    } else if deploy::prune_flag_requested(args) && p.pre_client.is_none() {
+    } else if deletes && p.client.is_none() {
         // `--current-activation` has not contacted the cluster, so it
         // cannot yet tell which orphans another Kix cluster deploys.
         "will be deleted, except any another Kix cluster still deploys; \
          checked once the deploy connects"
             .to_string()
-    } else if deploy::prune_flag_requested(args) {
+    } else if deletes {
         "will be deleted".to_string()
     } else {
-        format!("kept; {}", deploy::KEPT_ORPHANS_HINT)
+        format!("kept; {}", plan::KEPT_ORPHANS_HINT)
     };
     // Shared orphans are listed with the prune section of `render::render_text`.
-    print!("{}", deploy::render_plan_orphans(&p.orphan_rids, &fate));
+    output::progress_text(&plan::render_plan_orphans(p.checked.orphans(), &fate));
 
     // Where the extra work in this plan came from. Without this the reader
     // sees a deploy of an unchanged config proposing changes, and has no way
     // to tell why.
-    if !p.failed_baseline.is_empty() {
+    if !p.baseline.failed().is_empty() {
         let names: Vec<&str> = p
-            .failed_baseline
+            .baseline
+            .failed()
             .consumed
             .iter()
             .map(String::as_str)
             .collect();
-        println!(
+        crate::say!(
             "  {} reconciling what {} left behind ({})",
             output::yellow("!"),
             if names.len() == 1 {
@@ -768,12 +822,15 @@ pub(crate) fn print_text(p: &Prepared, doc: &Plan, args: &PlanArgs, verbose: boo
         );
     }
 
-    print!("{}", render::render_text(doc));
+    output::progress_text(&render::render_text(doc));
 }
 
-fn markdown(p: &Prepared, doc: &Plan) -> String {
-    let mut out =
-        plan::render_package_diff_markdown(&p.pkg_diff).replacen("### kix diff", "### kix plan", 1);
+fn markdown(p: &Planned, doc: &Plan) -> String {
+    let mut out = plan::render_package_diff_markdown(p.checked.pkg_diff()).replacen(
+        "### kix diff",
+        "### kix plan",
+        1,
+    );
     if !doc.migrations.items().is_empty() {
         use std::fmt::Write;
         let _ = writeln!(

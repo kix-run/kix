@@ -27,6 +27,17 @@
 # over the operator's pod labels, the stackgres-cluster precedent. They are
 # what phase 5's default-deny test on kind exercises.
 #
+# Upgrades: stay on an LTS line (the March and August releases), and take a
+# new release only after it has had a few weeks of fixes. The operator
+# restarts one replica at a time on an image change. Run no DDL until every
+# replica reports the new version, and use no new feature until then
+# either. Keep clickhouse-keeper on the same LTS line as the servers.
+#
+# Object storage is not modelled. A serverConfig that adds an S3 disk, and
+# especially one that turns on allow_remote_fs_zero_copy_replication (off
+# by default), is at the cluster's own risk: zero-copy replication has a
+# history of data loss and of orphaned objects left in the bucket.
+#
 # Not carried over from the bare package: the Keeper digest identity. The
 # CR has no way to take it from a Secret, so on this path Keeper's
 # protection is network policy (only these servers may reach it).
@@ -38,6 +49,23 @@
 #   credentials (required)         secret or secret-ref with a `password`
 #                                  key, for the `default` user
 #   storageClasses (optional)      storageClassName when the option is unset
+#   prometheus (optional)          a PodMonitor on every replica's built-in
+#                                  /metrics endpoint (:9363), and the alerts
+#                                  below. Removing the `prometheus`
+#                                  fragment drops both.
+#
+# Alerts (../clickhouse/alerts.nix, shared with the bare package): the bare
+# package's list, per replica where it names a pod, plus two that need a
+# second replica and render only with `replicas` above 1:
+#   ClickHouseReplicationLag            ReplicasMaxAbsoluteDelay over
+#                                       metrics.maxReplicationLag (warning)
+#   ClickHouseReplicatedFetchesFailing  part fetches failing for 15 minutes
+#                                       (warning)
+# ClickHouseKeeperSessionLost here means the clickhouse-keeper quorum is
+# unreachable. ClickHouseDown fires only when no replica is scraped; one
+# replica down is TargetDown and KubeStatefulSetReplicasMismatch from the
+# kube-prometheus rules. The operator's metrics exporter scrapes the same
+# servers under other names (chi_clickhouse_*); no rule reads those.
 #
 # Exposes the clickhouse contract (../clickhouse/contract.nix, which checks
 # it), plus out.replicas.
@@ -55,8 +83,20 @@ let
   ports = {
     http = 8123;
     native = 9000;
+    metrics = 9363;
   };
   contract = import ../clickhouse/contract.nix { inherit lib; };
+  # The PodMonitor's name, which the alert selector's `job` label carries.
+  podMonitorName = name;
+
+  # A null `prometheus` fragment, or a null `prometheus.prometheus` key in
+  # it, removes the metrics endpoint, so nothing is left to scrape or alert on.
+  metricsEndpointOn =
+    serverConfig:
+    let
+      f = serverConfig.prometheus or { };
+    in
+    f != null && (f.prometheus or { }) != null;
 in
 {
   meta = {
@@ -119,7 +159,7 @@ in
         cpu = "2";
         memory = "2Gi";
       };
-      description = "Per replica. ClickHouse sizes itself from these limits; 2Gi of memory is a floor (see the clickhouse package).";
+      description = "Per replica. ClickHouse sizes itself from these limits; the memory limit is required and 2Gi is a floor (see the clickhouse package).";
     };
 
     serverConfig = lib.mkOption {
@@ -129,7 +169,7 @@ in
         Server configuration fragments in ClickHouse's own vocabulary, as in
         the clickhouse package: each attribute becomes config.d/<name>.yaml
         on every replica, merged over the package's own (logging,
-        system-logs). Null removes.
+        prometheus, system-logs). Null removes.
       '';
     };
 
@@ -139,11 +179,19 @@ in
       description = "Merged over the ClickHouseInstallation spec the package builds.";
     };
 
+    metrics = kix.options.monitor // {
+      maxReplicationLag = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 300;
+        description = "Seconds a replica may lag behind the newest part of a replicated table (ReplicasMaxAbsoluteDelay) for 15 minutes before ClickHouseReplicationLag fires. The default is the threshold of the Altinity operator's sample rules.";
+      };
+    };
+
     healthCheck = kix.options.healthCheck // {
       enabled = lib.mkOption {
         type = lib.types.bool;
         default = true;
-        description = "Run the post-deploy probe, the same one as the clickhouse package plus a replica count.";
+        description = "Run the post-deploy probe, the same one as the clickhouse package plus a replica count. It asks each replica for read-only tables through the replica's own Service.";
       };
       # A first install pulls images and forms two quorums.
       retryFor = lib.mkOption {
@@ -165,11 +213,29 @@ in
         clickhouseKeeper,
         credentials,
         storageClasses ? null,
+        prometheus ? null,
         ...
       }:
       let
         # What the operator stamps on every pod of this installation.
         podSelector = clickhouseOperator.out.operandSelector.clickHouseInstallations name;
+
+        # The operator's Service for one replica, named
+        # chi-{chi}-{cluster}-{shard}-{replica} with zero-based indexes
+        # (patterns.go in operator 0.27.3). It cuts the installation name to
+        # 60 characters and the cluster name to 15, then trims "-", "_" and
+        # "." from both ends of each. A serviceTemplate could rename it, so
+        # extraSpec may not define one.
+        operatorNamePart =
+          length: s:
+          let
+            m = builtins.match "[-_.]*(.*[^-_.])?[-_.]*" (builtins.substring 0 length s);
+          in
+          if m == null || builtins.head m == null then "" else builtins.head m;
+        replicaServiceName =
+          replica:
+          "chi-${operatorNamePart 60 name}-${operatorNamePart 15 config.clusterName}-0-${toString replica}";
+        replicaIndexes = lib.range 0 (config.replicas - 1);
 
         storageClassName =
           if config.storage.storageClassName != null then
@@ -179,12 +245,22 @@ in
           else
             null;
 
-        # The two lessons of the bare package that the operator's own
-        # fragments do not cover: the shipped console log level is trace,
-        # and most system log tables have no TTL. The operator already
-        # gives query_log, part_log and trace_log one.
+        # The lessons of the bare package that the operator's own fragments
+        # do not cover: the shipped console log level is trace, most system
+        # log tables have no TTL (the operator already gives query_log,
+        # part_log and trace_log one), and the metrics endpoint is off.
         builtinServerConfig = {
           logging.logger.level = "information";
+          # The same endpoint as the bare package, so both share one metric
+          # vocabulary and ../clickhouse/alerts.nix.
+          prometheus.prometheus = {
+            endpoint = "/metrics";
+            port = ports.metrics;
+            metrics = true;
+            events = true;
+            asynchronous_metrics = true;
+            status_info = true;
+          };
           system-logs =
             lib.genAttrs
               [
@@ -287,157 +363,235 @@ in
           }
         ];
       in
-      {
-        installation = clickhouseOperator.out.mkClickHouseInstallation scope {
-          inherit name;
-          spec = kix.mergeGuarded {
-            who = "clickhouse-cluster (${name})";
-            # The Keeper address carries the netpol edge, the password
-            # is the credentials dep, the users' network and
-            # access_management are what lets clickhouse-database in,
-            # and the rest have an option of their own.
-            locked = [
-              [
-                "configuration"
-                "zookeeper"
-              ]
-              [
-                "configuration"
-                "clusters"
-              ]
-              [
-                "configuration"
-                "files"
-              ]
-              [
-                "configuration"
-                "users"
-                "default/password"
-              ]
-              [
-                "configuration"
-                "users"
-                "default/networks/ip"
-              ]
-              [
-                "configuration"
-                "users"
-                "default/access_management"
-              ]
-              [
-                "templates"
-                "podTemplates"
-              ]
-              [
-                "templates"
-                "volumeClaimTemplates"
-              ]
-            ];
-          } baseSpec config.extraSpec;
-        };
-
-        service = scope.mkServiceRef {
-          name = "clickhouse-${name}";
-          selector = podSelector;
-          ports = [
-            {
-              name = "http";
-              port = ports.http;
-              protocol = "TCP";
-            }
-            {
-              name = "tcp";
-              port = ports.native;
-              protocol = "TCP";
-            }
-          ];
-          requires = [ self.installation ];
-        };
-
-        # Replica to replica: fetches (9009), distributed DDL and queries
-        # (9000), and name resolution for them.
-        replicaEgress = kix.operandPolicy {
-          inherit scope;
-          name = "${name}-replicas-egress";
-          spec = {
-            endpointSelector.matchLabels = podSelector;
-            egress = [
-              netpol.dnsEgressRule
-              { toEndpoints = [ { matchLabels = podSelector; } ]; }
-            ];
+      if (config.resources.limits.memory or null) == null then
+        throw "clickhouse-cluster (${name}): resources.limits.memory is unset. ClickHouse sizes its memory cap from the container limit and falls back to the node's RAM without one. Set config.resources.limits.memory."
+      else
+        {
+          installation = clickhouseOperator.out.mkClickHouseInstallation scope {
+            inherit name;
+            spec = kix.mergeGuarded {
+              who = "clickhouse-cluster (${name})";
+              # The Keeper address carries the netpol edge, the password
+              # is the credentials dep, the users' network and
+              # access_management are what lets clickhouse-database in,
+              # and the rest have an option of their own.
+              locked = [
+                [
+                  "configuration"
+                  "zookeeper"
+                ]
+                [
+                  "configuration"
+                  "clusters"
+                ]
+                [
+                  "configuration"
+                  "files"
+                ]
+                [
+                  "configuration"
+                  "users"
+                  "default/password"
+                ]
+                [
+                  "configuration"
+                  "users"
+                  "default/networks/ip"
+                ]
+                [
+                  "configuration"
+                  "users"
+                  "default/access_management"
+                ]
+                [
+                  "templates"
+                  "podTemplates"
+                ]
+                [
+                  "templates"
+                  "volumeClaimTemplates"
+                ]
+                [
+                  "templates"
+                  "serviceTemplates"
+                ]
+              ];
+            } baseSpec config.extraSpec;
           };
-        };
-        replicaIngress = kix.operandPolicy {
-          inherit scope;
-          name = "${name}-replicas-ingress";
-          spec = {
-            endpointSelector.matchLabels = podSelector;
-            ingress = [
-              { fromEndpoints = [ { matchLabels = podSelector; } ]; }
-              # The operator propagates schema to a new replica and its
-              # exporter reads metrics, both over HTTP.
+
+          service = scope.mkServiceRef {
+            name = "clickhouse-${name}";
+            selector = podSelector;
+            ports = [
               {
-                fromEndpoints = [
-                  {
-                    matchLabels = clickhouseOperator.out.podSelector // {
-                      "k8s:io.kubernetes.pod.namespace" = operatorNamespace;
-                    };
-                  }
-                ];
-                toPorts = httpOnly;
+                name = "http";
+                port = ports.http;
+                protocol = "TCP";
+              }
+              {
+                name = "tcp";
+                port = ports.native;
+                protocol = "TCP";
               }
             ];
+            requires = [ self.installation ];
           };
-        };
-        # The other end of that second rule, in the operator's namespace.
-        operatorEgress = kix.operandPolicy {
-          scope = operatorScope;
-          name = "${scope.namespaceName}-${name}-operator-egress";
-          spec = {
-            endpointSelector.matchLabels = clickhouseOperator.out.podSelector;
-            egress = [
-              {
-                toEndpoints = [
-                  {
-                    matchLabels = podSelector // {
-                      "k8s:io.kubernetes.pod.namespace" = scope.namespaceName;
-                    };
-                  }
-                ];
-                toPorts = httpOnly;
-              }
-            ];
-          };
-        };
 
-        root = {
-          resource = self.service;
-          requires = [
-            self.installation
-          ]
-          ++ builtins.filter (p: p != null) [
-            self.replicaEgress
-            self.replicaIngress
-            self.operatorEgress
-          ];
-          out = contract.check "clickhouse-cluster (${name})" {
-            httpUrl = "http://${self.service.out.fqdn}:${toString ports.http}";
-            nativeEndpoint = "${self.service.out.fqdn}:${toString ports.native}";
-            host = self.service.out.fqdn;
-            ports = {
-              http = toString ports.http;
-              native = toString ports.native;
+          podMonitor =
+            if config.metrics.enabled && prometheus != null && metricsEndpointOn config.serverConfig then
+              prometheus.out.mkPodMonitor scope {
+                name = podMonitorName;
+                spec = {
+                  selector.matchLabels = podSelector;
+                  podMetricsEndpoints = [
+                    (
+                      {
+                        # The operator's pod template declares no port for
+                        # the endpoint, and the scrape egress rule needs a
+                        # number.
+                        portNumber = ports.metrics;
+                      }
+                      // lib.optionalAttrs (config.metrics.interval != null) { inherit (config.metrics) interval; }
+                    )
+                  ];
+                };
+                requires = [ self.installation ];
+              }
+            else
+              null;
+
+          # The health check asks every replica whether it has read-only
+          # tables, which a query through the load-balanced Service cannot.
+          replicaServices = map (
+            replica:
+            scope.mkServiceRef {
+              name = replicaServiceName replica;
+              # The replica's name is its index, as a label value too.
+              selector = podSelector // {
+                "clickhouse.altinity.com/replica" = toString replica;
+              };
+              ports = [
+                {
+                  name = "http";
+                  port = ports.http;
+                  protocol = "TCP";
+                }
+              ];
+              requires = [ self.installation ];
+            }
+          ) replicaIndexes;
+
+          # Replica to replica: fetches (9009), distributed DDL and queries
+          # (9000), and name resolution for them.
+          replicaEgress = kix.operandPolicy {
+            inherit scope;
+            name = "${name}-replicas-egress";
+            spec = {
+              endpointSelector.matchLabels = podSelector;
+              egress = [
+                netpol.dnsEgressRule
+                { toEndpoints = [ { matchLabels = podSelector; } ]; }
+              ];
             };
-            username = "default";
-            authSecret = credentials;
-            authPasswordKey = passwordKey;
-            inherit (config) clusterName;
-            version = lib.versions.majorMinor config.image.tag;
-            replicas = toString config.replicas;
-            extraImages = [ (kix.image.ref config.image) ];
           };
+          replicaIngress = kix.operandPolicy {
+            inherit scope;
+            name = "${name}-replicas-ingress";
+            spec = {
+              endpointSelector.matchLabels = podSelector;
+              ingress = [
+                { fromEndpoints = [ { matchLabels = podSelector; } ]; }
+                # The operator propagates schema to a new replica and its
+                # exporter reads metrics, both over HTTP.
+                {
+                  fromEndpoints = [
+                    {
+                      matchLabels = clickhouseOperator.out.podSelector // {
+                        "k8s:io.kubernetes.pod.namespace" = operatorNamespace;
+                      };
+                    }
+                  ];
+                  toPorts = httpOnly;
+                }
+              ];
+            };
+          };
+          # The other end of that second rule, in the operator's namespace.
+          operatorEgress = kix.operandPolicy {
+            scope = operatorScope;
+            name = "${scope.namespaceName}-${name}-operator-egress";
+            spec = {
+              endpointSelector.matchLabels = clickhouseOperator.out.podSelector;
+              egress = [
+                {
+                  toEndpoints = [
+                    {
+                      matchLabels = podSelector // {
+                        "k8s:io.kubernetes.pod.namespace" = scope.namespaceName;
+                      };
+                    }
+                  ];
+                  toPorts = httpOnly;
+                }
+              ];
+            };
+          };
+
+          root = {
+            resource = self.service;
+            requires = [
+              self.installation
+            ]
+            ++ builtins.filter (p: p != null) [
+              self.replicaEgress
+              self.replicaIngress
+              self.operatorEgress
+              self.podMonitor
+              (self.prometheusRules or null)
+            ];
+            out = contract.check "clickhouse-cluster (${name})" {
+              httpUrl = "http://${self.service.out.fqdn}:${toString ports.http}";
+              nativeEndpoint = "${self.service.out.fqdn}:${toString ports.native}";
+              host = self.service.out.fqdn;
+              ports = {
+                http = toString ports.http;
+                native = toString ports.native;
+              };
+              username = "default";
+              authSecret = credentials;
+              authPasswordKey = passwordKey;
+              inherit (config) clusterName;
+              version = lib.versions.majorMinor config.image.tag;
+              replicas = toString config.replicas;
+              extraImages = [ (kix.image.ref config.image) ];
+            };
+          };
+        }
+    )
+
+    # kix.alerts reads `scope` and `prometheus` from the arguments it is
+    # called with, so the wrapper names them for the build to pass. Without
+    # the metrics endpoint it gets no `prometheus`, which drops the rules.
+    # The package's own fragments set none of the keys alerts.nix reads, so
+    # it is given the instance's serverConfig alone.
+    (
+      {
+        config,
+        scope,
+        prometheus ? null,
+        ...
+      }@args:
+      kix.alerts {
+        alerts = import ../clickhouse/alerts.nix { inherit lib kix; } {
+          sel = ''namespace="${scope.namespaceName}",job="${scope.namespaceName}/${podMonitorName}"'';
+          by = "namespace, job";
+          instance = "${scope.namespaceName}/${name}";
+          memoryLimit = config.resources.limits.memory or null;
+          fragments = config.serverConfig;
+          # One replica has no peer to lag behind or fetch from.
+          maxReplicationLag = if config.replicas > 1 then config.metrics.maxReplicationLag else null;
         };
-      }
+      } (args // lib.optionalAttrs (!metricsEndpointOn config.serverConfig) { prometheus = null; })
     )
 
     (kix.healthCheck {
@@ -449,6 +603,9 @@ in
           CLICKHOUSE_PASSWORD = self.root.out.authSecret.out.keyRef self.root.out.authPasswordKey;
           CLICKHOUSE_CLUSTER = self.root.out.clusterName;
           CLICKHOUSE_REPLICAS = self.root.out.replicas;
+          CLICKHOUSE_REPLICA_URLS = lib.concatMapStringsSep " " (
+            svc: "http://${svc.out.fqdn}:${svc.out.port}"
+          ) self.replicaServices;
         };
       # One probe for both implementations of the contract.
       script = builtins.readFile ../clickhouse/health-check.py;

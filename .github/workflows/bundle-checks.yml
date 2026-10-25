@@ -1,0 +1,88 @@
+name: Bundle checks
+
+# The bundle checks too slow for every `cargo test` (cli/README.md,
+# "Bundle acceptance checks"):
+#
+# - each libFuzzer target in cli/fuzz for two minutes, seeded from the
+#   honest bundles in cli/kix-bundle/tests/fixtures and the plan file in
+#   cli/kix/tests/fixtures, under the README's
+#   4 GiB RSS cap;
+# - `every_test_cluster_bundles`, which builds and bundles every test
+#   cluster.
+#
+# A short run catches a reader change that breaks on the seeds' first
+# mutations. The weekly run is where a slower finding turns up. A crash
+# leaves its input under cli/fuzz/artifacts/, uploaded with the run.
+#
+# Same Nix setup as cli-tests.yml, on a Spindle VM whose image ships Nix.
+
+on:
+  pull_request:
+    paths:
+      - 'cli/**'
+      - '.github/workflows/bundle-checks.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cli/**'
+      - '.github/workflows/bundle-checks.yml'
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bundle-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundle-checks:
+    runs-on: [self-hosted, spindle-8c-16g]
+    timeout-minutes: 60
+    env:
+      NIX_CONFIG: |
+        extra-experimental-features = nix-command flakes pipe-operators
+        accept-flake-config = true
+        access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # cargo-fuzz, zstd and python3 come from this flake's nixpkgs. The
+      # targets build on stable rustc without a sanitizer, hence
+      # RUSTC_BOOTSTRAP.
+      - name: Fuzz
+        run: |
+          nix develop --command nix shell --inputs-from . \
+            nixpkgs#cargo-fuzz nixpkgs#zstd nixpkgs#python3 --command bash -c '
+            set -euo pipefail
+            cd cli/fuzz
+            ./seed.py ../kix-bundle/tests/fixtures/*.kixbundle ../kix/tests/fixtures/*.kixplan seeds
+            export RUSTC_BOOTSTRAP=1
+            cargo fuzz build -s none -O
+            for target in $(cargo fuzz list); do
+              case $target in
+                *_frames) seeds=seeds/frames ;;
+                *) seeds=seeds/raw ;;
+              esac
+              mkdir -p "corpus/$target"
+              cargo fuzz run -s none -O "$target" "corpus/$target" "$seeds" -- \
+                -max_total_time=120 -max_len=2500000 -rss_limit_mb=4096
+            done'
+
+      - name: Every test cluster bundles
+        run: |
+          nix develop --command bash -c \
+            'cd cli && cargo test -p kix-cli --test commands_test -- --ignored every_test_cluster_bundles'
+
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: cli/fuzz/artifacts/
+          if-no-files-found: ignore

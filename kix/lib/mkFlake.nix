@@ -4,6 +4,10 @@
   clusters ? { },
 
   # Passed to cluster functions that declare a required `pins` argument.
+  # A cluster applies the file's instance pins by passing it on:
+  # `kix.buildCluster { inherit pins; ... }`. Instance pins name instances
+  # of one cluster, so only one cluster passes a file that holds them; any
+  # other reads its own with `kix.pins`.
   pins ? null,
 
   # Prepended to each cluster's modules.
@@ -114,11 +118,33 @@ let
           + slib.optionalString (cluster.extraImages != null) ''
             ln -s ${builtins.toFile "kix-extra-images.json" (builtins.toJSON cluster.extraImages)} $out/kix-extra-images.json
           ''
+          # Where each image option's value comes from. Beside the
+          # Activation, not in it, so it never changes the Activation's name.
+          + ''
+            ln -s ${builtins.toFile "kix-image-sources.json" (builtins.toJSON cluster.imageSources)} $out/kix-image-sources.json
+          ''
         );
       }) resolvedClusters;
 
+      # A cluster file `foo.nix` declares its alert rule tests in
+      # `foo.rules-test.yaml` beside it. A cluster given as a value, not a
+      # path, has none.
+      ruleTestsOf =
+        clusterDef:
+        let
+          sibling =
+            if builtins.isPath clusterDef || builtins.isString clusterDef then
+              "${dirOf clusterDef}/${lib.removeSuffix ".nix" (baseNameOf clusterDef)}.rules-test.yaml"
+            else
+              null;
+        in
+        if sibling != null && builtins.pathExists sibling then sibling else null;
+
       clusterChecks = lib.concatMapAttrs (cname: cluster: {
         "schema-cluster-${cname}" = kixChecks.schemaCheck "cluster-${cname}" (kix.mkManifests cluster);
+        "rules-cluster-${cname}" = kixChecks.rulesCheck "cluster-${cname}" (kix.mkManifests cluster) (
+          ruleTestsOf clusters.${cname}
+        );
         "pi-wiring-cluster-${cname}" =
           assert piChecks.validatePIWiring "cluster-${cname}" cluster;
           pkgs.runCommand "pi-wiring-cluster-${cname}" { } ''

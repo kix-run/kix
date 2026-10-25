@@ -32,9 +32,31 @@ use serde_json::Value;
 pub const RECORD_KIND: &str = "Activation";
 /// The kind that carries import markers (and, without the mode annotation,
 /// ordinary package instance records that are desired state like any other).
-pub const PACKAGE_INSTANCE_KIND: &str = "PackageInstance";
+pub(crate) const PACKAGE_INSTANCE_KIND: &str = "PackageInstance";
 /// The mode value that marks an import.
-pub const IMPORT_MODE: &str = "import";
+pub(crate) const IMPORT_MODE: &str = "import";
+
+/// Activation phase values (stored in status.phase).
+pub const PHASE_QUEUED: &str = "Queued";
+pub const PHASE_ACTIVE: &str = "Active";
+pub const PHASE_SUPERSEDED: &str = "Superseded";
+pub const PHASE_DEPLOYING: &str = "Deploying";
+/// Deploy completed but some resources failed to apply or become ready.
+/// Treated as the "current state" for diffing/drift purposes: the next deploy
+/// must be able to find this CR to compute a meaningful plan.
+pub const PHASE_DEGRADED: &str = "Degraded";
+/// The deploy stopped before it could finalize: cancelled, a node failed under
+/// a Stop policy, discovery broke, or the process died and something later
+/// marked the record.
+///
+/// Terminal and never a current state.
+/// [`Records::active`](crate::cluster::activation::Records::active) must not
+/// return one: a half-applied closure is not what the cluster is running, and
+/// diffing against it would compute every object only the still-Active closure
+/// has as an orphan. The next deploy reads it only as an extra baseline, to
+/// re-apply what it may have changed and prune what it left behind, and
+/// supersedes it once that plan finalizes.
+pub const PHASE_FAILED: &str = "Failed";
 
 /// How kix treats a manifest. See the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -109,13 +131,13 @@ pub fn is_record(manifest: &Value) -> bool {
 }
 
 /// Is this manifest an import marker?
-pub fn is_marker(manifest: &Value) -> bool {
+pub(crate) fn is_marker(manifest: &Value) -> bool {
     lifecycle_of(manifest) == Lifecycle::Marker
 }
 
 /// Annotations that carry a Helm hook delete policy. Charts imported into a
 /// package keep them.
-pub const HOOK_DELETE_POLICY: [&str; 1] = ["helm.sh/hook-delete-policy"];
+pub(crate) const HOOK_DELETE_POLICY: [&str; 1] = ["helm.sh/hook-delete-policy"];
 
 /// Does this manifest declare that it removes itself once it succeeds?
 ///
@@ -153,11 +175,6 @@ pub fn record_of(manifests: &[Value]) -> Option<&Value> {
 /// export drops them; they would be garbage in a neutral handoff.
 pub fn is_kix_internal_kind(kind: &str) -> bool {
     kind == RECORD_KIND || kind == PACKAGE_INSTANCE_KIND
-}
-
-/// [`is_kix_internal_kind`] for a manifest.
-pub fn is_kix_internal(manifest: &Value) -> bool {
-    is_kix_internal_kind(manifest.get("kind").and_then(Value::as_str).unwrap_or(""))
 }
 
 /// Kinds that Kix reports when they leave the build but never deletes,
@@ -319,8 +336,8 @@ mod tests {
             Some("Activation")
         );
         assert_eq!(set.iter().filter(|m| is_record(m)).count(), 1);
-        assert!(is_kix_internal(&m("PackageInstance", None)));
-        assert!(!is_kix_internal(&m("Deployment", None)));
+        assert!(is_kix_internal_kind("PackageInstance"));
+        assert!(!is_kix_internal_kind("Deployment"));
     }
 
     /// Invariant 7 from kixpkgs#59: the kind strings of the record and the

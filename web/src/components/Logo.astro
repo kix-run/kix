@@ -1,0 +1,28 @@
+---
+// The "k" mark (a rounded square with an orange mono "k") and the mono
+// "kix" wordmark. On night the square is light instead of ink.
+interface Props {
+  tone?: 'paper' | 'night';
+  size?: 'md' | 'sm';
+  class?: string;
+}
+const { tone = 'paper', size = 'md', class: className } = Astro.props;
+---
+
+<span class:list={['inline-flex items-center gap-2.5', className]}>
+  <span
+    aria-hidden="true"
+    class:list={[
+      'inline-flex items-center justify-center font-mono font-bold text-accent-brand',
+      tone === 'paper' ? 'bg-ink' : 'bg-on-night',
+      size === 'md' ? 'size-7 rounded-md text-[17px]' : 'size-6 rounded-[5px] text-[15px]',
+    ]}>k</span
+  >
+  <span
+    class:list={[
+      'font-mono font-bold',
+      tone === 'paper' ? 'text-ink' : 'text-on-night',
+      size === 'md' ? 'text-[22px]' : 'text-[18px]',
+    ]}>kix</span
+  >
+</span>

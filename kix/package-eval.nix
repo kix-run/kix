@@ -146,7 +146,11 @@ let
       };
     };
     clickhouse-operator.instances = { inherit credentials; };
-    cloudflared.config.token = "eval-only";
+    cloudflared.instances.tunnel-token = {
+      package = packages.secret;
+      aliases = [ "tunnelToken" ];
+      config.stringData.token = "eval-only";
+    };
     # A Prometheus provider, so the PodMonitor is built.
     cnpg-cluster.instances.prometheus-operator.package = packages.prometheus-operator;
     # cnpg-cluster is off the shelf, so the database's cluster is declared.
@@ -183,19 +187,52 @@ let
         config.stringData.api-token = "token";
       };
     };
+    # A rules file, so the rules ConfigMap and its mount are built, and a
+    # Prometheus provider, so the metrics Service and the ServiceMonitor are
+    # built.
+    falco = {
+      config.rules.custom = [
+        {
+          rule = "Package eval rule";
+          desc = "A rule that exercises the rules ConfigMap.";
+          condition = "evt.type = open and proc.name = never-matches";
+          output = "Package eval rule (proc=%proc.name)";
+          priority = "NOTICE";
+        }
+      ];
+      instances.prometheus-operator.package = packages.prometheus-operator;
+    };
     filebrowser.instances = { inherit storage; };
-    firezone.config = {
-      domain = "firezone.example.com";
-      admin = {
-        email = "admin@example.com";
-        password = "password";
+    firezone = {
+      config = {
+        domain = "firezone.example.com";
+        admin.email = "admin@example.com";
       };
-      wireguard.privateKey = "key";
-      # The three salts are optional; clusters/test-immich.nix sets them.
-      secrets = {
-        guardianSecretKey = "guardian";
-        secretKeyBase = "base";
-        databaseEncryptionKey = "encryption";
+      instances = {
+        database = {
+          package = packages.stackgres-database;
+          config.password = "password";
+        };
+        # The three salts are optional; clusters/test-immich.nix sets them.
+        application-secrets = {
+          package = packages.secret;
+          aliases = [ "applicationSecrets" ];
+          config.stringData = {
+            GUARDIAN_SECRET_KEY = "guardian";
+            SECRET_KEY_BASE = "base";
+            DATABASE_ENCRYPTION_KEY = "encryption";
+          };
+        };
+        admin-password = {
+          package = packages.secret;
+          aliases = [ "adminPassword" ];
+          config.stringData.password = "password";
+        };
+        wireguard-key = {
+          package = packages.secret;
+          aliases = [ "wireguardKey" ];
+          config.stringData.private_key = "key";
+        };
       };
     };
     # The administrator's login, and a Prometheus provider, so the
@@ -313,6 +350,27 @@ let
         };
       };
     };
+    # The static seal, the default, needs the key. A declared policy, role,
+    # and engine give the reconcile Job data to apply.
+    openbao = {
+      instances.openbao-unseal = {
+        package = packages.secret;
+        aliases = [ "unsealKey" ];
+        config.stringData.key = "0123456789abcdef0123456789abcdef";
+      };
+      config = {
+        policies.app-read = ''path "secret/data/app/*" { capabilities = ["read"] }'';
+        kubernetesAuth.roles.app = {
+          bound_service_account_names = [ "app" ];
+          bound_service_account_namespaces = [ "app" ];
+          token_policies = [ "app-read" ];
+        };
+        secretsEngines.secret = {
+          type = "kv";
+          options.version = "2";
+        };
+      };
+    };
     # The collector refuses to start without a pipeline, and the events
     # pipeline needs no dependency. A Prometheus provider, so the metrics
     # port and the ServiceMonitor are built.
@@ -322,12 +380,27 @@ let
     };
     persistent-volume-claim.config.size = "1Gi";
     priority-class.config.value = 1000;
+    # A Prometheus provider, so the PodMonitor is built, and a settings
+    # entry, so additionalConfig is rendered.
+    rabbitmq-cluster = {
+      config.settings."vm_memory_high_watermark.relative" = "0.6";
+      instances.prometheus-operator.package = packages.prometheus-operator;
+    };
+    # A Prometheus provider, so the metrics Service and the ServiceMonitor
+    # are built.
+    rabbitmq-operator.instances.prometheus-operator.package = packages.prometheus-operator;
     secret.config.stringData.password = "password";
     secret-echo.instances = { inherit credentials; };
     secret-ref.config.keys = [ "password" ];
     # A Prometheus provider, so the metrics Service and the ServiceMonitor
     # are built.
     snapshot-controller.instances.prometheus-operator.package = packages.prometheus-operator;
+    # The kind flavour declares one node and containerd's discard of
+    # unpacked layers, which the package refuses.
+    spegel.module = _: {
+      cluster.capabilities.multiNode = true;
+      cluster.containerd.discardUnpackedLayers = false;
+    };
     # Backups to an object storage, so the SGObjectStorage reference, the
     # backups entries, and archive_timeout are built; a pooler and a script,
     # so the SGPoolingConfig and the SGScript are built.
@@ -406,6 +479,8 @@ let
       };
       config.domain = "https://vault.example.com";
     };
+    # The operator needs the VolumeSnapshot API, which kind does not ship.
+    volsync.instances.snapshot-controller.package = packages.snapshot-controller;
     velero = {
       config.backupStorageLocation.objectStorage.bucket = "backups";
       instances = {

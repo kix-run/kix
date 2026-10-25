@@ -37,6 +37,41 @@ in
       '';
     };
 
+    cluster.secrets.accept = lib.mkOption {
+      type = lib.types.nullOr (
+        lib.types.listOf (
+          lib.types.enum [
+            "inline"
+            "sops"
+            "external"
+            "controller"
+            "configuration"
+          ]
+        )
+      );
+      default = null;
+      example = [
+        "sops"
+        "external"
+        "controller"
+      ];
+      description = ''
+        Where a Secret's values may come from. Null accepts every source.
+        When set, the `security.secretSource` scorecard rule reports every
+        key of a Secret whose source is not listed. `inline`: the value is
+        written in the Nix expression, so it is in the Nix store and in
+        every build. `sops`: the deploy decrypts it from a SOPS file.
+        `external`: something outside Kix creates the Secret
+        (`scope.mkSecretRef`, a `secret-ref` instance). `controller`: Kix
+        creates the Secret empty and a controller fills it.
+        `configuration`: a package renders software configuration into a
+        Secret and classifies it so. The library does not verify the
+        classification or that the package refuses credential keys, so
+        listing this takes the package's word. A key the package marks
+        plain (a username, a host) is accepted under every setting.
+      '';
+    };
+
     instances = lib.mkOption {
       type = lib.types.attrsOf (
         lib.types.attrsOf (
@@ -80,8 +115,10 @@ in
                 default = { };
                 description = ''
                   Explicit DI overrides. Keys are package function arg names.
-                  Collision = error (two modules setting same dep for same
-                  instance must be resolved explicitly).
+                  A value is `ref.<ns>.<inst>`, a list of such refs (the
+                  package receives a list of instances), or any other value,
+                  bound as it is. Collision = error (two modules setting same
+                  dep for same instance must be resolved explicitly).
                 '';
               };
               partsOverlays = lib.mkOption {
@@ -425,6 +462,38 @@ in
         description = ''
           Whether DaemonSets can be deployed. False on GKE Autopilot where
           the platform manages all node-level daemons. null = unknown.
+        '';
+      };
+    };
+
+    # containerd's configuration on the nodes. Kix cannot read or change it;
+    # flavours set what their node images ship, and a package that talks to
+    # containerd on the host (spegel) reads it.
+    cluster.containerd = {
+      socket = lib.mkOption {
+        type = lib.types.strMatching "/.+";
+        default = "/run/containerd/containerd.sock";
+        description = "Path of containerd's gRPC socket on each node.";
+      };
+      registryConfigPath = lib.mkOption {
+        type = lib.types.strMatching "/.+";
+        default = "/etc/containerd/certs.d";
+        description = "The CRI registry `config_path` on each node: the directory of per-registry `hosts.toml` files that containerd reads mirrors from.";
+      };
+      contentPath = lib.mkOption {
+        type = lib.types.strMatching "/.+";
+        default = "/var/lib/containerd/io.containerd.content.v1.content";
+        description = "Path of containerd's content store on each node.";
+      };
+      discardUnpackedLayers = lib.mkOption {
+        type = lib.types.nullOr lib.types.bool;
+        default = null;
+        description = ''
+          The CRI `discard_unpacked_layers` setting on each node. When true,
+          containerd deletes an image's compressed layers once it has
+          unpacked them, so a node cannot serve them to its peers. The
+          kind, Talos, EKS, and GKE flavours set it to true, as their node
+          images ship. null = unknown.
         '';
       };
     };
