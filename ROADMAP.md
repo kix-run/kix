@@ -441,6 +441,13 @@
 - [ ] Backbone infra layer — define reuse patterns and cross-service/cross-app logic (e.g. shared storage, common sidecars) to reduce redundancy
 - [ ] Service mesh bindings — content-addressed "binds" that translate hashes into public service space; resolves cross-team dependencies at cluster level
 - [ ] Backstage as natural evolution — catalog, ownership, libraries
+- [ ] Private package catalogs (from kixpkgs#8, closed as stale on 2026-10-03). A repository that uses Kix should be able to add its own packages to the catalog its clusters see, without dropping down from `lib.mkFlake` to `lib.forPkgs`. The PR added `extraPackages` to `mkFlake`; `mkFlake` has changed since, so a new attempt starts from current main.
+- [ ] Release and project items carried over from the old roadmap issue (kixpkgs#18, closed 2026-10-03):
+  - [ ] Make the repository public. It has already moved into the kix-run GitHub organisation, with the other Kix repositories. Until it is public, released binaries go to the public kix-run/kix-releases.
+  - [ ] Split `kix/lib` into its own repository, separate from the package catalog.
+  - [ ] A process for keeping packages up to date with upstream releases.
+  - [ ] Keep packages imported from Helm charts apart from hand-written packages.
+  - [ ] Use Kix without installing Nix.
 
 ## Case studies & documentation
 
@@ -469,6 +476,8 @@
 ## Open design questions (still-to-get-right)
 
 - [ ] **`kix plan`, what doc 157 left open** (from `v2_discussions/archive/157_kix_plan_primary_preview.md`) (2026-10-03). (1) Saved plans: answered in #185 (see the saved-plans item above). A `resourceVersion` precondition on applies that revert drift, and deploying a reviewed store path from a binary cache, wait for the in-cluster doc. (2) Cost on large clusters: unchanged objects already skip the dry run, as the engine skips them; is one request per changed object acceptable on every `kix deploy`, or should `--yes` in CI be able to skip it? (3) The deployed build for three-way labels when its store path is gone and the live reconstruction is itself drifted: today nothing is labelled; a fetch from a binary cache would label it. (4) Running plans inside the cluster so callers never hold credentials needs its own doc (how a build reaches the cluster, who may request a plan, how results return). (5) A plan's `drift` covers the objects the deploy applies; drift on the objects it skips is in `kix diff` and `kix drift`, not in the plan.
+- [ ] **Contested shelf names, what the refusal left open** (from `v2_discussions/archive/151_ambiguous_alias_providers.md` §4, 2026-09-28; the refusal shipped in kixpkgs#156). (1) A flavor's stock entry and a catalog package that claim one role are refused like any other pair; doc 127 treats the flavor as the more specific source, but `availablePackages` cannot tell who contributed an entry. Keep refusing, or let the flavor win? (2) `kube-prometheus-stack` answers `prometheusOperator` without `mkAlertmanager` and `mkPrometheus`, so an explicit kps instance next to a native alertmanager still fails on a missing attribute: drop the alias, add the builders, or wait for doc 120's `out` typing. (3) `effectiveAliases` replaces `defaultAliases` with instance aliases, while `peekPackageAliases` adds shelf-entry aliases to them; making the shelf replace too would allow `availablePackages.<n>.aliases = [ ]` as a third way to choose. (4) Sugar for choosing a provider (doc 151 option B): no until choosing becomes repetitive across real clusters.
+- [ ] **Two Kix clusters that render one shared object differently** (2026-09-28, from kixpkgs#161, `v2_discussions/archive/150_scope_managed_sweep_to_one_cluster.md`). Objects are shareable between Kix clusters on one Kubernetes cluster, and prune keeps an object another cluster still deploys. When the two builds render it differently, each deploy overwrites the other's version and nothing warns. Also deferred from that doc: a selectable per-cluster label (option D), until listing every Kix-labelled object is measurably slow.
 
 Things that are either "shipped but the underlying question isn't actually settled" or "deferred but important enough that we need to not forget them". Pulled from archived v2 discussion docs during the April 2026 cleanup.
 
