@@ -424,7 +424,7 @@
 - [ ] Backstage as natural evolution — catalog, ownership, libraries
 - [ ] Private package catalogs (from kixpkgs#8, closed as stale on 2026-10-03). A repository that uses Kix should be able to add its own packages to the catalog its clusters see, without dropping down from `lib.mkFlake` to `lib.forPkgs`. The PR added `extraPackages` to `mkFlake`; `mkFlake` has changed since, so a new attempt starts from current main.
 - [ ] Release and project items carried over from the old roadmap issue (kixpkgs#18, closed 2026-10-03):
-  - [ ] Make the repository public, then move the repositories into the kix-ops GitHub organisation (moving earlier loses GitHub Pages).
+  - [ ] Make the repository public. It has already moved into the kix-run GitHub organisation, with the other Kix repositories. Until it is public, released binaries go to the public kix-run/kix-releases.
   - [ ] Split `kix/lib` into its own repository, separate from the package catalog.
   - [ ] A process for keeping packages up to date with upstream releases.
   - [ ] Keep packages imported from Helm charts apart from hand-written packages.
