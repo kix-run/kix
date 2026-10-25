@@ -147,16 +147,20 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
         source_rev.as_deref(),
     );
 
-    // The note is the one field a person wrote, so a promotion carries it
-    // forward rather than replacing it. `--note` is how you change it, and
-    // `--note ""` is how you clear it.
+    // A person's note says why the entry is what it is, so it describes the
+    // image it was written for. Moving the image drops it; setting the same
+    // image again keeps it. `--note` sets a new one, and `--note ""` clears
+    // it.
+    let kept_note = existing.as_ref().and_then(|p| p.note.clone());
+    let dropped_note = kept_note.clone().filter(|_| changed && args.note.is_none());
     let note = match &args.note {
         Some(n) if n.is_empty() => None,
         Some(n) => Some(n.clone()),
-        None => existing.as_ref().and_then(|p| p.note.clone()),
+        None if changed => None,
+        None => kept_note.clone(),
     };
 
-    let pin = if changed || note != existing.as_ref().and_then(|p| p.note.clone()) {
+    let pin = if changed || note != kept_note {
         Pin {
             repository,
             tag,
@@ -183,6 +187,7 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
             "option": option_of(&key),
             "pin": pin,
             "changed": changed,
+            "droppedNote": dropped_note,
         });
         println!("{}", serde_json::to_string_pretty(&doc).into_diagnostic()?);
         return Ok(());
@@ -204,6 +209,14 @@ fn set(args: &PinSetArgs, global: &GlobalArgs) -> Result<()> {
         && let Some(prev_digest) = &prev.digest
     {
         crate::say!("  was {prev_digest}");
+    }
+    if let Some(dropped) = &dropped_note {
+        crate::say!(
+            "  {}",
+            output::yellow(&format!(
+                "dropped the note, which described the old image: {dropped}"
+            ))
+        );
     }
     if !changed {
         crate::say!(

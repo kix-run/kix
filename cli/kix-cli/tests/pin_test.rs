@@ -188,3 +188,40 @@ fn list_and_check_cover_both_maps() {
         "r/api"
     );
 }
+
+/// A note describes the image it was written for: moving the pin drops it
+/// and says so, setting the same image again keeps it, and `--note` with a
+/// move sets the new one.
+#[test]
+fn moving_a_pin_drops_its_note() {
+    let file = pins_file("note");
+    let set = |tag: &str, d: char, note: Option<&str>| {
+        let mut cmd = kix();
+        cmd.args(["pin", "set", "monitoring/grafana", "--init"])
+            .args(["--repository", "docker.io/grafana/grafana", "--tag", tag])
+            .args(["--digest", &digest(d)])
+            .arg("--pins-file")
+            .arg(&file);
+        if let Some(note) = note {
+            cmd.args(["--note", note]);
+        }
+        cmd.assert().success()
+    };
+    let note =
+        |file: &PathBuf| read(file)["instances"]["monitoring/grafana"]["image"]["note"].clone();
+
+    set("13.1.3", 'a', Some("Held back: see the 13.1.4 regression."));
+    // The same image again: the note stays.
+    set("13.1.3", 'a', None);
+    assert_eq!(note(&file), "Held back: see the 13.1.4 regression.");
+
+    // A move: the note goes, and the output quotes it.
+    set("13.1.5", 'b', None).stdout(predicate::str::contains(
+        "dropped the note, which described the old image: Held back: see the 13.1.4 regression.",
+    ));
+    assert!(note(&file).is_null());
+
+    // A move with a note of its own keeps that one.
+    set("13.1.6", 'c', Some("Watch memory after this one."));
+    assert_eq!(note(&file), "Watch memory after this one.");
+}

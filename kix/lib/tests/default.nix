@@ -35,7 +35,12 @@ let
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   k8s = import ../core { inherit lib; };
-  eval = import ../eval { inherit lib k8s; };
+  # `self` is this repository, so image sources name files by their path
+  # in it, as for a cluster in a consuming flake.
+  eval = import ../eval {
+    inherit lib k8s;
+    self = ../../..;
+  };
   kixlib = import ../vocab { inherit lib; };
 
   # The *public* surface, as a consuming flake sees it through `mkFlake`.

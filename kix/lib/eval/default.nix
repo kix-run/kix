@@ -2,6 +2,9 @@
   lib,
   k8s,
   helm ? { },
+  # The flake whose clusters these are (its `self`): image sources name a
+  # file by its path in it. Null when the caller does not say.
+  self ? null,
 }:
 
 let
@@ -74,6 +77,7 @@ let
   };
   cluster = import ./cluster.nix {
     inherit
+      self
       lib
       k8s
       meta
