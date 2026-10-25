@@ -1,5 +1,6 @@
 ---
 source: kix-cli/tests/snapshot_test.rs
+assertion_line: 23
 expression: stdout
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -14257,7 +14258,7 @@ apiVersion: kix.run/v1alpha1
 kind: Activation
 metadata:
   annotations:
-    kix.run/built-via: /nix/store/5kwjwcjj1m15hcchrhfppkh36gs43s6w-k8s-activation-example
+    kix.run/built-via: /nix/store/nq9nflmc7bkbavfp661gmf0d0vb8zzn9-k8s-activation-example
     kix.run/depends-on: '2hnqf813zj2q2vlpk9j6s8gh4q4kw1ij,35i8mjh56ys8dz6yd89269yy5k86abin,590al7hbiz804ha7f7q5ivm49ds9fxcg,5mv940cjcfv2zf1cm9zjfi61b117n128,5n47j74lzrsijy4r2z12cj7w81mgsnsh,612a8ppkv1f4rn0w58x8iycqxi69byb3,cmc1p3p89byv00rfq647jm40cys8h0hz,dzpbknj62i8rmbpf8gmf0fhzlx5l23d9,i9x9p2zin5iy88a0m2m4cypg66x2g8rw,ki0h6ghbhq7dp6b9km61cvb2z0sqsyf8,ria5rm7jiqz7q00b8zbqvz4n9xlnx7b6,w4jfxii3b0w1bl78pjanhkxinzl0kiys,requires:gvrlspcfgh9a2qnsx5kqxw9f4l3x52jj'
     kix.run/identity-hash: '53a4gqsgdaqkavyyc5zmvhq0bchw8fw0'
     kix.run/package: _cluster

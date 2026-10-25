@@ -4,6 +4,7 @@
 
 {
   lib,
+  k8s,
   eval,
   kixlib,
   baseInstances,
@@ -376,7 +377,7 @@ in
           (s "mkdefault" "image").origin == "package_default" && (s "mkdefault" "image").tag == "1.5";
         code =
           coded.origin == "code"
-          && lib.hasSuffix "units/lib-instance-pins.nix" coded.file
+          && coded.file == "kix/lib/tests/units/lib-instance-pins.nix"
           && builtins.isInt coded.line
           && coded.tag == "9.9"
           && coded.repository == "reg.example/web";
@@ -387,7 +388,7 @@ in
               map = "images";
               key = "shared";
             }
-          && lib.hasSuffix "instance-pins/pins.json" fromget.file;
+          && fromget.file == "kix/lib/tests/units/instance-pins/pins.json";
         nixBuilt =
           (s "nixbuilt" "image").origin == "nix_built" && !(builtins.hasContext (s "nixbuilt" "image").tag);
         injected =
@@ -395,7 +396,8 @@ in
         envelope =
           cluster.imageSources.version == 1
           && cluster.imageSources.cluster == "test"
-          && lib.hasSuffix "instance-pins/pins.json" cluster.imageSources.pinsFile;
+          && cluster.imageSources.pinsFile == "kix/lib/tests/units/instance-pins/pins.json"
+          && cluster.imageSources.pinsFileUnknown == null;
         # It is written with builtins.toFile, which refuses a string context.
         serialises = builtins.isString (
           builtins.toFile "kix-image-sources.json" (builtins.toJSON cluster.imageSources)
@@ -576,4 +578,45 @@ in
           images = { };
           holds = { };
         }).keys;
+
+  # A pin file outside the flake `self` (another flake input) has no path in
+  # the image sources, and says why; so does a cluster whose caller did not
+  # name its flake. Nothing names a path in a repository that does not hold
+  # the file.
+  lib-instance-pins-pin-file-outside-the-flake-has-no-path =
+    let
+      clusterIn =
+        self:
+        (import ../../eval { inherit lib k8s self; }).buildCluster {
+          name = "test";
+          modules = [
+            baseInstances
+            {
+              instances.app.web = {
+                package = webPackage;
+              };
+            }
+          ];
+          pins = pinsFile;
+        };
+      # Another directory stands in for the flake: the pin file is not in it.
+      elsewhere = clusterIn ../../core;
+      unnamed = clusterIn null;
+      web = cluster: sourceOf cluster "web" "image";
+    in
+    (
+      elsewhere.imageSources.pinsFile == null
+      && elsewhere.imageSources.pinsFileUnknown == "outside_flake"
+      && (web elsewhere).origin == "pin"
+      && (web elsewhere).file == null
+      && unnamed.imageSources.pinsFile == null
+      && unnamed.imageSources.pinsFileUnknown == "flake_unknown"
+      && (web unnamed).file == null
+    )
+    || throw "a pin file outside the flake was named: ${
+      builtins.toJSON {
+        elsewhere = removeAttrs elsewhere.imageSources [ "images" ];
+        unnamed = removeAttrs unnamed.imageSources [ "images" ];
+      }
+    }";
 }

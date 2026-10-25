@@ -2380,9 +2380,11 @@ their ordinary version tags, because a person moves those.
 `atlas-server-acme`, `web-eu`: environments, tenants, regions, or two axes
 at once. Nothing in Kix has an opinion about what the axis means.
 
-`note` is for whoever reads the file. Kix never reads it and a promotion
-never discards it, which is what a comment could not promise. It does not
-reach the image option either, so it cannot affect a manifest.
+`note` is for whoever reads the file. Kix never reads it, and it survives
+a rewrite, which is what a comment could not promise. It does not reach the
+image option either, so it cannot affect a manifest. It describes the image
+it was written for, so `kix pin set` drops it when it moves the entry to
+another image, and says so; pass `--note` to write a new one.
 
 JSON rather than Nix, for a reason worth checking rather than taking on
 taste. Reading a Nix file means evaluating it, so reading a pin file would
@@ -2508,6 +2510,14 @@ value, the package's default, and its origin (`pin`, `package_default`,
 `injected`, `nix_built`, or `code`), with the pin key, the dependency, or the
 file and line. It is outside the Activation, so it never changes its name.
 Its shape is in the docs site's image and pin helpers reference.
+
+Every file it names is a path in the flake whose clusters these are: `mkFlake`
+knows that flake, and `lib.forPkgs` is told with `self`
+(`kixpkgs.lib.forPkgs { inherit pkgs lib self; }`). A pin file from another
+flake input is in no path of this repository, so `pinsFile` is null and
+`pinsFileUnknown` says why: `outside_flake`, or `flake_unknown` when
+`forPkgs` was not given `self`. A tool that edits pins then has nothing to
+edit.
 
 ### 29.3 Promoting
 

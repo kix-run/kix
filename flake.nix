@@ -323,10 +323,18 @@
       ) clusterOutputs.checks;
 
       # Preserve the forPkgs API for external consumers.
+      #
+      # `self` is the consumer's flake. Without it, kix cannot tell a pin
+      # file in that flake from one in another input, so image sources name
+      # no pin file and Kix Enterprise opens no update pull requests.
       lib.forPkgs =
-        { pkgs, lib }:
+        {
+          pkgs,
+          lib,
+          self ? null,
+        }:
         let
-          kix = import ./kix/lib { inherit pkgs lib; };
+          kix = import ./kix/lib { inherit pkgs lib self; };
           entries = builtins.readDir ./kix/packages;
           dirs = lib.filterAttrs (_: type: type == "directory") entries;
           packages = lib.mapAttrs (name: _: import ./kix/packages/${name}) dirs;

@@ -1,8 +1,21 @@
-{ pkgs, lib }:
+{
+  pkgs,
+  lib,
+  # The flake whose clusters these are (its `self`). Image sources name the
+  # pin file by its path in this flake, and only when it is inside it.
+  self ? null,
+}:
 
 let
   k8s = import ./core { inherit lib; };
-  eval = import ./eval { inherit lib k8s helm; };
+  eval = import ./eval {
+    inherit
+      lib
+      k8s
+      helm
+      self
+      ;
+  };
   env = import ./env.nix { inherit lib; };
   fragments = import ./vocab/fragments.nix { inherit lib; };
   helm = import ./helm.nix { inherit pkgs lib; };

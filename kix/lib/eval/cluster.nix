@@ -24,6 +24,9 @@
   evaluateInstance,
   mkImport,
   checkExtraDeps,
+  # The flake whose clusters these are (its `self`), or null when the caller
+  # did not say. Image sources name a file only by its path in this flake.
+  self,
 }:
 
 {
@@ -624,30 +627,43 @@
       # `kix-image-sources.json`. Outside the Activation: nothing here
       # reaches a manifest, so moving a value between code and a pin
       # changes this record and leaves the Activation's name alone.
-      imageSources = {
-        version = 1;
-        cluster = name;
-        pinsFile =
-          if pins == null || pins.file == null then null else instancePinsLib.relativeFile pins.file;
-        images = builtins.concatMap (
-          inst:
-          let
-            nsName = inst._meta.namespaceName;
-            instName = inst._meta.instanceName;
-          in
-          if (mergedInstances.${nsName}.${instName}.package._type or "") == "kix-import" then
-            [ ]
-          else
-            instancePinsLib.imageSources {
-              namespaceName = nsName;
-              instanceName = instName;
-              evaluation = instanceEvaluations.${nsName}.${instName};
-              packageConfigFile = "package config of ${nsName}/${instName}";
-              instancePins = instancePinsOf nsName instName;
-              inherit pins;
-            }
-        ) allInstancesList;
-      };
+      imageSources =
+        let
+          pinsFile = if pins == null then null else instancePinsLib.pathInFlake self pins.file;
+        in
+        {
+          version = 1;
+          cluster = name;
+          inherit pinsFile;
+          # Why a pin file the cluster passes has no `pinsFile`: another
+          # flake input holds it (`outside_flake`), or kix was not told the
+          # flake (`flake_unknown`). Null when there is a path, or no file.
+          pinsFileUnknown =
+            if pins == null || pins.file == null || pinsFile != null then
+              null
+            else if self == null then
+              "flake_unknown"
+            else
+              "outside_flake";
+          images = builtins.concatMap (
+            inst:
+            let
+              nsName = inst._meta.namespaceName;
+              instName = inst._meta.instanceName;
+            in
+            if (mergedInstances.${nsName}.${instName}.package._type or "") == "kix-import" then
+              [ ]
+            else
+              instancePinsLib.imageSources {
+                namespaceName = nsName;
+                instanceName = instName;
+                evaluation = instanceEvaluations.${nsName}.${instName};
+                packageConfigFile = "package config of ${nsName}/${instName}";
+                instancePins = instancePinsOf nsName instName;
+                inherit pins self;
+              }
+          ) allInstancesList;
+        };
 
       scorecardReport =
         if scorecardEnabled then

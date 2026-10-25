@@ -466,8 +466,9 @@ pub struct PinSetArgs {
     pub promoted_by: Option<String>,
 
     /// A note about this entry, kept for whoever reads the file later. Kix
-    /// never reads it and a promotion never discards it. Pass an empty
-    /// string to clear one.
+    /// never reads it. Setting the same image again keeps it; moving the
+    /// entry to another image drops it, since it described the old one,
+    /// unless this sets a new one. Pass an empty string to clear one.
     #[arg(long)]
     pub note: Option<String>,
 

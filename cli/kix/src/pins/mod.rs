@@ -57,9 +57,10 @@
 //! `sha-5d5dda2`. The digest is the part that changes, which is what makes
 //! the file regenerable and keeps CI out of the cluster definition.
 //!
-//! `note` is there so a person can say why an entry is what it is without
-//! the next promotion deleting it. JSON has no comments, and a field
-//! survives a rewrite where a comment would not.
+//! `note` is there so a person can say why an entry is what it is. JSON has
+//! no comments, and a field survives a rewrite where a comment would not.
+//! The file keeps it as written; `kix pin set` drops it when it moves the
+//! entry to another image, since the note described the old one.
 //!
 //! Writing produces the canonical form above, which is why `kix pin set`
 //! refuses to overwrite a file that does not declare `managedBy`.
@@ -122,8 +123,8 @@ pub struct Pin {
         skip_serializing_if = "Option::is_none"
     )]
     pub resolved_at: Option<String>,
-    /// A human note about this entry. Kix never reads it, and never
-    /// discards it.
+    /// A human note about this entry. Kix never reads it. `kix pin set`
+    /// drops it when it moves the entry to another image.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }

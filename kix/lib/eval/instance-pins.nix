@@ -11,14 +11,32 @@
 
 let
   # Store paths of flake sources are `/nix/store/<hash>-source/<path>`.
-  # Provenance reports the part after the source root, which is the path in
-  # the repository for a flake at the repository root.
+  # Error messages show the part after the source root. It names the file
+  # well enough for a person, whichever flake input holds it.
   relativeFile =
     file:
     let
       m = builtins.match "/nix/store/[^/]+/(.*)" file;
     in
     if m == null then file else builtins.head m;
+
+  # The path of `file` below `self`, the flake whose clusters these are, or
+  # null when the file is not inside it or `self` is not known. A path
+  # literal in a flake evaluates to a path under the flake's own store path,
+  # so the result is the file's path in the flake's repository. A file from
+  # another flake input has another store path and gets null: no path in
+  # this repository holds it, and `kix-image-sources.json` names only paths
+  # that a person or Kix Enterprise can edit in this repository.
+  pathInFlake =
+    self: file:
+    let
+      root = builtins.unsafeDiscardStringContext (toString self);
+      f = builtins.unsafeDiscardStringContext (toString file);
+    in
+    if self == null || file == null || !(lib.hasPrefix "${root}/" f) then
+      null
+    else
+      lib.removePrefix "${root}/" f;
 
   # The module system names a definition from a cluster module as
   # "<file>, via option instances.<ns>.<inst>.config", and an inline module
@@ -51,12 +69,11 @@ let
     in
     if positions != [ ] then
       {
-        file = relativeFile (builtins.head positions).file;
-        line = (builtins.head positions).line;
+        inherit (builtins.head positions) file line;
       }
     else
       {
-        file = if file == null then null else relativeFile file;
+        inherit file;
         line = null;
       };
 
@@ -68,9 +85,9 @@ let
     if p.file == null then
       "a module with no file (${def.file})"
     else if p.line == null then
-      p.file
+      relativeFile p.file
     else
-      "${p.file} line ${toString p.line}";
+      "${relativeFile p.file} line ${toString p.line}";
 
   # An image option is a submodule option declared by `kix.options.image`.
   isImageOption =
@@ -105,7 +122,7 @@ let
   showPaths = paths: lib.concatMapStringsSep ", " (lib.concatStringsSep ".") paths;
 in
 {
-  inherit relativeFile imageOptionPaths;
+  inherit relativeFile pathInFlake imageOptionPaths;
 
   # The module that applies one instance's pins. `instancePins` is
   # `{ file; options; }`: the pin file, and option path to pin.
@@ -203,9 +220,11 @@ in
   #   code             any other definition in the cluster's code
   #
   # A value that does not evaluate is left out; evaluating the cluster
-  # reports it where it is used.
+  # reports it where it is used. Each `file` is a path in the flake `self`
+  # (`pathInFlake`), null for a file outside it.
   imageSources =
     {
+      self,
       namespaceName,
       instanceName,
       evaluation,
@@ -244,13 +263,17 @@ in
             ) null pins.keys;
         hasContext = builtins.hasContext final.repository || builtins.hasContext final.tag;
         code = lib.findFirst (d: d.file != packageConfigFile) (builtins.head defs) defs;
-        place = definitionPlace code;
+        place =
+          let
+            p = definitionPlace code;
+          in
+          p // { file = pathInFlake self p.file; };
         noPlace = {
           file = null;
           line = null;
         };
         pinPlace = {
-          file = if pins == null || pins.file == null then null else relativeFile pins.file;
+          file = if pins == null then null else pathInFlake self pins.file;
           line = null;
         };
 
@@ -265,7 +288,7 @@ in
               dependency = null;
             }
             // {
-              file = relativeFile pinFile;
+              file = pathInFlake self pinFile;
               line = null;
             }
           else if fromPackage then

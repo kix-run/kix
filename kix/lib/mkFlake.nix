@@ -55,6 +55,8 @@ let
           base = import ./. {
             inherit pkgs;
             lib = slib;
+            # Image sources name the pin file by its path in this flake.
+            self = inputs.self or null;
           };
         in
         base
