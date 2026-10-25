@@ -17,7 +17,7 @@
 //!
 //! ```json
 //! {
-//!   "version": 1,
+//!   "version": 2,
 //!   "managedBy": "kix pin",
 //!   "images": {
 //!     "atlas-server-prod": {
@@ -29,9 +29,29 @@
 //!       "resolvedAt": "2026-09-09T14:02:11Z",
 //!       "note": "Held back while we investigate the memory leak."
 //!     }
+//!   },
+//!   "instances": {
+//!     "monitoring/grafana": {
+//!       "image": {
+//!         "repository": "docker.io/grafana/grafana",
+//!         "tag": "13.1.3",
+//!         "digest": "sha256:9a1c…"
+//!       }
+//!     }
 //!   }
 //! }
 //! ```
+//!
+//! The file has two maps. The cluster's code reads an `images` pin by name,
+//! `pins.get "atlas-server-prod"`. Kix applies an `instances` pin itself,
+//! as a definition of that instance's option, when the cluster passes the
+//! file to `kix.buildCluster { pins = ...; }`; no code reads it. The option
+//! path is relative to the instance's config, so `image` is
+//! `instances.monitoring.grafana.config.image`.
+//!
+//! Version 1 has `images` only, and version 2 adds `instances`. A file with
+//! no instance pins is written as version 1, so a Kix that reads only
+//! version 1 can still read it.
 //!
 //! The tag names a stream and does not move per build: `main`, not
 //! `sha-5d5dda2`. The digest is the part that changes, which is what makes
@@ -58,8 +78,14 @@ pub const MANAGED_MARKER: &str = "\"managedBy\": \"kix pin\"";
 /// What `managedBy` has to say for the file to be safe to rewrite.
 const MANAGED_BY: &str = "kix pin";
 
-/// The schema version of the envelope. Bumped only for a breaking change.
-const VERSION: u32 = 1;
+/// The schema version of a file with `images` only.
+const VERSION_IMAGES: u32 = 1;
+
+/// The schema version of a file with `instances`.
+const VERSION_INSTANCES: u32 = 2;
+
+/// The option an instance pin sets when none is named.
+pub const DEFAULT_OPTION: &str = "image";
 
 /// One image reference, as resolved at promotion time.
 ///
@@ -119,12 +145,70 @@ impl Pin {
 
 /// The on-disk envelope. Separate from `PinFile` because the envelope is a
 /// serialisation detail and `PinFile` carries the path and the managed flag.
+/// Fields serialise in declaration order, which is the canonical order.
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Envelope {
     version: u32,
     #[serde(rename = "managedBy")]
     managed_by: String,
+    #[serde(default)]
     images: BTreeMap<String, Pin>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    instances: BTreeMap<String, BTreeMap<String, Pin>>,
+}
+
+/// Which entry of a pin file a pin is.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PinKey {
+    /// An `images` pin, which the cluster's code reads with `pins.get`.
+    Image(String),
+    /// An `instances` pin: `instance` is `<namespace>/<instance>`, and
+    /// `option` is an option path of its package, such as `image`.
+    Instance { instance: String, option: String },
+}
+
+impl PinKey {
+    /// The key as `kix pin` takes it on the command line: a name, or
+    /// `<namespace>/<instance>` with `--option` for an option other than
+    /// `image`.
+    pub fn parse(key: &str, option: Option<&str>) -> Result<Self, String> {
+        if key.contains('/') {
+            check_instance_key(key)?;
+            let option = option.unwrap_or(DEFAULT_OPTION);
+            check_option_path(key, option)?;
+            Ok(Self::Instance {
+                instance: key.to_string(),
+                option: option.to_string(),
+            })
+        } else if let Some(option) = option {
+            Err(format!(
+                "--option {option} names an option of an instance, and '{key}' is a pin name. Name the instance as <namespace>/<instance>."
+            ))
+        } else if key.is_empty() {
+            Err("A pin name cannot be empty.".to_string())
+        } else {
+            Ok(Self::Image(key.to_string()))
+        }
+    }
+
+    /// The `kix pin set` arguments that name this pin.
+    pub fn arguments(&self) -> String {
+        match self {
+            Self::Image(name) => name.clone(),
+            Self::Instance { instance, option } if option == DEFAULT_OPTION => instance.clone(),
+            Self::Instance { instance, option } => format!("{instance} --option {option}"),
+        }
+    }
+}
+
+impl std::fmt::Display for PinKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Image(name) => write!(f, "{name}"),
+            Self::Instance { instance, option } => write!(f, "{instance} {option}"),
+        }
+    }
 }
 
 /// A whole pin file. Ordered, so writing it back is deterministic and a diff
@@ -132,7 +216,10 @@ struct Envelope {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PinFile {
     pub path: PathBuf,
+    /// The `images` map, by pin name.
     pub pins: BTreeMap<String, Pin>,
+    /// The `instances` map, by `<namespace>/<instance>`, then option path.
+    pub instances: BTreeMap<String, BTreeMap<String, Pin>>,
     /// Whether the file on disk declared `managedBy`.
     pub managed: bool,
 }
@@ -180,24 +267,90 @@ impl PinFile {
             path: path.display().to_string(),
             source: e,
         })?;
-        let (pins, managed) = parse_file(&text).map_err(|detail| PinError::Invalid {
+        Self::parse(&text, path)
+    }
+
+    /// Parse a pin file's text, for a caller that read it from somewhere
+    /// other than the disk, such as a forge's API. `path` is where the file
+    /// lives, for error messages and for `write`.
+    pub fn parse(text: &str, path: &Path) -> Result<Self, PinError> {
+        let mut file = parse_file(text).map_err(|detail| PinError::Invalid {
             path: path.display().to_string(),
             detail,
         })?;
-        Ok(Self {
-            path: path.to_path_buf(),
-            pins,
-            managed,
-        })
+        file.path = path.to_path_buf();
+        Ok(file)
     }
 
     /// A pin file that does not exist yet.
-    pub(crate) fn empty(path: &Path) -> Self {
+    pub fn empty(path: &Path) -> Self {
         Self {
             path: path.to_path_buf(),
-            pins: BTreeMap::new(),
             managed: true,
+            ..Self::default()
         }
+    }
+
+    /// The pin `key` names, if the file has it.
+    pub fn get(&self, key: &PinKey) -> Option<&Pin> {
+        match key {
+            PinKey::Image(name) => self.pins.get(name),
+            PinKey::Instance { instance, option } => self.instances.get(instance)?.get(option),
+        }
+    }
+
+    /// Add or replace the pin `key` names.
+    pub fn insert(&mut self, key: PinKey, pin: Pin) {
+        match key {
+            PinKey::Image(name) => {
+                self.pins.insert(name, pin);
+            }
+            PinKey::Instance { instance, option } => {
+                self.instances
+                    .entry(instance)
+                    .or_default()
+                    .insert(option, pin);
+            }
+        }
+    }
+
+    /// Remove the pin `key` names, and an instance left with no pins.
+    pub fn remove(&mut self, key: &PinKey) -> Option<Pin> {
+        match key {
+            PinKey::Image(name) => self.pins.remove(name),
+            PinKey::Instance { instance, option } => {
+                let options = self.instances.get_mut(instance)?;
+                let pin = options.remove(option);
+                if options.is_empty() {
+                    self.instances.remove(instance);
+                }
+                pin
+            }
+        }
+    }
+
+    /// Every pin, `images` first, each map in key order.
+    pub fn entries(&self) -> impl Iterator<Item = (PinKey, &Pin)> {
+        let images = self
+            .pins
+            .iter()
+            .map(|(name, pin)| (PinKey::Image(name.clone()), pin));
+        let instances = self.instances.iter().flat_map(|(instance, options)| {
+            options.iter().map(move |(option, pin)| {
+                (
+                    PinKey::Instance {
+                        instance: instance.clone(),
+                        option: option.clone(),
+                    },
+                    pin,
+                )
+            })
+        });
+        images.chain(instances)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pins.is_empty() && self.instances.is_empty()
     }
 
     /// Read the file if it is there, otherwise start an empty one.
@@ -210,11 +363,16 @@ impl PinFile {
     }
 
     /// Render the canonical form. Deterministic: same pins, same bytes.
-    pub(crate) fn render(&self) -> String {
+    pub fn render(&self) -> String {
         let envelope = Envelope {
-            version: VERSION,
+            version: if self.instances.is_empty() {
+                VERSION_IMAGES
+            } else {
+                VERSION_INSTANCES
+            },
             managed_by: MANAGED_BY.to_string(),
             images: self.pins.clone(),
+            instances: self.instances.clone(),
         };
         let mut out = serde_json::to_string_pretty(&envelope)
             .expect("a pin file is plain data and always serialises");
@@ -225,6 +383,14 @@ impl PinFile {
     /// Write the canonical form, refusing to clobber a file Kix did not write
     /// unless the caller has said to.
     pub fn write(&self, force: bool) -> Result<(), PinError> {
+        // The checks a reader makes, so nothing writes a file Kix would
+        // then refuse to read.
+        check_pins(&self.pins)
+            .and_then(|()| check_instances(&self.instances))
+            .map_err(|detail| PinError::Invalid {
+                path: self.path.display().to_string(),
+                detail,
+            })?;
         if self.path.exists() && !self.managed && !force {
             return Err(PinError::NotManaged {
                 path: self.path.display().to_string(),
@@ -245,13 +411,13 @@ impl PinFile {
     }
 }
 
-/// Parse a pin file's text into its pins and whether it declared itself
-/// managed.
+/// Parse a pin file's text. The path is left empty for the caller to set.
 ///
-/// Two shapes are accepted. The canonical envelope, and a bare map of pins,
-/// which is what a file without the generated envelope looks like. A bare map is never
-/// managed, so `kix pin set` will not rewrite one without `--force`.
-fn parse_file(text: &str) -> Result<(BTreeMap<String, Pin>, bool), String> {
+/// Two shapes are accepted. The canonical envelope, and a bare map of image
+/// pins, which is what a file without the generated envelope looks like. A
+/// bare map is never managed, so `kix pin set` will not rewrite one without
+/// `--force`.
+fn parse_file(text: &str) -> Result<PinFile, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|e| {
         format!("It is not JSON: {e}. A pin file is JSON written by `kix pin set`.")
     })?;
@@ -260,25 +426,44 @@ fn parse_file(text: &str) -> Result<(BTreeMap<String, Pin>, bool), String> {
         .as_object()
         .ok_or_else(|| "A pin file must be a JSON object.".to_string())?;
 
-    if obj.contains_key("images") {
+    if ["version", "images", "instances"]
+        .iter()
+        .any(|k| obj.contains_key(*k))
+    {
+        // The version is checked before the shape, so a file from a newer
+        // Kix is reported as that rather than as a field this one lacks.
+        // The Nix reader refuses the same versions.
+        let version = obj.get("version").and_then(serde_json::Value::as_u64);
+        match version {
+            Some(1) | Some(2) => {}
+            Some(v) => {
+                return Err(format!(
+                    "It declares version {v}, and this kix reads versions {VERSION_IMAGES} and {VERSION_INSTANCES}. Upgrade kix, or check the file."
+                ));
+            }
+            None => return Err("It has no version. A pin file declares `\"version\"`.".to_string()),
+        }
         let envelope: Envelope = serde_json::from_value(value.clone())
             .map_err(|e| format!("It is not shaped like a pin file: {e}."))?;
-        // Checked rather than ignored. A file from a newer Kix read as
-        // though it were this one is the failure a version field exists to
-        // prevent, and the Nix reader refuses it too.
-        if envelope.version != VERSION {
+        if envelope.version == VERSION_IMAGES && !envelope.instances.is_empty() {
             return Err(format!(
-                "It declares version {}, and this kix reads version {VERSION}. Upgrade kix, or check the file.",
-                envelope.version
+                "It has instance pins (`instances`) but declares version {VERSION_IMAGES}. A file with instance pins declares version {VERSION_INSTANCES}."
             ));
         }
         check_pins(&envelope.images)?;
-        let managed = envelope.managed_by == MANAGED_BY;
-        return Ok((envelope.images, managed));
+        check_instances(&envelope.instances)?;
+        return Ok(PinFile {
+            managed: envelope.managed_by == MANAGED_BY,
+            pins: envelope.images,
+            instances: envelope.instances,
+            ..PinFile::default()
+        });
     }
 
-    let pins = parse_pins(&value)?;
-    Ok((pins, false))
+    Ok(PinFile {
+        pins: parse_pins(&value)?,
+        ..PinFile::default()
+    })
 }
 
 /// Turn a bare map of pins into pins, refusing anything that would render a
@@ -304,20 +489,160 @@ pub(crate) fn parse_pins(value: &serde_json::Value) -> Result<BTreeMap<String, P
 /// The checks that apply however the file was shaped.
 fn check_pins(pins: &BTreeMap<String, Pin>) -> Result<(), String> {
     for (key, pin) in pins {
-        if pin.repository.is_empty() || pin.tag.is_empty() {
+        check_pin(&format!("Pin '{key}'"), pin)?;
+    }
+    Ok(())
+}
+
+fn check_instances(instances: &BTreeMap<String, BTreeMap<String, Pin>>) -> Result<(), String> {
+    for (instance, options) in instances {
+        check_instance_key(instance)?;
+        if options.is_empty() {
             return Err(format!(
-                "Pin '{key}' has an empty repository or tag. Both are required."
+                "Instance pin '{instance}' has no options. Map an option path, such as `image`, to a pin."
             ));
         }
-        if let Some(d) = &pin.digest
-            && !is_sha256_digest(d)
-        {
-            return Err(format!(
-                "Pin '{key}' has a digest that is not sha256: followed by 64 hexadecimal characters: '{d}'."
-            ));
+        for (option, pin) in options {
+            check_option_path(instance, option)?;
+            check_pin(&format!("Instance pin '{instance}' option '{option}'"), pin)?;
         }
     }
     Ok(())
+}
+
+fn check_pin(label: &str, pin: &Pin) -> Result<(), String> {
+    if pin.repository.is_empty() || pin.tag.is_empty() {
+        return Err(format!(
+            "{label} has an empty repository or tag. Both are required."
+        ));
+    }
+    if !is_repository(&pin.repository) {
+        return Err(format!(
+            "{label} has a repository that is not an image repository: '{}'. A repository is an optional registry host, then lower-case path components separated by `/`, such as docker.io/library/nginx.",
+            pin.repository
+        ));
+    }
+    if pin.tag.contains('@') {
+        return Err(format!(
+            "{label} has a digest in its tag: '{}'. Put the tag in `tag` and the digest in `digest`.",
+            pin.tag
+        ));
+    }
+    if !is_tag(&pin.tag) {
+        return Err(format!(
+            "{label} has a tag that is not an image tag: '{}'. A tag is up to 128 letters, digits, `_`, `.` and `-`, and does not start with `.` or `-`.",
+            pin.tag
+        ));
+    }
+    if let Some(d) = &pin.digest
+        && !is_sha256_digest(d)
+    {
+        return Err(format!(
+            "{label} has a digest that is not sha256: followed by 64 hexadecimal characters: '{d}'."
+        ));
+    }
+    Ok(())
+}
+
+// The image reference grammar of the OCI distribution spec
+// (distribution/reference), as the Nix reader checks it in
+// kix/lib/vocab/pins.nix: an optional registry host and port, then
+// lower-case path components; a tag of at most 128 word characters, dots,
+// and dashes.
+
+/// `[a-z0-9]+(([.]|_|__|-+)[a-z0-9]+)*`
+fn is_path_component(s: &str) -> bool {
+    let alnum = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+    let mut chars = s.chars().peekable();
+    loop {
+        // A run of letters and digits, at least one.
+        let mut run = 0;
+        while chars.peek().is_some_and(|c| alnum(*c)) {
+            chars.next();
+            run += 1;
+        }
+        if run == 0 {
+            return false;
+        }
+        // Then the end, or one separator and another run.
+        let mut sep = String::new();
+        while let Some(c) = chars.peek().copied().filter(|c| !alnum(*c)) {
+            sep.push(c);
+            chars.next();
+        }
+        if sep.is_empty() {
+            return chars.peek().is_none();
+        }
+        if !(sep == "." || sep == "_" || sep == "__" || sep.chars().all(|c| c == '-')) {
+            return false;
+        }
+    }
+}
+
+/// A registry host: dot-separated labels or a bracketed IPv6 address, and
+/// an optional port.
+fn is_host(s: &str) -> bool {
+    let (name, port) = match s.rsplit_once(':') {
+        Some((name, port)) if !name.ends_with(':') && !port.contains(']') => (name, Some(port)),
+        _ => (s, None),
+    };
+    if port.is_some_and(|p| p.is_empty() || !p.chars().all(|c| c.is_ascii_digit())) {
+        return false;
+    }
+    if let Some(ip) = name.strip_prefix('[').and_then(|n| n.strip_suffix(']')) {
+        return !ip.is_empty() && ip.chars().all(|c| c.is_ascii_hexdigit() || c == ':');
+    }
+    name.split('.').all(|label| {
+        !label.is_empty()
+            && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+    })
+}
+
+fn is_repository(s: &str) -> bool {
+    if s.len() > 255 {
+        return false;
+    }
+    let parts: Vec<&str> = s.split('/').collect();
+    let paths_ok = |paths: &[&str]| !paths.is_empty() && paths.iter().all(|p| is_path_component(p));
+    paths_ok(&parts) || (parts.len() > 1 && is_host(parts[0]) && paths_ok(&parts[1..]))
+}
+
+/// `[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}`
+fn is_tag(s: &str) -> bool {
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut chars = s.chars();
+    s.len() <= 128
+        && chars.next().is_some_and(word)
+        && chars.all(|c| word(c) || c == '.' || c == '-')
+}
+
+/// `<namespace>/<instance>`, as the Nix reader requires.
+fn check_instance_key(instance: &str) -> Result<(), String> {
+    match instance.split_once('/') {
+        Some((ns, name)) if !ns.is_empty() && !name.is_empty() && !name.contains('/') => Ok(()),
+        _ => Err(format!(
+            "Instance pin '{instance}' is not <namespace>/<instance>."
+        )),
+    }
+}
+
+/// Dot-separated option names, as the Nix reader requires.
+fn check_option_path(instance: &str, option: &str) -> Result<(), String> {
+    let ok = option.split('.').all(|part| {
+        !part.is_empty()
+            && part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    });
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "Instance pin '{instance}' names option '{option}', which is not an option path such as `image` or `server.image`."
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -426,16 +751,237 @@ mod tests {
 
     #[test]
     fn a_newer_schema_version_is_refused_rather_than_misread() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("pins.json");
-        std::fs::write(
-            &path,
-            r#"{"version":2,"managedBy":"kix pin","images":{"web":{"repository":"r/w","tag":"main"}}}"#,
+        let msg = parse_file(
+            r#"{"version":3,"managedBy":"kix pin","images":{"web":{"repository":"r/w","tag":"main"}}}"#,
+        )
+        .unwrap_err();
+        assert!(msg.contains("version 3"), "{msg}");
+    }
+
+    #[test]
+    fn a_version_1_file_still_reads_and_is_written_back_as_version_1() {
+        let text = r#"{
+  "version": 1,
+  "managedBy": "kix pin",
+  "images": {
+    "web": {
+      "repository": "r/w",
+      "tag": "main"
+    }
+  }
+}
+"#;
+        let f = parse_file(text).unwrap();
+        assert_eq!(f.pins["web"].tag, "main");
+        assert!(f.instances.is_empty());
+        // Byte for byte, so a Kix that reads only version 1 keeps reading
+        // every file without instance pins.
+        assert_eq!(f.render(), text);
+    }
+
+    #[test]
+    fn instance_pins_are_version_2_and_render_in_sorted_order() {
+        let mut f = PinFile::empty(Path::new("pins.json"));
+        f.insert(
+            PinKey::parse("monitoring/grafana", None).unwrap(),
+            pin("docker.io/grafana/grafana", "13.1.3"),
+        );
+        f.insert(
+            PinKey::parse("monitoring/alloy", Some("server.image")).unwrap(),
+            pin("docker.io/grafana/alloy", "v1.10.0"),
+        );
+        f.insert(PinKey::Image("web".into()), pin("r/w", "main"));
+        let text = f.render();
+        assert_eq!(
+            text,
+            r#"{
+  "version": 2,
+  "managedBy": "kix pin",
+  "images": {
+    "web": {
+      "repository": "r/w",
+      "tag": "main"
+    }
+  },
+  "instances": {
+    "monitoring/alloy": {
+      "server.image": {
+        "repository": "docker.io/grafana/alloy",
+        "tag": "v1.10.0"
+      }
+    },
+    "monitoring/grafana": {
+      "image": {
+        "repository": "docker.io/grafana/grafana",
+        "tag": "13.1.3"
+      }
+    }
+  }
+}
+"#
+        );
+        let back = parse_file(&text).unwrap();
+        assert_eq!(back.instances, f.instances);
+        assert_eq!(back.pins, f.pins);
+        assert!(back.managed);
+    }
+
+    #[test]
+    fn removing_the_last_instance_pin_writes_version_1_again() {
+        let mut f = PinFile::empty(Path::new("pins.json"));
+        let key = PinKey::parse("monitoring/grafana", None).unwrap();
+        f.insert(key.clone(), pin("r/g", "1"));
+        assert!(f.render().contains("\"version\": 2"));
+        assert!(f.remove(&key).is_some());
+        assert!(
+            f.instances.is_empty(),
+            "an instance with no pins is removed"
+        );
+        assert!(f.render().contains("\"version\": 1"));
+    }
+
+    #[test]
+    fn a_version_1_file_with_instance_pins_is_refused() {
+        let msg = parse_file(
+            r#"{"version":1,"managedBy":"kix pin","images":{},
+                "instances":{"ns/app":{"image":{"repository":"r/a","tag":"1"}}}}"#,
+        )
+        .unwrap_err();
+        assert!(msg.contains("declares version 1"), "{msg}");
+    }
+
+    #[test]
+    fn parse_reads_text_and_names_the_path_in_errors() {
+        let f = PinFile::parse(
+            r#"{"version":1,"managedBy":"kix pin","images":{"web":{"repository":"r/w","tag":"1"}}}"#,
+            Path::new("clusters/app/pins.json"),
         )
         .unwrap();
+        assert_eq!(f.path, Path::new("clusters/app/pins.json"));
+        assert!(f.managed);
+        let msg = PinFile::parse("{", Path::new("clusters/app/pins.json"))
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("clusters/app/pins.json"), "{msg}");
+    }
 
-        let msg = PinFile::read(&path).unwrap_err().to_string();
-        assert!(msg.contains("version 2"), "{msg}");
+    #[test]
+    fn a_version_2_file_without_images_reads() {
+        let f = parse_file(
+            r#"{"version":2,"managedBy":"kix pin",
+                "instances":{"ns/app":{"image":{"repository":"r/a","tag":"1"}}}}"#,
+        )
+        .unwrap();
+        let key = PinKey::parse("ns/app", None).unwrap();
+        assert_eq!(f.get(&key).unwrap().tag, "1");
+        assert!(f.pins.is_empty());
+    }
+
+    #[test]
+    fn malformed_instance_pins_are_refused() {
+        for (text, needle) in [
+            (
+                r#"{"version":2,"managedBy":"kix pin","instances":{"app":{"image":{"repository":"r","tag":"1"}}}}"#,
+                "<namespace>/<instance>",
+            ),
+            (
+                r#"{"version":2,"managedBy":"kix pin","instances":{"ns/app":{"image.":{"repository":"r","tag":"1"}}}}"#,
+                "not an option path",
+            ),
+            (
+                r#"{"version":2,"managedBy":"kix pin","instances":{"ns/app":{}}}"#,
+                "has no options",
+            ),
+            (
+                r#"{"version":2,"managedBy":"kix pin","instances":{"ns/app":{"image":{"repository":"r","tag":""}}}}"#,
+                "empty repository or tag",
+            ),
+            (
+                r#"{"version":2,"managedBy":"kix pin","images":{},"holds":{}}"#,
+                "holds",
+            ),
+        ] {
+            let msg = parse_file(text).unwrap_err();
+            assert!(msg.contains(needle), "{needle}: {msg}");
+        }
+    }
+
+    #[test]
+    fn repositories_and_tags_follow_the_image_reference_grammar() {
+        for ok in [
+            "nginx",
+            "docker.io/library/nginx",
+            "harbor.example.com:8443/team/web-server",
+            "localhost:5000/a__b/c.d/e--f",
+            "[::1]:5000/app",
+            "Registry.Example.com/app",
+        ] {
+            assert!(is_repository(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "Docker/Nginx",
+            "reg.example/app/",
+            "reg.example//app",
+            "reg.example/-app",
+            "reg.example/app.",
+            "reg.example/a...b",
+            "reg.example:x/app",
+            "reg example/app",
+        ] {
+            assert!(!is_repository(bad), "{bad}");
+        }
+        for ok in ["1.27-alpine", "v1.154.0", "_x", "main", &"a".repeat(128)] {
+            assert!(is_tag(ok), "{ok}");
+        }
+        for bad in ["", ".x", "-x", "a:b", "a/b", &"a".repeat(129)] {
+            assert!(!is_tag(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_pin_with_a_bad_reference_is_refused() {
+        for (pin, needle) in [
+            (
+                r#"{"repository":"r/w","tag":"1@sha256:aa"}"#,
+                "digest in its tag",
+            ),
+            (
+                r#"{"repository":"R/W","tag":"1"}"#,
+                "not an image repository",
+            ),
+            (r#"{"repository":"r/w","tag":"-1"}"#, "not an image tag"),
+        ] {
+            let text = format!(
+                r#"{{"version":2,"managedBy":"kix pin","instances":{{"ns/app":{{"image":{pin}}}}}}}"#
+            );
+            let msg = parse_file(&text).unwrap_err();
+            assert!(msg.contains(needle), "{needle}: {msg}");
+        }
+    }
+
+    #[test]
+    fn a_key_with_a_slash_names_an_instance() {
+        assert_eq!(
+            PinKey::parse("monitoring/grafana", None).unwrap(),
+            PinKey::Instance {
+                instance: "monitoring/grafana".into(),
+                option: "image".into()
+            }
+        );
+        assert_eq!(
+            PinKey::parse("web", None).unwrap(),
+            PinKey::Image("web".into())
+        );
+        assert!(PinKey::parse("web", Some("image")).is_err());
+        assert!(PinKey::parse("a/b/c", None).is_err());
+        assert_eq!(
+            PinKey::parse("ns/app", Some("server.image"))
+                .unwrap()
+                .arguments(),
+            "ns/app --option server.image"
+        );
+        assert_eq!(PinKey::parse("ns/app", None).unwrap().arguments(), "ns/app");
     }
 
     #[test]

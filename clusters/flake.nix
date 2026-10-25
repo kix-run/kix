@@ -24,7 +24,9 @@
 
       # region:pinFile
       # Declared once. A cluster that takes a `pins` argument gets this file
-      # already loaded, so no cluster definition names the path.
+      # already loaded, so no cluster definition names the path. It holds
+      # instance pins for `pins` (test-pins.nix), so no other cluster passes
+      # it to buildCluster: instance pins belong to one cluster.
       pins = ./pins.json;
       # endregion:pinFile
 

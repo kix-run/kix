@@ -19,7 +19,8 @@
   buildConfigInjections,
   checkRefTargets,
   refsOf,
-  evaluateInstanceConfig,
+  evaluateInstanceModules,
+  instancePinsLib,
   evaluateInstance,
   mkImport,
   checkExtraDeps,
@@ -31,6 +32,11 @@
       name ? "cluster",
       modules,
       specialArgs ? { },
+      # The cluster's pin file, as `kix.pins` reads it. Its `instances` map
+      # is applied here; its `images` map is read by the cluster's code with
+      # `pins.get`, and names the pin a matching value came from in
+      # `imageSources`.
+      pins ? null,
     }:
     let
       # Module merge stays lazy: ref thunks in config values are not forced here.
@@ -91,6 +97,50 @@
         instances = cfg.instances;
         inherit mergedInstances;
       };
+
+      # An instance pin for an instance the cluster does not have would
+      # otherwise pin nothing, and say nothing. So a pin file with instance
+      # pins belongs to one cluster: a flake with several clusters gives each
+      # its own, `pins = kix.pins ./<cluster>/pins.json;`.
+      _instancePinsCheck =
+        if pins == null then
+          null
+        else
+          builtins.foldl' (
+            _: key:
+            let
+              parts = lib.splitString "/" key;
+              nsName = builtins.elemAt parts 0;
+              instName = builtins.elemAt parts 1;
+              instCfg = (mergedInstances.${nsName} or { }).${instName} or null;
+              where = if pins.file == null then "the pins attrset" else instancePinsLib.relativeFile pins.file;
+            in
+            if instCfg == null then
+              throw "kix.pins: ${where} pins instance '${key}', which cluster '${name}' does not have. Instances in namespace '${nsName}': ${
+                let
+                  names = builtins.attrNames (mergedInstances.${nsName} or { });
+                in
+                if names == [ ] then "none" else builtins.concatStringsSep ", " names
+              }. A pin file with instance pins belongs to one cluster; give each cluster that applies instance pins its own file."
+            else if (instCfg.package._type or "") == "kix-import" then
+              throw "kix.pins: ${where} pins instance '${key}', which is an import. An import renders no workloads, so it has no image to pin."
+            else
+              null
+          ) null (builtins.attrNames pins.instances);
+
+      # This instance's entry of the pin file's `instances` map, or null.
+      instancePinsOf =
+        nsName: instName:
+        let
+          key = "${nsName}/${instName}";
+        in
+        if pins != null && pins.instances ? ${key} then
+          {
+            file = if pins.file == null then "the pins attrset" else pins.file;
+            options = pins.instances.${key};
+          }
+        else
+          null;
 
       allNsNames = lib.unique (builtins.attrNames cfg.namespaces ++ builtins.attrNames mergedInstances);
 
@@ -381,29 +431,38 @@
             inj
         ) (configInjections.${nsName}.${instName} or [ ]);
 
+      configsOf = lib.mapAttrs (_: lib.mapAttrs (_: e: e.config));
+
       # Resolve consumer-to-dependency config injections in a config-only
-      # fixpoint so they do not depend on full instance views.
-      instanceConfigs = lib.fix (
-        selfCfg:
+      # fixpoint so they do not depend on full instance views. The options
+      # are kept for `imageSources`.
+      instanceEvaluations = lib.fix (
+        selfEval:
         lib.mapAttrs (
           nsName: nsInsts:
           lib.mapAttrs (
             instName: instCfg:
             if (instCfg.package._type or "") == "kix-import" then
-              { }
+              {
+                config = { };
+                options = { };
+              }
             else
-              evaluateInstanceConfig {
+              evaluateInstanceModules {
                 inherit (phase1Instances.${nsName}.${instName}) packageOptions packageConfig;
                 packageConfigFile = "package config of ${nsName}/${instName}";
                 namespaceName = nsName;
                 instanceName = instName;
                 inherit instCfg;
                 clusterConfig = cfg;
-                configInjections = resolveInjectionsAgainst selfCfg nsName instName;
+                configInjections = resolveInjectionsAgainst (configsOf selfEval) nsName instName;
+                instancePins = instancePinsOf nsName instName;
               }
           ) nsInsts
         ) mergedInstances
       );
+
+      instanceConfigs = configsOf instanceEvaluations;
 
       resolveInjections = resolveInjectionsAgainst instanceConfigs;
 
@@ -425,6 +484,7 @@
               inherit resolutionIndex;
               globalPartsOverlays = cfg.globalPartsOverlays;
               configInjections = resolveInjections nsName instName;
+              instancePins = instancePinsOf nsName instName;
               inherit workloadInterceptors instanceProcessors clusterCtx;
               inherit annotationDomainIndex factBehaviorOverrides;
               isInstanceActive = isActive;
@@ -559,6 +619,35 @@
           ) allInstancesList;
         in
         if perInstance == [ ] then null else perInstance;
+
+      # Where each image option's value comes from, for
+      # `kix-image-sources.json`. Outside the Activation: nothing here
+      # reaches a manifest, so moving a value between code and a pin
+      # changes this record and leaves the Activation's name alone.
+      imageSources = {
+        version = 1;
+        cluster = name;
+        pinsFile =
+          if pins == null || pins.file == null then null else instancePinsLib.relativeFile pins.file;
+        images = builtins.concatMap (
+          inst:
+          let
+            nsName = inst._meta.namespaceName;
+            instName = inst._meta.instanceName;
+          in
+          if (mergedInstances.${nsName}.${instName}.package._type or "") == "kix-import" then
+            [ ]
+          else
+            instancePinsLib.imageSources {
+              namespaceName = nsName;
+              instanceName = instName;
+              evaluation = instanceEvaluations.${nsName}.${instName};
+              packageConfigFile = "package config of ${nsName}/${instName}";
+              instancePins = instancePinsOf nsName instName;
+              inherit pins;
+            }
+        ) allInstancesList;
+      };
 
       scorecardReport =
         if scorecardEnabled then
@@ -918,47 +1007,50 @@
       _clusterHookChecksRun = hooks.runChecks clusterHookChecks;
 
     in
-    builtins.seq _refTargetsCheck (
-      builtins.seq _extraDepsCheck (
-        builtins.seq _rolesValidation (
-          builtins.seq _roleBindingsCheck (
-            builtins.seq _annotationDomainsCheck (
-              builtins.seq _clusterHookChecksRun (
-                builtins.seq clusterDiagnostics.emitExtraWarnings (
-                  builtins.seq clusterDiagnostics.assertionCheck {
-                    _type = "k8s-cluster-v2";
-                    inherit name;
+    builtins.seq _instancePinsCheck (
+      builtins.seq _refTargetsCheck (
+        builtins.seq _extraDepsCheck (
+          builtins.seq _rolesValidation (
+            builtins.seq _roleBindingsCheck (
+              builtins.seq _annotationDomainsCheck (
+                builtins.seq _clusterHookChecksRun (
+                  builtins.seq clusterDiagnostics.emitExtraWarnings (
+                    builtins.seq clusterDiagnostics.assertionCheck {
+                      _type = "k8s-cluster-v2";
+                      inherit name;
 
-                    inherit clusterInstances;
-                    instances = clusterInstances;
+                      inherit clusterInstances;
+                      instances = clusterInstances;
 
-                    namespaces = nsResources;
+                      namespaces = nsResources;
 
-                    inherit
-                      activation
-                      packageIndex
-                      packageIndexContent
-                      info
-                      extraImages
-                      ;
+                      inherit
+                        activation
+                        packageIndex
+                        packageIndexContent
+                        info
+                        extraImages
+                        imageSources
+                        ;
 
-                    diagnostics = {
-                      warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
-                      inherit (clusterDiagnostics) assertions failedAssertions;
-                    };
-
-                    out = {
-                      maintenance = {
-                        enable = cfg.cluster.maintenance.enable or false;
-                        reason = cfg.cluster.maintenance.reason or null;
-                        until = cfg.cluster.maintenance.until or null;
+                      diagnostics = {
+                        warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;
+                        inherit (clusterDiagnostics) assertions failedAssertions;
                       };
-                    };
 
-                    inherit scorecardReport;
+                      out = {
+                        maintenance = {
+                          enable = cfg.cluster.maintenance.enable or false;
+                          reason = cfg.cluster.maintenance.reason or null;
+                          until = cfg.cluster.maintenance.until or null;
+                        };
+                      };
 
-                    rawManifests = rawManifestList;
-                  }
+                      inherit scorecardReport;
+
+                      rawManifests = rawManifestList;
+                    }
+                  )
                 )
               )
             )

@@ -47,6 +47,8 @@ in
       globalPartsOverlays ? [ ],
       clusterConfig ? { },
       configInjections ? [ ],
+      # This instance's pins from the cluster's pin file (eval/instance-pins.nix).
+      instancePins ? null,
       workloadInterceptors ? [ ],
       instanceProcessors ? [ ],
       clusterCtx ? { },
@@ -301,6 +303,7 @@ in
             instCfg
             clusterConfig
             configInjections
+            instancePins
             namespaceName
             instanceName
             ;

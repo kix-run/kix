@@ -744,7 +744,12 @@ inputs.kix.lib.mkFlake { inherit inputs; pins = ./pins.json; clusters = { ... };
 
 `kix pin set web --tag v1.2.3` asks the registry what that tag resolves to,
 refuses a tag that is not there, and rewrites `pins.json` with the repository,
-the tag and the digest. Promotion is then an ordinary commit, which means the
+the tag and the digest. A cluster that passes the file to `kix.buildCluster { inherit pins; }`
+can also pin an instance's image option with no line of code reading it:
+`kix pin set monitoring/grafana --tag 13.1.3` writes an `instances` entry
+that Kix applies to `instances.monitoring.grafana.config.image`. Prefer that
+for an upstream image: the version lives in one JSON entry, and deleting the
+entry returns the package's default. Promotion is then an ordinary commit, which means the
 repository can always answer what is deployed, a clean checkout deploys
 something real, and both a person and a CI job promote the same way.
 

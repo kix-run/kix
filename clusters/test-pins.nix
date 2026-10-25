@@ -13,7 +13,14 @@
 #   3. Promotion is a command anybody can run. `kix pin set` writes the pin
 #      from a laptop or from CI, identically, with no cluster evaluation.
 #
+# A second instance, `web-next`, shows the other kind of pin. Nothing in this
+# file reads it: `clusters/pins.json` pins `kix-pins/web-next`'s `image`
+# option under `instances`, and `kix.buildCluster` applies it because the
+# file is passed as `pins`. Removing that entry returns the instance to its
+# package's default; no Nix changes either way.
+#
 # Promote:  kix --flake ./clusters pin set web --tag 1.27-alpine
+#           kix --flake ./clusters pin set kix-pins/web-next --tag 1.29-alpine
 # Verify:   kix --flake ./clusters pin check
 # Build:    nix build ./clusters#cluster-pins --extra-experimental-features pipe-operators
 # Deploy:   kix --flake ./clusters --context kind-kix-pins deploy pins -y
@@ -34,11 +41,78 @@ let
   # own uses. Asserting they agree keeps the documented escape hatch working,
   # because nothing else in this repository exercises it.
   direct = kix.pins ./pins.json;
+
+  webPackage = {
+    meta.version = "test";
+
+    # The digest slot is declared once, the same way in every package,
+    # so `kix pin` always has somewhere to put a resolution.
+    # region:pinnedImageOption
+    options.image = kix.kixlib.options.image {
+      repository = "docker.io/nginxinc/nginx-unprivileged";
+      tag = "1.27-alpine";
+    };
+    # endregion:pinnedImageOption
+
+    build = [
+      (
+        {
+          self,
+          config,
+          scope,
+          kix,
+          ...
+        }:
+        {
+          root = self.svc;
+
+          deployment = scope.mkDeployment {
+            name = scope.instanceName;
+            spec = {
+              selector.matchLabels = scope.selectorLabels;
+              template.spec.containers = [
+                {
+                  name = scope.instanceName;
+                  # repository:tag@digest. The tag is what a person
+                  # reads; the digest is what the runtime pulls.
+                  # region:renderPinnedImage
+                  image = kix.image.ref config.image;
+                  imagePullPolicy = config.image.pullPolicy;
+                  # endregion:renderPinnedImage
+                  ports = [ (kix.port "http" 8080) ];
+                  resources = {
+                    requests = {
+                      cpu = "10m";
+                      memory = "16Mi";
+                    };
+                    limits.memory = "64Mi";
+                  };
+                  securityContext = {
+                    runAsNonRoot = true;
+                    runAsUser = 101;
+                    allowPrivilegeEscalation = false;
+                    capabilities.drop = [ "ALL" ];
+                  };
+                }
+              ];
+            };
+          };
+
+          svc =
+            self.deployment |> kix.service.fromWorkload { name = scope.instanceName; } |> scope.mkResource;
+        }
+      )
+    ];
+  };
 in
 assert direct.get "web" == pins.get "web";
 
 kix.buildCluster {
   name = "pins";
+  # Applies the file's instance pins. Its image pins are read below.
+  # region:applyInstancePins
+  inherit pins;
+  # endregion:applyInstancePins
   modules = [
     {
       # The placeholder ratchet, at error severity. `sha-REPLACE_ME` and its
@@ -54,73 +128,16 @@ kix.buildCluster {
       namespaces.kix-pins = { };
 
       instances.kix-pins.web = {
-        package = {
-          meta.version = "test";
-
-          # The digest slot is declared once, the same way in every package,
-          # so `kix pin` always has somewhere to put a resolution.
-          # region:pinnedImageOption
-          options.image = kix.kixlib.options.image {
-            repository = "docker.io/nginxinc/nginx-unprivileged";
-            tag = "1.27-alpine";
-          };
-          # endregion:pinnedImageOption
-
-          build = [
-            (
-              {
-                self,
-                config,
-                scope,
-                kix,
-                ...
-              }:
-              {
-                root = self.svc;
-
-                deployment = scope.mkDeployment {
-                  name = "web";
-                  spec = {
-                    selector.matchLabels = scope.selectorLabels;
-                    template.spec.containers = [
-                      {
-                        name = "web";
-                        # repository:tag@digest. The tag is what a person
-                        # reads; the digest is what the runtime pulls.
-                        # region:renderPinnedImage
-                        image = kix.image.ref config.image;
-                        imagePullPolicy = config.image.pullPolicy;
-                        # endregion:renderPinnedImage
-                        ports = [ (kix.port "http" 8080) ];
-                        resources = {
-                          requests = {
-                            cpu = "10m";
-                            memory = "16Mi";
-                          };
-                          limits.memory = "64Mi";
-                        };
-                        securityContext = {
-                          runAsNonRoot = true;
-                          runAsUser = 101;
-                          allowPrivilegeEscalation = false;
-                          capabilities.drop = [ "ALL" ];
-                        };
-                      }
-                    ];
-                  };
-                };
-
-                svc = self.deployment |> kix.service.fromWorkload { name = "web"; } |> scope.mkResource;
-              }
-            )
-          ];
-        };
+        package = webPackage;
 
         # The whole point: the reference is read, not written.
         # region:consumePin
         config.image = pins.get "web";
         # endregion:consumePin
       };
+
+      # No config: the instance pin in pins.json sets `image`.
+      instances.kix-pins.web-next.package = webPackage;
     }
   ];
 }
