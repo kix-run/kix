@@ -267,7 +267,14 @@ impl PinFile {
             path: path.display().to_string(),
             source: e,
         })?;
-        let mut file = parse_file(&text).map_err(|detail| PinError::Invalid {
+        Self::parse(&text, path)
+    }
+
+    /// Parse a pin file's text, for a caller that read it from somewhere
+    /// other than the disk, such as a forge's API. `path` is where the file
+    /// lives, for error messages and for `write`.
+    pub fn parse(text: &str, path: &Path) -> Result<Self, PinError> {
+        let mut file = parse_file(text).map_err(|detail| PinError::Invalid {
             path: path.display().to_string(),
             detail,
         })?;
@@ -841,6 +848,21 @@ mod tests {
         )
         .unwrap_err();
         assert!(msg.contains("declares version 1"), "{msg}");
+    }
+
+    #[test]
+    fn parse_reads_text_and_names_the_path_in_errors() {
+        let f = PinFile::parse(
+            r#"{"version":1,"managedBy":"kix pin","images":{"web":{"repository":"r/w","tag":"1"}}}"#,
+            Path::new("clusters/app/pins.json"),
+        )
+        .unwrap();
+        assert_eq!(f.path, Path::new("clusters/app/pins.json"));
+        assert!(f.managed);
+        let msg = PinFile::parse("{", Path::new("clusters/app/pins.json"))
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("clusters/app/pins.json"), "{msg}");
     }
 
     #[test]
