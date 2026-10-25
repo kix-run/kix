@@ -397,10 +397,17 @@ rec {
     in
     {
       # Render `repository:tag` plus `@digest` when a digest is pinned.
+      #
+      # The reference names an image in a registry, so the string context of
+      # a tag derived from a Nix build is dropped here: the manifest does not
+      # depend on the build. Keeping that context up to this point is what
+      # lets `kix-image-sources.json` report the image as `nix_built`.
       ref =
         image:
-        "${needField image "repository"}:${needField image "tag"}"
-        + lib.optionalString (image.digest or null != null) "@${image.digest}";
+        builtins.unsafeDiscardStringContext (
+          "${needField image "repository"}:${needField image "tag"}"
+          + lib.optionalString (image.digest or null != null) "@${image.digest}"
+        );
 
       # Test whether digest is present and non-null; this does not validate it.
       isPinned = image: (image.digest or null) != null;

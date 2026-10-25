@@ -115,8 +115,10 @@ in
                 default = { };
                 description = ''
                   Explicit DI overrides. Keys are package function arg names.
-                  Collision = error (two modules setting same dep for same
-                  instance must be resolved explicitly).
+                  A value is `ref.<ns>.<inst>`, a list of such refs (the
+                  package receives a list of instances), or any other value,
+                  bound as it is. Collision = error (two modules setting same
+                  dep for same instance must be resolved explicitly).
                 '';
               };
               partsOverlays = lib.mkOption {

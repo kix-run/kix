@@ -24,7 +24,7 @@ warning and the default applies.
 | `KIX_REQUEST_TIMEOUT` | `120` | Deadline in seconds for each attempt of a request that is not a watch. `0` removes the deadline. |
 | `KIX_CONNECT_TIMEOUT` | `15` | TCP connect timeout in seconds. `0` keeps the default. |
 | `KIX_PREFLIGHT` | on | `0` skips the reachability check before the first request. |
-| `KIX_SWEEP_CONCURRENCY` | `16` | Maximum parallel LIST requests when Kix lists every Kix-managed resource. Minimum `1`. |
+| `KIX_SWEEP_CONCURRENCY` | `8` | Maximum parallel LIST requests when Kix lists every Kix-managed resource. Minimum `1`. |
 | `KIX_STALL_TIMEOUT` | `600` | Seconds without progress after which `deploy`, `rollback`, or the operator cancels the run. `0` never cancels. |
 
 ## Retries

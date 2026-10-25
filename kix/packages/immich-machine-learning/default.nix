@@ -151,7 +151,7 @@ in
                   none = 1;
                   pod = 2;
                   node = 2;
-                  zone = 3;
+                  zone = 2;
                 };
             ${if cached then "strategy" else null} = {
               type = "Recreate";

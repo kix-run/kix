@@ -463,6 +463,7 @@ impl<'a> Run<'a> {
         observer: Arc<dyn DeployObserver>,
     ) -> Self {
         let progress = Arc::new(Progress::new());
+        progress.set_readiness_budget(config.timeout);
         let dry_run = cluster.is_dry_run();
         let resources = cluster.resources().clone();
         let ctx = Arc::new(NodeCtx {
@@ -1809,9 +1810,11 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
     }
 
     // Wait for readiness. Every status callback counts as progress for the
-    // watchdog, so a long but healthy rollout is never reported as a stall.
+    // watchdog, so a long but healthy rollout is never reported as a stall;
+    // the watchdog reports the wait itself from the status kept here.
     ctx.progress.set_phase(&node, Phase::Readiness);
     let on_status = |msg: &str| {
+        ctx.progress.set_status(&node, msg);
         ctx.emit(DeployEvent::NodeStateChanged {
             node: node.clone(),
             kind: entry.kind,

@@ -444,6 +444,9 @@ impl ViewState {
                     line
                 });
             }
+            // The row of a running node already shows its timer and last
+            // readiness message.
+            DeployEvent::Waiting { .. } => {}
             DeployEvent::BestEffortFailed { what, message } => {
                 self.warnings.push(format!("{what} failed: {message}"));
             }

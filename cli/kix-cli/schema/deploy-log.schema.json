@@ -754,6 +754,47 @@
       "type": "object"
     },
     {
+      "description": "`node` has been in `phase` for `since_ms` without a verdict. Repeated\non a schedule while the wait lasts. `status` is the node's last\nreadiness message and `budget_ms` the readiness timeout.",
+      "properties": {
+        "budget_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "node": {
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/Phase"
+        },
+        "since_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "waiting",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "node",
+        "phase",
+        "since_ms"
+      ],
+      "type": "object"
+    },
+    {
       "description": "A write that the next deploy redoes failed.",
       "properties": {
         "message": {

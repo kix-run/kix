@@ -202,7 +202,7 @@ ls result/
 
 **Global flags:** `-o text|json|yaml`, `-v|-vv|-vvv`, `-q`, `--no-color`, `--context <ctx>`, `--flake <path>`, `--no-cache` (bypass SQLite eval cache), `--override-input <name> <url>`. A subcommand's `--help` lists only the ones it reads (`SCOPED_GLOBALS` in `cli/kix-cli/src/cli.rs`); the rest are accepted and ignored.
 
-**Env vars:** `KIX_LOG` overrides the log-filter (RUST_LOG syntax). Apiserver transport (every command and the operator share one policy; defaults suit a cluster mid-incident, override only to debug): `KIX_RETRY_ATTEMPTS` total attempts per request (default 7, `1` disables retries), `KIX_SWEEP_CONCURRENCY` parallel LISTs in the managed-resource sweep (default 16), `KIX_REQUEST_TIMEOUT` per-attempt deadline in seconds for non-watch requests (default 120, `0` none), `KIX_CONNECT_TIMEOUT` TCP connect timeout in seconds (default 15), which also sets the deadline for the first-contact probe (`KIX_PREFLIGHT=0` skips it), `KIX_STALL_TIMEOUT` seconds of no progress before `kix deploy` gives up (default 600, `0` never; a `stalled:` line naming every resource in flight, its phase and its age prints after 30s of no progress regardless). Retries: 429 always, with `Retry-After` honoured; 5xx and connection loss only for idempotent requests (GET, DELETE, PATCH including server-side apply). A request that still fails after the retries is an error, never an empty result: `diff`, `deploy` and `gc` refuse to plan from a partial view of the cluster. Resource types the account may not list (403) are reported, not hidden. First contact: every command proves the apiserver answers before doing anything else, so an unreachable cluster fails in seconds with the endpoint named instead of hanging on whatever request happened to run first. A refused port fails in 0.1s, a blackholed address in 15s, and an endpoint that completes the handshake and then goes silent in 20s.
+**Env vars:** `KIX_LOG` overrides the log-filter (RUST_LOG syntax). Apiserver transport (every command and the operator share one policy; defaults suit a cluster mid-incident, override only to debug): `KIX_RETRY_ATTEMPTS` total attempts per request (default 7, `1` disables retries), `KIX_SWEEP_CONCURRENCY` parallel LISTs in the managed-resource sweep (default 8), `KIX_REQUEST_TIMEOUT` per-attempt deadline in seconds for non-watch requests (default 120, `0` none), `KIX_CONNECT_TIMEOUT` TCP connect timeout in seconds (default 15), which also sets the deadline for the first-contact probe (`KIX_PREFLIGHT=0` skips it), `KIX_STALL_TIMEOUT` seconds of no progress before `kix deploy` gives up (default 600, `0` never; a `stalled:` line naming every resource in flight, its phase and its age prints after 30s of no progress regardless; a resource that keeps reporting readiness without reaching it is not a stall, so for it a `waiting:` line with its last readiness message and the readiness budget prints at 10s, 30s, 60s, 120s, then every minute). A retry the API server's rate limiter forces is logged only at debug level; a request that outlasts its retries still warns. Retries: 429 always, with `Retry-After` honoured; 5xx and connection loss only for idempotent requests (GET, DELETE, PATCH including server-side apply). A request that still fails after the retries is an error, never an empty result: `diff`, `deploy` and `gc` refuse to plan from a partial view of the cluster. Resource types the account may not list (403) are reported, not hidden. First contact: every command proves the apiserver answers before doing anything else, so an unreachable cluster fails in seconds with the endpoint named instead of hanging on whatever request happened to run first. A refused port fails in 0.1s, a blackholed address in 15s, and an endpoint that completes the handshake and then goes silent in 20s.
 
 **Exit codes:** `0` success; `1` error / failed resources; `2` differences detected (diff).
 
@@ -960,7 +960,7 @@ These come from `kix.lib` (top-level), distinct from the per-package `kix` arg (
 | `kix.flavors.{k3s,kind,kubeadm,eks,gke,gke-autopilot,aks,openshift,rke2,talos,scaleway,ovh}` | Platform flavor modules (§15) |
 | `kix.modules.monitoring` | Reusable Prometheus/Grafana/Loki module (see `kix/lib/modules/monitoring.nix`) |
 | `kix.rules.{security,reliability,governance,architecture}` | Built-in scorecard rule sets (§17) |
-| `kix.pins <path>` | Read a committed pin file (JSON): `{ get, ref, keys, all }`. Usually unnecessary: declare `pins = ./pins.json;` in `mkFlake` and take a `pins` argument (§29) |
+| `kix.pins <path>` | Read a committed pin file (JSON): `{ get, ref, keys, all, instances, file }`. Usually unnecessary: declare `pins = ./pins.json;` in `mkFlake` and take a `pins` argument (§29). Pass it to `kix.buildCluster { pins = ...; }` to apply its instance pins (§29.2a) |
 | `kix.image.ref <image>` | Render `repository:tag[@digest]` (§29) |
 | `kix.peekPackageMeta` | Extract package meta without full evaluation (used by tooling) |
 
@@ -2306,7 +2306,7 @@ Diff features:
 | Native single-Deployment package (RBAC, leader election, guarded `extraArgs`/`env`, `out` transformer, `kix.monitor`) | `kix/packages/reloader/` |
 | `kix.storage.mkClasses` over a typed map of classes | `kix/packages/storage-classes/` |
 | First-class PVC instance | `kix/packages/persistent-volume-claim/` |
-| Image reference read from a committed pin file | `clusters/test-pins.nix` + `clusters/pins.json` |
+| Image reference read from a committed pin file, and an instance pin no code reads | `clusters/test-pins.nix` + `clusters/pins.json` |
 | Mid-complexity with DI storage, expose, monitor, mounts, `kix.mergeEnv` owned groups, an optional dependency with a version check | `kix/packages/immich/` |
 | Complex multi-component | `kix/packages/harbor/` |
 | Helm-wrapped capability owner | `kix/packages/cilium/` (chart, HelmChartConfig, or environment delivery) |
@@ -2454,6 +2454,60 @@ imagePullPolicy = config.image.pullPolicy;
 `kix.image.ref` renders the digest when there is one and omits it when there
 is not, so an unresolved pin still deploys and is visibly different from a
 resolved one.
+
+### 29.2a Instance pins: no code reads them
+
+An `images` pin needs a line of code to reach an option. An instance pin
+needs none. It lives under `instances`, keyed by instance and then by option
+path, and `kix.buildCluster` applies it to that option when the file is passed
+as `pins`:
+
+```json
+{
+  "version": 2,
+  "managedBy": "kix pin",
+  "images": {},
+  "instances": {
+    "monitoring/grafana": {
+      "image": { "repository": "docker.io/grafana/grafana", "tag": "13.1.3", "digest": "sha256:…" }
+    }
+  }
+}
+```
+
+```nix
+{ kix, pins, ... }:
+kix.buildCluster { name = "prod"; inherit pins; modules = [ ... ]; }
+```
+
+The entry is one more definition of `instances.monitoring.grafana.config.image`,
+from a module whose file is the pin file, so pinning a package default is
+adding an entry and returning to the default is deleting it. A pin and a
+definition in code at the pin's priority or above is an evaluation error
+naming both; a pin wins over a `lib.mkDefault` in code and over the package's
+own defaults, so a follower image can be pinned (pin every image of a
+release: pinning only the main one drops the followers' digests). A pin
+states its digest, so one without a digest never keeps the package's. Pin
+repositories and tags follow the OCI reference grammar in both readers. A
+file with instance pins belongs to one cluster, since a pin for an instance
+the cluster lacks is an error. So is a pin for an instance the cluster lacks, an import, an
+option the package lacks, or an option that is not a `kix.options.image`
+option.
+
+A file with `instances` declares `version: 2`. One without stays version 1, so
+a Kix that reads only version 1 keeps reading it, and refuses a version 2
+file by name rather than ignoring its instance pins.
+
+`kix pin set monitoring/grafana --tag 13.1.4` moves one; `--option
+sidecar.image` names another option. A new instance pin needs `--repository`
+and no `--init`. Implementation: `kix/lib/eval/instance-pins.nix`.
+
+**Image sources.** Every cluster build result holds `kix-image-sources.json`
+beside the Activation: for each image option of each active instance, the
+value, the package's default, and its origin (`pin`, `package_default`,
+`injected`, `nix_built`, or `code`), with the pin key, the dependency, or the
+file and line. It is outside the Activation, so it never changes its name.
+Its shape is in the docs site's image and pin helpers reference.
 
 ### 29.3 Promoting
 

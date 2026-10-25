@@ -617,7 +617,7 @@ depEnv =
 
 `resolveArg` (`kix/lib/eval/resolve.nix`) maps dep arg name -> instance via priority ladder. Requester namespace matters; prefers local instances (like DNS local search domain).
 
-1. **Explicit override** (`deps.<argName> = ...` on the instance, see `03-advanced.md#overrides`) -> returned directly (`direct = true`).
+1. **Explicit override** (`deps.<argName> = ...` on the instance, see `03-advanced.md#overrides`). A `ref.<ns>.<inst>` names that instance, and a list of refs names each of them (the package receives a list); either way the named instances get the checks an automatically resolved one does. Any other value is bound as it is (`direct = true`).
 2. Same namespace, exactly one match -> use it.
 3. Same namespace, multiple matches -> throw `dependency '<arg>' matches multiple instances in namespace '<ns>'`.
 4. No same-ns match, exactly one cluster-wide match -> use it (cross-namespace).

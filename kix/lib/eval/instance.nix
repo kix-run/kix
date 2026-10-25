@@ -21,6 +21,7 @@ let
   inherit (view) mkPackageView;
   inherit (resolve)
     resolveArg
+    targetsOf
     describeRequester
     evaluateInstanceConfig
     callPackagePhase1
@@ -46,6 +47,8 @@ in
       globalPartsOverlays ? [ ],
       clusterConfig ? { },
       configInjections ? [ ],
+      # This instance's pins from the cluster's pin file (eval/instance-pins.nix).
+      instancePins ? null,
       workloadInterceptors ? [ ],
       instanceProcessors ? [ ],
       clusterCtx ? { },
@@ -197,19 +200,16 @@ in
         };
 
         _depResourcesForEdges = builtins.concatMap (
-          argName:
-          let
-            depParts = resolvedDepMeta.${argName}.instance.raw or { };
-          in
+          depTarget:
           builtins.filter (v: (v._type or "") == "k8s-resource") (
             collectTypedAttrs {
               excludeKeys = [
                 "root"
                 "meta"
               ];
-            } depParts
+            } (depTarget.instance.raw or { })
           )
-        ) (builtins.attrNames resolvedDepMeta);
+        ) allDepTargets;
 
         raw = callPackagePhase1 {
           package = instCfg.package;
@@ -249,31 +249,39 @@ in
               hasDefault = isOptional;
             };
           in
+          # `targets` holds one entry per instance the dependency names: one,
+          # or several for a list override. `value` is what the package
+          # receives.
           if resolution.found && !(resolution.direct or false) then
             acc
             // {
               ${argName} = {
-                inherit resolution;
-                instance = allInstances.${resolution.namespace}.${resolution.instanceName};
+                targets = map (t: {
+                  resolution = t;
+                  instance = allInstances.${t.namespace}.${t.instanceName};
+                }) (targetsOf resolution);
+                value = resolvedDeps.${argName};
               };
             }
           else
             acc
         ) { } depArgNames;
 
+        allDepTargets = builtins.concatMap (depInfo: depInfo.targets) (builtins.attrValues resolvedDepMeta);
+
         _crossNsCheck =
           let
-            crossNsDeps = lib.filterAttrs (
-              _: depInfo:
+            crossNsDeps = builtins.filter (
+              depTarget:
               let
-                depScope = (depInfo.instance._meta.packageMeta or { }).scope or "cluster";
+                depScope = (depTarget.instance._meta.packageMeta or { }).scope or "cluster";
               in
-              (depInfo.resolution.namespace or namespaceName) != namespaceName && depScope == "namespace"
-            ) resolvedDepMeta;
+              depTarget.resolution.namespace != namespaceName && depScope == "namespace"
+            ) allDepTargets;
           in
-          lib.foldlAttrs (
-            _: _: depInfo:
-            throw "instance '${instanceName}' (namespace '${namespaceName}') depends on '${depInfo.resolution.instanceName}' (namespace '${depInfo.resolution.namespace}') which declares meta.scope = \"namespace\" and can only be used within its own namespace"
+          lib.foldl' (
+            _: depTarget:
+            throw "instance '${instanceName}' (namespace '${namespaceName}') depends on '${depTarget.resolution.instanceName}' (namespace '${depTarget.resolution.namespace}') which declares meta.scope = \"namespace\" and can only be used within its own namespace"
           ) null crossNsDeps;
 
         metaResult = meta.checkMetaStatic {
@@ -295,6 +303,7 @@ in
             instCfg
             clusterConfig
             configInjections
+            instancePins
             namespaceName
             instanceName
             ;
@@ -547,10 +556,10 @@ in
         # view. resolvedDepMeta covers DI; directly wired deps expose their
         # identity through _meta.
         directDepLinks =
-          lib.mapAttrsToList (_: depInfo: {
-            id = "${depInfo.resolution.namespace}/${depInfo.resolution.instanceName}";
-            instance = depInfo.instance;
-          }) resolvedDepMeta
+          map (depTarget: {
+            id = "${depTarget.resolution.namespace}/${depTarget.resolution.instanceName}";
+            instance = depTarget.instance;
+          }) allDepTargets
           ++ builtins.concatMap (
             v:
             let

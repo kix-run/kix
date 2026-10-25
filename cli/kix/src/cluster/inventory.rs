@@ -514,11 +514,12 @@ enum ListOutcome {
 
 /// How many LISTs the sweep keeps in flight. One per kind is over a hundred
 /// on a real cluster, and the apiserver's priority-and-fairness answers
-/// that burst with 429s. Bounded here, on spawned tasks the runtime always
+/// that burst with 429s; sixteen at once still drew sixteen of them from a
+/// small cluster, eight does not. Bounded here, on spawned tasks the runtime always
 /// polls, rather than in the transport layer, where a permit held inside a
 /// future its owner had parked deadlocked `kix deploy` (see
 /// `cluster::client`). Override with `KIX_SWEEP_CONCURRENCY`.
-pub(crate) const DEFAULT_SWEEP_CONCURRENCY: usize = 16;
+pub(crate) const DEFAULT_SWEEP_CONCURRENCY: usize = 8;
 /// Env var for [`DEFAULT_SWEEP_CONCURRENCY`].
 pub(crate) const SWEEP_CONCURRENCY_ENV: &str = "KIX_SWEEP_CONCURRENCY";
 

@@ -85,9 +85,10 @@ pub enum PlanEvent<'a> {
     /// A failed deploy's build was found but will not load; the plan leaves
     /// out what that deploy applied.
     FailedBuildUnusable { activation: &'a str, error: &'a str },
-    /// A failed deploy's build is not on this machine.
+    /// Failed deploys whose builds are not on this machine, and which the
+    /// plan did not read from the cluster.
     FailedUnresolved {
-        record: &'a Record,
+        records: &'a [Record],
         cluster: &'a str,
     },
     /// The builds an earlier deploy kept orphans from that are in the plan.
@@ -95,9 +96,10 @@ pub enum PlanEvent<'a> {
     /// A build an earlier deploy kept orphans from was found but will not
     /// load; the plan cannot list or delete those orphans.
     KeptBuildUnusable { activation: &'a str, error: &'a str },
-    /// A build an earlier deploy kept orphans from is not on this machine.
+    /// Builds an earlier deploy kept orphans from that are not on this
+    /// machine, and which the plan did not read from the cluster.
     KeptUnresolved {
-        source: &'a KeptOrphanSource,
+        sources: &'a [KeptOrphanSource],
         cluster: &'a str,
     },
 }

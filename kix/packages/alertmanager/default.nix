@@ -47,8 +47,8 @@
 # (Grafana's datasource). Each instance has its own Service, so two
 # instances in one namespace do not share one.
 #
-# Replicas follow the instance's availability: one at `none`, two at `pod`,
-# and three from `node`, gossiping silences and the notification log. With
+# Replicas follow the instance's availability: one at `none`, two above,
+# gossiping silences and the notification log. With
 # more than one, the pods spread across the level's failure domain and a
 # PodDisruptionBudget lets one be down at a time.
 #
@@ -88,13 +88,14 @@ let
 
   defaultSettings = import ./default-settings.nix;
 
-  # Two at `pod`, so a restarting pod leaves one to notify; three from
-  # `node`, so a lost node leaves two peers to gossip.
+  # Two from `pod` up: peers share silences and notification state by
+  # gossip and need no majority, so the one left after a lost pod, node,
+  # or zone still notifies.
   replicas = kix.availability.pick availability {
     none = 1;
     pod = 2;
-    node = 3;
-    zone = 3;
+    node = 2;
+    zone = 2;
   };
 
   webPort = 9093;

@@ -56,7 +56,10 @@ stall limit for one run, set `KIX_STALL_TIMEOUT` in seconds:
 
 Progress and readiness are separate: a resource can take longer than the
 stall limit without triggering it when its readiness checks continue to
-report activity.
+report activity. Kix tells you about such a wait anyway: after 10 seconds it
+prints a `waiting:` line with the resource, what its last readiness check
+said, and how much of the readiness timeout has passed, and repeats it at 30,
+60, and 120 seconds and then every minute.
 
 ## Choose when to prune
 

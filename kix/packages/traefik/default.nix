@@ -152,13 +152,13 @@ in
     };
     replicas = lib.mkOption {
       type = lib.types.ints.positive;
-      # Two proxies once a pod restart must not drop traffic, three once a
-      # whole zone may go.
+      # Two proxies once a pod restart must not drop traffic, spread so
+      # either survives a lost node or zone.
       default = kix.availability.pick availability {
         none = 1;
         pod = 2;
         node = 2;
-        zone = 3;
+        zone = 2;
       };
       defaultText = lib.literalMD "1, 2, 2, or 3 for the cluster's availability level `none`, `pod`, `node`, or `zone`";
       description = "Traefik replicas. Every replica serves traffic and writes Gateway status.";

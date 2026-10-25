@@ -202,6 +202,22 @@ impl DeployObserver for OperatorObserver {
                     tracing::warn!(activation, idle_s = idle.as_secs(), %waiting_on, "Deploy stalled");
                 }
             }
+            DeployEvent::Waiting {
+                node,
+                phase,
+                since,
+                status,
+                budget,
+            } => {
+                let waiting = kix::cluster::watchdog::describe_wait(
+                    node,
+                    *phase,
+                    *since,
+                    status.as_deref(),
+                    *budget,
+                );
+                tracing::info!(activation, %waiting, "Deploy waiting");
+            }
             DeployEvent::BestEffortFailed { what, message } => {
                 tracing::warn!(
                     activation,
