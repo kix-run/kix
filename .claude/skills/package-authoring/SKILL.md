@@ -22,6 +22,15 @@ makes keeping this file current part of changing the package conventions.
 | Any prose, including comments and the header | `CLAUDE.prose.md`, `CLAUDE.md` "Code comments" |
 | Logging what you notice and do not fix | `CLAUDE.housekeeping.md` |
 
+Read `PRINCIPLES.md`, the package-review checklist headings, and the closest
+reference package in full before writing; open the rest when a decision
+needs it. Starting points by shape: a web application on PostgreSQL,
+metabase; the same with URL-shaped credentials, vaultwarden; an application
+on PostgreSQL and a ClickHouse facade with migrations in an init container,
+plausible; a server with a per-consumer facade, clickhouse and
+clickhouse-database; an operator and its kinds, cnpg-operator and
+cnpg-cluster.
+
 The HANDBOOK and BEST-PRACTICES sections on builders, workloads, selectors,
 and scorecard rules predate the lib rewrite of August and September 2026
 (BEST-PRACTICES.md:1135). Where they disagree with `kix/lib/` or a reference
@@ -30,6 +39,9 @@ package in the pattern table below, the code wins.
 ## Setup
 
 - One git worktree per package, outside the checkout (`../kixpkgs-wt/<name>`).
+  If one exists, check `git -C <path> status` and its log; reuse it when it
+  holds no work, and rebase it on `origin/main` before the review, or the
+  reviewer's diff against `origin/main` shows main's newer commits reversed.
 - `git add` every new file before the first evaluation. The git fetcher skips
   untracked files, so an unadded package or `crds/*.json` does not exist.
 - `CLAUDE.md` "Build caches and disk" and "Git hygiene" apply: no `path:`
@@ -82,9 +94,12 @@ named decision; record the fact and its upstream path in the pull request.
 
 | Upstream source | Extract | Settles |
 |---|---|---|
-| Runtime config loader (`config/runtime.exs`, `settings.py`, `config.go`) | every variable, which are required, which are URL-shaped credentials, which need a restart | option set and types (step 8); what comes from a dep's `out`; `keyRef` per variable or `$(VAR)` expansion into an owned URL, with its escaping limit (step 6) |
-| Dockerfile and entrypoint | `USER`, uid, writable paths, `$HOME`, start command, whether the entrypoint migrates | numeric `runAsUser`, emptyDir mounts (W12), `enableServiceLinks` (W16), init container or Job |
-| Migrations | `CREATE EXTENSION`, schema and global privileges, advisory locks, whether two pods may migrate at once | injected extensions or privileges (step 4), Recreate or RollingUpdate (W8), a replica ceiling |
+| Runtime config loader (`config/runtime.exs`, `settings.py`, `config.go`) | every variable, which are required, which are URL-shaped credentials, which are credentials a user would set (API keys, SMTP passwords), which need a restart, and the branch each `raise` sits in (one adapter, one mode) | option set and types (step 8); what comes from a dep's `out`; `keyRef` per variable or `$(VAR)` expansion into an owned URL, with its escaping limit (step 6); the credential names `env` refuses as literal strings (step 7); refusals scoped to the branch that raises |
+| Config sources besides the environment (a config directory read before env, `_FILE` twins, a config file path variable) | every path that can override a variable the package owns | owned names (E8): own the directory or path variable too |
+| Dockerfile and entrypoint | `USER`, uid, writable paths, `$HOME`, start command, whether the entrypoint migrates, what the runtime listens on by default (Erlang distribution, JMX, debug ports) | numeric `runAsUser`, emptyDir mounts (W12), `enableServiceLinks` (W16), init container or Job, variables that close default listeners (W18) |
+| Upstream's own deployment files (compose file, systemd unit, install script) | `ulimits`, `sysctls`, tmpfs mounts, the exact start and migrate commands | runtime limits the image does not state: a BEAM or JVM sized from `nofile` needs an env cap (`ERL_MAX_PORTS`), or the pod is OOM-killed at start on a runtime whose limit is the kernel maximum |
+| Migrations, data migrations, and startup queries | `CREATE EXTENSION`; every privilege the statements need on the provider's pinned version, including global objects (`CREATE OR REPLACE` needs DROP too) and reads of system catalogs; `CREATE DATABASE` steps a facade makes unnecessary; advisory locks; whether two pods may migrate at once; engine or table types that only work on one topology | injected extensions or privileges (step 4), Recreate or RollingUpdate (W8), a replica ceiling, a refusal of a provider topology |
+| Outbound calls (HTTP clients, mailers, updaters, favicon or geo downloads) | each destination and port, whether it is required or cosmetic | egress under default-deny: a static intent, a policy built from config (pattern table, "Config-derived egress"), or a header line naming what stays unreachable |
 | Health endpoints | what each endpoint checks; whether liveness dials a dependency | probes (W13), startup deadline (W14) |
 | Metrics | port, whether on the public port, auth, the flag that enables them | `kix.monitor` wiring (Mo11, Mo12) |
 | Clustering and HA, in source | in-memory state, sessions, caches, job queues, leader election, peer discovery, cron singletons | the `pick` table and any ceiling (step 3) |
@@ -95,12 +110,30 @@ named decision; record the fact and its upstream path in the pull request.
 "Does it run replicated, and what does it need for that?" is a mandatory
 question, answered from source, not from the chart's default.
 
-Worked example, Plausible CE: `config/runtime.exs` takes `DATABASE_URL` and
-`CLICKHOUSE_DATABASE_URL` as URLs, so the credentials are `$(VAR)` expansions
-into owned variables, not `keyRef` values. Its ClickHouse migrations run
-`CREATE FUNCTION`, a global privilege, and create plain `MergeTree` tables on
-a fresh install; both are questions for the ClickHouse providers (step 4),
-not workarounds in the consumer.
+Collect a whole class at once rather than meeting it one deploy at a time:
+`grep -rhoE "system\.[a-z_]+"` over the source and migrations for catalog
+reads, every `CREATE`, `DROP`, or `GRANT` of an object outside the app's
+database, every `System.get_env`/`os.environ` name.
+
+Worked example, Plausible CE (`kix/packages/plausible`):
+`config/runtime.exs` takes `DATABASE_URL` and `CLICKHOUSE_DATABASE_URL` as
+URLs, so the credentials are `$(VAR)` expansions into owned variables. It
+reads every setting from a file in `CONFIG_DIR` before the environment, so
+the package owns `CONFIG_DIR`. The ClickHouse migrations run `CREATE OR
+REPLACE FUNCTION` and read four system tables, which ClickHouse 26.3 guards
+with grants: a provider gap, fixed by a `grants` option on
+clickhouse-database that the consumer injects. They also create plain
+`MergeTree` tables on a fresh install, and switch to replicated tables only
+once the tables already are, which no provider can fix. The consumer runs
+the migrations on one replica (the contract's `replicaHosts`) and a second
+init container converts the tables and creates them on the other replicas
+(`plausible/replicate.py`). Not every upstream fact becomes a provider fix,
+and a single-server assumption in an upstream's schema is a step for the
+package to add before it is a reason for a ceiling.
+The image's Erlang distribution listens on every interface with a cookie
+shared by every copy of the image, so the package sets
+`RELEASE_DISTRIBUTION=none`. The compose file's `nofile` limit is why it
+sets `ERL_MAX_PORTS`; kind found that one.
 
 ### 3. Availability
 
@@ -110,23 +143,31 @@ is a finding from the upstream source, not a default.
 
 1. Name `availability` in the package function (the lib passes only named
    arguments) and start from replicated:
-   `kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 3; }`.
+   `kix.availability.pick availability { none = 1; pod = 2; node = 2; zone = 2; }`.
    Quorum systems use odd counts (rabbitmq-cluster); leader-elected
-   controllers follow W6.
+   controllers follow W6. Two copies survive the loss of one pod, node, or
+   zone, provided they are spread across it, so `zone` needs no more than
+   `node`; a quorum (Keeper, etcd, RabbitMQ) is the exception, with three,
+   one per zone at `zone`. At `zone`, check that the replicas really are
+   spread across zones (item 6 for operator-placed pods); the count does
+   not spread them.
 2. Check in source: shared in-memory state and whether a dependency (Postgres,
    Valkey) replaces it; leader election or an HA flag; migrations that are not
    concurrent-safe (then Recreate, keycloak:83-88); session affinity (a
    Service setting, not a ceiling); cron or queue singletons (a ceiling on that
    workload only, or upstream's "run the scheduler in one pod" flag); one RWO
    volume as the state (immich:144-146); one owner of an OS resource
-   (firezone:83-85).
+   (firezone:83-85). For each piece of in-memory state, also note what a
+   restart loses (sessions, buffered events), since Recreate and a singleton
+   make every deploy a restart; the header's `Limits:` says it.
 3. If it replicates with configuration, configure it (keycloak's jdbc-ping,
    header 74-81).
 4. A ceiling needs evidence from upstream source, in the comment beside it
    and in the header's `Limits:` line (grafana:119-121, tempo:101). A
-   program-wide limit is `meta.availability.max`; a limit that depends on
-   config, wiring, or one workload is `availability.max` on that builder
-   (pattern table, "Ceilings"). W4 and W5 cover the singleton form.
+   program-wide limit is `meta.availability.max = "none";`; a limit that
+   depends on config, wiring, or one workload is `availability.max` on that
+   builder (pattern table, "Ceilings"). W4 and W5 cover the singleton form:
+   a literal `replicas = 1` under the `none` ceiling.
 5. Load-serving workloads: O19 (the option form is the pattern table's
    "`pick`" row). Strategy: W8.
 6. Operator-placed operands map the level into the CR (`instances`,
@@ -134,10 +175,11 @@ is a finding from the upstream source, not a default.
    CR takes a spread list (cnpg-cluster:512); never raw anti-affinity (W2).
 7. Dependencies resolve their own level from the cluster default
    (`kix/lib/eval/instance.nix:74-85`); no consumer channel raises a
-   provider's level. So check each dependency's mapping. A provider that caps
-   at `none` without evidence, or a new provider with no mapping, is fixed in
-   the same change (step 4). A consumer whose availability depends on the
-   provider's says so in its header.
+   provider's level. So check the mapping of each provider the package can
+   run on. A provider that caps at `none` without evidence, or a new provider
+   with no mapping, is fixed in the same change (step 4); a provider the
+   package refuses goes to housekeeping instead. A consumer whose
+   availability depends on the provider's says so in its header.
 
 Lib: levels and `pick` in `kix/lib/core/availability.nix:24-74`; `resolve`
 caps at the package ceiling with a warning (`:188-219`); builder ceilings in
@@ -158,7 +200,15 @@ the defaults fails there.
   (D30; pattern table, "Contracts").
 - A consumer that reads an optional field (`username`, `extensions`, `tls`)
   handles its absence on a `kix.mkImport` stand-in
-  (`kix/lib/vocab/postgres-database.nix:1-11`, D22).
+  (`kix/lib/vocab/postgres-database.nix:1-11`, D22), and acts on it where the
+  program needs telling: `tls = true` means TLS in the connection settings
+  (keycloak's `KC_DB_URL_PROPERTIES`, plausible's `sslmode=require`).
+- A facade with no contract file (clickhouse-database) is held through
+  `deps.<x>.assertions` on the `out` fields the consumer needs
+  (clickhouse-logs:103-114, plausible:210-245).
+- Config the consumer injects (`deps.<x>.config`) is ignored by a
+  `kix.mkImport` stand-in, so the consumer also asserts on the `out` field
+  that reports the injected value (plausible checks `out.grants`).
 - When the consumer needs a fact every provider can give, extend the contract
   and every provider, not the consumer. Precedent: `extensions`, injected
   through `deps.database.config.extensions`, forwarded by the facade, merged
@@ -167,7 +217,11 @@ the defaults fails there.
   the instance's own value.
 - Fix the provider in the same change, with tests: a missing `out` field, a
   non-mergeable option, a privilege the facade cannot grant, a singleton
-  default with no evidence. Never re-derive a host, write a NetworkPolicy, or
+  default with no evidence. Test the provider with two same-named consumers
+  in two namespaces; resources it puts in its own namespace collide when
+  named by the instance alone. A privilege set is rarely complete from
+  reading alone, so deploy on kind before settling the provider option's
+  shape. Never re-derive a host, write a NetworkPolicy, or
   widen a privilege in the consumer. Some providers (the ClickHouse packages)
   are new, so a new consumer finding gaps in them is expected.
 - Test a contract change three ways: `every-package-evaluates` (every provider
@@ -213,6 +267,9 @@ pattern table has each form.
   dependency or option is locked through `kix.mergeGuarded`, `kix.guardArgs`
   (owned flags derived from the owned env groups), and `kix.mergeEnv` owned
   groups (E3, E6, E8; pattern table).
+- `env` accepts strings, so refuse the program's credential variables as
+  literal strings (pattern table) and point at a `secretKeyRef` to a Secret
+  managed outside Kix or at the secret dep (S1).
 - Bind `who = "<pkg> ${scope.namespaceName}/${name}"` once in the `let` and
   pass it to every helper (P9).
 
@@ -247,7 +304,13 @@ The header is the package's contract for a reader who will not open the code
 5. `` `out`: `` the fields consumers read.
 6. `Escape hatches:` the hatches and their locked paths.
 7. `Limits:` ceilings with the upstream reason and where each is declared,
-   untested paths, host prerequisites (tempo:101, falco:45). Operators add
+   what a restart loses, untested paths, host prerequisites (tempo:101,
+   falco:45).
+
+A comment that states an upstream fact names the upstream path, and copies
+numbers from the source rather than memory (a reviewer found "65536
+matches compose" where compose says 65535). A behaviour observed only on a
+deploy says where it was observed. Operators add
    `Replicas:` and `Moving to another release:` (cnpg-operator:46, 76).
    A version that existing installs cannot take with a plain deploy adds
    `Upgrades:`, saying what an operator does first (clickhouse-cluster:30).
@@ -277,11 +340,17 @@ The only place in this skill with package line numbers. `pkg:N` is
 | Ceilings: package-wide, per builder | tempo:416-418; valkey:545, harbor:1543-1545 |
 | `kix.expose`, `exposure.urlOrNull` | metabase:168-171, 360 |
 | Metrics toggle that does not restart the workload | metabase:148-153; keycloak header 30-36 |
-| `kix.monitor` with alerts | openbao:1241-1262; clickhouse:597-623 and `alerts.nix` |
+| `kix.monitor` with alerts | openbao:1241-1262; clickhouse:602-628 and `alerts.nix` |
 | `kix.alerts` over a PodMonitor | cnpg-cluster:841-850 |
 | `kix.healthCheck` with a script file | victoria-metrics-agent:324-343 |
 | Checksum annotations, `enableServiceLinks = false` | metabase:253-267 |
 | Facade: consumer-namespace Secret, server-namespace Job | clickhouse-database:1-40; stackgres-database |
+| Facade resources in the server's namespace named with the consumer's namespace | clickhouse-database:265 (`serverSideName`) |
+| Privileges injected into a facade, with the upstream file for each, and asserted on `out` | plausible:180-192, 210-245 |
+| Migrations in an init container sharing the server's env and mounts (`kix.withMounts` fills `containers` only) | plausible:598-614; vaultwarden:178-200 |
+| Literal credentials refused in `env` | plausible:334-354 |
+| Config-derived egress (a port read from config) through `kix.operandPolicy` | plausible:664-692; cnpg-cluster:727-745 |
+| A step after the migrations on one replica of a dependency: an init container running a sibling script from a ConfigMap, with a checksum annotation | plausible:503-544, 651-660; `plausible/replicate.py` |
 | One alias, two implementations, a contract file | `clickhouse/contract.nix`; clickhouse, clickhouse-cluster |
 
 A script of more than a few lines is a sibling file read with
@@ -317,7 +386,10 @@ Conditional:
 8. `clusters/test-<pkg>.rules-test.yaml` when the package ships alerts
    (auto-discovered, `kix/lib/mkFlake.nix:120-138`).
 9. `kix/lib/vocab/<contract>.nix`, `vocab/default.nix`, `units/<contract>.nix`,
-   and `kix/lib/architecture.md` for a new contract.
+   and `kix/lib/architecture.md` for a new contract. A new field on any
+   contract, package-local ones included: `git grep -n` an existing field
+   name to find every list of fields (FEATURE-CATALOG, the kix-migration
+   skill) and add it there.
 10. Provider packages the consumer exposed gaps in, with their tests (step 4).
 11. `crds/` with `crds/sources.txt`, and `rbac/` (crd-vendoring skill); sibling
     files such as `health-check.py`, `release.nix`, `contract.nix`, and
@@ -347,7 +419,21 @@ nix build ludo/#cluster-ludo-kind $F $P                                  # 7. sm
 
 `<cluster>` is the key in `clusters/flake.nix`. When `every-package-evaluates`
 fails, `evaluate level name` (`kix/package-eval.nix:696`) evaluates one
-package at one level; `flake.nix:118-124` shows how the file is imported.
+package at one level. From the worktree root, with `$PWD` absolute:
+
+```bash
+nix eval --impure --raw $F $P --expr "let f = builtins.getFlake \"$PWD\"; lib = f.inputs.nixpkgs.lib;
+  pkgs = f.inputs.nixpkgs.legacyPackages.x86_64-linux;
+  r = import $PWD/kix/package-eval.nix { inherit lib; kix = import $PWD/kix/lib { inherit pkgs lib; }; };
+  in builtins.deepSeq (r.evaluate \"zone\" \"<pkg>\") \"ok\""
+```
+
+One lib test: `nix eval --impure $F $P --expr '(import ./kix/lib/tests { }).tests.<name>'`.
+
+Start the kind cluster (handover step 3) as soon as the test cluster
+builds, in the background: for a package whose risk is at runtime
+(migrations against a provider's version, privileges, runtime limits) the
+deploy is the slowest and most informative step.
 
 ## Handover
 
@@ -380,8 +466,20 @@ package at one level; `flake.nix:118-124` shows how the file is imported.
    header (`scripts/kind-operators.sh:49`; add `--timeout` for a slow first
    start, `clusters/test-keycloak.nix:12-14`). Run clusters one at a time.
    Kind finds what evaluation cannot: a wrong uid, a duplicate extension, a
-   cross-namespace `untrackedRef`, a config-kind readiness condition. Fix
-   real bugs in the package. At a genuine environment wall (a kernel module,
+   cross-namespace `untrackedRef`, a config-kind readiness condition, a
+   missing grant, a runtime OOM-killed by its own `nofile` sizing. Fix real
+   bugs in the package.
+
+   While the deploy waits out a CrashLoopBackOff, read the failing
+   container's logs (`kubectl logs <pod> -c <init container> --previous`)
+   instead of waiting for the verdict. A change only to a dependency (a
+   facade's grants) leaves the consumer's pod template unchanged, so delete
+   the crash-looping pod once the dependency's Job completes. A first deploy
+   halted part way (a transient image pull error) can leave a webhook
+   configuration without its Service, and the next deploy's dry run refuses
+   the custom resources it guards; rerun with `--on-error continue`.
+   End with one request through the real path (an event in, a row out), not
+   only green probes. At a genuine environment wall (a kernel module,
    read-only sysfs, hugepages) use an upstream knob, confine the part in the
    cluster file, and state the limit in the header and the pull request.
    Packages are not bent to fit kind.

@@ -21,8 +21,9 @@ PodDisruptionBudgets for those workloads.
 
 ## One requirement, several compiled decisions
 
-A stateless server may map `pod` to two replicas and `zone` to three. A quorum
-store may need three members from `pod` upward. Another package may support
+A stateless server may map every level above `none` to two replicas, since two
+copies spread across a failure domain survive the loss of one. A quorum store
+may need three members from `pod` upward. Another package may support
 only one active controller and declare that it cannot meet `node` availability.
 
 Keeping those mappings in each package preserves the application's operational

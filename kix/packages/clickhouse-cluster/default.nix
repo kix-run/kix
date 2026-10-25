@@ -68,7 +68,8 @@
 # servers under other names (chi_clickhouse_*); no rule reads those.
 #
 # Exposes the clickhouse contract (../clickhouse/contract.nix, which checks
-# it), plus out.replicas.
+# it). `out.replicas` is the `replicas` option, and `out.replicaHosts` the
+# operator's per-replica Services, replica 0 first.
 #
 # root = the ServiceRef.
 
@@ -563,6 +564,7 @@ in
               inherit (config) clusterName;
               version = lib.versions.majorMinor config.image.tag;
               replicas = toString config.replicas;
+              replicaHosts = map (svc: svc.out.fqdn) self.replicaServices;
               extraImages = [ (kix.image.ref config.image) ];
             };
           };

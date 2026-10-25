@@ -67,6 +67,9 @@
 #                       out.authPasswordKey`
 #   out.authPasswordKey "password"
 #   out.clusterName     the name `{cluster}` expands to
+#   out.version         the server release as YY.M
+#   out.replicas        "1"
+#   out.replicaHosts    [ "<fqdn>" ], the one replica
 #
 # root = Service.
 
@@ -589,6 +592,8 @@ in
               authPasswordKey = passwordKey;
               inherit (config) clusterName;
               version = lib.versions.majorMinor config.image.tag;
+              replicas = "1";
+              replicaHosts = [ self.service.out.fqdn ];
             };
           };
         }

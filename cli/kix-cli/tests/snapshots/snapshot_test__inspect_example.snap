@@ -40,7 +40,7 @@ Resource kinds:
 
 Resources:
   (cluster-scoped):
-    Activation/example-w0d1xhbfk80a
+    Activation/example-53a4gqsgdaqk
     ClusterRole/cert-manager-cainjector
     ClusterRole/cert-manager-cluster-view
     ClusterRole/cert-manager-controller-approve:cert-manager-io
@@ -113,7 +113,7 @@ Resources:
     ConfigMap/valkey-config
     Deployment/immich-server
     Deployment/machine-learning
-    Job/immich-db-bootstrap-f2457d27ce
+    Job/immich-db-immich-bootstrap-f2457d27ce
     PackageInstance/immich
     PackageInstance/immich-db
     PackageInstance/machine-learning
@@ -130,8 +130,8 @@ Resources:
     SGCluster/postgres
     SGInstanceProfile/postgres-profile
     SGPostgresConfig/postgres-pg17-config
-    Secret/immich-db-bootstrap-password
     Secret/immich-db-credentials
+    Secret/immich-db-immich-bootstrap-password
     Secret/valkey-password
     Service/immich-server
     Service/machine-learning

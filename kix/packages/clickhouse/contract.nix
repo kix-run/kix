@@ -53,6 +53,21 @@ let
       shape = "the server release as YY.M";
       test = isVersion;
     };
+    # A consumer whose upstream creates plain MergeTree tables can run only
+    # where the shard has one replica: on more, each connection may land on
+    # a replica that lacks the table.
+    replicas = {
+      shape = "the shard's replica count as a string of digits";
+      test = v: isString v && builtins.match "[1-9][0-9]*" v != null;
+    };
+    # One address per replica, in replica order, each serving the HTTP port
+    # of `ports`. A consumer that must run statements on one particular
+    # replica (migrations that create plain tables) connects to one of
+    # these instead of the load-balanced `host`.
+    replicaHosts = {
+      shape = "a list of one FQDN per replica, as many as `replicas`";
+      test = v: builtins.isList v && v != [ ] && builtins.all isString v;
+    };
   };
 
   problems =

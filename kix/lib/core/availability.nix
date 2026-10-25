@@ -60,7 +60,7 @@ let
   # atLeast "node" level: true for node and zone.
   atLeast = min: level: rank level >= rank min;
 
-  # pick level { none = 1; pod = 2; node = 2; zone = 3; }. Every level must
+  # pick level { none = 1; pod = 2; node = 2; zone = 2; }. Every level must
   # be present so a package's mapping is complete by construction.
   pick = level: table: builtins.seq (checkPickTable table) table.${level};
 

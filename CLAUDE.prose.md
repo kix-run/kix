@@ -20,6 +20,10 @@ whenever Adam corrects writing style.
   Just state the thing.
 - Pre-existing (from CLAUDE.md): no sentence-ending "with confidence"; no
   "unlock", "empower", "supercharge", "seamless".
+- **No insider shorthand for ordinary actions.** "Take a release" means
+  "upgrade to a new version"; say that. The same goes for chat messages,
+  warnings, and comments: if a phrase only makes sense to someone who already
+  knows the jargon, use the plain words.
 
 ## AI-tell constructions
 

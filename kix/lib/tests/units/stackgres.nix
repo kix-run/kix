@@ -2,8 +2,9 @@
 # kix.availability.spreadConstraints (the spread rule for operator-placed
 # operands), the refusals of stackgres-operator, stackgres-cluster, and
 # stackgres-object-storage, the operand image table, the rendered
-# SGCluster, the webhook check that StackGres custom resources wait for, and
-# stackgres-cluster's alert rules and what each is gated on.
+# SGCluster, the webhook check that StackGres custom resources wait for,
+# stackgres-cluster's alert rules and what each is gated on, and
+# stackgres-database's names in the cluster's namespace.
 
 {
   lib,
@@ -27,6 +28,7 @@ let
   operatorPackage = import ../../../packages/stackgres-operator;
   clusterPackage = import ../../../packages/stackgres-cluster;
   objectStoragePackage = import ../../../packages/stackgres-object-storage;
+  databasePackage = import ../../../packages/stackgres-database;
   secretPackage = import ../../../packages/secret;
   releaseTable = import ../../../packages/stackgres-operator/release.nix { inherit lib; };
 
@@ -438,6 +440,43 @@ in
 
   # The operand image table: a major takes its newest minor and the Patroni
   # build of that minor; unknown, unpublished, and `latest` versions throw.
+  # Two stackgres-database instances named alike in two namespaces, on one
+  # cluster, put their bootstrap Secret and Job in the cluster's namespace
+  # under names that carry their own namespace, so both render.
+  stackgres-database-same-name-two-namespaces =
+    let
+      dbIn =
+        ns:
+        { ref, ... }:
+        {
+          instances.${ns}.app-db = {
+            package = databasePackage;
+            deps.postgres = ref.data.postgres;
+            config.password = "pw-${ns}";
+          };
+        };
+      cluster = sgCluster {
+        extra.imports = [
+          (dbIn "team-a")
+          (dbIn "team-b")
+        ];
+      };
+      inData =
+        kind:
+        map (m: m.metadata.name) (
+          builtins.filter (m: m.metadata.namespace == "data") (ofKind kind (manifests cluster))
+        );
+      jobs = inData "Job";
+      secrets = inData "Secret";
+    in
+    (
+      builtins.any (lib.hasPrefix "app-db-team-a-bootstrap-") jobs
+      && builtins.any (lib.hasPrefix "app-db-team-b-bootstrap-") jobs
+      && builtins.elem "app-db-team-a-bootstrap-password" secrets
+      && builtins.elem "app-db-team-b-bootstrap-password" secrets
+    )
+    || throw "stackgres-database same name: jobs ${builtins.toJSON jobs}, secrets ${builtins.toJSON secrets}";
+
   stackgres-resolve-postgres =
     let
       resolve =

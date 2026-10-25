@@ -332,6 +332,26 @@ let
         config.stringData.key = "0123456789abcdef";
       };
     };
+    # BASE_URL from env, since the synthetic cluster routes nothing.
+    plausible = {
+      config.env.BASE_URL = "https://plausible.example.org";
+      instances = {
+        inherit credentials storage;
+        database = {
+          package = packages.stackgres-database;
+          config.password = "password";
+        };
+        clickhouse-database = {
+          package = packages.clickhouse-database;
+          config.password = "password";
+        };
+        secret-key-base = {
+          package = packages.secret;
+          aliases = [ "secretKeyBase" ];
+          config.stringData.key = "0123456789abcdef0123456789abcdef";
+        };
+      };
+    };
     # metrics.enabled with a prometheus provider renders the ServiceMonitor
     # and N8N_METRICS.
     n8n = {

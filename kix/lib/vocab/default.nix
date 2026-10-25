@@ -41,7 +41,7 @@ compose
     oidc = oidcProvider.clientOptions;
   };
   # Map availability levels to package replica counts and quorums:
-  # kix.availability.pick level { none = 1; pod = 2; node = 2; zone = 3; }
+  # kix.availability.pick level { none = 1; pod = 2; node = 2; zone = 2; }
   # kix.availability.atLeast "node" level
   # A workload that runs one pod at a time sets one replica and the ceiling
   # "none" (availability.max on its builder call, or meta.availability.max
