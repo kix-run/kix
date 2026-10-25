@@ -407,6 +407,20 @@ in
       builtins.toJSON (map (x: removeAttrs x [ "default" ]) (sourcesOf cluster))
     }";
 
+  # A value read with `pins.get` in a cluster that does not pass its pin
+  # file to buildCluster is `code`, and its place is never kix's own reader.
+  lib-instance-pins-get-without-pins-names-no-kix-file =
+    let
+      src = sourceOf (build null {
+        app.fromget = {
+          package = webPackage;
+          config.image = pinsFile.get "shared";
+        };
+      }) "fromget" "image";
+    in
+    (src.origin == "code" && (src.file == null || !(lib.hasSuffix "vocab/pins.nix" src.file)))
+    || throw "pins.get value placed at ${builtins.toJSON src}";
+
   # Moving a value from code to an instance pin changes the image sources
   # and nothing that is deployed, so the Activation keeps its name.
   lib-instance-pins-move-to-pin-keeps-the-activation =

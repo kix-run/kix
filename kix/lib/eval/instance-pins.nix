@@ -33,13 +33,16 @@ let
 
   # Where one definition was written: the position of its first attribute
   # when the value is an attrset from Nix source, otherwise the module's file.
-  # Values read from JSON have no position.
+  # Values read from JSON have no position. Positions in Kix's vocab
+  # helpers are left out: an attribute Kix adds, such as the digest `pins.get`
+  # fills in, says nothing about where the cluster set the value.
+  kixVocab = toString ../vocab;
   definitionPlace =
     def:
     let
       positions =
         if builtins.isAttrs def.value then
-          builtins.filter (p: p != null) (
+          builtins.filter (p: p != null && !(lib.hasPrefix "${kixVocab}/" p.file)) (
             map (n: builtins.unsafeGetAttrPos n def.value) (builtins.attrNames def.value)
           )
         else
