@@ -50,6 +50,8 @@ rec {
       identityHashes,
       owners,
       externalNames ? { },
+      # Namespaces another Kix cluster creates for this one (`kix.interface`).
+      providedNamespaces ? { },
     }:
     let
       resources = manifests;
@@ -586,7 +588,8 @@ rec {
       ) (builtins.filter (r: r.kind == "Ingress") resources);
 
       # --- 11. Namespace existence ---
-      # Every namespaced resource must have its Namespace in the manifest set.
+      # Every namespaced resource must have its Namespace in the manifest set,
+      # or in a platform's grant.
 
       namespaceNames = builtins.listToAttrs (
         builtins.concatMap (
@@ -617,7 +620,15 @@ rec {
               let
                 ns = r.metadata.namespace or null;
               in
-              if ns != null && !(isSentinelNamespace ns) && !(namespaceNames ? ${ns}) then [ ns ] else [ ]
+              if
+                ns != null
+                && !(isSentinelNamespace ns)
+                && !(namespaceNames ? ${ns})
+                && !(providedNamespaces ? ${ns})
+              then
+                [ ns ]
+              else
+                [ ]
             ) resources
           );
         in

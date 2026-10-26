@@ -60,6 +60,8 @@
           openbao = ./clusters/test-openbao.nix;
           doc-how-tos = ./clusters/test-doc-how-tos.nix;
           bundle-alias = ./clusters/test-bundle-alias.nix;
+          consumers-platform = ./clusters/test-consumers/platform.nix;
+          consumers-acme = ./clusters/test-consumers/acme.nix;
 
           # Register documented examples so routine builds catch evaluation
           # errors in them.

@@ -70,6 +70,7 @@ in
     evaluateInstance
     evaluateImportInstance
     buildCluster
+    interface
     checkPackageOptions
     packageOptionViolations
     ;

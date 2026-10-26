@@ -53,6 +53,11 @@ let
       ;
   };
   namespaceMod = import ./namespace.nix { inherit lib k8s; };
+  consumersMod = import ./consumers.nix {
+    inherit lib k8s;
+    inherit (import_) mkImport;
+    inherit (resolve) instancePinsLib;
+  };
   auto = import ./auto.nix {
     inherit
       lib
@@ -104,6 +109,7 @@ let
       ;
     inherit (instance) evaluateInstance;
     inherit (import_) mkImport checkExtraDeps;
+    inherit consumersMod;
   };
 
 in
@@ -118,6 +124,8 @@ in
   inherit (import_) mkImport mkImportScope evaluateImportInstance;
 
   inherit (namespaceMod) mkNamespace;
+
+  inherit (consumersMod) interface;
 
   inherit (auto)
     normalizeAvailablePackages
