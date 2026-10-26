@@ -1,6 +1,6 @@
 # 156: The cross-organisation boundary
 
-**Status:** RFC / Draft
+**Status:** RFC. The interface file, the grant, and the loader are built (2026-10-26, HANDBOOK §23.1); the rest is open. Revised the same day: §2, §3, §4, §5.2, §5.4, §6.2, §8, §9.
 **Related:** `45_multi_team_and_operator_models.md` (work styles, assumes mutual trust), `129_scaling_axes_fleet_and_linking.md` §5–6 (linking when trust is low), `127_compiler_target_model.md` (platform imports are the ABI), `117_self_service_platform_interface.md` (schema export; §3.7 eval is not a tenant boundary), `140_catalogue_versions_and_upgrade_windows.md` (per-client pin cadence), `business_discussions/51_kix_airlock.md` (the mirror case: vendor into customer cluster)
 
 ## 1. Problem
@@ -28,7 +28,7 @@ Settled in discussion (2026-10-02):
 - "Each side cannot see the other's code" means **source**. Whoever runs the
   cluster can read every applied manifest, so hiding output from the platform
   is impossible and is not a goal.
-- The consumer receives a **generated, data-only interface flake** (§3). It
+- The consumer receives a **generated, data-only interface file** (§3). It
   carries no secret values (§3.1).
 - The checks we want across the boundary: contract and type checks, ownership
   collisions, cross-boundary network policy, and platform policy and budgets.
@@ -48,41 +48,37 @@ That leaves three cases:
 | Who can read both sources | What runs | Where it lives |
 |---|---|---|
 | Nobody | Each side builds alone and they exchange data (§3 to §5) | Open core |
-| The platform | The platform's integration build evaluates everything (§6.1) | Open core |
-| Only a neutral third party | A trusted evaluator in an isolated worker per pairing (§6.2) | Separate product |
+| A party that builds both sides: the platform, when it can read consumer source; or a paid product both parties give their repositories to | It runs the cross-boundary checks and returns to each side only what it may see (§6) | Open core for the platform; a paid product otherwise |
 
 The third row needs a host both parties trust, and running that host is
 operational infrastructure. So the technical line and the commercial line fall
 in the same place.
 
-## 3. The interface flake
+## 3. The interface file
 
 The platform build already knows everything a consumer needs: the cluster's
-facts, the services on offer, their `out` contracts, and the options a
-consumer may set. `kix export-interface <cluster> --for <consumer>` writes
-that down as data:
+facts, the services on offer, and their `out` contracts. The platform declares
+each consumer in its cluster definition (`consumers.acme`: namespaces,
+services, Secrets, cluster-scoped objects), and its evaluation writes one data
+file per consumer, `kix-interface-acme.json`, with a format `version`. The
+file is in every build of the platform (its Activation record references it)
+and is a flake output beside the record. There is no export command.
 
-```
-lithus-interface-acme/            # one per consumer, published to the consumer
-  flake.nix                       # exposes kix.interface; no package code
-  facts.json                      # flavor facts: provider, k8s version, storage classes, availability, PSA level
-  imports.json                    # granted services: name, roles, out (host, port, secretRef, selector, ...)
-  namespaces.json                 # namespaces the consumer owns, with quotas
-  policy/                         # platform rules, as scorecard rules and admission policy (§5.4)
-  schema/                         # JSON Schema + docs for each granted golden path (117 §3.1)
-```
-
-The consumer's cluster definition consumes it:
+The consumer's Kix cluster is `<platform>-<consumer>`, derived from the
+declaration. It commits a copy of the file and loads it:
 
 ```nix
 kix.buildCluster {
-  name = "acme";                               # its own Kix cluster name
+  name = "lab1-acme";
   modules = [
-    lithus-interface-acme.kix.interface        # flavor + mkImport instances + policy
+    (kix.interface ./kix-interface/lab1.json)   # facts + mkImport instances + provided namespaces
     ./acme.nix                                  # the consumer's own instances
   ];
 }
 ```
+
+The consumer's build renders no Namespace for a provided namespace, and
+refuses objects outside the grant or owned by the platform.
 
 Most of this exists already:
 
@@ -92,6 +88,8 @@ Most of this exists already:
   exported service is one of these with `out` filled from the platform's build.
 - A flavor is already the statement of what the environment provides (127).
   The exported facts are the platform's resolved flavor.
+- Schemas and docs for golden paths (`schema/` above, 117 §3) and policy
+  (`policy/`, §5.4) are not in the file yet.
 - Several Kix clusters can share one Kubernetes cluster since 2026-09-28: each
   command sees only its own cluster's objects, and an orphan another cluster
   still builds is kept (ROADMAP, "Commands see one Kix cluster's objects").
@@ -137,7 +135,11 @@ and audited per consumer. Shared ones can be copied by the existing
 from its own scope. Across organisations the platform's build must do it,
 because the consumer has no rights in the platform's namespace.
 
-**Each side encrypts to its own keys.** The interface flake contains no SOPS
+In the mediated case (§6.2) one agent deploys every slice, so the consumer
+encrypts to the key of the cluster that deploys it; the interface carries
+its public half as `secretsRecipient`.
+
+**Each side encrypts to its own keys.** The interface file contains no SOPS
 files, and neither side holds the other's decryption keys. This holds in the
 platform's integration build (§6.1) too: the consumer's SOPS files enter the
 evaluation as ciphertext, and only whoever deploys the consumer's part needs
@@ -153,9 +155,9 @@ admin. Only scoped RBAC does that.
 No integration repo is needed in the open core. Each side owns its own repo,
 and the interface is a versioned artifact between them.
 
-- **Platform → consumer.** The platform publishes interface versions (git
-  tags on a repo the consumer can read, or a tarball). The consumer pins one
-  in `flake.lock`. Moving the pin is a PR in the consumer repo, and Kix
+- **Platform → consumer.** The consumer pins the interface file in its own
+  repository; its Activation record names the file's path and sha256. Moving
+  the pin is a PR in the consumer repo that replaces the file, and Kix
   compiles it before merge (117 §4). How fast a client must move is the
   catalogue-window question of doc 140.
 - **Consumer → platform: usage files.** The consumer build writes
@@ -166,7 +168,9 @@ and the interface is a versioned artifact between them.
   consumer-driven contract test (the Pact pattern), done on data only.
 
 That gives each side early warning of the other's breaking changes without
-either reading the other's source.
+either reading the other's source. Usage files are not built: a party that
+builds both sides checks breakage by building the consumer against the
+candidate interface instead (§6).
 
 ## 5. The four checks
 
@@ -210,10 +214,17 @@ an answer to the ROADMAP open question "Two Kix clusters that render one shared
 object differently". A plausible answer is a per-pair setting: same-organisation
 Kix clusters share by default, and cross-organisation pairs refuse by default.
 
+Answer for parties (2026-10-26): refuse, identical or not. A consumer's build
+refuses an object its interface lists as the platform's, and an object
+outside its granted namespaces. A paid product that sees every slice's
+objects can also refuse a plan before deploy. Scoped rights for a consumer
+(RBAC rendered from the grant, the slice deployed as that account) are a step
+above the arrangement where both parties are trusted, not the default.
+
 With admin rights on both sides, the check prevents mistakes, not misuse.
 `kubectl` and Helm bypass it, and so does a deploy with the check switched
 off. It turns "the client's agent overwrote our ingress controller" into a
-refused deploy with the owning Kix cluster named. The interface flake also
+refused deploy with the owning Kix cluster named. The interface file also
 lists the platform's namespaces and strong roles as reserved, so the
 consumer's evaluation refuses them before deploy.
 
@@ -252,7 +263,8 @@ in two forms:
 2. **Admission policy** (ValidatingAdmissionPolicy, plus ResourceQuota and
    LimitRange on consumer namespaces) that the platform's own build deploys.
    This is the guarantee, enforced by the cluster whatever tool the consumer
-   used.
+   used. Pod Security refuses at the Pod, not at the server-side dry run of a
+   Deployment, so the consumer's plan passes and its Pods never start.
 
 Shipping the scorecard rules as data needs one check: today rules are Nix
 functions. Exported rules are platform code the consumer evaluates. That is
@@ -291,7 +303,7 @@ expose their modules from their flake (for example `kixModules.acme`)
 separately from their own `buildCluster`.
 
 This gives the platform the first five rows of the table above with no third
-party. The consumer keeps developing against the interface flake on its own
+party. The consumer keeps developing against the interface file on its own
 machine and never sees platform code. For an internal platform team this is
 129 §6 with consumer repos as inputs instead of directories in a monorepo.
 
@@ -315,10 +327,13 @@ diagnostics about the client's own resources. A diagnostic that names a
 platform resource needs redaction (the last row of the table), which is the
 §6.2 product.
 
-### 6.2 Nobody can read both: a trusted evaluator
+### 6.2 Nobody can read both: a mediating product
 
 When the consumer will not share its source with the platform, every row needs
-a host both trust. That host holds both sources, evaluates in an isolated
+a host both trust. A mediating product builds each side alone, serves the
+interface, runs trial builds of each consumer against a platform change's
+candidate interface, refuses collisions, and deploys every slice through one
+agent. Joint evaluation stays a later capability of such a product. That host holds both sources, evaluates in an isolated
 worker, and returns to each side only what that side may see. It reuses the
 per-tenant worker (117 §3.7), the Airlock's redaction and exposure dial (51),
 and the operator reporting cluster state back. Operationally it is Kix Cloud
@@ -333,7 +348,7 @@ core already guarantees more coarsely, so a team that never buys it still has
 a safe boundary.
 
 The business answer may move the line further in (for example, keeping
-`kix export-interface` or the integration build for paid tiers). The technical
+the interface or the integration build for paid tiers). The technical
 constraint only says the line cannot move further out: the open core cannot
 offer joint evaluation between parties that cannot read each other without
 someone running the trusted host.
@@ -379,7 +394,7 @@ product in §6.2.
   Acme's interface lists only that Secret's name and keys. Acme's deploy waits
   until it exists.
 - **A Lithus package puts a SOPS file path in its `out` by mistake.**
-  `kix export-interface` fails and names the field. The interface is not
+  The platform's build fails and names the field. The interface is not
   published.
 - **An AI agent works in Acme's repo.** It can read the schemas and docs for
   every service Acme may use. It cannot read Lithus's packages, because they
@@ -430,34 +445,25 @@ product in §6.2.
 
 ## 8. Work, roughly in order
 
-1. `kix export-interface`: facts, granted imports, namespaces, schemas. Data
-   only, filtered per consumer, refusing `out` values that refer to store
-   paths (§3.1).
-2. Interface loader in `kix/lib`: JSON to mkImport instances, flavor, reserved
-   names and roles.
-3. Deploy-time ownership refusal across Kix clusters, with a per-pair sharing
-   setting (§5.2). Needed first for Lithus, where both sides are admins.
-   Generated per-consumer RBAC and namespace quotas follow, from the same
-   grant list.
-4. Ingress derivation from grants in the netpol plugin.
-5. `usage.json` emission on the consumer side and a platform CI check against
-   it.
-6. Policy export: scorecard rules plus generated admission policy.
-7. Credential delivery as part of a grant: per-consumer credentials where the
-   package can mint them, reflection otherwise, both from the platform side.
-8. The integration build: consumer flakes expose modules, sliced compilation
+1. Done: `consumers` on the platform's cluster, the interface file, and the
+   export refusing `out` values that refer to store paths (§3.1).
+2. Done: the loader, `kix.interface`, with provided namespaces and build-time
+   refusals; ingress from grants when network policy is on.
+3. Deploy-time ownership refusal across Kix clusters (§5.2).
+4. RBAC rendered from the grant, the slice deployed as that account.
+5. Policy export: scorecard rules plus generated admission policy.
+6. Credential delivery: per-consumer credentials where the package can mint
+   them, reflection otherwise, both from the platform side.
+7. The integration build: consumer flakes expose modules, sliced compilation
    (blocked on 129 §6), and the hash comparison between a consumer's own build
    and its slice.
 
-1 and 2 alone are useful to the internal case (agents and source separation)
-and to a first Lithus client.
+Usage files are dropped (§4).
 
 ## 9. Open questions
 
-1. **Grant model.** Where does the platform declare "acme may use
-   `postgres-shared`"? Per-consumer files in the platform repo, or a field on
-   the exported instance? It drives RBAC, ingress, and the export, so it needs
-   one home.
+1. **Grant model.** Answered: per-consumer declarations in the platform's
+   cluster definition, `consumers.<name>`.
 2. **Golden paths across the boundary.** 117's golden paths are partially
    applied platform packages. A consumer that wants a platform-provided "web
    app" shape needs the package code, which hands platform code to the
@@ -465,22 +471,19 @@ and to a first Lithus client.
    published openly as a separate public package set, or the consumer submits
    instance files and the platform compiles them (117's request model, which
    gives up the consumer's own `kix deploy`).
-3. **Who runs the operator.** One Kix operator per Kubernetes cluster owned by
-   the platform, reconciling both Kix clusters? Or one per Kix cluster? The
-   consumer must not gain the platform operator's rights through it.
+3. **Who runs the operator.** Answered: one operator and agent per Kubernetes
+   cluster, the platform's.
 4. **Are policy rules secret?** If a Lithus client must not see Lithus's
    rules, §5.4 loses its local half. Rules are probably fine to publish.
 5. **Same-organisation teams.** With §6.1 an internal platform team gets the
    cross-team checks back without a monorepo. Is there still a reason to offer
    the monorepo-plus-CODEOWNERS layout of 129 §5, or does every multi-team
-   setup become interface flake plus integration build?
+   setup become interface file plus integration build?
 6. **Minting per-consumer credentials.** Which platform packages can create a
    user per consumer (`stackgres-database` is the obvious first), and what is
    the common `out` shape for "a credential delivered to namespace X"?
-7. **Who deploys in the integration case.** Consumers deploying their own
-   builds keeps their cadence and needs the hash check. The platform deploying
-   everything is simpler and makes the platform a bottleneck. Internal teams
-   and Lithus clients may choose differently.
-8. **Interface distribution.** A git repo per consumer is simple, but at many
-   consumers a registry (or the Lithus portal) serving versioned tarballs may
-   fit better.
+7. **Who deploys in the integration case.** Answered for the mediated case:
+   the platform's agent deploys everything, each slice from that consumer's
+   own build.
+8. **Interface distribution.** Answered: a paid product serves it; otherwise
+   the platform hands over the flake output.

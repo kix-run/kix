@@ -2051,6 +2051,87 @@ instance, whose resources take `requires` or `extraDeps` in their builders
 instead. When the import is active, a `ref` to an optional instance that
 nothing activates also fails.
 
+### 23.1 A platform and its consumers
+
+Two Kix clusters can share one Kubernetes cluster as a platform and its
+consumers. Each builds alone, from its own repository. The platform says
+what each consumer gets, and its build writes that down as an interface
+file, which the consumer's build loads. Neither side needs the other's code.
+
+The platform declares each consumer:
+
+```nix
+{
+  consumers.acme = {
+    namespaces.acme-app = { resourceQuota.pods = "20"; podSecurity = "restricted"; };
+    services = [ "data/postgres-shared" ];        # "namespace/instance", active and managed
+    secrets = [ { name = "postgres"; namespace = "acme-app"; keys = [ "user" "password" ]; } ];
+    clusterScoped = [ { kind = "ClusterRole"; name = "acme-reader"; } ];
+  };
+  secretsRecipient = "age1...";                   # the key SOPS files are encrypted to
+}
+```
+
+The platform's build then:
+
+- renders each granted namespace, with its quota and Pod Security level, as
+  its own objects. A namespace the platform uses itself, or grants to another
+  consumer, is refused;
+- with `networkPolicy.enable`, renders a NetworkPolicy
+  `kix-consumer-<consumer>-<instance>` in each granted service's namespace
+  that lets pods of the consumer's namespaces reach the Service's pods. Off,
+  it renders none: an allow policy would isolate those pods from everyone
+  else;
+- writes `kix-interface-<consumer>.json`, referenced by the Activation record
+  and linked beside it in `cluster-<name>-activation`. Its record lists each
+  consumer in `spec.consumers.<consumer> = { slice; interface; }`.
+
+The consumer's Kix cluster is named `<platform>-<consumer>`, here `lab1-acme`.
+The interface lists the Secrets a grant names; the platform's own instances
+create them, for example with the reflector package (§21.4) or a package that
+mints a credential per consumer. Kix does not copy them.
+
+The interface is data only. It holds the format `version`, the platform's
+facts (provider, Kubernetes version, cluster domain, capabilities, whether
+network policy is enforced), the namespaces with the objects the platform
+renders in each (`platformObjects`), each service's `out` and roles, the
+Secrets, the cluster-scoped objects allowed, and `secretsRecipient`. Functions
+and `identityHash` in an `out` are left out. A string whose context holds a
+store path other than a resource's identity, a fact, or a marker, such as a
+SOPS file or a rendered configuration file, fails the platform's build naming
+the field, `consumers.acme.services."data/postgres-shared".out.config`. A
+password typed into `out` as plain text is not caught; review the
+interface's diff.
+
+The consumer commits a copy and loads it:
+
+```nix
+kix.buildCluster {
+  name = "lab1-acme";
+  modules = [ (kix.interface ./kix-interface/lab1.json) ./acme.nix ];
+}
+```
+
+`kix.interface` sets the facts as defaults, adds one `kix.mkImport` per
+service, named for the platform's instance, in the consumer's first granted
+namespace, and puts the parsed file in `config.interfaces.<platform>` for the
+cluster's modules to read (`config.interfaces.lab1.secrets`). The build then:
+
+- fails unless the cluster's name is the interface's `slice`, and unless the
+  file's `version` is one this kix reads;
+- renders no Namespace object for a granted namespace;
+- fails on any object outside the granted namespaces, any cluster-scoped
+  object `clusterScoped` does not list, and any object the platform renders
+  (`platformObjects`). The Activation record and the `kix.run` CRDs are
+  exempt: every Kix cluster renders them;
+- records the file in its Activation record as
+  `spec.interfaces.<platform> = { consumer; path; sha256; }`, `path` being the
+  file's path in the flake, or null when it is outside it.
+
+Moving to a newer interface is a commit of the new file. These build-time
+checks catch mistakes; they do not stop a consumer that deploys with the
+cluster's full rights from doing anything else.
+
 ## 24. Manifest stamping
 
 Every kix-managed resource gets:
