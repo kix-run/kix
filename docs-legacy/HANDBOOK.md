@@ -2126,7 +2126,9 @@ cluster's modules to read (`config.interfaces.lab1.secrets`). The build then:
   exempt: every Kix cluster renders them;
 - records the file in its Activation record as
   `spec.interfaces.<platform> = { consumer; path; sha256; }`, `path` being the
-  file's path in the flake, or null when it is outside it.
+  file's path in the flake, or null when it is outside it. `sha256` is of the
+  file as the platform's build writes it (compact JSON, keys sorted), so a
+  copy an editor reformatted names the same interface as the platform's file.
 
 Moving to a newer interface is a commit of the new file. These build-time
 checks catch mistakes; they do not stop a consumer that deploys with the

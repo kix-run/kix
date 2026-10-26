@@ -262,10 +262,19 @@ in
       lab1 = {
         consumer = "acme";
         path = "kix/lib/tests/units/consumers/lab1.json";
-        sha256 = builtins.hashFile "sha256" fixture;
+        sha256 = builtins.hashString "sha256" (
+          builtins.toJSON (builtins.fromJSON (builtins.readFile fixture))
+        );
       };
     }
     || throw "unexpected spec.interfaces: ${builtins.toJSON (recordOf consumer).spec}";
+
+  # The fixture is reformatted JSON; the record pins it by the hash of the
+  # file the platform writes, so a server can compare the two.
+  lib-consumers-reformatted-copy-pins-the-platform-file =
+    (recordOf consumer).spec.interfaces.lab1.sha256
+    == builtins.hashFile "sha256" platform.interfaces.acme
+    || throw "the pinned hash differs from the platform's file: ${builtins.toJSON (recordOf consumer).spec.interfaces}";
 
   lib-consumers-interface-reads-in-modules =
     (consumer.instances.acme-app.db.out.fqdn == "db.dbns.svc.cluster.local")

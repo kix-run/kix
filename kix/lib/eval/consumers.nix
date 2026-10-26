@@ -415,10 +415,15 @@ in
           }
         ) data.namespaces;
 
+        # The hash of the file as the platform's build writes it: compact
+        # JSON with sorted keys. A copy reformatted by an editor pins the
+        # same interface as the platform's own file.
         recordInterfaces.${data.platform} = {
           inherit (data) consumer;
           path = instancePinsLib.pathInFlake self data.file;
-          sha256 = builtins.hashFile "sha256" data.file;
+          sha256 = builtins.hashString "sha256" (
+            builtins.toJSON (builtins.fromJSON (builtins.readFile data.file))
+          );
         };
 
         # The refusals of the build, as assertions.
