@@ -11,6 +11,7 @@ use super::PlanError;
 use super::document::{Objects, WriteChange};
 use super::fixtures::{deployed, flags, plan, stamp};
 use super::objects::Unshown;
+use crate::cluster::stream::TransitionKind;
 use crate::eval::store_graph::{PackageNode, ResourceNode};
 use crate::eval::store_graph::{StoreGraph, store_hash};
 use crate::manifest::types::{self, ResourceId};
@@ -235,6 +236,55 @@ fn a_first_deploy_writes_every_object_the_plan_shows() {
             .all(|w| w.change == WriteChange::Added)
     );
     assert!(objects.deletes.is_empty());
+}
+
+/// A consumer's first deploy writes every object but Kix's own CRDs, which
+/// its platform writes. Its engine plan waits for them, and its package
+/// diff does not list them.
+#[test]
+fn a_consumer_leaves_kix_crds_to_its_platform() {
+    let mut new = build();
+    for node in new.resources.values_mut() {
+        if lifecycle::is_record(&node.manifest) {
+            node.manifest["spec"]["interfaces"] = json!({"core": {"consumer": "acme"}});
+        }
+    }
+    let checked = plan(&deployed(None), &new, flags(&[])).unwrap();
+    let is_kix_crd = |kind: &str, name: &str| {
+        kind == "CustomResourceDefinition"
+            && [keys::ACTIVATIONS_CRD, keys::PACKAGE_INSTANCES_CRD].contains(&name)
+    };
+
+    let writes = &checked.objects().writes;
+    assert_eq!(writes.len(), new.resources.len() - 2);
+    assert!(!writes.iter().any(|w| is_kix_crd(&w.kind, &w.name)));
+
+    let mut waits: Vec<(&str, Option<&str>)> = checked
+        .plan()
+        .nodes()
+        .iter()
+        .filter(|n| n.kind == TransitionKind::Wait)
+        .map(|n| {
+            let target = n.meta.import_target.as_ref().unwrap();
+            (target.name.as_str(), target.platform.as_deref())
+        })
+        .collect();
+    waits.sort();
+    assert_eq!(
+        waits,
+        [
+            (keys::ACTIVATIONS_CRD, Some("core")),
+            (keys::PACKAGE_INSTANCES_CRD, Some("core"))
+        ]
+    );
+
+    let shown = checked
+        .pkg_diff()
+        .cluster_level
+        .iter()
+        .flat_map(|c| &c.added_resources)
+        .any(|r| is_kix_crd(&r.kind, &r.name));
+    assert!(!shown, "the package diff lists a CRD the platform writes");
 }
 
 #[test]

@@ -48,6 +48,10 @@ pub enum TransitionKind {
     Delete,
     /// Wait for operator approval.
     Pause,
+    /// Wait for an object the build needs and another Kix cluster writes:
+    /// Kix's own CRDs on a consumer cluster, which its platform installs.
+    /// Nothing is applied or stamped.
+    Wait,
 }
 
 impl TransitionKind {
@@ -63,6 +67,7 @@ impl TransitionKind {
             TransitionKind::Drain => Some("drain"),
             TransitionKind::Delete => Some("delete"),
             TransitionKind::Pause => Some("pause"),
+            TransitionKind::Wait => Some("wait"),
         }
     }
 }

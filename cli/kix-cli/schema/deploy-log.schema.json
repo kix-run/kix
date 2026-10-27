@@ -543,6 +543,11 @@
           "const": "pause",
           "description": "Wait for operator approval.",
           "type": "string"
+        },
+        {
+          "const": "wait",
+          "description": "Wait for an object the build needs and another Kix cluster writes:\nKix's own CRDs on a consumer cluster, which its platform installs.\nNothing is applied or stamped.",
+          "type": "string"
         }
       ]
     }
