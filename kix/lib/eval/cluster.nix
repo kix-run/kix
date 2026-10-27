@@ -25,6 +25,7 @@
   mkImport,
   checkExtraDeps,
   consumersMod,
+  podSecurity,
   # The flake whose clusters these are (its `self`), or null when the caller
   # did not say. Image sources name a file only by its path in this flake.
   self,
@@ -827,6 +828,46 @@
       outPathKey =
         r: if r ? outPath then builtins.unsafeDiscardStringContext (toString r.outPath) else "";
 
+      # A workload whose pods its namespace's Pod Security level refuses.
+      # Kubernetes admission would refuse the pods at deploy; the build
+      # refuses the workload instead, naming each field to change. One
+      # assertion per workload.
+      podSecurityAssertions =
+        let
+          plain = v: builtins.unsafeDiscardStringContext (toString v);
+          levelOf = ns: if builtins.elem ns allNsNames then namespacePodSecurity ns else null;
+          sourceOf =
+            ns:
+            if consumerSide != null && consumerSide.podSecuritySource != null then
+              consumerSide.podSecuritySource
+            else if (cfg.namespaces.${ns}.podSecurity or null) != null then
+              "set by namespaces.${ns}.podSecurity"
+            else
+              "the level its instances ask for in meta.podSecurity";
+          ofInstance =
+            inst:
+            let
+              owner = "${inst._meta.namespaceName or "?"}/${inst._meta.instanceName or "?"}";
+            in
+            builtins.concatMap (
+              r:
+              let
+                m = r.rawManifest;
+                ns = plain (m.metadata.namespace or (inst._meta.namespaceName or ""));
+                level = levelOf ns;
+                found = if level == null then [ ] else podSecurity.violations level m;
+              in
+              lib.optional (found != [ ]) {
+                assertion = false;
+                message =
+                  "kix: instance ${owner}: ${plain m.kind} ${plain m.metadata.name} breaks Pod Security level \"${level}\", "
+                  + "which namespace ${ns} enforces (${sourceOf ns}). Kubernetes would refuse its pods. Change:"
+                  + lib.concatMapStrings (v: "\n      ${v.where}: ${v.problem}") found;
+              }
+            ) (builtins.filter (r: r ? rawManifest) (collectResources inst));
+        in
+        builtins.concatMap ofInstance allInstancesList;
+
       # A cluster-scoped object, by API group, kind and name, that more than
       # one active instance renders. Kubernetes holds one object under that
       # identity, so the instances would apply it over each other. Identical
@@ -1002,6 +1043,7 @@
         extraAssertions =
           crossScorecardDiag.assertions
           ++ sharedClusterObjectAssertions
+          ++ podSecurityAssertions
           ++ crossResourceAssertions
           ++ (if consumerSide == null then [ ] else consumerSide.assertionsFor rawManifestList);
       };

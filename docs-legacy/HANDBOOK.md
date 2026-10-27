@@ -1344,6 +1344,17 @@ networkPolicy = {
 
 **Pod Security Standards.** A package whose pods need a level declares it: `meta.podSecurity = "privileged"` (kubevirt's virt-handler). The namespace gets `pod-security.kubernetes.io/enforce` at the most permissive level any of its instances needs, and nothing when none declares one. `namespaces.<ns>.podSecurity` sets the level by hand; setting it stricter than an instance in that namespace needs is an eval error naming the instance, rather than a pod the apiserver refuses with a message naming the pod.
 
+The build checks every pod template (Pod, Deployment, StatefulSet, DaemonSet, ReplicaSet, ReplicationController, Job, CronJob, init containers included) in a namespace with a level against the Pod Security Standards, and fails on each workload that breaks it, naming the instance, the workload, and each container and field with the value to set:
+
+```
+- kix: instance acme-app/echo: Deployment echo breaks Pod Security level "restricted", which namespace acme-app enforces (set by prod's interface). Kubernetes would refuse its pods. Change:
+    container 'nginx': securityContext.allowPrivilegeEscalation is unset; set it to false
+    container 'nginx': securityContext.seccompProfile.type is unset here and on the pod; set RuntimeDefault (or Localhost) on the container or in the pod's securityContext
+    container 'nginx': securityContext.capabilities.drop does not include ALL; set it to [ "ALL" ]
+```
+
+`baseline` covers host namespaces, `privileged`, Windows HostProcess, hostPath volumes, host ports, capabilities added beyond the baseline set, an `Unconfined` seccomp profile, and `procMount`. `restricted` adds volume types, `allowPrivilegeEscalation: false`, `runAsNonRoot` (pod or container), `runAsUser` 0, a `RuntimeDefault` or `Localhost` seccomp profile (pod or container), and `capabilities.drop` including `ALL` with nothing added but `NET_BIND_SERVICE`. AppArmor, SELinux options, sysctls, and the restricted exemptions for a Windows pod are not checked; admission still refuses those at deploy (`eval/pod-security.nix`).
+
 Each default-deny CNP carries one empty rule per denied direction (`ingress: [ { } ]`), which is what puts the namespace's endpoints into default deny with nothing allowed. An empty list is not the same: cilium 1.19 rejects it as invalid and enforces nothing.
 
 ### 16.5 Package intents
@@ -2140,6 +2151,10 @@ The build then:
   and quota where it sets them. An instance that needs a more permissive
   level than the interface's fails as it would against a namespace's own
   `podSecurity`;
+- fails on a workload whose pods the interface's Pod Security level refuses,
+  as Kubernetes admission would at deploy (§16.4, Pod Security Standards). The
+  message names the instance, the workload, each container and field, and
+  the value to set;
 - fails on any object, or Namespace, in a namespace no pattern matches, that
   is the platform's, or that a `claimed` pattern matches, and on any cluster-scoped object `clusterScoped`
   does not list. The Activation record and the `kix.run` CRDs are exempt:
