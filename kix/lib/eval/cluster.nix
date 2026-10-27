@@ -24,6 +24,7 @@
   evaluateInstance,
   mkImport,
   checkExtraDeps,
+  consumersMod,
   # The flake whose clusters these are (its `self`), or null when the caller
   # did not say. Image sources name a file only by its path in this flake.
   self,
@@ -49,6 +50,7 @@
           inherit ref;
           kix = {
             inherit mkImport;
+            inherit (consumersMod) interface;
           };
         }
         // specialArgs;
@@ -170,13 +172,24 @@
         else
           i;
 
+      # Set when this cluster loads a platform's interface: it is that
+      # platform's consumer, and every namespace it renders carries the
+      # interface's label, Pod Security level and quota.
+      consumerSide = consumersMod.consumer { inherit name cfg self; };
+      namespaceConfig =
+        nsName:
+        let
+          own = cfg.namespaces.${nsName} or { };
+        in
+        if consumerSide == null then own else consumerSide.stamp own;
+
       # Derive the namespace level from its instances unless the cluster sets
       # one explicitly. Reject an explicit level that is more restrictive than
       # an instance requirement before Kubernetes rejects the resulting pod.
       namespacePodSecurity =
         nsName:
         let
-          declared = (cfg.namespaces.${nsName} or { }).podSecurity or null;
+          declared = (namespaceConfig nsName).podSecurity or null;
           needs = lib.filter (n: n.level != null) (
             lib.mapAttrsToList (instName: _: {
               inherit instName;
@@ -207,7 +220,7 @@
             {
               name = nsName;
             }
-            // (cfg.namespaces.${nsName} or { })
+            // namespaceConfig nsName
             // {
               podSecurity = namespacePodSecurity nsName;
             }
@@ -671,27 +684,48 @@
         else
           null;
 
+      # What this cluster renders for the clusters it hosts, and their
+      # interface files. Null without `consumers`.
+      platformSide =
+        if cfg.consumers == { } then
+          null
+        else
+          consumersMod.platform {
+            inherit
+              name
+              cfg
+              realNsNames
+              nsResources
+              mergedInstances
+              clusterInstances
+              peekedMetas
+              isActive
+              ;
+          };
+
       # collectResources can encounter aliases of the same resource. Collapse
       # equal store paths before checking identity collisions and writing the
       # manifest list.
-      allResources = dedupeByOutPath (
-        [
-          k8s.kixCRDs.packageInstance
-          k8s.kixCRDs.activation
-        ]
-        ++ (builtins.concatMap collectResources allInstancesList)
-        ++ (builtins.concatMap (
-          nsName:
-          let
-            ns = nsResources.${nsName};
-          in
-          [ ns.resource ]
-          ++ (if ns.quota != null then [ ns.quota ] else [ ])
-          ++ builtins.attrValues ns.netpols
-        ) realNsNames)
-        ++ clusterHookResources
-        ++ [ activation ]
-      );
+      allResources = dedupeByOutPath (resourcesBeforeRecord ++ [ activation ]);
+
+      # Every resource but the Activation record, which references the
+      # interface files built from this list.
+      resourcesBeforeRecord = [
+        k8s.kixCRDs.packageInstance
+        k8s.kixCRDs.activation
+      ]
+      ++ (builtins.concatMap collectResources allInstancesList)
+      ++ (builtins.concatMap (
+        nsName:
+        let
+          ns = nsResources.${nsName};
+        in
+        [ ns.resource ]
+        ++ (if ns.quota != null then [ ns.quota ] else [ ])
+        ++ builtins.attrValues ns.netpols
+      ) realNsNames)
+      ++ (if platformSide == null then [ ] else platformSide.resources)
+      ++ clusterHookResources;
 
       # Remove Nix string context from the manifest list consumed by the CLI,
       # manifest writer, and cross-resource validation.
@@ -728,14 +762,23 @@
         nsName: nsInsts: lib.filterAttrs (instName: _: isActive nsName instName) nsInsts
       ) clusterInstances;
 
-      activation = k8s.mkActivation {
-        inherit name;
-        instances = lib.mapAttrs (
-          _nsName: nsInsts: lib.mapAttrs (_: inst: inst._packageInstance.out.name) nsInsts
-        ) activeClusterInstances;
-        index = packageIndex;
-        extraDeps = clusterHookResources;
-      };
+      activation = k8s.mkActivation (
+        {
+          inherit name;
+          instances = lib.mapAttrs (
+            _nsName: nsInsts: lib.mapAttrs (_: inst: inst._packageInstance.out.name) nsInsts
+          ) activeClusterInstances;
+          index = packageIndex;
+          extraDeps = clusterHookResources;
+        }
+        // lib.optionalAttrs (platformSide != null) {
+          consumers = platformSide.recordConsumers;
+          inherit (platformSide) interfaceFiles;
+        }
+        // lib.optionalAttrs (consumerSide != null) {
+          interfaces = consumerSide.recordInterfaces;
+        }
+      );
 
       # The index keeps the string context of every path it lists, so it
       # references them, and the Activation record references the index.
@@ -957,7 +1000,10 @@
         inherit allInstancesList;
         extraWarnings = crossScorecardDiag.warnings;
         extraAssertions =
-          crossScorecardDiag.assertions ++ sharedClusterObjectAssertions ++ crossResourceAssertions;
+          crossScorecardDiag.assertions
+          ++ sharedClusterObjectAssertions
+          ++ crossResourceAssertions
+          ++ (if consumerSide == null then [ ] else consumerSide.assertionsFor rawManifestList);
       };
 
       isInlinePackage = v: builtins.isAttrs v && v ? build && (v._type or "") != "kix-import";
@@ -1048,6 +1094,10 @@
                         extraImages
                         imageSources
                         ;
+
+                      # Consumer name -> the interface file this cluster
+                      # writes for it.
+                      interfaces = if platformSide == null then { } else platformSide.interfaces;
 
                       diagnostics = {
                         warnings = clusterDiagnostics.warnings ++ clusterHookWarnings;

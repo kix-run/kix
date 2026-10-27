@@ -125,6 +125,13 @@ let
           + ''
             ln -s ${builtins.toFile "kix-image-sources.json" (builtins.toJSON cluster.imageSources)} $out/kix-image-sources.json
           ''
+          # The interface file of each consumer, for the platform to hand to
+          # the consumer, who loads a copy with `kix.interface`.
+          + slib.concatStrings (
+            slib.mapAttrsToList (consumer: file: ''
+              ln -s ${file} $out/kix-interface-${consumer}.json
+            '') (cluster.interfaces or { })
+          )
         );
       }) resolvedClusters;
 

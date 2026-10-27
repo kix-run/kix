@@ -1,0 +1,60 @@
+{
+  "clusterScoped": [],
+  "consumer": "acme",
+  "facts": {
+    "capabilities": {
+      "availabilityZones": null,
+      "daemonSets": null,
+      "gpu": null,
+      "managedControlPlane": null,
+      "multiNode": null,
+      "nodeAutoscaling": null,
+      "podSecurityEnforcement": null,
+      "privilegedContainers": null
+    },
+    "clusterDomain": "cluster.local",
+    "k8sVersion": null,
+    "networkPolicy": false,
+    "provider": null
+  },
+  "namespaces": {
+    "claimed": [],
+    "patterns": [
+      "acme-*"
+    ],
+    "platform": [
+      "kube-system",
+      "platform"
+    ],
+    "podSecurity": "baseline",
+    "resourceQuota": {
+      "pods": "20"
+    }
+  },
+  "platform": "test-platform",
+  "secrets": [],
+  "secretsRecipient": null,
+  "services": {
+    "platform/api": {
+      "instance": "api",
+      "namespace": "platform",
+      "out": {
+        "fqdn": "api.platform.svc.cluster.local",
+        "name": "api",
+        "ports": [
+          {
+            "name": "http",
+            "port": 80,
+            "targetPort": "http"
+          }
+        ],
+        "selector": {
+          "app.kubernetes.io/instance": "api",
+          "app.kubernetes.io/managed-by": "kix"
+        }
+      },
+      "roles": []
+    }
+  },
+  "version": 1
+}

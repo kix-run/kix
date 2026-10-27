@@ -1,0 +1,76 @@
+{
+  "clusterScoped": [
+    {
+      "kind": "ClusterRole",
+      "name": "acme-reader"
+    }
+  ],
+  "consumer": "acme",
+  "facts": {
+    "capabilities": {
+      "availabilityZones": null,
+      "daemonSets": null,
+      "gpu": null,
+      "managedControlPlane": null,
+      "multiNode": null,
+      "nodeAutoscaling": null,
+      "podSecurityEnforcement": null,
+      "privilegedContainers": null
+    },
+    "clusterDomain": "cluster.local",
+    "k8sVersion": null,
+    "networkPolicy": false,
+    "provider": null
+  },
+  "namespaces": {
+    "claimed": [],
+    "patterns": [
+      "acme-*"
+    ],
+    "platform": [
+      "appns",
+      "dbns",
+      "dns",
+      "kube-system"
+    ],
+    "podSecurity": "restricted",
+    "resourceQuota": {
+      "pods": "10"
+    }
+  },
+  "platform": "prod",
+  "secrets": [
+    {
+      "keys": [
+        "password",
+        "user"
+      ],
+      "name": "postgres",
+      "namespace": "acme-app",
+      "type": "Opaque"
+    }
+  ],
+  "secretsRecipient": "age1test",
+  "services": {
+    "dbns/db": {
+      "instance": "db",
+      "namespace": "dbns",
+      "out": {
+        "fqdn": "db.dbns.svc.cluster.local",
+        "name": "db",
+        "ports": [
+          {
+            "name": "db",
+            "port": 5432
+          }
+        ],
+        "selector": {
+          "app.kubernetes.io/instance": "db",
+          "app.kubernetes.io/managed-by": "kix"
+        }
+      },
+      "roles": []
+    }
+  },
+  "version": 1
+}

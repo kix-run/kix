@@ -86,6 +86,15 @@ in
       instances,
       index,
       extraDeps ? [ ],
+      # The clusters this one hosts: consumer name -> { interface; },
+      # `interface` the store path of its interface file as a plain string.
+      # The record references each file in `interfaceFiles`, so they are in
+      # its closure and in every bundle of it.
+      consumers ? { },
+      interfaceFiles ? [ ],
+      # The interface files this cluster is built against: platform cluster
+      # name -> { consumer; path; sha256; }.
+      interfaces ? { },
     }:
     mkResource {
       apiVersion = kixAnnotations.apiVersion;
@@ -97,11 +106,15 @@ in
       };
       requires = [ kixCRDs.activation ];
       extraDeps = extraDeps;
-      storeReferences = [ index ];
+      storeReferences = [ index ] ++ interfaceFiles;
       namespace = clusterScoped;
+      # Each key only when set, so a cluster without consumers or
+      # interfaces keeps its record, and its name, as before.
       extra.spec = {
         inherit instances;
-      };
+      }
+      // lib.optionalAttrs (consumers != { }) { inherit consumers; }
+      // lib.optionalAttrs (interfaces != { }) { inherit interfaces; };
     };
 
 }

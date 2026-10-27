@@ -6,7 +6,7 @@ use crate::cli::StatusArgs;
 use crate::client;
 use crate::output::{self, CommandResponse};
 use kix::build_source::Build;
-use kix::cluster::activation::Records;
+use kix::cluster::activation::{PinnedInterface, Record, Records, RecordsError};
 use kix::cluster::readiness;
 use kix::cluster::{discovery, inventory};
 use kix::eval::store_graph::StoreGraph;
@@ -246,6 +246,10 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
         Some(records) => records.active(cluster_name).await.into_diagnostic()?,
         None => None,
     };
+    let interface_notes = match (opened.records(), &active) {
+        (Some(records), Some(act)) => interface_notes(records, cluster_name, act).await?,
+        _ => vec![],
+    };
     let built_via = active.as_ref().and_then(|act| act.built_via.clone());
     let activation_status = active.map(|act| ActivationStatus {
         age: compute_age(act.created_at),
@@ -276,6 +280,9 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
         sp.finish_and_clear();
     }
     for note in sweep.scope_notes() {
+        crate::esay!("{note}");
+    }
+    for note in interface_notes {
         crate::esay!("{note}");
     }
     let live_resources = sweep.managed;
@@ -310,6 +317,57 @@ async fn run_operator_async(cluster_name: &str, global: &crate::cli::GlobalArgs)
     };
 
     output::result(&response)
+}
+
+/// A line for each platform whose interface `cluster`'s live deploy was not
+/// built against the one that platform's live deploy publishes. Nothing when
+/// they match.
+async fn interface_notes(records: &Records, cluster: &str, active: &Record) -> Result<Vec<String>> {
+    let mut notes = vec![];
+    for (platform, pinned) in &active.interfaces {
+        let live = records.active(platform).await;
+        notes.extend(interface_note(cluster, platform, pinned, live)?);
+    }
+    Ok(notes)
+}
+
+/// What to say about the interface `pinned` from `platform`, given what
+/// reading `platform`'s live record gave. A refusal to read it is said, not
+/// raised: the consumer's own status stands without it.
+fn interface_note(
+    cluster: &str,
+    platform: &str,
+    pinned: &PinnedInterface,
+    live: Result<Option<Record>, RecordsError>,
+) -> Result<Option<String>> {
+    let live = match live {
+        Ok(live) => live,
+        Err(e) if e.forbidden() => {
+            return Ok(Some(format!(
+                "Cannot check {cluster}'s interface from {platform}: this context may not read \
+                 {platform}'s Activation records (HTTP 403)."
+            )));
+        }
+        Err(e) => return Err(e).into_diagnostic(),
+    };
+    let Some(live) = live else {
+        return Ok(Some(format!(
+            "Cannot check {cluster}'s interface from {platform}: {platform} has no live deploy."
+        )));
+    };
+    Ok(match live.published_interfaces.get(&pinned.consumer) {
+        None => Some(format!(
+            "{platform}'s live deploy has no interface for consumer {}. {cluster} was built \
+             against one it no longer publishes.",
+            pinned.consumer
+        )),
+        Some(sha256) if *sha256 != pinned.sha256 => Some(format!(
+            "{cluster} was built against a different interface from the one {platform} runs \
+             now. Commit {platform}'s current {} and deploy {cluster} to take it up.",
+            pinned.path
+        )),
+        Some(_) => None,
+    })
 }
 
 /// Build the package-grouped view by joining store graph packages with live cluster resources.
@@ -482,12 +540,19 @@ async fn run_flat_async(cluster: &str, global: &crate::cli::GlobalArgs) -> Resul
     )
     .await
     .into_diagnostic()?;
+    let interface_notes = match records.records() {
+        Some(records) => match records.active(cluster).await.into_diagnostic()? {
+            Some(active) => interface_notes(records, cluster, &active).await?,
+            None => vec![],
+        },
+        None => vec![],
+    };
 
     if let Some(sp) = &spinner {
         sp.finish_and_clear();
     }
 
-    for note in sweep.scope_notes() {
+    for note in sweep.scope_notes().into_iter().chain(interface_notes) {
         crate::esay!("{note}");
     }
     let resources = sweep.managed;
@@ -619,5 +684,90 @@ fn format_duration(d: chrono::Duration) -> String {
         format!("{}m", minutes)
     } else {
         format!("{}s", total_seconds)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pinned(sha256: &str) -> PinnedInterface {
+        PinnedInterface {
+            consumer: "acme".into(),
+            path: "kix-interface/prod.json".into(),
+            sha256: sha256.into(),
+        }
+    }
+
+    fn publishing(sha256: &str) -> Record {
+        Record {
+            published_interfaces: [("acme".to_string(), sha256.to_string())].into(),
+            ..Record::default()
+        }
+    }
+
+    fn note(live: Result<Option<Record>, RecordsError>) -> Option<String> {
+        interface_note("acme-prod", "prod", &pinned("aa"), live).unwrap()
+    }
+
+    fn refused(code: u16) -> RecordsError {
+        RecordsError {
+            op: "list",
+            name: None,
+            source: kube::Error::Api(kube::error::ErrorResponse {
+                status: "Failure".into(),
+                message: "refused".into(),
+                reason: "Forbidden".into(),
+                code,
+            }),
+        }
+    }
+
+    #[test]
+    fn the_same_interface_says_nothing() {
+        assert_eq!(note(Ok(Some(publishing("aa")))), None);
+    }
+
+    #[test]
+    fn a_new_interface_says_to_commit_it() {
+        assert_eq!(
+            note(Ok(Some(publishing("bb")))).as_deref(),
+            Some(
+                "acme-prod was built against a different interface from the one prod runs \
+                 now. Commit prod's current kix-interface/prod.json and deploy acme-prod to \
+                 take it up."
+            )
+        );
+    }
+
+    #[test]
+    fn a_withdrawn_interface_says_so() {
+        assert_eq!(
+            note(Ok(Some(Record::default()))).as_deref(),
+            Some(
+                "prod's live deploy has no interface for consumer acme. acme-prod was built \
+                 against one it no longer publishes."
+            )
+        );
+    }
+
+    #[test]
+    fn no_live_platform_says_so() {
+        assert_eq!(
+            note(Ok(None)).as_deref(),
+            Some("Cannot check acme-prod's interface from prod: prod has no live deploy.")
+        );
+    }
+
+    #[test]
+    fn a_forbidden_read_says_so_and_another_failure_is_raised() {
+        assert_eq!(
+            note(Err(refused(403))).as_deref(),
+            Some(
+                "Cannot check acme-prod's interface from prod: this context may not read \
+                 prod's Activation records (HTTP 403)."
+            )
+        );
+        assert!(interface_note("acme-prod", "prod", &pinned("aa"), Err(refused(500))).is_err());
     }
 }

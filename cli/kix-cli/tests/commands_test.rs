@@ -144,6 +144,21 @@ fn bundle_reads_back_an_aliased_resource() {
         .success();
 }
 
+/// A platform that hosts a consumer, and the consumer, which renders no
+/// Namespace for the namespaces the platform creates, each make a bundle
+/// `kix bundle` reads back.
+#[test]
+fn bundle_reads_back_a_platform_and_its_consumer() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["consumers-platform", "consumers-acme"] {
+        kix()
+            .args(["bundle", name])
+            .arg(dir.path().join(format!("{name}.kixbundle")))
+            .assert()
+            .success();
+    }
+}
+
 #[test]
 fn nonexistent_cluster_fails() {
     kix()

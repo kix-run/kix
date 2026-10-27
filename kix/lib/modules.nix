@@ -676,6 +676,136 @@ in
       description = "Scorecard policy evaluation. See v2_discussions/60_scorecard_rules_design.md.";
     };
 
+    consumers = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.submodule {
+          options = {
+            namespaces = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              example = [
+                "acme-*"
+                "reports"
+              ];
+              description = ''
+                The namespaces the consumer may create and use, as patterns:
+                an exact name, a prefix such as "acme-*", or "*" for every
+                namespace that is not this cluster's. This cluster's
+                namespaces are those its build renders into, and
+                `reservedNamespaces`. One consumer may hold "*"; no two
+                consumers' other patterns may match the same namespace.
+              '';
+            };
+            podSecurity = lib.mkOption {
+              type = lib.types.nullOr (
+                lib.types.enum [
+                  "privileged"
+                  "baseline"
+                  "restricted"
+                ]
+              );
+              default = null;
+              description = "The Pod Security level of every namespace the consumer creates.";
+            };
+            resourceQuota = lib.mkOption {
+              type = lib.types.nullOr lib.types.anything;
+              default = null;
+              example = {
+                pods = "20";
+              };
+              description = "The ResourceQuota `hard` limits of every namespace the consumer creates.";
+            };
+            services = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              example = [ "data/postgres-shared" ];
+              description = ''
+                Instances of this cluster the consumer may use, as
+                "namespace/instance". Each reaches the consumer as a
+                `kix.mkImport` with the instance's `out` and roles.
+              '';
+            };
+            secrets = lib.mkOption {
+              type = lib.types.listOf (
+                lib.types.submodule {
+                  options = {
+                    name = lib.mkOption { type = lib.types.str; };
+                    namespace = lib.mkOption { type = lib.types.str; };
+                    keys = lib.mkOption {
+                      type = lib.types.listOf lib.types.str;
+                      default = [ ];
+                    };
+                    type = lib.mkOption {
+                      type = lib.types.str;
+                      default = "Opaque";
+                    };
+                  };
+                }
+              );
+              default = [ ];
+              description = ''
+                Secrets present in the consumer's namespaces for it to use,
+                each in an exact namespace one of its patterns matches.
+                The interface lists them by name, namespace, keys, and type.
+                Kix does not create them: this cluster's own instances do,
+                for example the reflector package, or a package that mints a
+                credential per consumer.
+              '';
+            };
+            clusterScoped = lib.mkOption {
+              type = lib.types.listOf (
+                lib.types.submodule {
+                  options = {
+                    kind = lib.mkOption { type = lib.types.str; };
+                    name = lib.mkOption { type = lib.types.str; };
+                  };
+                }
+              );
+              default = [ ];
+              description = "Cluster-scoped objects the consumer may render, by kind and name.";
+            };
+          };
+        }
+      );
+      default = { };
+      description = ''
+        Other Kix clusters this cluster hosts on the same Kubernetes
+        cluster, keyed by consumer name. A consumer names its own cluster
+        and builds it from its own repository against the interface file
+        this cluster writes for it (`kix-interface-acme.json`, loaded with
+        `kix.interface`).
+      '';
+    };
+
+    reservedNamespaces = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "kube-system" ];
+      description = ''
+        Namespaces this cluster claims without rendering into them, such as
+        those the Kubernetes distribution creates. No consumer may use them.
+      '';
+    };
+
+    secretsRecipient = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "age1...";
+      description = ''
+        The age public key that decrypts SOPS files where this cluster is
+        deployed. Consumers find it in their interface and encrypt to it.
+      '';
+    };
+
+    interfaces = lib.mkOption {
+      type = lib.types.attrsOf lib.types.raw;
+      default = { };
+      description = ''
+        Interface files this cluster is built against, keyed by the platform
+        cluster's name. Set by `kix.interface`; cluster modules read the
+        parsed file here, for example `config.interfaces.prod.secrets`.
+      '';
+    };
+
     # Each hook is a function `ctx -> result` or `{ priority ? 1000; fn; }`.
     # Execution order is priority ascending, then name. Declare a priority
     # instead of encoding order into hook names. Results are shape-checked;
