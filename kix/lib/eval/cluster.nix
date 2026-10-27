@@ -172,13 +172,24 @@
         else
           i;
 
+      # Set when this cluster loads a platform's interface: it is that
+      # platform's consumer, and every namespace it renders carries the
+      # interface's label, Pod Security level and quota.
+      consumerSide = consumersMod.consumer { inherit name cfg self; };
+      namespaceConfig =
+        nsName:
+        let
+          own = cfg.namespaces.${nsName} or { };
+        in
+        if consumerSide == null then own else consumerSide.stamp own;
+
       # Derive the namespace level from its instances unless the cluster sets
       # one explicitly. Reject an explicit level that is more restrictive than
       # an instance requirement before Kubernetes rejects the resulting pod.
       namespacePodSecurity =
         nsName:
         let
-          declared = (cfg.namespaces.${nsName} or { }).podSecurity or null;
+          declared = (namespaceConfig nsName).podSecurity or null;
           needs = lib.filter (n: n.level != null) (
             lib.mapAttrsToList (instName: _: {
               inherit instName;
@@ -202,27 +213,18 @@
         else
           mostPermissive.level;
 
-      # Set when this cluster loads a platform's interface: it is that
-      # platform's consumer.
-      consumerSide = consumersMod.consumer { inherit name cfg self; };
-      providedNamespaces = if consumerSide == null then { } else consumerSide.providedNamespaces;
-
       nsResources = builtins.listToAttrs (
         map (nsName: {
           name = nsName;
-          value =
-            if providedNamespaces ? ${nsName} then
-              providedNamespaces.${nsName}
-            else
-              mkNamespace (
-                {
-                  name = nsName;
-                }
-                // (cfg.namespaces.${nsName} or { })
-                // {
-                  podSecurity = namespacePodSecurity nsName;
-                }
-              );
+          value = mkNamespace (
+            {
+              name = nsName;
+            }
+            // namespaceConfig nsName
+            // {
+              podSecurity = namespacePodSecurity nsName;
+            }
+          );
         }) allNsNames
       );
 
@@ -692,15 +694,13 @@
             inherit
               name
               cfg
-              allNsNames
+              realNsNames
               nsResources
               mergedInstances
               clusterInstances
               peekedMetas
               isActive
-              mkNamespace
               ;
-            objects = resourcesBeforeRecord;
           };
 
       # collectResources can encounter aliases of the same resource. Collapse
@@ -723,7 +723,7 @@
         [ ns.resource ]
         ++ (if ns.quota != null then [ ns.quota ] else [ ])
         ++ builtins.attrValues ns.netpols
-      ) (builtins.filter (n: !(providedNamespaces ? ${n})) realNsNames))
+      ) realNsNames)
       ++ (if platformSide == null then [ ] else platformSide.resources)
       ++ clusterHookResources;
 
@@ -821,7 +821,6 @@
               identityHashes = map (r: if r ? outPath then k8s.extractStoreHash r.outPath else null) allResources;
               owners = map (r: resourceOwners.${outPathKey r} or null) allResources;
               externalNames = externalRefNames;
-              inherit providedNamespaces;
             }
           );
 

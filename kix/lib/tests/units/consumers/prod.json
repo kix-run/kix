@@ -23,22 +23,21 @@
     "provider": null
   },
   "namespaces": {
-    "acme-app": {
-      "labels": {},
-      "platformObjects": [
-        {
-          "apiVersion": "v1",
-          "kind": "ResourceQuota",
-          "name": "acme-app-quota"
-        }
-      ],
-      "podSecurity": "restricted",
-      "resourceQuota": {
-        "pods": "10"
-      }
+    "patterns": [
+      "acme-*"
+    ],
+    "platform": [
+      "appns",
+      "dbns",
+      "dns",
+      "kube-system"
+    ],
+    "podSecurity": "restricted",
+    "resourceQuota": {
+      "pods": "10"
     }
   },
-  "platform": "lab1",
+  "platform": "prod",
   "secrets": [
     {
       "keys": [
@@ -72,6 +71,5 @@
       "roles": []
     }
   },
-  "slice": "lab1-acme",
   "version": 1
 }

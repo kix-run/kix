@@ -61,6 +61,9 @@ rec {
     deployedAt = key "deployed-at";
     # A label, not an annotation, so records list per cluster.
     clusterLabel = key "cluster";
+    # A label on each namespace a consumer cluster renders: the consumer's
+    # name. A platform's ingress rules select the consumer's namespaces by it.
+    consumerLabel = key "consumer";
     mode = key "mode";
 
     # Import markers.

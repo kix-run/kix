@@ -18,33 +18,6 @@ rec {
     name = null;
   };
 
-  # A namespace another Kix cluster creates, which this cluster's objects
-  # live in. It stands where a namespace resource would, with no store path,
-  # so nothing renders it and no object depends on it. `rawManifest` gives
-  # its labels to code that reads a namespace's labels.
-  mkProvidedNamespace =
-    {
-      name,
-      labels ? { },
-    }:
-    {
-      _type = "k8s-provided-namespace";
-      inherit name;
-      __toString = self: self.name;
-      rawManifest = {
-        apiVersion = "v1";
-        kind = "Namespace";
-        metadata = {
-          inherit name;
-          labels = labels // {
-            "kubernetes.io/metadata.name" = name;
-          };
-        };
-      };
-    };
-
-  isProvidedNamespace = ns: builtins.isAttrs ns && (ns._type or "") == "k8s-provided-namespace";
-
   validKixKeys = [
     "namespace"
     "source"
@@ -111,7 +84,7 @@ rec {
     }:
     let
       isClusterScoped = builtins.isAttrs namespace && (namespace._type or "") == "k8s-cluster-scoped";
-      isNsResource = builtins.isAttrs namespace && (namespace ? outPath || isProvidedNamespace namespace);
+      isNsResource = builtins.isAttrs namespace && namespace ? outPath;
       nsKey =
         if isClusterScoped then
           "_cluster_"
@@ -221,7 +194,7 @@ rec {
       allAnnotations = annotations // cedeAnnotations;
 
       isClusterScoped = builtins.isAttrs namespace && (namespace._type or "") == "k8s-cluster-scoped";
-      isNsResource = builtins.isAttrs namespace && (namespace ? outPath || isProvidedNamespace namespace);
+      isNsResource = builtins.isAttrs namespace && namespace ? outPath;
 
       nsName =
         if isClusterScoped then

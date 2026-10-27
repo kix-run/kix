@@ -58,27 +58,33 @@ in the same place.
 
 The platform build already knows everything a consumer needs: the cluster's
 facts, the services on offer, and their `out` contracts. The platform declares
-each consumer in its cluster definition (`consumers.acme`: namespaces,
-services, Secrets, cluster-scoped objects), and its evaluation writes one data
+each consumer in its cluster definition (`consumers.acme`: namespace
+patterns such as `acme-*`, with a Pod Security level and quota, services,
+Secrets, cluster-scoped objects), and its evaluation writes one data
 file per consumer, `kix-interface-acme.json`, with a format `version`. The
 file is in every build of the platform (its Activation record references it)
 and is a flake output beside the record. There is no export command.
 
-The consumer's Kix cluster is `<platform>-<consumer>`, derived from the
-declaration. It commits a copy of the file and loads it:
+The consumer names its own Kix cluster, one per environment. It commits a
+copy of the file and loads it:
 
 ```nix
 kix.buildCluster {
-  name = "lab1-acme";
+  name = "acme-production";
   modules = [
-    (kix.interface ./kix-interface/lab1.json)   # facts + mkImport instances + provided namespaces
+    (kix.interface ./kix-interface/prod.json)  # facts + mkImport instances
     ./acme.nix                                  # the consumer's own instances
   ];
 }
 ```
 
-The consumer's build renders no Namespace for a provided namespace, and
-refuses objects outside the grant or owned by the platform.
+The consumer's build renders its own namespaces, each labelled
+`kix.run/consumer=acme` and given the interface's Pod Security level and
+quota, and refuses objects in a namespace that is the platform's or that no
+pattern matches. The platform's namespaces are those its build renders
+into, and those it reserves (`reservedNamespaces`). One consumer may take
+`*`, every namespace that is not the platform's; two consumers' other
+patterns may not overlap.
 
 Most of this exists already:
 
@@ -239,11 +245,11 @@ access is a grant rather than a discovered edge.
 - **Platform ingress** from consumers is derived from the grant list the
   platform already keeps to produce the export: "acme may reach
   `postgres-shared`" becomes an ingress rule on `postgres-shared` from acme's
-  namespaces. The platform never needs to know which consumer workload makes
-  the call. Namespace labels are a safe selector when the platform creates
-  the consumer namespaces and the consumer has no rights to relabel them.
-  When the consumer is also an admin, the labels are guarded only as well as
-  §5.2 guards any other platform object.
+  namespaces, selected by the `kix.run/consumer` label the consumer's build
+  puts on them. The platform never needs to know which consumer workload makes
+  the call, nor the consumer's namespace names. The label is the consumer's
+  own: a consumer that is also an admin could put it on any namespace, so it
+  separates parties that trust each other, as §5.2's checks do.
 - **Consumer → consumer** traffic goes through the platform as a grant too, or
   is denied.
 
@@ -447,8 +453,9 @@ product in §6.2.
 
 1. Done: `consumers` on the platform's cluster, the interface file, and the
    export refusing `out` values that refer to store paths (§3.1).
-2. Done: the loader, `kix.interface`, with provided namespaces and build-time
-   refusals; ingress from grants when network policy is on.
+2. Done: the loader, `kix.interface`, with namespace patterns, stamped
+   consumer namespaces and build-time refusals; ingress from grants, by
+   label, when network policy is on.
 3. Deploy-time ownership refusal across Kix clusters (§5.2).
 4. RBAC rendered from the grant, the slice deployed as that account.
 5. Policy export: scorecard rules plus generated admission policy.

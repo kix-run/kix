@@ -1,17 +1,22 @@
 # clusters/test-consumers/acme.nix: the consumer of ./platform.nix, built
 # from its own code against the platform's interface file.
 #
-# The platform creates acme-app, so this build renders no Namespace, and
-# reaches the platform's api service as the import acme-app/api.
+# The consumer names its own cluster, acme-prod, and renders its own
+# namespace, acme-app, which carries the label, Pod Security level and quota
+# the interface sets. It reaches the platform's api service as the import
+# acme-app/api.
 #
 # Build:  nix build .#cluster-consumers-acme
 
 { kix, packages }:
 
 kix.buildCluster {
-  name = "test-platform-acme";
+  name = "acme-prod";
   modules = [
-    (kix.interface ./kix-interface/test-platform.json)
+    (kix.interface {
+      file = ./kix-interface/test-platform.json;
+      importNamespace = "acme-app";
+    })
     (
       { config, ... }:
       {

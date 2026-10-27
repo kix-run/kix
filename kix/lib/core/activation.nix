@@ -86,7 +86,7 @@ in
       instances,
       index,
       extraDeps ? [ ],
-      # The clusters this one hosts: consumer name -> { slice; interface; },
+      # The clusters this one hosts: consumer name -> { interface; },
       # `interface` the store path of its interface file as a plain string.
       # The record references each file in `interfaceFiles`, so they are in
       # its closure and in every bundle of it.

@@ -681,32 +681,38 @@ in
         lib.types.submodule {
           options = {
             namespaces = lib.mkOption {
-              type = lib.types.attrsOf (
-                lib.types.submodule {
-                  options = {
-                    labels = lib.mkOption {
-                      type = lib.types.attrsOf lib.types.str;
-                      default = { };
-                    };
-                    resourceQuota = lib.mkOption {
-                      type = lib.types.nullOr lib.types.anything;
-                      default = null;
-                    };
-                    podSecurity = lib.mkOption {
-                      type = lib.types.nullOr (
-                        lib.types.enum [
-                          "privileged"
-                          "baseline"
-                          "restricted"
-                        ]
-                      );
-                      default = null;
-                    };
-                  };
-                }
+              type = lib.types.listOf lib.types.str;
+              example = [
+                "acme-*"
+                "reports"
+              ];
+              description = ''
+                The namespaces the consumer may create and use, as patterns:
+                an exact name, a prefix such as "acme-*", or "*" for every
+                namespace that is not this cluster's. This cluster's
+                namespaces are those its build renders into, and
+                `reservedNamespaces`. One consumer may hold "*"; no two
+                consumers' other patterns may match the same namespace.
+              '';
+            };
+            podSecurity = lib.mkOption {
+              type = lib.types.nullOr (
+                lib.types.enum [
+                  "privileged"
+                  "baseline"
+                  "restricted"
+                ]
               );
-              default = { };
-              description = "Namespaces this cluster creates for the consumer. The consumer's objects live in them.";
+              default = null;
+              description = "The Pod Security level of every namespace the consumer creates.";
+            };
+            resourceQuota = lib.mkOption {
+              type = lib.types.nullOr lib.types.anything;
+              default = null;
+              example = {
+                pods = "20";
+              };
+              description = "The ResourceQuota `hard` limits of every namespace the consumer creates.";
             };
             services = lib.mkOption {
               type = lib.types.listOf lib.types.str;
@@ -737,7 +743,8 @@ in
               );
               default = [ ];
               description = ''
-                Secrets present in the consumer's namespaces for it to use.
+                Secrets present in the consumer's namespaces for it to use,
+                each in an exact namespace one of its patterns matches.
                 The interface lists them by name, namespace, keys, and type.
                 Kix does not create them: this cluster's own instances do,
                 for example the reflector package, or a package that mints a
@@ -762,10 +769,20 @@ in
       default = { };
       description = ''
         Other Kix clusters this cluster hosts on the same Kubernetes
-        cluster, keyed by consumer name. Consumer `acme` of cluster `lab1`
-        is the Kix cluster `lab1-acme`, built from its own repository against
-        the interface file this cluster writes for it
-        (`kix-interface-acme.json`, loaded with `kix.interface`).
+        cluster, keyed by consumer name. A consumer names its own cluster
+        and builds it from its own repository against the interface file
+        this cluster writes for it (`kix-interface-acme.json`, loaded with
+        `kix.interface`).
+      '';
+    };
+
+    reservedNamespaces = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "kube-system" ];
+      description = ''
+        Namespaces this cluster claims without rendering into them, such as
+        those the Kubernetes distribution creates. No consumer may use them.
       '';
     };
 
@@ -785,7 +802,7 @@ in
       description = ''
         Interface files this cluster is built against, keyed by the platform
         cluster's name. Set by `kix.interface`; cluster modules read the
-        parsed file here, for example `config.interfaces.lab1.secrets`.
+        parsed file here, for example `config.interfaces.prod.secrets`.
       '';
     };
 

@@ -2054,85 +2054,104 @@ nothing activates also fails.
 ### 23.1 A platform and its consumers
 
 Two Kix clusters can share one Kubernetes cluster as a platform and its
-consumers. Each builds alone, from its own repository. The platform says
-what each consumer gets, and its build writes that down as an interface
-file, which the consumer's build loads. Neither side needs the other's code.
+consumers. Each builds alone, from its own repository, under a name of its
+own. The platform says what each consumer gets, and its build writes that
+down as an interface file, which the consumer's build loads. Neither side
+needs the other's code.
 
 The platform declares each consumer:
 
 ```nix
 {
   consumers.acme = {
-    namespaces.acme-app = { resourceQuota.pods = "20"; podSecurity = "restricted"; };
+    namespaces = [ "acme-*" "reports" ];          # an exact name, a prefix "x-*", or "*"
+    podSecurity = "restricted";                   # every namespace acme creates
+    resourceQuota.pods = "20";                    # likewise
     services = [ "data/postgres-shared" ];        # "namespace/instance", active and managed
     secrets = [ { name = "postgres"; namespace = "acme-app"; keys = [ "user" "password" ]; } ];
     clusterScoped = [ { kind = "ClusterRole"; name = "acme-reader"; } ];
   };
+  reservedNamespaces = [ "kube-system" ];         # the platform's, though it renders nothing there
   secretsRecipient = "age1...";                   # the key SOPS files are encrypted to
 }
 ```
 
-The platform's build then:
+The platform's namespaces are those its build renders objects into, and
+`reservedNamespaces`. A consumer may use any namespace one of its patterns
+matches and that is not the platform's; `*` matches every such namespace.
+The platform's build:
 
-- renders each granted namespace, with its quota and Pod Security level, as
-  its own objects. A namespace the platform uses itself, or grants to another
-  consumer, is refused;
+- fails when more than one consumer holds `*`, when two consumers' other
+  patterns can match the same namespace, when an exact pattern names a
+  platform namespace, when a pattern has `*` anywhere but at its end, and
+  when a Secret is in a namespace that is the platform's or matches none of
+  the consumer's patterns. A consumer with `*` and one with `acme-*` may
+  both exist; which of them uses a namespace both match is not decided here;
 - with `networkPolicy.enable`, renders a NetworkPolicy
   `kix-consumer-<consumer>-<instance>` in each granted service's namespace
-  that lets pods of the consumer's namespaces reach the Service's pods. Off,
-  it renders none: an allow policy would isolate those pods from everyone
-  else;
+  that lets pods of every namespace labelled `kix.run/consumer=<consumer>`
+  reach the Service's pods. Off, it renders none: an allow policy would
+  isolate those pods from everyone else;
 - writes `kix-interface-<consumer>.json`, referenced by the Activation record
   and linked beside it in `cluster-<name>-activation`. Its record lists each
-  consumer in `spec.consumers.<consumer> = { slice; interface; }`.
+  consumer in `spec.consumers.<consumer> = { interface; }`.
 
-The consumer's Kix cluster is named `<platform>-<consumer>`, here `lab1-acme`.
-The interface lists the Secrets a grant names; the platform's own instances
-create them, for example with the reflector package (§21.4) or a package that
-mints a credential per consumer. Kix does not copy them.
+It renders nothing in a consumer's namespaces. The interface lists the
+Secrets a grant names; the platform's own instances create them, for example
+with the reflector package (§21.4) or a package that mints a credential per
+consumer. Kix does not copy them.
 
 The interface is data only. It holds the format `version`, the platform's
-facts (provider, Kubernetes version, cluster domain, capabilities, whether
-network policy is enforced), the namespaces with the objects the platform
-renders in each (`platformObjects`), each service's `out` and roles, the
-Secrets, the cluster-scoped objects allowed, and `secretsRecipient`. Functions
-and `identityHash` in an `out` are left out. A string whose context holds a
-store path other than a resource's identity, a fact, or a marker, such as a
-SOPS file or a rendered configuration file, fails the platform's build naming
-the field, `consumers.acme.services."data/postgres-shared".out.config`. A
+name, the consumer's name, the platform's facts (provider, Kubernetes
+version, cluster domain, capabilities, whether network policy is enforced),
+`namespaces` (`patterns`, `podSecurity`, `resourceQuota`, and `platform`, the
+platform's namespace names), each service's `out` and roles, the Secrets,
+the cluster-scoped objects allowed, and `secretsRecipient`. Functions and
+`identityHash` in an `out` are left out. A string whose context holds a store
+path other than a resource's identity, a fact, or a marker, such as a SOPS
+file or a rendered configuration file, fails the platform's build naming the
+field, `consumers.acme.services."data/postgres-shared".out.config`. A
 password typed into `out` as plain text is not caught; review the
 interface's diff.
 
-The consumer commits a copy and loads it:
+The consumer commits a copy and loads it, under any cluster name it likes:
 
 ```nix
 kix.buildCluster {
-  name = "lab1-acme";
-  modules = [ (kix.interface ./kix-interface/lab1.json) ./acme.nix ];
+  name = "acme-production";
+  modules = [ (kix.interface ./kix-interface/prod.json) ./acme.nix ];
 }
 ```
 
 `kix.interface` sets the facts as defaults, adds one `kix.mkImport` per
-service, named for the platform's instance, in the consumer's first granted
-namespace, and puts the parsed file in `config.interfaces.<platform>` for the
-cluster's modules to read (`config.interfaces.lab1.secrets`). The build then:
+service, named for the platform's instance, and puts the parsed file in
+`config.interfaces.<platform>` for the cluster's modules to read
+(`config.interfaces.prod.secrets`). The imports go in the first exact name
+among the consumer's patterns. When the patterns hold none, name the
+namespace: `kix.interface { file = ./kix-interface/prod.json; importNamespace = "acme-app"; }`.
+The build then:
 
-- fails unless the cluster's name is the interface's `slice`, and unless the
-  file's `version` is one this kix reads;
-- renders no Namespace object for a granted namespace;
-- fails on any object outside the granted namespaces, any cluster-scoped
-  object `clusterScoped` does not list, and any object the platform renders
-  (`platformObjects`). The Activation record and the `kix.run` CRDs are
-  exempt: every Kix cluster renders them;
+- fails unless the file's `version` is one this kix reads;
+- renders the consumer's own namespaces, each with the label
+  `kix.run/consumer=<consumer>`, and with the interface's Pod Security level
+  and quota where it sets them. An instance that needs a more permissive
+  level than the interface's fails as it would against a namespace's own
+  `podSecurity`;
+- fails on any object, or Namespace, in a namespace no pattern matches or
+  that is the platform's, and on any cluster-scoped object `clusterScoped`
+  does not list. The Activation record and the `kix.run` CRDs are exempt:
+  every Kix cluster renders them;
 - records the file in its Activation record as
   `spec.interfaces.<platform> = { consumer; path; sha256; }`, `path` being the
   file's path in the flake, or null when it is outside it. `sha256` is of the
   file as the platform's build writes it (compact JSON, keys sorted), so a
   copy an editor reformatted names the same interface as the platform's file.
 
-Moving to a newer interface is a commit of the new file. These build-time
-checks catch mistakes; they do not stop a consumer that deploys with the
-cluster's full rights from doing anything else.
+Moving to a newer interface is a commit of the new file. Each environment is
+a cluster of its own with its own copy: `acme-production` against `prod`,
+`acme-staging` against `staging`. These build-time checks catch mistakes;
+they do not stop a consumer that deploys with the cluster's full rights from
+doing anything else.
 
 ## 24. Manifest stamping
 

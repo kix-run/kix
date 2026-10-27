@@ -1,6 +1,6 @@
 # clusters/test-consumers/platform.nix: a cluster that hosts a consumer.
 #
-# It grants consumer `acme` the namespace acme-app and its own api service,
+# It grants consumer `acme` the namespaces acme-* and its own api service,
 # and writes acme's interface file beside its Activation record:
 # `nix build .#cluster-consumers-platform-activation`, then
 # result/kix-interface-acme.json. ./acme.nix builds the consumer against a
@@ -92,10 +92,9 @@ kix.buildCluster {
       instances.platform.api.package = apiPackage;
 
       consumers.acme = {
-        namespaces.acme-app = {
-          resourceQuota.pods = "20";
-          podSecurity = "baseline";
-        };
+        namespaces = [ "acme-*" ];
+        resourceQuota.pods = "20";
+        podSecurity = "baseline";
         services = [ "platform/api" ];
       };
     }

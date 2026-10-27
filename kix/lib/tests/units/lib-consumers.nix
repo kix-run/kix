@@ -1,8 +1,9 @@
 # Tests for a platform cluster and the consumer clusters it hosts
-# (eval/consumers.nix). The platform `lab1` grants consumer `acme` a
-# namespace, the service dbns/db, a Secret and a ClusterRole, and writes
-# acme's interface file. The consumer `lab1-acme` loads the copy checked in
-# as ./consumers/lab1.json, which must equal what the platform writes.
+# (eval/consumers.nix). The platform `prod` grants consumer `acme` the
+# namespaces `acme-*`, the service dbns/db, a Secret and a ClusterRole, and
+# writes acme's interface file. The consumer, a cluster it names `acme-prod`,
+# loads the copy checked in as ./consumers/prod.json, which must equal what
+# the platform writes.
 
 {
   lib,
@@ -17,12 +18,13 @@
 }:
 
 let
+  consumerLabel = (import ../../core/annotations.nix).keys.consumerLabel;
+
   grant = {
     consumers.acme = {
-      namespaces.acme-app = {
-        resourceQuota.pods = "10";
-        podSecurity = "restricted";
-      };
+      namespaces = [ "acme-*" ];
+      resourceQuota.pods = "10";
+      podSecurity = "restricted";
       services = [ "dbns/db" ];
       secrets = [
         {
@@ -41,13 +43,14 @@ let
         }
       ];
     };
+    reservedNamespaces = [ "kube-system" ];
     secretsRecipient = "age1test";
   };
 
   platformWith =
     modules:
     eval.buildCluster {
-      name = "lab1";
+      name = "prod";
       modules = [ baseInstances ] ++ modules;
     };
 
@@ -55,7 +58,10 @@ let
 
   interfaceOf = cluster: builtins.fromJSON (builtins.readFile cluster.interfaces.acme);
 
-  fixture = ./consumers/lab1.json;
+  # The platform's interface, forced: a refusal throws here.
+  refused = cluster: !(builtins.tryEval (builtins.deepSeq (interfaceOf cluster) true)).success;
+
+  fixture = ./consumers/prod.json;
 
   recordOf = cluster: builtins.head (ofKind "Activation" (manifests cluster));
 
@@ -73,17 +79,21 @@ let
       };
   };
 
-  # A consumer cluster built from `file`, with `modules` beside it.
+  # A consumer cluster built from `file`, with `modules` beside it. The
+  # patterns hold no exact name, so the imports' namespace is named.
   consumerWith =
     {
-      name ? "lab1-acme",
+      name ? "acme-prod",
       file ? fixture,
     }:
     modules:
     eval.buildCluster {
       inherit name;
       modules = [
-        (eval.interface file)
+        (eval.interface {
+          inherit file;
+          importNamespace = "acme-app";
+        })
         { instances.acme-app.web.package = mkCmPackage { name = "web"; }; }
       ]
       ++ modules;
@@ -95,28 +105,41 @@ let
   named =
     kind: name: ms:
     builtins.filter (m: m.metadata.name == name) (ofKind kind ms);
+
+  # `fixture` with `change` applied, as a file.
+  fixtureWith =
+    change:
+    builtins.toFile "prod.json" (
+      builtins.toJSON (change (builtins.fromJSON (builtins.readFile fixture)))
+    );
 in
 {
   lib-consumers-interface-shape =
     let
       i = interfaceOf platform;
-      ns = i.namespaces.acme-app;
       db = i.services."dbns/db";
     in
     (
       i.version == 1
-      && i.platform == "lab1"
+      && i.platform == "prod"
       && i.consumer == "acme"
-      && i.slice == "lab1-acme"
+      && !(i ? slice)
       && i.facts.clusterDomain == "cluster.local"
       && i.facts.networkPolicy == false
-      && ns.podSecurity == "restricted"
-      && ns.resourceQuota == { pods = "10"; }
-      && builtins.elem {
-        apiVersion = "v1";
-        kind = "ResourceQuota";
-        name = "acme-app-quota";
-      } ns.platformObjects
+      &&
+        i.namespaces == {
+          patterns = [ "acme-*" ];
+          podSecurity = "restricted";
+          resourceQuota = {
+            pods = "10";
+          };
+          platform = [
+            "appns"
+            "dbns"
+            "dns"
+            "kube-system"
+          ];
+        }
       && db.namespace == "dbns"
       && db.instance == "db"
       && db.out.fqdn == "db.dbns.svc.cluster.local"
@@ -148,26 +171,18 @@ in
   # platform writes.
   lib-consumers-fixture-is-the-platforms =
     interfaceOf platform == builtins.fromJSON (builtins.readFile fixture)
-    || throw "kix/lib/tests/units/consumers/lab1.json is stale. Write it again from: ${builtins.readFile platform.interfaces.acme}";
+    || throw "kix/lib/tests/units/consumers/prod.json is stale. Write it again from: ${builtins.readFile platform.interfaces.acme}";
 
-  lib-consumers-platform-renders-the-namespace =
+  lib-consumers-platform-renders-no-consumer-namespace =
     let
       ms = manifests platform;
-      ns = named "Namespace" "acme-app" ms;
     in
-    (
-      builtins.length ns == 1
-      && (builtins.head ns).metadata.labels."pod-security.kubernetes.io/enforce" == "restricted"
-      && named "ResourceQuota" "acme-app-quota" ms != [ ]
-    )
-    || throw "the platform did not render namespace acme-app with its quota";
+    (named "Namespace" "acme-app" ms == [ ] && named "ResourceQuota" "acme-app-quota" ms == [ ])
+    || throw "the platform rendered a namespace of its consumer";
 
   lib-consumers-record-names-the-consumers =
     (recordOf platform).spec.consumers == {
-      acme = {
-        slice = "lab1-acme";
-        interface = builtins.unsafeDiscardStringContext (toString platform.interfaces.acme);
-      };
+      acme.interface = builtins.unsafeDiscardStringContext (toString platform.interfaces.acme);
     }
     || throw "unexpected spec.consumers: ${builtins.toJSON (recordOf platform).spec}";
 
@@ -185,38 +200,89 @@ in
     || throw "a cluster without consumers changed its record: ${builtins.toJSON spec}";
 
   lib-consumers-store-path-in-out-refused =
-    let
-      leaky = platformWith [
-        grant
-        {
-          instances.dbns.leaky.package = mkCmPackage {
-            name = "leaky";
-            out.config = "${builtins.toFile "leaky.conf" "secret"}";
-          };
-          consumers.acme.services = [ "dbns/leaky" ];
-        }
-      ];
-    in
-    !(builtins.tryEval (builtins.deepSeq (interfaceOf leaky) true)).success
+    refused (platformWith [
+      grant
+      {
+        instances.dbns.leaky.package = mkCmPackage {
+          name = "leaky";
+          out.config = "${builtins.toFile "leaky.conf" "secret"}";
+        };
+        consumers.acme.services = [ "dbns/leaky" ];
+      }
+    ])
     || throw "an out value naming a store path reached the interface";
 
   lib-consumers-platform-namespace-not-grantable =
-    evalFails (platformWith [
+    refused (platformWith [
       grant
-      { consumers.acme.namespaces.appns = { }; }
+      { consumers.acme.namespaces = [ "appns" ]; }
     ])
-    || throw "a namespace the platform uses itself was granted";
+    && refused (platformWith [
+      grant
+      { consumers.acme.namespaces = [ "kube-system" ]; }
+    ])
+    || throw "a namespace the platform uses or reserves was granted";
+
+  lib-consumers-one-wildcard =
+    refused (platformWith [
+      grant
+      {
+        consumers.acme.namespaces = [ "*" ];
+        consumers.globex.namespaces = [ "*" ];
+      }
+    ])
+    && !refused (platformWith [
+      grant
+      { consumers.globex.namespaces = [ "*" ]; }
+    ])
+    || throw "two consumers held \"*\", or one could not";
+
+  lib-consumers-overlapping-patterns-refused =
+    let
+      with' =
+        patterns:
+        platformWith [
+          grant
+          { consumers.globex.namespaces = patterns; }
+        ];
+    in
+    (
+      refused (with' [ "acme-reports" ])
+      && refused (with' [ "acme-reports-*" ])
+      && refused (with' [ "acme*" ])
+      && !refused (with' [ "globex-*" ])
+    )
+    || throw "overlapping patterns of two consumers were granted, or separate ones refused";
+
+  lib-consumers-pattern-syntax-refused =
+    refused (platformWith [
+      grant
+      { consumers.acme.namespaces = [ "acme-*-app" ]; }
+    ])
+    || throw "a pattern with '*' inside was accepted";
+
+  lib-consumers-secret-outside-namespaces-refused =
+    refused (platformWith [
+      grant
+      {
+        consumers.acme.secrets = lib.mkForce [
+          {
+            name = "postgres";
+            namespace = "dbns";
+          }
+        ];
+      }
+    ])
+    || throw "a Secret in a platform namespace was granted";
 
   lib-consumers-unknown-service-refused =
-    !(builtins.tryEval (
-      builtins.deepSeq (interfaceOf (platformWith [
-        grant
-        { consumers.acme.services = [ "dbns/nope" ]; }
-      ])) true
-    )).success
+    refused (platformWith [
+      grant
+      { consumers.acme.services = [ "dbns/nope" ]; }
+    ])
     || throw "a service that is not an instance was granted";
 
-  lib-consumers-ingress-only-with-network-policy =
+  lib-consumers-ingress-by-label-only-with-network-policy =
     let
       policy = cluster: named "NetworkPolicy" "kix-consumer-acme-db" (manifests cluster);
       on = policy (platformWith [
@@ -230,19 +296,12 @@ in
       && (builtins.head on).metadata.namespace == "dbns"
       &&
         (builtins.head (builtins.head on).spec.ingress).from == [
-          {
-            namespaceSelector.matchExpressions = [
-              {
-                key = "kubernetes.io/metadata.name";
-                operator = "In";
-                values = [ "acme-app" ];
-              }
-            ];
-          }
+          { namespaceSelector.matchLabels.${consumerLabel} = "acme"; }
         ]
     )
-    || throw "expected the ingress policy only with networkPolicy.enable; with it: ${builtins.toJSON on}";
+    || throw "expected the ingress policy by label only with networkPolicy.enable; with it: ${builtins.toJSON on}";
 
+  # Any name: the consumer chooses it.
   lib-consumers-consumer-builds =
     let
       ms = manifests consumer;
@@ -250,18 +309,32 @@ in
     (
       named "ConfigMap" "web" (inNamespace "acme-app" ms) != [ ]
       && named "PackageInstance" "db" (inNamespace "acme-app" ms) != [ ]
-      && ofKind "Namespace" ms == [ ]
-      && consumer.name == "lab1-acme"
+      && consumer.name == "acme-prod"
+      && builtins.deepSeq (manifests (consumerWith { name = "staging"; } [ ])) true
     )
     || throw "unexpected consumer manifests: ${
       builtins.toJSON (map (m: "${m.kind}/${m.metadata.name}") ms)
     }";
 
+  lib-consumers-consumer-stamps-its-namespaces =
+    let
+      ms = manifests consumer;
+      ns = named "Namespace" "acme-app" ms;
+      labels = (builtins.head ns).metadata.labels;
+    in
+    (
+      builtins.length ns == 1
+      && labels.${consumerLabel} == "acme"
+      && labels."pod-security.kubernetes.io/enforce" == "restricted"
+      && named "ResourceQuota" "acme-app-quota" (inNamespace "acme-app" ms) != [ ]
+    )
+    || throw "the consumer's namespace lacks its label, level or quota: ${builtins.toJSON ns}";
+
   lib-consumers-record-names-the-interface =
     (recordOf consumer).spec.interfaces == {
-      lab1 = {
+      prod = {
         consumer = "acme";
-        path = "kix/lib/tests/units/consumers/lab1.json";
+        path = "kix/lib/tests/units/consumers/prod.json";
         sha256 = builtins.hashString "sha256" (
           builtins.toJSON (builtins.fromJSON (builtins.readFile fixture))
         );
@@ -272,13 +345,38 @@ in
   # The fixture is reformatted JSON; the record pins it by the hash of the
   # file the platform writes, so a server can compare the two.
   lib-consumers-reformatted-copy-pins-the-platform-file =
-    (recordOf consumer).spec.interfaces.lab1.sha256
+    (recordOf consumer).spec.interfaces.prod.sha256
     == builtins.hashFile "sha256" platform.interfaces.acme
     || throw "the pinned hash differs from the platform's file: ${builtins.toJSON (recordOf consumer).spec.interfaces}";
 
   lib-consumers-interface-reads-in-modules =
     (consumer.instances.acme-app.db.out.fqdn == "db.dbns.svc.cluster.local")
     || throw "the db import does not carry the platform's out";
+
+  # With an exact name among the patterns, the imports go there unasked;
+  # with none, the consumer must name the namespace.
+  lib-consumers-imports-namespace =
+    let
+      exact = fixtureWith (
+        i:
+        i
+        // {
+          namespaces = i.namespaces // {
+            patterns = [ "acme-app" ];
+          };
+        }
+      );
+      built = eval.buildCluster {
+        name = "acme-prod";
+        modules = [ (eval.interface exact) ];
+      };
+      unnamed = eval.buildCluster {
+        name = "acme-prod";
+        modules = [ (eval.interface fixture) ];
+      };
+    in
+    (built.instances.acme-app.db.out.fqdn == "db.dbns.svc.cluster.local" && evalFails unnamed)
+    || throw "imports did not go to the exact namespace, or went somewhere unnamed";
 
   lib-consumers-granted-cluster-object-builds = builtins.deepSeq (manifests (
     consumerWith { } [
@@ -294,47 +392,35 @@ in
     )
     || throw "a cluster-scoped object the interface does not allow was built";
 
-  lib-consumers-object-outside-namespaces-refused =
+  lib-consumers-namespace-matching-no-pattern-refused =
     evalFails (
       consumerWith { } [
         { instances.monitoring.extra.package = mkCmPackage { name = "extra"; }; }
       ]
     )
-    || throw "an object outside the granted namespaces was built";
+    || throw "an object in a namespace no pattern matches was built";
 
-  lib-consumers-platform-object-refused =
+  lib-consumers-platform-namespace-refused =
     evalFails (
-      consumerWith { } [
+      consumerWith
         {
-          instances.acme-app.quota.package = {
-            meta.version = "test";
-            build =
-              { self, scope, ... }:
-              {
-                quota = scope.mkResource {
-                  apiVersion = "v1";
-                  kind = "ResourceQuota";
-                  name = "acme-app-quota";
-                };
-                root = self.quota;
+          file = fixtureWith (
+            i:
+            i
+            // {
+              namespaces = i.namespaces // {
+                patterns = [ "*" ];
               };
-          };
+            }
+          );
         }
-      ]
+        [
+          { instances.dbns.extra.package = mkCmPackage { name = "extra"; }; }
+        ]
     )
-    || throw "an object the platform owns was built";
-
-  lib-consumers-name-must-be-the-slice =
-    evalFails (consumerWith { name = "acme"; } [ ])
-    || throw "a consumer cluster not named lab1-acme was built";
+    || throw "an object in the platform's namespace was built";
 
   lib-consumers-unknown-version-refused =
-    evalFails (
-      consumerWith {
-        file = builtins.toFile "lab1.json" (
-          builtins.toJSON (builtins.fromJSON (builtins.readFile fixture) // { version = 2; })
-        );
-      } [ ]
-    )
+    evalFails (consumerWith { file = fixtureWith (i: i // { version = 2; }); } [ ])
     || throw "an interface of version 2 was loaded";
 }

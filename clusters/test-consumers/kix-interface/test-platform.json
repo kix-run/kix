@@ -18,19 +18,16 @@
     "provider": null
   },
   "namespaces": {
-    "acme-app": {
-      "labels": {},
-      "platformObjects": [
-        {
-          "apiVersion": "v1",
-          "kind": "ResourceQuota",
-          "name": "acme-app-quota"
-        }
-      ],
-      "podSecurity": "baseline",
-      "resourceQuota": {
-        "pods": "20"
-      }
+    "patterns": [
+      "acme-*"
+    ],
+    "platform": [
+      "kube-system",
+      "platform"
+    ],
+    "podSecurity": "baseline",
+    "resourceQuota": {
+      "pods": "20"
     }
   },
   "platform": "test-platform",
@@ -58,6 +55,5 @@
       "roles": []
     }
   },
-  "slice": "test-platform-acme",
   "version": 1
 }
