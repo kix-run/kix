@@ -20,7 +20,7 @@
 //! whose records still sit under a retired API group. A record comes back
 //! as a [`Record`], the fields Kix reads off it.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::legacy_domain::{self, LegacyDomainError};
 use crate::manifest::keys;
@@ -61,6 +61,14 @@ impl RecordsError {
             name: None,
             source,
         }
+    }
+
+    /// Whether the apiserver refused the request with HTTP 403.
+    pub fn forbidden(&self) -> bool {
+        matches!(
+            crate::cluster::errors::classify(&self.source),
+            crate::cluster::errors::FailureClass::Forbidden
+        )
     }
 
     /// A failed `op` on the record `name`.
@@ -127,6 +135,23 @@ pub struct Record {
     /// on. Empty for a record built by hand.
     pub uid: String,
     pub resource_version: String,
+    /// `spec.interfaces`: the interface each platform gave this cluster as
+    /// its consumer, as the build pinned it, by platform name.
+    pub interfaces: BTreeMap<String, PinnedInterface>,
+    /// `spec.consumers.<consumer>.sha256`: the hash of the interface this
+    /// cluster publishes to each of its consumers, by consumer name.
+    pub published_interfaces: BTreeMap<String, String>,
+}
+
+/// A platform's interface file as a consumer's build loaded it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct PinnedInterface {
+    /// The consumer name the platform gave this cluster.
+    pub consumer: String,
+    /// The file, relative to the flake root.
+    pub path: String,
+    /// The hash of the file as the platform's build writes it.
+    pub sha256: String,
 }
 
 impl Record {
@@ -170,6 +195,12 @@ impl Record {
             deleting: obj.metadata.deletion_timestamp.is_some(),
             uid: obj.metadata.uid.clone().unwrap_or_default(),
             resource_version: obj.metadata.resource_version.clone().unwrap_or_default(),
+            interfaces: spec_map(obj, "/spec/interfaces", |v| {
+                serde_json::from_value(v.clone()).ok()
+            }),
+            published_interfaces: spec_map(obj, "/spec/consumers", |v| {
+                v.get("sha256").and_then(Value::as_str).map(str::to_string)
+            }),
         }
     }
 
@@ -205,6 +236,25 @@ impl Record {
             .find_map(|at| at.as_deref().and_then(parse_time))
             .or(self.created_at)
     }
+}
+
+/// The object at `pointer`, each entry read by `read`. An entry `read`
+/// cannot read is left out.
+fn spec_map<T>(
+    obj: &DynamicObject,
+    pointer: &str,
+    read: impl Fn(&Value) -> Option<T>,
+) -> BTreeMap<String, T> {
+    obj.data
+        .pointer(pointer)
+        .and_then(Value::as_object)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|(name, v)| Some((name.clone(), read(v)?)))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A build whose orphans a deploy reported and did not delete.
@@ -1489,6 +1539,44 @@ mod orphans_kept_from_tests {
         assert_eq!(
             json!(written[0]),
             json!({"activation": "c-v1", "identityHash": "abc", "builtVia": "/nix/store/abc-activation"})
+        );
+    }
+
+    /// A consumer's pinned interfaces and a platform's published hashes are
+    /// read off `spec`; a malformed entry is left out.
+    #[test]
+    fn reads_interfaces_and_published_hashes() {
+        let obj: DynamicObject = serde_json::from_value(json!({
+            "apiVersion": keys::API_VERSION,
+            "kind": "Activation",
+            "metadata": { "name": "c-v1" },
+            "spec": {
+                "interfaces": {
+                    "prod": { "consumer": "acme", "path": "kix-interface/prod.json", "sha256": "aa" },
+                    "broken": { "consumer": "acme" },
+                },
+                "consumers": {
+                    "acme": { "interface": "/nix/store/x-kix-interface-acme.json", "sha256": "bb" },
+                    "old": { "interface": "/nix/store/y-kix-interface-old.json" },
+                },
+            },
+        }))
+        .unwrap();
+        let record = Record::of(&obj);
+        assert_eq!(
+            record.interfaces,
+            BTreeMap::from([(
+                "prod".to_string(),
+                PinnedInterface {
+                    consumer: "acme".into(),
+                    path: "kix-interface/prod.json".into(),
+                    sha256: "aa".into(),
+                }
+            )])
+        );
+        assert_eq!(
+            record.published_interfaces,
+            BTreeMap::from([("acme".to_string(), "bb".to_string())])
         );
     }
 

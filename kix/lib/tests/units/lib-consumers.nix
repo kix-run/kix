@@ -139,6 +139,7 @@ in
             "dns"
             "kube-system"
           ];
+          claimed = [ ];
         }
       && db.namespace == "dbns"
       && db.instance == "db"
@@ -182,7 +183,10 @@ in
 
   lib-consumers-record-names-the-consumers =
     (recordOf platform).spec.consumers == {
-      acme.interface = builtins.unsafeDiscardStringContext (toString platform.interfaces.acme);
+      acme = {
+        interface = builtins.unsafeDiscardStringContext (toString platform.interfaces.acme);
+        sha256 = builtins.hashFile "sha256" platform.interfaces.acme;
+      };
     }
     || throw "unexpected spec.consumers: ${builtins.toJSON (recordOf platform).spec}";
 
@@ -236,6 +240,55 @@ in
       { consumers.globex.namespaces = [ "*" ]; }
     ])
     || throw "two consumers held \"*\", or one could not";
+
+  # `*` is what nobody else claims. The holder's interface lists the other
+  # consumers' patterns, without their names.
+  lib-consumers-wildcard-lists-claimed-patterns =
+    let
+      cluster = platformWith [
+        grant
+        {
+          consumers.globex.namespaces = [ "*" ];
+          consumers.initech.namespaces = [
+            "reports"
+            "initech-*"
+          ];
+        }
+      ];
+      claimedOf = c: (builtins.fromJSON (builtins.readFile cluster.interfaces.${c})).namespaces.claimed;
+    in
+    (
+      claimedOf "globex" == [
+        "acme-*"
+        "initech-*"
+        "reports"
+      ]
+      && claimedOf "acme" == [ ]
+      && claimedOf "initech" == [ ]
+    )
+    || throw "the \"*\" holder's claimed patterns are wrong: ${builtins.toJSON (claimedOf "globex")}";
+
+  lib-consumers-wildcard-secret-in-claimed-namespace-refused =
+    let
+      with' =
+        namespace:
+        platformWith [
+          grant
+          {
+            consumers.globex = {
+              namespaces = [ "*" ];
+              secrets = [
+                {
+                  name = "token";
+                  inherit namespace;
+                }
+              ];
+            };
+          }
+        ];
+    in
+    (refused (with' "acme-app") && !refused (with' "globex-app"))
+    || throw "a Secret for the \"*\" holder was refused outside the claimed namespaces, or allowed in one";
 
   lib-consumers-overlapping-patterns-refused =
     let
@@ -343,10 +396,9 @@ in
     || throw "unexpected spec.interfaces: ${builtins.toJSON (recordOf consumer).spec}";
 
   # The fixture is reformatted JSON; the record pins it by the hash of the
-  # file the platform writes, so a server can compare the two.
+  # file the platform writes, so `kix status` can compare the two records.
   lib-consumers-reformatted-copy-pins-the-platform-file =
-    (recordOf consumer).spec.interfaces.prod.sha256
-    == builtins.hashFile "sha256" platform.interfaces.acme
+    (recordOf consumer).spec.interfaces.prod.sha256 == (recordOf platform).spec.consumers.acme.sha256
     || throw "the pinned hash differs from the platform's file: ${builtins.toJSON (recordOf consumer).spec.interfaces}";
 
   lib-consumers-interface-reads-in-modules =
@@ -419,6 +471,33 @@ in
         ]
     )
     || throw "an object in the platform's namespace was built";
+
+  lib-consumers-claimed-namespace-refused =
+    let
+      wildcard =
+        modules:
+        consumerWith {
+          file = fixtureWith (
+            i:
+            i
+            // {
+              namespaces = i.namespaces // {
+                patterns = [ "*" ];
+                claimed = [ "globex-*" ];
+              };
+            }
+          );
+        } modules;
+    in
+    (
+      evalFails (wildcard [
+        { instances.globex-app.extra.package = mkCmPackage { name = "extra"; }; }
+      ])
+      && builtins.deepSeq (manifests (wildcard [
+        { instances.other.extra.package = mkCmPackage { name = "extra"; }; }
+      ])) true
+    )
+    || throw "the \"*\" holder built into another consumer's namespace";
 
   lib-consumers-unknown-version-refused =
     evalFails (consumerWith { file = fixtureWith (i: i // { version = 2; }); } [ ])

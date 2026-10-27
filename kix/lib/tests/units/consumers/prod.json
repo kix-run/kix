@@ -23,6 +23,7 @@
     "provider": null
   },
   "namespaces": {
+    "claimed": [],
     "patterns": [
       "acme-*"
     ],

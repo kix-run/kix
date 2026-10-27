@@ -6,7 +6,10 @@
 # A consumer's namespaces are patterns (`acme-*`, `reports`, `*`). The
 # platform's namespaces are those its build renders into plus its
 # `reservedNamespaces`; a consumer may use any namespace one of its patterns
-# matches and that is not the platform's. The consumer renders its own
+# matches and that is not the platform's. One consumer may hold `*`: every
+# namespace that is not the platform's and that no other consumer's pattern
+# matches. Its interface lists those other patterns as `claimed`, without
+# the consumers' names. The consumer renders its own
 # namespaces, and each carries the consumer's label, Pod Security level and
 # quota.
 #
@@ -30,6 +33,14 @@ let
   consumerLabel = kixAnnotations.keys.consumerLabel;
 
   plain = v: builtins.unsafeDiscardStringContext (toString v);
+
+  # The hash of an interface file as the platform's build writes it:
+  # compact JSON with sorted keys. A copy reformatted by an editor hashes the
+  # same as the platform's own file. Both records carry it, so `kix status`
+  # on a consumer can tell whether it was built against what the platform
+  # publishes now.
+  interfaceHash =
+    file: builtins.hashString "sha256" (builtins.toJSON (builtins.fromJSON (builtins.readFile file)));
 
   isDnsLabel =
     s: builtins.stringLength s <= 63 && builtins.match "[a-z0-9]([-a-z0-9]*[a-z0-9])?" s != null;
@@ -120,6 +131,23 @@ let
     else
       v;
 
+  # The other consumers' patterns, which the `*` holder may not use. Empty
+  # for a consumer without `*`: its patterns overlap no one else's.
+  claimedBy =
+    consumers: consumer:
+    if builtins.elem "*" consumers.${consumer}.namespaces then
+      lib.unique (
+        builtins.sort builtins.lessThan (
+          builtins.filter (p: p != "*") (
+            lib.concatMap (c: consumers.${c}.namespaces) (
+              builtins.filter (c: c != consumer) (builtins.attrNames consumers)
+            )
+          )
+        )
+      )
+    else
+      [ ];
+
   # Refusals, as messages, of the platform's grants: names, patterns, `*`
   # held once, no two consumers' patterns overlapping, no exact pattern on
   # a platform namespace, and delivered Secrets in the consumer's own
@@ -131,7 +159,11 @@ let
       platformNamespaces,
     }:
     let
-      owns = c: ns: !(builtins.elem ns platformNamespaces) && builtins.any (p: matches p ns) c.namespaces;
+      owns =
+        consumer: c: ns:
+        !(builtins.elem ns platformNamespaces)
+        && builtins.any (p: matches p ns) c.namespaces
+        && !(builtins.any (p: matches p ns) (claimedBy consumers consumer));
       names = builtins.attrNames consumers;
       wildcards = builtins.filter (c: builtins.elem "*" consumers.${c}.namespaces) names;
       pairs = lib.concatMap (a: map (b: { inherit a b; }) (builtins.filter (b: a < b) names)) names;
@@ -165,8 +197,8 @@ let
         ) (builtins.filter (p: !isGlob p && p != "*" && builtins.elem p platformNamespaces) c.namespaces)
         ++ map (
           s:
-          "${who}.secrets: Secret '${s.name}' is in namespace '${s.namespace}', which is not one of the consumer's namespaces (${builtins.concatStringsSep ", " c.namespaces}, not cluster '${name}''s own)."
-        ) (builtins.filter (s: !(owns c s.namespace)) c.secrets);
+          "${who}.secrets: Secret '${s.name}' is in namespace '${s.namespace}', which is not one of the consumer's namespaces (${builtins.concatStringsSep ", " c.namespaces}, not cluster '${name}''s own nor another consumer's)."
+        ) (builtins.filter (s: !(owns consumer c s.namespace)) c.secrets);
     in
     lib.concatLists (lib.mapAttrsToList ofConsumer consumers)
     ++
@@ -285,6 +317,7 @@ in
           patterns = c.namespaces;
           inherit (c) podSecurity resourceQuota;
           platform = platformNamespaces;
+          claimed = claimedBy consumers consumer;
         };
         services = builtins.listToAttrs (
           map (
@@ -323,7 +356,10 @@ in
       {
         resources = ingressPolicies;
         interfaces = files;
-        recordConsumers = lib.mapAttrs (_: file: { interface = plain file; }) files;
+        recordConsumers = lib.mapAttrs (_: file: {
+          interface = plain file;
+          sha256 = interfaceHash file;
+        }) files;
         interfaceFiles = builtins.attrValues files;
       };
 
@@ -408,7 +444,13 @@ in
         else if !(builtins.any (p: matches p ns) grant.patterns) then
           "matches none of your namespaces (${builtins.concatStringsSep ", " grant.patterns})"
         else
-          null;
+          let
+            by = builtins.filter (p: matches p ns) grant.claimed;
+          in
+          if by != [ ] then
+            "another consumer of ${data.platform} uses (it matches '${builtins.head by}')"
+          else
+            null;
 
       # Refuse what the grant does not allow, before anything is deployed.
       refusalOf =
@@ -452,15 +494,10 @@ in
           // lib.optionalAttrs (grant.podSecurity != null) { inherit (grant) podSecurity; }
           // lib.optionalAttrs (grant.resourceQuota != null) { inherit (grant) resourceQuota; };
 
-        # The hash of the file as the platform's build writes it: compact
-        # JSON with sorted keys. A copy reformatted by an editor pins the
-        # same interface as the platform's own file.
         recordInterfaces.${data.platform} = {
           inherit (data) consumer;
           path = instancePinsLib.pathInFlake self data.file;
-          sha256 = builtins.hashString "sha256" (
-            builtins.toJSON (builtins.fromJSON (builtins.readFile data.file))
-          );
+          sha256 = interfaceHash data.file;
         };
 
         # The refusals of the build, as assertions.

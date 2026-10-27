@@ -83,8 +83,10 @@ The consumer's build renders its own namespaces, each labelled
 quota, and refuses objects in a namespace that is the platform's or that no
 pattern matches. The platform's namespaces are those its build renders
 into, and those it reserves (`reservedNamespaces`). One consumer may take
-`*`, every namespace that is not the platform's; two consumers' other
-patterns may not overlap.
+`*`, every namespace that is not the platform's and that no other
+consumer's pattern matches; its interface lists those patterns as
+`claimed`, without the consumers' names. Two consumers' other patterns may
+not overlap.
 
 Most of this exists already:
 

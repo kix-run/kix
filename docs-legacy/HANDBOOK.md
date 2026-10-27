@@ -2078,15 +2078,16 @@ The platform declares each consumer:
 
 The platform's namespaces are those its build renders objects into, and
 `reservedNamespaces`. A consumer may use any namespace one of its patterns
-matches and that is not the platform's; `*` matches every such namespace.
-The platform's build:
+matches and that is not the platform's. `*` matches every namespace that is
+not the platform's and that no other consumer's pattern matches: with one
+consumer on `*` and another on `acme-*`, `acme-app` is the second's. The
+platform's build:
 
 - fails when more than one consumer holds `*`, when two consumers' other
   patterns can match the same namespace, when an exact pattern names a
   platform namespace, when a pattern has `*` anywhere but at its end, and
-  when a Secret is in a namespace that is the platform's or matches none of
-  the consumer's patterns. A consumer with `*` and one with `acme-*` may
-  both exist; which of them uses a namespace both match is not decided here;
+  when a Secret is in a namespace that is the platform's, matches none of
+  the consumer's patterns, or is another consumer's;
 - with `networkPolicy.enable`, renders a NetworkPolicy
   `kix-consumer-<consumer>-<instance>` in each granted service's namespace
   that lets pods of every namespace labelled `kix.run/consumer=<consumer>`
@@ -2094,7 +2095,8 @@ The platform's build:
   isolate those pods from everyone else;
 - writes `kix-interface-<consumer>.json`, referenced by the Activation record
   and linked beside it in `cluster-<name>-activation`. Its record lists each
-  consumer in `spec.consumers.<consumer> = { interface; }`.
+  consumer in `spec.consumers.<consumer> = { interface; sha256; }`, the hash
+  taken as the consumer's build takes it (below).
 
 It renders nothing in a consumer's namespaces. The interface lists the
 Secrets a grant names; the platform's own instances create them, for example
@@ -2104,8 +2106,9 @@ consumer. Kix does not copy them.
 The interface is data only. It holds the format `version`, the platform's
 name, the consumer's name, the platform's facts (provider, Kubernetes
 version, cluster domain, capabilities, whether network policy is enforced),
-`namespaces` (`patterns`, `podSecurity`, `resourceQuota`, and `platform`, the
-platform's namespace names), each service's `out` and roles, the Secrets,
+`namespaces` (`patterns`, `podSecurity`, `resourceQuota`, `platform`, the
+platform's namespace names, and `claimed`, the other consumers' patterns, for
+the consumer holding `*`; empty for the others), each service's `out` and roles, the Secrets,
 the cluster-scoped objects allowed, and `secretsRecipient`. Functions and
 `identityHash` in an `out` are left out. A string whose context holds a store
 path other than a resource's identity, a fact, or a marker, such as a SOPS
@@ -2137,8 +2140,8 @@ The build then:
   and quota where it sets them. An instance that needs a more permissive
   level than the interface's fails as it would against a namespace's own
   `podSecurity`;
-- fails on any object, or Namespace, in a namespace no pattern matches or
-  that is the platform's, and on any cluster-scoped object `clusterScoped`
+- fails on any object, or Namespace, in a namespace no pattern matches, that
+  is the platform's, or that a `claimed` pattern matches, and on any cluster-scoped object `clusterScoped`
   does not list. The Activation record and the `kix.run` CRDs are exempt:
   every Kix cluster renders them;
 - records the file in its Activation record as
@@ -2147,7 +2150,15 @@ The build then:
   file as the platform's build writes it (compact JSON, keys sorted), so a
   copy an editor reformatted names the same interface as the platform's file.
 
-Moving to a newer interface is a commit of the new file. Each environment is
+Moving to a newer interface is a commit of the new file. `kix status` on the
+consumer compares the `sha256` its live deploy pinned with the one the
+platform's live deploy records, and says when they differ:
+`acme-production was built against an older interface from prod. Commit the
+new kix-interface/prod.json and deploy acme-production to take it up.` When
+they match it says nothing. It also says when the platform has no live
+deploy, no longer publishes an interface for the consumer, or its records
+cannot be read (HTTP 403). The `*` holder's interface changes when another
+consumer's patterns do. Each environment is
 a cluster of its own with its own copy: `acme-production` against `prod`,
 `acme-staging` against `staging`. These build-time checks catch mistakes;
 they do not stop a consumer that deploys with the cluster's full rights from

@@ -231,7 +231,7 @@ Auto-derives CiliumNetworkPolicy from the DI graph:
 - `cluster.topology.failureDomainKeys` — Read-only: the topology keys pods spread across, computed from `capabilities.availabilityZones`, `multiNode` and the two keys above. Operator-CR packages read it through `clusterConfig`.
 - `scorecard`: enable (default on), rules (default `kix.rules`), maxSeverity (default `warning`: findings are capped there, so nothing fails until a cluster raises it to `error`), ruleDefaults, ruleOverrides, knownAnnotationDomains. `mkFlake { clusterModules = [ ... ]; }` prepends modules to every cluster in a flake; this repository's flakes raise the cap with it. Packages read a rule's resolved severity with `kix.scorecard.effectiveSeverity { clusterConfig; rule; namespaceName; owner ? null; }` (null when the rule does not run), to fail with option-specific advice (`initChownData` in vaultwarden and immich). (`kix/lib/vocab/default.nix`)
 - `networkPolicy` — enable, defaultDeny, directions.
-- `consumers.<name>`: Kix clusters this one hosts on the same Kubernetes cluster: `namespaces` (patterns: an exact name, `x-*`, or `*`), `podSecurity` and `resourceQuota` for every namespace the consumer creates, `services` ("namespace/instance"), `secrets` (listed, not created), `clusterScoped` (kind, name). Refuses `*` held twice and overlapping patterns; renders ingress NetworkPolicies selecting the consumer's namespaces by label when `networkPolicy.enable`, and `kix-interface-<name>.json`, which the Activation record references and names in `spec.consumers` (HANDBOOK §23.1).
+- `consumers.<name>`: Kix clusters this one hosts on the same Kubernetes cluster: `namespaces` (patterns: an exact name, `x-*`, or `*`, every namespace neither the platform's nor matched by another consumer), `podSecurity` and `resourceQuota` for every namespace the consumer creates, `services` ("namespace/instance"), `secrets` (listed, not created), `clusterScoped` (kind, name). Refuses `*` held twice and overlapping patterns; renders ingress NetworkPolicies selecting the consumer's namespaces by label when `networkPolicy.enable`, and `kix-interface-<name>.json`, which the Activation record references and names in `spec.consumers` (HANDBOOK §23.1).
 - `reservedNamespaces`: Namespaces the cluster claims without rendering into them; no consumer may use them.
 - `secretsRecipient`: The age public key the cluster's SOPS files are encrypted to; carried in every interface.
 - `interfaces.<platform>`: set by `kix.interface`: the parsed interface file the cluster is built against.
@@ -456,6 +456,7 @@ Pipeline: build activation → load store graph → resolve old activation → D
 Resource health table.
 - Default (flat): NAME | NAMESPACE | KIND | READY | STATUS | AGE. Lists only this Kix cluster's objects.
 - `--operator` — Package-grouped view with Activation CR metadata, phase-based coloring (Active=green, Deploying=yellow, Failed=red).
+- On a consumer cluster, either view says when the interface its live deploy was built against differs from the one the platform's live deploy publishes, or when that cannot be checked (HANDBOOK §23.1).
 
 #### `kix list clusters`
 List all available clusters in the flake.
