@@ -106,6 +106,36 @@ let
     kind: name: ms:
     builtins.filter (m: m.metadata.name == name) (ofKind kind ms);
 
+  echoPackage = import ../../../packages/echo-server;
+
+  # A Deployment whose container is `container`.
+  deploymentPackage = container: {
+    meta.version = "test";
+    build =
+      { self, scope, ... }:
+      {
+        deployment = scope.mkDeployment {
+          name = "app";
+          spec = {
+            selector.matchLabels = scope.selectorLabels;
+            template = {
+              metadata.labels = scope.selectorLabels;
+              spec.containers = [
+                (
+                  {
+                    name = "app";
+                    image = "registry.example.com/app:1";
+                  }
+                  // container
+                )
+              ];
+            };
+          };
+        };
+        root = self.deployment;
+      };
+  };
+
   # `fixture` with `change` applied, as a file.
   fixtureWith =
     change:
@@ -502,4 +532,54 @@ in
   lib-consumers-unknown-version-refused =
     evalFails (consumerWith { file = fixtureWith (i: i // { version = 2; }); } [ ])
     || throw "an interface of version 2 was loaded";
+
+  # The fixture's namespaces enforce "restricted": echo-server's pods break
+  # it, so the build refuses them; a container that meets it builds.
+  lib-consumers-pod-security-refuses-at-build =
+    evalFails (consumerWith { } [ { instances.acme-app.echo.package = echoPackage; } ])
+    && builtins.deepSeq (manifests (
+      consumerWith { } [
+        {
+          instances.acme-app.app.package = deploymentPackage {
+            securityContext = {
+              runAsNonRoot = true;
+              allowPrivilegeEscalation = false;
+              capabilities.drop = [ "ALL" ];
+              seccompProfile.type = "RuntimeDefault";
+            };
+          };
+        }
+      ]
+    )) true
+    || throw "echo-server built under \"restricted\", or a restricted container did not";
+
+  # Under "baseline" or no level, echo-server builds; a privileged
+  # container still fails "baseline".
+  lib-consumers-pod-security-follows-the-interface-level =
+    let
+      levelled =
+        level: modules:
+        consumerWith {
+          file = fixtureWith (
+            i:
+            i
+            // {
+              namespaces = i.namespaces // {
+                podSecurity = level;
+              };
+            }
+          );
+        } modules;
+      echo = [ { instances.acme-app.echo.package = echoPackage; } ];
+    in
+    (
+      builtins.deepSeq (manifests (levelled "baseline" echo)) true
+      && builtins.deepSeq (manifests (levelled null echo)) true
+      && evalFails (
+        levelled "baseline" [
+          { instances.acme-app.app.package = deploymentPackage { securityContext.privileged = true; }; }
+        ]
+      )
+    )
+    || throw "the check did not follow the interface's level";
 }

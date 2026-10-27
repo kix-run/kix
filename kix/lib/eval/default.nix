@@ -53,6 +53,7 @@ let
       ;
   };
   namespaceMod = import ./namespace.nix { inherit lib k8s; };
+  podSecurity = import ./pod-security.nix { inherit lib; };
   consumersMod = import ./consumers.nix {
     inherit lib k8s;
     inherit (import_) mkImport;
@@ -109,7 +110,7 @@ let
       ;
     inherit (instance) evaluateInstance;
     inherit (import_) mkImport checkExtraDeps;
-    inherit consumersMod;
+    inherit consumersMod podSecurity;
   };
 
 in

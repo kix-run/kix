@@ -494,6 +494,11 @@ in
           // lib.optionalAttrs (grant.podSecurity != null) { inherit (grant) podSecurity; }
           // lib.optionalAttrs (grant.resourceQuota != null) { inherit (grant) resourceQuota; };
 
+        # Where the Pod Security level of the consumer's namespaces comes
+        # from, for the build's messages; null when the interface sets none.
+        podSecuritySource =
+          if grant.podSecurity != null then "set by ${data.platform}'s interface" else null;
+
         recordInterfaces.${data.platform} = {
           inherit (data) consumer;
           path = instancePinsLib.pathInFlake self data.file;
