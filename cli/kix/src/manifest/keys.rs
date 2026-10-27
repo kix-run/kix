@@ -85,6 +85,9 @@ pub(crate) const ORPHANS_KEPT_FROM_FIELD: &str = "orphansKeptFrom";
 /// `activations.<domain>`, the CRD name.
 pub const ACTIVATIONS_CRD: &str = concat!("activations.", domain!());
 
+/// `packageinstances.<domain>`, the CRD name.
+pub const PACKAGE_INSTANCES_CRD: &str = concat!("packageinstances.", domain!());
+
 // --- Stamped by the CLI at load time (eval/stamp.rs) ---
 
 /// The 32-char Nix store hash of the resource's sealed manifest. The identity
@@ -261,6 +264,7 @@ mod tests {
         assert_eq!(PREFIX, format!("{DOMAIN}/"));
         assert_eq!(IDENTITY_HASH, format!("{DOMAIN}/identity-hash"));
         assert_eq!(ACTIVATIONS_CRD, format!("activations.{DOMAIN}"));
+        assert_eq!(PACKAGE_INSTANCES_CRD, format!("packageinstances.{DOMAIN}"));
         assert_eq!(WEBSITE, format!("https://{DOMAIN}"));
     }
 

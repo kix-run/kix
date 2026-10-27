@@ -96,6 +96,32 @@ pub struct ImportTarget {
     /// CRD's `spec.versions` with `served: true`. Never empty for a CRD ref
     /// marker; empty for every other import, which gets no version check.
     pub served_versions: Vec<String>,
+    /// The platform Kix cluster that installs this object, when it is one
+    /// of Kix's own CRDs on a consumer cluster
+    /// ([`crate::manifest::lifecycle::left_to_platform`]). The failure
+    /// messages then tell the reader to deploy or upgrade Kix there.
+    pub platform: Option<String>,
+}
+
+impl ImportTarget {
+    /// The target a consumer's deploy waits for in place of applying `crd`,
+    /// one of Kix's own CRDs that `platform` installs. The live CRD must
+    /// serve every version `crd` serves.
+    pub fn left_to_platform(crd: &Value, platform: &str) -> Self {
+        ImportTarget {
+            kind: "CustomResourceDefinition".into(),
+            api_version: "apiextensions.k8s.io/v1".into(),
+            name: crd
+                .pointer("/metadata/name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            namespace: None,
+            expected_keys: Vec::new(),
+            served_versions: served_crd_versions(crd),
+            platform: Some(platform.to_string()),
+        }
+    }
 }
 
 /// An import marker whose annotations the kix library would not have
@@ -206,6 +232,7 @@ pub fn import_target_from_manifest(
         namespace,
         expected_keys,
         served_versions,
+        platform: None,
     }))
 }
 
@@ -300,10 +327,16 @@ pub(crate) async fn wait_for_import_target(
                         // waiting does not change what the CRD serves.
                         let unserved = unserved_crd_versions(&obj.data, &target.served_versions);
                         if !unserved.is_empty() {
+                            let fix = match &target.platform {
+                                Some(platform) => format!(
+                                    "This cluster is a consumer, and its platform cluster '{platform}' installs Kix's own resource types. Upgrade Kix on '{platform}' first, then deploy again."
+                                ),
+                                None => "Correct version or servedVersions on the scope.mkCRDRef or mkImport crds entry that declares it.".to_string(),
+                            };
                             return Ok(ReadinessResult::ImportMismatch {
                                 missing_keys: Vec::new(),
                                 message: format!(
-                                    "CustomResourceDefinition {} does not serve {} (serves {}). Correct version or servedVersions on the scope.mkCRDRef or mkImport crds entry that declares it.",
+                                    "CustomResourceDefinition {} does not serve {} (serves {}). {fix}",
                                     target.name,
                                     unserved.join(", "),
                                     served_crd_versions(&obj.data).join(", ")
@@ -388,13 +421,17 @@ pub(crate) async fn wait_for_import_target(
 
         let elapsed = start.elapsed();
         if elapsed >= timeout {
-            return Ok(ReadinessResult::TimedOut {
-                elapsed,
-                message: format!(
+            let message = match &target.platform {
+                Some(platform) => format!(
+                    "{} {} is not on the cluster, or is not established. This cluster is a consumer, and its platform cluster '{platform}' installs Kix's own resource types. Deploy Kix on '{platform}' first, then deploy again.",
+                    target.kind, target.name
+                ),
+                None => format!(
                     "import target {}/{} (apiVersion {}) not found on cluster",
                     target.kind, target.name, target.api_version
                 ),
-            });
+            };
+            return Ok(ReadinessResult::TimedOut { elapsed, message });
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }

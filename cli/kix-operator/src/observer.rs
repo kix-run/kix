@@ -50,6 +50,7 @@ impl DeployObserver for OperatorObserver {
                     kix::cluster::stream::TransitionKind::Drain => "drain",
                     kix::cluster::stream::TransitionKind::Delete => "delete",
                     kix::cluster::stream::TransitionKind::Pause => "pause",
+                    kix::cluster::stream::TransitionKind::Wait => "wait",
                 };
                 match verdict {
                     Verdict::Pending => {}

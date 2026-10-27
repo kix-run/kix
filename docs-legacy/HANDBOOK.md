@@ -2165,6 +2165,29 @@ The build then:
   file as the platform's build writes it (compact JSON, keys sorted), so a
   copy an editor reformatted names the same interface as the platform's file.
 
+The platform owns Kix's own CRDs, `activations.kix.run` and
+`packageinstances.kix.run`, on the Kubernetes cluster. A consumer's build
+still contains them, because its PackageInstances and its record depend on
+them. Its deploy never writes them. Every Kix cluster applies with the same
+field manager, so a consumer's apply would replace the platform's schema
+without a conflict, and a consumer on another Kix version would change it.
+`kix deploy` and `kix plan` read a build whose record has
+`spec.interfaces` as a consumer's, and for these two CRDs:
+
+- the plan leaves them out of `objects.writes` and the package diff;
+- the deploy runs a `wait` node for each: it waits for the live CRD to be
+  established and to serve every version the build's copy serves, then lets
+  the objects that depend on it go ahead. It neither applies the CRD nor adds
+  the consumer to its `kix.run/activations` annotation;
+- when the CRD does not appear before the readiness timeout, the node fails
+  and says to deploy Kix on the platform first. When the live CRD lacks a
+  version, it fails at once and says to upgrade Kix on the platform first.
+  Nothing that depends on the CRD is applied.
+
+A consumer on a newer Kix whose CRDs serve a new version therefore waits for
+its platform to upgrade. A consumer never deletes these CRDs: prune never
+deletes a CRD (`never_pruned`).
+
 Moving to a newer interface is a commit of the new file. `kix status` on the
 consumer compares the `sha256` its live deploy pinned with the one the
 platform's live deploy records, and says when they differ:

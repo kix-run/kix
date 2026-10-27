@@ -116,10 +116,6 @@ impl LivePlan {
         .map_err(|e| LivePlanError::Fetch(Box::new(e)))?;
 
         let (actions, shared_orphans) = live_changes(desired, &sweep.managed, &sweep.tenancy);
-        let applies = actions
-            .iter()
-            .filter(|a| matches!(a, ChangeAction::Apply(_)))
-            .count();
         let orphans: Vec<ResourceId> = actions
             .iter()
             .filter_map(|a| match a {
@@ -127,10 +123,17 @@ impl LivePlan {
                 _ => None,
             })
             .collect();
-        let unchanged = actions.len() - applies - orphans.len();
         let graph = ResourceGraph::from_manifests(desired).map_err(LivePlanError::Graph)?;
         let plan =
             DeployPlan::from_graph_and_changes(&graph, &actions).map_err(LivePlanError::Marker)?;
+        // Counted on the plan, which applies none of the objects a consumer
+        // leaves to its platform.
+        let applies = plan
+            .nodes()
+            .iter()
+            .filter(|n| matches!(n.action, ChangeAction::Apply(_)))
+            .count();
+        let unchanged = actions.len() - applies - orphans.len();
 
         Ok(LivePlan {
             client: client.clone(),

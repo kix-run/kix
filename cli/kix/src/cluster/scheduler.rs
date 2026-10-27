@@ -46,7 +46,7 @@ use super::stream::{
 };
 use super::watchdog::{self, Progress, StallPolicy};
 use crate::manifest::keys;
-use crate::manifest::lifecycle::never_pruned;
+use crate::manifest::lifecycle::{self, never_pruned};
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
@@ -108,9 +108,35 @@ impl DeployPlan {
             );
         }
 
+        // On a consumer, Kix's own CRDs are its platform's to write: their
+        // nodes wait for the live CRDs instead (see `lifecycle::left_to_platform`).
+        let manifests = || graph.graph.node_weights().map(|n| &n.manifest);
+        let left_to_platform = lifecycle::left_to_platform(manifests());
+        let platform = manifests()
+            .find(|m| lifecycle::is_record(m))
+            .and_then(lifecycle::platform_of)
+            .unwrap_or_default();
+
         let mut nodes = Vec::with_capacity(graph.graph.node_count());
         for idx in graph.graph.node_indices() {
             let node = &graph.graph[idx];
+            if left_to_platform.contains(&node.id) {
+                nodes.push(PlanNodeEntry {
+                    id: NodeId::Resource(node.id.clone()),
+                    kind: TransitionKind::Wait,
+                    action: ChangeAction::Skip(node.id.clone()),
+                    meta: NodeMeta {
+                        package: keys::get(&node.manifest, keys::PACKAGE).map(|s| s.to_string()),
+                        namespace: None,
+                        import_target: Some(ImportTarget::left_to_platform(
+                            &node.manifest,
+                            platform,
+                        )),
+                    },
+                    rerun: None,
+                });
+                continue;
+            }
             let k8s_id = format!("{}/{}/{}", node.id.kind, node.id.namespace, node.id.name);
             let action = match by_id.get(&k8s_id) {
                 Some(ChangeAction::Apply(m)) => ChangeAction::Apply((*m).clone()),
@@ -1625,6 +1651,9 @@ fn recreate_refusal(rid: &ResourceId) -> Option<String> {
 }
 
 async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
+    if entry.kind == TransitionKind::Wait {
+        return wait_for_platform(ctx, entry).await;
+    }
     // Reason a rerun node is deleted before apply. None means a plain apply.
     let mut rerun_reason: Option<&'static str> = None;
     let manifest = match (&entry.action, &entry.rerun) {
@@ -1886,6 +1915,72 @@ async fn execute_node(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
                 output: Vec::new(),
             },
             message,
+        },
+    }
+}
+
+/// Wait for an object another Kix cluster writes (a [`TransitionKind::Wait`]
+/// node) to be ready, without applying it. A dry run returns at once, as
+/// it does for the readiness of every other node.
+async fn wait_for_platform(ctx: &NodeCtx, entry: &PlanNodeEntry) -> NodeOutcome {
+    let unchanged = NodeOutcome::Ready {
+        apply_action: ApplyAction::Unchanged,
+    };
+    let NodeId::Resource(rid) = &entry.id else {
+        return unchanged;
+    };
+    if ctx.dry_run {
+        return unchanged;
+    }
+    let node = entry.id.clone();
+    ctx.progress.set_phase(&node, Phase::Readiness);
+    let on_status = |msg: &str| {
+        ctx.progress.set_status(&node, msg);
+        ctx.emit(DeployEvent::NodeStateChanged {
+            node: node.clone(),
+            kind: entry.kind,
+            verdict: Verdict::Running,
+            detail: Some(NodeDetail::ReadinessProgress(msg.to_string())),
+        });
+    };
+    let outcome = ctx
+        .resources
+        .wait_ready(
+            rid,
+            entry.meta.import_target.as_ref(),
+            ctx.timeout,
+            &ctx.cancel,
+            &on_status,
+        )
+        .await;
+    match outcome {
+        Ok(ReadinessResult::Ready | ReadinessResult::ReadyPendingRestart { .. }) => unchanged,
+        Ok(ReadinessResult::Cancelled) => NodeOutcome::Cancelled,
+        Ok(ReadinessResult::TimedOut { elapsed, message }) => NodeOutcome::Failed {
+            detail: NodeDetail::ReadinessTimeout {
+                elapsed,
+                message: message.clone(),
+            },
+            message,
+        },
+        Ok(
+            ReadinessResult::Failed { message, .. }
+            | ReadinessResult::ImportMismatch { message, .. },
+        ) => NodeOutcome::Failed {
+            detail: NodeDetail::ReadinessFailed {
+                message: message.clone(),
+                missing_keys: Vec::new(),
+                output: Vec::new(),
+            },
+            message,
+        },
+        Err(e) => NodeOutcome::Failed {
+            detail: NodeDetail::ReadinessFailed {
+                message: e.to_string(),
+                missing_keys: Vec::new(),
+                output: Vec::new(),
+            },
+            message: e.to_string(),
         },
     }
 }
@@ -3489,6 +3584,133 @@ mod engine_tests {
                 .is_none()
         );
         assert_eq!(rec.terminal_count(&NodeId::Resource(rid("Widget", "w"))), 1);
+    }
+
+    /// One of Kix's own CRDs as a build writes it, serving v1alpha1.
+    fn kix_crd(name: &str) -> Value {
+        let mut v = m("CustomResourceDefinition", name, &[]);
+        v["apiVersion"] = json!("apiextensions.k8s.io/v1");
+        v["spec"] = json!({"versions": [{"name": "v1alpha1", "served": true}]});
+        v
+    }
+
+    /// A deploy record depending on `deps`, with the interfaces `interfaces`.
+    fn record_m(interfaces: Value, deps: &[&str]) -> Value {
+        let mut v = m(lifecycle::RECORD_KIND, "rec", deps);
+        v["apiVersion"] = json!(keys::API_VERSION);
+        v["metadata"].as_object_mut().unwrap().remove("namespace");
+        v["spec"] = json!({ "interfaces": interfaces });
+        v
+    }
+
+    /// Kix's two CRDs, a PackageInstance of the one, and a record of the
+    /// other. `interfaces` makes the build a consumer's.
+    fn kix_build(interfaces: Value) -> Vec<Value> {
+        vec![
+            kix_crd(keys::ACTIVATIONS_CRD),
+            kix_crd(keys::PACKAGE_INSTANCES_CRD),
+            m("PackageInstance", "web", &[keys::PACKAGE_INSTANCES_CRD]),
+            record_m(interfaces, &[keys::ACTIVATIONS_CRD, "web"]),
+        ]
+    }
+
+    /// A consumer waits for Kix's CRDs, which its platform writes. It never
+    /// applies them, nor stamps them, and its other objects wait for them.
+    #[tokio::test(start_paused = true)]
+    async fn a_consumer_waits_for_kix_crds_and_never_writes_them() {
+        let manifests = kix_build(json!({"core": {"consumer": "acme"}}));
+        let plan = plan_of(&manifests);
+        let crds = [
+            rid("CustomResourceDefinition", keys::ACTIVATIONS_CRD),
+            rid("CustomResourceDefinition", keys::PACKAGE_INSTANCES_CRD),
+        ];
+        for crd in &crds {
+            let node = plan
+                .nodes()
+                .iter()
+                .find(|n| n.id == NodeId::Resource(crd.clone()))
+                .unwrap();
+            assert_eq!(node.kind, TransitionKind::Wait);
+            assert!(matches!(node.action, ChangeAction::Skip(_)));
+            let target = node.meta.import_target.as_ref().unwrap();
+            assert_eq!(target.platform.as_deref(), Some("core"));
+            assert_eq!(target.served_versions, ["v1alpha1"]);
+        }
+
+        let ops = Arc::new(ScriptedOps::new());
+        let result = run(
+            &ops,
+            plan,
+            &config(quiet_watchdog()),
+            Arc::new(NullObserver),
+        )
+        .await
+        .unwrap();
+
+        let calls = ops.calls();
+        for crd in &crds {
+            assert!(!calls.contains(&Call::ApplyStart(crd.clone())));
+            assert!(!calls.contains(&Call::Stamp(crd.clone())));
+            assert!(calls.contains(&Call::ReadyEnd(crd.clone())));
+        }
+        let crd_ready = ops
+            .time_of(|c| *c == Call::ReadyEnd(crds[1].clone()))
+            .unwrap();
+        let web_applied = ops
+            .time_of(|c| *c == Call::ApplyStart(rid("PackageInstance", "web")))
+            .unwrap();
+        assert!(crd_ready <= web_applied);
+        assert_eq!(result.unchanged, 2);
+        assert_eq!(result.created, 2);
+    }
+
+    /// A Kix CRD the platform never installs fails its node, and nothing
+    /// that needs it is applied.
+    #[tokio::test(start_paused = true)]
+    async fn a_consumer_stops_when_kix_crds_never_appear() {
+        let manifests = kix_build(json!({"core": {"consumer": "acme"}}));
+        let ops = Arc::new(ScriptedOps::new());
+        ops.script(
+            rid("CustomResourceDefinition", keys::PACKAGE_INSTANCES_CRD),
+            NodeScript::default().ready(Behaviour::Now(Ready::TimedOut)),
+        );
+        let result = run(
+            &ops,
+            plan_of(&manifests),
+            &config(quiet_watchdog()),
+            Arc::new(NullObserver),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.failed, 1);
+        assert!(
+            !ops.calls()
+                .contains(&Call::ApplyStart(rid("PackageInstance", "web")))
+        );
+    }
+
+    /// A cluster that is no one's consumer applies Kix's CRDs itself.
+    #[tokio::test(start_paused = true)]
+    async fn a_cluster_without_a_platform_applies_kix_crds() {
+        let manifests = kix_build(json!({}));
+        let plan = plan_of(&manifests);
+        assert!(!plan.nodes().iter().any(|n| n.kind == TransitionKind::Wait));
+
+        let ops = Arc::new(ScriptedOps::new());
+        run(
+            &ops,
+            plan,
+            &config(quiet_watchdog()),
+            Arc::new(NullObserver),
+        )
+        .await
+        .unwrap();
+        let calls = ops.calls();
+        assert!(calls.contains(&Call::ApplyStart(rid(
+            "CustomResourceDefinition",
+            keys::PACKAGE_INSTANCES_CRD
+        ))));
     }
 
     /// Stamping an unchanged resource is bounded by the watchdog.

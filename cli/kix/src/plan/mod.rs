@@ -532,8 +532,11 @@ pub const CLUSTER_LEVEL_KEY: &str = "_cluster";
 
 /// Resources in `graph.resources` that no package owns, minus the
 /// PackageInstances (each belongs with its package, see
-/// `resource_map_for_package`) and the deploy record.
+/// `resource_map_for_package`), the deploy record, and on a consumer the
+/// CRDs its platform writes (`lifecycle::left_to_platform`).
 fn unowned_resources(graph: &StoreGraph) -> BTreeMap<ResourceId, (&PathBuf, &Value)> {
+    let left_to_platform =
+        lifecycle::left_to_platform(graph.resources.values().map(|node| &node.manifest));
     graph
         .resources
         .iter()
@@ -546,7 +549,7 @@ fn unowned_resources(graph: &StoreGraph) -> BTreeMap<ResourceId, (&PathBuf, &Val
                 (path, &node.manifest),
             )
         })
-        .filter(|(id, _)| !lifecycle::is_record_kind(&id.kind))
+        .filter(|(id, _)| !lifecycle::is_record_kind(&id.kind) && !left_to_platform.contains(id))
         .collect()
 }
 

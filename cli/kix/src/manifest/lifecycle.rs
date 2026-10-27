@@ -24,7 +24,10 @@
 //! table. Nothing outside it may compare a kind string to `"Activation"`
 //! (a test in this module enforces that).
 
+use std::collections::HashSet;
+
 use crate::manifest::keys;
+use crate::manifest::types::ResourceId;
 use kube::api::DynamicObject;
 use serde_json::Value;
 
@@ -187,6 +190,91 @@ pub fn is_kix_internal_kind(kind: &str) -> bool {
 /// predicate; removing such an object is left to an explicit `kubectl delete`.
 pub fn never_pruned(kind: &str) -> bool {
     matches!(kind, "Namespace" | "CustomResourceDefinition")
+}
+
+/// The platform Kix cluster whose consumer `record` is, from the interface
+/// that platform gave it in `spec.interfaces`. A consumer shares its
+/// Kubernetes cluster with that platform and loads one interface. `None`
+/// for any other cluster's record.
+pub fn platform_of(record: &Value) -> Option<&str> {
+    record
+        .pointer("/spec/interfaces")
+        .and_then(Value::as_object)
+        .and_then(|interfaces| interfaces.keys().next())
+        .map(String::as_str)
+}
+
+/// Whether `manifest` is one of Kix's own CustomResourceDefinitions.
+pub fn is_kix_crd(manifest: &Value) -> bool {
+    manifest.get("kind").and_then(Value::as_str) == Some("CustomResourceDefinition")
+        && matches!(
+            manifest.pointer("/metadata/name").and_then(Value::as_str),
+            Some(keys::ACTIVATIONS_CRD | keys::PACKAGE_INSTANCES_CRD)
+        )
+}
+
+/// The objects of a build that its platform writes: Kix's own CRDs when the
+/// build's record is a consumer's, and nothing otherwise.
+///
+/// Every Kix build contains Kix's CRDs, and every Kix cluster applies with
+/// the same field manager. On a Kubernetes cluster that a platform shares
+/// with its consumers, the platform installs these CRDs. A consumer that
+/// applied its own copy would replace the platform's schema without a
+/// conflict, and a consumer on another Kix version would change it. So a
+/// consumer's deploy waits for them and never writes them.
+pub fn left_to_platform<'a>(manifests: impl IntoIterator<Item = &'a Value>) -> HashSet<ResourceId> {
+    let manifests: Vec<&Value> = manifests.into_iter().collect();
+    if !manifests
+        .iter()
+        .any(|m| is_record(m) && platform_of(m).is_some())
+    {
+        return HashSet::new();
+    }
+    manifests
+        .into_iter()
+        .filter(|m| is_kix_crd(m))
+        .map(ResourceId::from_value)
+        .collect()
+}
+
+#[cfg(test)]
+mod left_to_platform_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn crd(name: &str) -> Value {
+        json!({"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition",
+            "metadata": {"name": name}})
+    }
+
+    fn record(spec: Value) -> Value {
+        json!({"apiVersion": keys::API_VERSION, "kind": RECORD_KIND,
+            "metadata": {"name": "rec"}, "spec": spec})
+    }
+
+    #[test]
+    fn a_consumer_leaves_kix_crds_to_its_platform() {
+        let manifests = [
+            crd(keys::ACTIVATIONS_CRD),
+            crd(keys::PACKAGE_INSTANCES_CRD),
+            crd("widgets.example.com"),
+            record(json!({"interfaces": {"platform": {"consumer": "acme"}}})),
+        ];
+        assert_eq!(platform_of(&manifests[3]), Some("platform"));
+        let left = left_to_platform(&manifests);
+        let mut names: Vec<&str> = left.iter().map(|id| id.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, [keys::ACTIVATIONS_CRD, keys::PACKAGE_INSTANCES_CRD]);
+    }
+
+    #[test]
+    fn a_cluster_without_interfaces_writes_kix_crds() {
+        for spec in [json!({}), json!({"interfaces": {}})] {
+            let manifests = [crd(keys::ACTIVATIONS_CRD), record(spec)];
+            assert_eq!(platform_of(&manifests[1]), None);
+            assert!(left_to_platform(&manifests).is_empty());
+        }
+    }
 }
 
 #[cfg(test)]
