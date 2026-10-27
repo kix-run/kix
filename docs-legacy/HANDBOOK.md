@@ -2153,8 +2153,9 @@ The build then:
 Moving to a newer interface is a commit of the new file. `kix status` on the
 consumer compares the `sha256` its live deploy pinned with the one the
 platform's live deploy records, and says when they differ:
-`acme-production was built against an older interface from prod. Commit the
-new kix-interface/prod.json and deploy acme-production to take it up.` When
+`acme-production was built against a different interface from the one prod
+runs now. Commit prod's current kix-interface/prod.json and deploy
+acme-production to take it up.` When
 they match it says nothing. It also says when the platform has no live
 deploy, no longer publishes an interface for the consumer, or its records
 cannot be read (HTTP 403). The `*` holder's interface changes when another

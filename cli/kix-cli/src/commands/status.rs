@@ -362,8 +362,8 @@ fn interface_note(
             pinned.consumer
         )),
         Some(sha256) if *sha256 != pinned.sha256 => Some(format!(
-            "{cluster} was built against an older interface from {platform}. Commit the new \
-             {} and deploy {cluster} to take it up.",
+            "{cluster} was built against a different interface from the one {platform} runs \
+             now. Commit {platform}'s current {} and deploy {cluster} to take it up.",
             pinned.path
         )),
         Some(_) => None,
@@ -733,8 +733,9 @@ mod tests {
         assert_eq!(
             note(Ok(Some(publishing("bb")))).as_deref(),
             Some(
-                "acme-prod was built against an older interface from prod. Commit the new \
-                 kix-interface/prod.json and deploy acme-prod to take it up."
+                "acme-prod was built against a different interface from the one prod runs \
+                 now. Commit prod's current kix-interface/prod.json and deploy acme-prod to \
+                 take it up."
             )
         );
     }
