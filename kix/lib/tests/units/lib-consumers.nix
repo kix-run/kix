@@ -18,7 +18,8 @@
 }:
 
 let
-  consumerLabel = (import ../../core/annotations.nix).keys.consumerLabel;
+  kixKeys = (import ../../core/annotations.nix).keys;
+  consumerLabel = kixKeys.consumerLabel;
 
   grant = {
     consumers.acme = {
@@ -412,6 +413,18 @@ in
       && named "ResourceQuota" "acme-app-quota" (inNamespace "acme-app" ms) != [ ]
     )
     || throw "the consumer's namespace lacks its label, level or quota: ${builtins.toJSON ns}";
+
+  # A namespace's quota is applied after the namespace, never before: a
+  # first deploy that created both failed with "namespaces not found".
+  lib-consumers-quota-waits-for-its-namespace =
+    let
+      ms = manifests consumer;
+      dependsOn = m: m.metadata.annotations.${kixKeys.dependsOn} or "";
+      ns = builtins.head (named "Namespace" "acme-app" ms);
+      quota = builtins.head (named "ResourceQuota" "acme-app-quota" ms);
+    in
+    (dependsOn quota != "" && dependsOn ns == "")
+    || throw "the quota must wait for its namespace, not the other way: namespace ${dependsOn ns}, quota ${dependsOn quota}";
 
   lib-consumers-record-names-the-interface =
     (recordOf consumer).spec.interfaces == {
