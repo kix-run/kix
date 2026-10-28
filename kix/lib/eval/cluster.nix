@@ -182,7 +182,7 @@
         let
           own = cfg.namespaces.${nsName} or { };
         in
-        if consumerSide == null then own else consumerSide.stamp own;
+        if consumerSide == null then own else consumerSide.stamp nsName own;
 
       # Derive the namespace level from its instances unless the cluster sets
       # one explicitly. Reject an explicit level that is more restrictive than
@@ -838,8 +838,8 @@
           levelOf = ns: if builtins.elem ns allNsNames then namespacePodSecurity ns else null;
           sourceOf =
             ns:
-            if consumerSide != null && consumerSide.podSecuritySource != null then
-              consumerSide.podSecuritySource
+            if consumerSide != null && consumerSide.podSecuritySourceOf ns != null then
+              consumerSide.podSecuritySourceOf ns
             else if (cfg.namespaces.${ns}.podSecurity or null) != null then
               "set by namespaces.${ns}.podSecurity"
             else

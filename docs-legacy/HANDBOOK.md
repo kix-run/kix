@@ -2075,11 +2075,19 @@ The platform declares each consumer:
 ```nix
 {
   consumers.acme = {
-    namespaces = [ "acme-*" "reports" ];          # an exact name, a prefix "x-*", or "*"
-    podSecurity = "restricted";                   # every namespace acme creates
-    resourceQuota.pods = "20";                    # likewise
+    namespaces = {                                # an exact name, a prefix "x-*", or "*"
+      "acme-*" = {
+        podSecurity = "restricted";               # each namespace "acme-*" matches
+        quota = { pods = "4"; "requests.cpu" = "500m"; "requests.memory" = "512Mi"; };
+        max = 3;                                  # at most 3 such namespaces; patterns only
+      };
+      acme-app = {                                # an exact name inside the pattern
+        quota."requests.memory" = "2Gi";          # adjusts that one namespace
+        secrets = [ { name = "postgres"; keys = [ "user" "password" ]; } ];
+      };
+      reports = { };                              # granted, no settings
+    };
     services = [ "data/postgres-shared" ];        # "namespace/instance", active and managed
-    secrets = [ { name = "postgres"; namespace = "acme-app"; keys = [ "user" "password" ]; } ];
     clusterScoped = [ { kind = "ClusterRole"; name = "acme-reader"; } ];
   };
   reservedNamespaces = [ "kube-system" ];         # the platform's, though it renders nothing there
@@ -2087,18 +2095,29 @@ The platform declares each consumer:
 }
 ```
 
+Each key of `namespaces` grants namespaces and holds their settings:
+`podSecurity`, `quota` (the ResourceQuota `hard` limits, with Kubernetes'
+key names), `max` (on a pattern only), and `secrets` (on an exact name only;
+`type` defaults to `Opaque`). A namespace takes the settings of the pattern
+that matches it, then those of its exact name on top: the exact name's
+`podSecurity` replaces the pattern's, and its `quota` keys replace the
+pattern's keys of the same name. Above, `acme-app` gets `pods = "4"`,
+`requests.cpu = "500m"` and `requests.memory = "2Gi"`. Every namespace gets
+its own quota; the limits are not shared between namespaces.
+
 The platform's namespaces are those its build renders objects into, and
-`reservedNamespaces`. A consumer may use any namespace one of its patterns
+`reservedNamespaces`. A consumer may use any namespace one of its keys
 matches and that is not the platform's. `*` matches every namespace that is
-not the platform's and that no other consumer's pattern matches: with one
+not the platform's and that no other consumer's key matches: with one
 consumer on `*` and another on `acme-*`, `acme-app` is the second's. The
 platform's build:
 
 - fails when more than one consumer holds `*`, when two consumers' other
-  patterns can match the same namespace, when an exact pattern names a
-  platform namespace, when a pattern has `*` anywhere but at its end, and
-  when a Secret is in a namespace that is the platform's, matches none of
-  the consumer's patterns, or is another consumer's;
+  keys can match the same namespace, when two patterns of one consumer can
+  match the same namespace (an exact name inside a pattern is fine), when an
+  exact name is a platform namespace, when a pattern has `*` anywhere but at
+  its end, when `max` is on an exact name, and when `secrets` is on a
+  pattern;
 - with `networkPolicy.enable`, renders a NetworkPolicy
   `kix-consumer-<consumer>-<instance>` in each granted service's namespace
   that lets pods of every namespace labelled `kix.run/consumer=<consumer>`
@@ -2110,17 +2129,17 @@ platform's build:
   taken as the consumer's build takes it (below).
 
 It renders nothing in a consumer's namespaces. The interface lists the
-Secrets a grant names; the platform's own instances create them, for example
+Secrets a grant names under their namespace; the platform's own instances create them, for example
 with the reflector package (§21.4) or a package that mints a credential per
 consumer. Kix does not copy them.
 
-The interface is data only. It holds the format `version`, the platform's
-name, the consumer's name, the platform's facts (provider, Kubernetes
-version, cluster domain, capabilities, whether network policy is enforced),
-`namespaces` (`patterns`, `podSecurity`, `resourceQuota`, `platform`, the
-platform's namespace names, and `claimed`, the other consumers' patterns, for
-the consumer holding `*`; empty for the others), each service's `out` and roles, the Secrets,
-the cluster-scoped objects allowed, and `secretsRecipient`. Functions and
+The interface is data only. It holds the format `version` (2), the
+platform's name, the consumer's name, the platform's facts (provider,
+Kubernetes version, cluster domain, capabilities, whether network policy is
+enforced), `namespaces` (each key with its `podSecurity`, `quota`, `max`, and
+`secrets`), `platformNamespaces`, `claimedNamespaces` (the other consumers'
+keys, for the consumer holding `*`; empty for the others), each service's
+`out` and roles, the cluster-scoped objects allowed, and `secretsRecipient`. Functions and
 `identityHash` in an `out` are left out. A string whose context holds a store
 path other than a resource's identity, a fact, or a marker, such as a SOPS
 file or a rendered configuration file, fails the platform's build naming the
@@ -2140,23 +2159,25 @@ kix.buildCluster {
 `kix.interface` sets the facts as defaults, adds one `kix.mkImport` per
 service, named for the platform's instance, and puts the parsed file in
 `config.interfaces.<platform>` for the cluster's modules to read
-(`config.interfaces.prod.secrets`). The imports go in the first exact name
-among the consumer's patterns. When the patterns hold none, name the
-namespace: `kix.interface { file = ./kix-interface/prod.json; importNamespace = "acme-app"; }`.
+(`config.interfaces.prod.namespaces.acme-app.secrets`). The imports go in the
+first exact name, in alphabetical order, among the consumer's keys. When
+there is none, name the namespace: `kix.interface { file = ./kix-interface/prod.json; importNamespace = "acme-app"; }`.
 The build then:
 
 - fails unless the file's `version` is one this kix reads;
 - renders the consumer's own namespaces, each with the label
-  `kix.run/consumer=<consumer>`, and with the interface's Pod Security level
-  and quota where it sets them. An instance that needs a more permissive
-  level than the interface's fails as it would against a namespace's own
-  `podSecurity`;
+  `kix.run/consumer=<consumer>`, and with the Pod Security level and quota
+  its settings give, where they set them. An instance that needs a more
+  permissive level than the interface's fails as it would against a
+  namespace's own `podSecurity`;
+- fails when it renders more namespaces matching a pattern than the
+  pattern's `max`, naming them. Exact names inside the pattern count;
 - fails on a workload whose pods the interface's Pod Security level refuses,
   as Kubernetes admission would at deploy (§16.4, Pod Security Standards). The
   message names the instance, the workload, each container and field, and
   the value to set;
-- fails on any object, or Namespace, in a namespace no pattern matches, that
-  is the platform's, or that a `claimed` pattern matches, and on any cluster-scoped object `clusterScoped`
+- fails on any object, or Namespace, in a namespace no key matches, that
+  is the platform's, or that a `claimedNamespaces` key matches, and on any cluster-scoped object `clusterScoped`
   does not list. The Activation record and the `kix.run` CRDs are exempt:
   every Kix cluster renders them;
 - records the file in its Activation record as
@@ -2197,7 +2218,7 @@ acme-production to take it up.` When
 they match it says nothing. It also says when the platform has no live
 deploy, no longer publishes an interface for the consumer, or its records
 cannot be read (HTTP 403). The `*` holder's interface changes when another
-consumer's patterns do. Each environment is
+consumer's keys do. Each environment is
 a cluster of its own with its own copy: `acme-production` against `prod`,
 `acme-staging` against `staging`. These build-time checks catch mistakes;
 they do not stop a consumer that deploys with the cluster's full rights from

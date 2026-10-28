@@ -1,4 +1,5 @@
 {
+  "claimedNamespaces": [],
   "clusterScoped": [],
   "consumer": "acme",
   "facts": {
@@ -18,21 +19,20 @@
     "provider": null
   },
   "namespaces": {
-    "claimed": [],
-    "patterns": [
-      "acme-*"
-    ],
-    "platform": [
-      "kube-system",
-      "platform"
-    ],
-    "podSecurity": "baseline",
-    "resourceQuota": {
-      "pods": "20"
+    "acme-*": {
+      "max": 5,
+      "podSecurity": "baseline",
+      "quota": {
+        "pods": "20"
+      },
+      "secrets": []
     }
   },
   "platform": "test-platform",
-  "secrets": [],
+  "platformNamespaces": [
+    "kube-system",
+    "platform"
+  ],
   "secretsRecipient": null,
   "services": {
     "platform/api": {
@@ -56,5 +56,5 @@
       "roles": []
     }
   },
-  "version": 1
+  "version": 2
 }
