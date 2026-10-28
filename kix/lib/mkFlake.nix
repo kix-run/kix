@@ -3,19 +3,17 @@
 
   clusters ? { },
 
-  # Passed to cluster functions that declare a required `pins` argument.
-  # A cluster applies the file's instance pins by passing it on:
-  # `kix.buildCluster { inherit pins; ... }`. Instance pins name instances
-  # of one cluster, so only one cluster passes a file that holds them; any
-  # other reads its own with `kix.pins`.
+  # Pin file passed to cluster functions that declare a `pins` argument.
+  # Instance pins target a single cluster, so a flake with multiple clusters
+  # should load per-cluster pin files with `kix.pins`.
   pins ? null,
 
   # Prepended to each cluster's modules.
   clusterModules ? [ ],
 
-  # Packages this flake defines, by name: a package or a path to one. Each
-  # gets the check `option-contract-<name>`, because evaluating a cluster
-  # does not check the option contract.
+  # Packages defined by this flake (each a package or a path to one), checked
+  # by `option-contract-<name>` since cluster evaluation does not run option
+  # contract checks.
   packages ? { },
 
   systems ? [
@@ -55,7 +53,6 @@ let
           base = import ./. {
             inherit pkgs;
             lib = slib;
-            # Image sources name the pin file by its path in this flake.
             self = inputs.self or null;
           };
         in
@@ -120,13 +117,12 @@ let
           + slib.optionalString (cluster.extraImages != null) ''
             ln -s ${builtins.toFile "kix-extra-images.json" (builtins.toJSON cluster.extraImages)} $out/kix-extra-images.json
           ''
-          # Where each image option's value comes from. Beside the
-          # Activation, not in it, so it never changes the Activation's name.
+          # Emit image provenance alongside the Activation so provenance changes
+          # do not alter the Activation hash.
           + ''
             ln -s ${builtins.toFile "kix-image-sources.json" (builtins.toJSON cluster.imageSources)} $out/kix-image-sources.json
           ''
-          # The interface file of each consumer, for the platform to hand to
-          # the consumer, who loads a copy with `kix.interface`.
+          # Emit each consumer's interface file for loading via `kix.interface`.
           + slib.concatStrings (
             slib.mapAttrsToList (consumer: file: ''
               ln -s ${file} $out/kix-interface-${consumer}.json
@@ -135,9 +131,8 @@ let
         );
       }) resolvedClusters;
 
-      # A cluster file `foo.nix` declares its alert rule tests in
-      # `foo.rules-test.yaml` beside it. A cluster given as a value, not a
-      # path, has none.
+      # Return the `<name>.rules-test.yaml` path beside a cluster file if it
+      # exists, or null when the cluster is given as an inline value.
       ruleTestsOf =
         clusterDef:
         let

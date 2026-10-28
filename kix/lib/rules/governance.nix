@@ -1,8 +1,4 @@
-# Built-in scorecard rules: Governance
-#
-# Checks for ownership, descriptions, and label standards.
-#
-# See v2_discussions/60_scorecard_rules_design.md §Built-in rule library.
+# Built-in scorecard rules for package ownership, descriptions, and standard labels.
 
 { lib }:
 

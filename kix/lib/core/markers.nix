@@ -1,34 +1,28 @@
-# Inert context markers: `toFile` paths in a string's context that record a
-# claim about the string and are not resources. core/resource.nix excludes
-# them from depends-on (`isMarkerPath`) because they have no deployable
-# manifest.
+# Context markers (`toFile` store paths carried in string context) that record
+# metadata about a string without representing a deployable resource.
+# `core/resource.nix` excludes them from `kix.run/depends-on`.
 #
-# An untracked-reference marker names an object created outside this
-# cluster definition. It supplies string context so reference validators
-# accept the name, and a marker with a kind also supplies an expectation
-# that deploy checks before applying the resource that refers to it.
+# An untracked-reference marker names an object created outside the cluster
+# definition so reference validators accept it. When a marker includes `kind`,
+# deploy waits for the object before applying the referring resource.
 #
-# A load-balancer-class marker says a provider in the build serves the
-# class a Service names in `spec.loadBalancerClass`.
+# A load-balancer-class marker records that an in-cluster provider serves a
+# Service's `spec.loadBalancerClass`.
 { lib }:
 
 rec {
-  # /nix/store/ = 11 chars, hash = 32, "-" = 1 → name starts at offset 44
+  # Strip the 44-character "/nix/store/<32-char-hash>-" prefix from a store path.
   pathName = p: builtins.substring 44 (builtins.stringLength p) p;
 
   untrackedRefName = "kix-untracked-ref";
   loadBalancerClassName = "kix-load-balancer-class";
 
-  # Built-in kinds that `by` rejects, keyed by API group ("" is the core
-  # group), and that may not hold a `by = "self"` reference. None of them
-  # creates an object a manifest refers to by name: what the control plane
-  # derives from them (a Service's EndpointSlices, the PersistentVolume
-  # bound to a claim) is not named in a pod or custom resource. Namespace is
-  # not listed, because the control plane creates the kube-root-ca.crt
-  # ConfigMap and the default ServiceAccount in each one and pods name both.
-  # The group matters: a custom kind with the same name (Knative's
-  # serving.knative.dev Service) is a creator. Kinds not listed here,
-  # including every custom resource, are accepted.
+  # Built-in kinds (by API group) that cannot create other named objects and
+  # therefore cannot be used as `by` targets or carry `by = "self"` references.
+  # Namespace is excluded because the control plane creates `kube-root-ca.crt`
+  # and the `default` ServiceAccount in each namespace. Custom kinds with the
+  # same name in another API group (such as `serving.knative.dev` Service) are
+  # allowed.
   passiveKinds = {
     "" = [
       "ConfigMap"
@@ -82,22 +76,17 @@ rec {
     in
     builtins.elem kind (passiveKinds.${group} or [ ]);
 
-  # Accept a name or { name; kind?; apiVersion?; by?; } and return the name
-  # with marker context. A string alone adds no deployment existence check.
+  # Attach an untracked-reference marker to `ref` (a name or
+  # `{ name; kind?; apiVersion?; by?; }`).
   #
-  # The experimental attrset form supports two additional constraints:
-  # by adds the creator's resource context for dependency ordering; kind adds
-  # a kix.run/expects entry checked before applying the referring resource.
-  # apiVersion defaults to "v1".
-  #   kix.untrackedRef { kind = "Secret"; name = "x"; by = self.job; }
+  # In the attrset form, `by` attaches the creator resource's context for
+  # deployment ordering, and `kind` (with `apiVersion` defaulting to `"v1"`)
+  # records a `kix.run/expects` entry that deploy checks before applying the
+  # referring resource.
   #
-  # `by = "self"` says the resource holding the reference creates the object,
-  # such as an operator that mounts an optional Secret and then mints it. It
-  # adds no dependency and no kix.run/expects entry, because the object
-  # exists only after the referrer runs, so it takes no kind. A workload may
-  # hold it only in an optional reference (core/resource.nix), and it names
-  # the creator only while one resource carries it (eval/cluster.nix).
-  #   kix.untrackedRef { name = "operator-certs"; by = "self"; }
+  # `by = "self"` marks an object created at runtime by the referring resource
+  # itself (such as an optional Secret minted by an operator after startup).
+  # It takes no `kind` and must only appear on `optional = true` pod references.
   mkUntrackedRef =
     ref:
     let
@@ -159,14 +148,10 @@ rec {
 
   isUntrackedRefPath = p: lib.hasPrefix untrackedRefName (pathName p);
 
-  # A `spec.loadBalancerClass` value served by a load balancer provider in
-  # the build: `class` with a marker, and with the context of `by`, the
-  # provider resource that serves it, so a Service naming the class depends
-  # on that resource. The loadBalancer role check (scope/validators.nix
-  # checkLoadBalancer) skips a Service whose class is this value, and
-  # derived network policy gives that Service no ingress from outside the
-  # cluster (plugins/netpol/derive.nix).
-  #   kix.providedLoadBalancerClass { class = "tailscale"; by = self.deployment; }
+  # Attach a load-balancer-class marker and the context of `by` (the controller
+  # resource serving the class) to `class`. Services using this value depend on
+  # `by`, bypass the cluster `load-balancer` role check, and receive no external
+  # ingress in derived network policies.
   mkProvidedLoadBalancerClass =
     args:
     let
@@ -198,10 +183,9 @@ rec {
 
   isLoadBalancerClassPath = p: lib.hasPrefix loadBalancerClassName (pathName p);
 
-  # Whether a string carries a load-balancer-class marker for its own value.
-  # Context survives string operations, so `"${class}-internal"` keeps the
-  # marker for `class`; comparing the marker's content with the string
-  # refuses such a derived value.
+  # Return true when `s` carries a load-balancer-class marker matching `s`.
+  # Comparing the marker content rejects derived strings such as
+  # `"${class}-internal"` that inherit `class`'s string context.
   isProvidedLoadBalancerClass =
     s:
     builtins.isString s
@@ -209,10 +193,9 @@ rec {
       p: isLoadBalancerClassPath p && builtins.readFile p == builtins.unsafeDiscardStringContext s
     ) (builtins.attrNames (builtins.getContext s));
 
-  # Whether a context path is a marker rather than a resource.
   isMarkerPath = p: isUntrackedRefPath p || isLoadBalancerClassPath p;
 
-  # A marker's JSON record, or null for a bare string reference.
+  # Decode a marker's JSON record, or return null for a bare string marker.
   readMarker =
     p:
     let
@@ -220,9 +203,8 @@ rec {
     in
     if lib.hasPrefix "{" content then builtins.fromJSON content else null;
 
-  # What a marker expects to exist, when its reference named a kind:
-  # { name; kind; apiVersion; hasCreator?; }, else null. hasCreator is true
-  # when the reference also named `by`.
+  # Return `{ name; kind; apiVersion; hasCreator?; }` when the marker declares
+  # an expected kind, or null otherwise.
   readExpectation =
     p:
     let
@@ -230,10 +212,9 @@ rec {
     in
     if m != null && m ? kind then m else null;
 
-  # Whether a marker's reference was made with `by = "self"`.
   isSelfCreated = p: (readMarker p).selfCreated or false;
 
-  # Names of the `by = "self"` references in a string's context.
+  # Return the names of all `by = "self"` references in `s`'s string context.
   selfCreatedNames =
     s:
     map (p: (readMarker p).name) (
@@ -242,7 +223,5 @@ rec {
       )
     );
 
-  # Whether a marker's reference was made with `kind` and `by`, so deploy
-  # orders the referrer after the creator and waits for the object.
   hasCreator = p: (readMarker p).hasCreator or false;
 }

@@ -1,23 +1,16 @@
-# The OpenID Connect provider contract: what an instance wired as an
-# application's `oidcProvider` dependency publishes on root.out, so that the
-# application can sign users in through it. A provider (keycloak, or a
-# kix.mkImport standing in for one outside the cluster) passes its out
-# through `check`; a consumer holds its `oidcProvider` dependency to the
-# contract with `assertions`.
+# Define the OpenID Connect provider contract for `oidcProvider` dependencies
+# (`kix.contracts.oidcProvider`) and the shared consumer option helper
+# (`kix.options.oidc`).
 #
-# Both fields are functions of a realm name, because one Keycloak serves many
-# realms, each with its own issuer. A provider with one issuer ignores the
-# argument (`issuerUrl = _: "https://login.example.com";`).
-#
-# `clientOptions` is the `oidc` option set the consumers share (grafana,
-# harbor, immich), reached as `kix.options.oidc`. Packages reach this file as
-# `kix.contracts.oidcProvider`.
+# Both `issuerUrl` and `endpoints` take a realm name because a single Keycloak
+# instance can serve multiple realms. Providers with a single issuer ignore the
+# realm argument.
 { lib }:
 let
   isUrl = v: builtins.isString v && builtins.match "https?://[^/]+(/.*)?" v != null;
 
-  # `check` and `assertions` call the functions with this name to test the
-  # shape of what they return.
+  # Passed to `issuerUrl` and `endpoints` during validation to check their
+  # return values.
   probeRealm = "kix-contract-probe";
 
   callable = f: builtins.isFunction f || (builtins.isAttrs f && f ? __functor);
@@ -29,20 +22,18 @@ let
   ];
 
   fields = {
-    # The issuer that tokens carry in `iss`. An application that discovers
-    # the provider (`<issuer>/.well-known/openid-configuration`) dials it
-    # and compares the issuer it finds there with this URL.
+    # Expected `iss` claim in ID tokens and base URL for
+    # `/.well-known/openid-configuration` discovery.
     issuerUrl = {
       required = true;
       shape = "a function from a realm name to that realm's issuer URL (scheme://host/path)";
       test = f: callable f && isUrl (f probeRealm);
     };
-    # For an application that takes the endpoints instead of discovering
-    # them (Grafana's generic_oauth). `authorizationUrl` is opened by the
-    # browser, so it is public. `tokenUrl` and `userinfoUrl` are dialled by
-    # the application's server; a provider in the cluster gives its
-    # Service's address there, so that address carries the dependency and
-    # the derived network policy.
+    # Explicit OAuth endpoints for applications that do not use OIDC discovery.
+    # Browsers open `authorizationUrl` directly, so it must be public. The
+    # application backend dials `tokenUrl` and `userinfoUrl`. In-cluster
+    # providers use their Service URL so Kix derives the dependency and
+    # network policy.
     endpoints = {
       required = false;
       shape = "a function from a realm name to { ${lib.concatStringsSep "; " endpointKeys}; }, each a URL";
@@ -58,6 +49,8 @@ let
     };
   };
 
+  # Return a list of validation errors for `out`. When `all` is true, require
+  # optional fields as well.
   problemsWith =
     all: out:
     builtins.concatMap (
@@ -79,11 +72,11 @@ in
   alias = "oidcProvider";
   inherit fields;
 
-  # The problems a consumer's assertion reports for `out`.
+  # Return the contract violations a consumer reports for `out`.
   problems = problemsWith false;
 
-  # For a provider: `root.out = kix.contracts.oidcProvider.check who { ... }`.
-  # Returns `out`, or throws naming every missing or misshapen field.
+  # Validate a provider's `root.out` and return it, or throw if any field is
+  # missing or malformed.
   check =
     who: out:
     let
@@ -94,9 +87,8 @@ in
     else
       throw "${who}: root.out does not honour the OIDC provider contract: ${lib.concatStringsSep "; " found} (${here})";
 
-  # For a consumer:
-  # `deps.oidcProvider.assertions = dep: kix.contracts.oidcProvider.assertions who dep;`.
-  # Requires `issuerUrl` and checks `endpoints` when it is present.
+  # Return dependency assertions that validate `issuerUrl` and, when present,
+  # `endpoints` on `dep.out`.
   assertions =
     who: dep:
     let
@@ -113,10 +105,10 @@ in
       message = "${who}: deps.oidcProvider resolved to ${provider}, whose out does not honour the OIDC provider contract: ${lib.concatStringsSep "; " found}. Set them on that instance's out (a kix.mkImport sets them in `out`), or wire another provider with deps.oidcProvider = ref.<ns>.<instance> (${here}).";
     };
 
-  # The provider and the client credentials a consumer with `oidc.enabled`
-  # reads, or a throw naming what is missing. `provider` and `client` are the
-  # consumer's `oidcProvider` and `oidcClient` arguments; the client's keys
-  # are checked by the package with kix.checkSecretKeys.
+  # Validate that `provider`, `client`, and `oidc.realm` are present when OIDC
+  # is enabled, and return the resolved `issuerUrl` and `endpoints` for that
+  # realm. The caller checks `client` secret keys separately via
+  # `kix.checkSecretKeys`.
   requireClient =
     {
       who,
@@ -145,10 +137,8 @@ in
     "clientSecret"
   ];
 
-  # The `oidc` option of a consumer. `scopes` is the application's default
-  # scope list. `autoLogin` names the setting that sends users straight to
-  # the provider; an application without one passes null and gets no
-  # `autoLogin` option.
+  # Build the `oidc` option set for a consumer package. Pass `autoLogin = null`
+  # when the application has no setting to bypass its login page.
   clientOptions =
     {
       scopes,

@@ -16,9 +16,8 @@ in
       podSecurity ? null,
     }:
     let
-      # Bare k8s.mkResource stamps no labels; every other sealing path
-      # marks its output as kix-managed, and the cross-resource checks
-      # require it.
+      # Bare k8s.mkResource stamps no labels. Cross-resource validation
+      # requires every resource to carry the Kix managed-by label.
       managedBy = {
         "app.kubernetes.io/managed-by" = "kix";
       };
@@ -66,16 +65,16 @@ in
         }
       ) networkPolicies;
 
-      # The namespace as the quota's and policies' `namespace`: its name, and
-      # an edge to the Namespace, so they are applied after it.
+      # Pass the Namespace store path to the quota and policies so they are
+      # applied after the Namespace.
       inside = {
         inherit name;
         inherit (ns.resource) outPath;
       };
 
       root = ns.resource;
-      # Objects placed in this namespace take its name, and with it an edge
-      # to the quota and policies, so pods start after them.
+      # Attach the quota and NetworkPolicy store paths to the namespace name
+      # so resources in the namespace are applied after them.
       name = builtins.appendContext name (
         builtins.foldl' (acc: r: acc // builtins.getContext "${r}") { } (
           lib.optional (ns.quota != null) ns.quota ++ builtins.attrValues ns.netpols

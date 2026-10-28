@@ -1,8 +1,6 @@
 { lib }:
 
 let
-  # Kix's own annotation keys and API names, spelled once in
-  # core/annotations.nix.
   kixAnnotations = import ../../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   core = import ../../core/default.nix { inherit lib; };
@@ -72,10 +70,9 @@ in
 
             wName = workloadInput.name or (throw "buildWorkloadCnps: workloadInput.name is required");
 
-            # edges discovered through indirection or import-mode refs have
-            # no producing resource in scope (service = null); the CNP's
-            # ordering after the Service still holds via store-DAG
-            # transitivity where a resource exists at all
+            # Edges from ServiceRef markers or indirect references have
+            # `service = null`. When a backing Service resource exists,
+            # store-path context still orders the policy after it.
             serviceDeps = builtins.filter (s: s != null) (map (e: e.service) edges);
 
             egressCnp =
@@ -172,7 +169,8 @@ in
       networkPolicyEnforcer ? null,
     }:
     let
-      # left lazy: self-enforcer instances arrive with a null enforcer but must still produce warnings
+      # Keep lazy because the enforcer instance itself has
+      # `networkPolicyEnforcer = null` while still running warning checks.
       enforcerApi = networkPolicyEnforcer.netpol;
 
       workloads = builtins.filter isWorkload allPartResources;
@@ -297,19 +295,12 @@ in
               ]
           ) workloads;
 
-      # terminate-declared CRs (meta.factBehavior): the controller dials the
-      # endpoints absorbed by the CR spec, so the holes open for the OPERAND
-      # pods named by the declaration's podSelector. The CR has no pods of
-      # its own and never went through sealWorkload.
-      # the resolved behavior rides on the resource itself (threaded through
-      # the CRD builder chain or the cluster override at seal time, with no
-      # index lookup needed here
-      #
-      # The policies do not require the CR, because a CR's readiness can
-      # need the connection they open (a Velero BackupStorageLocation is
-      # Available only once its store answers).
+      # For custom resources with `factBehavior.endpoint = "terminate"`, the
+      # operator's operand pods dial the endpoints referenced in the CR spec.
+      # Open egress on the operand pods selected by `factBehavior.podSelector`
+      # and caller ingress on the targets. These policies do not depend on the
+      # CR because the CR may require the network path to become Ready.
       terminatingCrs =
-        # Self-enforcer instances arrive with a null enforcer, so no policies
         if networkPolicyEnforcer == null then
           [ ]
         else
@@ -485,10 +476,10 @@ in
           intent = intent // {
             name = intentName;
           };
-          # Platform intents target pods outside any kix scope, so they are
-          # sealed with the bare core constructor, which stamps no labels.
-          # Mark them kix-managed here, once, whatever the enforcer is: the
-          # cross-resource checks require the label and gc/health key on it.
+          # Platform intents target pods outside any Kix scope and use the bare
+          # core constructor, which does not add scope labels. Add
+          # `managed-by = "kix"` here because cross-resource checks, garbage
+          # collection, and health checks require it.
           mkResource =
             args:
             core.mkResource (

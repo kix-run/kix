@@ -1,31 +1,19 @@
 # RKE2 flavor.
 #
-# Designed for security-conscious environments. RKE2 installs Canal
-# (Flannel + Calico NetworkPolicy enforcement) by default, CIS benchmark
-# hardened. No default StorageClass or LoadBalancer is provided; install
-# Longhorn, MetalLB, etc.
+# RKE2 installs Canal (Flannel with Calico NetworkPolicy enforcement) by
+# default, along with CoreDNS, metrics-server, and `rke2-snapshot-controller`.
+# No default StorageClass or LoadBalancer is included.
 #
-# The cni role follows cluster.flavor.rke2.cni, which must match the `cni`
-# list of RKE2's server config. canal, calico, and flannel own the role
-# exclusively. With cilium, RKE2 installs its bundled Cilium chart, the
-# flavour declares it as the platform import kube-system/platform-cilium,
-# and a `cilium` instance in kube-system configures it through the
-# HelmChartConfig kube-system/rke2-cilium that the import names. With none,
-# the role is vacant for a managed CNI.
+# `cluster.flavor.rke2.cni` must match the `cni` list in RKE2's server config.
+# `canal`, `calico`, and `flannel` bind `cni` exclusively. `cilium` exposes the
+# bundled chart as `kube-system/platform-cilium` so a `cilium` instance in
+# `kube-system` can configure it through the `kube-system/rke2-cilium`
+# HelmChartConfig. `none` leaves the `cni` role `absent` for a managed CNI.
 #
-# Platform intents: when networkPolicy.enable = true, declares connectivity
-# for the pods RKE2's bundled charts run in kube-system, so the
-# kube-system default-deny policy does not cut them off. Labels and ports
-# come from the rke2-charts releases that RKE2 1.33 and the newest RKE2
-# ship (rancher/rke2 charts/chart_versions.yaml). An intent whose selector
-# matches no pod selects nothing, so components a cluster disables are
-# harmless.
-#
-# cluster.network.podCidr defaults to RKE2's cluster-cidr, 10.42.0.0/16.
-#
-# Platform imports: DNS (coredns), the VolumeSnapshot API
-# (rke2-snapshot-controller), and Cilium when cni names it. No default
-# storage.
+# When `networkPolicy.enable = true`, this flavor declares platform network
+# policy intents for RKE2's bundled charts in `kube-system` (`rancher/rke2`
+# `charts/chart_versions.yaml`) so default-deny policies in `kube-system` do
+# not block them.
 
 {
   config,
@@ -63,9 +51,8 @@ let
     }
     // intent;
 
-  # Charts RKE2 installs without `bootstrap: true`. helm-controller runs their
-  # helm-install Jobs on the pod network (bootstrap charts' Jobs use the host
-  # network), labelled with the chart name.
+  # Non-bootstrap charts whose `helm-install` Jobs run on the pod network
+  # rather than the host network.
   nonBootstrapCharts = [
     "rke2-gateway-api-crd"
     "rke2-ingress-nginx"
@@ -107,7 +94,7 @@ in
   config = {
     cluster.provider = lib.mkDefault "rke2";
 
-    # RKE2's default cluster-cidr.
+    # Default `cluster-cidr` in RKE2.
     cluster.network.podCidr = lib.mkDefault "10.42.0.0/16";
 
     cluster.roles = {
@@ -132,32 +119,26 @@ in
         })
       ];
       dns.binding = lib.mkDefault "shadowable";
-      storageClasses.binding = lib.mkDefault "absent"; # no default StorageClass
+      storageClasses.binding = lib.mkDefault "absent";
       loadBalancer.binding = lib.mkDefault "absent";
-      # RKE2 installs the snapshot CRDs and controller (the
-      # rke2-snapshot-controller and rke2-snapshot-controller-crd charts). A
-      # cluster that disables both charts sets the binding to "absent" and
-      # runs a snapshot-controller instance.
+      # Override to "absent" when `rke2-snapshot-controller` and
+      # `rke2-snapshot-controller-crd` are disabled in the RKE2 server config.
       snapshotController = {
         binding = lib.mkDefault "exclusive";
         provider = lib.mkDefault "rke2-snapshot-controller";
       };
-      # RKE2 installs metrics-server (the rke2-metrics-server chart). A
-      # cluster that disables the chart sets the binding to "absent" and runs
-      # a metrics-server instance.
+      # Override to "absent" when `rke2-metrics-server` is disabled in the RKE2
+      # server config.
       metricsApi = {
         binding = lib.mkDefault "exclusive";
         provider = lib.mkDefault "rke2-metrics-server";
       };
-      # registryMirror stays unknown: RKE2 embeds Spegel but runs it only
-      # with `embedded-registry: true` in the server config. A cluster that
-      # turns it on sets the binding to "exclusive", so a spegel instance is
-      # refused.
+      # Leave `registryMirror` unset by default because RKE2 only enables its
+      # embedded Spegel mirror when `embedded-registry: true` is configured.
     };
 
-    # RKE2's agent is k3s's (pkg/agent/config in k3s) with the data
-    # directory /var/lib/rancher/rke2. Its containerd config does not set
-    # discard_unpacked_layers, which containerd defaults to false.
+    # RKE2 uses the k3s agent containerd layout under `/var/lib/rancher/rke2`
+    # and leaves `discard_unpacked_layers` false.
     cluster.containerd = {
       socket = lib.mkDefault "/run/k3s/containerd/containerd.sock";
       registryConfigPath = lib.mkDefault "/var/lib/rancher/rke2/agent/etc/containerd/certs.d";
@@ -172,7 +153,6 @@ in
       daemonSets = lib.mkDefault true;
     };
 
-    # Platform-provided imports.
     instances.kube-system = {
       platform-dns = {
         package = kix.mkImport {
@@ -187,9 +167,10 @@ in
         optional = true;
       };
 
-      # The `cilium` package reads out.helmChartConfig to write its values
-      # into RKE2's bundled chart. Not optional: the package takes it as an
-      # optional dependency, which never activates an optional import.
+      # Expose `out.helmChartConfig` so the `cilium` package can configure
+      # RKE2's bundled Cilium chart. Keep this import non-optional because the
+      # `cilium` package consumes it via an optional dependency, which does not
+      # activate optional imports.
       platform-cilium = lib.mkIf (primary == "cilium") {
         package = kix.mkImport {
           roles = [ "cni" ];
@@ -232,9 +213,9 @@ in
 
     networkPolicy.platformIntents = lib.mkIf config.networkPolicy.enable (
       {
-        # In the flavour rather than on the platform-dns import: the import
-        # is optional and stays inactive until a required dependency demands
-        # DNS, but kube-system's default-deny policy applies either way.
+        # Declare CoreDNS intents at the flavor level rather than on
+        # `platform-dns` because `platform-dns` is optional and may remain
+        # inactive while `kube-system` default-deny is active.
         rke2-coredns-egress = inKubeSystem { "k8s-app" = "kube-dns"; } {
           egress = [
             apiserver
@@ -270,15 +251,13 @@ in
           egress = [ apiserver ];
         };
 
-        # The apiserver rule also admits the `host` and `remote-node`
-        # identities on every port, which covers the kubelets metrics-server
-        # scrapes on 10250
-        # (housekeeping/2026-10-01-apiserver-egress-rule-allows-every-host-port.md).
+        # The `apiserver` egress target also permits `host` and `remote-node`
+        # identities on all ports, covering kubelet scraping on port 10250.
         rke2-metrics-server-egress = inKubeSystem { app = "rke2-metrics-server"; } {
           egress = [ apiserver ];
         };
-        # The `all-pods` source is Cilium's `cluster` entity, which includes
-        # the host-networked API server that calls metrics-server.
+        # `all-pods` maps to Cilium's `cluster` entity, which includes the
+        # host-networked API server calling metrics-server.
         rke2-metrics-server-ingress = inKubeSystem { app = "rke2-metrics-server"; } {
           ingress = [
             {

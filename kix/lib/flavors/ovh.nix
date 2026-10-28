@@ -1,18 +1,10 @@
-# OVHcloud Managed Kubernetes Service flavor.
+# OVHcloud Managed Kubernetes Service (MKS) flavor.
 #
-# Managed control plane. Node pools (multi-node capable). Default CNI is
-# Canal (Flannel for pod networking + Calico for NetworkPolicy enforcement)
-# is environment-owned and exclusive. Block storage uses the OpenStack Cinder
-# CSI driver (several `csi-cinder-*` StorageClasses; `csi-cinder-high-speed`
-# is the cluster default). OVH Load Balancer is available for Services of
-# type=LoadBalancer (a paid add-on).
-#
-# Platform imports: DNS (coredns, bundled), storage (csi-cinder-high-speed).
-#
-# Note: this flavor describes what an OVH MKS cluster *provides*. A minimal
-# single-node deployment that avoids the paid load balancer and block storage
-# (e.g. hostPath volumes + NodePort + a Cloudflare tunnel) expresses those as
-# per-cluster overrides on top of this flavor, not here.
+# OVH MKS provides a managed control plane, Canal CNI (Flannel networking with
+# Calico NetworkPolicy enforcement, exclusive), CoreDNS, OpenStack Cinder CSI
+# block storage (`csi-cinder-high-speed` by default), and an optional paid OVH
+# Load Balancer. Single-node or minimal clusters that avoid paid load balancers
+# and block storage can override these bindings per cluster.
 
 {
   config,
@@ -37,14 +29,13 @@
   };
 
   cluster.capabilities = {
-    multiNode = lib.mkDefault true; # node pools
-    managedControlPlane = lib.mkDefault true; # OVH runs the control plane
-    nodeAutoscaling = lib.mkDefault false; # available per node-pool, off by default
-    privilegedContainers = lib.mkDefault true; # MKS permits privileged / hostPath
+    multiNode = lib.mkDefault true;
+    managedControlPlane = lib.mkDefault true;
+    nodeAutoscaling = lib.mkDefault false; # available per node pool, off by default
+    privilegedContainers = lib.mkDefault true;
     daemonSets = lib.mkDefault true;
   };
 
-  # Platform-provided imports.
   instances.kube-system = {
     platform-dns = {
       package = kix.mkImport {
@@ -65,9 +56,8 @@
         apiVersion = "storage.k8s.io/v1";
         roles = [ "storageClasses" ];
         out = {
-          # OVH's default StorageClass. Override per-cluster for the other
-          # csi-cinder-* classes, or for a hostPath/local-path provisioner on a
-          # single-node minimal cluster.
+          # Default StorageClass on OVH MKS. Override per cluster to use another
+          # `csi-cinder-*` class or a local provisioner.
           storageClassName = "csi-cinder-high-speed";
           name = "csi-cinder-high-speed";
         };

@@ -1,29 +1,17 @@
 # Scaleway Kapsule flavor.
 #
-# Managed control plane (the shared/mutualized plane is free; `type = "kapsule"`
-# on the cluster resource). Node pools (multi-node capable). Default CNI is
-# Cilium, which also enforces NetworkPolicy via CiliumNetworkPolicy, is
-# environment-owned, exclusive. Scaleway Load Balancer is available for
-# Services of type=LoadBalancer (a paid add-on).
+# Scaleway Kapsule provides a managed control plane, Kapsule-managed Cilium CNI
+# (exclusive), CoreDNS, and an optional paid Scaleway Load Balancer.
 #
-# Storage (verified against a live fr-par cluster):
-#   - Block CSI `csi.scaleway.com`: classes scw-bssd / sbs-default / sbs-5k /
-#     sbs-15k (+ *-retain variants). `sbs-default` is the cluster default.
-#     RWO only. Preinstalled on every node.
-#   - File Storage CSI `filestorage.csi.scaleway.com`: classes sfs-standard
-#     (+ -retain), RWX (ReadWriteMany, NFS-backed). Enable it by
-#     tagging the cluster `scw-filestorage-csi`. CAVEAT: its filestorage-csi-node
-#     DaemonSet has a nodeAffinity allow-list of instance types (BASIC3 / POP2 /
-#     STANDARD2-3 / COMPUTE3 / MEMORY3 / GPU), excluding the DEV1 and
-#     PLAY2 development ranges. On those nodes the driver never schedules and
-#     sfs PVCs fail with "no topology key found on CSINode". So RWX is only
-#     usable on a BASIC3+ node.
-#
-# Platform imports: DNS (coredns, bundled), storage (sbs-default).
-#
-# This flavor describes a Kapsule cluster; it does not provision one. The cluster
-# can be provisioned separately with tools such as Terranix. This flavor is
-# the KiX-side description that workloads deploy against.
+# Storage:
+#   - Block CSI (`csi.scaleway.com`): pre-installed on all nodes with RWO
+#     classes `scw-bssd`, `sbs-default` (the cluster default), `sbs-5k`, and
+#     `sbs-15k` (plus `*-retain` variants).
+#   - File Storage CSI (`filestorage.csi.scaleway.com`): provides RWX
+#     `sfs-standard` (and `sfs-standard-retain`) when the cluster is tagged
+#     `scw-filestorage-csi`. Its `filestorage-csi-node` DaemonSet nodeAffinity
+#     excludes `DEV1` and `PLAY2` nodes, so RWX volumes require `BASIC3` or
+#     higher instance types.
 
 {
   config,
@@ -47,18 +35,18 @@
     };
   };
 
-  # The node image keeps unpacked layers, so peers can serve them.
+  # Kapsule node images keep unpacked containerd layers so Spegel peers can
+  # serve them.
   cluster.containerd.discardUnpackedLayers = lib.mkDefault false;
 
   cluster.capabilities = {
-    multiNode = lib.mkDefault true; # node pools
-    managedControlPlane = lib.mkDefault true; # Scaleway runs the control plane
-    nodeAutoscaling = lib.mkDefault false; # available per node-pool, off by default
-    privilegedContainers = lib.mkDefault true; # Kapsule permits privileged / hostPath
+    multiNode = lib.mkDefault true;
+    managedControlPlane = lib.mkDefault true;
+    nodeAutoscaling = lib.mkDefault false; # available per node pool, off by default
+    privilegedContainers = lib.mkDefault true;
     daemonSets = lib.mkDefault true;
   };
 
-  # Platform-provided imports.
   instances.kube-system = {
     platform-dns = {
       package = kix.mkImport {
@@ -79,10 +67,8 @@
         apiVersion = "storage.k8s.io/v1";
         roles = [ "storageClasses" ];
         out = {
-          # Kapsule's default StorageClass. Override per-cluster for the other
-          # block classes (scw-bssd, sbs-5k/15k, *-retain) or the File Storage
-          # class (sfs-standard, RWX, requiring a BASIC3+ node and the
-          # scw-filestorage-csi cluster tag).
+          # Default StorageClass on Kapsule. Override per cluster for other
+          # block classes or `sfs-standard`.
           storageClassName = "sbs-default";
           name = "sbs-default";
         };

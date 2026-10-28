@@ -1,37 +1,18 @@
-# Cross-resource integrity checks over a cluster's finished manifests.
+# Validate cross-resource references and selectors across a cluster's rendered
+# manifests.
 #
 # `crossResourceFailures { manifests, identityHashes, owners, externalNames }`
-# returns a list of human-readable failure strings (empty when the set is
-# consistent). `identityHashes` and `owners` are aligned with `manifests`:
-# the store hash a resource's `kix.run/depends-on` entries name it by, and
-# the "<namespace>/<instance>" of the instance that built it. Checks that
-# follow dependencies (21) walk `kix.run/depends-on` through the hashes;
-# messages name owners. `externalNames` is the set of "<namespace>/<name>"
-# keys packages marked with `kix.untrackedRef`: buildCluster collects them
-# from string context before it is stripped, so a reference the author
-# declared external resolves. Import markers in the manifest set
-# (PackageInstance with `kix.run/import-kind` and `kix.run/import-name`, from
-# scope.mkServiceRef/mkSecretRef/mkCRDRef and kix.mkImport) count as the
-# object they stand for in the lookups, and a ref's declared pod selector
-# stands in for a pod template in the selector checks. buildCluster feeds
-# the failure list into the cluster assertions, so every cluster evaluation
-# runs these checks: `nix build`, and every `kix` command that evaluates a
-# cluster (`kix drift`, `kix rollback` and `completions` do not).
+# returns a list of failure messages. `identityHashes` and `owners` align with
+# `manifests` and record the store hash used in `kix.run/depends-on` and the
+# `<namespace>/<instance>` owner of each resource. `externalNames` contains
+# `<namespace>/<name>` entries marked with `kix.untrackedRef` before string
+# context is stripped. Import markers (`PackageInstance` resources with
+# `kix.run/import-kind` and `kix.run/import-name`) satisfy reference and
+# selector lookups for the external resources they represent.
 #
-# These are RESOLUTION checks: does the thing a name points at exist, do
-# these labels really match a pod in the build. They complement the
-# scorecard rules in kix/lib/rules/, which check PROVENANCE (did a value
-# come from a workload) while string context is still attached. The
-# manifests here have that context stripped, so a check that needs to
-# know where a value came from cannot live in this file.
-#
-# History and audit: v2_discussions/135 (kixpkgs#70).
-#
-# Design principles:
-#   - Every failure names the specific resource(s) involved.
-#   - External references (cluster-provided roles, system pods) are
-#     exempted via documented allowlists.
-#   - Only INTERNAL references (resources created by kix) are validated.
+# These checks verify that referenced resources and pod labels exist in the
+# rendered manifest set after string context is stripped. Provenance checks
+# that inspect string context live in `kix/lib/rules/`.
 
 { lib }:
 
@@ -69,8 +50,6 @@ rec {
         }) (builtins.filter (e: e.hash != null) entries)
       );
 
-      # "Deployment a/web" or "StorageClass fast": the namespace only when
-      # the object has one.
       describe =
         r:
         let
@@ -83,9 +62,8 @@ rec {
 
       splitList = s: builtins.filter (x: x != "") (map lib.trim (lib.splitString "," (toString s)));
 
-      # The store hashes a resource's kix.run/depends-on names, with the
-      # `requires:` and `extra:` prefixes removed. Check 21 follows every
-      # entry, whatever its prefix.
+      # Map each resource hash to the dependency hashes in `kix.run/depends-on`,
+      # stripping `requires:` and `extra:` prefixes.
       depHashesByHash = lib.mapAttrs (
         _: e:
         map (d: lib.removePrefix "extra:" (lib.removePrefix "requires:" d)) (
@@ -93,8 +71,8 @@ rec {
         )
       ) byHash;
 
-      # Every hash reachable through depends-on from the entry, as a set.
-      # Empty for an entry with no hash.
+      # Return the set of resource hashes transitively reachable through
+      # `kix.run/depends-on`.
       dependencyClosure =
         e:
         if e.hash == null then
@@ -114,7 +92,6 @@ rec {
               )
           );
 
-      # Resource identity: kind/namespace/name (unique within a cluster).
       resourceId =
         r:
         let
@@ -123,13 +100,11 @@ rec {
         in
         "${r.kind}/${ns}/${name}";
 
-      # Index by (kind, namespace, name) for namespace-aware lookup.
       byId = builtins.foldl' (acc: r: acc // { "${resourceId r}" = r; }) { } resources;
 
-      # Import markers stand in for objects kix does not render: a
-      # PackageInstance carrying kix.run/import-kind and kix.run/import-name
-      # (scope.mkServiceRef, scope.mkSecretRef, mkImportMarker). The deploy
-      # engine gates on the described object, so a reference to it resolves.
+      # Collect import markers (`PackageInstance` resources with
+      # `kix.run/import-kind` and `kix.run/import-name`) that represent
+      # external resources.
       importMarkers = builtins.concatMap (
         r:
         let
@@ -148,7 +123,6 @@ rec {
           [ ]
       ) resources;
 
-      # "<kind>/<namespace>/<name>" -> the marker's annotations.
       importIds = builtins.listToAttrs (
         map (m: {
           name = "${m.kind}/${m.ns}/${m.iname}";
@@ -156,9 +130,8 @@ rec {
         }) importMarkers
       );
 
-      # A marker for a cluster-scoped kind (a StorageClass a flavour
-      # imports into kube-system) stands for one object in the whole
-      # cluster, so it resolves from every namespace: "<kind>/<name>".
+      # Index cluster-scoped import markers by `<kind>/<name>` so they resolve
+      # from any namespace.
       clusterImportIds = builtins.listToAttrs (
         map (m: {
           name = "${m.kind}/${m.iname}";
@@ -166,22 +139,13 @@ rec {
         }) (builtins.filter (m: isClusterScopedKind m.kind) importMarkers)
       );
 
-      # Kinds that resolve through the cluster-scoped bucket: the built-in
-      # cluster-scoped kinds, nothing else. Before this every kind fell back
-      # to that bucket, so a Deployment in `a` could mount a ConfigMap that
-      # existed only as a cluster-scoped object of the same name (kixpkgs#71
-      # item 5). No check here looks up a custom cluster-scoped kind: an HPA
-      # can only target namespaced kinds, and the one legitimate cluster-
-      # scoped reference is a RoleBinding to a ClusterRole. A check that
-      # needs another kind extends `builtInClusterScopedKinds` in helpers.nix.
+      # Report whether `kind` is a built-in cluster-scoped kind that can
+      # resolve across namespaces.
       isClusterScopedKind = kind: builtins.elem kind helpers.builtInClusterScopedKinds;
 
-      # Does `name` of `kind` exist for a referrer in namespace `ns`? The
-      # namespaced bucket first; the cluster-scoped bucket and import
-      # markers in any namespace only for a kind that is cluster-scoped (a
-      # RoleBinding may name a ClusterRole). A name the author wrapped in
-      # `kix.untrackedRef` is external by declaration and resolves whatever
-      # its kind.
+      # Check whether `kind` `name` resolves in namespace `ns`, as a
+      # cluster-scoped resource, through an import marker, or via
+      # `kix.untrackedRef`.
       hasResource =
         kind: ns: name:
         byId ? "${kind}/${ns}/${name}"
@@ -191,11 +155,9 @@ rec {
         || externalNames ? "${ns}/${name}"
         || externalNames ? "cluster-scoped/${name}";
 
-      # Pod selectors declared by ServiceRef markers (kix.run/service-selector):
-      # the operator's pods exist by declaration, so a Service or
-      # NetworkPolicy in the same namespace whose selector is within one
-      # of them selects real pods. A witness for checks 4 and 12, which
-      # otherwise only see pod templates in the build.
+      # Collect pod selectors declared on ServiceRef import markers
+      # (`kix.run/service-selector`) so Services, NetworkPolicies, and PDBs can
+      # match operator-managed pods.
       refPodSelectors = builtins.concatMap (
         r:
         let
@@ -225,10 +187,7 @@ rec {
       workloads = builtins.filter (r: builtins.elem r.kind workloadKinds) resources;
       nsOf = r: r.metadata.namespace or "cluster-scoped";
 
-      # A label selector reaches pods in its own namespace only, so a
-      # Service, NetworkPolicy or PodDisruptionBudget in `a` is not
-      # satisfied by a matching pod template in `b`. Same rule as the
-      # ServiceRef witness below.
+      # Check whether `selector` matches any workload pod template in namespace `ns`.
       selectsPodsIn =
         ns: selector:
         builtins.any (w: nsOf w == ns && selectorMatchesLabels selector (getPodLabels w)) workloads;
@@ -244,9 +203,6 @@ rec {
         in
         template;
 
-      # Pod template labels, CronJob-aware like getPodSpec. Checks 4, 12 and
-      # 13 match selectors against these; reading spec.template directly
-      # made CronJob pods invisible to them.
       getPodLabels =
         r:
         if r.kind == "CronJob" then
@@ -259,7 +215,7 @@ rec {
 
       # --- Allowlists for external references ---
 
-      # Roles provided by the cluster itself, not by kix.
+      # Report whether `name` is a built-in cluster role provided by Kubernetes.
       externalRoleRef =
         name:
         lib.hasPrefix "system:" name
@@ -274,20 +230,11 @@ rec {
           "extension-apiserver-authentication-reader"
         ];
 
-      # A Service (or PodDisruptionBudget) kix renders over pods an operator
-      # creates at runtime has no pod template to match. The package says so
-      # on the resource:
-      #   metadata.annotations.<operand-of> = "<group>/<Kind>/<name>"
-      # names the CR whose operand pods it selects, and checks 4 and 14
-      # accept it when that CR is in the build in the same namespace. Keyed by group
-      # and kind: kind names alone are not unique across API groups. This
-      # replaced a global list of operator kinds plus a name-prefix guess
-      # (v2_discussions/135, kixpkgs#70). Where the operator creates the
-      # Service itself, scope.mkServiceRef is the better tool: nothing to
-      # exempt.
+      # Services and PodDisruptionBudgets that select pods created at runtime
+      # by an operator have no pod template in the build. They annotate
+      # `kix.run/operand-of = "<group>/<Kind>/<name>"` to reference the custom
+      # resource in the same namespace whose operand pods they select.
       operandOfAnnotation = kixKeys.operandOf;
-      # "monitoring.coreos.com/v1" -> "monitoring.coreos.com"; the core group
-      # ("v1") is "", as Kubernetes writes it.
       groupOf =
         apiVersion:
         let
@@ -328,11 +275,8 @@ rec {
         let
           selector = svc.spec.selector or { };
         in
-        # Headless and external-name Services have no selector.
         selector == { }
-        # Targets a K8s system component (metrics scraping).
         || builtins.any (sc: selectorMatchesLabels sc selector) systemComponentSelectors
-        # Declares the CR whose operand pods it selects, and that CR is here.
         || operandCrPresent svc;
 
       # --- 1. ServiceAccount references ---
@@ -383,8 +327,8 @@ rec {
             ) resources
           );
 
-      # Secrets are not checked because they are commonly managed
-      # externally (Infisical, sealed-secrets, manual creation).
+      # Check ConfigMap volume mounts. Secret mounts are not checked here
+      # because Secrets are often provisioned by external controllers.
 
       volumeRefFailures = builtins.concatMap (
         w:
@@ -556,7 +500,6 @@ rec {
         ing:
         let
           ns = ing.metadata.namespace or "cluster-scoped";
-          # Collect all backend service names from rules and defaultBackend.
           ruleBackends = builtins.concatMap (
             rule:
             builtins.concatMap (
@@ -603,12 +546,10 @@ rec {
         ) resources
       );
 
-      # `_`-prefixed namespaces are kix's sentinel for cluster-level instances
-      # (ROADMAP "Cluster-level instances"): eval keeps them out of Namespace
-      # emission on purpose, so they are not missing, they are not real.
+      # Report whether `ns` is a `_`-prefixed sentinel namespace for
+      # cluster-level instances, which do not emit a Namespace resource.
       isSentinelNamespace = ns: lib.hasPrefix "_" ns;
 
-      # One failure per missing namespace, not one per resource in it.
       uniqueNamespaceFailures =
         let
           missingNs = lib.unique (
@@ -646,14 +587,10 @@ rec {
           ]
       ) (builtins.filter (r: r.kind == "NetworkPolicy") resources);
 
-      # Validate named Service targetPorts against container port names.
-      # When a Service uses a named targetPort, that port name must exist in
-      # at least one matched workload's container ports. A Service that
-      # matches no pod template in the build is skipped here on purpose:
-      # either check 4 already reports it, or it is exempt there because
-      # its pods are an operator's (a ref witness or `kix.run/operand-of`),
-      # and then there is no container spec in the build to read port
-      # names from. Nothing more can be checked without the pods.
+      # Validate that named Service targetPorts exist on at least one matched
+      # workload container. Services that match no workload pod template in the
+      # build are skipped because check 4 either reports them or exempts them as
+      # operator-managed.
 
       portNameFailures = builtins.concatMap (
         svc:
@@ -661,7 +598,6 @@ rec {
           selector = svc.spec.selector or { };
           ns = svc.metadata.namespace or "cluster-scoped";
           svcPorts = svc.spec.ports or [ ];
-          # Named targetPorts (skip numeric ones).
           namedTargetPorts = builtins.filter (
             p:
             let
@@ -669,7 +605,6 @@ rec {
             in
             tp != null && builtins.isString tp
           ) svcPorts;
-          # Find all container port names in matched workloads.
           matchedWorkloads = builtins.filter (
             w: nsOf w == ns && selectorMatchesLabels selector (getPodLabels w)
           ) workloads;
@@ -701,12 +636,9 @@ rec {
           ) namedTargetPorts
       ) (builtins.filter (r: r.kind == "Service") resources);
 
-      # Validate PodDisruptionBudget selectors against pod templates.
-      # A PDB whose selector matches no pod in the build protects nothing,
-      # and it is also the one thing helm-dag.findOrphans used to compute
-      # (for chart-internal resources only) that no other check covered.
-      # Same witnesses as check 4: pod templates, ServiceRef selectors,
-      # and a `kix.run/operand-of` declaration for operator-created pods.
+      # Validate that each PodDisruptionBudget `matchLabels` selector matches a
+      # workload pod template, a ServiceRef selector, or an `operand-of` custom
+      # resource.
 
       pdbFailures = builtins.concatMap (
         pdb:
@@ -716,8 +648,6 @@ rec {
           matchesAny = selectsPodsIn ns selector || selectsRefPods ns selector;
           decl = operandOf pdb;
         in
-        # No matchLabels: an empty selector or matchExpressions only. Nothing
-        # to resolve here.
         if selector == { } || matchesAny || operandCrPresent pdb then
           [ ]
         else if decl != null && builtins.length (lib.splitString "/" decl) != 3 then
@@ -735,10 +665,9 @@ rec {
       ) (builtins.filter (r: r.kind == "PodDisruptionBudget") resources);
 
       # --- 15. Job pods are not Service endpoints ---
-      # A Job's pod is not a server. When its template labels satisfy a
-      # Service selector in the same namespace, the Service routes real
-      # traffic to the Job pod for as long as it runs (a probe Job built on
-      # the package's selector labels did exactly this, kixpkgs#77).
+      # Reject Jobs whose pod labels match a Service selector in the same
+      # namespace, which would route Service traffic to the Job pod while it
+      # runs.
 
       jobEndpointFailures = builtins.concatMap (
         job:
@@ -759,10 +688,9 @@ rec {
       ) (builtins.filter (r: r.kind == "Job") resources);
 
       # --- 16. kix.run/rerun is for Jobs ---
-      # The deploy engine deletes and recreates a resource carrying the
-      # annotation (core/annotations.nix). For a Job that is a retry; for
-      # anything with a rollout it would be an outage, so the engine
-      # ignores it on other kinds and the eval refuses it.
+      # The deploy engine deletes and recreates resources annotated with
+      # `kix.run/rerun`. Reject the annotation on non-Job resources, where
+      # recreation would cause an outage.
 
       rerunFailures = builtins.concatMap (
         r:
@@ -785,12 +713,10 @@ rec {
       ) resources;
 
       # --- 17. priorityClassName references ---
-      # The apiserver rejects every pod of a workload naming a PriorityClass
-      # that does not exist ("no PriorityClass with name X was found"), at
-      # admission, so the workload applies and then never schedules.
-      # PriorityClass is cluster-scoped, so `hasResource` finds one built
-      # anywhere in the cluster; the `system-` classes ship with Kubernetes
-      # itself.
+      # Admission rejects pods whose `priorityClassName` does not exist, leaving
+      # the workload unscheduled. PriorityClass is cluster-scoped, and
+      # Kubernetes provides `system-cluster-critical` and `system-node-critical`
+      # by default.
 
       builtInPriorityClasses = [
         "system-cluster-critical"
@@ -815,14 +741,11 @@ rec {
       ) workloads;
 
       # --- 18. Namespaced kinds carry a namespace ---
-      # The apiserver stores a namespaced object that names no namespace in
-      # the requester's namespace, and the CLI keys the manifest as
-      # cluster-scoped, so `kix diff` and `kix deploy --prune` would treat
-      # the live object as an orphan of the build that created it. Kix knows
-      # the scope of the built-in kinds below, of every custom kind whose
-      # CustomResourceDefinition is in this build (`spec.scope`), and of every
-      # kind a CRD ref marker declares (`kix.run/crd-scope`); any other custom
-      # kind is left to the deploy-time check in the CLI.
+      # A namespaced resource without `metadata.namespace` is stored in the
+      # default namespace by the API server while the CLI tracks it as
+      # cluster-scoped, breaking diff and prune. Check built-in namespaced kinds
+      # and custom kinds declared as `Namespaced` by a CRD or CRD ref marker in
+      # the build.
 
       builtInNamespacedKinds = {
         "" = [
@@ -903,8 +826,8 @@ rec {
       # A pod that mounts a claim that does not exist stays Pending.
 
       safeList = v: if builtins.isList v then v else [ ];
-      # A chart may render `data: null`; Nix's `or` handles missing
-      # attributes only.
+      # Helm charts can render `data: null`, whereas Nix's `or` only handles
+      # missing attributes.
       attrNamesOf = v: if builtins.isAttrs v then builtins.attrNames v else [ ];
 
       claimFailures = builtins.concatMap (
@@ -993,13 +916,9 @@ rec {
         ) workloads;
 
       # --- 21. Custom resources depend on a declaration of their kind ---
-      # The apiserver rejects an object whose kind it does not serve, and
-      # the deploy orders a custom resource after its CRD only through a
-      # kix.run/depends-on path. So every object outside the built-in API
-      # groups must reach, through depends-on, a declaration of its group
-      # and kind that serves its version: a CustomResourceDefinition, a CRD
-      # ref marker (scope.mkCRDRef, kix.mkImport crds), or an APIService for
-      # the group (resource or import marker).
+      # Every resource outside the built-in API groups must depend (via
+      # `kix.run/depends-on`) on a CustomResourceDefinition, CRD ref marker, or
+      # APIService that serves its group, kind, and version.
 
       builtInGroups = [
         ""
@@ -1035,8 +954,6 @@ rec {
         in
         lib.last parts;
 
-      # Declarations: { group; kind (null: any kind of the group); served;
-      # scope; text; e }.
       crdDecls = builtins.concatMap (
         e:
         if e.r.kind == "CustomResourceDefinition" then
@@ -1168,18 +1085,13 @@ rec {
       ) entries;
 
       # --- 22. Named Secret and ConfigMap keys ---
-      # A container does not start when an env var or volume item names a
-      # key its Secret or ConfigMap lacks. A subPath of a missing key mounts
-      # an empty directory, and the container fails to start if its image has
-      # a file at the mount path. Keys are known for a Secret built with
-      # scope.mkSecret (kix.run/secret-keys), a ref that lists keys
-      # (kix.run/import-secret-keys) and a ConfigMap in the build (data,
-      # binaryData). Skipped: `optional: true`; names declared external with
-      # kix.untrackedRef (a controller-created Secret); names with no object
-      # in the build, which check 3 and the deploy own; Secrets without
-      # kix.run/secret-keys (a chart's); objects that cede their data fields
-      # to another manager. Whole use (envFrom, a volume without items) reads
-      # no named key and is not checked.
+      # Validate that env vars, volume `items`, and `subPath` mounts reference
+      # keys that exist on their target Secret or ConfigMap. Known keys come
+      # from `kix.run/secret-keys` on `scope.mkSecret`,
+      # `kix.run/import-secret-keys` on Secret refs, and `data` or `binaryData`
+      # on ConfigMaps. Skip optional references, `kix.untrackedRef` names,
+      # Secret resources without `kix.run/secret-keys`, and resources that cede
+      # their data fields.
 
       cedesData =
         r:
@@ -1187,8 +1099,9 @@ rec {
           p: lib.hasPrefix "data" p || lib.hasPrefix "binaryData" p || lib.hasPrefix "stringData" p
         ) (splitList ((r.metadata.annotations or { }).${kixKeys.cedeFields} or ""));
 
-      # { keys = [ ... ]; } when the keys are known, { noKeysListed = true; }
-      # for a Secret ref that lists none, null when nothing is checked.
+      # Return `{ keys }` when the target's keys are known,
+      # `{ noKeysListed = true }` for a Secret ref without declared keys, or
+      # null when unchecked.
       declaredKeys =
         objKind: ns: name:
         let

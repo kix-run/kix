@@ -1,19 +1,14 @@
-# The OTLP endpoint contract: what a package answering the `otlp` alias
-# publishes on root.out, the addresses where it receives OpenTelemetry
-# traces, metrics, or logs. A trace store (tempo) and a collector both
-# publish it, so an application written against these fields sends to
-# either.
+# Define the OTLP endpoint contract for packages that answer the `otlp` alias
+# and receive OpenTelemetry traces, metrics, or logs (`kix.contracts.otlpEndpoint`).
 #
-# A provider package passes its out through `check`, which requires every
-# field. A consumer holds its dependency to the contract through
-# `assertions`, which requires the fields marked `required` and checks the
-# shape of the others when they are present, so a kix.mkImport stand-in may
-# publish only the two URLs. Packages reach this file as
-# `kix.contracts.otlpEndpoint`.
+# Provider packages call `check`, which requires every field. Consumers
+# validate their `otlp` dependency with `assertions`, which requires only the
+# `required` fields so a `kix.mkImport` stand-in only needs to publish the two
+# base URLs.
 { lib }:
 let
-  # OTLP exporters take a scheme, host, and port, and a gRPC exporter
-  # rejects a path, so the URL ends at the port.
+  # Return true when `v` is an `http://` or `https://` base URL without a path,
+  # since gRPC exporters reject paths and HTTP exporters append `/v1/<signal>`.
   isBaseUrl = v: builtins.isString v && builtins.match "https?://[^/]+" v != null;
 
   fields = {
@@ -22,7 +17,7 @@ let
       shape = "the OTLP/gRPC base URL, scheme://host:port with no path (port 4317 by convention)";
       test = isBaseUrl;
     };
-    # Exporters append the signal path (`/v1/traces`) to this base.
+    # HTTP exporters append the signal path (such as `/v1/traces`) to this base.
     otlpHttpUrl = {
       required = true;
       shape = "the OTLP/HTTP base URL, scheme://host:port with no path (port 4318 by convention)";
@@ -35,8 +30,8 @@ let
     };
   };
 
-  # Problems with `out`, one string per field. `all` requires every field;
-  # otherwise only the required ones.
+  # Return a list of validation errors for `out`. When `all` is true, require
+  # optional fields as well.
   problemsWith =
     all: out:
     builtins.concatMap (
@@ -58,11 +53,11 @@ in
   alias = "otlp";
   inherit fields;
 
-  # The problems a consumer's assertion reports for `out`.
+  # Return the contract violations a consumer reports for `out`.
   problems = problemsWith false;
 
-  # For a provider: `root.out = kix.contracts.otlpEndpoint.check who { ... }`.
-  # Returns `out`, or throws naming every missing or misshapen field.
+  # Validate a provider's `root.out` and return it, or throw if any field is
+  # missing or malformed.
   check =
     who: out:
     let
@@ -73,11 +68,9 @@ in
     else
       throw "${who}: root.out does not honour the OTLP endpoint contract: ${lib.concatStringsSep "; " found} (${here})";
 
-  # For a consumer:
-  # `deps.otlp.assertions = dep: kix.contracts.otlpEndpoint.assertions who dep;`.
-  # The message names the instance the dependency resolved to. Dependency
-  # assertions are evaluated after the build, so a field the build reads
-  # and `out` lacks fails first with Nix's missing-attribute error.
+  # Return dependency assertions that validate `dep.out` against the contract.
+  # Dependency assertions run after `build`, so missing attributes that `build`
+  # evaluates directly will fail earlier with a missing-attribute error.
   assertions =
     who: dep:
     let

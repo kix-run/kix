@@ -1,24 +1,14 @@
 # kind flavor for local development and CI.
 #
-# Pre-installs kindnet CNI and a local, ephemeral StorageClass `standard`
-# (local-path-provisioner, annotated as the default; the node image's
-# manifest is pkg/build/nodeimage/const_storage.go in kubernetes-sigs/kind),
-# whose volumes do not survive container restarts. No LoadBalancer support.
+# Stock kind installs `kindnet` CNI (exclusive), CoreDNS, and an ephemeral
+# default StorageClass named `standard` (`local-path-provisioner`), with no
+# LoadBalancer controller. When kind is created with `disableDefaultCNI = true`,
+# set `cluster.roles.cni.binding = "absent"` to deploy a managed CNI such as
+# Cilium.
 #
-# Role bindings (v2_discussions/127): kindnet owns the pod network
-# exclusively. Deploying a managed CNI on stock kind breaks the cluster,
-# so it is refused at eval. A kind cluster created with the default CNI
-# disabled overrides `cluster.roles.cni.binding = "absent"` and fills the
-# role with a managed instance (this is what ludo-kind does with cilium).
-# DNS and storage are weak (shadowable) environment defaults, declared as
-# platform imports below.
-#
-# Platform intents: when networkPolicy.enable = true, declares connectivity
-# for kind's non-kix-managed system pods so they aren't blocked by Cilium's
-# `always` enforcement mode. CoreDNS intents live on the platform-dns
-# import (so the marker depends on its CNPs → enforcer chain). Intents
-# for pods without an import (local-path-provisioner) stay in
-# networkPolicy.platformIntents.
+# When `networkPolicy.enable = true`, this flavor declares platform network
+# policy intents for CoreDNS and `local-path-provisioner` so Cilium's `always`
+# enforcement mode does not block system pods.
 
 {
   lib,
@@ -29,7 +19,7 @@
 {
   cluster.provider = lib.mkDefault "kind";
 
-  # kind's default networking.podSubnet.
+  # Default `networking.podSubnet` in kind.
   cluster.network.podCidr = lib.mkDefault "10.244.0.0/16";
 
   cluster.roles = {
@@ -40,21 +30,15 @@
     dns.binding = lib.mkDefault "shadowable";
     storageClasses.binding = lib.mkDefault "shadowable";
     loadBalancer.binding = lib.mkDefault "absent";
-    # kind ships no snapshot CRDs or controller; a snapshot-controller
-    # instance provides them.
     snapshotController.binding = lib.mkDefault "absent";
-    # kind ships no metrics-server; a metrics-server instance provides
-    # metrics.k8s.io.
     metricsApi.binding = lib.mkDefault "absent";
-    # kind ships no registry mirror; a spegel instance provides one.
     registryMirror.binding = lib.mkDefault "absent";
   };
 
-  # The node image turns discard_unpacked_layers on, in the version 2
-  # config's [plugins."io.containerd.grpc.v1.cri".containerd] table. A
-  # cluster created with a containerdConfigPatches entry that sets it false
-  # in that same table sets this to false; containerd 2 copies that table
-  # over one written in the newer io.containerd.cri.v1.images form.
+  # The kind node image enables `discard_unpacked_layers` in the v2 containerd
+  # config table `[plugins."io.containerd.grpc.v1.cri".containerd]`. Set this
+  # to false when `containerdConfigPatches` disables `discard_unpacked_layers`
+  # in that same table.
   cluster.containerd.discardUnpackedLayers = lib.mkDefault true;
 
   cluster.capabilities = {
@@ -66,7 +50,6 @@
     daemonSets = lib.mkDefault true;
   };
 
-  # Platform-provided imports.
   instances.kube-system = {
     platform-dns = {
       package = kix.mkImport {
@@ -79,11 +62,9 @@
         };
       };
 
-      # Platform intents for CoreDNS. Materialized into CNPs and injected
-      # as extraDeps on the import marker, establishing:
-      # workload → platform-dns marker → CoreDNS CNPs → cilium enforcer.
-      # Without these, Cilium `always` mode blocks CoreDNS traffic and the
-      # cluster is non-functional.
+      # Attach CoreDNS network policy intents to `platform-dns` so workloads
+      # that depend on DNS are ordered after the CoreDNS policies and the
+      # network policy enforcer.
       platformIntents = lib.mkIf config.networkPolicy.enable {
         coredns-egress = {
           namespace = "kube-system";
@@ -142,8 +123,8 @@
         apiVersion = "storage.k8s.io/v1";
         roles = [ "storageClasses" ];
         out = {
-          # Ephemeral: backed by the docker container FS, does not survive
-          # container restarts.
+          # Backed by the kind node container filesystem. Volumes do not survive
+          # node container restarts.
           storageClassName = "standard";
           name = "standard";
         };
@@ -151,10 +132,8 @@
     };
   };
 
-  # Connectivity for kind's pre-installed system pods
-  # that don't have an associated import instance. Intents for pods with
-  # imports (CoreDNS) live on the import's `platformIntents` field instead,
-  # so the import marker transitively depends on its CNPs.
+  # Allow `local-path-provisioner` pods in `local-path-storage` to reach the
+  # API server and DNS when network policy enforcement is enabled.
   networkPolicy.platformIntents = lib.mkIf config.networkPolicy.enable {
     local-path-provisioner-egress = {
       scope = "clusterwide";

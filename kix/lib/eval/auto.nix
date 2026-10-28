@@ -68,11 +68,11 @@ rec {
 
   getAllDeps = getDepsWhere (_name: _spec: true);
 
-  # Every `<ns>.<inst>` computeAutoInstances could produce, as
-  # `{ <ns> = [ <inst> ... ]; }`: the explicit instances plus each shelf
-  # package in each namespace it could be placed in. It needs no closure,
-  # so `ref` can be built from it and `deps` values read during
-  # auto-instantiation without recursion.
+  # Return every `<ns>.<inst>` that computeAutoInstances could produce, as
+  # `{ <ns> = [ <inst> ... ]; }`. This includes explicit instances and each
+  # availablePackages entry in each namespace where it could be placed. It needs
+  # no closure, so `ref` can be built from it and `deps` values can be read
+  # during auto-instantiation without recursion.
   possibleInstanceNames =
     {
       explicitInstances,
@@ -82,8 +82,8 @@ rec {
     let
       normalizedAvail = normalizeAvailablePackages availablePackages;
       fixedNs = lib.filter (n: n != null) (lib.mapAttrsToList (_: e: e.namespace) normalizedAvail);
-      # A shelf package without a namespace lands in autoNamespace, or else
-      # in the namespace of whatever demanded it.
+      # Place an availablePackages entry without a fixed namespace in
+      # autoNamespace, or in the namespace of whatever demanded it.
       floatingNs =
         if autoNamespace != null then
           [ autoNamespace ]
@@ -99,13 +99,13 @@ rec {
       shelfByNs
     ];
 
-  # Instances pulled from availablePackages to satisfy demands, and the
-  # optional instances the demands activate. Only a required dependency
-  # places a demand. An optional dependency resolves against active
-  # instances and is null otherwise; it never pulls a shelf package or
-  # activates an optional instance. A shelf package that runs once per
-  # cluster (onePerClusterReason) and would be placed in more than one
-  # namespace is refused.
+  # Compute instances pulled from availablePackages to satisfy demands and the
+  # optional instances those demands activate. Only a required dependency
+  # places a demand. An optional dependency resolves against active instances
+  # and is null otherwise. It never pulls from availablePackages or activates an
+  # optional instance. Reject any availablePackages entry that runs once per
+  # cluster (onePerClusterReason) if demands would place it in multiple
+  # namespaces.
   computeAutoInstances =
     {
       explicitInstances,
@@ -126,16 +126,18 @@ rec {
           }
         );
 
-      # Key to every shelf package that answers it, in attrNames order.
-      # Membership tests (`?`) do not look at the claimants; a demand goes
-      # through pickShelf, which refuses a key with more than one.
+      # Map each key to every availablePackages entry that answers it, in
+      # attrNames order. Membership tests (`?`) do not check how many packages
+      # match. Demands go through pickShelf, which rejects keys with multiple
+      # matching packages.
       availableByKey = builtins.zipAttrsWith (_: names: names) (
         builtins.concatMap (name: map (key: { ${key} = name; }) (shelfKeys name)) (
           builtins.attrNames normalizedAvail
         )
       );
 
-      # Why a shelf package answers a key, for the refusal message only.
+      # Return the reasons an availablePackages entry matches `key`, for error
+      # messages.
       claimSources =
         name: key:
         let
@@ -205,14 +207,14 @@ rec {
         ) (builtins.attrNames (optional.${ns} or { }))
       ) (builtins.attrNames optional);
 
-      # Key to every optional instance that answers it; pickOptional chooses.
       optionalByKey = builtins.zipAttrsWith (_: opts: opts) optionalByKeyList;
 
-      # Why a shelf package runs once per cluster, or null: its
-      # meta.conflictsWith lists `cluster:<key>` for a key it answers, or it
-      # claims a role, which hooks.findRoleProvider allows one managed
-      # provider of. A package with meta.scope = "namespace" is excluded,
-      # because a requester in another namespace cannot resolve to it.
+      # Return the reason an availablePackages entry runs once per cluster, or
+      # null. A package runs once per cluster when `meta.conflictsWith` lists
+      # `cluster:<key>` for a key it answers, or when it declares a role (which
+      # hooks.findRoleProvider restricts to one managed provider). Exclude
+      # packages with `meta.scope = "namespace"` because requesters in other
+      # namespaces cannot resolve to them.
       onePerClusterReason =
         name:
         let
@@ -234,23 +236,23 @@ rec {
         else
           null;
 
-      # The demand key, which genericClosure deduplicates on. A role-named
-      # dependency is keyed by the role, so consumers in several namespaces
-      # share one provider. Any other demand is keyed by its requesting
-      # namespace, so it activates that namespace's optional instance or
-      # places a shelf package there. `requester` (`<ns>/<inst>`) names the
-      # first demand for the refusal messages and does not take part in
-      # deduplication.
+      # Build a demand item keyed for genericClosure deduplication. Key role
+      # dependencies by role name so consumers across namespaces share one
+      # provider. Key other demands by the requesting namespace so they activate
+      # that namespace's optional instance or place an availablePackages entry
+      # there. Record the first `requester` (`<ns>/<inst>`) for error messages
+      # without affecting deduplication.
       mkItem = depName: requesterNs: requester: {
         key =
           if builtins.elem depName roles.roleNames then "role:${depName}" else "${depName}@${requesterNs}";
         inherit depName requesterNs requester;
       };
 
-      # The demands an instance places on optional instances and the shelf.
-      # A dependency answered by a mandatory instance places none. One wired
-      # with `deps.<arg>` places none by name; each `ref` in the wiring (one,
-      # or a list) to an optional instance demands that instance directly.
+      # Return the demands an instance places on optional instances and
+      # availablePackages. Dependencies satisfied by mandatory instances place no
+      # demand. Dependencies wired via `deps.<arg>` place no demand by name, but
+      # each `ref` in the wiring to an optional instance demands that instance
+      # directly.
       demandsOf =
         instCfg: ns: instName:
         let
@@ -280,11 +282,11 @@ rec {
         else
           "dependency '${item.depName}' of ${item.requester} has no instance";
 
-      # The optional instance answering a demanded key, chosen as resolveArg
-      # chooses: instances with meta.scope = "namespace" in other namespaces
-      # are skipped, then a managed instance wins over an import, then the
-      # requester's namespace over the others. More than one at the deciding
-      # step is refused; null when none is left.
+      # Select the optional instance matching a demand using the same precedence
+      # as resolveArg. Skip instances in other namespaces with
+      # `meta.scope = "namespace"`, prefer managed instances over imports, and
+      # prefer the requester's namespace over other namespaces. Throw if multiple
+      # candidates remain at the deciding tier, or return null if none match.
       pickOptional =
         item:
         let
@@ -307,7 +309,7 @@ rec {
             builtins.concatStringsSep ", " (map (o: "${o.ns}/${o.instName}") tier)
           }. Keep one of them, or set deps.${item.depName} on ${item.requester} to the intended one.";
 
-      # The optional instance an item activates, or null.
+      # Return the optional instance that `item` activates, or null.
       activatedBy =
         item:
         if item ? target then
@@ -317,9 +319,9 @@ rec {
         else
           null;
 
-      # The one shelf package answering a demanded key. Kix does not rank
-      # claimants, so a contested key is refused here, when something
-      # depends on it, and never when it merely sits on the shelf.
+      # Select the single availablePackages entry matching a demand. Kix does not
+      # rank multiple matching packages, so reject ambiguous keys when a consumer
+      # demands them rather than when they are declared in availablePackages.
       pickShelf =
         item:
         let
@@ -434,9 +436,9 @@ rec {
 
       placementsByName = builtins.groupBy (p: p.instName) autoInstanceList;
 
-      # Every requester of the instance at `<ns>/<inst>`, for the refusals
-      # that name an auto-instantiated instance (meta.nix conflictsWith,
-      # hooks.findRoleProvider, sharedClusterObjectAssertions).
+      # Record every requester of `<ns>/<inst>` for error messages that report an
+      # auto-instantiated instance (meta.nix conflictsWith,
+      # hooks.findRoleProvider, and sharedClusterObjectAssertions).
       requestersOf = builtins.mapAttrs (_: ps: lib.unique (map (p: p.requester) ps)) (
         builtins.groupBy (p: "${p.ns}/${p.instName}") autoInstanceList
       );
@@ -471,10 +473,11 @@ rec {
         in
         if declared then r else "${r} (auto-instantiated)";
 
-      # A shelf package that runs once per cluster and that the closure
-      # places in more than one namespace. A fixed availablePackages
-      # namespace or autoNamespace places every copy in one namespace, so
-      # only a package that floats to its requesters can spread.
+      # Reject availablePackages entries that must run once per cluster when
+      # demands place them in multiple namespaces. A fixed namespace on the
+      # availablePackages entry or autoNamespace places every copy in one
+      # namespace, so only packages placed in their requester's namespace can
+      # spread across namespaces.
       spreadRefusals = builtins.concatMap (
         name:
         let

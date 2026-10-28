@@ -24,8 +24,6 @@ in
       description = "Kubernetes cluster DNS domain. Used to construct resource FQDNs (e.g. svc.cluster.local).";
     };
 
-    # Public base domain. This is distinct from `clusterDomain`, which is the
-    # DNS suffix used inside the cluster.
     cluster.domain = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -122,11 +120,9 @@ in
                 '';
               };
               partsOverlays = lib.mkOption {
-                # `raw` stores each function as defined. `anything` would wrap
-                # it and merge its result, which evaluates every nested value:
-                # `root.resource = self.<part>` then forces `self` while the
-                # parts fixed point is still being computed, and an overlay
-                # that reads the previous overlay's `base.root` recurses.
+                # Use `raw` so the module system does not wrap overlay functions
+                # and eagerly merge their return values while the `self` fixed
+                # point is still being computed.
                 type = lib.types.listOf lib.types.raw;
                 default = [ ];
                 description = ''
@@ -304,9 +300,6 @@ in
       '';
     };
 
-    # Target roles describe provider bindings; capabilities describe substrate
-    # facts, where null means unknown.
-
     cluster.provider = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -466,9 +459,8 @@ in
       };
     };
 
-    # containerd's configuration on the nodes. Kix cannot read or change it;
-    # flavours set what their node images ship, and a package that talks to
-    # containerd on the host (spegel) reads it.
+    # Node containerd paths and settings. Flavors set the defaults for their
+    # node images, and host-level packages such as spegel read them.
     cluster.containerd = {
       socket = lib.mkOption {
         type = lib.types.strMatching "/.+";
@@ -497,9 +489,6 @@ in
         '';
       };
     };
-
-    # Exposed through `cluster.out.maintenance` for consumers that suppress
-    # actions during a declared maintenance window.
 
     cluster.maintenance = lib.mkOption {
       type = lib.types.submodule {
@@ -839,10 +828,9 @@ in
       '';
     };
 
-    # Each hook is a function `ctx -> result` or `{ priority ? 1000; fn; }`.
-    # Execution order is priority ascending, then name. Declare a priority
-    # instead of encoding order into hook names. Results are shape-checked;
-    # unknown keys throw at the call site.
+    # Each hook is a function `ctx -> result` or `{ priority ? 1000; fn; }`,
+    # executed by ascending priority and then by name. Hook return values are
+    # shape-checked and unknown keys throw at the call site.
     hooks = {
       workloadInterceptors = lib.mkOption {
         type = lib.types.attrsOf lib.types.raw;

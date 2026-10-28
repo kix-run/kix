@@ -24,7 +24,7 @@ let
     let
       provider = cluster.findRoleProvider enforcerRole;
     in
-    # Self-dep guard: the enforcer's own instance must not depend on itself.
+    # Return null for the enforcer's own instance so it does not depend on itself.
     if provider == null || (provider.ns == namespaceName && provider.inst == instanceName) then
       null
     else

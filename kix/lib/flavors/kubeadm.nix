@@ -1,11 +1,8 @@
-# kubeadm flavor for an upstream Kubernetes bootstrap.
+# kubeadm flavor for upstream Kubernetes clusters.
 #
-# Ships nothing beyond the control plane. CNI, storage, and load balancing
-# are bring-your-own: the roles are declared vacant ("absent"), so managed
-# instances fill them and a consumer without a provider gets a link error
-# at eval.
-#
-# Platform imports: DNS (coredns, bundled by kubeadm). No default storage.
+# kubeadm installs only the control plane and CoreDNS. CNI, storage, load
+# balancing, and metrics-server are marked `absent` so managed instances can
+# provide them.
 
 {
   config,
@@ -17,11 +14,11 @@
   cluster.provider = lib.mkDefault "kubeadm";
 
   cluster.roles = {
-    cni.binding = lib.mkDefault "absent"; # must be installed separately
+    cni.binding = lib.mkDefault "absent";
     dns.binding = lib.mkDefault "shadowable";
-    storageClasses.binding = lib.mkDefault "absent"; # no default StorageClass
+    storageClasses.binding = lib.mkDefault "absent";
     loadBalancer.binding = lib.mkDefault "absent";
-    metricsApi.binding = lib.mkDefault "absent"; # kubeadm installs no metrics-server
+    metricsApi.binding = lib.mkDefault "absent";
   };
 
   cluster.capabilities = {
@@ -31,7 +28,6 @@
     daemonSets = lib.mkDefault true;
   };
 
-  # Platform-provided imports.
   instances.kube-system = {
     platform-dns = {
       package = kix.mkImport {

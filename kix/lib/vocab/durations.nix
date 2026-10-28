@@ -1,12 +1,7 @@
-# Prometheus durations and backup schedules, for alert thresholds.
-#
-# An alert compares a gauge in seconds with a threshold a package option
-# writes as a duration ("5m", "50h"), and a backup alert derives its
-# threshold from the schedule the package renders.
+# Parse Prometheus durations and cron schedules to compute alert thresholds.
 { lib }:
 let
-  # Seconds per unit. Prometheus also accepts `ms`; toSeconds rounds it
-  # down to whole seconds.
+  # Prometheus also accepts `ms`, which `toSeconds` rounds down to whole seconds.
   units = {
     s = 1;
     m = 60;
@@ -16,6 +11,7 @@ let
     y = 31536000;
   };
 
+  # Convert a Prometheus duration string (such as "1h30m") to whole seconds.
   toSeconds =
     d:
     let
@@ -33,9 +29,9 @@ let
     else
       lib.foldl' (acc: p: acc + partSeconds p) 0 parts;
 
-  # Whole hours where they divide evenly, else minutes, else seconds, so
-  # "50h" rather than "2d2h": the hour count reads directly against a
-  # schedule period.
+  # Format a second count as whole hours, minutes, or seconds. Prefer hours
+  # (such as "50h" instead of "2d2h") so the threshold is easy to compare with
+  # a schedule period.
   fromSeconds =
     secs:
     if secs > 0 && lib.mod secs 3600 == 0 then
@@ -45,8 +41,8 @@ let
     else
       "${toString secs}s";
 
-  # A Go duration in whole hours, minutes and seconds ("6h", "1h30m"), as
-  # cron's `@every` takes it. Null for any other form, such as "1.5h".
+  # Parse a Go duration in whole hours, minutes, and seconds (such as "1h30m")
+  # for cron's `@every` syntax, or return null for other forms.
   goSeconds =
     d:
     if builtins.match "([0-9]+[hms])+" d == null then
@@ -66,12 +62,12 @@ let
     "@annually" = 366 * 86400;
   };
 
-  # The longest gap between two runs of a cron schedule, in seconds, or null
-  # when it cannot be read. Takes a descriptor, `@every <duration>`, or five
-  # or six fields (six when the first is seconds), after an optional
-  # `CRON_TZ=` or `TZ=` prefix. With day-of-month and month both `*`, a
-  # schedule runs at least daily when day-of-week is also `*`, and at least
-  # weekly otherwise; any other field pattern is null.
+  # Return the longest gap in seconds between two runs of a cron schedule, or
+  # null when the schedule cannot be statically bounded. Accepts a `@`
+  # descriptor, `@every <duration>`, or a 5- or 6-field cron expression with
+  # an optional `CRON_TZ=` or `TZ=` prefix. When day-of-month and month are
+  # both `*`, a `*` day-of-week runs at least daily and any other day-of-week
+  # runs at least weekly.
   period =
     schedule:
     let
@@ -96,19 +92,16 @@ in
   types.promDuration = lib.types.strMatching "([0-9]+(ms|s|m|h|d|w|y))+";
 
   durations = {
-    # "1h30m" -> 5400. Throws on a string that is not a Prometheus duration.
     inherit toSeconds;
-    # 5400 -> "90m", 180000 -> "50h".
     inherit fromSeconds;
   };
 
   schedules = {
     inherit period;
-    # How long a job on `schedule` may go without a success before an alert
-    # fires: two periods, so one missed run stays quiet while the failure
-    # alert reports it, plus two hours for a run to finish. A duration
-    # string such as "50h" for a daily schedule, or null when the period
-    # cannot be read.
+    # Return the staleness threshold for a scheduled job as a duration string,
+    # or null when the schedule period cannot be read. Uses two periods plus
+    # two hours so a single missed run only triggers the failure alert while
+    # leaving time for the second run to complete.
     staleAfter =
       schedule:
       let

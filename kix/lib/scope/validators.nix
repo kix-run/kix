@@ -1,9 +1,8 @@
 { lib }:
 
 let
-  # A chart can render `volumes: null` or `env: null` (an unset value through
-  # toYaml). Every list read below goes through this so a null reads as
-  # empty instead of "expected a list but found null" with no resource named.
+  # Coerce null to an empty list because Helm charts often render unset list
+  # fields such as `volumes` or `env` as null.
   lst = v: if v == null then [ ] else v;
 
   _allowedFieldPaths = [
@@ -52,10 +51,8 @@ let
 
   markers = import ../core/markers.nix { inherit lib; };
 
-  # True when a Service spec's `loadBalancerClass` comes from
-  # `kix.providedLoadBalancerClass` (core/markers.nix), so a provider in the
-  # build serves the Service. Any other class, with or without string
-  # context, is false.
+  # Return true when `spec.loadBalancerClass` was produced by
+  # `kix.providedLoadBalancerClass`, indicating an in-cluster provider serves it.
   hasProviderClass = spec: markers.isProvidedLoadBalancerClass (spec.loadBalancerClass or null);
 in
 {
@@ -69,10 +66,9 @@ in
       unsafeGrants ? [ ],
     }:
     let
-      # Three-valued substrate gates (v2_discussions/127 §3): declared-false
-      # is an error, unknown (null) is a warning naming the axiom to declare,
-      # true passes. The `capabilities == { }` escape keeps standalone scopes
-      # (tests, subscope stubs) silent.
+      # Validate a required cluster capability. Throw when the capability is
+      # false, warn when it is null, and skip checks when `capabilities` is empty
+      # in standalone test scopes.
       checkCapability =
         {
           cap,
@@ -93,7 +89,7 @@ in
         else
           null;
 
-      # `subject` names what reads metrics.k8s.io, for the message.
+      # Check that the cluster provides `metrics.k8s.io` for `subject`.
       requireMetricsApi =
         subject:
         let
@@ -210,27 +206,10 @@ in
     {
       inherit requireMetricsApi;
 
-      # Structural authoring rule (v2_discussions/128 mechanism 1): raw PVCs
-      # are a cluster-operator concern. Packages request storage via DI and
-      # the `persistent-volume-claim` package is the canonical claim author.
-      # Unlike the capability gates above this is target-independent, so it
-      # has no `capabilities == { }` escape: the only way out is the explicit
-      # `meta.unsafe = [ "raw-pvc" ]` grant, which the scorecard audits.
-      # Helm-imported chart resources route through the wrapping package's
-      # mkResource, so charts with persistence enabled need the same grant.
-      # The Kubernetes OpenAPI schema leaves `metadata.name` unconstrained, so
-      # schema validation accepts names that the API server rejects. Check
-      # them during evaluation instead. Packages commonly derive names from
-      # `scope.instanceName`, making camel-case instance names a frequent
-      # source of errors.
-      #
-      # Three rules, matching apimachinery:
-      #   Service    RFC 1035 label, must start with a letter, <= 63
-      #   Namespace  DNS-1123 label, no dots, <= 63
-      #   otherwise  DNS-1123 subdomain, <= 253
-      # RBAC kinds are exempt: the API server validates those as path
-      # segments, which is why `prometheus-operator:leader-election` is a
-      # legal Role name.
+      # Validate `metadata.name` against Kubernetes apimachinery naming rules,
+      # since the OpenAPI schema does not constrain `metadata.name`. RBAC kinds
+      # are exempt because the API server only forbids path separators in their
+      # names.
       checkResourceName =
         args:
         let
@@ -262,6 +241,9 @@ in
         else
           null;
 
+      # Reject PersistentVolumeClaims built directly by a package unless the
+      # package declares `meta.unsafe = [ "raw-pvc" ]`. Packages should request
+      # storage through dependency injection instead.
       checkRawPvc =
         args:
         if (args.kind or "") == "PersistentVolumeClaim" && !(builtins.elem "raw-pvc" unsafeGrants) then
@@ -276,9 +258,8 @@ in
         else
           null;
 
-      # A Service whose loadBalancerClass comes from a provider in the build
-      # is served by that provider, so the cluster's loadBalancer role does
-      # not apply to it.
+      # Check that the cluster provides a load balancer for `type = LoadBalancer`
+      # Services unless an in-cluster provider serves `spec.loadBalancerClass`.
       checkLoadBalancer =
         args:
         let
@@ -311,10 +292,8 @@ in
         else
           null;
 
-      # An autoscaling/v1 HPA scales on CPU, and an autoscaling/v2 HPA with
-      # no `metrics` defaults to 80% CPU; both read metrics.k8s.io, as do
-      # Resource and ContainerResource metrics. Pods, Object, and External
-      # metrics come from the custom and external metrics APIs.
+      # Check that `metrics.k8s.io` is available when a HorizontalPodAutoscaler
+      # uses CPU defaults or `Resource`/`ContainerResource` metrics.
       checkHorizontalPodAutoscaler =
         args:
         let
@@ -385,11 +364,9 @@ in
         else
           null;
 
-      # A hard placement rule on a multi-replica workload can only ever
-      # leave pods Pending on a single-node cluster: one node has exactly
-      # one value of every topology key. Refuse when multiNode is declared
-      # false, warn when it is unknown (v2_discussions/143 §4). Soft rules
-      # and single-replica workloads pass.
+      # Check that multi-replica workloads with required anti-affinity or
+      # `DoNotSchedule` spread constraints do not target a single-node cluster,
+      # where extra replicas would remain Pending.
       checkSpreadFeasible =
         {
           kind,
@@ -645,9 +622,9 @@ in
                   null
                 else
                   let
-                    # `parse` throws for a value it cannot compute exactly:
-                    # a cpu value the quantity type accepts can be out of
-                    # range in millicores. Throw first with the field named.
+                    # Check whether `quantity.parse` can represent the value as
+                    # a 64-bit integer before calling it, so out-of-range values
+                    # fail with the container and field name.
                     problem =
                       field: values:
                       let
@@ -683,10 +660,9 @@ in
         builtins.foldl' (acc: check: builtins.seq check acc) null allChecks;
 
       checkDuplicateNames = _checkDuplicateNames { includeEnv = true; };
-      # Charts commonly append user `extraEnv` over defaults; a duplicate
-      # env name is valid Kubernetes (the API server warns, last wins), so
-      # for chart workloads only container, volume and port names are
-      # checked, the three the API server rejects.
+      # Check container, volume, and port names for chart workloads while allowing
+      # duplicate env var names, which charts often produce when appending user
+      # overrides and which the API server accepts with last-wins semantics.
       checkDuplicateNamesChart = _checkDuplicateNames { includeEnv = false; };
       checkFieldRefs =
         templateSpec:
@@ -697,10 +673,9 @@ in
           isAllowed =
             path:
             builtins.elem path _allowedFieldPaths
-            # Bracket expressions for the literal brackets: `\[` is not a
-            # valid escape in the extended regex builtins.match uses, and
-            # the old form threw "invalid regular expression" on exactly
-            # the paths this clause was meant to allow.
+            # Match literal `[` and `]` with character classes because POSIX
+            # extended regular expressions in `builtins.match` do not support
+            # `\[` escapes.
             || builtins.match "metadata\\.labels[[]'.*'[]]" path != null
             || builtins.match "metadata\\.annotations[[]'.*'[]]" path != null;
 

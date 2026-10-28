@@ -1,33 +1,29 @@
-# The option contract: a package option's default must survive an instance
-# that sets only part of the option. The module system replaces an attrset
-# default as a whole when any definition exists, so these declarations lose
-# the package's values:
+# Enforce the package option contract so that package defaults survive
+# when an instance sets only part of an option.
+# The module system replaces an attrset default as a whole when any
+# definition exists, so the following declarations lose package defaults:
 #
-#   Rule 1: an untyped option (`anything`, `unspecified`, `raw`, `attrs`, or
-#           `attrsOf` of one of those) with a non-empty attrset default.
-#   Rule 2: an `attrsOf`/`lazyAttrsOf` of any other type with a non-empty
-#           default.
-#   Rule 3: a submodule whose own default sets a key that its field does not
-#           default to the same value.
+#   - Rule 1: an untyped option (`anything`, `unspecified`, `raw`, `attrs`, or
+#     `attrsOf` of one of those) with a non-empty attrset default.
+#   - Rule 2: an `attrsOf` or `lazyAttrsOf` of any other type with a non-empty
+#     default.
+#   - Rule 3: a submodule whose own default sets a key that its field does not
+#     default to the same value.
 #
 # `optionContractViolations` walks a package's raw `options` declaration,
 # including submodule fields, and returns one entry per violation.
-# `checkOptionContract` throws when there is any. `kix.checkPackageOptions`
-# (eval/package-options.nix) runs it over a package at each availability
-# level; package CI and mkFlake's `packages` call that, and instance
-# evaluation does not.
-# A declaration the walker cannot read is a violation too: a default or a
-# submodule that throws, a default wrapped in a `_type` other than the
-# module system's override, order, merge, and if wrappers, an attrset
-# default on a type the rules do not cover, an entry that is not an option,
-# and anything nested deeper than `maxDepth`. The default of an option whose
-# type takes no attrset is not evaluated.
+# `checkOptionContract` throws when any violations exist.
+# `kix.checkPackageOptions` (eval/package-options.nix) runs this check at
+# each availability level during package CI and `mkFlake`.
+# Unreadable declarations also count as violations, including defaults or
+# submodules that throw, unknown `_type` wrappers, uncovered attrset types,
+# non-option entries, and nesting deeper than `maxDepth`.
 { lib }:
 
 let
-  # A recursive submodule type stops at the first option that repeats a
-  # declaration on the current path; this bound covers types whose options
-  # carry no declaration position.
+  # Recursive submodule types stop at the first repeated declaration on the
+  # current path. This bound guards against recursive types whose options lack
+  # declaration positions.
   maxDepth = 12;
 
   isOption = v: builtins.isAttrs v && (v._type or "") == "option";
@@ -44,7 +40,7 @@ let
     "lazyAttrsOf"
   ];
 
-  # Types that only constrain the value of the type they wrap.
+  # Strip wrapper types that only constrain the inner type.
   unwrap =
     t:
     if
@@ -59,7 +55,7 @@ let
     else
       t;
 
-  # The alternatives of an `either`/`oneOf`, each unwrapped.
+  # Return the unwrapped alternatives of an `either` or `oneOf` type.
   branches =
     t:
     let
@@ -72,11 +68,9 @@ let
 
   isCoercedTo = t: (t.name or "") == "coercedTo" && t ? nestedTypes.finalType;
 
-  # The alternatives that hold the default `d`. A `coercedTo` whose
-  # `coercedType` rejects `d` stores `d` as its `finalType`, so it is
-  # replaced by the alternatives of `finalType`. When `coercedType` accepts
-  # `d` the stored value is the result of a function the type does not
-  # expose, so the `coercedTo` stays and no rule covers it.
+  # Return the type alternatives that can hold the default `d`.
+  # When `coercedType` rejects `d`, `coercedTo` stores `d` as `finalType`,
+  # so inspect `finalType` instead.
   branchesFor =
     d: t:
     builtins.concatMap (
@@ -90,10 +84,8 @@ let
         [ b ]
     ) (branches t);
 
-  # False when no alternative of `t` accepts an attrset, so its default is
-  # never one. Each alternative is probed with { }; a check that throws
-  # counts as accepting it. `attrTag` rejects { } but accepts an attrset
-  # with one tag.
+  # Report whether any alternative of `t` can accept an attrset.
+  # `attrTag` rejects `{ }` when probed, so check for it by name.
   holdsAttrs =
     t:
     builtins.any (
@@ -107,8 +99,6 @@ let
       || !(r.success && r.value == false)
     ) (branches t);
 
-  # "rule1", "rule2", "rule3" or null for a type that merges an attrset
-  # default with an instance value, or takes no attrset.
   classify =
     t:
     let
@@ -130,10 +120,9 @@ let
 
   typeText = t: t.description or t.name or "unknown";
 
-  # The values a default contributes to the merge: `lib.mkOverride`
-  # (`lib.mkDefault`, `lib.mkForce`) and `lib.mkOrder` removed, each entry of
-  # a `lib.mkMerge`, and a `lib.mkIf` whose condition is true. A string for
-  # anything else with a `_type`, naming what cannot be read.
+  # Unwrap module-system wrappers (`mkOverride`, `mkOrder`, `mkMerge`, `mkIf`)
+  # from an option default. Return a list of underlying values, or an error
+  # string for unrecognized `_type` wrappers.
   defaultValues =
     d:
     let
@@ -160,10 +149,9 @@ let
     else
       "its default is a value of _type \"${toString kind}\", which the check does not read";
 
-  # The non-empty attrset values of an option's default, as a list, or
-  # `{ unreadable = <reason>; }`. Only the top level of each value is
-  # forced. A derivation default (`types.package`) is not an attrset the
-  # module system merges.
+  # Return the non-empty attrset values in an option's default, or
+  # `{ unreadable = <reason>; }`. Ignore derivations because `types.package`
+  # does not merge them as attrsets.
   attrsDefaults =
     opt:
     let
@@ -193,8 +181,8 @@ let
     in
     if r.success then r.value else "a value that cannot be shown";
 
-  # The value each field of submodule type `t` takes when the option is set
-  # to { }, or null when that cannot be evaluated.
+  # Evaluate submodule type `t` with `{ }` to collect its field defaults, or
+  # return null if evaluation fails.
   fieldDefaults =
     t:
     let
@@ -213,8 +201,8 @@ let
     in
     if r.success && builtins.isAttrs r.value then r.value else null;
 
-  # One problem per key of `want` (an option's own default) that the field
-  # defaults in `got` do not reproduce. `prefix` is the key path so far.
+  # Compare a submodule option's default (`want`) against its field defaults
+  # (`got`) and return any mismatches.
   rule3Problems =
     prefix: want: got:
     builtins.concatLists (
@@ -314,8 +302,6 @@ let
 
   showPos = pos: if pos == null then "<unknown position>" else "${pos.file}:${toString pos.line}";
 
-  # The declaration position of an option returned by getSubOptions, or
-  # `fallback` when it carries none.
   subPosition =
     fallback: opt:
     let
@@ -362,8 +348,6 @@ let
             ]
           else
             map (p: mk (rule3Message name p)) (rule3Problems [ ] d got);
-      # The alternatives a rule covers; the first whose rule the default
-      # breaks is reported.
       checkValue =
         d:
         let
@@ -381,8 +365,7 @@ let
     else
       builtins.concatMap checkValue defaults;
 
-  # The fields of a submodule-typed option, and the path segment that stands
-  # for one element of an attrsOf or listOf.
+  # Extract submodule fields and the path segment for `attrsOf` or `listOf` elements.
   subOptions =
     opt:
     let
@@ -412,8 +395,8 @@ let
       options = if r.success then r.value else { };
     };
 
-  # The declaration of an option returned by getSubOptions, as
-  # "<name>@<file>:<line>:<column>", or null when it carries no position.
+  # Build a position key (`<name>@<file>:<line>:<column>`) to detect recursive
+  # submodule options.
   declarationKey =
     n: opt:
     let
@@ -430,10 +413,8 @@ let
     in
     if r.success then r.value else null;
 
-  # `seen` holds the declaration keys of the options entered through
-  # getSubOptions on the path to `node`. An option whose key is already
-  # there is the same declaration reached through a recursive type, and its
-  # subtree has been checked.
+  # Walk an option tree and return contract violations, using `seen` to stop at
+  # recursive submodule declarations.
   walk =
     depth: seen: path: pos: node:
     let
@@ -498,8 +479,7 @@ in
 {
   inherit optionContractViolations;
 
-  # Throws when `options` breaks the contract; `who` names the package, such
-  # as `kix/packages/caddy`.
+  # Throw if `options` violates the option contract.
   checkOptionContract =
     { who, options }:
     let

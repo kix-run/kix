@@ -1,8 +1,8 @@
 {
   pkgs,
   lib,
-  # The flake whose clusters these are (its `self`). Image sources name the
-  # pin file by its path in this flake, and only when it is inside it.
+  # The calling flake (`self`), used to record flake-relative pin file paths
+  # in image sources.
   self ? null,
 }:
 
@@ -29,8 +29,8 @@ let
 
   inherit (normalize) normalizeManifest;
 
-  # Kubernetes names can contain colons, but Nix store path names cannot.
-  # Encode colons in filenames only; resource identity comes from the manifest.
+  # Encode colons in the filename because Nix store path names cannot contain
+  # them. Resource identity comes from the manifest itself.
   manifestFileName =
     manifest:
     let

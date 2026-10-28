@@ -12,8 +12,7 @@ let
 
   gatewayContract = import ./gateway.nix { inherit lib; };
 
-  # Resource names a ResourceRequirements map may use besides cpu, memory
-  # and ephemeral-storage.
+  # Return true when `name` is a valid Kubernetes ResourceRequirements key.
   isResourceName =
     name:
     builtins.elem name [
@@ -24,10 +23,9 @@ let
     || builtins.match "hugepages-.+" name != null
     || lib.hasInfix "/" name;
 
-  # The value of `kix.options.resources` with every unset field removed:
-  # no null leaves, no empty `requests` or `limits`, no null `claims`.
-  # Undeclared resource names are checked here because a freeformType's
-  # own `check` never runs; `apply` has no instance name to report.
+  # Strip null leaves and empty sections from a `kix.options.resources` value.
+  # Validate undeclared resource names here because a submodule `freeformType`
+  # does not run its own `check`.
   cleanResources =
     value:
     let
@@ -85,17 +83,15 @@ let
     else
       throw "${caller}: service '${svc.name or "unknown"}' has no out.port. Specify port explicitly";
 
-  # The public route kix.expose renders for an instance, as data:
-  # { via; host; scheme; url; urlOrNull; }. `via` is "gateway", "ingress"
-  # or null (no route). `scheme` is null when Kix cannot vouch for it (a
-  # gateway without out.listeners, such as a kix.mkImport). `url` throws
-  # when there is no route or no scheme, naming the cause; `urlOrNull` is
-  # null then, for a package that works without a public URL. It reads
-  # config, clusterConfig, scope and the exposure deps, never `self`, so
-  # any part can read it. `rawHost` keeps the string context of
-  # config.ingress.host for rendering. With `deriveHost = false` the host
-  # comes only from config.ingress.host, so an instance without one has no
-  # route.
+  # Compute the public route record `{ via; host; rawHost; scheme; url; urlOrNull; }`
+  # that `kix.expose` publishes for an instance.
+  #
+  # `via` is "gateway", "ingress", or null when no route is configured.
+  # `scheme` is null when the gateway does not publish `out.listeners` (such as
+  # a `kix.mkImport`). `url` throws when no route or scheme is available, while
+  # `urlOrNull` returns null for packages that can run without a public URL.
+  # Reading only `config`, `clusterConfig`, `scope`, and exposure dependencies
+  # avoids forcing `self` so any part can read `exposure`.
   exposureOf =
     {
       name,
@@ -118,11 +114,11 @@ let
         else
           null;
 
-      # The `gateway` argument also resolves to any instance named
-      # `gateway`, such as an OpenTelemetry Collector, which is no gateway.
+      # Ignore unrelated instances named `gateway` (such as an OpenTelemetry
+      # Collector) that do not claim the gateway contract.
       hasGateway = gateway != null && gatewayContract.claims gateway;
-      # Read through `listener`, which the HTTPRoute forces, so the contract
-      # is checked whenever a gateway route renders.
+      # Validate the gateway contract when `listener` is forced by the
+      # HTTPRoute.
       checkedGateway =
         if hasGateway then
           gatewayContract.require "kix.expose (${scope.namespaceName}/${name})" gateway
@@ -198,14 +194,15 @@ let
           throw "kix.expose (${scope.namespaceName}/${name}): the package reads the instance's public URL (exposure.url), but ${missing}. If the package has an option for its URL, set that instead.";
     };
 
-  # The Gateway listener an HTTPRoute for `host` from the instance's
-  # namespace attaches to, matched as Gateway API does: protocol HTTP or
-  # HTTPS, `hostname` unset, equal, or a `*.` wildcard covering the host,
-  # and `allowedRoutes.namespaces.from` admitting the namespace (unset means
-  # Same). Kix does not evaluate a `Selector`, so such a listener is
-  # unverified and chosen only after verified ones, with a warning.
-  # Returns { scheme; port; } or null when the gateway publishes no
-  # listeners. Throws when no listener accepts the route.
+  # Select the Gateway listener that an HTTPRoute for `host` in `scope` attaches
+  # to, returning `{ scheme; port; }` or null when the gateway does not publish
+  # `out.listeners`.
+  #
+  # Matches HTTP and HTTPS listeners whose `hostname` is unset, exact, or a
+  # matching `*.` wildcard, and whose `allowedRoutes.namespaces.from` admits
+  # the route namespace (`Same` when unset). Listeners using `Selector` cannot
+  # be verified statically and are ranked below verified listeners with a
+  # warning. Throws when no listener accepts the route.
   gatewayListener =
     {
       name,
@@ -229,7 +226,7 @@ let
         in
         h == null || h == host || (lib.hasPrefix "*." h && lib.hasSuffix (lib.removePrefix "*" h) host);
 
-      # "verified", "unverified" (Selector), or a rejection reason.
+      # Return "verified", "unverified" (for `Selector`), or a rejection reason.
       verdict =
         l:
         let
@@ -291,9 +288,9 @@ let
           inherit (chosen.l) port;
         };
 
-  # The PrometheusRule part behind `alerts` and `monitor`. A separate binding
-  # because `monitor` takes an argument named `alerts`, which shadows the
-  # public builder inside its body.
+  # Build the PrometheusRule part shared by `alerts` and `monitor`. Kept
+  # separate because `monitor` takes an `alerts` argument that would shadow the
+  # public `alerts` helper.
   alertsPart =
     {
       alerts,
@@ -362,27 +359,20 @@ in
 
 rec {
 
-  # Use kix.keys.<name> for annotation keys defined in core/annotations.nix.
+  # Expose annotation keys from `core/annotations.nix`.
   keys = kixKeys;
 
-  # Values Kix gives its own keys, from core/annotations.nix:
-  #   annotations.${kix.keys.rerun} = kix.keyValues.rerunOnChange;
+  # Expose canonical annotation values from `core/annotations.nix`.
   keyValues = kixAnnotations.values;
 
-  # Package helpers for endpoint facts; see core/facts.nix for their contracts.
+  # Expose endpoint fact constructors (`core/facts.nix`).
   facts = {
     inherit (import ../core/facts.nix { inherit lib; }) refOnly connect structural;
   };
 
-  # Image reference helpers. ref renders repository:tag and an optional
-  # @digest; a digest selects fixed image content even when the tag moves.
-  # These helpers do not validate digest syntax or query a registry.
-  #
-  #   image = kix.image.ref config.serverImage;
-  #   # docker.io/library/nginx:1.27@sha256:0d17b1...
-  #
-  # Cluster definitions can supply config.serverImage = pins.get "server";
-  # from a committed pin file. See pins.nix for loading and validation.
+  # Format and inspect container image references (`{ repository; tag; digest?; }`).
+  # These helpers do not validate digest syntax or query a registry. See
+  # `pins.nix` for pin file loading and validation.
   image =
     let
       needField =
@@ -396,12 +386,10 @@ rec {
           v;
     in
     {
-      # Render `repository:tag` plus `@digest` when a digest is pinned.
-      #
-      # The reference names an image in a registry, so the string context of
-      # a tag derived from a Nix build is dropped here: the manifest does not
-      # depend on the build. Keeping that context up to this point is what
-      # lets `kix-image-sources.json` report the image as `nix_built`.
+      # Render `repository:tag` with `@digest` appended when `digest` is non-null.
+      # Discard string context so Nix-built image tags do not add build-time
+      # store dependencies to rendered manifests while still allowing
+      # `kix-image-sources.json` to classify the option value as `nix_built`.
       ref =
         image:
         builtins.unsafeDiscardStringContext (
@@ -409,7 +397,7 @@ rec {
           + lib.optionalString (image.digest or null != null) "@${image.digest}"
         );
 
-      # Test whether digest is present and non-null; this does not validate it.
+      # Return true when `image.digest` is present and non-null.
       isPinned = image: (image.digest or null) != null;
     };
 
@@ -418,10 +406,10 @@ rec {
     protocol = "TCP";
   };
 
-  # A value is a string, or a `valueFrom` source such as the one
-  # `secret.out.keyRef "password"` returns. The source keeps its dependency
-  # context, so `{ DB_PASSWORD = creds.out.keyRef "password"; }` orders the
-  # workload after the Secret the same way a string from `out.*` would.
+  # Convert an attrset of environment variables into a Kubernetes `env` list,
+  # dropping null entries. Each value may be a string or a `valueFrom` attrset
+  # (such as `secret.out.keyRef "password"`), which preserves its dependency
+  # context so the workload is ordered after the referenced resource.
   mkEnvVars =
     attrs:
     lib.mapAttrsToList (
@@ -436,15 +424,9 @@ rec {
 
   mkEnv = attrs: raw: (mkEnvVars attrs) ++ raw;
 
-  # lib.recursiveUpdate for an escape hatch such as `extraSpec`, refusing an
-  # override on any path the package computed for correctness (an address
-  # that carries a netpol edge, a credential reference, a quorum size) or
-  # that has an option of its own. `locked` is a list of attribute paths;
-  # `who` names the package instance and `what` the option, for the error.
-  #
-  # A locked path is also refused when `overrides` sets one of its ancestors
-  # to a value that is not an attribute set: recursiveUpdate would replace
-  # the whole subtree, so `{ a = null; }` removes a locked `a.b`.
+  # Merge `overrides` into `base` with `lib.recursiveUpdate`, throwing if
+  # `overrides` touches any attribute path in `locked` or replaces a parent of
+  # a locked path with a non-attrset value.
   mergeGuarded =
     {
       who,
@@ -453,8 +435,8 @@ rec {
     }:
     base: overrides:
     let
-      # The proper prefix of `path` that `overrides` sets to a
-      # non-attrset, or null when there is none.
+      # Return the shortest proper prefix of `path` that `overrides` sets to a
+      # non-attrset, or null when none exists.
       replacingAncestor =
         path:
         lib.findFirst (
@@ -485,34 +467,21 @@ rec {
     else
       lib.recursiveUpdate base overrides;
 
-  # Option types for values Kubernetes parses. `quantity` is the grammar of
-  # vocab/quantity.nix: "500m", "1.5Gi", 2.
+  # Validate Kubernetes resource quantities (`vocab/quantity.nix`).
   types.quantity = quantity.type;
 
-  # The quantity `q` in millicores when `resource` is "cpu", and in bytes
-  # otherwise, rounded down. null when `q` is not a quantity.
-  #
-  #   kix.parseQuantity "memory" "512Mi"   # 536870912
+  # Parse a Kubernetes quantity `q` into millicores when `resource` is "cpu"
+  # and into bytes otherwise, rounded down, or return null when `q` is not a
+  # valid quantity.
   parseQuantity = quantity.parse;
 
-  # The env attrset for `kix.mkEnvVars`: the package's `defaults`, then the
-  # instance's `env` (a `kix.options.env` value), then the variables the
-  # package owns. Each entry of `owned` is
-  #   { vars ? { }; names ? [ ]; from; fix; }
-  # `vars` are added to the result and may not appear in `env`; `names` may
-  # not appear in `env` and are delivered another way (an `envFrom`). A key
-  # in `env` that a group owns throws, also when its value is null, with
-  # one line per group naming `from` and `fix`.
+  # Merge package `defaults`, user `env` (`kix.options.env`), and package-owned
+  # variables into an attrset for `kix.mkEnvVars`.
   #
-  #   env = kix.mkEnvVars (kix.mergeEnv {
-  #     inherit who;
-  #     defaults.LOG_LEVEL = "info";
-  #     owned = [ {
-  #       vars.DB_HOST = database.out.fqdn;
-  #       from = "the database dependency";
-  #       fix = "Wire a different database instance through deps.database instead.";
-  #     } ];
-  #   } config.env);
+  # Each entry in `owned` has `{ vars ? { }; names ? [ ]; from; fix; }`. `vars`
+  # are added to the result, while `names` reserves variables delivered via
+  # `envFrom`. Throws if `env` defines any key in `vars` or `names` (even as
+  # null).
   mergeEnv =
     {
       who,
@@ -540,20 +509,13 @@ rec {
     else
       defaults // env // lib.foldl' (acc: group: acc // group.vars or { }) { } owned;
 
-  # Returns `args` (an `extraArgs` list) unless it sets a flag the package
-  # owns. `owned` maps each flag to the reason and fix shown in the error.
-  # An argument sets a flag when it equals the flag or starts with the flag
-  # followed by "=", so `--ingress-class-by-name=true` does not set
-  # `--ingress-class`. A one-letter flag such as `-c` also matches an
-  # argument that starts with it (`-c/etc/x`), the attached-value form that
-  # getopt and clap accept. For a Go program, whose single-dash flags can be
-  # whole words, an owned `-v` would therefore refuse `-vmodule=x`. Every hit
-  # is reported, one line each.
+  # Validate that `args` does not set any CLI flag in `owned`, and return
+  # `args`.
   #
-  #   args = baseArgs ++ kix.guardArgs {
-  #     inherit who;
-  #     owned."--metrics-bind-address" = "the metrics Service uses :8080; remove it.";
-  #   } config.extraArgs;
+  # `owned` maps each reserved flag to an explanation and remedy. Matches exact
+  # flags, `--flag=value`, and short flags with attached values (such as
+  # `-c/etc/x`, which also matches multi-character single-dash Go flags like
+  # `-vmodule=x` when `-v` is owned).
   guardArgs =
     {
       who,
@@ -580,18 +542,9 @@ rec {
     in
     if lines != [ ] then throw (lib.concatStringsSep "\n" lines) else args;
 
-  # Returns `dep` (a secret dependency, or null for an absent optional one)
-  # after checking that its `out.keys` declares every name in `keys` and,
-  # when `anyOf` is a list of key groups, every name of at least one group.
-  # `arg` is the dependency's argument name, for the error. Read the secret
-  # through the returned value, so the check runs before any `keyRef`.
-  #
-  #   creds = kix.checkSecretKeys {
-  #     inherit who;
-  #     arg = "cloudCredentials";
-  #     dep = cloudCredentials;
-  #     keys = [ "cloud" ];
-  #   };
+  # Validate that a secret dependency `dep` declares all required `keys` (and
+  # at least one key group in `anyOf` when set) in `dep.out.keys`, then return
+  # `dep`. Read `keyRef` through the returned value so validation runs first.
   checkSecretKeys =
     {
       who,
@@ -616,31 +569,14 @@ rec {
     else
       throw "${who}: deps.${arg} resolved to secret \"${dep.out.name}\", which declares ${declaredText}; this package reads ${lib.concatStringsSep " and " wanted}. Add them to that instance's keys (a SOPS secret lists them in keys), or wire another secret with deps.${arg} = ref.<ns>.<instance>.";
 
-  # A network policy for pods an operator creates from a custom resource.
-  # Derived policy covers only workloads the package renders, so the package
-  # states these pods' traffic itself. `spec` is in the enforcer's policy
-  # format and carries the selector for the operand pods (Cilium:
-  # `endpointSelector`). `scope` decides the policy's namespace; pass
-  # `scope.forService dep` for a policy in a dependency's namespace.
+  # Build a network policy for operand pods created at runtime by an operator,
+  # or return null when no policy is needed.
   #
-  # The `ingress`/`ingressDeny` or `egress`/`egressDeny` sections of a
-  # direction the cluster does not enforce (`scope.networkPolicyEnforced`)
-  # are dropped: such a section would isolate the pods in a direction that
-  # default deny leaves open, and allow only what the section lists.
-  #
-  # Null when the scope has no enforcer (network policy off, no provider,
-  # or the enforcer's own instance) or when every section of `spec` was
-  # dropped, so callers filter nulls before adding the policy to
-  # `root.requires`.
-  #
-  #   peerIngress = kix.operandPolicy {
-  #     inherit scope;
-  #     name = "${name}-peers";
-  #     spec = {
-  #       endpointSelector.matchLabels = podSelector;
-  #       ingress = [ { fromEndpoints = [ { matchLabels = podSelector; } ]; } ];
-  #     };
-  #   };
+  # Drops `ingress`/`ingressDeny` or `egress`/`egressDeny` sections for
+  # directions the cluster does not enforce (`scope.networkPolicyEnforced`),
+  # because including an unenforced direction would isolate the pods in that
+  # direction. Returns null when `scope` has no enforcer or all sections were
+  # dropped.
   operandPolicy =
     {
       scope,
@@ -722,7 +658,6 @@ rec {
             workload.rawManifest.spec.template.spec.containers or [ ]
           )
         );
-        # name -> containerPort, for resolving named targetPorts below.
         workloadPortNumbers = builtins.listToAttrs (
           builtins.concatMap (
             c:
@@ -738,9 +673,9 @@ rec {
           && builtins.isString p.targetPort
           && !(builtins.elem p.targetPort workloadPortNames)
         ) finalPorts;
-        # Resolve named targetPorts while the workload is available. The
-        # network-policy layer copies targetPort into egress rules, and Cilium
-        # 1.19 drops egress traffic when those policy ports remain named.
+        # Resolve named `targetPort` values to numbers while the workload is
+        # available, because Cilium 1.19 drops egress traffic when derived
+        # network-policy rules use named ports.
         resolvedPorts = map (
           p:
           if (p ? targetPort) && builtins.isString p.targetPort then
@@ -758,9 +693,7 @@ rec {
             null;
       in
       # Merge passthrough fields into the generated Service so additions such
-      # as spec.clusterIP preserve its selector and ports. Recursive update
-      # replaces lists as complete values; remove ports above because it has a
-      # dedicated argument.
+      # as `spec.clusterIP` preserve its selector and ports.
       builtins.seq _portCheck (
         lib.recursiveUpdate {
           apiVersion = "v1";
@@ -836,9 +769,9 @@ rec {
         path ? "/",
         pathType ? "PathPrefix",
         port ? null,
-        # Gateway API HTTPRoute per-rule timeouts, e.g.
-        # { request = "0s"; backendRequest = "0s"; } to disable (needed for
-        # long-lived streaming backends). null → omit (Envoy's 15s default).
+        # Per-rule Gateway API HTTPRoute timeouts, such as
+        # `{ request = "0s"; backendRequest = "0s"; }` to disable timeouts for
+        # streaming backends. Null omits the field.
         timeouts ? null,
         ...
       }@cfg:
@@ -895,8 +828,8 @@ rec {
       // passthrough;
   };
 
-  # Ingress pathType to Gateway API path match type. `paths` entries are
-  # written in the Ingress vocabulary so one declaration serves both modes.
+  # Map an Ingress `pathType` to a Gateway API path match type so `paths`
+  # entries work in both Ingress and Gateway modes.
   gatewayPathType =
     caller: t:
     if t == "Prefix" || t == "PathPrefix" then
@@ -906,16 +839,14 @@ rec {
     else
       throw "${caller}: pathType \"${toString t}\" has no Gateway API equivalent (use Prefix or Exact)";
 
-  # One HTTPRoute, one rule per path, each to its own backend. The Gateway
-  # orders rules by precedence itself, so the list order carries no
-  # meaning.
+  # Build an HTTPRoute with one rule per entry in `paths`.
   httpRoute.fromPaths =
     {
       name,
       host,
       parentRef,
       timeouts ? null,
-      # [ { path; pathType ? "Prefix"; svc; port ? null } ]
+      # List of `{ path; pathType ? "Prefix"; svc; port ? null; }`.
       paths,
     }:
     {
@@ -984,8 +915,8 @@ rec {
       {
         mountPath,
         name ? null,
-        # A ConfigMap volume is read-only whatever the mount says; this
-        # writes it on the mount too, where a reader of the pod looks.
+        # ConfigMap volumes are always read-only. Setting `readOnly = true`
+        # also records `readOnly` on the container's `volumeMounts` entry.
         readOnly ? false,
         subPath ? null,
         items ? null,
@@ -1135,36 +1066,17 @@ rec {
   providedLoadBalancerClass = markers.mkProvidedLoadBalancerClass;
 
   options = {
-    # Image option with repository, tag, and optional digest and pull policy.
-    # A null digest leaves the reference unpinned. A null pullPolicy leaves
-    # imagePullPolicy unset, so Kubernetes chooses: Always for `:latest`,
-    # IfNotPresent otherwise.
+    # Build a container image submodule option (`repository`, `tag`, `digest`,
+    # `pullPolicy`, and pin metadata).
     #
-    # An instance that sets only some fields keeps the package's defaults for
-    # the rest. The package's digest is kept only while `tag` equals the
-    # package's tag, since a digest belongs to the tag it was resolved from.
+    # When an instance overrides only some fields, the remaining fields keep
+    # the package defaults. The default `digest` is kept only while `config.tag`
+    # matches the package's `tag`.
     #
-    #   options.image = kix.options.image {
-    #     repository = "docker.io/library/nginx";
-    #     tag = "1.27";
-    #   };
-    #
-    # Supply a resolved reference from the cluster's pin file:
-    #   config.image = pins.get "web";
-    #
-    # `tagText` is the Nix expression the option reference shows as the
-    # tag's default, for a package whose `config` sets the tag from another
-    # option. `tag` stays the declared default the digest rule compares with.
-    #
-    # A package that has no image of its own (a framework package that runs
-    # the user's application) leaves `repository`, `tag`, or both null. A
-    # null argument gives its field no default, so an instance must set it;
-    # reading the image without it fails with the module system's "accessed
-    # but has no value defined" error, naming the field's option path. The
-    # option's own default is then `{ }`: a submodule option with no default
-    # and no definition evaluates to an attrset without its fields.
-    #
-    #   options.image = kix.options.image { };
+    # Set `tagText` when a package derives `config.image.tag` from another
+    # option so generated docs show the expression while `digest` still compares
+    # against `tag`. Leave `repository` or `tag` null in framework packages that
+    # have no default image of their own.
     image =
       {
         repository ? null,
@@ -1186,8 +1098,8 @@ rec {
             pullPolicy
             ;
         };
-        # toPretty prints a `__pretty` value through its function, so the tag
-        # renders as the expression rather than as a quoted string.
+        # Use `__pretty` so `toPretty` renders `tagText` as a literal expression
+        # rather than a quoted string.
         shownDefault = default // {
           tag = {
             __pretty = lib.id;
@@ -1273,19 +1185,13 @@ rec {
         );
       };
 
-    # Container resource requests and limits as typed fields. Each default
-    # sits on its field, so an instance that sets `limits.memory` keeps the
-    # package's `requests`; null removes a default. The value is a
-    # ResourceRequirements with unset fields absent, ready for a container's
-    # `resources`.
+    # Build a container `resources` submodule option (`requests`, `limits`, and
+    # `claims`) that evaluates to a cleaned Kubernetes `ResourceRequirements`
+    # attrset.
     #
-    #   options.resources = kix.options.resources {
-    #     requests = { cpu = "100m"; memory = "128Mi"; };
-    #     limits.memory = "256Mi";
-    #   };
-    #
-    # Defaults may set cpu, memory and ephemeral-storage. An instance may
-    # also set hugepages-<size> and extended resources (nvidia.com/gpu).
+    # Package defaults may set `cpu`, `memory`, and `ephemeral-storage`.
+    # Instances may also set `hugepages-<size>` and extended resources (such as
+    # `nvidia.com/gpu`) or set a field to null to clear its default.
     resources =
       {
         requests ? { },
@@ -1360,8 +1266,8 @@ rec {
           apply = cleanResources;
         };
 
-    # Extra environment variables for a container, rendered with
-    # `kix.mergeEnv` so the variables the package owns cannot be replaced.
+    # Extra container environment variables, merged via `kix.mergeEnv` so
+    # package-owned variables cannot be overridden.
     env = lib.mkOption {
       type = lib.types.attrsOf (
         lib.types.nullOr (
@@ -1404,7 +1310,8 @@ rec {
       };
     };
 
-    # For packages with a kix.healthCheck probe; the helper reads both.
+    # Options read by `kix.healthCheck` for packages that define a post-deploy
+    # probe.
     healthCheck = {
       enabled = lib.mkOption {
         type = lib.types.bool;
@@ -1419,50 +1326,28 @@ rec {
     };
   };
 
-  # Build a post-deploy health probe as a Job in the package namespace.
-  # Addresses passed from out.* values carry dependency and network-policy
-  # context, so the Job runs after its targets and receives matching egress.
-  # Job success completes the probe; exhausting backoffLimit fails the deploy.
+  # Build a post-deploy health probe as a `<partName>Script` ConfigMap and a
+  # `<partName>` Job in the package namespace.
   #
-  #   options.healthCheck = kix.options.healthCheck;   # enabled, retryFor
-  #   build = [
-  #     ({ self, vmCluster, ... }: { ... })
-  #     (kix.healthCheck {
-  #       env = { self, deps, ... }: {
-  #         VMSELECT_URL = deps.vmCluster.out.serviceUrl;
-  #         AGENT_REPLICAS = self.vmAgent.out.replicas;
-  #       };
-  #       script = builtins.readFile ./health-check.py;
-  #     })
-  #   ];
+  # Addresses passed in `env` from `out.*` carry dependency and network-policy
+  # context, ordering the Job after its targets and granting egress. The Job
+  # sets `kix.run/rerun = "on-change"` so Kix recreates it when its spec
+  # changes or after a failed run.
   #
-  # The helper emits a ConfigMap named `<partName>Script` and a Job named
-  # `<partName>` that mounts it at /probe. The Job depends on the package root
-  # plus `requires`. kix.run/rerun="on-change" recreates the Job after its
-  # identity changes or after a failure. An operator reconcile also recreates
-  # a completed Job after ttlSecondsAfterFinished removes it.
-  #
-  # Python is the default runtime. A nonzero exit fails the probe. RETRY_FOR
-  # gives the script its retry window, and activeDeadlineSeconds includes that
-  # window plus roundBudget for one final check. The script must stop after
-  # RETRY_FOR and keep each round within roundBudget. On failure,
-  # FallbackToLogsOnError supplies the final log lines to deploy output.
-  #
-  # Probe labels do not overlap the package selector, which prevents package
-  # Services from routing to the probe. The pod runs as nobody with a read-only
-  # root filesystem and no service account token.
+  # `RETRY_FOR` gives the script its retry window in seconds, and
+  # `activeDeadlineSeconds` adds `roundBudget` for one final check round. Probe
+  # pod labels are disjoint from the package selector so package Services never
+  # route traffic to the probe.
   healthCheck =
     let
       imageRef = image.ref;
 
-      # Seconds one worst-case round of checks may take: every query timing
-      # out, plus the pause before the next round. The deadline always
-      # leaves this much room after the retry window. The shipped probes
-      # make at most six requests a round at a 10 s timeout, then pause 10 s.
+      # Reserve 90s after the retry window so one final check round can finish
+      # before `activeDeadlineSeconds` expires.
       roundBudget = 90;
 
-      # Bump a digest with `crane digest <repository>:<tag>` (the multi-arch
-      # index digest, which is what containerd resolves).
+      # Update digests with `crane digest <repository>:<tag>` (multi-arch index
+      # digest).
       runtimes = {
         python = {
           image = {
@@ -1472,8 +1357,7 @@ rec {
           };
           file = "health-check.py";
           interpreter = [ "python3" ];
-          # No bytecode cache next to the script: the root filesystem is
-          # read-only and /probe is a ConfigMap.
+          # Skip bytecode writes because `/` and `/probe` are read-only.
           env.PYTHONDONTWRITEBYTECODE = "1";
         };
         shell = {
@@ -1495,34 +1379,24 @@ rec {
       inherit runtimes roundBudget;
       __functor =
         _:
-        # Every callback receives the same `{ self, config, deps }`: `self`
-        # is the package's build result, `config` its evaluated options,
-        # `deps` every dependency-injected package some entry of the
-        # package declares, keyed by argument name.
+        # Callbacks receive `{ self, config, deps }`.
         {
           script,
-          # -> attrset of env var name to value. Values from `out.*` carry
-          # context; that is what gives the Job its edges. Nulls are
-          # dropped. `RETRY_FOR` is set by the helper.
+          # Return an attrset of environment variables for the probe container.
+          # Values from `out.*` carry dependency and network-policy context.
           env ? (_: { }),
-          # -> bool. False renders nothing. The default reads the option
-          # set `kix.options.healthCheck` when the package declares it, and
-          # is true when it does not.
+          # Return false to omit the probe resources.
           when ? ({ config, ... }: config.healthCheck.enabled or true),
-          # -> seconds the script keeps re-checking before it gives up.
-          # Same default rule as `when`; 90 when the package has no option.
+          # Return the retry window in seconds (`RETRY_FOR`).
           retryFor ? ({ config, ... }: config.healthCheck.retryFor or 90),
-          # -> resources the probe waits for beyond the package root, which
-          # it always waits for.
+          # Return extra resources the probe Job must wait for in addition to
+          # `self.root`.
           requires ? (_: [ ]),
           partName ? "healthCheck",
-          # { image = { repository; tag; digest; }; file; interpreter; env; }.
-          # One of `kix.healthCheck.runtimes`, or a package's own.
           runtime ? runtimes.python,
-          # Job deadline. Null sizes it from the retry window; a value must
-          # leave `roundBudget` after the window, or the build fails.
+          # Override `activeDeadlineSeconds`. Must be at least
+          # `retryFor + roundBudget`.
           activeDeadlineSeconds ? null,
-          # Seconds a finished Job stays before Kubernetes removes it.
           ttlSecondsAfterFinished ? 3600,
         }:
         {
@@ -1541,15 +1415,13 @@ rec {
           retry = retryFor ctx;
           deadline = if activeDeadlineSeconds == null then retry + roundBudget else activeDeadlineSeconds;
           userEnv = env ctx;
-          # The package root as a resource: a bare part, or the wrapper
-          # form `{ resource; out; }`.
           rootRes =
             let
               r = self.root;
             in
             r.resource or r;
-          # An env value computed from the root already carries the edge;
-          # listing it again would draw the redundant-requires warning.
+          # Avoid adding `rootRes` to `requires` when `userEnv` already
+          # references it, which would trigger a redundant-requires warning.
           dialsRoot = builtins.hasAttr (builtins.unsafeDiscardStringContext rootRes.outPath) (
             builtins.getContext (builtins.toJSON userEnv)
           );
@@ -1632,24 +1504,22 @@ rec {
           };
     };
 
+  # Expose a Service (or a list of path backends) via a Gateway API HTTPRoute
+  # or an Ingress resource, and publish route metadata under `exposurePart`.
   expose =
     {
       service ? null,
       paths ? null,
-      # The Ingress or HTTPRoute part.
       partName ? "route",
-      # A record part { via; host; scheme; url; urlOrNull; } describing
-      # that route (exposureOf). Set both names on a second kix.expose call.
+      # Name of the `{ via; host; scheme; url; urlOrNull; }` part (`exposureOf`).
+      # Override both `partName` and `exposurePart` on a second `kix.expose` call.
       exposurePart ? "exposure",
       defaultAnnotations ? { },
       port ? null,
-      # Gateway API mode only: per-rule HTTPRoute timeouts, e.g.
-      # { request = "0s"; } to disable the default 15s request timeout for
-      # long-lived streaming backends. Ignored in Ingress (nginx) mode.
+      # Per-rule HTTPRoute timeouts in Gateway mode. Ignored in Ingress mode.
       timeouts ? null,
-      # When false, the route's host comes only from config.ingress.host:
-      # without it the instance gets no route and `exposure.via` is null.
-      # When true, a missing host defaults to <instance>.<cluster.domain>.
+      # When false, require an explicit `config.ingress.host` instead of
+      # falling back to `<instance>.<cluster.domain>`.
       deriveHost ? true,
     }:
     {
@@ -1727,12 +1597,8 @@ rec {
           }
         ];
 
-      # Under default-deny policy, allow the ingress controller or the
-      # gateway's data plane to reach each backend on the routed pod port.
-      # kix.expose has both the backend Service and the dependency needed to
-      # derive this rule. A gateway whose out.podSelector is null (its
-      # implementation places the data plane where the package cannot see)
-      # gets no rule.
+      # Under default-deny network policy, allow the ingress controller or
+      # gateway data plane to reach each exposed backend on its target pod port.
       backends =
         if paths != null then
           map (p: {
@@ -1760,8 +1626,6 @@ rec {
 
       wantsControllerEdge = hasExposure && scope.networkPolicyEnforcer != null;
 
-      # A policy requires the router's pod selector and namespace. Warn when
-      # the ingress controller or gateway package does not publish them.
       _controllerEdgeWarn =
         if wantsControllerEdge && useIngress && controllerSelector == null then
           lib.warn (
@@ -1784,8 +1648,7 @@ rec {
         else
           lib.id;
 
-      # The rule carries the pod port, not the Service port: the policy
-      # lands on the backend's pods.
+      # Resolve the backend pod ports corresponding to the routed Service port.
       podPortsFor =
         b:
         let
@@ -1800,8 +1663,8 @@ rec {
         scope.networkPolicyEnforcer.netpol.mkPolicy {
           mkResource = scope.mkResource;
           extraArgs = {
-            # The Service's own name, not the part's: a part name is a
-            # Nix identifier and `coreService` is not a legal object name.
+            # Use the Kubernetes Service name rather than the Nix part key,
+            # which may be camelCase (such as `coreService`).
             name = "${b.svc.name}-from-${if useGateway then "gateway" else "ingress-controller"}";
             labels = {
               ${kixKeys.derived} = "true";
@@ -1817,16 +1680,13 @@ rec {
                 })
               ];
             };
-            # The selector above is raw labels and carries no context, so
-            # without this the policy is a part no dependency reaches.
+            # Attach the policy to the Service so it is included in the built
+            # resource graph even though `spec.selector` has no string context.
             extraDeps = [ b.svc ];
           };
         };
 
-      # The HTTPRoute CRD arrives with the Gateway API implementation, outside
-      # Kix. The ref gives the route its CRD-before-CR dependency. Two
-      # kix.expose calls in one instance render the same marker, which the
-      # cluster build keeps once.
+      # Reference the external HTTPRoute CRD so the route is ordered after it.
       routeCrd = scope.mkCRDRef {
         group = "gateway.networking.k8s.io";
         kind = "HTTPRoute";
@@ -1851,8 +1711,8 @@ rec {
         "${partName}Crd" = routeCrd;
       }
       // {
-        # `_type` stops the part walkers (eval/helpers.nix
-        # collectTypedAttrs) at the record, so they do not force `url`.
+        # Tag the record with `_type` so part walkers (`collectTypedAttrs` in
+        # `eval/helpers.nix`) do not descend into it and force `url`.
         ${exposurePart} = {
           _type = "kix-exposure";
           inherit (info)
@@ -1864,8 +1724,8 @@ rec {
             ;
         };
 
-        # Forcing info.scheme runs the listener match, so a route that no
-        # listener accepts fails the build even when nothing reads the URL.
+        # Force `info.scheme` so listener validation runs even when no consumer
+        # reads `exposure.url`.
         ${partName} =
           if hasExposure && useGateway then
             builtins.seq info.scheme (
@@ -1947,17 +1807,12 @@ rec {
       }
     );
 
-  # `name`, `monitorPart` and `rulesPart` let a package with several
-  # metrics Services (harbor: core, registry, jobservice, exporter) call
-  # this once per Service without the parts or the resource names
-  # colliding. The defaults are the single-Service case.
+  # Build a ServiceMonitor and optional PrometheusRule for a Service.
   #
-  # `scheme`, `tlsConfig` (a ServiceMonitor endpoint `tlsConfig`), and
-  # `params` (query parameters, as a ServiceMonitor endpoint's `params`:
-  # an attrset of string lists) apply to the primary endpoint only. Each of
-  # `extraEndpoints` is a ServiceMonitor endpoint over the defaults
-  # `scheme = "http"`, `path = "/metrics"`, and the instance's
-  # `metrics.interval` when that is set.
+  # Override `name`, `monitorPart`, and `rulesPart` when a package monitors
+  # multiple Services. `scheme`, `tlsConfig`, and `params` apply only to the
+  # primary endpoint. `extraEndpoints` inherit `scheme = "http"`,
+  # `path = "/metrics"`, and `config.metrics.interval`.
   monitor =
     {
       service,
@@ -2036,15 +1891,9 @@ rec {
       name = monitorName;
     } args;
 
-  # A PrometheusRule `<name>-alerts` from `alerts`, for a package whose
-  # scrape is not one `kix.monitor` ServiceMonitor: a PodMonitor, an
-  # operator-built monitor, or several. `kix.monitor` renders its `alerts`
-  # through this. The rule renders only when the instance has a `prometheus`
-  # dependency, `metrics.enabled` is not false, and `alerts` is non-empty.
-  #
-  # Each alert is { expr; for?; keep_firing_for?; severity? ("warning");
-  # summary?; description?; runbook_url?; labels?; annotations?; }; other
-  # keys are ignored. `name` defaults to the instance name.
+  # Build a `<name>-alerts` PrometheusRule part for packages that do not use a
+  # single `kix.monitor` ServiceMonitor. Renders only when `prometheus` is
+  # wired, `metrics.enabled` is not false, and `alerts` is non-empty.
   alerts =
     {
       alerts,

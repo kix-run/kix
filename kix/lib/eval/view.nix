@@ -19,10 +19,10 @@ in
     let
       ctx = "instance '${instanceName}'";
 
-      # A known folder (`crds`, `secrets`) whose name `rootOut` also defines is
-      # left out of the view, so `out.crds.<Kind>` can sit beside a `crds.*`
-      # parts folder and the view's `crds` is the `out` value. The folder's
-      # resources are still emitted, because emission reads `parts`.
+      # Omit known folders (`crds`, `secrets`) that `rootOut` also defines so
+      # `rootOut` takes precedence in the package view without triggering a
+      # collision. The folder's resources are still emitted because emission
+      # reads `parts` directly.
       folders = lib.filterAttrs (
         n: v:
         n != "root"

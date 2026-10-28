@@ -11,8 +11,6 @@
 }:
 
 let
-  # Kix's own annotation keys and API names, spelled once in
-  # core/annotations.nix.
   kixAnnotations = import ../core/annotations.nix;
   kixKeys = kixAnnotations.keys;
   inherit (k8s)
@@ -30,14 +28,14 @@ rec {
       out ? { },
       kind ? null,
       apiVersion ? null,
-      # Registry roles this environment-provided service fills (weak symbols;
-      # a managed instance with the same role shadows it). The role name is
-      # also the import's DI alias, so no instance-level `aliases` are needed.
+      # Roles that this environment-provided service fulfills. A managed
+      # instance declaring the same role takes precedence over the import. Each
+      # role name also acts as a dependency-resolution alias.
       roles ? [ ],
-      # CustomResourceDefinitions the environment installs, each given as
-      # scope.mkCRDRef's arguments without `installedBy`. Each entry becomes
-      # `out.crds.<kind>`, a handle consumers pass to scope.mkCR, and a CRD
-      # marker the deploy waits for while the import is active.
+      # CustomResourceDefinitions installed by the environment, each given as
+      # `scope.mkCRDRef` arguments without `installedBy`. Each entry populates
+      # `out.crds.<kind>` for `scope.mkCR` consumers and emits a CRD marker
+      # while the import is active.
       crds ? [ ],
     }:
     {
@@ -97,8 +95,9 @@ rec {
           requires ? [ ],
         }:
         let
-          # Import-mode refs have no store resource, so facts are the
-          # first channel that lets them participate in edge detection
+          # Attach an endpoint fact token so import-mode service refs
+          # participate in network dependency detection without a store
+          # resource.
           endpointFactCtx = k8s.facts.mkFact "endpoint" {
             inherit name selector ports;
             namespace = namespaceName;
@@ -136,15 +135,11 @@ rec {
           };
         };
 
-      # Import mode renders no resources, but a package reaches its
-      # workloads on the way to the `out` values an import does need:
-      # `kix.service.fromWorkload` reads the workload's selector and its
-      # container ports, and that is the documented way to write a Service.
-      # Without these builders such a package failed on a bare
-      # `attribute 'mkStatefulSet' missing` naming its own line
-      # (housekeeping 2026-09-20). They seal nothing, patch nothing and emit
-      # nothing: what an import promises is the root's `out`, so a workload
-      # only has to carry the selector and the ports a Service is built from.
+      # Build a stub workload for import mode that exposes `rawSelector` and
+      # `rawManifest` without sealing or emitting a Kubernetes resource.
+      # Packages derived via `mkImport { from = ...; }` evaluate their workload
+      # builders when `kix.service.fromWorkload` reads the workload's selector
+      # and container ports to construct the root Service's `out`.
       mkWorkloadImport =
         apiVersion: kind: args:
         let
@@ -199,11 +194,11 @@ rec {
     in
     scope;
 
-  # Checks every declared instance's extraDeps, active or not, without
-  # evaluating any instance: a non-empty list on a managed instance, an
-  # entry that is neither a resource nor a ref, and a ref to the import
-  # itself or to a name that is not an instance. Whether a ref's target is
-  # active is checked when the import's marker is built.
+  # Validate `extraDeps` on every declared instance, active or inactive, before
+  # evaluating instances. Reject non-empty `extraDeps` on managed instances,
+  # entries that are neither resources nor `ref` pointers, self-references, and
+  # references to undeclared instances. Target activation is checked when the
+  # import marker is built.
   checkExtraDeps =
     { instances, mergedInstances }:
     let
@@ -261,8 +256,8 @@ rec {
       clusterLabels,
       clusterConfig ? { },
       clusterCtx ? { },
-      # The cluster's evaluated instances and whether each renders; extraDeps
-      # reads `root` from the ones its `ref` entries name.
+      # Evaluated cluster instances and their activation predicate, used by
+      # `extraDeps` to read `root` from referenced instances.
       allInstances,
       isInstanceActive,
       ...
@@ -300,9 +295,8 @@ rec {
                 inherit lib;
               }
               // lib.optionalAttrs (fnArgs ? kix) { kix = kixlib; }
-              # An import renders no workloads of its own, so the level it
-              # sees only shapes option defaults nobody reads; "none" keeps
-              # every mapped default at its floor.
+              # Pass `availability = "none"` so availability-mapped option
+              # defaults evaluate cleanly when building the import's `out`.
               // lib.optionalAttrs (fnArgs ? availability) { availability = "none"; }
               // nullDeps
             );
@@ -319,10 +313,9 @@ rec {
                 ;
             };
 
-            # Build entries run as they do for a managed instance, with the
-            # import scope, availability "none", no resolved `deps`, and a
-            # throwing proxy for each dependency an entry asks for by name.
-            # Part overlays do not apply.
+            # Evaluate build entries with the import scope, `availability = "none"`,
+            # empty `deps`, and throwing proxies for named dependencies. Part
+            # overlays do not apply to imports.
             buildDepProxies = lib.mapAttrs (name: _: mkDepProxy name) (discoverBuildDeps raw.build);
             callBuildFn =
               self: fn:
@@ -390,8 +383,6 @@ rec {
               };
           };
 
-      # Markers for the CRDs the import declares, built with the import's
-      # namespace and labels.
       crdHandleArgs = [
         "group"
         "kind"
@@ -469,8 +460,9 @@ rec {
       networkConfig = clusterConfig.networkPolicy or { enable = false; };
       rawPlatformIntents = instCfg.platformIntents or { };
 
-      # Fallback materializer intents must be extraDeps on the marker and
-      # sealed at mkResource time; instanceProcessors run too late.
+      # Materialize platform network-policy intents here so they can be attached
+      # to `markerResource.extraDeps` when the marker is sealed, before
+      # `instanceProcessors` run.
       intentProvider =
         if rawPlatformIntents == { } || !networkConfig.enable || !(clusterCtx ? findRoleProvider) then
           null
@@ -499,8 +491,8 @@ rec {
               intent = intent // {
                 name = intentName;
               };
-              # Same as plugins/netpol/derive.nix: platform intents are sealed
-              # without a scope, so mark them kix-managed here.
+              # Mark materialized platform intent policies as Kix-managed
+              # because they are sealed outside a package scope.
               mkResource =
                 args:
                 mkResource (
@@ -516,10 +508,10 @@ rec {
             }
           ) rawPlatformIntents;
 
-      # checkExtraDeps has refused malformed entries, so an entry here is a
-      # resource or a `ref.<namespace>.<instance>` pointer to another
-      # instance, which stands for that instance's PackageInstance marker
-      # (its `root`). A ref does not activate an optional instance.
+      # Resolve an `extraDeps` entry to a resource. `checkExtraDeps` already
+      # validated the entry shape, so a `ref` pointer resolves to the target
+      # instance's `root` PackageInstance marker without activating optional
+      # targets.
       resolveExtraDep =
         entry:
         if (entry._type or "") == "kix-ref" then

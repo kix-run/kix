@@ -15,7 +15,6 @@ let
 
   isWorkloadKind = kind: builtins.elem kind workloadKinds;
 
-  # Extract pod spec from a raw workload resource.
   podSpecOf =
     r:
     if r.kind == "CronJob" then
@@ -23,7 +22,6 @@ let
     else
       ((r.spec or { }).template or { }).spec or { };
 
-  # Extract pod template labels from a raw workload resource.
   podLabelsOf =
     r:
     if r.kind == "CronJob" then
@@ -31,14 +29,14 @@ let
     else
       (((r.spec or { }).template or { }).metadata or { }).labels or { };
 
-  # Label subset match: every key in selector exists in labels with same value.
+  # Return true when every key in selector matches labels.
   isSubsetMatch =
     selector: labels:
     selector != { }
     && builtins.all (k: labels ? ${k} && labels.${k} == selector.${k}) (builtins.attrNames selector);
 
-  # Safe list accessor: Helm charts can emit explicit `null` for list fields
-  # (e.g. `volumes: null`), which `or` doesn't catch since the key exists.
+  # Return v when it is a list, or [ ] when a Helm chart emits explicit null
+  # for a list field (which `or` does not catch because the key exists).
   safeList = v: if builtins.isList v then v else [ ];
 
 in
@@ -50,18 +48,15 @@ rec {
     isSubsetMatch
     ;
 
-  # Identity key for a raw JSON resource within a chart.
-  # Kind/name is unique within a single Helm release.
+  # Return the "Kind/name" key for a raw JSON resource, which is unique within
+  # a single Helm release.
   resourceId = r: "${r.kind}/${(r.metadata or { }).name or ""}";
 
-  # Infer edges from raw JSON resources before wrapping.
-  # Returns a list of { from, to, type } where from/to are raw resource objects.
-  #
-  # Edge direction: `from` depends on `to` (from is deployed after to).
+  # Infer dependency edges `{ from, to, type }` between raw JSON resources
+  # before wrapping. `from` depends on `to` and is deployed after it.
   inferEdges =
     resources:
     let
-      # Lookup by "Kind/name".
       byKindName = builtins.listToAttrs (
         map (r: {
           name = "${r.kind}/${(r.metadata or { }).name or ""}";
@@ -71,7 +66,6 @@ rec {
 
       workloads = builtins.filter (r: isWorkloadKind r.kind) resources;
 
-      # Workload to ServiceAccount.
       saEdges = builtins.concatMap (
         r:
         let
@@ -90,19 +84,16 @@ rec {
           [ ]
       ) workloads;
 
-      # Workload to ConfigMap or Secret through volumes and environment.
       volumeEdges = builtins.concatMap (
         r:
         let
           ps = podSpecOf r;
 
-          # Volume sources.
           volRefs = builtins.concatMap (
             v:
             let
               cmName = (v.configMap or { }).name or null;
               secName = (v.secret or { }).secretName or null;
-              # Projected volume sources.
               projRefs = builtins.concatMap (
                 s:
                 let
@@ -162,7 +153,6 @@ rec {
             ++ projRefs
           ) (safeList (ps.volumes or [ ]));
 
-          # envFrom references from all containers.
           containers = safeList (ps.containers or [ ]) ++ safeList (ps.initContainers or [ ]);
           envFromRefs = builtins.concatMap (
             c:
@@ -199,7 +189,6 @@ rec {
             ) (safeList (c.envFrom or [ ]))
           ) containers;
 
-          # env[].valueFrom references.
           envValueFromRefs = builtins.concatMap (
             c:
             builtins.concatMap (
@@ -239,7 +228,6 @@ rec {
         volRefs ++ envFromRefs ++ envValueFromRefs
       ) workloads;
 
-      # Role bindings to ServiceAccounts.
       bindingEdges = builtins.concatMap (
         r:
         builtins.concatMap (
@@ -260,7 +248,6 @@ rec {
         ) (safeList (r.subjects or [ ]))
       ) (builtins.filter (r: r.kind == "RoleBinding" || r.kind == "ClusterRoleBinding") resources);
 
-      # Services to workloads selected by label subset.
       serviceEdges = builtins.concatMap (
         svc:
         let
@@ -274,7 +261,6 @@ rec {
         }) matching
       ) (builtins.filter (r: r.kind == "Service") resources);
 
-      # HPAs to scale targets.
       hpaEdges = builtins.concatMap (
         r:
         let
@@ -293,7 +279,6 @@ rec {
           [ ]
       ) (builtins.filter (r: r.kind == "HorizontalPodAutoscaler") resources);
 
-      # PDBs to workloads selected by labels.
       pdbEdges = builtins.concatMap (
         r:
         let
@@ -307,11 +292,9 @@ rec {
         }) matching
       ) (builtins.filter (r: r.kind == "PodDisruptionBudget") resources);
 
-      # Ingresses to backend Services.
       ingressEdges = builtins.concatMap (
         r:
         let
-          # Default backend.
           defaultSvcName = ((r.spec or { }).defaultBackend.service or { }).name or null;
           defaultEdges =
             if defaultSvcName != null && byKindName ? "Service/${defaultSvcName}" then
@@ -324,7 +307,6 @@ rec {
               ]
             else
               [ ];
-          # Rule backends.
           ruleEdges = builtins.concatMap (
             rule:
             builtins.concatMap (
@@ -348,7 +330,6 @@ rec {
         defaultEdges ++ ruleEdges
       ) (builtins.filter (r: r.kind == "Ingress") resources);
 
-      # HTTPRoutes to backend Services.
       httpRouteEdges = builtins.concatMap (
         r:
         builtins.concatMap (
@@ -373,10 +354,10 @@ rec {
         ) (safeList ((r.spec or { }).rules or [ ]))
       ) (builtins.filter (r: r.kind == "HTTPRoute") resources);
 
-      # Custom resources to the chart's own CRD of their group and kind, so
-      # the deploy applies the CR after the CRD is served. A chart resource
-      # of a kind the chart does not ship gets no edge here; the cluster
-      # build refuses it unless it depends on a declaration (check 21).
+      # Link custom resources to the chart's own CRD of the same group and kind
+      # so deploy applies the CR after the CRD is served. Resources of kinds the
+      # chart does not ship get no edge here and must depend on an external CRD
+      # declaration (check 21).
       crdsByGroupKind = builtins.listToAttrs (
         map (crd: {
           name = "${crd.spec.group or ""}/${crd.spec.names.kind or ""}";
@@ -406,7 +387,6 @@ rec {
           [ ]
       ) resources;
 
-      # ServiceMonitors to Services selected by labels.
       serviceMonitorEdges = builtins.concatMap (
         r:
         let
@@ -434,8 +414,7 @@ rec {
     ++ serviceMonitorEdges
     ++ instanceOfEdges;
 
-  # Convert edges to a resourceId -> [resourceId] map.
-  # Direction: from depends on to.
+  # Convert edges to a map from each resourceId to the resourceIds it depends on.
   buildDepsMap =
     edges:
     builtins.foldl' (
@@ -448,15 +427,13 @@ rec {
       if builtins.elem depId existing then acc else acc // { ${key} = existing ++ [ depId ]; }
     ) { } edges;
 
-  # Set of resourceIds that are depended on by other resources.
-  # These are reachable through the DAG and don't need to be direct
-  # requires of the package root.
+  # Return the resourceIds that other chart resources depend on. These are
+  # reachable through the DAG and do not need to be direct requires of the root.
   dependedOnIds = edges: lib.unique (map (e: resourceId e.to) edges);
 
-  # The root of an imported chart: the only Service, else the only
-  # Deployment, StatefulSet or DaemonSet. Consumers read the root's
-  # out.selector and out.fqdn, so any other case throws instead of guessing.
-  # `resources` are wrapped resources (with `kind` and `name`).
+  # Return the chart's only Service, or its only Deployment, StatefulSet, or
+  # DaemonSet when it has no Service. Throw when the choice is ambiguous,
+  # because consumers read the root's `out.selector` and `out.fqdn`.
   pickRoot =
     releaseName: resources:
     let

@@ -1,13 +1,11 @@
-# StorageClass vocabulary: the option type `kix.types.storageClass` and the
-# renderer `kix.storage.mkClasses`, for any package that renders
-# StorageClasses, whether a generic class author or a CSI driver. Using both
-# gives every such package the same fields, checks and `storageClassName`.
+# Define the StorageClass submodule option type (`kix.types.storageClass`) and
+# renderer (`kix.storage.mkClasses`) shared by storage packages and CSI drivers.
 #
-# A class becomes the cluster default only through the Kubernetes annotation
-# `storageclass.kubernetes.io/is-default-class`. The same annotation chooses
-# `storageClassName`, the class kix consumers get when they name none: the
-# annotated class when exactly one is, else the only class. With any other
-# set of classes the consumer names its class.
+# A StorageClass becomes the cluster default through the Kubernetes annotation
+# `storageclass.kubernetes.io/is-default-class = "true"`. The same annotation
+# selects `storageClassName` for Kix consumers that do not name a class: the
+# annotated class when exactly one is annotated, or the sole class when only
+# one exists.
 { lib }:
 
 let
@@ -39,11 +37,10 @@ let
   };
 in
 {
-  # `provisioner = false` drops the `provisioner` field, for a driver package
-  # that sets one provisioner on every class through `mkClasses`.
-  # `parameters` is the type of the class's `parameters` map; a driver
-  # passes a submodule with its typed keys. Each `defaults` entry becomes a
-  # `lib.mkDefault` on the field of that name.
+  # Build a StorageClass submodule type. Set `provisioner = false` in CSI driver
+  # packages that pass a fixed provisioner to `mkClasses`. `parameters` sets the
+  # option type for the `parameters` map, and `defaults` sets `lib.mkDefault`
+  # values on matching option fields.
   type =
     {
       provisioner ? true,
@@ -113,23 +110,13 @@ in
       config = lib.mapAttrs (_: lib.mkDefault) defaults;
     };
 
-  # Renders `classes` (an attrset of `type` values keyed by class name) as
-  # cluster-scoped StorageClasses and picks the class consumers that name
-  # none get. Returns `{ resources; storageClassName; }`:
-  #   - `resources`: one resource per class, keyed like `classes`. Forcing the
-  #     attrset runs the checks below.
-  #   - `storageClassName`: the `out.name` of the class annotated default when
-  #     exactly one is, else of the only class. Otherwise reading it throws,
-  #     so a package can put it in `out` and the build fails only when a
-  #     consumer relies on it.
-  # `parts` is the attrset the package stores `resources` under, read
-  # through `self` (for example `self.classes`). `storageClassName` is taken
-  # from it, so a consumer's manifest depends on the class as finally built,
-  # including any `partsOverlays` change, and is applied after it.
-  # `who` prefixes every message and `optionPath` names the option `classes`
-  # came from. `provisioner`, when a string, is set on every class; null
-  # reads each class's own `provisioner` field. `requires` is added to every
-  # class, such as the driver's CSIDriver and pods.
+  # Render `classes` as cluster-scoped StorageClass resources and return
+  # `{ resources; storageClassName; }`.
+  #
+  # `storageClassName` resolves to the `out.name` of the single default-annotated
+  # class or the sole class, and throws when read if the choice is ambiguous.
+  # Reading `out.name` from `parts` (such as `self.classes`) preserves
+  # `partsOverlays` edits and orders consumers after the StorageClass.
   mkClasses =
     {
       scope,
@@ -148,8 +135,8 @@ in
       binding = (clusterConfig.cluster.roles.storageClasses or { }).binding or null;
       shadowable = binding == "shadowable";
 
-      # instancePartResources (eval/helpers.nix) skips keys named `root` or
-      # `meta` at every depth, so a class under either key is never rendered.
+      # `instancePartResources` (`eval/helpers.nix`) skips keys named `root` or
+      # `meta` at every depth, so a class under either key would not render.
       reserved = builtins.filter (n: n == "root" || n == "meta") names;
 
       checks =

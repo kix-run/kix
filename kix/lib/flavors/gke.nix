@@ -1,16 +1,9 @@
 # GKE Standard flavor.
 #
-# Managed control plane. GKE dataplane v2 (eBPF/Cilium-based) is the
-# default CNI but exposes only k8s-standard NetworkPolicy, not
-# CiliumNetworkPolicy. The cni role is environment-owned and exclusive.
-# Built-in GCE ingress controller. PD CSI with volume snapshot support.
-#
-# Platform imports: DNS (kube-dns), storage (standard-rwo via PD CSI). GKE
-# creates the standard-rwo and premium-rwo StorageClasses with the PD CSI
-# driver (https://cloud.google.com/kubernetes-engine/docs/how-to/persistent-volumes/gce-pd-csi-driver).
-# These participate in DI so packages can resolve against them. If the
-# cluster installs its own storage-classes or DNS package, it takes
-# priority automatically (managed shadows import in DI resolution).
+# GKE Standard provides a managed control plane, GKE Dataplane V2 (exclusive
+# `cni` role that exposes standard Kubernetes NetworkPolicy rather than
+# CiliumNetworkPolicy), `kube-dns`, GCP Network Load Balancer, and the PD CSI
+# driver with `standard-rwo` as the default StorageClass.
 
 {
   config,
@@ -39,10 +32,8 @@
     };
   };
 
-  # GKE nodes turn discard_unpacked_layers on and configure mirrors in
-  # containerd's legacy form. Spegel's GKE setup moves the registry hosts
-  # to /etc/containerd/hosts.d with a node startup script; a cluster that
-  # applies it sets discardUnpackedLayers to false.
+  # GKE nodes enable `discard_unpacked_layers` by default. Clusters that apply
+  # a node startup script for Spegel set `discardUnpackedLayers = false`.
   cluster.containerd = {
     registryConfigPath = lib.mkDefault "/etc/containerd/hosts.d";
     discardUnpackedLayers = lib.mkDefault true;
@@ -50,21 +41,17 @@
 
   cluster.capabilities = {
     managedControlPlane = lib.mkDefault true;
-    nodeAutoscaling = lib.mkDefault false; # available per node pool, not on by default
+    nodeAutoscaling = lib.mkDefault false; # available per node pool, off by default
     daemonSets = lib.mkDefault true;
-    gpu = lib.mkDefault false; # requires GPU node pool
-    privilegedContainers = lib.mkDefault true; # restricted on Autopilot, not Standard
-    podSecurityEnforcement = lib.mkDefault null; # no cluster-wide PSA by default
+    gpu = lib.mkDefault false; # requires a GPU node pool
+    privilegedContainers = lib.mkDefault true;
+    podSecurityEnforcement = lib.mkDefault null;
   };
 
   cluster.network = {
-    podCidr = lib.mkDefault null; # varies by VPC-native vs routes-based
-    serviceCidr = lib.mkDefault null; # varies by cluster configuration
+    podCidr = lib.mkDefault null;
+    serviceCidr = lib.mkDefault null;
   };
-
-  # --- Platform-provided imports ---
-  # GKE manages these services; they exist in the cluster but are not
-  # kix-managed. Exposed as imports so packages can depend on them via DI.
 
   instances.kube-system = {
     platform-dns = {
